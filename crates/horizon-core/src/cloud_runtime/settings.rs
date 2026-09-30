@@ -207,6 +207,21 @@ impl Hetzner {
         Ok(chosen)
     }
 
+    /// Explicit worker choices must remain allowed on every allocation and resume.
+    /// # Errors
+    /// Rejects any selected type outside the machine's server-type policy.
+    pub fn types_for(&self, placement: Option<&crate::cloud_panel::Placement>) -> Result<Vec<String>> {
+        let Some(placement) = placement.filter(|placement| !placement.cpu_types.is_empty()) else {
+            return Ok(self.server_types.clone());
+        };
+        if placement.cpu_types.iter().any(|name| !self.server_types.contains(name)) {
+            return Err(Error::Invalid(
+                "This cloud's chosen server type is not allowed in the Hetzner settings",
+            ));
+        }
+        Ok(placement.cpu_types.clone())
+    }
+
     /// The pull login for the worker host, when a private image needs one.
     /// # Errors
     /// Requires a private, readable password file.
@@ -328,6 +343,7 @@ mod tests {
         let any = crate::cloud_panel::Placement::default();
         assert_eq!(Settings::for_cloud(&path, &any).unwrap().data_centers, ["US-MO-2"]);
         let europe = crate::cloud_panel::Placement {
+            cpu_types: Vec::new(),
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into()],
             gpu_types: vec!["NVIDIA RTX A5000".into()],

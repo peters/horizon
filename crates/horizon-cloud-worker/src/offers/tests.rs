@@ -343,3 +343,73 @@ fn stale_runpod_prices_do_not_hold_back_current_hetzner_offers() {
     assert!(answered["unavailable"].as_str().unwrap().contains("60 minutes old"));
     assert_eq!(answered["other_providers"][0]["offers"][0]["id"], "cx43");
 }
+
+#[test]
+fn absent_runpod_prices_are_unknown_until_explicitly_cleared() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("cloud-offers.json");
+    publish_hetzner(
+        hetzner_snapshot(u64::try_from(NOW).unwrap()).as_slice(),
+        &hetzner_path(&path),
+        NOW,
+    )
+    .unwrap();
+    let requirements = Requirements {
+        min_vcpu: Some(8),
+        ..Requirements::default()
+    };
+    let unknown = native_rank(&requirements, &path, NOW).unwrap();
+    assert_eq!(unknown["comparison_incomplete"], true);
+    clear_runpod(&b"{}"[..], &path).unwrap();
+    assert_ne!(
+        native_rank(&requirements, &path, NOW).unwrap()["comparison_incomplete"],
+        true
+    );
+    assert!(path.with_file_name(RUNPOD_UNCONFIGURED).exists());
+    publish(snapshot(u64::try_from(NOW).unwrap()).as_slice(), &path, NOW).unwrap();
+    assert!(!path.with_file_name(RUNPOD_UNCONFIGURED).exists());
+    let answer = rank_with(&requirements, &path, NOW, false).unwrap();
+    assert_eq!(answer["comparison"]["complete"], false);
+    assert_eq!(answer["comparison"]["offers"][0]["currency"], "USD");
+    assert!(
+        answer["comparison"]["offers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|offer| offer["currency"] == "EUR")
+            .unwrap()["estimated_total_usd"]
+            .is_null()
+    );
+}
+
+#[test]
+fn missing_hetzner_snapshot_cannot_establish_a_complete_cpu_comparison() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("cloud-offers.json");
+    publish(snapshot(u64::try_from(NOW).unwrap()).as_slice(), &path, NOW).unwrap();
+    let requirements = Requirements::default();
+    let unknown = rank_with(&requirements, &path, NOW, false).unwrap();
+    assert_eq!(unknown["comparison"]["complete"], false);
+    let mut unconfigured: HetznerSnapshot =
+        serde_json::from_slice(&hetzner_snapshot(u64::try_from(NOW).unwrap())).unwrap();
+    unconfigured.catalog.offers.clear();
+    publish_hetzner(
+        serde_json::to_vec(&unconfigured).unwrap().as_slice(),
+        &hetzner_path(&path),
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(
+        rank_with(&requirements, &path, NOW, false).unwrap()["comparison"]["complete"],
+        true
+    );
+    std::fs::remove_file(hetzner_path(&path)).unwrap();
+    let gpu = Requirements {
+        gpu: true,
+        ..Requirements::default()
+    };
+    assert_eq!(
+        rank_with(&gpu, &path, NOW, false).unwrap()["comparison"]["complete"],
+        true
+    );
+}

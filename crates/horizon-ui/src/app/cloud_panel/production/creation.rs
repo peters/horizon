@@ -3,10 +3,7 @@ use super::{HorizonApp, Production};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
-use horizon_core::{
-    ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement,
-    cloud_runtime::provider::Placement as ProviderPlacement,
-};
+use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement};
 use std::path::{Path, PathBuf};
 
 pub(super) mod checks;
@@ -473,63 +470,25 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
 
 /// The worker for the selected profile: the wide selector where the provider lists its
 /// offers, and the provider's own size and location fields otherwise. Returns whether
-/// the selector was shown.
+/// the summary leaves the container disk editor to More options.
 fn machine(ui: &mut Ui, form: &mut Production) -> bool {
-    let Some(config) = &mut form.profiles else {
-        return false;
-    };
-    let Some(profile) = config.profiles.get_mut(&form.selected_profile) else {
-        return false;
-    };
-    // A profile reread as CPU only drops a GPU type chosen while it was a GPU profile.
-    if !profile.gpu {
-        form.placement.gpu_types.clear();
+    if let Some(profile) = selector::profile(form) {
+        let gpu = profile.gpu;
+        if form
+            .provider
+            .is_some_and(|chosen| !provider::choices(&form.prices, profile).contains(&chosen))
+        {
+            form.provider = None;
+            form.placement = Placement::default();
+            form.size = None;
+        }
+        form.placement = form.placement.for_profile(gpu);
     }
-    let choices = provider::choices(&form.prices, profile);
-    // A provider chosen before the profile or the configured providers changed is
-    // dropped once it is no longer a choice, with the place it named.
-    if form.provider.is_some_and(|chosen| !choices.contains(&chosen)) {
-        form.provider = None;
-        form.placement = Placement::default();
-    }
-    let provider = provider::current(form.provider, profile);
-    // A profile naming a provider this machine cannot use is never moved on its
-    // own: the person picks one it can, even when there is only one.
-    let unusable = !choices.is_empty() && !choices.contains(&provider);
-    if unusable {
-        ui.small(format!(
-            "This profile names {}, which this machine has no credentials for. Choose a provider it can use.",
-            provider.label
-        ));
-    }
-    if (choices.len() > 1 || unusable)
-        && let Some(chosen) = provider::choice(ui, &choices, provider)
-    {
-        form.provider = Some(chosen);
-        // Each provider names places and sizes its own way.
-        form.placement = Placement::default();
-        form.size = None;
-        return false;
-    }
-    if provider.placement == ProviderPlacement::DataCenters {
-        selector::section(ui, form);
-        return true;
-    }
-    let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
-    storage::field(ui, profile, provider);
-    if let Some(size) = provider::size_field(ui, &form.prices, profile, (cpu, memory_gb)) {
-        form.size = Some(size);
-    }
-    let sized = horizon_core::cloud_runtime::prices::Profile {
-        cpu,
-        memory_gb,
-        ..profile.clone()
-    };
-    ui.add_space(4.0);
-    if let Some(placement) = provider::card(ui, &form.prices, (provider, &sized), &form.placement) {
-        form.placement = placement;
-    }
-    false
+    selector::section(ui, form);
+    selector::profile(form).is_some_and(|profile| {
+        provider::current(form.provider, profile).placement
+            == horizon_core::cloud_runtime::provider::Placement::DataCenters
+    })
 }
 
 fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
@@ -603,7 +562,7 @@ fn submit_reason_given(form: &Production, blocked: Option<&'static str>) -> Opti
     }
 }
 
-fn can_submit(form: &Production) -> bool {
+pub(super) fn can_submit(form: &Production) -> bool {
     can_submit_given(form, storage::launch_reason(form))
 }
 

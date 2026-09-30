@@ -6,6 +6,8 @@ mod group;
 mod placement;
 mod reordering;
 mod resize;
+mod selection;
+pub use selection::{ChosenWorker, WorkerChoice};
 
 pub use horizon_cloud::Connection as CloudConnection;
 use std::collections::HashMap;
@@ -120,6 +122,9 @@ pub struct Placement {
     /// GPU types to request, in this order; empty for the machine's `gpu_types` setting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gpu_types: Vec<String>,
+    /// Explicit CPU server types, narrowed to the machine's allowed types.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cpu_types: Vec<String>,
 }
 
 impl Placement {
@@ -132,7 +137,7 @@ impl Placement {
     /// Whether nothing was chosen, so the machine settings apply unchanged.
     #[must_use]
     pub fn is_default(&self) -> bool {
-        self.data_centers.is_empty() && self.gpu_types.is_empty()
+        self.data_centers.is_empty() && self.gpu_types.is_empty() && self.cpu_types.is_empty()
     }
 
     /// This placement for a profile with or without a GPU: a GPU type chosen while the
@@ -141,6 +146,7 @@ impl Placement {
     pub fn for_profile(&self, gpu: bool) -> Self {
         Self {
             gpu_types: if gpu { self.gpu_types.clone() } else { Vec::new() },
+            cpu_types: if gpu { Vec::new() } else { self.cpu_types.clone() },
             ..self.clone()
         }
     }
@@ -421,6 +427,7 @@ mod tests {
             "any placement keeps the machine setting"
         );
         let europe = Placement {
+            cpu_types: Vec::new(),
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
             gpu_types: Vec::new(),

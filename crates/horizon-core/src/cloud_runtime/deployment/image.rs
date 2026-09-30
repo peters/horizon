@@ -1,8 +1,5 @@
 //! Worker image preparation and the image contract checked before allocation.
-use super::{
-    Deployment, Request, Result, Runner, Store, repository,
-    sizing::{cpu_flavors, data_centers},
-};
+use super::{Deployment, Request, Result, Runner, Store, repository};
 use crate::cloud_runtime::{
     WorkerContract, git_auth,
     image::{Images, Layer, default_tag},
@@ -157,7 +154,16 @@ pub(super) fn prepare_image(
     )))?
     .trim()
     .to_owned();
+    let cpu_flavors = super::sizing::bound_types(&state.profile, &request.settings, state.spec.as_ref())?;
+    let data_centers = super::sizing::bound_centers(&state.profile, &request.settings, state.spec.as_ref())?;
+    let exact_placement = state.spec.as_ref().is_some_and(|spec| spec.exact_placement)
+        || request
+            .settings
+            .placement
+            .as_ref()
+            .is_some_and(|placement| !placement.cpu_types.is_empty());
     state.spec = Some(WorkerSpec {
+        exact_placement,
         operation_id: state.cloud_id.clone(),
         image_digest: digest,
         profile: state.profile.clone(),
@@ -167,8 +173,8 @@ pub(super) fn prepare_image(
             .then(|| request.settings.registry_pull_auth_id.clone())
             .flatten(),
         gpu_types: request.settings.gpu_types.clone(),
-        cpu_flavors: cpu_flavors(&state.profile, &request.settings)?,
-        data_centers: data_centers(&state.profile, &request.settings)?,
+        cpu_flavors,
+        data_centers,
         startup_metadata: None,
     });
     store.save(state)

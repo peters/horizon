@@ -13,17 +13,41 @@ fn title(offer: &Offer) -> (String, String) {
             .gpu_memory_gb
             .map(|gb| format!("{gb} GB GPU memory"))
             .unwrap_or_default();
-        (offer.name.clone(), memory)
+        (offer.name.clone(), format!("{} · {memory}", offer.provider))
     } else {
         let size = format!("{} vCPU · {} GB", offer.vcpu.unwrap_or(0), offer.memory_gb.unwrap_or(0));
         let family = offer.name.split(" · ").next().unwrap_or_default().to_owned();
-        (size, family)
+        (
+            size,
+            format!(
+                "{} · {family}{}",
+                offer.provider,
+                offer
+                    .location
+                    .as_ref()
+                    .map(|place| format!(" · {place}"))
+                    .unwrap_or_default()
+            ),
+        )
     }
 }
 
 fn price(offer: &Offer) -> String {
     let prefix = if offer.flavors.len() > 1 { "up to " } else { "" };
-    format!("{prefix}${:.2}/hr", offer.hourly)
+    let symbol = symbol(offer.currency);
+    if offer.currency == "EUR" {
+        format!("{prefix}{symbol}{:.4}/hr", offer.hourly)
+    } else {
+        format!("{prefix}{symbol}{:.2}/hr", offer.hourly)
+    }
+}
+
+fn symbol(currency: &str) -> &str {
+    match currency {
+        "EUR" => "€",
+        "USD" => "$",
+        currency => currency,
+    }
 }
 
 /// The three starting points. Returns the one clicked.
@@ -53,7 +77,9 @@ pub(super) fn picks(ui: &mut Ui, catalog: &Catalog, form: &Production) -> Option
 fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool {
     let offer = &catalog.offers[index];
     let selected = catalog.selected == Some(index);
-    let id = ui.id().with(("worker-card", &offer.id));
+    let id = ui
+        .id()
+        .with(("worker-card", offer.provider, &offer.id, &offer.location));
     let hovered = ui.is_enabled() && ui.ctx().read_response(id).is_some_and(|response| response.hovered());
     // Cards take keyboard focus like buttons, and Enter or Space chooses one.
     let focused = ui.memory(|memory| memory.has_focus(id));
@@ -69,7 +95,7 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
     };
     let stroke = if focused { Stroke::new(2.0, theme::FG()) } else { stroke };
     let (name, detail) = title(offer);
-    let (stock, color) = widgets::stock(catalog.stock(index, form));
+    let (stock, color) = stock(catalog, index, form);
     let frame = Frame::new()
         .fill(fill)
         .stroke(stroke)
@@ -79,9 +105,16 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 3.0;
             ui.label(RichText::new(name).size(15.0).strong().color(theme::FG()));
-            ui.label(RichText::new(detail).size(12.5).color(theme::FG_SOFT()));
+            ui.label(RichText::new(&detail).size(12.5).color(theme::FG_SOFT()));
             ui.add_space(4.0);
             ui.label(RichText::new(price(offer)).size(19.0).strong().color(theme::FG()));
+            if let Some(total) = catalog.total(offer, form) {
+                ui.label(
+                    RichText::new(format!("≈ {}{total:.3} total", symbol(catalog.currency)))
+                        .size(12.0)
+                        .color(theme::FG_SOFT()),
+                );
+            }
             ui.horizontal(|ui| widgets::pill(ui, stock, color));
         });
     let response = ui
@@ -92,32 +125,21 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
             egui::WidgetType::Button,
             ui.is_enabled(),
             selected,
-            format!("{}, {}, {stock}", title(offer).0, price(offer)),
+            format!("{}, {detail}, {}, {stock}", title(offer).0, price(offer)),
         )
     });
     ui.add_space(4.0);
     response.clicked()
 }
 
-/// Every worker the profile allows, behind a toggle. Sold-out workers are listed
-/// unless "In stock only" is checked. Returns the one clicked.
-pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Option<usize> {
+/// Search and eligibility controls keep their place when rankings refresh.
+pub(super) fn filters(ui: &mut Ui, catalog: &Catalog, form: &mut Production) {
+    let excluded = catalog
+        .scoped_offers(form)
+        .filter(|(index, _)| *index >= catalog.matching)
+        .count();
     let state = &mut form.launch.selector;
-    let label = if state.show_all {
-        "Hide the full list".to_owned()
-    } else {
-        format!("Show all {} workers", catalog.offers.len())
-    };
-    if ui
-        .link(RichText::new(label).size(13.0).color(theme::ACCENT()))
-        .clicked()
-    {
-        state.show_all = !state.show_all;
-    }
-    if !state.show_all {
-        return None;
-    }
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.add(
             egui::TextEdit::singleline(&mut state.search)
                 .desired_width(220.0)
@@ -125,10 +147,27 @@ pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Opti
         );
         widgets::checkbox(ui, &mut state.in_stock_only, "In stock only");
     });
+    if excluded > 0 {
+        widgets::checkbox(ui, &mut state.show_below_minimums, "Show workers below requirements");
+    }
+}
+
+/// Excluded workers can be inspected, but never chosen.
+pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Option<usize> {
+    let state = &form.launch.selector;
+    let total = catalog.scoped_offers(form).count();
+    let excluded = catalog
+        .scoped_offers(form)
+        .filter(|(index, _)| *index >= catalog.matching)
+        .count();
     let search = state.search.trim().to_lowercase();
     let in_stock_only = state.in_stock_only;
+    let show_below_minimums = state.show_below_minimums;
     let form = &*form;
-    let rows: Vec<usize> = (0..catalog.offers.len())
+    let rows: Vec<usize> = catalog
+        .scoped_offers(form)
+        .map(|(index, _)| index)
+        .filter(|&index| show_below_minimums || index < catalog.matching)
         .filter(|&index| {
             let (name, detail) = title(&catalog.offers[index]);
             search.is_empty() || format!("{name} {detail}").to_lowercase().contains(&search)
@@ -140,16 +179,36 @@ pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Opti
                     .is_some_and(|stock| stock.level != horizon_core::cloud_runtime::prices::Availability::None)
         })
         .collect();
+    let hidden = if show_below_minimums { 0 } else { excluded };
+    widgets::note(
+        ui,
+        &format!(
+            "Showing {} of {} workers · {hidden} below requirements hidden",
+            rows.len(),
+            total
+        ),
+    );
     if rows.is_empty() {
-        widgets::note(ui, "No worker matches.");
+        widgets::note(
+            ui,
+            "No worker matches these filters. Clear the search or change the filters.",
+        );
         return None;
     }
     let mut chosen = None;
-    for (stripe, index) in rows.into_iter().enumerate() {
-        if row(ui, catalog, form, index, stripe % 2 == 1) {
-            chosen = Some(index);
-        }
-    }
+    super::super::super::super::runtime::solid_scroll_area(ui)
+        .id_salt("cloud-worker-catalog")
+        .max_height(180.0)
+        .show(ui, |ui| {
+            for (stripe, index) in rows.into_iter().enumerate() {
+                let response = ui.add_enabled_ui(index < catalog.matching, |ui| {
+                    row(ui, catalog, form, index, stripe % 2 == 1)
+                });
+                if response.inner {
+                    chosen = Some(index);
+                }
+            }
+        });
     chosen
 }
 
@@ -160,7 +219,14 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let selected = catalog.selected == Some(index);
     let (name, detail) = title(offer);
-    let (stock, stock_color) = widgets::stock(catalog.stock(index, form));
+    let reason = super::profile(form).and_then(|profile| {
+        horizon_core::cloud_runtime::offers::Requirements::for_profile(profile).resource_reason(offer)
+    });
+    let (stock, stock_color) = if reason.is_some() {
+        ("Below requirements", theme::FG_DIM())
+    } else {
+        stock(catalog, index, form)
+    };
     let painter = ui.painter();
     let fill = if selected {
         theme::alpha(theme::ACCENT(), 44)
@@ -182,20 +248,30 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
     let font = FontId::proportional(13.0);
     let y = rect.center().y;
     let at = |fraction: f32| rect.left() + 12.0 + (width - 24.0) * fraction;
-    painter.text(
-        egui::pos2(at(0.0), y),
-        Align2::LEFT_CENTER,
-        &name,
-        font.clone(),
-        theme::FG(),
-    );
-    painter.text(
-        egui::pos2(at(0.34), y),
-        Align2::LEFT_CENTER,
-        &detail,
-        font.clone(),
-        theme::FG_DIM(),
-    );
+    painter
+        .with_clip_rect(painter.clip_rect().intersect(egui::Rect::from_min_max(
+            egui::pos2(at(0.0), rect.top()),
+            egui::pos2(at(0.33), rect.bottom()),
+        )))
+        .text(
+            egui::pos2(at(0.0), y),
+            Align2::LEFT_CENTER,
+            &name,
+            font.clone(),
+            theme::FG(),
+        );
+    painter
+        .with_clip_rect(painter.clip_rect().intersect(egui::Rect::from_min_max(
+            egui::pos2(at(0.34), rect.top()),
+            egui::pos2(at(0.65), rect.bottom()),
+        )))
+        .text(
+            egui::pos2(at(0.34), y),
+            Align2::LEFT_CENTER,
+            &detail,
+            font.clone(),
+            theme::FG_DIM(),
+        );
     painter.text(
         egui::pos2(at(0.66), y),
         Align2::LEFT_CENTER,
@@ -215,8 +291,25 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
             egui::WidgetType::Button,
             ui.is_enabled(),
             selected,
-            format!("{name}, {}, {stock}", price(offer)),
+            format!("{name}, {detail}, {}, {stock}", price(offer)),
         )
     });
+    let response = if let Some(reason) = reason {
+        response.on_disabled_hover_text(reason)
+    } else {
+        response
+    };
     response.clicked()
+}
+
+fn stock(catalog: &Catalog, index: usize, form: &Production) -> (&'static str, egui::Color32) {
+    let offer = &catalog.offers[index];
+    if offer.location.is_some() {
+        return if offer.availability == "listed" {
+            ("Listed available", theme::PALETTE_GREEN())
+        } else {
+            ("Unlisted · advisory", theme::PALETTE_YELLOW())
+        };
+    }
+    widgets::stock(catalog.stock(index, form))
 }

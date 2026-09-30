@@ -94,6 +94,34 @@ pub struct Policy {
     pub server_types: Vec<String>,
 }
 
+impl Policy {
+    /// Intersect current machine policy with the worker's persisted allocation choice.
+    /// # Errors
+    /// Refuses a saved worker choice no longer allowed by current settings.
+    pub fn for_spec(&self, spec: &WorkerSpec) -> Result<Self, CloudError> {
+        if !spec.exact_placement {
+            return Ok(self.clone());
+        }
+        let selected = |allowed: &[String], saved: &[String]| -> Vec<String> {
+            if saved.is_empty() {
+                allowed.to_vec()
+            } else {
+                saved.iter().filter(|value| allowed.contains(value)).cloned().collect()
+            }
+        };
+        let policy = Self {
+            locations: selected(&self.locations, &spec.data_centers),
+            server_types: selected(&self.server_types, &spec.cpu_flavors),
+        };
+        if policy.locations.is_empty() || policy.server_types.is_empty() {
+            return Err(CloudError::Invalid(
+                "The saved worker type or location is no longer allowed",
+            ));
+        }
+        Ok(policy)
+    }
+}
+
 /// The location of an existing workspace volume. The policy can change while a
 /// cloud has a volume, so a location it no longer allows is refused rather than used.
 /// # Errors
@@ -116,6 +144,7 @@ pub fn location(recorded: Option<&str>, policy: &Policy) -> Result<String, Cloud
 /// # Errors
 /// Refuses when no allowed location has a fitting type.
 pub fn first_fit(offers: &[Offer], spec: &WorkerSpec, policy: &Policy) -> Result<(String, Vec<Placement>), CloudError> {
+    let policy = policy.for_spec(spec)?;
     if policy.locations.is_empty() {
         return Err(CloudError::Invalid("Hetzner settings list no location"));
     }
@@ -167,7 +196,7 @@ pub fn fit(
     };
     let placements: Vec<Placement> = server_types
         .iter()
-        .filter(|server_type| fits(server_type))
+        .filter(|server_type| (!spec.exact_placement || spec.cpu_flavors.contains(server_type)) && fits(server_type))
         .map(|server_type| Placement {
             server_type: server_type.clone(),
             location: location.to_owned(),

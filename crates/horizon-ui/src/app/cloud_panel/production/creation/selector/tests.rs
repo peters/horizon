@@ -90,7 +90,61 @@ fn form(profile: &str) -> Production {
     };
     form.launch.accounts_checked = true;
     form.prices.answered(list(None), preferences(), Vec::new());
+    form.prices.hetzner.answered(None);
     form
+}
+
+#[test]
+fn refresh_keeps_browsing_choices_but_removes_complete_rankings_until_current() {
+    let mut form = form("cpu");
+    let before = catalog(&form).unwrap();
+    assert!(before.complete && before.picks.cheapest.is_some());
+    form.prices.refresh();
+    let during = catalog(&form).unwrap();
+    assert_eq!(during.offers, before.offers);
+    assert!(!during.complete && during.picks.cheapest.is_none());
+    form.prices.answered(list(None), preferences(), Vec::new());
+    assert!(
+        !catalog(&form).unwrap().complete,
+        "Hetzner binding still needs rechecking"
+    );
+    form.prices.hetzner.answered(None);
+    assert!(catalog(&form).unwrap().complete);
+    if let Some(at) = Instant::now().checked_sub(std::time::Duration::from_hours(2)) {
+        form.prices.list.as_mut().unwrap().at = at;
+        assert!(!catalog(&form).unwrap().complete);
+    }
+}
+
+#[test]
+fn refreshing_rankings_does_not_move_filter_controls() {
+    let positions = |form: &mut Production| {
+        egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(1000.0);
+                section(ui, form);
+            })
+            .discard_textures()
+            .shapes
+            .into_iter()
+            .filter_map(|shape| match shape.shape {
+                egui::epaint::Shape::Text(text)
+                    if matches!(
+                        text.galley.job.text.as_str(),
+                        "In stock only" | "Show workers below requirements"
+                    ) =>
+                {
+                    Some((text.galley.job.text.clone(), text.pos))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut form = form("cpu");
+    let before = positions(&mut form);
+    assert_eq!(before.len(), 2);
+    form.prices.refresh();
+    assert_eq!(positions(&mut form), before);
 }
 
 /// Draws the selector and its summary once, returning every visible text.
@@ -114,6 +168,45 @@ fn render(form: &mut Production) -> Vec<String> {
 }
 
 #[test]
+fn provider_and_exchange_failures_only_appear_in_the_comparison_scope() {
+    let failed = |profile| {
+        let mut form = form(profile);
+        form.prices.hetzner.failed("Synthetic Hetzner failure");
+        form.prices.exchange.error = Some("Synthetic exchange failure".into());
+        form.prices.list_error = Some("Synthetic RunPod failure".into());
+        form
+    };
+    let contains = |labels: &[String], text: &str| labels.iter().any(|label| label.contains(text));
+    let mut all = failed("cpu");
+    let labels = render(&mut all);
+    for error in ["Synthetic Hetzner failure", "Synthetic RunPod failure"] {
+        assert!(contains(&labels, error), "missing {error}");
+    }
+    assert!(!contains(&labels, "Synthetic exchange failure"));
+    for profile in ["cpu", "gpu"] {
+        let mut runpod = failed(profile);
+        runpod.launch.selector.provider_filter = Some("RunPod".into());
+        let labels = render(&mut runpod);
+        assert!(contains(&labels, "Synthetic RunPod failure"));
+        assert!(!contains(&labels, "Synthetic Hetzner failure"));
+        assert!(!contains(&labels, "Synthetic exchange failure"));
+    }
+    let labels = render(&mut failed("gpu"));
+    assert!(!contains(&labels, "Synthetic Hetzner failure"));
+    assert!(!contains(&labels, "Synthetic exchange failure"));
+    let mut hetzner = failed("cpu");
+    hetzner.launch.selector.provider_filter = Some("Hetzner".into());
+    let labels = render(&mut hetzner);
+    assert!(contains(&labels, "Synthetic Hetzner failure"));
+    assert!(!contains(&labels, "Synthetic RunPod failure"));
+    assert!(!contains(&labels, "Synthetic exchange failure"));
+    assert!(labels.iter().any(|label| label == "Refresh"));
+    let mut unconfigured = form("cpu");
+    unconfigured.prices.exchange.error = Some("Synthetic exchange failure".into());
+    assert!(!contains(&render(&mut unconfigured), "Synthetic exchange failure"));
+}
+
+#[test]
 fn cpu_workers_below_the_profile_are_hidden_and_picks_span_the_rest() {
     let mut form = form("cpu");
     let shown = catalog(&form).unwrap();
@@ -122,6 +215,7 @@ fn cpu_workers_below_the_profile_are_hidden_and_picks_span_the_rest() {
         shown
             .offers
             .iter()
+            .take(shown.matching)
             .all(|offer| offer.vcpu.unwrap() >= 4 && offer.memory_gb.unwrap() >= 8)
     );
     // The profile's own size is the cheapest and starts selected.
@@ -139,8 +233,151 @@ fn cpu_workers_below_the_profile_are_hidden_and_picks_span_the_rest() {
     assert!(
         labels
             .iter()
-            .any(|label| label == "At least 4 vCPU and 8 GB memory, for the cpu profile")
+            .any(|label| label == "Profile cpu requires at least 4 vCPU and 8 GB memory")
     );
+}
+
+#[test]
+fn filters_are_discoverable_and_do_not_change_the_selection() {
+    let mut form = form("cpu");
+    assert!(form.launch.selector.in_stock_only);
+    assert!(!form.launch.selector.show_below_minimums);
+    let shown = catalog(&form).unwrap();
+    assert!(shown.matching < shown.offers.len());
+    let labels = render(&mut form);
+    assert!(labels.iter().any(|label| label == "In stock only"));
+    assert!(labels.iter().any(|label| label == "Show workers below requirements"));
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.starts_with("Showing ") && label.contains("below requirements hidden"))
+    );
+    assert!(labels.iter().any(|label| label == "EU-1"));
+    assert!(labels.iter().any(|label| label == "US-1"));
+    let before = (form.size, form.placement.clone());
+    form.launch.selector.search = "No such worker".into();
+    form.launch.selector.in_stock_only = false;
+    form.launch.selector.show_below_minimums = true;
+    form.launch.selector.wait_for_stock = true;
+    let labels = render(&mut form);
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.starts_with("No worker matches these filters."))
+    );
+    assert_eq!((form.size, form.placement.clone()), before);
+    form.launch.selector.profile_changed();
+    assert!(form.launch.selector.search.is_empty());
+    assert!(form.launch.selector.in_stock_only && !form.launch.selector.show_below_minimums);
+    assert!(!form.launch.selector.wait_for_stock);
+}
+
+#[test]
+fn stock_filter_defaults_to_hiding_sold_out_workers_without_changing_the_selection() {
+    let mut form = form("gpu");
+    let _ = render(&mut form);
+    let before = (form.size, form.placement.clone());
+    let labels = render(&mut form);
+    assert!(!labels.iter().any(|label| label == "A5000"));
+    assert!(labels.iter().any(|label| label == "A6000"));
+    form.launch.selector.in_stock_only = false;
+    let labels = render(&mut form);
+    assert!(labels.iter().any(|label| label == "A5000"));
+    assert_eq!((form.size, form.placement.clone()), before);
+}
+
+#[test]
+fn browsing_a_worker_below_requirements_never_selects_or_enables_it() {
+    let mut form = form("cpu");
+    form.launch.selector.show_below_minimums = true;
+    form.launch.selector.search = "2 vCPU".into();
+    let ctx = egui::Context::default();
+    let frame = |form: &mut Production, events| {
+        let catalog = catalog(form).unwrap();
+        let mut chosen = None;
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    events,
+                    ..egui::RawInput::default()
+                },
+                |ui| {
+                    ui.set_width(1000.0);
+                    chosen = cards::all(ui, &catalog, form);
+                },
+            )
+            .discard_textures();
+        assert!(chosen.is_none());
+        output
+    };
+    let output = frame(&mut form, Vec::new());
+    let text = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text == "2 vCPU · 4 GB" => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    let at = egui::Rect::from_min_size(text.pos, text.galley.size()).center();
+    for pressed in [true, false] {
+        let _ = frame(
+            &mut form,
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(form.size.is_none());
+    form.size = Some((2, 4));
+    assert!(catalog(&form).unwrap().selected.is_none());
+    assert!(!can_submit(&form));
+}
+
+#[test]
+fn an_empty_matching_catalog_still_exposes_filters_and_excluded_workers() {
+    let mut form = form("gpu");
+    form.profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("gpu")
+        .unwrap()
+        .min_gpu_memory_gb = Some(1000);
+    let shown = catalog(&form).unwrap();
+    assert_eq!(shown.matching, 0);
+    assert!(!shown.offers.is_empty());
+    form.launch.selector.show_below_minimums = true;
+    let labels = render(&mut form);
+    assert!(labels.iter().any(|label| label == "In stock only"));
+    assert!(labels.iter().any(|label| label == "Below requirements"));
+    assert!(form.placement.gpu_types.is_empty());
+    assert!(!can_submit(&form));
+}
+
+#[test]
+fn datacenter_stock_never_counts_a_preferred_gpu_below_the_profile_floor() {
+    let mut form = form("gpu");
+    form.profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("gpu")
+        .unwrap()
+        .min_gpu_memory_gb = Some(1000);
+    let mut preferred = preferences();
+    preferred.gpu_types = vec!["small".into()];
+    form.prices.answered(list(None), preferred, Vec::new());
+    let labels = render(&mut form);
+    assert!(labels.iter().any(|label| label.contains("stock unknown")));
+    assert!(!labels.iter().any(|label| label.contains("1 in stock")));
+    assert!(!can_submit(&form));
 }
 
 #[test]
@@ -150,7 +387,11 @@ fn a_gpu_profile_requests_the_cheapest_in_stock_type_that_meets_its_memory_floor
     // "small" is cheaper and in stock, but below the 24 GB floor; A5000 is sold out.
     assert_eq!(form.placement.gpu_types, ["a6000"]);
     let shown = catalog(&form).unwrap();
-    assert!(shown.offers.iter().all(|offer| offer.gpu_memory_gb.unwrap() >= 24));
+    assert!(
+        shown.offers[..shown.matching]
+            .iter()
+            .all(|offer| offer.gpu_memory_gb.unwrap() >= 24)
+    );
     // Sold-out types stay listed.
     assert!(shown.offers.iter().any(|offer| offer.id == "a5000"));
 }
@@ -181,6 +422,7 @@ fn the_wait_checkbox_appears_only_for_a_sold_out_selection() {
     assert!(!labels.iter().any(|label| label == "Start new cloud once available"));
     assert!(labels.iter().any(|label| label == "Start cloud"));
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: vec!["a5000".into()],
@@ -201,6 +443,7 @@ fn the_wait_checkbox_appears_only_for_a_sold_out_selection() {
 fn a_watch_needs_one_data_center_and_never_starts_above_the_price_shown() {
     let mut form = form("gpu");
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into(), "EU-2".into()],
         gpu_types: vec!["a5000".into()],
@@ -255,14 +498,15 @@ fn old_runpod_prices_never_hold_back_another_provider() {
     fetched.at = Instant::now().checked_sub(std::time::Duration::from_hours(2)).unwrap();
     assert!(!can_submit(&form));
     form.provider = Some(&horizon_core::cloud_runtime::provider::HETZNER);
-    assert_eq!(submit_reason(&form), None);
-    assert!(can_submit(&form));
+    assert_eq!(submit_reason(&form), Some("Choose a Hetzner worker and location."));
+    assert!(!can_submit(&form));
 }
 
 #[test]
 fn a_watch_never_arms_without_a_price_to_hold_it_to() {
     let mut form = form("gpu");
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: vec!["a5000".into()],
@@ -285,6 +529,7 @@ fn a_watch_never_arms_without_a_price_to_hold_it_to() {
 fn a_data_center_without_the_chosen_volume_blocks_start_instead_of_moving() {
     let mut form = form("cpu");
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: Vec::new(),
@@ -320,6 +565,7 @@ fn a_chosen_gpu_type_is_never_replaced_once_it_is_no_longer_offered() {
 fn only_stock_is_waited_for_and_a_new_profile_clears_the_search() {
     let mut form = form("cpu");
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: Vec::new(),
@@ -395,6 +641,10 @@ fn worker_cards_are_chosen_from_the_keyboard() {
         }
     }
     let label = target.expect("a worker card takes keyboard focus");
+    assert!(
+        label.contains("RunPod"),
+        "the accessible name identifies its provider: {label}"
+    );
     let _ = frame(
         &mut form,
         vec![key(egui::Key::Enter, true), key(egui::Key::Enter, false)],
@@ -474,12 +724,45 @@ fn only_the_chosen_cpu_size_reads_exact_stock_and_the_rest_say_likely() {
         .unwrap();
     assert_eq!(widgets::stock(shown.stock(other, &form)).0, "Likely in stock");
     assert_eq!(widgets::stock(shown.stock(chosen, &form)).0, "Out of stock");
+    assert_ne!(shown.picks.cheapest, Some(chosen));
+    for index in [shown.picks.cheapest, shown.picks.balanced, shown.picks.powerful]
+        .into_iter()
+        .flatten()
+    {
+        assert!(
+            shown
+                .stock(index, &form)
+                .is_some_and(|stock| stock.level != Availability::None)
+        );
+    }
+    form.launch.selector.in_stock_only = false;
+    let unfiltered = catalog(&form).unwrap();
+    assert_eq!(unfiltered.picks.cheapest, Some(chosen));
+}
+
+#[test]
+fn stock_only_recommendations_are_empty_when_every_worker_is_unavailable() {
+    let mut form = form("gpu");
+    let mut sold_out = list(None);
+    for center in &mut sold_out.data_centers {
+        for (_, stock) in &mut center.gpus {
+            *stock = Availability::None;
+        }
+    }
+    form.prices.answered(sold_out, preferences(), Vec::new());
+    let shown = catalog(&form).unwrap();
+    assert!(shown.complete);
+    assert_eq!(shown.picks, Picks::default());
+    form.launch.selector.in_stock_only = false;
+    let unfiltered = catalog(&form).unwrap();
+    assert!(unfiltered.picks.cheapest.is_some());
 }
 
 #[test]
 fn start_arms_the_watch_for_a_checked_sold_out_worker_whether_clicked_or_entered() {
     let mut form = form("gpu");
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: vec!["a5000".into()],
@@ -510,6 +793,7 @@ fn a_vanished_data_center_or_price_ends_what_depends_on_it() {
     // A watched GPU the catalog stops pricing ends the watch instead of waiting forever.
     let mut watched = form("gpu");
     watched.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: vec!["a5000".into()],
@@ -530,6 +814,7 @@ fn a_vanished_data_center_or_price_ends_what_depends_on_it() {
 fn an_old_catalog_keeps_a_watch_waiting_and_a_volume_nobody_holds_is_named() {
     let mut watched = form("gpu");
     watched.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: vec!["a5000".into()],
@@ -560,4 +845,30 @@ fn an_old_catalog_keeps_a_watch_waiting_and_a_volume_nobody_holds_is_named() {
         submit_reason(&fast),
         Some("No allowed data center can hold this kind of workspace volume. Choose another storage type.")
     );
+}
+
+#[test]
+fn retained_region_selection_requires_every_center_to_hold_the_storage_tier() {
+    let mut form = form("cpu");
+    let second = &mut form.prices.list.as_mut().unwrap().value.0.data_centers[1];
+    second.id = "EU-2".into();
+    second.region = "EUROPE".into();
+    form.placement.data_centers = vec!["EU-1".into(), "EU-2".into()];
+    form.placement.region = Some("Europe".into());
+    assert!(can_submit(&form));
+    form.profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("cpu")
+        .unwrap()
+        .storage
+        .volume_tier = StorageTier::HighPerformance;
+    assert!(!can_submit(&form));
+    assert!(submit_reason(&form).unwrap().contains("cannot hold"));
+    form.placement.data_centers = vec!["EU-2".into()];
+    assert!(can_submit(&form));
+    form.placement.data_centers.push("not-offered".into());
+    assert!(!can_submit(&form));
+    assert!(submit_reason(&form).unwrap().contains("no longer offered"));
 }

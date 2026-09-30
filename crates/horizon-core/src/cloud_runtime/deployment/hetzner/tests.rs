@@ -13,6 +13,7 @@ fn spec() -> WorkerSpec {
     }))
     .unwrap();
     WorkerSpec {
+        exact_placement: false,
         operation_id: "0e9f3c52-8f55-4a4c-9d7c-1c1c0a6a7b21".into(),
         image_digest: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
         profile,

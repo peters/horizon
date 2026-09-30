@@ -23,7 +23,7 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         // A GPU cloud requests exactly the one type chosen for it, never the machine's
         // preferences, and any fetched catalog must offer the chosen worker.
         let catalog = super::selector::catalog(form);
-        if catalog.as_ref().is_some_and(|catalog| catalog.offers.is_empty()) {
+        if catalog.as_ref().is_some_and(|catalog| catalog.matching == 0) {
             return Some(empty_catalog_reason(form, profile));
         }
         if profile.gpu && form.placement.gpu_types.len() != 1 {
@@ -34,17 +34,20 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         }
         // A chosen place must still be offered, and hold the chosen kind of workspace volume.
         if let Some(fetched) = form.prices.list.as_ref().filter(|_| !form.placement.is_any()) {
-            let mut known = fetched
-                .value
-                .0
+            let centers = &fetched.value.0.data_centers;
+            if form
+                .placement
                 .data_centers
                 .iter()
-                .filter(|center| form.placement.data_centers.contains(&center.id))
-                .peekable();
-            if known.peek().is_none() {
+                .any(|id| !centers.iter().any(|center| center.id == *id))
+            {
                 return Some("The chosen data center is no longer offered. Choose another data center.");
             }
-            if !profile.gpu && !known.any(|center| center.holds(profile.storage.volume_tier)) {
+            if !profile.gpu
+                && centers.iter().any(|center| {
+                    form.placement.data_centers.contains(&center.id) && !center.holds(profile.storage.volume_tier)
+                })
+            {
                 return Some(
                     "The chosen data center cannot hold this kind of workspace volume. Choose another data center or storage type.",
                 );
@@ -59,6 +62,12 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
             return Some("Choose a CPU size the catalog offers for this profile.");
         }
         return None;
+    }
+    if form.placement.cpu_types.len() != 1 {
+        return Some("Choose a Hetzner worker and location.");
+    }
+    if super::selector::catalog(form).is_none_or(|catalog| catalog.selected.is_none()) {
+        return Some("The selected worker is no longer offered for this profile. Choose another worker.");
     }
     size_reason(form)
 }
@@ -85,14 +94,6 @@ pub(super) fn empty_catalog_reason(form: &super::Production, profile: &Profile) 
 pub(super) fn size_reason(form: &super::Production) -> Option<&'static str> {
     let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
     let provider = super::provider::current(form.provider, profile);
-    if provider.kind == Kind::Hetzner {
-        form.prices.hetzner.displayed()?.value.as_ref()?;
-        let sized = super::provider::sized(provider, profile, form.size).ok()?;
-        return (!super::provider::location_offers(&form.prices, &sized)
-            .iter()
-            .any(|offer| form.placement.is_any() || form.placement.data_centers.contains(&offer.location)))
-        .then_some("Choose a system disk and CPU size supported by a server in the selected location.");
-    }
     (provider.kind == Kind::RunPod
         && !profile.gpu
         && !flavors::offered(

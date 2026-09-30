@@ -38,9 +38,9 @@ pub fn hetzner_catalog(settings: &Settings, cancel: &Cancellation) -> Result<Opt
         return Ok(None);
     };
     let mut catalog = Hetzner::new(hetzner.credential()?).catalog(cancel)?;
-    catalog
-        .offers
-        .retain(|offer| hetzner.locations.contains(&offer.location));
+    catalog.offers.retain(|offer| {
+        hetzner.locations.contains(&offer.location) && hetzner.server_types.contains(&offer.server_type)
+    });
     Ok(Some(catalog))
 }
 

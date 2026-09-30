@@ -140,6 +140,7 @@ mod tests {
     #[test]
     fn the_header_names_the_landed_data_center_before_the_choice() {
         let chosen = launch(Placement {
+            cpu_types: Vec::new(),
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into(), "EU-SE-1".into()],
             gpu_types: Vec::new(),
@@ -176,6 +177,7 @@ mod tests {
         let unknown = |_: &str| None;
         let known = |center: &str| (center == "US-MO-2").then(|| "North America".to_owned());
         let europe = Placement {
+            cpu_types: Vec::new(),
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
             gpu_types: Vec::new(),
@@ -205,6 +207,7 @@ mod tests {
         );
         assert_eq!(landed(Some(&cpu)), Some("US-MO-2"));
         let one = Placement {
+            cpu_types: Vec::new(),
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into()],
             gpu_types: Vec::new(),
