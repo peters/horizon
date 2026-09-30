@@ -681,6 +681,53 @@ fn retry_repairs_a_reused_reservations_claim_when_its_source_write_landed_alone(
 }
 
 #[test]
+fn submitting_again_repairs_an_interrupted_reuse_with_the_canonical_claim() {
+    for (missing_claim, new_retry_id) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (mut fixture, binding) = fresh("reserved");
+        let declined = OperationId::generate();
+        reserve(&fixture.request(), binding, declined).unwrap();
+        save_reserved(&fixture, &prepared(&fixture));
+        cancel_submission(&fixture.request(), declined).unwrap();
+        // The fresh submission committed, then stopped before updating the target.
+        let canonical = OperationId::generate();
+        let (store, mut state) = fixture.request().load().unwrap();
+        state
+            .intents
+            .submit("consumer", Action::EnsureReady, canonical)
+            .unwrap();
+        store.save(&state).unwrap();
+        drop(store);
+        if missing_claim {
+            std::fs::remove_file(fixture.root.path().join("reserved/companion-operation.json")).unwrap();
+        }
+        let retry = if new_retry_id {
+            OperationId::generate()
+        } else {
+            canonical
+        };
+        let operation = submit(&fixture.request(), Action::EnsureReady, retry).unwrap();
+        assert_eq!(
+            (operation.intent.operation_id, operation.phase),
+            (canonical, Phase::Submitted)
+        );
+        let claim = receipt::load(&fixture.root.path().join("reserved")).unwrap().unwrap();
+        assert_eq!(
+            (claim.id, claim.phase, claim.confirmed),
+            (canonical, Phase::Submitted, None)
+        );
+        // The retained card can now confirm and execute that same operation.
+        select_reserved(&mut fixture);
+        confirm_creation(&fixture.request(), canonical).unwrap();
+        let mut backend = Fake::new(&fixture);
+        assert_eq!(
+            execute_with(&fixture.request(), canonical, &mut backend).unwrap().phase,
+            Phase::Ready
+        );
+        assert_eq!(backend.decisions, [Decision::Reconnect]);
+    }
+}
+
+#[test]
 fn an_existing_binding_with_no_operation_or_cloud_does_not_hold_a_reservation() {
     let (mut fixture, binding) = fresh("reserved");
     bind(&fixture.request(), fixture.binding.clone()).unwrap();

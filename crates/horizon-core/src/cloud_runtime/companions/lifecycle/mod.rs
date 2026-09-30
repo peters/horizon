@@ -215,6 +215,14 @@ fn submit_locked(request: &Request<'_>, action: Action, id: OperationId) -> Resu
     {
         state.intents = candidate;
         store.save(&state)?;
+        if recovering && intent.state == State::Submitted {
+            let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
+            let _execution = receipt::execution_lock(&root)?;
+            let target = request.target_store(&binding)?;
+            if creation::unallocated(&binding, &target)? {
+                creation::repair_claim(request, &state, &intent, &target)?;
+            }
+        }
         return operation(request, &binding, intent);
     }
     if recovering {

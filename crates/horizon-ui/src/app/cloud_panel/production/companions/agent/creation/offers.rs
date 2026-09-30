@@ -4,8 +4,8 @@ use super::{Action, Checkout, Context, HorizonApp, PathBuf, Pending, SEARCHED, S
 
 impl HorizonApp {
     /// Asks the owner to start a checked companion whose cloud was created but never
-    /// started, as a creation whose card already exists. `None` when its card is not
-    /// open here, and the agent is told to have it started from its card.
+    /// started, or to restore its recoverable reserved card before starting it.
+    /// `None` when neither offer is available.
     pub(in crate::app::cloud_panel::production::companions::agent) fn request_companion_start(
         &mut self,
         source: &str,
@@ -14,12 +14,15 @@ impl HorizonApp {
         context: &Context,
     ) -> Option<Value> {
         let target = &operation.intent.target_cloud_id;
-        let group = self
+        let Some(group) = self
             .cloud_prototype
             .groups
             .0
             .iter()
-            .find(|group| group.remote.as_ref().is_some_and(|launch| &launch.id == target))?;
+            .find(|group| group.remote.as_ref().is_some_and(|launch| &launch.id == target))
+        else {
+            return self.request_companion_recovery(source, alias, operation, context);
+        };
         let launch = group.remote.as_ref()?;
         let owner = self
             .cloud_prototype

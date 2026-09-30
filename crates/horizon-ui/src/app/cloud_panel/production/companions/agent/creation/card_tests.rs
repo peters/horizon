@@ -3,27 +3,124 @@
 use super::tests::{creation, declaration, owner};
 use super::*;
 
-#[test]
-fn a_checked_cloud_that_never_started_is_offered_to_the_owner_to_start() {
-    let (_temp, mut app) = crate::app::test_support::test_app();
-    let ctx = egui::Context::default();
-    let launch = |id: &str| -> horizon_core::cloud_panel::CloudLaunch {
+fn cloud(issue: u32, id: &str) -> horizon_core::cloud_panel::CloudGroup {
+    let mut group = horizon_core::cloud_panel::CloudGroup::new(
+        issue,
+        id.into(),
+        "workspace".into(),
+        format!("/checkouts/{id}").into(),
+        [0.0, 0.0],
+    );
+    group.remote = Some(
         serde_json::from_value(json!({
             "id": id, "revision": "a".repeat(40), "profile_name": "cpu",
             "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8}
         }))
-        .unwrap()
-    };
-    for (issue, id) in [(1, "source"), (2, "target")] {
-        let mut group = horizon_core::cloud_panel::CloudGroup::new(
-            issue,
-            id.into(),
-            "workspace".into(),
-            format!("/checkouts/{id}").into(),
-            [0.0, 0.0],
+        .unwrap(),
+    );
+    group
+}
+
+#[test]
+fn confirmation_polls_and_resubmissions_offer_to_restore_a_missing_reserved_card() {
+    for read in [true, false] {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let root = temp.path().join("clouds");
+        app.cloud_prototype.root = Some(root.clone());
+        app.cloud_prototype.groups.0.push(cloud(1, "source"));
+        let groups = app.cloud_prototype.groups.clone();
+        app.cloud_prototype.production.companions.sync(Some("session"), &groups);
+        let owner = owner();
+        let context = Context {
+            source: Target {
+                scope: owner.scope.clone(),
+                cloud_id: owner.cloud_id.clone(),
+                declaration: Declaration::new("example/source", "cpu"),
+            },
+            declarations: [("consumer".into(), declaration())].into(),
+            inventory: Vec::new(),
+        };
+        let target = Target {
+            scope: owner.scope.clone(),
+            cloud_id: "reserved".into(),
+            declaration: declaration(),
+        };
+        let id = OperationId::generate();
+        let binding = Binding::new(
+            &owner,
+            "consumer",
+            target,
+            "/checkouts/consumer".into(),
+            Origin::Reserved,
+        )
+        .unwrap();
+        let request = lifecycle::Request {
+            root: &root,
+            owner: &owner,
+            context: &context,
+            alias: "consumer",
+        };
+        let mut operation = lifecycle::reserve(&request, binding, id).unwrap();
+        let record: horizon_core::cloud_runtime::state::Deployment = serde_json::from_value(json!({
+            "version":1, "cloud_id":"reserved", "repository":"/checkouts/consumer", "revision":"a".repeat(40),
+            "profile":{"provider":"runpod", "image":"example.invalid/worker", "cpu":4, "memory_gb":8},
+            "stage":"Validate", "operation":{"state":"prepared"}, "spec":null, "sessions":[],
+            "source_ready":false, "stop_requested":false
+        }))
+        .unwrap();
+        horizon_core::cloud_runtime::state::Store::lock(&root.join("reserved"))
+            .unwrap()
+            .save(&record)
+            .unwrap();
+        std::fs::write(
+            root.join("reserved/companion-operation.json"),
+            serde_json::to_vec(&json!({
+                "owner":owner, "id":id, "phase":"confirmation_required"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        operation.phase = lifecycle::Phase::ConfirmationRequired;
+        let submitted = || super::super::Submitted {
+            operation: operation.clone(),
+            context: context.clone(),
+            alias: "consumer".into(),
+        };
+        let ctx = egui::Context::default();
+        let (answer, started) = if read {
+            let status: super::super::UsageRequest = serde_json::from_value(json!({
+                "request_id":"companion", "actor":"horizon:agent", "host_instance":"host",
+                "deadline_at_millis":i64::MAX, "claimed":true,
+                "cloud_companion":{"action":"status", "cloud":"source", "alias":"consumer", "operation_id":id}
+            }))
+            .unwrap();
+            app.answer_submitted(&status, "source", submitted(), &ctx)
+        } else {
+            app.continue_operation("source", submitted(), &ctx)
+        };
+        assert!(!started);
+        assert_eq!(
+            (answer["phase"].as_str(), answer["done"].as_bool()),
+            (Some("confirmation_required"), Some(false))
         );
-        group.remote = Some(launch(id));
-        app.cloud_prototype.groups.0.push(group);
+        assert_eq!(answer["operation_id"], json!(id));
+        let pending = &creation(&mut app).pending[0];
+        assert!(pending.waiting() && pending.recorded);
+        assert_eq!(pending.card, None);
+        assert_eq!(pending.cloud_id.as_deref(), Some("reserved"));
+        assert_eq!(pending.chosen.as_deref(), Some(Path::new("/checkouts/consumer")));
+        // Offering recovery never adds a card or allocates without the owner.
+        assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+        assert!(app.cloud_prototype.production.companions.agent.executing.is_empty());
+    }
+}
+
+#[test]
+fn a_checked_cloud_that_never_started_is_offered_to_the_owner_to_start() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    for (issue, id) in [(1, "source"), (2, "target")] {
+        app.cloud_prototype.groups.0.push(cloud(issue, id));
     }
     let groups = app.cloud_prototype.groups.clone();
     app.cloud_prototype.production.companions.sync(Some("session"), &groups);

@@ -27,13 +27,7 @@ pub fn reserve(request: &Request<'_>, binding: Binding, id: OperationId) -> Resu
                     let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
                     let _execution = receipt::execution_lock(&root)?;
                     let target = request.target_store(&binding)?;
-                    // The journal write landed but the claim did not: finish it, so the
-                    // owner can still confirm this reservation.
-                    if receipt::load(target.root())?
-                        .is_none_or(|claim| claim.owner == *request.owner && state.intents.settled(claim.id))
-                    {
-                        receipt::save(&target, request.owner, intent.operation_id, Phase::Submitted)?;
-                    }
+                    repair_claim(request, &state, intent, &target)?;
                 }
             }
             Some(bound) if bound.target() == binding.target() => {
@@ -76,6 +70,23 @@ pub fn reserve(request: &Request<'_>, binding: Binding, id: OperationId) -> Resu
         }
     }
     super::submit_locked(request, Action::EnsureReady, id)
+}
+
+/// The source journal committed an unstarted reservation but its target claim did
+/// not. Call under the source, execution and target locks; never replace another
+/// owner's claim or an unsettled operation.
+pub(super) fn repair_claim(
+    request: &Request<'_>,
+    state: &super::journal::State,
+    intent: &super::Intent,
+    target: &Store,
+) -> Result<()> {
+    if receipt::load(target.root())?
+        .is_none_or(|claim| claim.owner == *request.owner && state.intents.settled(claim.id))
+    {
+        receipt::save(target, request.owner, intent.operation_id, Phase::Submitted)?;
+    }
+    Ok(())
 }
 
 /// Refuses a reserved identity that already names a cloud, its record, claim or
