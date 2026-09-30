@@ -584,6 +584,9 @@ backdrop dimming:
 - In dialogs: 38 high, full width, text 15, margin (12, 10), hint text in
   `FG_DIM`, label above at 14 strong `FG`. The fill is egui's text-edit
   background (`BG`), so a field reads as a well in the surface behind it.
+- New cloud starts with a 640 px source dialog, an 11 px eyebrow and a 30 px
+  heading. After the repository loads, it expands to the worker selector and
+  summary; the title, profile and revision live under Options.
 - A field that opens a picker looks the same but is a button with a right-side
   "Browse..." label (13 `FG_SOFT`); an empty value shows the placeholder in
   `FG_DIM`.

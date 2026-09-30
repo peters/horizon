@@ -564,7 +564,7 @@ mod tests {
                 .discard_textures();
         }
         app.cloud_prototype.production.title = "Keep editing".into();
-        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("cloud-title")));
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("cloud-source")));
         let mut event = input();
         event.events.push(egui::Event::Key {
             key: egui::Key::Enter,
@@ -578,7 +578,7 @@ mod tests {
             .discard_textures();
         assert!(!app.cloud_prototype.production.launch.submitted);
         assert!(app.cloud_prototype.production.pending_creation.is_none());
-        assert!(ctx.read_response(egui::Id::new("cloud-title")).unwrap().enabled());
+        assert!(ctx.read_response(egui::Id::new("cloud-source")).unwrap().enabled());
     }
 
     #[test]

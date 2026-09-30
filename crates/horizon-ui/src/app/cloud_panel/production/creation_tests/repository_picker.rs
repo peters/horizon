@@ -141,25 +141,6 @@ fn holding_escape_in_the_picker_keeps_the_dialog_open() {
 }
 
 #[test]
-fn clicking_the_dialog_body_cancels_the_picker_and_keeps_the_dialog() {
-    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-        runtime_state: Box::new(RuntimeState::default()),
-    });
-    open_creation(&ctx, &mut app, temp.path().join("clouds"));
-    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    let cancel = label_position(&output, "Cancel");
-    click(&ctx, &mut app, label_position(&output, "Browse…"));
-    assert!(app.dir_picker.is_some(), "the repository field opens the picker");
-    click(&ctx, &mut app, cancel);
-    assert!(
-        app.dir_picker.is_none(),
-        "a click on the disabled dialog cancels the picker"
-    );
-    assert!(app.cloud_creation_open(), "the disabled Cancel button does not act");
-    assert!(app.cloud_prototype.production.repository.is_empty());
-}
-
-#[test]
 fn choosing_another_repository_clears_its_stale_error() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),

@@ -283,6 +283,25 @@ fn creation_tab_navigation_never_activates_the_toolbar() {
     panic!("keyboard navigation did not reach the dialog's Cancel action");
 }
 
+fn focus_title_for_replacement(ctx: &egui::Context, app: &mut HorizonApp) {
+    let output = run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
+    click(ctx, app, label_position(&output, "Options"));
+    for _ in 0..3 {
+        frame(ctx, app, Vec::new(), Modifiers::NONE);
+    }
+    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
+    key(
+        ctx,
+        app,
+        Key::A,
+        Modifiers {
+            ctrl: true,
+            command: true,
+            ..Modifiers::NONE
+        },
+    );
+}
+
 #[test]
 fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
@@ -339,8 +358,13 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
         Modifiers::NONE,
     );
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
-    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
-    frame(&ctx, &mut app, vec![Event::Text(" HEAD".into())], Modifiers::NONE);
+    focus_title_for_replacement(&ctx, &mut app);
+    frame(
+        &ctx,
+        &mut app,
+        vec![Event::Text("Deployment HEAD".into())],
+        Modifiers::NONE,
+    );
     assert_eq!(app.cloud_prototype.production.title, "Deployment HEAD");
     assert_eq!(
         std::path::Path::new(&app.cloud_prototype.production.repository),

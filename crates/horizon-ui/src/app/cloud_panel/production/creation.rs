@@ -55,7 +55,8 @@ impl HorizonApp {
             return;
         }
         let viewport = ctx.content_rect();
-        let width = (viewport.width() - 64.0).clamp(240.0, 1180.0);
+        let source_step = checks::source_step(&self.cloud_prototype.production);
+        let width = (viewport.width() - 64.0).clamp(240.0, if source_step { 640.0 } else { 1180.0 });
         // Room for the heading and the action bar under the columns.
         let body_height = (viewport.height() - 270.0).max(120.0);
         let mut actions = Actions::default();
@@ -87,7 +88,7 @@ impl HorizonApp {
                     ui.disable();
                 }
                 ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
-                heading(ui, provider::label(&self.cloud_prototype.production));
+                heading(ui, provider::label(&self.cloud_prototype.production), source_step);
                 ui.add_space(16.0);
                 if width >= TWO_COLUMNS {
                     let left = width - SUMMARY_WIDTH - GUTTER;
@@ -118,12 +119,14 @@ impl HorizonApp {
                         .max_height(body_height)
                         .show(ui, |ui| {
                             self.cloud_creation_body(ui, &mut actions, refocus_repository);
-                            ui.add_space(12.0);
-                            checks::with_summary(
-                                ui,
-                                &mut self.cloud_prototype.production,
-                                self.cloud_prototype.root.as_deref(),
-                            );
+                            if !source_step {
+                                ui.add_space(12.0);
+                                checks::with_summary(
+                                    ui,
+                                    &mut self.cloud_prototype.production,
+                                    self.cloud_prototype.root.as_deref(),
+                                );
+                            }
                         });
                 }
                 ui.add_space(12.0);
@@ -350,7 +353,22 @@ fn navigation_key(key: ShortcutKey) -> ShortcutBinding {
     ShortcutBinding::new(ShortcutModifiers::NONE, key)
 }
 
-fn heading(ui: &mut Ui, provider: &str) {
+fn heading(ui: &mut Ui, provider: &str, source_step: bool) {
+    if source_step {
+        ui.label(RichText::new("NEW CLOUD").size(11.0).strong().color(theme::FG_DIM()));
+        ui.label(
+            RichText::new("Where is your code?")
+                .size(30.0)
+                .strong()
+                .color(theme::FG()),
+        );
+        ui.label(
+            RichText::new("Paste a repository link or choose a folder. Horizon picks a worker for you.")
+                .size(15.0)
+                .color(theme::FG_SOFT()),
+        );
+        return;
+    }
     ui.horizontal(|ui| {
         ui.label(RichText::new("New cloud").size(26.0).strong().color(theme::FG()));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -425,24 +443,42 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         } => RepositoryAction::CloneFolder,
         _ => RepositoryAction::None,
     };
-    ui.add_space(8.0);
-    title_field(ui, form, submit);
     if checks::source_step(form) {
         return action;
     }
-    let listed = if form.launch.loading() {
+    ui.add_space(8.0);
+    egui::CollapsingHeader::new(RichText::new("Options").size(14.0))
+        .id_salt("cloud-more-options")
+        .default_open(form.title.trim().is_empty() || (form.profiles.is_none() && !form.launch.loading()))
+        .show(ui, |ui| {
+            title_field(ui, form, submit);
+            if form.profiles.is_some() {
+                profiles::field(ui, form);
+            }
+            if let Some(profile) = form
+                .profiles
+                .as_mut()
+                .and_then(|config| config.profiles.get_mut(&form.selected_profile))
+            {
+                let provider = provider::current(form.provider, profile);
+                if provider.placement == ProviderPlacement::DataCenters {
+                    storage::container_field(ui, profile, provider);
+                }
+            }
+            match advanced_fields(ui, form) {
+                RepositoryAction::None => {}
+                chosen => action = chosen,
+            }
+        });
+    if form.launch.loading() {
         ui.horizontal(|ui| {
             ui.spinner();
             ui.label("Preparing cloud…");
         });
-        false
     } else if form.profiles.is_some() {
-        profiles::field(ui, form);
         ui.add_space(8.0);
-        machine(ui, form)
-    } else {
-        false
-    };
+        machine(ui, form);
+    }
     // Siblings can hold back Start, so they stay in view.
     if form.profiles.is_some()
         && !form.launch.loading()
@@ -450,24 +486,6 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     {
         action = RepositoryAction::ChooseSibling(alias);
     }
-    ui.add_space(8.0);
-    egui::CollapsingHeader::new(RichText::new("More options").size(14.0))
-        .id_salt("cloud-more-options")
-        .default_open(form.profiles.is_none() && !form.launch.loading())
-        .show(ui, |ui| {
-            if listed
-                && let Some(profile) = form
-                    .profiles
-                    .as_mut()
-                    .and_then(|config| config.profiles.get_mut(&form.selected_profile))
-            {
-                storage::container_field(ui, profile, provider::current(form.provider, profile));
-            }
-            match advanced_fields(ui, form) {
-                RepositoryAction::None => {}
-                chosen => action = chosen,
-            }
-        });
     action
 }
 
@@ -534,7 +552,6 @@ fn machine(ui: &mut Ui, form: &mut Production) -> bool {
 
 fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
     let mut changed = false;
-    ui.add_space(8.0);
     ui.add_space(8.0);
     changed |= field(
         ui,

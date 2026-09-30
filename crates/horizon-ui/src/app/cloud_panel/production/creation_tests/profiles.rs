@@ -53,6 +53,14 @@ fn click(ctx: &egui::Context, app: &mut HorizonApp, position: Pos2) {
     }
 }
 
+fn open_options(ctx: &egui::Context, app: &mut HorizonApp) {
+    let output = dialog_frame(ctx, app, Vec::new());
+    click(ctx, app, label_rect(&output, "Options").center());
+    for _ in 0..3 {
+        dialog_frame(ctx, app, Vec::new());
+    }
+}
+
 fn prepare(app: &mut HorizonApp, ctx: &egui::Context, directory: &std::path::Path) {
     for args in [
         vec!["init", "--quiet"],
@@ -101,6 +109,7 @@ fn pointer_selects_prebuilt_and_creates_it_inside_a_short_viewport() {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
+    open_options(&ctx, &mut app);
     let output = dialog_frame(&ctx, &mut app, Vec::new());
     let profile = label_rect(&output, "prebuilt");
     let create = label_rect(&output, "Start cloud");
@@ -443,6 +452,7 @@ fn size_choice_resets_with_the_profile_or_repository_and_gpu_minimums_can_change
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
+    open_options(&ctx, &mut app);
     let config = app.cloud_prototype.production.profiles.as_mut().unwrap();
     let mut accelerated = config.profiles["development"].clone();
     accelerated.gpu = true;
@@ -478,6 +488,7 @@ fn keyboard_selects_prebuilt_without_reclaiming_cleared_focus() {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
+    open_options(&ctx, &mut app);
     assert_eq!(ctx.memory(egui::Memory::focused), Some(Id::new("cloud-title")));
     ctx.memory_mut(|memory| memory.surrender_focus(Id::new("cloud-title")));
     dialog_frame(&ctx, &mut app, Vec::new());
@@ -698,7 +709,7 @@ fn container_edit_requires_a_compatible_cpu_size_before_starting() {
     app.cloud_prototype.production.placement = placement.clone();
     answer_cpu_catalog(&mut app);
     let output = tall_frame(&ctx, &mut app);
-    click(&ctx, &mut app, label_rect(&output, "More options").center());
+    click(&ctx, &mut app, label_rect(&output, "Options").center());
     let output = tall_frame(&ctx, &mut app);
     let at = label_rect(&output, "20").center();
     click(&ctx, &mut app, at);

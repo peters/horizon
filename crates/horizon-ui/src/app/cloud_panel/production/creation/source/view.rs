@@ -20,12 +20,9 @@ pub(in super::super) struct Step {
 pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) -> Step {
     let mut step = Step::default();
     form.source.mirror(&form.repository);
-    ui.label(
-        RichText::new("Where is your code?")
-            .size(14.0)
-            .strong()
-            .color(theme::FG()),
-    );
+    if !super::super::checks::source_step(form) {
+        ui.label(RichText::new("Code").size(14.0).strong().color(theme::FG()));
+    }
     let id = Id::new("cloud-source");
     let empty = form.repository.trim().is_empty();
     if form.focus_title_on_open
