@@ -176,12 +176,23 @@ impl Readiness {
             _ => {}
         }
         for registry in &draft.registries {
-            match &registry.original {
-                None => return attention("Save the image repository, then validate its pull access.".into()),
-                Some(binding) if !verified.contains_key(&binding.repository) => {
-                    return attention(format!("Validate pull access for {}.", binding.repository));
-                }
-                Some(_) => {}
+            let Some(binding) = &registry.original else {
+                return attention("Save the image repository, then validate its pull access.".into());
+            };
+            if !registry.is_saved() {
+                return attention(format!(
+                    "Save the changes to {}, then validate its pull access.",
+                    binding.repository
+                ));
+            }
+            if !draft.saved_credentials.contains(&binding.pull.secret_file) {
+                return attention(format!(
+                    "The saved pull credential for {} is missing; paste it again.",
+                    binding.repository
+                ));
+            }
+            if !verified.contains_key(&binding.repository) {
+                return attention(format!("Validate pull access for {}.", binding.repository));
             }
         }
         Self {

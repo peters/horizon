@@ -555,3 +555,23 @@ fn an_agentless_profile_needs_no_agent_to_be_ready() {
         Tone::Attention
     );
 }
+
+#[test]
+fn a_registry_edit_or_a_lost_credential_holds_the_banner_even_with_a_saved_proof() {
+    use super::dashboard::{Readiness, Tone, Verified};
+    let temp = tempfile::tempdir().unwrap();
+    let mut draft = bound_registry_draft(temp.path());
+    let binding = draft.registries[0].original.clone().unwrap();
+    let mut verified = Verified::new();
+    verified.insert(binding.repository.clone(), validation());
+    assert_eq!(Readiness::of(&draft, Some(true), &verified, false).tone, Tone::Ready);
+    draft.registries[0].pull_expiry = "2030-01-01T00:00:00Z".into();
+    let edited = Readiness::of(&draft, Some(true), &verified, false);
+    assert_eq!(edited.tone, Tone::Attention);
+    assert!(edited.cause.contains("Save the changes"));
+    std::fs::remove_file(&binding.pull.secret_file).unwrap();
+    let lost = Draft::load(temp.path()).unwrap();
+    let lost = Readiness::of(&lost, Some(true), &verified, false);
+    assert_eq!(lost.tone, Tone::Attention);
+    assert!(lost.cause.contains("pull credential"));
+}
