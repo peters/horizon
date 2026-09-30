@@ -1,6 +1,6 @@
 //! Hetzner's catalog, fetched beside the `RunPod` price list when this machine has a
 //! Hetzner binding, for agents' offer requests and the prices sent to workers.
-use super::{Fetched, Job, RETRY_FAILED, finished, spawn};
+use super::{ANSWER_MARGIN_MILLIS, Fetched, Job, RETRY_FAILED, finished, spawn};
 use horizon_core::cloud_runtime::prices::{self, HetznerCatalog};
 use std::{
     path::Path,
@@ -11,10 +11,6 @@ use std::{
 const WAIT_FOR_FETCH: Duration = Duration::from_secs(20);
 /// Hetzner's catalog keeps its own cadence; fast GPU stock polling is RunPod-specific.
 const FRESH: Duration = Duration::from_mins(15);
-/// An agent's answer waits for a running Hetzner fetch only while more than this is
-/// left before its deadline; after that it reports Hetzner as still being fetched.
-const ANSWER_MARGIN_MILLIS: i64 = 3_000;
-
 /// A fetch's catalog with the configured server types and locations, or the reason it
 /// failed for a machine with a Hetzner binding.
 type Fetch = Result<(Option<HetznerCatalog>, Vec<String>, Vec<String>), String>;

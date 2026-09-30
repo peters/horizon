@@ -1,5 +1,5 @@
 //! Reference rates fetched in the background, independently of provider credentials.
-use super::{Fetched, Job, RETRY_FAILED, finished};
+use super::{ANSWER_MARGIN_MILLIS, Fetched, Job, RETRY_FAILED, finished};
 use horizon_core::cloud_runtime::offers::exchange::Rates;
 use std::{
     sync::mpsc::channel,
@@ -8,7 +8,6 @@ use std::{
 
 const FRESH: Duration = Duration::from_hours(6);
 const REQUEST_MARGIN_MILLIS: i64 = 6_000;
-const ANSWER_MARGIN_MILLIS: i64 = 3_000;
 
 #[derive(Default)]
 pub(in crate::app::cloud_panel::production) struct State {

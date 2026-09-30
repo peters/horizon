@@ -23,6 +23,8 @@ pub(super) const FRESH: Duration = Duration::from_secs(15);
 pub(super) const START_LIMIT: Duration = Duration::from_hours(1);
 /// How long agents' requests get the same failed price fetch before one asks again.
 const RETRY_FAILED: Duration = Duration::from_secs(30);
+/// Leave time to return available provider results before an agent request expires.
+pub(super) const ANSWER_MARGIN_MILLIS: i64 = 3_000;
 
 pub(super) struct Fetched<T> {
     pub value: T,

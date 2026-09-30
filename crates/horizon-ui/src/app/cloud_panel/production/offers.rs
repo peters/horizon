@@ -62,7 +62,18 @@ impl HorizonApp {
         // Other providers are ranked on their own, in their own currency, and a failed
         // Hetzner fetch is reported there without taking RunPod's offers down.
         let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
-        let fetched = prices.fresh_list()?;
+        let Some(fetched) = prices.fresh_list() else {
+            if deadline_in > super::prices::ANSWER_MARGIN_MILLIS || other_providers.is_empty() {
+                return None;
+            }
+            let answer = serde_json::json!({
+                "provider": "RunPod",
+                "error": "cloud_offers_unavailable: RunPod prices are still being fetched",
+                "offers": [],
+                "other_providers": other_providers,
+            });
+            return compared(answer, prices, deadline_in);
+        };
         let (list, preferences) = &fetched.value;
         let observed = std::time::SystemTime::now()
             .checked_sub(fetched.at.elapsed())
@@ -260,6 +271,36 @@ mod tests {
             "cloud_offers_unavailable: Missing Hetzner token"
         );
     }
+    #[test]
+    fn pending_runpod_prices_keep_current_hetzner_offers_near_the_deadline() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        app.cloud_prototype.root = Some(temp.path().to_path_buf());
+        app.cloud_prototype
+            .production
+            .prices
+            .hetzner
+            .answered(Some(hetzner_catalog()));
+        let mut cpu = request(&serde_json::json!({"min_vcpu": 8}));
+        assert!(app.cloud_offers_answer(&cpu, &ctx).is_none());
+        cpu.deadline_at_millis = horizon_core::browser::manifest::now_millis() + 2_000;
+        let pending = app.cloud_offers_answer(&cpu, &ctx).unwrap().unwrap();
+        assert_eq!(pending["offers"], serde_json::json!([]));
+        assert_eq!(
+            pending["error"],
+            "cloud_offers_unavailable: RunPod prices are still being fetched"
+        );
+        assert_eq!(pending["other_providers"][0]["offers"][0]["id"], "cx43");
+        assert_eq!(pending["other_providers"][0]["offers"][0]["currency"], "EUR");
+        assert_eq!(pending["comparison"]["complete"], false);
+        assert!(pending["comparison"]["exchange_date"].is_null());
+        priced(&mut app);
+        let settled = app.cloud_offers_answer(&cpu, &ctx).unwrap().unwrap();
+        assert!(settled.get("error").is_none());
+        assert!(!settled["offers"].as_array().unwrap().is_empty());
+        assert_eq!(settled["other_providers"][0]["offers"][0]["id"], "cx43");
+    }
+
     #[test]
     fn an_early_runpod_failure_waits_for_the_first_hetzner_result() {
         let (temp, mut app) = crate::app::test_support::test_app();
