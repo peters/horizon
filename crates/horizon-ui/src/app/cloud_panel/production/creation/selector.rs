@@ -73,7 +73,7 @@ impl Catalog {
             offer.estimated_total,
             offer.currency,
             self.currency,
-            form.prices.exchange.rates.as_ref(),
+            form.prices.exchange.fresh(),
         )
     }
     /// Best stock among the places the placement allows; `None` where none is allowed.
@@ -144,7 +144,7 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
             offer.estimated_total,
             offer.currency,
             currency,
-            form.prices.exchange.rates.as_ref(),
+            form.prices.exchange.fresh(),
         )
     };
     let complete = (!runpod_interested || form.prices.fresh_list().is_some() && form.prices.list_error.is_none())
@@ -341,7 +341,7 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
                 catalog.currency
             ),
         );
-    } else if let Some(rates) = &form.prices.exchange.rates {
+    } else if let Some(rates) = form.prices.exchange.fresh() {
         widgets::note(
             ui,
             &format!(

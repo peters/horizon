@@ -23,10 +23,17 @@ fn hetzner_binding(app: &mut HorizonApp) {
         &["cx33", "cpx32"],
         &["hel1"],
     );
-    app.cloud_prototype.production.prices.exchange.rates = Some(Rates {
-        date: OffsetDateTime::now_utc().date().to_string(),
-        usd_per_unit: BTreeMap::from([("USD".into(), 1.0), ("EUR".into(), 1.2)]),
-    });
+    app.cloud_prototype
+        .production
+        .prices
+        .exchange
+        .answered(super::super::super::prices::Fetched {
+            at: std::time::Instant::now(),
+            value: Rates {
+                date: OffsetDateTime::now_utc().date().to_string(),
+                usd_per_unit: BTreeMap::from([("USD".into(), 1.0), ("EUR".into(), 1.2)]),
+            },
+        });
 }
 
 fn selected(app: &HorizonApp) -> horizon_core::cloud_runtime::offers::Offer {
@@ -151,22 +158,46 @@ fn missing_or_stale_rates_keep_native_offers_without_a_cheapest_claim() {
     });
     prepare(&mut app, &ctx, temp.path());
     hetzner_binding(&mut app);
-    app.cloud_prototype.production.prices.exchange.rates = None;
+    app.cloud_prototype.production.prices.exchange.refresh();
     let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
     assert!(!shown.complete && shown.picks.cheapest.is_none());
     assert!(shown.offers.iter().any(|offer| offer.provider == "RunPod"));
     assert!(shown.offers.iter().any(|offer| offer.provider == "Hetzner"));
     assert!(painted(&tall_frame(&ctx, &mut app)).contains("Comparison incomplete"));
     hetzner_binding(&mut app);
-    app.cloud_prototype
-        .production
-        .prices
-        .exchange
-        .rates
-        .as_mut()
-        .unwrap()
-        .date = "2000-01-01".into();
+    let exchange = &mut app.cloud_prototype.production.prices.exchange;
+    let mut rates = exchange.fresh().unwrap().clone();
+    rates.date = "2000-01-01".into();
+    exchange.answered(super::super::super::prices::Fetched {
+        value: rates,
+        at: std::time::Instant::now(),
+    });
     assert!(!selector::catalog(&app.cloud_prototype.production).unwrap().complete);
+}
+
+#[test]
+fn an_expired_quote_blocks_global_ranking_but_keeps_native_provider_ranking() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let exchange = &mut app.cloud_prototype.production.prices.exchange;
+    let rates = exchange.fresh().unwrap().clone();
+    exchange.answered(super::super::super::prices::Fetched {
+        value: rates,
+        at: std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_hours(7))
+            .unwrap(),
+    });
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(!shown.complete && shown.picks.cheapest.is_none());
+    let output = tall_frame(&ctx, &mut app);
+    assert!(!painted(&output).contains("ECB rates dated"));
+    click(&ctx, &mut app, label_rect(&output, "Hetzner").center());
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(shown.complete && shown.picks.cheapest.is_some());
+    assert_eq!(shown.currency, "EUR");
 }
 
 #[test]
@@ -177,7 +208,7 @@ fn a_hetzner_only_machine_selects_the_cheapest_matching_worker() {
     prepare(&mut app, &ctx, temp.path());
     hetzner_binding(&mut app);
     app.cloud_prototype.production.prices.runpod_key_missing();
-    app.cloud_prototype.production.prices.exchange.rates = None;
+    app.cloud_prototype.production.prices.exchange.refresh();
     tall_frame(&ctx, &mut app);
     tall_frame(&ctx, &mut app);
     assert_eq!(selected(&app).provider, "Hetzner");
@@ -350,7 +381,7 @@ fn runpod_filter_can_rank_without_foreign_exchange_rates() {
     });
     prepare(&mut app, &ctx, temp.path());
     hetzner_binding(&mut app);
-    app.cloud_prototype.production.prices.exchange.rates = None;
+    app.cloud_prototype.production.prices.exchange.refresh();
     let output = tall_frame(&ctx, &mut app);
     assert!(!selector::catalog(&app.cloud_prototype.production).unwrap().complete);
     let provider_button = output

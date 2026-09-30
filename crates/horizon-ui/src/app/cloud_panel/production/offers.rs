@@ -83,12 +83,12 @@ fn compared(
 ) -> Option<Result<serde_json::Value, String>> {
     use horizon_core::cloud_runtime::offers::comparison;
     if comparison::needs_rates(&answer)
-        && prices.exchange.rates.is_none()
+        && prices.exchange.fresh().is_none()
         && prices.exchange.waiting_for_deadline(deadline_in)
     {
         return None;
     }
-    comparison::append(&mut answer, prices.exchange.rates.as_ref());
+    comparison::append(&mut answer, prices.exchange.fresh());
     Some(Ok(answer))
 }
 
@@ -147,6 +147,37 @@ mod tests {
             "regions": {"hel1": "EUROPE"},
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn cached_quotes_need_current_cache_age_before_host_conversion() {
+        use horizon_core::cloud_runtime::offers::exchange::{OffsetDateTime, Rates};
+        use std::time::{Duration, Instant};
+        let answer = serde_json::json!({ "offers": [], "other_providers": [{ "offers": [
+            { "provider": "Hetzner", "id": "cx43", "currency": "EUR", "estimated_total": 1.0 }
+        ] }] });
+        let mut prices = super::super::prices::State::default();
+        let rates = Rates {
+            date: OffsetDateTime::now_utc().date().to_string(),
+            usd_per_unit: std::collections::BTreeMap::from([("USD".into(), 1.0), ("EUR".into(), 1.2)]),
+        };
+        prices.exchange.answered(super::super::prices::Fetched {
+            value: rates.clone(),
+            at: Instant::now().checked_sub(Duration::from_hours(7)).unwrap(),
+        });
+        let stale = compared(answer.clone(), &prices, 6_000).unwrap().unwrap();
+        assert_eq!(stale["comparison"]["complete"], false);
+        assert!(stale["comparison"]["exchange_date"].is_null());
+        assert_eq!(stale["other_providers"][0]["offers"][0]["estimated_total"], 1.0);
+        prices.exchange.answered(super::super::prices::Fetched {
+            value: rates,
+            at: Instant::now(),
+        });
+        let current = compared(answer.clone(), &prices, 6_000).unwrap().unwrap();
+        assert_eq!(current["comparison"]["complete"], true);
+        prices.exchange.refresh();
+        let refreshed = compared(answer, &prices, 6_000).unwrap().unwrap();
+        assert_eq!(refreshed["comparison"]["complete"], false);
     }
 
     #[test]
