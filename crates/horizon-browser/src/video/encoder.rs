@@ -100,7 +100,7 @@ impl VideoCaptureHandle {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        Some(BrowserVideoCapture {
+        let mut capture = BrowserVideoCapture {
             capture_id,
             path,
             state,
@@ -115,8 +115,11 @@ impl VideoCaptureHandle {
             file_limit_reached: self.file_limit_reached.load(Ordering::Relaxed),
             encoder_failed: self.encoder_failed.load(Ordering::Relaxed),
             started_at_millis: self.started_at_millis.load(Ordering::Relaxed),
+            effective_fps: 0.0,
             elapsed_millis: self.elapsed_millis.load(Ordering::Relaxed),
-        })
+        };
+        capture.update_performance();
+        Some(capture)
     }
 
     fn reset(&self, capture_id: &str, path: &str, fps: u32, started_at_millis: i64) {
@@ -231,6 +234,7 @@ impl EncoderThread {
             width: 0,
             height: 0,
             fps: 0,
+            effective_fps: 0.0,
             frames_encoded: 0,
             frames_dropped: 0,
             frames_repeated: 0,
@@ -302,7 +306,6 @@ fn encode_loop(
         paused_total: Duration::ZERO,
         paused: false,
         next_tick: Instant::now(),
-        tick: 0,
         last_seq: 0,
     };
     session.run()
@@ -320,7 +323,6 @@ struct EncodeSession {
     paused_total: Duration,
     paused: bool,
     next_tick: Instant,
-    tick: u64,
     last_seq: u64,
 }
 
@@ -429,7 +431,6 @@ impl EncodeSession {
         let interval = Duration::from_nanos(1_000_000_000 / u64::from(fps));
         while self.next_tick + interval <= Instant::now() {
             self.handle.frames_dropped.fetch_add(1, Ordering::Relaxed);
-            self.tick += 1;
             self.next_tick += interval;
         }
         self.next_tick += interval;
@@ -437,9 +438,7 @@ impl EncodeSession {
     }
 
     fn encode_tick(&mut self) -> io::Result<()> {
-        let fps = self.options.fps.max(1);
-        let timestamp_ms = self.tick.saturating_mul(1_000) / u64::from(fps);
-        self.tick += 1;
+        let timestamp_ms = elapsed_millis(self.started, self.paused_total, self.paused_at);
         let Some(frame) = self.frame_slot.latest() else {
             self.handle.frames_dropped.fetch_add(1, Ordering::Relaxed);
             return Ok(());
@@ -477,7 +476,7 @@ impl EncodeSession {
 
     fn finish_file(&mut self) -> io::Result<()> {
         if let Some(encoder) = self.encoder.take() {
-            match encoder.finish() {
+            match encoder.finish(self.handle.elapsed_millis.load(Ordering::Relaxed)) {
                 Ok(stats) => {
                     self.handle.bytes_written.store(stats.bytes, Ordering::Relaxed);
                     self.handle.frames_encoded.store(stats.muxed, Ordering::Relaxed);
@@ -531,16 +530,19 @@ impl ActiveEncoder {
         encoder.quantizer = quality_to_quantizer(options.quality);
         encoder.bitrate = 0;
         encoder.low_latency = true;
+        // Live capture must not retain seconds of future samples for offline RDO.
+        encoder.speed_settings.rdo_lookahead_frames = 1;
         encoder.time_base = Rational {
             num: 1,
             den: u64::from(options.fps.max(1)),
         };
         let fps = u64::from(options.fps.max(1));
         encoder.set_key_frame_interval(fps, fps.saturating_mul(2));
-        encoder.tiles = 1;
+        let threads = std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
+        encoder.tiles = threads;
         let context = Config::new()
             .with_encoder_config(encoder)
-            .with_threads(1)
+            .with_threads(threads)
             .new_context()
             .map_err(|error| io::Error::other(error.to_string()))?;
         Ok(Self {
@@ -666,7 +668,7 @@ impl ActiveEncoder {
         Ok(())
     }
 
-    fn finish(mut self) -> io::Result<FinishStats> {
+    fn finish(mut self, recording_duration_ms: u64) -> io::Result<FinishStats> {
         self.context.flush();
         for _ in 0..1_024 {
             match self.context.receive_packet() {
@@ -685,7 +687,7 @@ impl ActiveEncoder {
         }
         let frame_ms = 1_000 / u64::from(self.fps.max(1));
         let bytes = if let Some(muxer) = self.muxer.take() {
-            muxer.finish(frame_ms)?
+            muxer.finish(frame_ms, recording_duration_ms)?
         } else if let Some(file) = self.file.take() {
             write_empty_webm(file)?
         } else {
@@ -711,7 +713,7 @@ fn fill_plane(frame: &mut Frame<u8>, plane: usize, source: &[u8], stride: usize)
 
 fn write_empty_webm(file: File) -> io::Result<u64> {
     let muxer = WebmMuxer::create(file, 16, 16, &[0x81, 0x1F, 0x0C, 0x00])?;
-    muxer.finish(1)
+    muxer.finish(1, 0)
 }
 
 fn quality_to_quantizer(quality: u32) -> usize {
@@ -896,5 +898,50 @@ mod tests {
         assert!(finished.frames_encoded > 0, "auto-sized capture must encode a frame");
         assert!(!finished.encoder_failed);
         assert!(std::fs::metadata(&finished.path).unwrap().len() > 0);
+    }
+    #[test]
+    fn sampled_scene_timestamps_keep_initial_delay_and_exclude_pause() {
+        let root = tempfile::tempdir().unwrap();
+        let slot = Arc::new(FrameSlot::new());
+        let (_, receiver) = mpsc::channel();
+        let now = Instant::now();
+        let mut session = EncodeSession {
+            file: Some(File::create(root.path().join("timeline.webm")).unwrap()),
+            encoder: None,
+            frame_slot: Arc::clone(&slot),
+            options: BrowserVideoCaptureOptions {
+                compression_level: 0,
+                ..Default::default()
+            },
+            handle: Arc::new(VideoCaptureHandle::default()),
+            commands: receiver,
+            started: now.checked_sub(Duration::from_secs(3)).unwrap(),
+            paused_at: None,
+            paused_total: Duration::from_secs(2),
+            paused: false,
+            next_tick: now,
+            last_seq: 0,
+        };
+        slot.store_test_rgb(64, 64, solid_rgb(255, 0, 0));
+        session.encode_tick().unwrap();
+        let first = session.encoder.as_ref().unwrap().timestamps[0];
+        assert!((1_000..1_500).contains(&first), "sample time: {first}");
+        session.started = session.started.checked_sub(Duration::from_secs(3)).unwrap();
+        slot.store_test_rgb(64, 64, solid_rgb(0, 255, 0));
+        session.encode_tick().unwrap();
+        let second = session.encoder.as_ref().unwrap().timestamps[1];
+        assert!(
+            (3_000..3_500).contains(&(second - first)),
+            "scene interval: {}",
+            second - first
+        );
+        session.started = session.started.checked_sub(Duration::from_secs(3)).unwrap();
+        slot.store_test_rgb(64, 64, solid_rgb(0, 0, 255));
+        session.encode_tick().unwrap();
+        let third = session.encoder.as_ref().unwrap().timestamps[2];
+        assert!((3_000..3_500).contains(&(third - second)));
+        let encoder = session.encoder.take().unwrap();
+        let finished = encoder.finish(third + 100).unwrap();
+        assert_eq!(finished.muxed, 3);
     }
 }

@@ -88,6 +88,7 @@ pub(crate) struct VideoOutput {
     width: u32,
     height: u32,
     fps: u32,
+    effective_fps: f64,
     frames_encoded: u64,
     frames_dropped: u64,
     frames_repeated: u64,
@@ -100,7 +101,8 @@ pub(crate) struct VideoOutput {
 }
 
 impl VideoOutput {
-    pub(crate) fn new(panel_id: String, action_id: String, capture: BrowserVideoCapture) -> Self {
+    pub(crate) fn new(panel_id: String, action_id: String, mut capture: BrowserVideoCapture) -> Self {
+        capture.update_performance();
         Self {
             panel_id,
             action_id,
@@ -116,6 +118,7 @@ impl VideoOutput {
             width: capture.width,
             height: capture.height,
             fps: capture.fps,
+            effective_fps: capture.effective_fps,
             frames_encoded: capture.frames_encoded,
             frames_dropped: capture.frames_dropped,
             frames_repeated: capture.frames_repeated,
@@ -127,6 +130,11 @@ impl VideoOutput {
             next_step: if capture.encoder_failed {
                 "The encoder failed; this WebM may be incomplete and should not be treated as a successful export."
                     .to_string()
+            } else if capture.frames_dropped > 0 {
+                format!(
+                    "The host missed scheduled frames: {:.2} fps encoded versus {} fps requested. Inspect the exact export path before relying on brief page states.",
+                    capture.effective_fps, capture.fps
+                )
             } else {
                 match capture.state {
                     BrowserVideoState::Recording => {
@@ -191,6 +199,7 @@ mod tests {
             width: 16,
             height: 16,
             fps: 5,
+            effective_fps: 0.0,
             frames_encoded: 0,
             frames_dropped: 0,
             frames_repeated: 0,
@@ -203,5 +212,34 @@ mod tests {
         let output = VideoOutput::new("panel".to_string(), "action".to_string(), capture);
         assert!(output.encoder_failed);
         assert!(output.next_step.contains("incomplete"));
+    }
+    #[test]
+    fn older_host_counters_report_actual_rate_and_missed_frames() {
+        let mut capture = BrowserVideoCapture {
+            capture_id: "capture".to_string(),
+            path: "/tmp/failed.webm".to_string(),
+            state: BrowserVideoState::Stopped,
+            active: false,
+            width: 16,
+            height: 16,
+            fps: 5,
+            effective_fps: 0.0,
+            frames_encoded: 0,
+            frames_dropped: 0,
+            frames_repeated: 0,
+            bytes_written: 12,
+            file_limit_reached: false,
+            encoder_failed: true,
+            started_at_millis: 0,
+            elapsed_millis: 0,
+        };
+        capture.encoder_failed = false;
+        capture.elapsed_millis = 10_000;
+        capture.frames_encoded = 20;
+        capture.frames_dropped = 30;
+        let output = VideoOutput::new("panel".to_string(), "action".to_string(), capture);
+        assert!((output.effective_fps - 2.0).abs() < f64::EPSILON);
+        assert!(output.next_step.contains("2.00 fps encoded versus 5 fps requested"));
+        assert!(!output.next_step.contains("preserves sample times"));
     }
 }

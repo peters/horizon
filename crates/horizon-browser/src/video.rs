@@ -194,6 +194,7 @@ impl VideoCaptureState {
                     width: 0,
                     height: 0,
                     fps: 0,
+                    effective_fps: 0.0,
                     frames_encoded: 0,
                     frames_dropped: 0,
                     frames_repeated: 0,

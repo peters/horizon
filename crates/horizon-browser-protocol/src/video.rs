@@ -160,7 +160,7 @@ impl BrowserVideoCaptureOverrides {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct BrowserVideoCapture {
     pub capture_id: String,
     pub path: String,
@@ -169,6 +169,9 @@ pub struct BrowserVideoCapture {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// Observed encoded frames per active recording second, including repeated frames.
+    #[serde(default)]
+    pub effective_fps: f64,
     pub frames_encoded: u64,
     pub frames_dropped: u64,
     pub frames_repeated: u64,
@@ -177,6 +180,17 @@ pub struct BrowserVideoCapture {
     pub encoder_failed: bool,
     pub started_at_millis: i64,
     pub elapsed_millis: u64,
+}
+
+impl BrowserVideoCapture {
+    pub fn update_performance(&mut self) {
+        let milli_fps = self
+            .frames_encoded
+            .saturating_mul(1_000_000)
+            .checked_div(self.elapsed_millis)
+            .unwrap_or(0);
+        self.effective_fps = f64::from(u32::try_from(milli_fps).unwrap_or(u32::MAX)) / 1_000.0;
+    }
 }
 
 #[cfg(test)]

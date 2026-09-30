@@ -81,12 +81,15 @@ impl WebmMuxer {
             > max_file_bytes)
     }
 
-    pub(super) fn finish(mut self, frame_duration_ms: u64) -> io::Result<u64> {
+    pub(super) fn finish(mut self, frame_duration_ms: u64, recording_duration_ms: u64) -> io::Result<u64> {
         self.flush_cluster()?;
         write_cues(&mut self.file, &self.cues)?;
         let end = self.file.stream_position()?;
         self.file.seek(SeekFrom::Start(self.duration_offset))?;
-        let duration = self.last_timestamp_ms.saturating_add(frame_duration_ms.max(1));
+        let duration = self
+            .last_timestamp_ms
+            .saturating_add(frame_duration_ms.max(1))
+            .max(recording_duration_ms);
         self.file.write_all(&duration_millis(duration))?;
         self.file.flush()?;
         Ok(end)
@@ -318,7 +321,7 @@ mod tests {
             .write_frame(100, false, &[5, 6, 7, 8])
             .unwrap_or_else(|error| panic!("write frame: {error}"));
         muxer
-            .finish(100)
+            .finish(100, 200)
             .unwrap_or_else(|error| panic!("finish muxer: {error}"));
         let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("read muxer file: {error}"));
         assert_eq!(&bytes[..4], &[0x1A, 0x45, 0xDF, 0xA3]);
@@ -328,5 +331,17 @@ mod tests {
         assert_ne!(encode_vint(127), vec![0xFF]);
         assert_eq!(encode_vint(127), vec![0x40, 0x7F]);
         assert_ne!(encode_vint(16_383), vec![0x7F, 0xFF]);
+    }
+    #[test]
+    fn final_duration_includes_time_after_the_last_sample() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("gap.webm");
+        let mut muxer = WebmMuxer::create(File::create(&path).unwrap(), 64, 64, &[]).unwrap();
+        let duration_offset = usize::try_from(muxer.duration_offset).unwrap();
+        muxer.write_frame(0, true, &[1, 2, 3]).unwrap();
+        muxer.finish(100, 3_000).unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        let duration = f64::from_be_bytes(bytes[duration_offset..duration_offset + 8].try_into().unwrap());
+        assert!((duration - 3_000.0).abs() < f64::EPSILON);
     }
 }
