@@ -165,16 +165,18 @@ impl Journal {
     #[must_use]
     pub fn settled_on(&self, target_cloud_id: &str) -> bool {
         let on_target = |intent: &&Intent| intent.target_cloud_id == target_cloud_id;
-        !self
-            .intents
-            .values()
-            .filter(on_target)
-            .any(|intent| intent.state.pending())
+        !self.pending_on(target_cloud_id)
             && self
                 .intents
                 .values()
                 .chain(self.history.values())
                 .any(|intent| on_target(&intent))
+    }
+
+    pub(super) fn pending_on(&self, target_cloud_id: &str) -> bool {
+        self.intents
+            .values()
+            .any(|intent| intent.target_cloud_id == target_cloud_id && intent.state.pending())
     }
 
     /// Retire authorization after grant cleanup, retaining old request IDs forever.

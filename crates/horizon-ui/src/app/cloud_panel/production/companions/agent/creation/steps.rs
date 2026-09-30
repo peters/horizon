@@ -130,16 +130,9 @@ pub(super) fn cancel(
         context: &context,
         alias,
     };
-    match retry_busy(|| lifecycle::status(&request, id)) {
-        Err(cloud_runtime::Error::Invalid("Companion is not bound" | "Unknown companion operation")) => Ok(()),
+    match retry_busy(|| lifecycle::cancel_submission(&request, id)) {
+        Err(cloud_runtime::Error::Invalid("Companion is not bound" | "Unknown companion operation")) | Ok(()) => Ok(()),
         Err(error) => Err(error.to_string()),
-        Ok(operation) if operation.intent.state == companions::intent::State::Submitted => {
-            retry_busy(|| lifecycle::cancel_submission(&request, id)).map_err(|error| error.to_string())
-        }
-        Ok(operation) if operation.intent.state.pending() => {
-            Err("The companion cloud is already starting; it can no longer be declined".into())
-        }
-        Ok(_) => Ok(()),
     }
 }
 

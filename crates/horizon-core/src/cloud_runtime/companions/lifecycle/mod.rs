@@ -2,6 +2,7 @@
 mod creation;
 mod execution;
 mod receipt;
+mod reservation;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -195,8 +196,19 @@ pub fn bind_selected(request: &Request<'_>) -> Result<()> {
 /// A different source's pending operation returns Busy, never starts a second action.
 /// That caller must explicitly retry after the operation is reconciled.
 pub fn submit(request: &Request<'_>, action: Action, id: OperationId) -> Result<Operation> {
+    let _workspace = reservation::lock(request.root)?;
+    submit_locked(request, action, id)
+}
+
+fn submit_locked(request: &Request<'_>, action: Action, id: OperationId) -> Result<Operation> {
     let (store, mut state) = request.load()?;
-    let binding = request.authorize(&state)?;
+    // A fresh Ensure Ready can reuse a declined, unallocated reservation. It still
+    // needs the owner's selection and confirmation before its first worker starts.
+    let binding = request.bound(&state)?.0.clone();
+    let recovering = action == Action::EnsureReady && creation::recoverable(request, &binding)?;
+    if !recovering {
+        request.authorize_execution(&state, id)?;
+    }
     let mut candidate = state.intents.clone();
     if let Ok(intent) = candidate.submit(request.alias, action, id)
         && state.intents.operation(intent.operation_id).is_some()
@@ -205,9 +217,16 @@ pub fn submit(request: &Request<'_>, action: Action, id: OperationId) -> Result<
         store.save(&state)?;
         return operation(request, &binding, intent);
     }
+    if recovering {
+        reservation::check(request, &binding, &state)?;
+    }
     let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
     let _execution = receipt::execution_lock(&root)?;
     let target = request.target_store(&binding)?;
+    if recovering && !creation::unallocated(&binding, &target)? {
+        let declaration = request.bound(&state)?.1;
+        request.require_selected(&state, &binding, declaration)?;
+    }
     let settled = if let Some(prior) = receipt::load(target.root())? {
         if prior.owner.cloud_id == request.owner.cloud_id {
             settle_access(&store, &mut state, &prior)?;
@@ -260,32 +279,41 @@ fn settle_access(store: &journal::Store, state: &mut journal::State, prior: &rec
 /// Refuses unknown IDs, changed authorization and corrupt durable state.
 pub fn status(request: &Request<'_>, id: OperationId) -> Result<Operation> {
     let (_, state) = request.load()?;
-    let binding = request.authorize(&state)?;
+    let binding = request.bound(&state)?.0.clone();
     let intent = state
         .intents
         .operation(id)
         .filter(|op| op.target_cloud_id == binding.target().cloud_id)
         .ok_or(Error::Invalid("Unknown companion operation"))?
         .clone();
+    if intent.state != State::Failed || !creation::recoverable(request, &binding)? {
+        request.authorize_execution(&state, id)?;
+    }
     operation(request, &binding, intent)
 }
 
 /// Cancel a submission that has never begun provider execution, including a declined
 /// creation confirmation or an interrupted target-claim write. Never clears uncertainty.
 /// # Errors
-/// Refuses an executing, uncertain or terminal operation.
+/// Refuses an executing, uncertain or successful operation. A failed cancellation
+/// can be retried to finish its target-claim write.
 pub fn cancel_submission(request: &Request<'_>, id: OperationId) -> Result<()> {
     let (store, mut state) = request.load()?;
-    let binding = request.authorize(&state)?;
+    let binding = request.bound(&state)?.0.clone();
     let intent = state
         .intents
         .operation(id)
-        .filter(|intent| intent.state == State::Submitted && intent.target_cloud_id == binding.target().cloud_id)
+        .filter(|intent| {
+            matches!(intent.state, State::Submitted | State::Failed)
+                && intent.target_cloud_id == binding.target().cloud_id
+        })
         .ok_or(Error::Invalid("Only an unstarted submission can be cancelled"))?
         .clone();
     let target = request.target_store(&binding)?;
-    state.intents.transition(intent.operation_id, State::Failed)?;
-    store.save(&state)?;
+    if intent.state == State::Submitted {
+        state.intents.transition(intent.operation_id, State::Failed)?;
+        store.save(&state)?;
+    }
     if receipt::load(target.root())?
         .is_some_and(|claim| claim.owner == *request.owner && claim.id == intent.operation_id)
     {
@@ -378,6 +406,7 @@ fn execute_with(request: &Request<'_>, id: OperationId, backend: &mut impl execu
         );
     }
     let observed = target.load()?;
+    creation::require_selection(request, (&journal, &binding), &intent, &target)?;
     let confirmed = confirmed(request, (&journal, &binding), &intent, (&target, &claim))?;
     let decision = execution::plan(&target, &binding, &intent, observed.as_ref(), confirmed)?;
     if decision == intent::Decision::Provision {

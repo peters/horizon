@@ -1,6 +1,6 @@
 //! Creating a companion cloud the owner confirmed on the source cloud's card: the
 //! reserved identity with the agent's operation, then the owner's confirmation.
-use super::{Action, Binding, Error, Operation, OperationId, Phase, Request, Result, State, intent, receipt, submit};
+use super::{Action, Binding, Error, Operation, OperationId, Phase, Request, Result, State, intent, receipt};
 use crate::cloud_runtime::state::Store;
 
 /// Reserve a fresh cloud identity for a missing companion and record the agent's Ensure
@@ -11,24 +11,28 @@ use crate::cloud_runtime::state::Store;
 /// Refuses an alias bound to another cloud or checkout, a target that already exists and
 /// an operation ID that belongs to another request, each before anything is written.
 pub fn reserve(request: &Request<'_>, binding: Binding, id: OperationId) -> Result<Operation> {
+    let _workspace = super::reservation::lock(request.root)?;
     {
         let (store, mut state) = request.load()?;
+        super::reservation::check(request, &binding, &state)?;
         match state.intents.binding(request.alias) {
             // A retry of this reservation; submitting again records nothing twice.
             Some(bound) if *bound == binding => {
-                let unstarted = state.intents.operation(id).is_some_and(|intent| {
+                let unstarted = state.intents.operation(id).filter(|intent| {
                     intent.state == State::Submitted
                         && intent.action == Action::EnsureReady
                         && intent.target_cloud_id == binding.target().cloud_id
                 });
-                if unstarted {
+                if let Some(intent) = unstarted {
                     let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
                     let _execution = receipt::execution_lock(&root)?;
                     let target = request.target_store(&binding)?;
                     // The journal write landed but the claim did not: finish it, so the
                     // owner can still confirm this reservation.
-                    if receipt::load(target.root())?.is_none() {
-                        receipt::save(&target, request.owner, id, Phase::Submitted)?;
+                    if receipt::load(target.root())?
+                        .is_none_or(|claim| claim.owner == *request.owner && state.intents.settled(claim.id))
+                    {
+                        receipt::save(&target, request.owner, intent.operation_id, Phase::Submitted)?;
                     }
                 }
             }
@@ -52,19 +56,6 @@ pub fn reserve(request: &Request<'_>, binding: Binding, id: OperationId) -> Resu
                 if binding.origin() != intent::Origin::Reserved {
                     return Err(Error::Invalid("Only a fresh cloud identity can be reserved"));
                 }
-                // Serialized by the source journal lock, so two aliases declaring the same
-                // repository and profile never both reserve a paid cloud.
-                let creating = state.intents.bindings().any(|(alias, bound)| {
-                    alias != request.alias
-                        && bound.origin() == intent::Origin::Reserved
-                        && !state.intents.settled_on(&bound.target().cloud_id)
-                        && bound.target().declaration.matches(declaration)
-                });
-                if creating {
-                    return Err(Error::Invalid(
-                        "Another companion with the same repository and profile is being created; use that cloud once it is ready",
-                    ));
-                }
                 // Submit's lock order: source journal, execution, then target.
                 let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
                 let _execution = receipt::execution_lock(&root)?;
@@ -84,7 +75,7 @@ pub fn reserve(request: &Request<'_>, binding: Binding, id: OperationId) -> Resu
             }
         }
     }
-    submit(request, Action::EnsureReady, id)
+    super::submit_locked(request, Action::EnsureReady, id)
 }
 
 /// Refuses a reserved identity that already names a cloud, its record, claim or
@@ -97,12 +88,7 @@ pub(super) fn require_fresh(request: &Request<'_>, binding: &Binding, target: &S
         .any(|target| target.cloud_id == binding.target().cloud_id)
         || target.load()?.is_some()
         || receipt::load(target.root())?.is_some()
-        || ["hetzner.json", "workspace-volume.json", "workspace-volume.required"]
-            .iter()
-            .map(|file| target.root().join(file).try_exists())
-            .collect::<std::io::Result<Vec<_>>>()?
-            .into_iter()
-            .any(|exists| exists)
+        || provider_resources(target.root())?
     {
         return Err(Error::Invalid(
             "Reserve a fresh cloud identity; an existing target requires selection",
@@ -231,17 +217,22 @@ pub fn card_recoverable(request: &Request<'_>) -> Result<bool> {
     let Some(binding) = state.intents.binding(request.alias) else {
         return Ok(false);
     };
+    recoverable(request, binding)
+}
+
+pub(super) fn recoverable(request: &Request<'_>, binding: &Binding) -> Result<bool> {
     if binding.origin() != intent::Origin::Reserved {
         return Ok(false);
     }
     let target = request.target_store(binding)?;
-    let provider_resources = ["hetzner.json", "workspace-volume.json", "workspace-volume.required"]
-        .iter()
-        .map(|file| target.root().join(file).try_exists())
-        .collect::<std::io::Result<Vec<_>>>()?
-        .into_iter()
-        .any(|exists| exists);
-    if provider_resources {
+    unallocated(binding, &target)
+}
+
+pub(super) fn unallocated(binding: &Binding, target: &Store) -> Result<bool> {
+    if binding.origin() != intent::Origin::Reserved {
+        return Ok(false);
+    }
+    if provider_resources(target.root())? {
         return Ok(false);
     }
     Ok(target.load()?.is_none_or(|record| {
@@ -251,4 +242,28 @@ pub fn card_recoverable(request: &Request<'_>) -> Result<bool> {
             && record.worker.is_none()
             && !record.stop_requested
     }))
+}
+
+pub(super) fn require_selection(
+    request: &Request<'_>,
+    (journal, binding): (&super::journal::State, &Binding),
+    intent: &super::Intent,
+    target: &Store,
+) -> Result<()> {
+    if intent.state == State::Submitted
+        && binding.origin() == intent::Origin::Reserved
+        && !unallocated(binding, target)?
+    {
+        request.require_selected(journal, binding, request.bound(journal)?.1)?;
+    }
+    Ok(())
+}
+
+pub(super) fn provider_resources(root: &std::path::Path) -> Result<bool> {
+    for file in ["hetzner.json", "workspace-volume.json", "workspace-volume.required"] {
+        if root.join(file).try_exists()? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
