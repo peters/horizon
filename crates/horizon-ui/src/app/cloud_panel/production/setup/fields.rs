@@ -1,5 +1,5 @@
 //! The provider, agent and workspace cards of the Cloud settings page.
-use super::dashboard::{self, Key, Tone, caption, field, header, label, saved_key, secret, surface};
+use super::dashboard::{self, Key, Readiness, Tone, caption, field, header, label, saved_key, secret, surface};
 use crate::{app::util::chrome_button, theme};
 use egui::{Align, Layout, RichText, Ui, vec2};
 use horizon_core::cloud_runtime::setup::{Agent, Authentication, Draft};
@@ -9,6 +9,8 @@ use horizon_core::cloud_runtime::setup::{Agent, Authentication, Draft};
 pub(super) struct Edits {
     runpod: bool,
     hetzner: bool,
+    /// Codex, then Claude.
+    agents: [bool; 2],
 }
 
 pub(super) fn providers(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits) {
@@ -126,16 +128,18 @@ fn keep_saved(ui: &mut Ui) -> bool {
     clicked
 }
 
-pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool) {
+pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits, fixed_agents: bool) {
+    let status = dashboard::agents_status(draft);
     surface(ui, |ui| {
         header(
             ui,
             "Coding agents",
             "Choose one or both. New panels share the cloud checkout.",
-            None,
+            Some(status),
         );
         let selected_agents = draft.selected_agents().to_vec();
-        for (agent, name, mode, value, saved) in [
+        let [codex, claude] = &mut edits.agents;
+        for (agent, name, mode, value, saved, replacing) in [
             (
                 Agent::Codex,
                 "Codex",
@@ -146,6 +150,7 @@ pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool) {
                     .openai_api_key_file
                     .as_ref()
                     .is_some_and(|path| draft.saved_credentials.contains(path)),
+                codex,
             ),
             (
                 Agent::Claude,
@@ -157,6 +162,7 @@ pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool) {
                     .anthropic_api_key_file
                     .as_ref()
                     .is_some_and(|path| draft.saved_credentials.contains(path)),
+                claude,
             ),
         ] {
             ui.push_id(name, |ui| {
@@ -181,7 +187,15 @@ pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool) {
                     ui.selectable_value(mode, Authentication::Subscription, "Subscription login");
                 });
                 if *mode == Authentication::ApiKey {
-                    secret(ui, "agent-key", value, saved, "Paste API key");
+                    if saved && value.is_empty() && !*replacing {
+                        *replacing = saved_key(ui);
+                    } else {
+                        secret(ui, "agent-key", value, saved, "Paste API key");
+                        if saved && keep_saved(ui) {
+                            value.clear();
+                            *replacing = false;
+                        }
+                    }
                 } else {
                     caption(
                         ui,
@@ -195,9 +209,13 @@ pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool) {
 }
 
 /// What these settings add up to, and the options few people need.
-pub(super) fn workspace(ui: &mut Ui, draft: &mut Draft, ssh_ready: Option<bool>) {
+pub(super) fn workspace(ui: &mut Ui, draft: &mut Draft, ssh_ready: Option<bool>, readiness: &Readiness) {
     surface(ui, |ui| {
-        header(ui, "Your workspace", "Defaults for every new cloud", None);
+        let status = match readiness.tone {
+            Tone::Ready => (Tone::Ready, "Complete"),
+            tone => (tone, "Incomplete"),
+        };
+        header(ui, "Your workspace", "Defaults for every new cloud", Some(status));
         let compute = match (
             dashboard::runpod_key(draft) != Key::Missing,
             dashboard::hetzner_key(draft) != Key::Missing,
@@ -210,11 +228,7 @@ pub(super) fn workspace(ui: &mut Ui, draft: &mut Draft, ssh_ready: Option<bool>)
         let agents = draft
             .selected_agents()
             .iter()
-            .map(|agent| match agent {
-                Agent::Codex => "Codex",
-                Agent::Claude => "Claude",
-                Agent::Grok => "Grok",
-            })
+            .map(|agent| dashboard::agent_name(*agent))
             .collect::<Vec<_>>()
             .join(" + ");
         let ssh = match ssh_ready {
@@ -256,8 +270,10 @@ pub(super) fn workspace(ui: &mut Ui, draft: &mut Draft, ssh_ready: Option<bool>)
                      remote-browser bindings are preserved.",
                 );
                 let mut endpoint = draft.settings.docker_host.clone().unwrap_or_default();
-                field(ui, "Docker endpoint (blank uses the local default)", &mut endpoint, "");
-                draft.settings.docker_host = (!endpoint.trim().is_empty()).then(|| endpoint.trim().to_owned());
+                // Only an edit rewrites the saved value; opening the section changes nothing.
+                if field(ui, "Docker endpoint (blank uses the local default)", &mut endpoint, "").changed() {
+                    draft.settings.docker_host = (!endpoint.trim().is_empty()).then(|| endpoint.trim().to_owned());
+                }
             },
         );
         caption(ui, "Choose a size and data center for each cloud in New cloud.");

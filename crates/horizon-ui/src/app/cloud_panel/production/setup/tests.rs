@@ -499,3 +499,36 @@ fn a_registry_result_keeps_or_drops_the_proof_for_the_current_grant_only() {
     state.record_registry(outcome(&binding.generation, None));
     assert!(state.verified.is_empty());
 }
+
+#[test]
+fn an_agent_api_key_holds_the_banner_until_it_is_saved() {
+    use super::dashboard::{Readiness, Tone, Verified, agents_status};
+    use horizon_core::cloud_runtime::setup::Authentication;
+    let temp = tempfile::tempdir().unwrap();
+    let mut first = Draft::load(temp.path()).unwrap();
+    *first.runpod_key = "synthetic-compute".into();
+    first.save().unwrap();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    let verified = Verified::new();
+    assert_eq!(Readiness::of(&draft, Some(true), &verified).tone, Tone::Ready);
+    assert_eq!(agents_status(&draft), (Tone::Ready, "Ready"));
+    draft.openai_auth = Authentication::ApiKey;
+    let missing = Readiness::of(&draft, Some(true), &verified);
+    assert_eq!(missing.tone, Tone::Attention);
+    assert!(missing.cause.contains("Codex API key"));
+    assert_eq!(agents_status(&draft), (Tone::Attention, "Needs a key"));
+    *draft.openai_key = "synthetic-agent".into();
+    assert!(
+        Readiness::of(&draft, Some(true), &verified)
+            .cause
+            .contains("Save settings")
+    );
+    assert_eq!(agents_status(&draft), (Tone::Attention, "Unsaved key"));
+    draft.settings.default_agents.clear();
+    assert_eq!(agents_status(&draft), (Tone::Attention, "Choose one"));
+    assert!(
+        Readiness::of(&draft, Some(true), &verified)
+            .cause
+            .contains("Choose a coding agent")
+    );
+}

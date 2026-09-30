@@ -6,7 +6,7 @@ use crate::{app::util::chrome_button, theme};
 use egui::{Align, Color32, Frame, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 use horizon_core::cloud_runtime::{
     registry::{Action, Validation},
-    setup::Draft,
+    setup::{Agent, Authentication, Draft},
 };
 use std::collections::BTreeMap;
 
@@ -70,6 +70,63 @@ pub(super) fn hetzner_key(draft: &Draft) -> Key {
     }
 }
 
+/// The key a selected agent needs, or `None` when it signs in with its own subscription.
+pub(super) fn agent_key(draft: &Draft, agent: Agent) -> Option<Key> {
+    let (mode, typed, file) = match agent {
+        Agent::Codex => (
+            draft.openai_auth,
+            !draft.openai_key.is_empty(),
+            draft.settings.openai_api_key_file.as_ref(),
+        ),
+        Agent::Claude => (
+            draft.anthropic_auth,
+            !draft.anthropic_key.is_empty(),
+            draft.settings.anthropic_api_key_file.as_ref(),
+        ),
+        Agent::Grok => return None,
+    };
+    (mode == Authentication::ApiKey).then(|| {
+        if typed {
+            Key::Unsaved
+        } else if file.is_some_and(|path| draft.saved_credentials.contains(path)) {
+            Key::Saved
+        } else {
+            Key::Missing
+        }
+    })
+}
+
+pub(super) fn agent_name(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Codex => "Codex",
+        Agent::Claude => "Claude",
+        Agent::Grok => "Grok",
+    }
+}
+
+/// The selected agents' keys, in order, for the agents that use one.
+fn agent_keys(draft: &Draft) -> Vec<(Agent, Key)> {
+    draft
+        .selected_agents()
+        .iter()
+        .filter_map(|agent| agent_key(draft, *agent).map(|key| (*agent, key)))
+        .collect()
+}
+
+/// What the agents card says about the selected agents.
+pub(super) fn agents_status(draft: &Draft) -> (Tone, &'static str) {
+    let keys = agent_keys(draft);
+    if draft.selected_agents().is_empty() {
+        (Tone::Attention, "Choose one")
+    } else if keys.iter().any(|(_, key)| *key == Key::Missing) {
+        (Tone::Attention, "Needs a key")
+    } else if keys.iter().any(|(_, key)| *key == Key::Unsaved) {
+        (Tone::Attention, "Unsaved key")
+    } else {
+        (Tone::Ready, "Ready")
+    }
+}
+
 /// What the banner says, in the order a person would fix things.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct Readiness {
@@ -92,7 +149,17 @@ impl Readiness {
         if hetzner == Key::Missing && draft.hetzner.enabled {
             return attention("Paste the Hetzner token, or switch Hetzner off.".into());
         }
-        if runpod == Key::Unsaved || hetzner == Key::Unsaved {
+        if draft.selected_agents().is_empty() {
+            return attention("Choose a coding agent.".into());
+        }
+        let agents = agent_keys(draft);
+        if let Some((agent, _)) = agents.iter().find(|(_, key)| *key == Key::Missing) {
+            return attention(format!(
+                "Paste the {} API key, or choose subscription login.",
+                agent_name(*agent)
+            ));
+        }
+        if runpod == Key::Unsaved || hetzner == Key::Unsaved || agents.iter().any(|(_, key)| *key == Key::Unsaved) {
             return attention("Save settings to keep the new key on this computer.".into());
         }
         match ssh_ready {
@@ -170,7 +237,7 @@ pub(super) fn label(ui: &mut Ui, text: &str) {
 }
 
 /// A plain single-line field under its label.
-pub(super) fn field(ui: &mut Ui, title: &str, value: &mut String, hint: &str) {
+pub(super) fn field(ui: &mut Ui, title: &str, value: &mut String, hint: &str) -> egui::Response {
     label(ui, title);
     ui.add_sized(
         [ui.available_width(), FIELD_HEIGHT],
@@ -178,7 +245,7 @@ pub(super) fn field(ui: &mut Ui, title: &str, value: &mut String, hint: &str) {
             .id_salt(title)
             .hint_text(hint)
             .margin(vec2(12.0, 9.0)),
-    );
+    )
 }
 
 /// A secret entry. A saved credential is kept unless something is typed over it.
@@ -263,21 +330,22 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
     } = state;
     let draft = draft.as_deref_mut()?;
     let fixed_agents = required_agents.is_some();
+    let readiness = Readiness::of(draft, *ssh_ready, verified);
     let mut action = None;
     ui.spacing_mut().item_spacing = vec2(GAP, GAP);
     if ui.available_width() < STACKED_BELOW {
         fields::providers(ui, draft, edits);
-        fields::agents(ui, draft, fixed_agents);
+        fields::agents(ui, draft, edits, fixed_agents);
         action = registry::card(ui, draft, verified);
-        fields::workspace(ui, draft, *ssh_ready);
+        fields::workspace(ui, draft, *ssh_ready, &readiness);
     } else {
         ui.columns(2, |columns| {
             columns[0].spacing_mut().item_spacing.y = GAP;
             columns[1].spacing_mut().item_spacing.y = GAP;
             fields::providers(&mut columns[0], draft, edits);
-            fields::agents(&mut columns[0], draft, fixed_agents);
+            fields::agents(&mut columns[0], draft, edits, fixed_agents);
             action = registry::card(&mut columns[1], draft, verified);
-            fields::workspace(&mut columns[1], draft, *ssh_ready);
+            fields::workspace(&mut columns[1], draft, *ssh_ready, &readiness);
         });
     }
     action
