@@ -275,6 +275,8 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
     let Some(mut catalog) = catalog(form) else {
         return;
     };
+    cards::filters(ui, &catalog, form);
+    ui.add_space(4.0);
     if catalog.matching == 0 {
         widgets::note(ui, super::storage::empty_catalog_reason(form, &profile));
     }

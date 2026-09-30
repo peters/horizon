@@ -519,7 +519,9 @@ the worker on stop, and the choices it supports. Interfaces read this descriptio
 to show exactly the fields that apply instead of branching on provider names.
 `offers::workers` assembles policy-filtered provider catalogs for a repository's
 requirements. `offers::{exchange, comparison}` own dated reference rates and the
-common estimated-total ordering used by UI, CLI and MCP. The UI's `prices::exchange`
+common estimated-total ordering used by UI, CLI and MCP. The worker's
+`offers::exchange` caches reference rates in a background job shared by requests,
+so FX cannot block its host loop. The UI's `prices::exchange`
 fetches reference rates off the render thread. `cloud_panel::selection` translates
 an offer identity to launch size and persisted placement. Explicit Hetzner choices
 set `WorkerSpec::exact_placement`; allocation and lifecycle policy intersect those

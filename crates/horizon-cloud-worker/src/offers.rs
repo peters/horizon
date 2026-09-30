@@ -1,5 +1,6 @@
 //! Cloud offers for agents on this worker, ranked from the prices the owning Horizon
 //! last sent. The worker holds no provider account; only public FX reference rates are fetched.
+mod exchange;
 #[cfg(test)]
 mod tests;
 
@@ -205,11 +206,8 @@ fn rank_with(
     fetch_rates: bool,
 ) -> Result<serde_json::Value, String> {
     let mut answer = native_rank(requirements, path, now)?;
-    if cfg!(test) || !fetch_rates {
-        horizon_cloud::offers::comparison::append(&mut answer, None);
-    } else {
-        horizon_cloud::offers::comparison::fetch_append(&mut answer);
-    }
+    let rates = exchange::quote(fetch_rates && horizon_cloud::offers::comparison::needs_rates(&answer));
+    horizon_cloud::offers::comparison::append(&mut answer, rates.as_ref());
     Ok(answer)
 }
 

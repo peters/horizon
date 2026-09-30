@@ -101,7 +101,7 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 3.0;
             ui.label(RichText::new(name).size(15.0).strong().color(theme::FG()));
-            ui.label(RichText::new(detail).size(12.5).color(theme::FG_SOFT()));
+            ui.label(RichText::new(&detail).size(12.5).color(theme::FG_SOFT()));
             ui.add_space(4.0);
             ui.label(RichText::new(price(offer)).size(19.0).strong().color(theme::FG()));
             if let Some(total) = horizon_core::cloud_runtime::offers::comparison::dollars(
@@ -125,15 +125,15 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
             egui::WidgetType::Button,
             ui.is_enabled(),
             selected,
-            format!("{}, {}, {stock}", title(offer).0, price(offer)),
+            format!("{}, {detail}, {}, {stock}", title(offer).0, price(offer)),
         )
     });
     ui.add_space(4.0);
     response.clicked()
 }
 
-/// The catalog and its visible filters. Excluded workers can be inspected, but never chosen.
-pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Option<usize> {
+/// Search and eligibility controls keep their place when rankings refresh.
+pub(super) fn filters(ui: &mut Ui, catalog: &Catalog, form: &mut Production) {
     let state = &mut form.launch.selector;
     ui.horizontal_wrapped(|ui| {
         ui.add(
@@ -147,6 +147,12 @@ pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Opti
     if excluded > 0 {
         widgets::checkbox(ui, &mut state.show_below_minimums, "Show workers below requirements");
     }
+}
+
+/// Excluded workers can be inspected, but never chosen.
+pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Option<usize> {
+    let state = &form.launch.selector;
+    let excluded = catalog.offers.len() - catalog.matching;
     let search = state.search.trim().to_lowercase();
     let in_stock_only = state.in_stock_only;
     let show_below_minimums = state.show_below_minimums;
@@ -283,7 +289,7 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
             egui::WidgetType::Button,
             ui.is_enabled(),
             selected,
-            format!("{name}, {}, {stock}", price(offer)),
+            format!("{name}, {detail}, {}, {stock}", price(offer)),
         )
     });
     let response = if let Some(reason) = reason {

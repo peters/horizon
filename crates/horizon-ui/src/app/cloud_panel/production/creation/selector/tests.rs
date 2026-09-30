@@ -116,6 +116,37 @@ fn refresh_keeps_browsing_choices_but_removes_complete_rankings_until_current() 
     }
 }
 
+#[test]
+fn refreshing_rankings_does_not_move_filter_controls() {
+    let positions = |form: &mut Production| {
+        egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(1000.0);
+                section(ui, form);
+            })
+            .discard_textures()
+            .shapes
+            .into_iter()
+            .filter_map(|shape| match shape.shape {
+                egui::epaint::Shape::Text(text)
+                    if matches!(
+                        text.galley.job.text.as_str(),
+                        "In stock only" | "Show workers below requirements"
+                    ) =>
+                {
+                    Some((text.galley.job.text.clone(), text.pos))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut form = form("cpu");
+    let before = positions(&mut form);
+    assert_eq!(before.len(), 2);
+    form.prices.refresh();
+    assert_eq!(positions(&mut form), before);
+}
+
 /// Draws the selector and its summary once, returning every visible text.
 fn render(form: &mut Production) -> Vec<String> {
     let mut actions = Actions::default();
@@ -571,6 +602,10 @@ fn worker_cards_are_chosen_from_the_keyboard() {
         }
     }
     let label = target.expect("a worker card takes keyboard focus");
+    assert!(
+        label.contains("RunPod"),
+        "the accessible name identifies its provider: {label}"
+    );
     let _ = frame(
         &mut form,
         vec![key(egui::Key::Enter, true), key(egui::Key::Enter, false)],
