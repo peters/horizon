@@ -94,6 +94,11 @@ fn has_explicit_browser_scheme(input: &str) -> bool {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserControlAction {
+    /// Rotate a remote device and wait for measured page acknowledgement.
+    Orientation {
+        orientation: crate::remote::RemoteOrientation,
+        timeout_millis: u64,
+    },
     /// Pin the content viewport in CSS pixels; `None` resumes host sizing.
     Resize {
         viewport: Option<[u32; 2]>,
@@ -208,6 +213,12 @@ impl BrowserControlAction {
     /// click count, or numeric coordinate is outside the engine contract.
     pub fn validate(&self) -> Result<(), &'static str> {
         match self {
+            Self::Orientation { timeout_millis, .. } => {
+                if !(1..=60_000).contains(timeout_millis) {
+                    return Err("orientation timeout must be between 1 and 60000 ms");
+                }
+                Ok(())
+            }
             Self::Resize {
                 viewport,
                 timeout_millis,
@@ -310,7 +321,8 @@ impl BrowserControlAction {
             Self::Back => Some(BrowserCommand::Back),
             Self::Forward => Some(BrowserCommand::Forward),
             Self::Input { input } => Some(BrowserCommand::Input(input.clone())),
-            Self::Resize { .. }
+            Self::Orientation { .. }
+            | Self::Resize { .. }
             | Self::Snapshot { .. }
             | Self::Query { .. }
             | Self::WaitForSelector { .. }

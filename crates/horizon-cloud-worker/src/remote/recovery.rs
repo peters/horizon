@@ -78,6 +78,7 @@ impl Allocations {
                     browser_name: "chrome".into(),
                     platform_name: "recovery".into(),
                     device: DeviceRequirement::default(),
+                    orientation: None,
                     capability_extensions: BTreeMap::new(),
                 };
                 let authorization = RemoteAuthorizationHeader::new(header.as_str().into()).map_err(io::Error::other)?;
@@ -253,6 +254,7 @@ mod tests {
             browser_name: "chrome".into(),
             platform_name: "test".into(),
             device: DeviceRequirement::default(),
+            orientation: None,
             capability_extensions: BTreeMap::new(),
         };
         let request =

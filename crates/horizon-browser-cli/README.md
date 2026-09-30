@@ -364,3 +364,26 @@ including superseded ones, and starts at most four per minute. When a stuck
 credential read eventually returns, discovery resumes without restarting
 Horizon. While two reads for an account never return, that account's
 discovery keeps reporting the stall.
+
+## Remote orientation plans
+
+The plan runner calls the same public MCP contract as interactive agents. A
+configured or catalog tablet can start in landscape and return to portrait:
+
+```json
+{
+  "version": 1,
+  "steps": [
+    {"id": "tablet", "tool": "browser_create", "arguments": {"target": "tablet", "orientation": "landscape"}},
+    {"id": "portrait", "tool": "browser_orientation", "arguments": {"panel_id": {"$ref": "tablet#/panel/panel_id"}, "orientation": "portrait"}},
+    {"id": "release", "tool": "browser_close", "arguments": {"panel_id": {"$ref": "tablet#/panel/panel_id"}}}
+  ]
+}
+```
+
+Use an existing configured target or an exact catalog reference returned by
+`browser_provider_devices`. Inspect `orientation_support` before rotating an
+existing session. Timeouts can follow an applied rotation; inspect rather than
+blindly replaying a failed mutation. Unsupported endpoints return
+`orientation_unsupported`, and physical viewports remain non-resizable. Both
+the MCP server and hosting application must include the orientation capability.

@@ -803,11 +803,12 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
         "method": "tools/list",
         "params": {}
     }));
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(28));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(29));
     assert!(tools.to_string().contains("cloud_companion_ensure_ready"));
     assert!(tools.to_string().contains("browser_network_watch"));
     assert!(tools.to_string().contains("browser_http_auth"));
     assert!(tools.to_string().contains("browser_resize"));
+    assert!(tools.to_string().contains("browser_orientation"));
     assert!(tools.to_string().contains("browser_close"));
     assert!(!tools.to_string().contains("browser_ws"));
     process.close();

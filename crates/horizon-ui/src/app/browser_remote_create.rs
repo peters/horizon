@@ -136,7 +136,7 @@ impl HorizonApp {
         let Some(target) = request.target.as_deref() else {
             return Ok(None);
         };
-        let plan = if let Some(provider) = horizon_core::browser::remote_catalog::target_provider(target) {
+        let mut plan = if let Some(provider) = horizon_core::browser::remote_catalog::target_provider(target) {
             let profile = self
                 .template_config
                 .browser
@@ -171,6 +171,7 @@ impl HorizonApp {
         } else {
             plan_remote_create(&self.template_config, &self.remote_browser_credentials, target)?
         };
+        horizon_core::browser::remote_config::override_orientation(&mut plan.request, request.orientation);
         let workspace = self
             .board
             .workspace(workspace_id)
@@ -347,6 +348,7 @@ mod tests {
                 browser_name: "Safari".into(),
                 platform_name: "iOS".into(),
                 device: horizon_core::browser::remote::DeviceRequirement::default(),
+                orientation: None,
                 capability_extensions: BTreeMap::new(),
             },
         );

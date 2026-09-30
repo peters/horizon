@@ -11,7 +11,7 @@ use crate::webdriver::remote_http::RemoteAuthorizationHeader;
 use crate::webdriver::test_server::{Reply, Server};
 use horizon_browser_protocol::remote::{DeviceKind, DeviceRequirement};
 
-pub(super) fn request(endpoint: &str) -> RemoteSessionRequest {
+pub(in crate::webdriver) fn request(endpoint: &str) -> RemoteSessionRequest {
     RemoteSessionRequest {
         adapter: horizon_browser_protocol::remote::RemoteAdapterKind::Webdriver,
         recovery: crate::RemoteAllocation::default(),

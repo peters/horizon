@@ -62,8 +62,8 @@ pub use close::{
 };
 pub use create::{
     BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, CreateNavigation,
-    claim_create_request, complete_create_request, enqueue_create, enqueue_duplicate, list_create_requests,
-    record_create_status, take_create_result,
+    RemoteCreateParameters, claim_create_request, complete_create_request, enqueue_create, enqueue_create_oriented,
+    enqueue_duplicate, list_create_requests, record_create_status, take_create_result,
 };
 pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
 pub use visibility::{
@@ -131,6 +131,8 @@ pub struct BrowserManifest {
     /// Driver-confirmed remote file-transfer support; absent on older hosts.
     #[serde(default)]
     pub remote_file_upload: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_orientation: Option<horizon_browser::remote::RemoteOrientationState>,
     #[serde(default)]
     pub file_chooser: horizon_browser::FileChooserStatus,
     /// Negotiated CDP/BiDi WebSocket endpoint, or empty for classic-only
@@ -731,6 +733,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.remote_target.clone_from(&state.remote_target);
             manifest.remote_device.clone_from(&state.remote_device);
             manifest.remote_file_upload = state.remote_file_upload;
+            manifest.remote_orientation = state.remote_orientation;
             manifest.file_chooser = state.file_chooser;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
@@ -750,6 +753,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.remote_target.clone_from(&state.remote_target);
             manifest.remote_device.clone_from(&state.remote_device);
             manifest.remote_file_upload = state.remote_file_upload;
+            manifest.remote_orientation = state.remote_orientation;
             manifest.file_chooser = state.file_chooser;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
@@ -941,6 +945,7 @@ mod tests {
             remote_target: None,
             remote_device: None,
             remote_file_upload: false,
+            remote_orientation: None,
             file_chooser: horizon_browser::FileChooserStatus::Unsupported,
             browser_ws: "ws://127.0.0.1:1/devtools/browser/x".to_string(),
             target_id: "T1".to_string(),

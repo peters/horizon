@@ -354,6 +354,10 @@ impl BrowserPanelState {
                         | RemoteReleaseOutcome::NeverAllocated,
                     ..
                 }
+                | RemoteSessionEvent::OrientationRejected {
+                    released: RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone,
+                    ..
+                }
                 | RemoteSessionEvent::DeviceRejected {
                     released: RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone,
                     ..
@@ -385,6 +389,13 @@ impl BrowserPanelState {
                 let summary = identity.summary();
                 device = Some(summary.clone());
                 format!("remote device for {label} verified: {summary}")
+            }
+            RemoteSessionEvent::OrientationRejected { label, code, released } => {
+                failure = Some(RemoteFailure {
+                    code,
+                    message: "the requested start orientation could not be verified and Horizon attempted release; check the panel's release status before creating again",
+                });
+                format!("remote orientation for {label} rejected ({code}); session {released}")
             }
             RemoteSessionEvent::DeviceRejected {
                 label,
@@ -434,6 +445,22 @@ impl BrowserPanelState {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn orientation_rejection_retains_unconfirmed_capacity_and_its_typed_code() {
+        use horizon_browser::{RemoteReleaseOutcome, RemoteSessionEvent};
+        let mut state = super::BrowserPanelState::inert_remote("tablet", "grid");
+        state.apply_remote_session_event_for_tests(RemoteSessionEvent::OrientationRejected {
+            label: "tablet".into(),
+            code: "remote_orientation_mismatch",
+            released: RemoteReleaseOutcome::ReleaseUnknown {
+                attempts: 3,
+                reason: "synthetic timeout".into(),
+            },
+        });
+        assert_eq!(state.remote_failure().unwrap().code, "remote_orientation_mismatch");
+        assert!(state.holds_remote_allocation());
+    }
+
     use super::super::{BackendCapabilities, BackendKind, BrowserConfig, BrowserPanelState, BrowserStatus};
 
     #[test]

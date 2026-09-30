@@ -2,7 +2,9 @@ mod http_auth;
 mod recovery;
 pub(crate) use recovery::RemoteAllocationsInput;
 mod network;
+mod orientation;
 mod viewport;
+pub(crate) use orientation::{OrientationInput, OrientationOutput};
 pub(crate) use viewport::{ResizeInput, ResizeOutput};
 mod video;
 
@@ -43,6 +45,10 @@ pub(crate) struct BrowserPanel {
     /// target name, is the real-device evidence. Absent for a local browser.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) remote_device: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) remote_orientation: Option<orientation::Orientation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) orientation_support: Option<orientation::Support>,
     pub(crate) url: String,
     pub(crate) title: String,
     /// Host presentation state (shown or hidden). It says nothing about
@@ -91,6 +97,15 @@ impl BrowserPanel {
             protocol,
             remote_target: value.remote_target,
             remote_device: value.remote_device,
+            remote_orientation: value.remote_orientation.and_then(|state| state.applied).map(Into::into),
+            orientation_support: remote.then(|| {
+                value
+                    .remote_orientation
+                    .map_or(horizon_browser::remote::OrientationSupport::Unverified, |state| {
+                        state.support
+                    })
+                    .into()
+            }),
             url: value.url,
             title: value.title,
             visible: !value.hidden,
@@ -102,7 +117,12 @@ impl BrowserPanel {
             },
             manual_file_chooser: value.file_chooser.supported(),
             file_chooser_pending: value.file_chooser.pending(),
-            capabilities: semantic_capabilities(value.backend, remote, value.remote_file_upload),
+            capabilities: semantic_capabilities(
+                value.backend,
+                remote,
+                value.remote_file_upload,
+                value.remote_orientation,
+            ),
             network_capture: NetworkCaptureCapability::for_backend(value.backend, remote),
             video_capture: VideoCaptureCapability::for_backend(),
         }
@@ -216,6 +236,8 @@ pub(crate) struct CreateInput {
     pub(crate) backend: Option<CreateBackend>,
     /// Configured remote target name (a key of Horizon's browser.remote.targets) to run the session at that remote target instead of a local browser. Provider-neutral: Horizon resolves the endpoint, capabilities and credentials; the panel then advertises `remote_target`, classic `WebDriver` and no network capture. After allocation the device is verified against the target's requirement from the provider's own evidence; a physical requirement the evidence does not confirm is refused as `remote_device_rejected` after Horizon attempts to release the session (the panel says whether the provider confirmed it), and a ready panel reports `remote_device`. Omit for a local browser.
     pub(crate) target: Option<String>,
+    /// Remote start orientation override; requires target. Provider default when omitted.
+    pub(crate) orientation: Option<orientation::Orientation>,
     /// Whether the panel is shown initially (default true). Hidden panels remain live and controllable.
     pub(crate) visible: Option<bool>,
     /// Explicitly permit another panel when this agent already owns one. Use only for a user-requested independent session.
@@ -903,7 +925,12 @@ fn backend_name(backend: BackendKind) -> &'static str {
     }
 }
 
-fn semantic_capabilities(backend: BackendKind, remote: bool, remote_file_upload: bool) -> Vec<String> {
+fn semantic_capabilities(
+    backend: BackendKind,
+    remote: bool,
+    remote_file_upload: bool,
+    orientation: Option<horizon_browser::remote::RemoteOrientationState>,
+) -> Vec<String> {
     let mut capabilities = [
         "navigate",
         "snapshot",
@@ -935,6 +962,11 @@ fn semantic_capabilities(backend: BackendKind, remote: bool, remote_file_upload:
             ]
             .map(str::to_string),
         );
+    }
+    if remote
+        && orientation.is_some_and(|state| state.support == horizon_browser::remote::OrientationSupport::Supported)
+    {
+        capabilities.push("orientation".into());
     }
     capabilities
 }

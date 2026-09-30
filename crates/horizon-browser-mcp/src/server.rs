@@ -1,5 +1,5 @@
 use horizon_browser::{BrowserControlAction, BrowserControlValue};
-use horizon_browser_control::manifest::AuditPageRequest;
+use horizon_browser_control::manifest::{self, AuditPageRequest};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{
@@ -174,7 +174,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_create",
-        description = "Create a browser panel in the calling agent's Horizon workspace and wait until its backend is ready and, when url is given, that page has committed; if the page has not committed within a bounded startup wait the panel is still returned with navigation=pending, and if the first page failed to load it is returned with navigation=failed and navigation_error (the panel is controllable; navigate again). Use this when browser_list is empty. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. Only when the user explicitly requests an independent session, set allow_additional=true. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Set target to a reference returned by browser_provider_devices or a configured remote target name to run the session at that remote target instead of a local browser (Horizon resolves the provider, capabilities and credentials; the panel then reports remote_target and classic WebDriver without network capture; the allocated device is verified against the target's requirement from the provider's own evidence, a physical requirement the evidence does not confirm fails as remote_device_rejected after Horizon attempts to release the session, and a ready panel reports remote_device) and omit backend. Bare hostnames default to HTTPS and explicit HTTP is preserved."
+        description = "Create a browser panel in the calling agent's Horizon workspace and wait until its backend is ready and, when url is given, that page has committed; if the page has not committed within a bounded startup wait the panel is still returned with navigation=pending, and if the first page failed to load it is returned with navigation=failed and navigation_error (the panel is controllable; navigate again). Use this when browser_list is empty. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. Only when the user explicitly requests an independent session, set allow_additional=true. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Set target to a reference returned by browser_provider_devices or a configured remote target name to run the session at that remote target instead of a local browser (Horizon resolves the provider, capabilities and credentials; the panel then reports remote_target and classic WebDriver without network capture; the allocated device is verified against the target's requirement from the provider's own evidence, a physical requirement the evidence does not confirm fails as remote_device_rejected after Horizon attempts to release the session, and a ready panel reports remote_device) and omit backend. Optional orientation=portrait or landscape requires target, overrides configured orientation for this session only, and is verified before readiness; a mismatch is refused and the allocation is released. Panels report remote_orientation and orientation_support. Bare hostnames default to HTTPS and explicit HTTP is preserved."
     )]
     async fn browser_create(&self, Parameters(input): Parameters<CreateInput>) -> Result<Json<CreateOutput>, String> {
         // Matches the request normalization: a blank url is no navigation.
@@ -182,10 +182,13 @@ impl HorizonBrowserMcp {
         let receipt = self
             .controller
             .create(
-                input.url,
-                input.backend.map(Into::into),
-                input.target,
-                input.visible.unwrap_or(true),
+                manifest::RemoteCreateParameters {
+                    url: input.url,
+                    backend: input.backend.map(Into::into),
+                    target: input.target,
+                    orientation: input.orientation.map(Into::into),
+                    visible: input.visible.unwrap_or(true),
+                },
                 input.allow_additional.unwrap_or(false),
                 input.timeout_millis,
             )
@@ -291,8 +294,25 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "browser_orientation",
+        description = "Rotate a remote device to portrait or landscape and wait for device and measured page acknowledgement. Check orientation_support first; unsupported endpoints and local browsers return orientation_unsupported. Returns requested/applied orientation and CSS viewport dimensions. Reacquire semantic refs afterwards. A timeout can follow an applied rotation; inspect the panel before retrying. Preserves ownership and handoff rules."
+    )]
+    async fn browser_orientation(
+        &self,
+        Parameters(input): Parameters<crate::model::OrientationInput>,
+    ) -> Result<Json<crate::model::OrientationOutput>, String> {
+        let action = input.action()?;
+        let receipt = self
+            .controller
+            .execute_engine_bounded(&input.panel_id, action, input.timeout_millis())
+            .await
+            .map_err(|error| error.to_string())?;
+        crate::model::OrientationOutput::from_result(input.panel_id, receipt.action_id, &receipt.value).map(Json)
+    }
+
+    #[tool(
         name = "browser_resize",
-        description = "Set an existing local Chromium or Firefox panel's exact page content viewport in CSS pixels (320-8000 per axis). Supply both width and height, or reset=true without dimensions to resume host panel sizing. Waits for measured innerWidth/innerHeight and returns requested and applied sizes; host layout and navigation preserve the pin until reset or session replacement. The canvas panel is unchanged and letterboxes the page. Remote devices return remote_viewport_fixed; unsupported backends return viewport_unsupported. Preserves workspace ownership, user steering and handoff rules. Video encoding dimensions and max_width do not change this viewport."
+        description = "Set an existing local Chromium or Firefox panel's exact page content viewport in CSS pixels (320-8000 per axis). Supply both width and height, or reset=true without dimensions to resume host panel sizing. Waits for measured innerWidth/innerHeight and returns requested and applied sizes; host layout and navigation preserve the pin until reset or session replacement. The canvas panel is unchanged and letterboxes the page. Remote devices return remote_viewport_fixed; use browser_orientation to rotate a supported remote device; unsupported backends return viewport_unsupported. Preserves workspace ownership, user steering and handoff rules. Video encoding dimensions and max_width do not change this viewport."
     )]
     async fn browser_resize(&self, Parameters(input): Parameters<ResizeInput>) -> Result<Json<ResizeOutput>, String> {
         let action = input.action()?;
@@ -730,6 +750,7 @@ mod tests {
                 "browser_navigate",
                 "browser_network",
                 "browser_network_watch",
+                "browser_orientation",
                 "browser_panel",
                 "browser_provider_devices",
                 "browser_provider_usage",

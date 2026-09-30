@@ -7,8 +7,10 @@
 //! stripped from exports.
 
 mod error;
+mod orientation;
 mod provider;
 mod target;
+pub use orientation::{OrientationSupport, RemoteOrientation, RemoteOrientationState};
 
 use std::collections::{BTreeMap, BTreeSet};
 

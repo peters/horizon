@@ -142,6 +142,7 @@ mod tests {
                     model: Some("iPhone 16".into()),
                     os_version: Some("18".into()),
                 },
+                orientation: None,
                 capability_extensions: extensions,
             },
         );

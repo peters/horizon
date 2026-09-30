@@ -15,7 +15,7 @@ use super::Driver;
 const WRITE_INTERVAL: Duration = Duration::from_millis(200);
 const SIGNAL_INTERVAL: Duration = Duration::from_millis(250);
 const USER_ACTIVE_STAMP_INTERVAL: Duration = Duration::from_secs(1);
-const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
+pub(super) const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
 
 impl Driver {
     pub(super) fn initialize_coordination(&mut self) {
@@ -251,6 +251,7 @@ impl Driver {
             title: self.title.clone(),
             remote_target: self.config.remote.as_ref().map(|request| request.label.clone()),
             remote_device: self.remote_device.clone(),
+            remote_orientation: self.remote_orientation,
             remote_file_upload: self.file_transfer.is_some(),
             file_chooser: self.config.frame_slot.file_chooser().status(),
         }

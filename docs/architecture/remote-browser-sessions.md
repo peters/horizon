@@ -327,6 +327,27 @@ the initial expectations:
 - `live_view`: adaptive screenshot polling with bounded rate, payload and
   memory, repainting on frame or state change. Richer streaming is optional.
 
+## Remote orientation contract
+
+Targets optionally normalize `orientation: portrait | landscape`. Create-time
+overrides require a remote target and share the same adapter and credential
+policy across the UI host, cloud worker and MCP/CLI. BrowserStack uses
+`bstack:options.deviceOrientation`; generic Appium uses `appium:orientation`.
+Orientation extensions are rejected to prevent conflicting settings.
+
+The driver negotiates GET `/orientation` after allocation and reports
+`orientation_support` separately from observed `remote_orientation`. Explicit
+start requests are verified against device orientation and measured inner/visual
+viewport geometry before readiness. Unsupported or mismatching starts attempt
+release and preserve uncertain holds. Runtime `browser_orientation` sets the
+device and waits for matching page geometry and a fresh frame, then rechecks
+event-loop ownership and document identity before completing. It invalidates
+semantic refs and scroll geometry; subsequent semantic input resolves fresh
+element/visual-viewport coordinates. The current remote semantic input path
+does not retain a screenshot-origin offset. Remote manual steering remains
+unsupported, and the coordinate calibration described below remains a design
+requirement for any future screenshot-coordinate input path.
+
 ## Coordinates and screenshots
 
 CSS pixels come from `visualViewport` and the element rect, never from

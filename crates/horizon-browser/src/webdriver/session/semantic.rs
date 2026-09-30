@@ -222,6 +222,10 @@ impl Driver {
                 .map_err(|error| BrowserControlFailure::new(failure_code, error));
         }
         match &request.action {
+            BrowserControlAction::Orientation { .. } => Err(BrowserControlFailure::new(
+                "invalid_action_state",
+                "orientation is observed from the driver loop",
+            )),
             BrowserControlAction::Resize { .. } => Err(BrowserControlFailure::new(
                 "invalid_action_state",
                 "resize is observed from the driver loop",

@@ -214,7 +214,7 @@ impl Driver {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::webdriver::session) mod tests {
     use std::collections::VecDeque;
     use std::net::TcpListener;
     use std::sync::{Arc, atomic::AtomicBool, mpsc};
@@ -258,7 +258,10 @@ mod tests {
         json!({"method":format!("browsingContext.{method}"),"params":{"context":context,"parent":parent}})
     }
 
-    fn bidi_fixture(refuse: bool, chooser: bool) -> (JsonWsLink, std::thread::JoinHandle<Vec<Value>>) {
+    pub(in crate::webdriver::session) fn bidi_fixture(
+        refuse: bool,
+        chooser: bool,
+    ) -> (JsonWsLink, std::thread::JoinHandle<Vec<Value>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("ws://{}/", listener.local_addr().unwrap());
         let worker = std::thread::spawn(move || {
@@ -301,7 +304,7 @@ mod tests {
         (JsonWsLink::connect(&url).unwrap(), worker)
     }
 
-    fn fixture_driver(classic: &Server, link: JsonWsLink) -> Driver {
+    pub(in crate::webdriver::session) fn fixture_driver(classic: &Server, link: JsonWsLink) -> Driver {
         // Use the existing loopback classic transport adapter without launching
         // a process. The real Firefox resize and event paths run below; remote
         // capability admission is intentionally not part of this fixture.
@@ -354,6 +357,8 @@ mod tests {
             host,
             remote_release,
             remote_device,
+            remote_orientation: None,
+            pending_orientation: None,
             remote_android_chromium: false,
             file_transfer: None,
             session_id,
@@ -402,7 +407,7 @@ mod tests {
         }
     }
 
-    fn events() -> BrowserEventSender {
+    pub(in crate::webdriver::session) fn events() -> BrowserEventSender {
         let (tx, _) = mpsc::channel();
         BrowserEventSender {
             tx,

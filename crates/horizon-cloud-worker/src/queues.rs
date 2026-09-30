@@ -39,12 +39,13 @@ fn create_requests(host: &mut Host) {
             }
             let id = format!("browser-{}", request.request_id);
             match start_before_deadline(&request, manifest::now_millis(), || {
-                host.open(
+                host.open_oriented(
                     &id,
                     request.url.clone(),
                     request.backend,
                     request.target.as_deref(),
                     &request.actor,
+                    request.orientation,
                 )
             }) {
                 Ok(()) => {
@@ -68,6 +69,10 @@ fn create_requests(host: &mut Host) {
 fn pending_requests(host: &mut Host) {
     host.pending.retain(|request| {
         let id = format!("browser-{}", request.request_id);
+        if let Some(code) = host.browsers.get(&id).and_then(|browser| browser.start_orientation_failure) {
+            host.pending_cleanup.insert(id);
+            return manifest::complete_create_request(&BrowserCreateResult::failed(request, code, "start orientation could not be verified; Horizon attempted to release the allocation, reconcile uncertain capacity before retrying")).is_err();
+        }
         if let Some(message) = pending_failure(
             request,
             host.browsers.get(&id).map(|browser| &browser.state),

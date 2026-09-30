@@ -17,6 +17,7 @@ use std::{
 pub struct HostedBrowser {
     pub session: BrowserSession,
     pub state: CloudViewState,
+    pub start_orientation_failure: Option<&'static str>,
 }
 pub struct Host {
     pub capabilities: horizon_cloud::Capabilities,
@@ -69,6 +70,20 @@ impl Host {
         target: Option<&str>,
         actor: &str,
     ) -> io::Result<()> {
+        self.open_oriented(id, url, backend, target, actor, None)
+    }
+    pub fn open_oriented(
+        &mut self,
+        id: &str,
+        url: Option<String>,
+        backend: Option<BackendKind>,
+        target: Option<&str>,
+        actor: &str,
+        orientation: Option<horizon_browser::remote::RemoteOrientation>,
+    ) -> io::Result<()> {
+        if orientation.is_some() && target.is_none() {
+            return Err(io::Error::other("orientation requires a remote target"));
+        }
         if !valid_identity(id) {
             return Err(io::Error::other("Invalid browser identity"));
         }
@@ -85,9 +100,12 @@ impl Host {
                 "Remote credentials were revoked; reconnect only after restoring the local grant",
             ));
         }
-        let remote = target
+        let mut remote = target
             .map(|name| super::remote::request(&self.capabilities, name, &self.catalog.cache))
             .transpose()?;
+        if let Some(remote) = &mut remote {
+            horizon_browser::remote_config::override_orientation(remote, orientation);
+        }
         let backend = match &remote {
             Some(remote) => remote.browser,
             None => selected_backend(&self.capabilities, backend)?,
@@ -135,6 +153,7 @@ impl Host {
             id.into(),
             HostedBrowser {
                 session,
+                start_orientation_failure: None,
                 state: CloudViewState {
                     id: id.into(),
                     backend,
@@ -154,6 +173,10 @@ impl Host {
                         identity,
                         ..
                     }) => browser.state.remote_device = Some(identity.summary()),
+                    BrowserEvent::RemoteSession(horizon_browser::RemoteSessionEvent::OrientationRejected {
+                        code,
+                        ..
+                    }) => browser.start_orientation_failure = Some(code),
                     BrowserEvent::Ready => browser.state.ready = true,
                     BrowserEvent::Title(title) => browser.state.title = title,
                     BrowserEvent::UrlChanged(url) => browser.state.url = url,

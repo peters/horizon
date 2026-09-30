@@ -23,6 +23,7 @@ mod shared_session;
 pub mod teach;
 
 pub use horizon_browser::remote;
+pub use horizon_browser::remote_config;
 pub use horizon_browser::{cdp, frames, input, process, session};
 pub use horizon_browser_protocol::cloud_view::{CloudViewResponse, CloudViewState};
 pub use remote_session::{RemoteRequestError, browser_family, build_remote_session_request};
