@@ -247,6 +247,22 @@ impl State {
 /// only.
 #[cfg(all(test, unix))]
 impl State {
+    pub fn pending_fetch(&mut self) -> impl FnOnce(Option<HetznerCatalog>) + use<> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.job = Some(receiver);
+        self.started = Some(Instant::now());
+        move |catalog| {
+            assert!(
+                sender
+                    .send(Ok(Fetched {
+                        value: Ok((catalog, Vec::new(), Vec::new())),
+                        at: Instant::now(),
+                    }))
+                    .is_ok()
+            );
+        }
+    }
+
     /// As a refresh fails after a catalog was fetched: the catalog stays on show.
     pub fn refresh_failed(&mut self, error: &str) {
         self.bound = true;

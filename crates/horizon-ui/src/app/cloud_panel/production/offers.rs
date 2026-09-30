@@ -46,11 +46,14 @@ impl HorizonApp {
         }
         // Every request waiting on a failed fetch gets its error; a later one asks again.
         if let Some(error) = prices.recent_list_error().map(str::to_owned) {
-            if !prices.hetzner.bound() || requirements.gpu {
+            if requirements.gpu {
                 return Some(Err(format!("cloud_offers_unavailable: {error}")));
             }
             prices.request_fresh_list(&root, ctx);
             let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
+            if !prices.hetzner.bound() && other_providers.is_empty() {
+                return Some(Err(format!("cloud_offers_unavailable: {error}")));
+            }
             let answer =
                 serde_json::json!({"provider":"RunPod", "error":error, "offers":[], "other_providers":other_providers});
             return compared(answer, prices, deadline_in);
@@ -257,6 +260,45 @@ mod tests {
             "cloud_offers_unavailable: Missing Hetzner token"
         );
     }
+    #[test]
+    fn an_early_runpod_failure_waits_for_the_first_hetzner_result() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        app.cloud_prototype.root = Some(temp.path().to_path_buf());
+        let prices = &mut app.cloud_prototype.production.prices;
+        prices.list_error = Some("Synthetic RunPod failure".into());
+        prices.list_failed_at = Some(std::time::Instant::now());
+        let complete = prices.hetzner.pending_fetch();
+        assert!(!prices.hetzner.bound());
+        let cpu = request(&serde_json::json!({"min_vcpu": 8}));
+        assert!(app.cloud_offers_answer(&cpu, &ctx).is_none());
+        let gpu = request(&serde_json::json!({"gpu": true}));
+        assert!(matches!(app.cloud_offers_answer(&gpu, &ctx), Some(Err(_))));
+        let mut short = cpu.clone();
+        short.deadline_at_millis = horizon_core::browser::manifest::now_millis() + 2_000;
+        let pending = app.cloud_offers_answer(&short, &ctx).unwrap().unwrap();
+        assert_eq!(pending["error"], "Synthetic RunPod failure");
+        assert!(
+            pending["other_providers"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("still being fetched")
+        );
+        complete(Some(hetzner_catalog()));
+        let answer = app.cloud_offers_answer(&cpu, &ctx).unwrap().unwrap();
+        assert_eq!(answer["error"], "Synthetic RunPod failure");
+        assert_eq!(answer["other_providers"][0]["offers"][0]["id"], "cx43");
+        let prices = &mut app.cloud_prototype.production.prices;
+        prices.hetzner = super::super::prices::hetzner::State::default();
+        let complete = prices.hetzner.pending_fetch();
+        assert!(app.cloud_offers_answer(&cpu, &ctx).is_none());
+        complete(None);
+        assert_eq!(
+            app.cloud_offers_answer(&cpu, &ctx),
+            Some(Err("cloud_offers_unavailable: Synthetic RunPod failure".into()))
+        );
+    }
+
     #[test]
     fn a_machine_without_a_runpod_key_offers_its_other_providers() {
         let (temp, mut app) = crate::app::test_support::test_app();

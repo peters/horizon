@@ -61,6 +61,7 @@ pub fn fetch_append(answer: &mut Value) {
 }
 
 pub fn append(answer: &mut Value, rates: Option<&Rates>) {
+    let exchange_needed = needs_rates(answer);
     let mut sections = vec![&*answer];
     if let Some(others) = answer.get("other_providers").and_then(Value::as_array) {
         sections.extend(others);
@@ -95,7 +96,7 @@ pub fn append(answer: &mut Value, rates: Option<&Rates>) {
     let comparison = Comparison {
         currency: "USD",
         exchange_date: rates
-            .filter(|rates| rates.current(time::OffsetDateTime::now_utc().date()))
+            .filter(|rates| exchange_needed && rates.current(time::OffsetDateTime::now_utc().date()))
             .map(|rates| rates.date.clone()),
         complete,
         offers,
@@ -107,6 +108,22 @@ pub fn append(answer: &mut Value, rates: Option<&Rates>) {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn native_dollar_and_empty_answers_do_not_publish_a_cached_exchange_date() {
+        let rates = Rates {
+            date: time::OffsetDateTime::now_utc().date().to_string(),
+            usd_per_unit: BTreeMap::from([("USD".into(), 1.0), ("EUR".into(), 1.2)]),
+        };
+        for mut answer in [
+            serde_json::json!({"offers": []}),
+            serde_json::json!({"offers": [{"currency": "USD", "estimated_total": 1.0}]}),
+        ] {
+            append(&mut answer, Some(&rates));
+            assert_eq!(answer["comparison"]["complete"], true);
+            assert!(answer["comparison"]["exchange_date"].is_null());
+        }
+    }
 
     #[test]
     fn comparison_uses_estimated_totals_and_keeps_the_worker_identity_and_invoice_currency() {
@@ -129,6 +146,7 @@ mod tests {
         assert_eq!(answer["comparison"]["offers"][1]["location"], "hel1");
         assert_eq!(answer["comparison"]["offers"][1]["estimated_total_usd"], 1.2);
         assert_eq!(answer["comparison"]["complete"], true);
+        assert_eq!(answer["comparison"]["exchange_date"], rates.date);
         append(&mut answer, None);
         assert_eq!(answer["comparison"]["complete"], false);
         assert!(answer["comparison"]["offers"][1]["estimated_total_usd"].is_null());
