@@ -335,6 +335,93 @@ fn horizon_agents_only_see_and_control_their_own_workspace() {
 }
 
 #[test]
+fn idle_hidden_panel_discovery_agrees_with_create_without_renewing_the_lease() {
+    let home = tempfile::tempdir().expect("isolated home");
+    seed_home(home.path());
+    let mut panel = read_manifest(home.path(), SAME_WORKSPACE_PANEL);
+    panel.hidden = true;
+    panel.owner = Some(stale_owner(AGENT_A));
+    write_manifest(home.path(), &panel);
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
+
+    let listed = agent.call("browser_list", &json!({}));
+    let inspected = agent.call("browser_panel", &json!({ "panel_id": SAME_WORKSPACE_PANEL }));
+    for result in [
+        &listed["structuredContent"]["panels"][0],
+        &inspected["structuredContent"],
+    ] {
+        assert_eq!(result["owner"], AGENT_A);
+        assert_eq!(result["owned_by_caller"], true);
+        assert_eq!(result["visible"], false);
+    }
+    let create = agent.call("browser_create", &json!({ "visible": false }));
+    assert_eq!(create["isError"], true, "{create}");
+    assert!(create["content"][0]["text"].as_str().is_some_and(
+        |message| message.contains(SAME_WORKSPACE_PANEL) && message.contains("already owned by this agent")
+    ));
+    assert_eq!(
+        read_manifest(home.path(), SAME_WORKSPACE_PANEL).owner,
+        panel.owner,
+        "discovery and the duplicate guard must not refresh the expired lease"
+    );
+
+    agent.close();
+}
+
+#[test]
+fn discovery_tracks_lease_takeover_and_refused_claims() {
+    let home = tempfile::tempdir().expect("isolated home");
+    seed_home(home.path());
+    let mut panel = read_manifest(home.path(), SAME_WORKSPACE_PANEL);
+    panel.owner = Some(stale_owner("horizon:agent-c"));
+    write_manifest(home.path(), &panel);
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
+    let mut other = McpProcess::start(home.path(), "horizon:agent-c", Some(HOST_A));
+
+    let before = agent.call("browser_panel", &json!({ "panel_id": SAME_WORKSPACE_PANEL }));
+    assert_eq!(before["structuredContent"]["owner"], "horizon:agent-c");
+    assert_eq!(before["structuredContent"]["owned_by_caller"], false);
+    let claimed = agent.call(
+        "browser_handoff",
+        &json!({
+            "panel_id": SAME_WORKSPACE_PANEL, "reason": "synthetic takeover", "wait": false
+        }),
+    );
+    assert_eq!(
+        claimed["isError"], false,
+        "expired same-workspace lease is claimable: {claimed}"
+    );
+    let refused = other.call(
+        "browser_handoff",
+        &json!({
+            "panel_id": SAME_WORKSPACE_PANEL, "reason": "must not steal live lease", "wait": false
+        }),
+    );
+    assert_eq!(
+        refused["isError"], true,
+        "another agent cannot steal the live claim: {refused}"
+    );
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .is_some_and(|message| message.contains("could not claim browser panel"))
+    );
+    let listed = agent.call("browser_list", &json!({}));
+    let inspected = other.call("browser_panel", &json!({ "panel_id": SAME_WORKSPACE_PANEL }));
+    assert_eq!(listed["structuredContent"]["panels"][0]["owner"], AGENT_A);
+    assert_eq!(listed["structuredContent"]["panels"][0]["owned_by_caller"], true);
+    assert_eq!(inspected["structuredContent"]["owner"], AGENT_A);
+    assert_eq!(inspected["structuredContent"]["owned_by_caller"], false);
+    assert_eq!(
+        read_manifest(home.path(), SAME_WORKSPACE_PANEL).owner.unwrap().name,
+        AGENT_A
+    );
+
+    other.close();
+    agent.close();
+}
+
+#[test]
 fn panel_moves_change_authorization_without_restarting_the_server() {
     let home = tempfile::tempdir().expect("isolated home");
     seed_home(home.path());
