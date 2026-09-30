@@ -277,7 +277,7 @@ impl BrowserAuditAction {
                     .map(|path| path.to_string_lossy().into_owned())
                     .collect(),
             },
-            BrowserControlAction::Evaluate { expression } => Self::Evaluate {
+            BrowserControlAction::Evaluate { expression, .. } => Self::Evaluate {
                 expression_characters: expression.chars().count(),
             },
             BrowserControlAction::Network { operation, options } => {
@@ -620,6 +620,7 @@ mod tests {
         });
         let evaluate = BrowserAuditAction::from_control(&BrowserControlAction::Evaluate {
             expression: "document.cookie".to_string(),
+            timeout_millis: None,
         });
         let attach = BrowserAuditAction::from_control(&BrowserControlAction::SetFiles {
             target: crate::BrowserTarget::Ref {

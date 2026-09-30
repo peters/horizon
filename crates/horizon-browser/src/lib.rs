@@ -11,6 +11,7 @@ mod challenge;
 mod coordination;
 mod disclosure;
 mod error;
+mod evaluation;
 mod file_chooser;
 pub mod frames;
 pub use file_chooser::{FileChooserAnswer, FileChooserHandle, FileChooserRequest, FileChooserStatus};

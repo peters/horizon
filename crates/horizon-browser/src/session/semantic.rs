@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use crate::evaluation::EvaluationDeadline;
 use crate::frames::FrameSlot;
 use crate::input::BrowserInputCdpExt;
 use crate::semantic::{
@@ -89,8 +90,15 @@ impl DriverState {
             BrowserControlAction::SetFiles { target, paths, .. } => {
                 self.semantic_set_files(link, event_tx, frame_slot, target, paths)
             }
-            BrowserControlAction::Evaluate { expression } => {
-                self.semantic_evaluate(link, event_tx, frame_slot, expression)
+            BrowserControlAction::Evaluate {
+                expression,
+                timeout_millis,
+            } => {
+                let deadline = EvaluationDeadline::new(request, *timeout_millis);
+                deadline.remaining().and_then(|remaining| {
+                    let result = self.evaluate_json_within(link, event_tx, frame_slot, expression, remaining);
+                    deadline.finish(result).map(|value| BrowserControlValue::Json { value })
+                })
             }
             BrowserControlAction::Network { operation, options } => {
                 self.network_action(link, event_tx, frame_slot, request, *operation, options.clone())
@@ -407,17 +415,6 @@ impl DriverState {
             .and_then(Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| BrowserControlFailure::new("no_such_element", "no element matched the target"))
-    }
-
-    fn semantic_evaluate(
-        &mut self,
-        link: &mut crate::cdp::CdpLink,
-        event_tx: &BrowserEventSender,
-        frame_slot: &Arc<FrameSlot>,
-        expression: &str,
-    ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.evaluate_json(link, event_tx, frame_slot, expression)?;
-        Ok(BrowserControlValue::Json { value })
     }
 
     fn evaluate_json(

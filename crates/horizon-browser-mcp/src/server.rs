@@ -396,20 +396,22 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_evaluate",
-        description = "Evaluate an explicit JavaScript expression in the top-level document. The expression is audited only by character count."
+        description = "Evaluate an explicit JavaScript expression in the top-level document. Promises are awaited within timeout_millis (1-60000 ms, default 15000), including queue time; expiry returns evaluation_timeout naming the bound and elapsed time. The expression is audited only by character count."
     )]
     async fn browser_evaluate(
         &self,
         Parameters(input): Parameters<EvaluateInput>,
     ) -> Result<Json<EvaluateOutput>, String> {
+        let timeout_millis = bounded_evaluation_timeout(input.timeout_millis);
         let receipt = self
             .controller
-            .execute(
+            .execute_engine_bounded(
                 &input.panel_id,
                 BrowserControlAction::Evaluate {
                     expression: input.expression,
+                    timeout_millis: Some(timeout_millis),
                 },
-                input.timeout_millis,
+                timeout_millis,
             )
             .await
             .map_err(|error| error.to_string())?;
@@ -625,6 +627,12 @@ fn bounded_navigation_timeout(timeout_millis: Option<u64>) -> u64 {
     crate::controller::bounded_action_timeout(timeout_millis).max(MIN_NAVIGATION_TIMEOUT_MILLIS)
 }
 
+fn bounded_evaluation_timeout(timeout_millis: Option<u64>) -> u64 {
+    timeout_millis
+        .unwrap_or(BrowserControlAction::DEFAULT_EVALUATION_TIMEOUT_MILLIS)
+        .clamp(1, BrowserControlAction::MAX_EVALUATION_TIMEOUT_MILLIS)
+}
+
 fn require_action_completed(action: ActKind, value: &BrowserControlValue) -> Result<(), String> {
     if matches!(value, BrowserControlValue::Accepted)
         || matches!(
@@ -682,6 +690,20 @@ async fn wait_for_selector(controller: &BrowserController, input: WaitInput) -> 
 mod tests {
     use super::*;
     use crate::model::WaitState;
+
+    #[test]
+    fn evaluation_bounds_follow_the_protocol_contract() {
+        assert_eq!(
+            bounded_evaluation_timeout(None),
+            BrowserControlAction::DEFAULT_EVALUATION_TIMEOUT_MILLIS
+        );
+        assert_eq!(bounded_evaluation_timeout(Some(0)), 1);
+        assert_eq!(bounded_evaluation_timeout(Some(12_000)), 12_000);
+        assert_eq!(
+            bounded_evaluation_timeout(Some(u64::MAX)),
+            BrowserControlAction::MAX_EVALUATION_TIMEOUT_MILLIS
+        );
+    }
 
     #[test]
     fn server_exposes_only_the_mcp_contract() {

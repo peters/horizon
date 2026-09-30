@@ -25,6 +25,34 @@ pub trait ClassicTransport: Send + Sync {
         read_timeout: Duration,
     ) -> Result<Value, HttpError>;
 
+    /// Evaluate on this page with one caller bound. Shared sessions override
+    /// this transaction to keep page selection and script settings atomic.
+    ///
+    /// # Errors
+    /// Typed evaluation expiry, JavaScript or transport failure.
+    fn evaluate(
+        &self,
+        session_path: &str,
+        expression: &str,
+        request: &crate::AgentAction,
+        timeout_millis: Option<u64>,
+    ) -> Result<Value, crate::BrowserControlFailure> {
+        let deadline = crate::evaluation::EvaluationDeadline::new(request, timeout_millis);
+        crate::evaluation::evaluate_classic(
+            |suffix, body, timeout| {
+                self.request(
+                    if body.is_some() { "POST" } else { "GET" },
+                    &format!("{session_path}{suffix}"),
+                    body,
+                    timeout,
+                )
+                .map_err(|error| evaluation_failure(&error, &deadline))
+            },
+            expression,
+            &deadline,
+        )
+    }
+
     /// # Errors
     /// See [`ClassicTransport::request`].
     fn get(&self, path: &str) -> Result<Value, HttpError> {
@@ -65,6 +93,17 @@ impl ClassicTransport for HttpClient {
         read_timeout: Duration,
     ) -> Result<Value, HttpError> {
         HttpClient::request(self, method, path, body, read_timeout)
+    }
+}
+
+pub(super) fn evaluation_failure(
+    error: &HttpError,
+    deadline: &crate::evaluation::EvaluationDeadline,
+) -> crate::BrowserControlFailure {
+    if matches!(error, HttpError::WebDriver { error, .. } if error == "script timeout") {
+        deadline.timeout()
+    } else {
+        crate::BrowserControlFailure::new("javascript_error", error.to_string())
     }
 }
 
@@ -148,6 +187,37 @@ const fn is_unreserved(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{encode_path_segment, validate_request_path};
+
+    #[test]
+    fn native_script_timeout_is_typed_even_before_the_local_deadline() {
+        let request = crate::AgentAction {
+            action_id: "evaluate".into(),
+            actor: "test".into(),
+            requested_at_millis: crate::navigation::now_millis(),
+            action: crate::BrowserControlAction::Evaluate {
+                expression: "true".into(),
+                timeout_millis: Some(20_000),
+            },
+        };
+        let deadline = crate::evaluation::EvaluationDeadline::new(&request, Some(20_000));
+        let failure = super::evaluation_failure(
+            &super::HttpError::WebDriver {
+                error: "script timeout".into(),
+                message: "native script expired".into(),
+            },
+            &deadline,
+        );
+        assert_eq!(failure.code, "evaluation_timeout");
+        assert!(failure.message.contains("20000 ms bound"));
+        let ordinary = super::evaluation_failure(
+            &super::HttpError::WebDriver {
+                error: "javascript error".into(),
+                message: "user threw script timeout".into(),
+            },
+            &deadline,
+        );
+        assert_eq!(ordinary.code, "javascript_error");
+    }
 
     #[test]
     fn opaque_segments_encode_canonically_and_validate() {

@@ -167,6 +167,9 @@ pub enum BrowserControlAction {
     /// Evaluate JavaScript in the current top-level document and return JSON.
     Evaluate {
         expression: String,
+        /// Total bound including time queued before dispatch (1-60000 ms).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_millis: Option<u64>,
     },
     /// Start, inspect, or stop a bounded network capture export.
     Network {
@@ -193,6 +196,11 @@ pub enum BrowserControlAction {
 }
 
 impl BrowserControlAction {
+    /// Evaluation bound used when an older caller does not provide one.
+    pub const DEFAULT_EVALUATION_TIMEOUT_MILLIS: u64 = 15_000;
+    /// Longest evaluation accepted by the engine.
+    pub const MAX_EVALUATION_TIMEOUT_MILLIS: u64 = 60_000;
+
     /// Validate untrusted host/agent input before it enters a driver queue.
     ///
     /// # Errors
@@ -257,16 +265,11 @@ impl BrowserControlAction {
                 }
                 Ok(())
             }
-            Self::SetFiles { target, paths, sources } => {
-                validate_target(target)?;
-                validate_attachment_paths(paths)?;
-                if sources.is_empty() {
-                    Ok(())
-                } else {
-                    validate_attachment_paths(sources)
-                }
-            }
-            Self::Evaluate { expression } => validate_expression(expression),
+            Self::SetFiles { target, paths, sources } => validate_set_files(target, paths, sources),
+            Self::Evaluate {
+                expression,
+                timeout_millis,
+            } => validate_evaluation(expression, *timeout_millis),
             Self::Network { operation, options } => match operation {
                 BrowserNetworkOperation::Start => options.clone().unwrap_or_default().validate(),
                 BrowserNetworkOperation::Status | BrowserNetworkOperation::Stop if options.is_some() => {
@@ -330,6 +333,31 @@ pub struct AgentAction {
     pub actor: String,
     pub requested_at_millis: i64,
     pub action: BrowserControlAction,
+}
+
+fn validate_set_files(
+    target: &BrowserTarget,
+    paths: &[std::path::PathBuf],
+    sources: &[std::path::PathBuf],
+) -> Result<(), &'static str> {
+    validate_target(target)?;
+    validate_attachment_paths(paths)?;
+    if sources.is_empty() {
+        Ok(())
+    } else {
+        validate_attachment_paths(sources)
+    }
+}
+
+fn validate_evaluation(expression: &str, timeout_millis: Option<u64>) -> Result<(), &'static str> {
+    validate_expression(expression)?;
+    match timeout_millis {
+        Some(0) => Err("evaluation timeout must be at least 1 ms"),
+        Some(value) if value > BrowserControlAction::MAX_EVALUATION_TIMEOUT_MILLIS => {
+            Err("evaluation timeout exceeds the engine bound")
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_navigation(url: &str) -> Result<(), &'static str> {
@@ -566,6 +594,28 @@ fn validate_text(text: &str) -> Result<(), &'static str> {
 mod tests {
     use super::*;
     use crate::{BrowserButton, BrowserModifiers};
+
+    #[test]
+    fn evaluation_bounds_validate_and_legacy_actions_still_decode() {
+        let action: BrowserControlAction = serde_json::from_value(serde_json::json!({
+            "type": "evaluate", "expression": "true",
+        }))
+        .expect("legacy evaluation");
+        assert!(matches!(
+            action,
+            BrowserControlAction::Evaluate {
+                timeout_millis: None,
+                ..
+            }
+        ));
+        for (timeout_millis, valid) in [(0, false), (1, true), (60_000, true), (60_001, false)] {
+            let action = BrowserControlAction::Evaluate {
+                expression: "true".into(),
+                timeout_millis: Some(timeout_millis),
+            };
+            assert_eq!(action.validate().is_ok(), valid);
+        }
+    }
 
     #[test]
     fn external_controls_roundtrip_without_horizon_types() {
