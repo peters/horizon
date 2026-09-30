@@ -402,7 +402,7 @@ impl HorizonBrowserMcp {
         &self,
         Parameters(input): Parameters<EvaluateInput>,
     ) -> Result<Json<EvaluateOutput>, String> {
-        let timeout_millis = crate::controller::bounded_action_timeout(input.timeout_millis);
+        let timeout_millis = bounded_evaluation_timeout(input.timeout_millis);
         let receipt = self
             .controller
             .execute_engine_bounded(
@@ -627,6 +627,12 @@ fn bounded_navigation_timeout(timeout_millis: Option<u64>) -> u64 {
     crate::controller::bounded_action_timeout(timeout_millis).max(MIN_NAVIGATION_TIMEOUT_MILLIS)
 }
 
+fn bounded_evaluation_timeout(timeout_millis: Option<u64>) -> u64 {
+    timeout_millis
+        .unwrap_or(BrowserControlAction::DEFAULT_EVALUATION_TIMEOUT_MILLIS)
+        .clamp(1, BrowserControlAction::MAX_EVALUATION_TIMEOUT_MILLIS)
+}
+
 fn require_action_completed(action: ActKind, value: &BrowserControlValue) -> Result<(), String> {
     if matches!(value, BrowserControlValue::Accepted)
         || matches!(
@@ -684,6 +690,20 @@ async fn wait_for_selector(controller: &BrowserController, input: WaitInput) -> 
 mod tests {
     use super::*;
     use crate::model::WaitState;
+
+    #[test]
+    fn evaluation_bounds_follow_the_protocol_contract() {
+        assert_eq!(
+            bounded_evaluation_timeout(None),
+            BrowserControlAction::DEFAULT_EVALUATION_TIMEOUT_MILLIS
+        );
+        assert_eq!(bounded_evaluation_timeout(Some(0)), 1);
+        assert_eq!(bounded_evaluation_timeout(Some(12_000)), 12_000);
+        assert_eq!(
+            bounded_evaluation_timeout(Some(u64::MAX)),
+            BrowserControlAction::MAX_EVALUATION_TIMEOUT_MILLIS
+        );
+    }
 
     #[test]
     fn server_exposes_only_the_mcp_contract() {
