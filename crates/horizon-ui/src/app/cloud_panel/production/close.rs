@@ -134,7 +134,10 @@ fn close_action(runtime: &Runtime, deployment_started: bool) -> Result<Action, &
         return Err("Cloud resource state is unavailable. Reconnect or check the provider before closing.");
     }
     Ok(
-        if runtime.state.as_ref().is_none_or(|state| state.stage == Stage::Deleted) {
+        if runtime.state.as_ref().is_none_or(|state| {
+            state.stage == Stage::Deleted
+                || (state.operation == horizon_core::cloud_runtime::CreateState::Prepared && state.spec.is_none())
+        }) {
             Action::Remove
         } else {
             Action::Delete

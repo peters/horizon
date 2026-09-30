@@ -66,6 +66,34 @@ fn closing_requires_known_idle_resources() {
 }
 
 #[test]
+#[cfg(unix)] // Durable cloud records require Unix directory durability.
+fn failed_image_push_closes_without_worker_deletion_and_rechecks_storage() {
+    let (temp, mut app) = test_app();
+    let mut state = deployment();
+    state.stage = Stage::Push;
+    state.operation = CreateState::Prepared;
+    state.spec = None;
+    let path = temp.path().join("fixture");
+    Store::lock(&path).unwrap().save(&state).unwrap();
+    add_cloud(&mut app, temp.path(), Some(state));
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
+    runtime.error = Some("error from registry: denied".into());
+    assert_eq!(close_action(runtime, true), Ok(Action::Remove));
+
+    std::fs::write(path.join("workspace-volume.required"), "").unwrap();
+    app.remove_deleted_cloud(101, &egui::Context::default());
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1, "storage must remain tracked");
+    std::fs::remove_file(path.join("workspace-volume.required")).unwrap();
+    app.remove_deleted_cloud(101, &egui::Context::default());
+    assert!(app.cloud_prototype.groups.0.is_empty());
+    assert!(!app.cloud_prototype.production.runtimes.contains_key(&101));
+    assert!(
+        !temp.path().join("settings.json").exists(),
+        "removal needs no provider credentials"
+    );
+}
+
+#[test]
 fn close_confirmation_is_modal_and_escape_preserves_cloud() {
     let (temp, mut app) = test_app();
     add_cloud(&mut app, temp.path(), Some(deployment()));
