@@ -240,7 +240,10 @@ impl Driver {
                 delta_y,
             } => self.semantic_scroll(target.as_ref(), *delta_x, *delta_y),
             BrowserControlAction::SetFiles { target, paths, .. } => self.semantic_set_files(target, paths),
-            BrowserControlAction::Evaluate { expression } => self.semantic_evaluate(expression),
+            BrowserControlAction::Evaluate {
+                expression,
+                timeout_millis,
+            } => self.semantic_evaluate(request, expression, *timeout_millis),
             BrowserControlAction::Network { operation, options } => {
                 self.network_action(request, *operation, options.clone(), event_tx)
             }
@@ -522,8 +525,17 @@ impl Driver {
         Ok(BrowserControlValue::Json { value })
     }
 
-    fn semantic_evaluate(&self, expression: &str) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.evaluate_json(expression)?;
+    fn semantic_evaluate(
+        &self,
+        request: &AgentAction,
+        expression: &str,
+        timeout_millis: Option<u64>,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        let value = self
+            .host
+            .transport()
+            .evaluate(&self.session_path(""), expression, request, timeout_millis)?;
+        let value = bounded_control_value(value)?;
         Ok(BrowserControlValue::Json { value })
     }
 

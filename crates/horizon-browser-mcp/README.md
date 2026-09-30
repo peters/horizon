@@ -199,7 +199,11 @@ shell commands, files, or other MCP servers.
   (`wait_superseded`), or the browser backend stops while waiting
   (`browser_unavailable`). `timeout_millis` accepts 1000-60000 ms;
   `poll_millis` is accepted for compatibility and ignored.
-- `browser_evaluate` evaluates an explicit size-bounded expression.
+- `browser_evaluate` awaits an explicit size-bounded expression or promise. Its
+  `timeout_millis` (1-60000 ms, default 15000) includes queue time; expiry returns
+  `evaluation_timeout` naming the bound and elapsed time. Chromium and classic
+  WebDriver use the same caller bound; WebDriver restores its prior script timeout
+  after the action. The CLI plan runner uses this same MCP contract.
 - `browser_network` starts, inspects, or stops a bounded HTTP/WebSocket
   capture and returns an explicit private NDJSON path plus connection state,
   frame/byte counts, drops, truncation, and writer health. Start it before

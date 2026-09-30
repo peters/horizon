@@ -567,6 +567,63 @@ impl Drop for SharedFirefoxPage {
 }
 
 impl ClassicTransport for SharedFirefoxPage {
+    fn evaluate(
+        &self,
+        session_path: &str,
+        expression: &str,
+        request: &crate::AgentAction,
+        timeout_millis: Option<u64>,
+    ) -> Result<Value, crate::BrowserControlFailure> {
+        use crate::BrowserControlFailure;
+        use crate::evaluation::{EvaluationDeadline, evaluate_classic};
+
+        let deadline = EvaluationDeadline::new(request, timeout_millis);
+        let expected_path = format!("/session/{}/", self.session_id);
+        if session_path != expected_path {
+            return Err(BrowserControlFailure::new("javascript_error", "wrong shared session"));
+        }
+        let _lock = loop {
+            match self.group.classic.try_lock() {
+                Ok(lock) => break lock,
+                Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    deadline.remaining()?;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        };
+        if self.is_closed() {
+            return Err(BrowserControlFailure::new(
+                "browser_unavailable",
+                "shared Firefox page has closed",
+            ));
+        }
+        let selected = self
+            .http
+            .request(
+                "POST",
+                &format!("{session_path}window"),
+                Some(&json!({"handle": self.context})),
+                deadline.remaining()?,
+            )
+            .map_err(|error| BrowserControlFailure::new("javascript_error", error.to_string()));
+        deadline.finish(selected)?;
+        evaluate_classic(
+            |suffix, body, timeout| {
+                self.http
+                    .request(
+                        if body.is_some() { "POST" } else { "GET" },
+                        &format!("{session_path}{suffix}"),
+                        body,
+                        timeout,
+                    )
+                    .map_err(|error| super::transport::evaluation_failure(&error, &deadline))
+            },
+            expression,
+            &deadline,
+        )
+    }
+
     fn request(
         &self,
         method: &str,
@@ -712,6 +769,82 @@ mod tests {
                 .to_owned()
         });
         assert_ne!(handles[0], handles[1]);
+    }
+
+    #[test]
+    fn evaluations_select_their_page_and_restore_script_timeouts_atomically() {
+        let replies = (0..2)
+            .flat_map(|_| {
+                [
+                    Reply::json(200, &json!({"value": null})),
+                    Reply::json(200, &json!({"value": {"script": 30_000}})),
+                    Reply::json(200, &json!({"value": null})),
+                    Reply::json(200, &json!({"value": 42})),
+                    Reply::json(200, &json!({"value": null})),
+                ]
+            })
+            .collect();
+        let server = Server::start(replies);
+        let group = SharedFirefoxSession::new("profile".into());
+        let (left, _) = page(group.clone(), server.port, "left");
+        let (right, _) = page(group, server.port, "right");
+        let run = |page: SharedFirefoxPage| {
+            std::thread::spawn(move || {
+                let request = crate::AgentAction {
+                    action_id: "evaluate".into(),
+                    actor: "test".into(),
+                    requested_at_millis: crate::navigation::now_millis(),
+                    action: crate::BrowserControlAction::Evaluate {
+                        expression: "Promise.resolve(42)".into(),
+                        timeout_millis: Some(20_000),
+                    },
+                };
+                page.evaluate("/session/session/", "Promise.resolve(42)", &request, Some(20_000))
+            })
+        };
+        let left = run(left);
+        let right = run(right);
+        assert_eq!(left.join().expect("left").expect("evaluated"), json!(42));
+        assert_eq!(right.join().expect("right").expect("evaluated"), json!(42));
+        let requests = server.recorded();
+        for batch in requests.as_chunks::<5>().0 {
+            assert_eq!(
+                batch.iter().map(|request| request.path.as_str()).collect::<Vec<_>>(),
+                [
+                    "/session/session/window",
+                    "/session/session/timeouts",
+                    "/session/session/timeouts",
+                    "/session/session/execute/sync",
+                    "/session/session/timeouts",
+                ]
+            );
+            assert_eq!(
+                serde_json::from_str::<Value>(&batch[4].body).expect("restore"),
+                json!({"script":30_000})
+            );
+        }
+        assert_ne!(requests[0].body, requests[5].body);
+    }
+
+    #[test]
+    fn evaluation_waiting_for_a_sibling_returns_its_typed_bound_without_dispatch() {
+        let group = SharedFirefoxSession::new("profile".into());
+        let (page, _) = page(group.clone(), 1, "page");
+        let _held = group.classic.lock().expect("hold transaction lock");
+        let request = crate::AgentAction {
+            action_id: "evaluate".into(),
+            actor: "test".into(),
+            requested_at_millis: crate::navigation::now_millis(),
+            action: crate::BrowserControlAction::Evaluate {
+                expression: "true".into(),
+                timeout_millis: Some(30),
+            },
+        };
+        let error = page
+            .evaluate("/session/session/", "true", &request, Some(30))
+            .expect_err("timed out");
+        assert_eq!(error.code, "evaluation_timeout");
+        assert!(error.message.contains("30 ms bound"));
     }
 
     #[test]

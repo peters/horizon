@@ -370,7 +370,8 @@ mod tests {
         handle.invalidate_request(first);
         assert_eq!(handle.request().map(|request| request.id), Some(second));
         assert!(handle.blocks(&crate::BrowserControlAction::Evaluate {
-            expression: "document.body.remove()".into()
+            expression: "document.body.remove()".into(),
+            timeout_millis: None
         }));
         for action in [
             crate::BrowserControlAction::Reload,
@@ -385,7 +386,8 @@ mod tests {
         }));
         handle.invalidate_request(second);
         assert!(!handle.blocks(&crate::BrowserControlAction::Evaluate {
-            expression: "document.title".into()
+            expression: "document.title".into(),
+            timeout_millis: None
         }));
         assert!(!handle.respond(second, FileChooserAnswer::Cancel));
     }

@@ -396,20 +396,22 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_evaluate",
-        description = "Evaluate an explicit JavaScript expression in the top-level document. The expression is audited only by character count."
+        description = "Evaluate an explicit JavaScript expression in the top-level document. Promises are awaited within timeout_millis (1-60000 ms, default 15000), including queue time; expiry returns evaluation_timeout naming the bound and elapsed time. The expression is audited only by character count."
     )]
     async fn browser_evaluate(
         &self,
         Parameters(input): Parameters<EvaluateInput>,
     ) -> Result<Json<EvaluateOutput>, String> {
+        let timeout_millis = crate::controller::bounded_action_timeout(input.timeout_millis);
         let receipt = self
             .controller
-            .execute(
+            .execute_engine_bounded(
                 &input.panel_id,
                 BrowserControlAction::Evaluate {
                     expression: input.expression,
+                    timeout_millis: Some(timeout_millis),
                 },
-                input.timeout_millis,
+                timeout_millis,
             )
             .await
             .map_err(|error| error.to_string())?;
