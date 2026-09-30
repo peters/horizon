@@ -136,9 +136,8 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
         places,
     } = workers;
     let interested = |provider| interested(form, profile, provider);
-    let runpod_interested = interested(&horizon_core::cloud_runtime::provider::RUNPOD) && form.prices.runpod_bound();
-    let hetzner_interested = interested(&horizon_core::cloud_runtime::provider::HETZNER) && form.prices.hetzner.bound();
-    let currency = comparison_currency(runpod_interested, hetzner_interested);
+    let scope = Scope::new(form, profile);
+    let currency = comparison_currency(scope.runpod, scope.hetzner);
     let cost = |offer: &Offer| {
         offers::comparison::in_currency(
             offer.estimated_total,
@@ -147,8 +146,8 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
             form.prices.exchange.fresh(),
         )
     };
-    let complete = (!runpod_interested || form.prices.fresh_list().is_some() && form.prices.list_error.is_none())
-        && (!hetzner_interested || form.prices.hetzner.fresh().is_some() && form.prices.hetzner.error().is_none())
+    let complete = (!scope.runpod || form.prices.fresh_list().is_some() && form.prices.list_error.is_none())
+        && (!scope.hetzner || form.prices.hetzner.fresh().is_some() && form.prices.hetzner.error().is_none())
         && (!interested(&horizon_core::cloud_runtime::provider::HETZNER) || form.prices.hetzner.fresh().is_some())
         && offers
             .iter()
@@ -162,7 +161,7 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
             })
             .all(|offer| cost(offer).is_some())
         && (profile.gpu
-            || !runpod_interested
+            || !scope.runpod
             || profile.storage.volume_tier == horizon_core::cloud_runtime::prices::StorageTier::Standard);
     let selected = offers
         .iter()
@@ -222,6 +221,26 @@ fn interested(
             .is_none_or(|filter| filter == provider.label)
 }
 
+struct Scope {
+    runpod: bool,
+    hetzner: bool,
+}
+
+impl Scope {
+    fn new(form: &Production, profile: &Profile) -> Self {
+        Self {
+            runpod: interested(form, profile, &horizon_core::cloud_runtime::provider::RUNPOD)
+                && form.prices.runpod_bound(),
+            hetzner: interested(form, profile, &horizon_core::cloud_runtime::provider::HETZNER)
+                && form.prices.hetzner.bound(),
+        }
+    }
+
+    fn uses_exchange(&self) -> bool {
+        self.runpod && self.hetzner
+    }
+}
+
 fn comparison_currency(runpod: bool, hetzner: bool) -> &'static str {
     if hetzner && !runpod {
         horizon_core::cloud_runtime::provider::HETZNER.currency
@@ -273,7 +292,7 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
         return;
     };
     widgets::heading(ui, "Machine", &requirement(&profile, &form.selected_profile));
-    freshness(ui, form);
+    freshness(ui, form, &profile);
     ui.horizontal_wrapped(|ui| {
         ui.label("Compare for");
         ui.add(
@@ -333,7 +352,9 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
                 catalog.currency
             ),
         );
-    } else if let Some(rates) = form.prices.exchange.fresh() {
+    } else if Scope::new(form, &profile).uses_exchange()
+        && let Some(rates) = form.prices.exchange.fresh()
+    {
         widgets::note(
             ui,
             &format!(
@@ -390,28 +411,33 @@ fn requirement(profile: &Profile, name: &str) -> String {
 }
 
 /// How old the prices on show are, and why they are not current.
-fn freshness(ui: &mut Ui, form: &mut Production) {
+fn freshness(ui: &mut Ui, form: &mut Production, profile: &Profile) {
+    let scope = Scope::new(form, profile);
     let prices = &form.prices;
-    if let Some(error) = prices.hetzner.error() {
+    if scope.hetzner
+        && let Some(error) = prices.hetzner.error()
+    {
         widgets::note(
             ui,
             &format!("Hetzner prices unavailable: {error}. Retaining the last catalog for inspection."),
         );
     }
-    if let Some(error) = &prices.exchange.error {
+    if scope.uses_exchange()
+        && let Some(error) = &prices.exchange.error
+    {
         widgets::note(ui, error);
     }
-    if prices.runpod_bound()
-        && profile(form).is_some_and(|profile| {
-            interested(form, profile, &horizon_core::cloud_runtime::provider::RUNPOD)
-                && !profile.gpu
-                && !profile.storage.standard_tier()
-        })
-    {
+    if scope.runpod && !profile.gpu && !profile.storage.standard_tier() {
         widgets::note(
             ui,
             "High-performance storage prices are unpublished. Choose standard storage to compare complete totals.",
         );
+    }
+    if !scope.runpod {
+        if ui.small_button("Refresh").clicked() {
+            form.prices.refresh();
+        }
+        return;
     }
     let Some(list) = &prices.list else {
         if let Some(error) = &prices.list_error {

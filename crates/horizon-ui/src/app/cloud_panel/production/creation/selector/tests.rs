@@ -168,6 +168,48 @@ fn render(form: &mut Production) -> Vec<String> {
 }
 
 #[test]
+fn provider_and_exchange_failures_only_appear_in_the_comparison_scope() {
+    let failed = |profile| {
+        let mut form = form(profile);
+        form.prices.hetzner.failed("Synthetic Hetzner failure");
+        form.prices.exchange.error = Some("Synthetic exchange failure".into());
+        form.prices.list_error = Some("Synthetic RunPod failure".into());
+        form
+    };
+    let contains = |labels: &[String], text: &str| labels.iter().any(|label| label.contains(text));
+    let mut all = failed("cpu");
+    let labels = render(&mut all);
+    for error in [
+        "Synthetic Hetzner failure",
+        "Synthetic exchange failure",
+        "Synthetic RunPod failure",
+    ] {
+        assert!(contains(&labels, error), "missing {error}");
+    }
+    for profile in ["cpu", "gpu"] {
+        let mut runpod = failed(profile);
+        runpod.launch.selector.provider_filter = Some("RunPod".into());
+        let labels = render(&mut runpod);
+        assert!(contains(&labels, "Synthetic RunPod failure"));
+        assert!(!contains(&labels, "Synthetic Hetzner failure"));
+        assert!(!contains(&labels, "Synthetic exchange failure"));
+    }
+    let labels = render(&mut failed("gpu"));
+    assert!(!contains(&labels, "Synthetic Hetzner failure"));
+    assert!(!contains(&labels, "Synthetic exchange failure"));
+    let mut hetzner = failed("cpu");
+    hetzner.launch.selector.provider_filter = Some("Hetzner".into());
+    let labels = render(&mut hetzner);
+    assert!(contains(&labels, "Synthetic Hetzner failure"));
+    assert!(!contains(&labels, "Synthetic RunPod failure"));
+    assert!(!contains(&labels, "Synthetic exchange failure"));
+    assert!(labels.iter().any(|label| label == "Refresh"));
+    let mut unconfigured = form("cpu");
+    unconfigured.prices.exchange.error = Some("Synthetic exchange failure".into());
+    assert!(!contains(&render(&mut unconfigured), "Synthetic exchange failure"));
+}
+
+#[test]
 fn cpu_workers_below_the_profile_are_hidden_and_picks_span_the_rest() {
     let mut form = form("cpu");
     let shown = catalog(&form).unwrap();
