@@ -232,7 +232,7 @@ fn data_centers(
         ui.label(RichText::new(&region.name).size(12.0).color(theme::FG_SOFT()));
         ui.horizontal_wrapped(|ui| {
             for candidate in candidates.iter().filter(|candidate| candidate.region == region.name) {
-                let selected = current.data_centers == [candidate.center.id.clone()];
+                let selected = matches!(current.data_centers.as_slice(), [id] if id == &candidate.center.id);
                 let detail = if candidate.compatible {
                     candidate.region.as_str()
                 } else {
