@@ -262,6 +262,14 @@ host. Manifests without a stamp (older hosts, or a panel whose host has not
 stamped it yet) fail closed for Horizon agents.
 Identities from outside Horizon (a standalone host or the process-local
 fallback) are not placed in any workspace and keep unscoped discovery.
+`browser_list` and `browser_panel` report the recorded owner, including after
+its activity lease expires while idle. This is the same ownership that
+`browser_create` uses to require reuse of an existing panel. Discovery is
+read-only and does not renew or acquire a lease. Every action still checks
+workspace membership and claims or refreshes the live lease; another agent
+in the same workspace may claim an expired lease. Subsequent discovery then
+reports that new owner. `owned_by_caller` describes the recorded association,
+not a guarantee that a later action will be authorized.
 When no valid actor is injected, the server uses a process-local identity and
 releases only that identity's claims on clean shutdown. A crash retains the
 heartbeat TTL fallback, while a normal reconnect can claim the panel

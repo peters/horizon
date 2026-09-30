@@ -50,6 +50,8 @@ pub(crate) struct BrowserPanel {
     /// returned panel is already in that agent's workspace, while identities
     /// from outside Horizon see every live panel.
     pub(crate) visible: bool,
+    /// Recorded owner, retained across idle lease expiry. Actions recheck the
+    /// workspace and live ownership lease before controlling the browser.
     pub(crate) owner: Option<String>,
     #[serde(flatten)]
     pub(crate) agent_state: BrowserPanelAgentState,
@@ -72,7 +74,7 @@ pub(crate) struct BrowserPanelAgentState {
 impl BrowserPanel {
     pub(crate) fn from_manifest(value: BrowserManifest, actor: &str) -> Self {
         let now = manifest::now_millis();
-        let owner = value.live_owner(now).map(|owner| owner.name.clone());
+        let owner = value.owner.as_ref().map(|owner| owner.name.clone());
         let owned_by_caller = owner.as_deref() == Some(actor);
         let remote = value.remote_target.is_some();
         // A remote session is classic WebDriver whatever browser it drives.
