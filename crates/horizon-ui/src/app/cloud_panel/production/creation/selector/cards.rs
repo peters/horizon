@@ -34,15 +34,19 @@ fn title(offer: &Offer) -> (String, String) {
 
 fn price(offer: &Offer) -> String {
     let prefix = if offer.flavors.len() > 1 { "up to " } else { "" };
-    let symbol = match offer.currency {
-        "EUR" => "€",
-        "USD" => "$",
-        currency => currency,
-    };
+    let symbol = symbol(offer.currency);
     if offer.currency == "EUR" {
         format!("{prefix}{symbol}{:.4}/hr", offer.hourly)
     } else {
         format!("{prefix}{symbol}{:.2}/hr", offer.hourly)
+    }
+}
+
+fn symbol(currency: &str) -> &str {
+    match currency {
+        "EUR" => "€",
+        "USD" => "$",
+        currency => currency,
     }
 }
 
@@ -104,13 +108,9 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
             ui.label(RichText::new(&detail).size(12.5).color(theme::FG_SOFT()));
             ui.add_space(4.0);
             ui.label(RichText::new(price(offer)).size(19.0).strong().color(theme::FG()));
-            if let Some(total) = horizon_core::cloud_runtime::offers::comparison::dollars(
-                offer.estimated_total,
-                offer.currency,
-                form.prices.exchange.rates.as_ref(),
-            ) {
+            if let Some(total) = catalog.total(offer, form) {
                 ui.label(
-                    RichText::new(format!("≈ ${total:.3} total"))
+                    RichText::new(format!("≈ {}{total:.3} total", symbol(catalog.currency)))
                         .size(12.0)
                         .color(theme::FG_SOFT()),
                 );

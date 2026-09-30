@@ -27,6 +27,18 @@ pub fn dollars(amount: f64, currency: &str, rates: Option<&Rates>) -> Option<f64
     rates?.dollars(amount, currency)
 }
 
+/// Native-currency ordering needs no exchange quote; cross-currency ordering does.
+#[must_use]
+pub fn in_currency(amount: f64, currency: &str, target: &str, rates: Option<&Rates>) -> Option<f64> {
+    if currency == target {
+        return (amount.is_finite() && amount >= 0.0).then_some(amount);
+    }
+    let usd = dollars(amount, currency, rates)?;
+    let per_target = dollars(1.0, target, rates)?;
+    let total = usd / per_target;
+    total.is_finite().then_some(total)
+}
+
 /// Add the common-currency answer without changing existing provider sections.
 /// Whether this answer needs an external currency quote.
 #[must_use]
@@ -108,6 +120,10 @@ mod tests {
             usd_per_unit: BTreeMap::from([("USD".into(), 1.0), ("EUR".into(), 1.2)]),
         };
         append(&mut answer, Some(&rates));
+        assert_eq!(in_currency(1.0, "EUR", "EUR", None), Some(1.0));
+        assert_eq!(in_currency(1.0, "EUR", "USD", None), None);
+        assert_eq!(in_currency(1.2, "USD", "EUR", Some(&rates)), Some(1.0));
+        assert_eq!(in_currency(f64::NAN, "EUR", "EUR", None), None);
         assert_eq!(answer["comparison"]["offers"][0]["provider"], "RunPod");
         assert_eq!(answer["comparison"]["offers"][1]["currency"], "EUR");
         assert_eq!(answer["comparison"]["offers"][1]["location"], "hel1");

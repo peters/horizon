@@ -30,7 +30,8 @@ create the PR GIF with a two-pass palette under 10 MB. Never allocate a paid wor
    provider identity; Hetzner includes exact type/location and EUR billing price.
    Estimated USD totals and exchange date are visible. Cheapest satisfies the profile.
 2. Narrow All providers to RunPod and Hetzner in turn; cards and list agree. Restore
-   All providers. Search by provider/type/resources and clear it. No result gives
+   All providers. With FX unavailable, RunPod-only ranks in USD and Hetzner-only
+   ranks in EUR; cross-provider ranking stays incomplete. Search by provider/type/resources and clear it. No result gives
    useful guidance. Sold-out workers appear when stock filter is unchecked.
 3. Reveal below-minimum workers: explain rejection and disable selection. Matching
    choices remain selectable. Profile changes restore filter defaults.
@@ -51,7 +52,9 @@ create the PR GIF with a two-pass palette under 10 MB. Never allocate a paid wor
    cheapest claim but preserve native offers and explicit selection. Refresh invalidates
    freshness. Single supported/provider-filtered lane may still rank its available offers.
 2. Provider policy filters allowed types/locations consistently in UI, CLI and MCP.
-   Container disk minimums apply to both providers. Unknown rates stay uncomparable.
+   Container disk minimums apply to both providers. Unknown rates stay uncomparable
+   across currencies. RunPod-only high-performance storage requirements must not be
+   silently changed to make a Hetzner worker eligible.
 3. Exact Hetzner choice survives serialization, plain-settings resume/reconnect/rebuild
    and image refresh; removed type/location is rejected without another allocation.
    Legacy saved workers retain their documented fallback policy.

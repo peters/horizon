@@ -64,9 +64,18 @@ pub(in crate::app::cloud_panel::production) struct Catalog {
     pub selected: Option<usize>,
     pub gpu: bool,
     pub complete: bool,
+    pub currency: &'static str,
 }
 
 impl Catalog {
+    pub fn total(&self, offer: &Offer, form: &Production) -> Option<f64> {
+        offers::comparison::in_currency(
+            offer.estimated_total,
+            offer.currency,
+            self.currency,
+            form.prices.exchange.rates.as_ref(),
+        )
+    }
     /// Best stock among the places the placement allows; `None` where none is allowed.
     ///
     /// GPU stock is the type's own. A CPU offer's catalog stock is its flavor family's,
@@ -126,28 +135,20 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
         matching,
         places,
     } = workers;
+    let interested = |provider| interested(form, profile, provider);
+    let runpod_interested = interested(&horizon_core::cloud_runtime::provider::RUNPOD) && form.prices.runpod_bound();
+    let hetzner_interested = interested(&horizon_core::cloud_runtime::provider::HETZNER) && form.prices.hetzner.bound();
+    let currency = comparison_currency(runpod_interested, hetzner_interested);
     let cost = |offer: &Offer| {
-        offers::comparison::dollars(
+        offers::comparison::in_currency(
             offer.estimated_total,
             offer.currency,
+            currency,
             form.prices.exchange.rates.as_ref(),
         )
     };
-    let interested = |provider: &horizon_core::cloud_runtime::provider::Description| {
-        provider.supports(profile)
-            && form
-                .launch
-                .selector
-                .provider_filter
-                .as_ref()
-                .is_none_or(|filter| filter == provider.label)
-    };
-    let complete = (!interested(&horizon_core::cloud_runtime::provider::RUNPOD)
-        || !form.prices.runpod_bound()
-        || form.prices.fresh_list().is_some() && form.prices.list_error.is_none())
-        && (!interested(&horizon_core::cloud_runtime::provider::HETZNER)
-            || !form.prices.hetzner.bound()
-            || form.prices.hetzner.fresh().is_some() && form.prices.hetzner.error().is_none())
+    let complete = (!runpod_interested || form.prices.fresh_list().is_some() && form.prices.list_error.is_none())
+        && (!hetzner_interested || form.prices.hetzner.fresh().is_some() && form.prices.hetzner.error().is_none())
         && (!interested(&horizon_core::cloud_runtime::provider::HETZNER) || form.prices.hetzner.fresh().is_some())
         && offers
             .iter()
@@ -160,7 +161,9 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
                     .is_none_or(|filter| filter == offer.provider)
             })
             .all(|offer| cost(offer).is_some())
-        && (profile.gpu || profile.storage.volume_tier == horizon_core::cloud_runtime::prices::StorageTier::Standard);
+        && (profile.gpu
+            || !runpod_interested
+            || profile.storage.volume_tier == horizon_core::cloud_runtime::prices::StorageTier::Standard);
     let stocked: std::collections::HashSet<_> = offers
         .iter()
         .zip(&places)
@@ -202,7 +205,30 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
         selected,
         gpu: profile.gpu,
         complete,
+        currency,
     })
+}
+
+fn interested(
+    form: &Production,
+    profile: &Profile,
+    provider: &horizon_core::cloud_runtime::provider::Description,
+) -> bool {
+    provider.supports(profile)
+        && form
+            .launch
+            .selector
+            .provider_filter
+            .as_ref()
+            .is_none_or(|filter| filter == provider.label)
+}
+
+fn comparison_currency(runpod: bool, hetzner: bool) -> &'static str {
+    if hetzner && !runpod {
+        horizon_core::cloud_runtime::provider::HETZNER.currency
+    } else {
+        horizon_core::cloud_runtime::provider::RUNPOD.currency
+    }
 }
 
 fn place_allowed(offer: &Offer, place: &Place, form: &Production, profile: &Profile) -> bool {
@@ -307,7 +333,15 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
             "Comparison incomplete: waiting for current provider prices and exchange rates. Choose a worker explicitly.",
         );
     }
-    if let Some(rates) = &form.prices.exchange.rates {
+    if catalog.currency != horizon_core::cloud_runtime::provider::RUNPOD.currency {
+        widgets::note(
+            ui,
+            &format!(
+                "Estimated totals in {} · provider billing currency retained",
+                catalog.currency
+            ),
+        );
+    } else if let Some(rates) = &form.prices.exchange.rates {
         widgets::note(
             ui,
             &format!(
@@ -375,7 +409,13 @@ fn freshness(ui: &mut Ui, form: &mut Production) {
     if let Some(error) = &prices.exchange.error {
         widgets::note(ui, error);
     }
-    if profile(form).is_some_and(|profile| !profile.gpu && !profile.storage.standard_tier()) {
+    if prices.runpod_bound()
+        && profile(form).is_some_and(|profile| {
+            interested(form, profile, &horizon_core::cloud_runtime::provider::RUNPOD)
+                && !profile.gpu
+                && !profile.storage.standard_tier()
+        })
+    {
         widgets::note(
             ui,
             "High-performance storage prices are unpublished. Choose standard storage to compare complete totals.",

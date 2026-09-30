@@ -177,11 +177,14 @@ fn a_hetzner_only_machine_selects_the_cheapest_matching_worker() {
     prepare(&mut app, &ctx, temp.path());
     hetzner_binding(&mut app);
     app.cloud_prototype.production.prices.runpod_key_missing();
+    app.cloud_prototype.production.prices.exchange.rates = None;
     tall_frame(&ctx, &mut app);
     tall_frame(&ctx, &mut app);
     assert_eq!(selected(&app).provider, "Hetzner");
     let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
     assert!(shown.offers.iter().all(|offer| offer.provider == "Hetzner"));
+    assert!(shown.complete && shown.picks.cheapest.is_some());
+    assert_eq!(shown.currency, "EUR");
 }
 
 #[test]
@@ -367,9 +370,42 @@ fn runpod_filter_can_rank_without_foreign_exchange_rates() {
     assert_eq!(shown.offers[shown.picks.cheapest.unwrap()].provider, "RunPod");
     let output = tall_frame(&ctx, &mut app);
     click(&ctx, &mut app, label_rect(&output, "Hetzner").center());
-    assert!(!selector::catalog(&app.cloud_prototype.production).unwrap().complete);
+    assert!(selector::catalog(&app.cloud_prototype.production).unwrap().complete);
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(shown.picks.cheapest.is_some());
+    assert_eq!(shown.currency, "EUR");
+    let output = tall_frame(&ctx, &mut app);
+    assert!(painted(&output).contains("Estimated totals in EUR"));
     hetzner_binding(&mut app);
     let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
     assert!(shown.complete);
     assert_eq!(shown.offers[shown.picks.cheapest.unwrap()].provider, "Hetzner");
+}
+
+#[test]
+fn runpod_storage_requirements_are_not_silently_changed_for_hetzner() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let form = &mut app.cloud_prototype.production;
+    form.profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("development")
+        .unwrap()
+        .storage
+        .volume_tier = horizon_core::cloud_runtime::prices::StorageTier::HighPerformance;
+    let shown = selector::catalog(form).unwrap();
+    assert!(!shown.complete);
+    assert!(shown.offers.iter().all(|offer| offer.provider == "RunPod"));
+    assert!(shown.picks.cheapest.is_none());
+    assert_eq!(
+        form.profiles.as_ref().unwrap().profiles["development"]
+            .storage
+            .volume_tier,
+        horizon_core::cloud_runtime::prices::StorageTier::HighPerformance
+    );
 }
