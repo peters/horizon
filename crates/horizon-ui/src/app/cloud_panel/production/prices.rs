@@ -117,7 +117,6 @@ impl State {
             self.fetch_list(root, ctx);
         }
         self.hetzner.request(root, ctx);
-        self.exchange.request(ctx);
     }
 
     /// The failed price fetch agents' requests report, the same one for every request

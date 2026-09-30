@@ -144,11 +144,11 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
     };
     let complete = (!interested(&horizon_core::cloud_runtime::provider::RUNPOD)
         || !form.prices.runpod_bound()
-        || runpod.is_some() && !form.prices.too_old() && form.prices.list_error.is_none())
+        || form.prices.fresh_list().is_some() && form.prices.list_error.is_none())
         && (!interested(&horizon_core::cloud_runtime::provider::HETZNER)
             || !form.prices.hetzner.bound()
-            || hetzner.is_some() && !form.prices.hetzner.too_old() && form.prices.hetzner.error().is_none())
-        && (!interested(&horizon_core::cloud_runtime::provider::HETZNER) || form.prices.hetzner.displayed().is_some())
+            || form.prices.hetzner.fresh().is_some() && form.prices.hetzner.error().is_none())
+        && (!interested(&horizon_core::cloud_runtime::provider::HETZNER) || form.prices.hetzner.fresh().is_some())
         && offers
             .iter()
             .take(matching)

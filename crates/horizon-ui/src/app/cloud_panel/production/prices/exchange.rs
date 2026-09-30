@@ -7,6 +7,8 @@ use std::{
 };
 
 const FRESH: Duration = Duration::from_hours(6);
+const REQUEST_MARGIN_MILLIS: i64 = 6_000;
+const ANSWER_MARGIN_MILLIS: i64 = 3_000;
 
 #[derive(Default)]
 pub(in crate::app::cloud_panel::production) struct State {
@@ -18,6 +20,11 @@ pub(in crate::app::cloud_panel::production) struct State {
 }
 
 impl State {
+    pub fn request_for_deadline(&mut self, ctx: &egui::Context, deadline_in_millis: i64) {
+        if deadline_in_millis > REQUEST_MARGIN_MILLIS {
+            self.request(ctx);
+        }
+    }
     pub fn request(&mut self, ctx: &egui::Context) {
         if cfg!(test)
             || self.job.is_some()
@@ -57,12 +64,30 @@ impl State {
         }
     }
 
-    pub fn waiting(&self) -> bool {
-        self.job.is_some()
+    pub fn waiting_for_deadline(&self, deadline_in_millis: i64) -> bool {
+        self.job.is_some() && deadline_in_millis > ANSWER_MARGIN_MILLIS
     }
 
     pub fn refresh(&mut self) {
         self.at = None;
         self.failed_at = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_rates_leave_time_to_return_native_offers() {
+        let (_sender, receiver) = channel();
+        let state = State {
+            job: Some(receiver),
+            ..State::default()
+        };
+        assert!(state.waiting_for_deadline(6_000));
+        assert!(!state.waiting_for_deadline(3_000));
+        assert!(!state.waiting_for_deadline(1_001));
+        assert!(!State::default().waiting_for_deadline(10_000));
     }
 }

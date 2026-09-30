@@ -94,6 +94,28 @@ fn form(profile: &str) -> Production {
     form
 }
 
+#[test]
+fn refresh_keeps_browsing_choices_but_removes_complete_rankings_until_current() {
+    let mut form = form("cpu");
+    let before = catalog(&form).unwrap();
+    assert!(before.complete && before.picks.cheapest.is_some());
+    form.prices.refresh();
+    let during = catalog(&form).unwrap();
+    assert_eq!(during.offers, before.offers);
+    assert!(!during.complete && during.picks.cheapest.is_none());
+    form.prices.answered(list(None), preferences(), Vec::new());
+    assert!(
+        !catalog(&form).unwrap().complete,
+        "Hetzner binding still needs rechecking"
+    );
+    form.prices.hetzner.answered(None);
+    assert!(catalog(&form).unwrap().complete);
+    if let Some(at) = Instant::now().checked_sub(std::time::Duration::from_hours(2)) {
+        form.prices.list.as_mut().unwrap().at = at;
+        assert!(!catalog(&form).unwrap().complete);
+    }
+}
+
 /// Draws the selector and its summary once, returning every visible text.
 fn render(form: &mut Production) -> Vec<String> {
     let mut actions = Actions::default();

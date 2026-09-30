@@ -26,6 +26,9 @@ impl HorizonApp {
         let deadline_in = request
             .deadline_at_millis
             .saturating_sub(horizon_core::browser::manifest::now_millis());
+        if !requirements.gpu {
+            prices.exchange.request_for_deadline(ctx, deadline_in);
+        }
         // A machine set up for Hetzner alone answers with its other providers, and says
         // why RunPod has no offers.
         if !prices.runpod_bound() {
@@ -81,8 +84,7 @@ fn compared(
     use horizon_core::cloud_runtime::offers::comparison;
     if comparison::needs_rates(&answer)
         && prices.exchange.rates.is_none()
-        && prices.exchange.waiting()
-        && deadline_in > 1_000
+        && prices.exchange.waiting_for_deadline(deadline_in)
     {
         return None;
     }
