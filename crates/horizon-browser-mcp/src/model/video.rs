@@ -132,7 +132,7 @@ impl VideoOutput {
                     .to_string()
             } else if capture.frames_dropped > 0 {
                 format!(
-                    "The host missed scheduled frames: {:.2} fps encoded versus {} fps requested. The WebM preserves sample times; inspect the exact export path before relying on brief page states.",
+                    "The host missed scheduled frames: {:.2} fps encoded versus {} fps requested. Inspect the exact export path before relying on brief page states.",
                     capture.effective_fps, capture.fps
                 )
             } else {
@@ -240,5 +240,6 @@ mod tests {
         let output = VideoOutput::new("panel".to_string(), "action".to_string(), capture);
         assert!((output.effective_fps - 2.0).abs() < f64::EPSILON);
         assert!(output.next_step.contains("2.00 fps encoded versus 5 fps requested"));
+        assert!(!output.next_step.contains("preserves sample times"));
     }
 }
