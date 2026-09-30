@@ -129,7 +129,7 @@ fn keep_saved(ui: &mut Ui) -> bool {
 }
 
 pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits, fixed_agents: bool) {
-    let status = dashboard::agents_status(draft);
+    let status = dashboard::agents_status(draft, fixed_agents);
     surface(ui, |ui| {
         header(
             ui,

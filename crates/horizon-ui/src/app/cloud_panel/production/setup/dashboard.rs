@@ -114,10 +114,15 @@ fn agent_keys(draft: &Draft) -> Vec<(Agent, Key)> {
 }
 
 /// What the agents card says about the selected agents.
-pub(super) fn agents_status(draft: &Draft) -> (Tone, &'static str) {
+pub(super) fn agents_status(draft: &Draft, fixed_agents: bool) -> (Tone, &'static str) {
     let keys = agent_keys(draft);
     if draft.selected_agents().is_empty() {
-        (Tone::Attention, "Choose one")
+        // A profile that runs no agent fixes the choice to none; there is nothing to pick.
+        if fixed_agents {
+            (Tone::Ready, "None required")
+        } else {
+            (Tone::Attention, "Choose one")
+        }
     } else if keys.iter().any(|(_, key)| *key == Key::Missing) {
         (Tone::Attention, "Needs a key")
     } else if keys.iter().any(|(_, key)| *key == Key::Unsaved) {
@@ -136,7 +141,8 @@ pub(super) struct Readiness {
 }
 
 impl Readiness {
-    pub(super) fn of(draft: &Draft, ssh_ready: Option<bool>, verified: &Verified) -> Self {
+    /// `fixed_agents`: the agents are fixed by the profile being started, so none may be required.
+    pub(super) fn of(draft: &Draft, ssh_ready: Option<bool>, verified: &Verified, fixed_agents: bool) -> Self {
         let attention = |cause: String| Self {
             tone: Tone::Attention,
             title: "Almost ready to launch",
@@ -149,7 +155,7 @@ impl Readiness {
         if hetzner == Key::Missing && draft.hetzner.enabled {
             return attention("Paste the Hetzner token, or switch Hetzner off.".into());
         }
-        if draft.selected_agents().is_empty() {
+        if draft.selected_agents().is_empty() && !fixed_agents {
             return attention("Choose a coding agent.".into());
         }
         let agents = agent_keys(draft);
@@ -314,7 +320,10 @@ pub(super) fn banner(ui: &mut Ui, readiness: &Readiness) {
 /// The banner for the settings being edited.
 pub(super) fn readiness_banner(ui: &mut Ui, state: &State) {
     if let Some(draft) = &state.draft {
-        banner(ui, &Readiness::of(draft, state.ssh_ready, &state.verified));
+        banner(
+            ui,
+            &Readiness::of(draft, state.ssh_ready, &state.verified, state.required_agents.is_some()),
+        );
     }
 }
 
@@ -330,7 +339,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
     } = state;
     let draft = draft.as_deref_mut()?;
     let fixed_agents = required_agents.is_some();
-    let readiness = Readiness::of(draft, *ssh_ready, verified);
+    let readiness = Readiness::of(draft, *ssh_ready, verified, fixed_agents);
     let mut action = None;
     ui.spacing_mut().item_spacing = vec2(GAP, GAP);
     if ui.available_width() < STACKED_BELOW {

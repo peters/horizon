@@ -456,24 +456,28 @@ fn readiness_names_the_first_thing_left_to_do() {
     let temp = tempfile::tempdir().unwrap();
     let mut verified = Verified::new();
     let mut draft = Draft::load(temp.path()).unwrap();
-    let first = Readiness::of(&draft, None, &verified);
+    let first = Readiness::of(&draft, None, &verified, false);
     assert_eq!(first.tone, Tone::Attention);
     assert!(first.cause.contains("RunPod or Hetzner"));
     *draft.runpod_key = "synthetic-key".into();
-    assert!(Readiness::of(&draft, None, &verified).cause.contains("Save settings"));
+    assert!(
+        Readiness::of(&draft, None, &verified, false)
+            .cause
+            .contains("Save settings")
+    );
     let draft = bound_registry_draft(temp.path());
     assert!(
-        Readiness::of(&draft, Some(true), &verified)
+        Readiness::of(&draft, Some(true), &verified, false)
             .cause
             .contains("Validate pull access for registry.example/team/worker")
     );
     assert!(
-        Readiness::of(&draft, Some(false), &verified)
+        Readiness::of(&draft, Some(false), &verified, false)
             .cause
             .contains("SSH identity is incomplete")
     );
     verified.insert("registry.example/team/worker".into(), validation());
-    let ready = Readiness::of(&draft, Some(true), &verified);
+    let ready = Readiness::of(&draft, Some(true), &verified, false);
     assert_eq!((ready.tone, ready.title), (Tone::Ready, "Settings complete"));
 }
 
@@ -510,25 +514,44 @@ fn an_agent_api_key_holds_the_banner_until_it_is_saved() {
     first.save().unwrap();
     let mut draft = Draft::load(temp.path()).unwrap();
     let verified = Verified::new();
-    assert_eq!(Readiness::of(&draft, Some(true), &verified).tone, Tone::Ready);
-    assert_eq!(agents_status(&draft), (Tone::Ready, "Ready"));
+    assert_eq!(Readiness::of(&draft, Some(true), &verified, false).tone, Tone::Ready);
+    assert_eq!(agents_status(&draft, false), (Tone::Ready, "Ready"));
     draft.openai_auth = Authentication::ApiKey;
-    let missing = Readiness::of(&draft, Some(true), &verified);
+    let missing = Readiness::of(&draft, Some(true), &verified, false);
     assert_eq!(missing.tone, Tone::Attention);
     assert!(missing.cause.contains("Codex API key"));
-    assert_eq!(agents_status(&draft), (Tone::Attention, "Needs a key"));
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Needs a key"));
     *draft.openai_key = "synthetic-agent".into();
     assert!(
-        Readiness::of(&draft, Some(true), &verified)
+        Readiness::of(&draft, Some(true), &verified, false)
             .cause
             .contains("Save settings")
     );
-    assert_eq!(agents_status(&draft), (Tone::Attention, "Unsaved key"));
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Unsaved key"));
     draft.settings.default_agents.clear();
-    assert_eq!(agents_status(&draft), (Tone::Attention, "Choose one"));
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Choose one"));
     assert!(
-        Readiness::of(&draft, Some(true), &verified)
+        Readiness::of(&draft, Some(true), &verified, false)
             .cause
             .contains("Choose a coding agent")
+    );
+}
+
+#[test]
+fn an_agentless_profile_needs_no_agent_to_be_ready() {
+    use super::dashboard::{Readiness, Tone, Verified, agents_status};
+    let temp = tempfile::tempdir().unwrap();
+    let mut first = Draft::load(temp.path()).unwrap();
+    *first.runpod_key = "synthetic-compute".into();
+    first.save().unwrap();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    draft.settings.default_agents.clear();
+    let verified = Verified::new();
+    assert_eq!(agents_status(&draft, true), (Tone::Ready, "None required"));
+    assert_eq!(Readiness::of(&draft, Some(true), &verified, true).tone, Tone::Ready);
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Choose one"));
+    assert_eq!(
+        Readiness::of(&draft, Some(true), &verified, false).tone,
+        Tone::Attention
     );
 }
