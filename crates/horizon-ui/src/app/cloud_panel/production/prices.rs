@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod exchange;
 pub(super) mod hetzner;
 
 /// Prices and stock older than this are fetched again while the dialog is open.
@@ -22,6 +23,8 @@ pub(super) const FRESH: Duration = Duration::from_secs(15);
 pub(super) const START_LIMIT: Duration = Duration::from_hours(1);
 /// How long agents' requests get the same failed price fetch before one asks again.
 const RETRY_FAILED: Duration = Duration::from_secs(30);
+/// Leave time to return available provider results before an agent request expires.
+pub(super) const ANSWER_MARGIN_MILLIS: i64 = 3_000;
 
 pub(super) struct Fetched<T> {
     pub value: T,
@@ -50,6 +53,7 @@ pub(super) struct State {
     regions: HashMap<String, String>,
     /// Hetzner's catalog, fetched beside the list when this machine has a binding.
     pub hetzner: hetzner::State,
+    pub exchange: exchange::State,
     /// A fetch found no `RunPod` API key. Kept through refreshes and expired errors,
     /// and cleared only by a list `RunPod` answered, so a retry never offers `RunPod`
     /// on a machine set up for Hetzner alone.
@@ -70,6 +74,7 @@ impl State {
         // Hetzner is offered beside RunPod for CPU profiles when this machine has a binding.
         if !profile.gpu {
             self.hetzner.request(root, ctx);
+            self.exchange.request(ctx);
         }
         let key = key(profile);
         let current = self
@@ -226,6 +231,7 @@ impl State {
     /// Collects finished fetches.
     pub fn poll(&mut self) {
         self.hetzner.poll();
+        self.exchange.poll();
         if let Some(result) = finished(&mut self.list_job) {
             match result {
                 Ok(fetched) => {
@@ -272,6 +278,8 @@ impl State {
 
     /// Requests new prices while retaining the last display and any requests in flight.
     pub fn refresh(&mut self) {
+        self.exchange.refresh();
+        self.hetzner.refresh();
         self.refreshed_after = Some(Instant::now());
         self.list_error = None;
         self.list_failed_at = None;
@@ -459,6 +467,9 @@ impl State {
     }
 
     pub fn answered(&mut self, list: PriceList, preferences: Preferences, sizes: Vec<(Profile, SizeAvailability)>) {
+        if self.hetzner.displayed().is_none() && !self.hetzner.bound() {
+            self.hetzner.answered(None);
+        }
         self.accept(Fetched {
             value: (list, preferences),
             at: Instant::now(),

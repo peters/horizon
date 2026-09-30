@@ -152,6 +152,7 @@ impl HorizonApp {
                     form.repository = prepared.repository.to_string_lossy().into_owned();
                     if !prepared.config.profiles.contains_key(&form.selected_profile) {
                         form.selected_profile.clone_from(&prepared.config.default);
+                        form.launch.selector.profile_changed();
                         form.size = None;
                         form.placement = Placement::default();
                         form.provider = None;
@@ -410,6 +411,7 @@ mod tests {
         let (sender, receiver) = channel();
         app.cloud_prototype.production.launch.receiver = Some(receiver);
         app.cloud_prototype.production.selected_profile = "other".into();
+        app.cloud_prototype.production.launch.selector.wait_for_stock = true;
         let mut result = loaded(temp.path());
         result
             .prepared
@@ -419,6 +421,24 @@ mod tests {
         sender.send(Ok(result)).unwrap();
         app.poll_cloud_launch(&ctx);
         assert_eq!(app.cloud_prototype.production.selected_profile, "other");
+        assert!(app.cloud_prototype.production.launch.selector.wait_for_stock);
+    }
+
+    #[test]
+    fn repository_reload_resets_selector_when_the_selected_profile_is_removed() {
+        let (temp, mut app) = test_app();
+        let ctx = Context::default();
+        let workspace = app.board.ensure_workspace();
+        app.open_workspace_cloud(&ctx, workspace);
+        let (sender, receiver) = channel();
+        let form = &mut app.cloud_prototype.production;
+        form.launch.receiver = Some(receiver);
+        form.selected_profile = "removed".into();
+        form.launch.selector.wait_for_stock = true;
+        sender.send(Ok(loaded(temp.path()))).unwrap();
+        app.poll_cloud_launch(&ctx);
+        assert_eq!(app.cloud_prototype.production.selected_profile, "dev");
+        assert!(!app.cloud_prototype.production.launch.selector.wait_for_stock);
     }
 
     #[test]

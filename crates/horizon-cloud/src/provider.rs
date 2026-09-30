@@ -59,7 +59,7 @@ pub struct Description {
     /// Shown to people, such as `RunPod`.
     pub label: &'static str,
     /// The currency the provider bills in, as an ISO 4217 code. Amounts are never
-    /// converted.
+    /// changed on provider invoices; comparisons may use reference rates.
     pub currency: &'static str,
     /// Whether prices exclude VAT.
     pub net_of_vat: bool,

@@ -26,6 +26,9 @@ impl HorizonApp {
         let deadline_in = request
             .deadline_at_millis
             .saturating_sub(horizon_core::browser::manifest::now_millis());
+        if !requirements.gpu {
+            prices.exchange.request_for_deadline(ctx, deadline_in);
+        }
         // A machine set up for Hetzner alone answers with its other providers, and says
         // why RunPod has no offers.
         if !prices.runpod_bound() {
@@ -33,35 +36,74 @@ impl HorizonApp {
             prices.recheck_runpod();
             prices.request_fresh_list(&root, ctx);
             let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
-            return Some(Ok(serde_json::json!({
+            let answer = serde_json::json!({
                 "provider": "RunPod",
                 "unavailable": horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING,
                 "offers": [],
                 "other_providers": other_providers,
-            })));
+            });
+            return compared(answer, prices, deadline_in);
         }
         // Every request waiting on a failed fetch gets its error; a later one asks again.
-        if let Some(error) = prices.recent_list_error() {
-            return Some(Err(format!("cloud_offers_unavailable: {error}")));
+        if let Some(error) = prices.recent_list_error().map(str::to_owned) {
+            if requirements.gpu {
+                return Some(Err(format!("cloud_offers_unavailable: {error}")));
+            }
+            prices.request_fresh_list(&root, ctx);
+            let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
+            if !prices.hetzner.bound() && other_providers.is_empty() {
+                return Some(Err(format!("cloud_offers_unavailable: {error}")));
+            }
+            let answer =
+                serde_json::json!({"provider":"RunPod", "error":error, "offers":[], "other_providers":other_providers});
+            return compared(answer, prices, deadline_in);
         }
         prices.request_fresh_list(&root, ctx);
         // Other providers are ranked on their own, in their own currency, and a failed
         // Hetzner fetch is reported there without taking RunPod's offers down.
         let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
-        let fetched = prices.fresh_list()?;
+        let Some(fetched) = prices.fresh_list() else {
+            if deadline_in > super::prices::ANSWER_MARGIN_MILLIS || other_providers.is_empty() {
+                return None;
+            }
+            let answer = serde_json::json!({
+                "provider": "RunPod",
+                "error": "cloud_offers_unavailable: RunPod prices are still being fetched",
+                "offers": [],
+                "other_providers": other_providers,
+            });
+            return compared(answer, prices, deadline_in);
+        };
         let (list, preferences) = &fetched.value;
         let observed = std::time::SystemTime::now()
             .checked_sub(fetched.at.elapsed())
             .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|at| u64::try_from(at.as_millis()).unwrap_or(u64::MAX));
-        Some(Ok(serde_json::json!({
+        let answer = serde_json::json!({
             "provider": list.provider,
             "observed_at_millis": observed,
             "observed_seconds_ago": fetched.at.elapsed().as_secs(),
             "offers": offers(list, preferences, &requirements),
             "other_providers": other_providers,
-        })))
+        });
+        compared(answer, prices, deadline_in)
     }
+}
+
+fn compared(
+    mut answer: serde_json::Value,
+    prices: &super::prices::State,
+    deadline_in: i64,
+) -> Option<Result<serde_json::Value, String>> {
+    use horizon_core::cloud_runtime::offers::comparison;
+    if comparison::needs_rates(&answer)
+        && prices.exchange.fresh().is_none()
+        && prices.exchange.waiting_for_deadline(deadline_in)
+    {
+        return None;
+    }
+    comparison::append(&mut answer, prices.exchange.fresh());
+    Some(Ok(answer))
 }
 
 #[cfg(all(test, unix))]
@@ -119,6 +161,37 @@ mod tests {
             "regions": {"hel1": "EUROPE"},
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn cached_quotes_need_current_cache_age_before_host_conversion() {
+        use horizon_core::cloud_runtime::offers::exchange::{OffsetDateTime, Rates};
+        use std::time::{Duration, Instant};
+        let answer = serde_json::json!({ "offers": [], "other_providers": [{ "offers": [
+            { "provider": "Hetzner", "id": "cx43", "currency": "EUR", "estimated_total": 1.0 }
+        ] }] });
+        let mut prices = super::super::prices::State::default();
+        let rates = Rates {
+            date: OffsetDateTime::now_utc().date().to_string(),
+            usd_per_unit: std::collections::BTreeMap::from([("USD".into(), 1.0), ("EUR".into(), 1.2)]),
+        };
+        prices.exchange.answered(super::super::prices::Fetched {
+            value: rates.clone(),
+            at: Instant::now().checked_sub(Duration::from_hours(7)).unwrap(),
+        });
+        let stale = compared(answer.clone(), &prices, 6_000).unwrap().unwrap();
+        assert_eq!(stale["comparison"]["complete"], false);
+        assert!(stale["comparison"]["exchange_date"].is_null());
+        assert_eq!(stale["other_providers"][0]["offers"][0]["estimated_total"], 1.0);
+        prices.exchange.answered(super::super::prices::Fetched {
+            value: rates,
+            at: Instant::now(),
+        });
+        let current = compared(answer.clone(), &prices, 6_000).unwrap().unwrap();
+        assert_eq!(current["comparison"]["complete"], true);
+        prices.exchange.refresh();
+        let refreshed = compared(answer, &prices, 6_000).unwrap().unwrap();
+        assert_eq!(refreshed["comparison"]["complete"], false);
     }
 
     #[test]
@@ -198,6 +271,75 @@ mod tests {
             "cloud_offers_unavailable: Missing Hetzner token"
         );
     }
+    #[test]
+    fn pending_runpod_prices_keep_current_hetzner_offers_near_the_deadline() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        app.cloud_prototype.root = Some(temp.path().to_path_buf());
+        app.cloud_prototype
+            .production
+            .prices
+            .hetzner
+            .answered(Some(hetzner_catalog()));
+        let mut cpu = request(&serde_json::json!({"min_vcpu": 8}));
+        assert!(app.cloud_offers_answer(&cpu, &ctx).is_none());
+        cpu.deadline_at_millis = horizon_core::browser::manifest::now_millis() + 2_000;
+        let pending = app.cloud_offers_answer(&cpu, &ctx).unwrap().unwrap();
+        assert_eq!(pending["offers"], serde_json::json!([]));
+        assert_eq!(
+            pending["error"],
+            "cloud_offers_unavailable: RunPod prices are still being fetched"
+        );
+        assert_eq!(pending["other_providers"][0]["offers"][0]["id"], "cx43");
+        assert_eq!(pending["other_providers"][0]["offers"][0]["currency"], "EUR");
+        assert_eq!(pending["comparison"]["complete"], false);
+        assert!(pending["comparison"]["exchange_date"].is_null());
+        priced(&mut app);
+        let settled = app.cloud_offers_answer(&cpu, &ctx).unwrap().unwrap();
+        assert!(settled.get("error").is_none());
+        assert!(!settled["offers"].as_array().unwrap().is_empty());
+        assert_eq!(settled["other_providers"][0]["offers"][0]["id"], "cx43");
+    }
+
+    #[test]
+    fn an_early_runpod_failure_waits_for_the_first_hetzner_result() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        app.cloud_prototype.root = Some(temp.path().to_path_buf());
+        let prices = &mut app.cloud_prototype.production.prices;
+        prices.list_error = Some("Synthetic RunPod failure".into());
+        prices.list_failed_at = Some(std::time::Instant::now());
+        let complete = prices.hetzner.pending_fetch();
+        assert!(!prices.hetzner.bound());
+        let cpu = request(&serde_json::json!({"min_vcpu": 8}));
+        assert!(app.cloud_offers_answer(&cpu, &ctx).is_none());
+        let gpu = request(&serde_json::json!({"gpu": true}));
+        assert!(matches!(app.cloud_offers_answer(&gpu, &ctx), Some(Err(_))));
+        let mut short = cpu.clone();
+        short.deadline_at_millis = horizon_core::browser::manifest::now_millis() + 2_000;
+        let pending = app.cloud_offers_answer(&short, &ctx).unwrap().unwrap();
+        assert_eq!(pending["error"], "Synthetic RunPod failure");
+        assert!(
+            pending["other_providers"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("still being fetched")
+        );
+        complete(Some(hetzner_catalog()));
+        let answer = app.cloud_offers_answer(&cpu, &ctx).unwrap().unwrap();
+        assert_eq!(answer["error"], "Synthetic RunPod failure");
+        assert_eq!(answer["other_providers"][0]["offers"][0]["id"], "cx43");
+        let prices = &mut app.cloud_prototype.production.prices;
+        prices.hetzner = super::super::prices::hetzner::State::default();
+        let complete = prices.hetzner.pending_fetch();
+        assert!(app.cloud_offers_answer(&cpu, &ctx).is_none());
+        complete(None);
+        assert_eq!(
+            app.cloud_offers_answer(&cpu, &ctx),
+            Some(Err("cloud_offers_unavailable: Synthetic RunPod failure".into()))
+        );
+    }
+
     #[test]
     fn a_machine_without_a_runpod_key_offers_its_other_providers() {
         let (temp, mut app) = crate::app::test_support::test_app();

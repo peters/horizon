@@ -29,6 +29,15 @@ pub(in super::super) fn show(ui: &mut Ui, form: &mut Production) {
                 } else {
                     // Providers without listed offers price their own location card.
                     located(ui, form, &profile, provider.label);
+                    ui.add_enabled_ui(editable, |ui| {
+                        if let Some(profile) = form
+                            .profiles
+                            .as_mut()
+                            .and_then(|config| config.profiles.get_mut(&form.selected_profile))
+                        {
+                            super::super::storage::field(ui, profile, provider);
+                        }
+                    });
                 }
             } else {
                 widgets::note(ui, "Read the repository profile to choose a worker.");
@@ -59,7 +68,31 @@ fn located(ui: &mut Ui, form: &Production, profile: &Profile, provider: &str) {
         places => places.join(", "),
     };
     ui.label(RichText::new(place).size(12.5).color(theme::FG_SOFT()));
-    widgets::note(ui, "Prices and the server type are on the location card.");
+    if let Some(catalog) = catalog(form)
+        && let Some(index) = catalog.selected
+    {
+        let offer = &catalog.offers[index];
+        widgets::line(ui, "Worker", &offer.id, true);
+        widgets::line(ui, "Compute", &format!("{}/hr", provider::euros(offer.hourly)), false);
+        widgets::line(
+            ui,
+            "Estimated run, storage + IPv4",
+            &provider::euros(offer.estimated_total),
+            true,
+        );
+        widgets::line(
+            ui,
+            "Stopped workspace",
+            &format!("{}/mo", provider::euros(offer.stopped_monthly)),
+            false,
+        );
+        widgets::note(
+            ui,
+            "Hetzner prices exclude VAT. Billed per started hour, with a monthly cap. Availability is advisory.",
+        );
+    } else {
+        widgets::note(ui, "Choose an exact worker and location.");
+    }
 }
 
 fn worker(ui: &mut Ui, form: &Production, profile: &Profile) {
@@ -194,6 +227,16 @@ fn cost(ui: &mut Ui, form: &Production) {
         widgets::note(ui, "Price unavailable for this worker.");
         return;
     };
+    if let Some(catalog) = catalog(form)
+        && let Some(index) = catalog.selected
+    {
+        widgets::line(
+            ui,
+            "Estimated run, including storage",
+            &costs::money(catalog.offers[index].estimated_total),
+            true,
+        );
+    }
     let storage = costs::storage(list, &sized);
     widgets::line(ui, "Compute", &format!("{}/hr", costs::range(low, high)), false);
     for item in &storage {

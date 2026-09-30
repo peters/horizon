@@ -81,6 +81,7 @@ fn confirmation_polls_and_resubmissions_offer_to_restore_a_missing_reserved_card
         )
         .unwrap();
         operation.phase = lifecycle::Phase::ConfirmationRequired;
+        assert_recovery_errors(&mut app, &context, &operation, &root);
         let submitted = || super::super::Submitted {
             operation: operation.clone(),
             context: context.clone(),
@@ -113,6 +114,35 @@ fn confirmation_polls_and_resubmissions_offer_to_restore_a_missing_reserved_card
         assert_eq!(app.cloud_prototype.groups.0.len(), 1);
         assert!(app.cloud_prototype.production.companions.agent.executing.is_empty());
     }
+}
+
+fn assert_recovery_errors(app: &mut HorizonApp, context: &Context, operation: &lifecycle::Operation, root: &Path) {
+    let target = root.join("reserved");
+    let lock = horizon_core::cloud_runtime::state::Store::lock(&target).unwrap();
+    let busy = app
+        .request_companion_start("source", "consumer", operation, context)
+        .unwrap();
+    assert_eq!(
+        (busy["done"].as_bool(), busy["resend"].as_bool()),
+        (Some(false), Some(false))
+    );
+    assert!(busy["error"].as_str().is_some_and(|error| !error.is_empty()));
+    assert_eq!(busy["operation_id"], json!(operation.intent.operation_id));
+    drop(lock);
+    let path = target.join("deployment.json");
+    let record = std::fs::read(&path).unwrap();
+    std::fs::write(&path, "corrupt record").unwrap();
+    let corrupt = app
+        .request_companion_start("source", "consumer", operation, context)
+        .unwrap();
+    assert_eq!(
+        (corrupt["done"].as_bool(), corrupt["resend"].as_bool()),
+        (Some(false), Some(true))
+    );
+    assert!(corrupt["error"].as_str().is_some_and(|error| !error.is_empty()));
+    assert!(creation(app).pending.is_empty());
+    assert!(app.cloud_prototype.production.companions.agent.executing.is_empty());
+    std::fs::write(path, record).unwrap();
 }
 
 #[test]

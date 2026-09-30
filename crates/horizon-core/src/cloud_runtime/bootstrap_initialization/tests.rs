@@ -20,6 +20,7 @@ fn request(root: &std::path::Path) -> Request {
     let credential = credential.keep().unwrap().1;
     Request {
         worker: WorkerSpec {
+            exact_placement: false,
             operation_id: "first-test".into(),
             image_digest: format!("test/worker@sha256:{}", "a".repeat(64)),
             profile: Profile {

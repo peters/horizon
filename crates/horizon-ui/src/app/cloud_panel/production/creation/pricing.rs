@@ -7,6 +7,10 @@ use horizon_core::{cloud_panel::Placement, cloud_runtime::prices::Preferences};
 /// A choice button with an optional second line, such as a price or stock, drawn in
 /// `tint` or else in the accent color when selected.
 pub(super) fn option(ui: &mut Ui, label: &str, selected: bool, detail: Option<&str>, tint: Option<Color32>) -> bool {
+    ui.add(button(label, selected, detail, tint)).clicked()
+}
+
+pub(super) fn button(label: &str, selected: bool, detail: Option<&str>, tint: Option<Color32>) -> Button<'static> {
     let mut job = LayoutJob::default();
     let format = |size: f32, color: Color32| TextFormat {
         font_id: FontId::proportional(size),
@@ -18,13 +22,10 @@ pub(super) fn option(ui: &mut Ui, label: &str, selected: bool, detail: Option<&s
         let color = tint.unwrap_or(if selected { theme::ACCENT() } else { theme::FG_DIM() });
         job.append(&format!("\n{detail}"), 0.0, format(11.0, color));
     }
-    ui.add(
-        Button::new(job)
-            .selected(selected)
-            .min_size(Vec2::new(0.0, if detail.is_some() { 42.0 } else { 30.0 }))
-            .corner_radius(8),
-    )
-    .clicked()
+    Button::new(job)
+        .selected(selected)
+        .min_size(Vec2::new(0.0, if detail.is_some() { 42.0 } else { 30.0 }))
+        .corner_radius(8)
 }
 
 /// The GPU types a new cloud would request: those chosen for it, or else the machine's

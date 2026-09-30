@@ -11,6 +11,7 @@ fn spec() -> WorkerSpec {
     }))
     .unwrap();
     WorkerSpec {
+        exact_placement: false,
         operation_id: "0e9f3c52-8f55-4a4c-9d7c-1c1c0a6a7b21".into(),
         image_digest: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
         profile,
@@ -229,4 +230,31 @@ fn readiness_accepts_only_a_server_and_volume_that_hold_each_other() {
     let mut extra = server.clone();
     extra.volumes = vec![9, 10];
     assert!(!holds(&extra, &volume));
+}
+
+#[test]
+fn an_exact_worker_choice_survives_plain_policy_reload_without_fallback() {
+    let mut chosen = spec();
+    chosen.cpu_flavors = vec!["cx33".into()];
+    chosen.data_centers = vec!["hel1".into()];
+    chosen.exact_placement = true;
+    let saved: WorkerSpec = serde_json::from_slice(&serde_json::to_vec(&chosen).unwrap()).unwrap();
+    let current = allowing(&["nbg1", "hel1"], &["cpx32", "cx33"]);
+    let bound = current.for_spec(&saved).unwrap();
+    assert_eq!(bound.locations, ["hel1"]);
+    assert_eq!(bound.server_types, ["cx33"]);
+    let offers = [offer("cpx32", "hel1", 4, 8.0), offer("cx33", "hel1", 4, 8.0)];
+    let placements = fit(&offers, &saved, &current.server_types, "hel1").unwrap();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].server_type, "cx33");
+    assert!(fit(&offers[..1], &saved, &current.server_types, "hel1").is_err());
+    assert!(allowing(&["hel1"], &["cpx32"]).for_spec(&saved).is_err());
+    assert!(allowing(&["nbg1"], &["cx33"]).for_spec(&saved).is_err());
+    // Old records retain their configured fallback semantics and wire shape.
+    chosen.exact_placement = false;
+    assert_eq!(current.for_spec(&chosen).unwrap(), current);
+    let mut legacy = serde_json::to_value(&chosen).unwrap();
+    assert!(legacy.get("exact_placement").is_none());
+    legacy.as_object_mut().unwrap().remove("exact_placement");
+    assert!(!serde_json::from_value::<WorkerSpec>(legacy).unwrap().exact_placement);
 }

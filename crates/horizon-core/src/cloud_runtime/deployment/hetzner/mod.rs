@@ -31,6 +31,7 @@ pub(in crate::cloud_runtime) fn preflight(
     let hetzner = super::sizing::hetzner(settings)?;
     hetzner.credential()?;
     hetzner.locations_for(settings.placement.as_ref())?;
+    hetzner.types_for(settings.placement.as_ref())?;
     Ok(())
 }
 
@@ -104,7 +105,7 @@ impl Compute {
         let hetzner = super::sizing::hetzner(settings)?.clone();
         let allowed = Allowed {
             locations: hetzner.locations_for(settings.placement.as_ref())?,
-            server_types: hetzner.server_types.clone(),
+            server_types: hetzner.types_for(settings.placement.as_ref())?,
         };
         Ok(Self {
             client: Hetzner::new(hetzner.credential()?),

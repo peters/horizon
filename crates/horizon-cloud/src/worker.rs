@@ -63,6 +63,9 @@ pub struct WorkerSpec {
     pub gpu_types: Vec<String>,
     pub cpu_flavors: Vec<String>,
     pub data_centers: Vec<String>,
+    /// The saved type and location are explicit choices, not machine defaults.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exact_placement: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub startup_metadata: Option<crate::StartupMetadata>,
 }
@@ -84,6 +87,16 @@ impl WorkerSpec {
     /// # Errors
     /// Requires immutable images, supported profiles and explicit GPU selection.
     pub fn validate(&self) -> Result<(), CloudError> {
+        if self.exact_placement
+            && (self.profile.provider != crate::provider::HETZNER.id
+                || self.profile.gpu
+                || self.cpu_flavors.len() != 1
+                || self.data_centers.len() != 1)
+        {
+            return Err(CloudError::Invalid(
+                "An exact Hetzner placement needs one server type and location",
+            ));
+        }
         self.profile
             .validate(false)
             .map_err(|_| CloudError::Invalid("Invalid worker profile"))?;
@@ -142,6 +155,7 @@ impl WorkerSpec {
             gpu_types,
             cpu_flavors,
             data_centers,
+            exact_placement,
             startup_metadata,
         } = next;
         if *operation_id != self.operation_id
@@ -150,6 +164,7 @@ impl WorkerSpec {
             || *gpu_types != self.gpu_types
             || *cpu_flavors != self.cpu_flavors
             || *data_centers != self.data_centers
+            || *exact_placement != self.exact_placement
             || *startup_metadata != self.startup_metadata
         {
             return Err(CloudError::IdentityChange);

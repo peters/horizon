@@ -1,6 +1,6 @@
 //! Hetzner's catalog, fetched beside the `RunPod` price list when this machine has a
 //! Hetzner binding, for agents' offer requests and the prices sent to workers.
-use super::{Fetched, Job, RETRY_FAILED, finished, spawn};
+use super::{ANSWER_MARGIN_MILLIS, Fetched, Job, RETRY_FAILED, finished, spawn};
 use horizon_core::cloud_runtime::prices::{self, HetznerCatalog};
 use std::{
     path::Path,
@@ -11,10 +11,6 @@ use std::{
 const WAIT_FOR_FETCH: Duration = Duration::from_secs(20);
 /// Hetzner's catalog keeps its own cadence; fast GPU stock polling is RunPod-specific.
 const FRESH: Duration = Duration::from_mins(15);
-/// An agent's answer waits for a running Hetzner fetch only while more than this is
-/// left before its deadline; after that it reports Hetzner as still being fetched.
-const ANSWER_MARGIN_MILLIS: i64 = 3_000;
-
 /// A fetch's catalog with the configured server types and locations, or the reason it
 /// failed for a machine with a Hetzner binding.
 type Fetch = Result<(Option<HetznerCatalog>, Vec<String>, Vec<String>), String>;
@@ -38,6 +34,7 @@ pub(in crate::app) struct State {
     started: Option<Instant>,
     /// When the settings the last fetch read were saved.
     settings_saved: Option<SystemTime>,
+    refreshed_after: Option<Instant>,
 }
 
 impl State {
@@ -58,10 +55,9 @@ impl State {
         }
         if self.job.is_none()
             && self.error.is_none()
-            && self
-                .fetched
-                .as_ref()
-                .is_none_or(|fetched| fetched.at.elapsed() >= FRESH)
+            && self.fetched.as_ref().is_none_or(|fetched| {
+                fetched.at.elapsed() >= FRESH || self.refreshed_after.is_some_and(|refresh| fetched.at < refresh)
+            })
         {
             self.job = Some(spawn(root, ctx, |settings, cancel| {
                 let (server_types, locations) = settings
@@ -151,11 +147,13 @@ impl State {
     }
 
     /// The server types this machine's settings try, in order.
+    #[cfg(test)]
     pub fn server_types(&self) -> &[String] {
         &self.server_types
     }
 
     /// The locations this machine's settings allow, in the order deployment tries them.
+    #[cfg(test)]
     pub fn locations(&self) -> &[String] {
         &self.locations
     }
@@ -166,8 +164,16 @@ impl State {
     }
 
     /// The current catalog, when this machine has a Hetzner binding.
+    pub fn refresh(&mut self) {
+        self.refreshed_after = Some(Instant::now());
+        self.failed_at = None;
+        self.error = None;
+    }
+
     pub fn fresh(&self) -> Option<&Fetched<Option<HetznerCatalog>>> {
-        self.fetched.as_ref().filter(|fetched| fetched.at.elapsed() < FRESH)
+        self.fetched.as_ref().filter(|fetched| {
+            fetched.at.elapsed() < FRESH && self.refreshed_after.is_none_or(|refresh| fetched.at >= refresh)
+        })
     }
 
     /// The last catalog fetched, however old, for showing choices while a refresh runs
@@ -198,6 +204,9 @@ impl State {
         requirements: &horizon_core::cloud_runtime::offers::Requirements,
         deadline_in_millis: i64,
     ) -> Option<Vec<serde_json::Value>> {
+        if requirements.gpu {
+            return Some(Vec::new());
+        }
         if self.job.is_some() {
             if deadline_in_millis > ANSWER_MARGIN_MILLIS {
                 return None;
@@ -234,6 +243,22 @@ impl State {
 /// only.
 #[cfg(all(test, unix))]
 impl State {
+    pub fn pending_fetch(&mut self) -> impl FnOnce(Option<HetznerCatalog>) + use<> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.job = Some(receiver);
+        self.started = Some(Instant::now());
+        move |catalog| {
+            assert!(
+                sender
+                    .send(Ok(Fetched {
+                        value: Ok((catalog, Vec::new(), Vec::new())),
+                        at: Instant::now(),
+                    }))
+                    .is_ok()
+            );
+        }
+    }
+
     /// As a refresh fails after a catalog was fetched: the catalog stays on show.
     pub fn refresh_failed(&mut self, error: &str) {
         self.bound = true;
@@ -314,7 +339,8 @@ mod tests {
         prices.hetzner.job = Some(receiver);
         prices.refresh();
         assert!(prices.runpod_bound() && prices.hetzner.bound());
-        assert!(prices.hetzner.fresh().is_some());
+        assert!(prices.hetzner.fresh().is_none());
+        assert!(prices.hetzner.displayed().is_some());
         assert_eq!(prices.hetzner.server_types(), ["cx43"]);
         assert_eq!(prices.hetzner.locations(), ["hel1"]);
         sender.send(Err("Synthetic failure".into())).unwrap();

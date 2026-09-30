@@ -141,7 +141,7 @@ pub fn check(
     let spec = spec.ok_or(CloudError::Invalid("No worker was requested"))?;
     let volume = bound_volume(client, journal, operation_id, cancel)?;
     // A found server is a worker only as readiness would accept it.
-    if !holds(&server, &volume) || !admitted(&server, &policy()?, journal.location.as_deref()) {
+    if !holds(&server, &volume) || !admitted(&server, &policy()?.for_spec(spec)?, journal.location.as_deref()) {
         return Err(CloudError::Invalid(
             "The server does not hold this cloud's workspace volume where the settings allow; delete the cloud",
         ));

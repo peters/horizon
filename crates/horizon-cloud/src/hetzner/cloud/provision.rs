@@ -81,6 +81,8 @@ pub fn provision(
     // configuration; a malformed one would boot a worker nobody can reach.
     spec.validate()?;
     supported(spec)?;
+    let policy = policy.for_spec(spec)?;
+    let policy = &policy;
     // A login for another registry would only fail the host's pull after the server
     // is billed. Whether the image needs one is the caller's to decide.
     check_login(login.as_ref(), false, &spec.image_digest)?;

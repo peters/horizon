@@ -58,6 +58,9 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
             .inner
         })
         .inner;
+    if response.has_focus() {
+        form.focus_title_on_open = false;
+    }
     // A link may carry a token; what was typed is not kept for undoing.
     super::super::forget_undo(ui.ctx(), response.id);
     if refocus {

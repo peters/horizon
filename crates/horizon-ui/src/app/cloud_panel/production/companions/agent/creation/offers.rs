@@ -113,10 +113,17 @@ impl HorizonApp {
         };
         // Its card may also have been removed while still only prepared; a record that
         // could own a worker or provider resources is never offered again.
-        if !lifecycle::card_recoverable(&request).unwrap_or(false) {
-            return None;
-        }
-        let checkout = lifecycle::bound_checkout(&request).ok().flatten()?;
+        let checkout = match lifecycle::card_recoverable(&request).and_then(|recoverable| {
+            if recoverable {
+                lifecycle::bound_checkout(&request)
+            } else {
+                Ok(None)
+            }
+        }) {
+            Ok(Some(checkout)) => checkout,
+            Ok(None) => return None,
+            Err(error) => return Some(recovery_error(source, alias, operation, &error)),
+        };
         let pending = Pending {
             source: source.to_owned(),
             alias: alias.to_owned(),
@@ -171,4 +178,24 @@ impl HorizonApp {
         }
         directories
     }
+}
+
+fn recovery_error(
+    source: &str,
+    alias: &str,
+    operation: &lifecycle::Operation,
+    error: &super::cloud_runtime::Error,
+) -> Value {
+    let mut answer = super::super::describe(source, alias, operation);
+    let busy = matches!(error, super::cloud_runtime::Error::Busy);
+    answer["done"] = false.into();
+    answer["resend"] = (!busy).into();
+    answer["error"] = error.to_string().into();
+    answer["message"] = if busy {
+        "Recovery state is busy; poll this operation again. Nothing was started."
+    } else {
+        "Could not read recovery state. Repair the reported error, then resend the same Ensure Ready request. Nothing was started."
+    }
+    .into();
+    answer
 }

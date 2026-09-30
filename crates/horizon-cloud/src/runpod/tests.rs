@@ -26,6 +26,7 @@ use std::{
 };
 fn spec() -> WorkerSpec {
     WorkerSpec {
+        exact_placement: false,
         operation_id: "test-operation".into(),
         image_digest: format!("example/worker@sha256:{}", "a".repeat(64)),
         profile: crate::CloudConfig::parse(crate::EXAMPLE).unwrap().profiles["image-only"].clone(),

@@ -15,7 +15,7 @@ fn settings(settings: &Settings) -> Result<&super::super::settings::Hetzner> {
 
 /// The server types Horizon tries, in order; the spec keeps them as its CPU flavors.
 pub(super) fn cpu_flavors(machine: &Settings) -> Result<Vec<String>> {
-    Ok(settings(machine)?.server_types.clone())
+    settings(machine)?.types_for(machine.placement.as_ref())
 }
 
 /// The locations this cloud may run in, narrowed by its placement.
