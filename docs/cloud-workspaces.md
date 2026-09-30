@@ -327,7 +327,8 @@ right, with **Start cloud** and **Cancel** in the action bar under both. Pick a
 **Profile** from `.horizon/cloud.yml`; its kind decides between CPU and GPU workers.
 The profile's `min_cpu` and `min_memory_gb` are CPU resource minimums, and
 `min_gpu_memory_gb` is the GPU memory minimum. The picker names the limits and
-counts workers hidden by them. **Show workers below requirements** reveals those
+counts workers hidden by them. **Show workers below requirements** is unchecked
+by default and reveals those
 workers with a reason; they cannot be chosen. There are no separate default-size
 settings. Legacy `cpu` and `memory_gb` keys remain accepted as aliases with the
 same meaning. To migrate a profile, rename those keys without changing the values;
@@ -340,8 +341,9 @@ workers in stock where the cloud may go, or among every matching worker when non
 is. CPU workers are more powerful with more vCPUs and then more memory; GPU types
 rank by price, which follows their performance more closely than their memory does.
 Search and the **In stock only** filter are always visible above the full worker
-list, with a count of the results and workers hidden by requirements. Sold-out GPU
-types are listed by default. A CPU size is offered only when a
+list, with a count of the results and workers hidden by requirements. **In stock
+only** is checked by default; uncheck it to show sold-out workers. Opening the
+dialog or changing profiles restores these filter defaults. A CPU size is offered only when a
 flavor can hold the profile's container disk. A GPU profile always requests one
 explicit GPU type, the cheapest in stock to start with, which replaces the
 `gpu_types` setting for every attempt, retry and redeploy of that cloud and is

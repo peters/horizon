@@ -399,7 +399,9 @@ fn a_sold_out_gpu_preference_gives_way_to_one_in_stock_for_this_cloud() {
     // The cheapest type in stock is requested explicitly, for this cloud only.
     assert_eq!(app.cloud_prototype.production.placement.gpu_types, ["NVIDIA RTX A5000"]);
     assert!(has_label(&output, "RTX A5000"));
-    // The sold-out preference stays in the list and can still be chosen.
+    // The sold-out preference can be revealed and chosen without changing the default.
+    assert!(!has_label(&output, "RTX A6000"));
+    click(&ctx, &mut app, label_rect(&output, "In stock only").center());
     let output = tall_frame(&ctx, &mut app);
     let rows: Vec<_> = output
         .shapes

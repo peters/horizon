@@ -15,7 +15,6 @@ pub(super) mod summary;
 mod widgets;
 
 /// How the catalog is being browsed; none of it is part of the cloud.
-#[derive(Default)]
 pub(in crate::app::cloud_panel::production) struct State {
     search: String,
     in_stock_only: bool,
@@ -24,13 +23,21 @@ pub(in crate::app::cloud_panel::production) struct State {
     pub wait_for_stock: bool,
 }
 
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            search: String::new(),
+            in_stock_only: true,
+            show_below_minimums: false,
+            wait_for_stock: false,
+        }
+    }
+}
+
 impl State {
     /// A search for one kind of worker means nothing for another profile's.
-    pub(super) fn profile_changed(&mut self) {
-        self.search.clear();
-        self.in_stock_only = false;
-        self.show_below_minimums = false;
-        self.wait_for_stock = false;
+    pub(in crate::app::cloud_panel::production) fn profile_changed(&mut self) {
+        *self = Self::default();
     }
 }
 

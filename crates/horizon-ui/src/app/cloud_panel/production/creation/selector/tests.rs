@@ -147,6 +147,8 @@ fn cpu_workers_below_the_profile_are_hidden_and_picks_span_the_rest() {
 #[test]
 fn filters_are_discoverable_and_do_not_change_the_selection() {
     let mut form = form("cpu");
+    assert!(form.launch.selector.in_stock_only);
+    assert!(!form.launch.selector.show_below_minimums);
     let shown = catalog(&form).unwrap();
     assert!(shown.matching < shown.offers.len());
     let labels = render(&mut form);
@@ -161,7 +163,9 @@ fn filters_are_discoverable_and_do_not_change_the_selection() {
     assert!(labels.iter().any(|label| label == "US-1"));
     let before = (form.size, form.placement.clone());
     form.launch.selector.search = "No such worker".into();
-    form.launch.selector.in_stock_only = true;
+    form.launch.selector.in_stock_only = false;
+    form.launch.selector.show_below_minimums = true;
+    form.launch.selector.wait_for_stock = true;
     let labels = render(&mut form);
     assert!(
         labels
@@ -171,7 +175,22 @@ fn filters_are_discoverable_and_do_not_change_the_selection() {
     assert_eq!((form.size, form.placement.clone()), before);
     form.launch.selector.profile_changed();
     assert!(form.launch.selector.search.is_empty());
-    assert!(!form.launch.selector.in_stock_only && !form.launch.selector.show_below_minimums);
+    assert!(form.launch.selector.in_stock_only && !form.launch.selector.show_below_minimums);
+    assert!(!form.launch.selector.wait_for_stock);
+}
+
+#[test]
+fn stock_filter_defaults_to_hiding_sold_out_workers_without_changing_the_selection() {
+    let mut form = form("gpu");
+    let _ = render(&mut form);
+    let before = (form.size, form.placement.clone());
+    let labels = render(&mut form);
+    assert!(!labels.iter().any(|label| label == "A5000"));
+    assert!(labels.iter().any(|label| label == "A6000"));
+    form.launch.selector.in_stock_only = false;
+    let labels = render(&mut form);
+    assert!(labels.iter().any(|label| label == "A5000"));
+    assert_eq!((form.size, form.placement.clone()), before);
 }
 
 #[test]
