@@ -74,6 +74,15 @@ shell commands, files, or other MCP servers.
   device may still be held; check the provider before creating again). Such a panel reports `remote_target`,
   `remote_device` (model, OS version, hardware evidence), classic
   `WebDriver` and no network capture.
+- `browser_video` records sampled page pixels as a private AV1/WebM export.
+  `fps` is the requested sample rate; `effective_fps` is encoded frames divided
+  by active recording seconds (including repeated frames). `frames_dropped`
+  counts skipped scheduled samples; the tool explains when the host cannot keep up.
+  Encoding is CPU-bound; high quality, stronger compression and larger frames
+  may reduce the observed rate. A missed sample can omit a brief page state.
+  Frame timestamps preserve elapsed sample time, and pause excludes idle time.
+  Check the finalized stop result and decode the exact returned export path
+  before relying on a recording as evidence of short interactions.
 - `browser_visibility` shows or hides an existing panel without stopping its
   browser, ownership lease, network capture, or MCP control.
 - `browser_duplicate` opens the current URL in another panel sharing the source
