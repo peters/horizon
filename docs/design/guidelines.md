@@ -503,7 +503,7 @@ There are four levels, from back to front:
 ### Modal dialog
 
 Two form dialogs share one frame: the cloud creation dialog (up to 1180 wide)
-and the cloud accounts dialog (up to 580 wide). Small confirmations (such as
+and the cloud accounts dialog (up to 1060 wide). Small confirmations (such as
 closing a cloud) and the browser file chooser keep egui's default modal frame
 from the theme instead: window fill `PANEL_BG`, 1 px `BORDER_SUBTLE` outline and
 the popup shadow, without the 24 px margin below.
@@ -533,8 +533,19 @@ Cloud creation dialog specifics:
 
 Cloud accounts dialog specifics:
 
-- Global 8 x 8 `item_spacing`, no info chip, the description at the default
-  text size.
+- One page, no tabs. Heading 24 strong, a 13 `FG_SOFT` description, then a pinned
+  readiness banner above the scrolling cards. The banner is an `alpha(state, 24)`
+  fill with an `alpha(state, 90)` outline, radius 12: yellow while something is
+  left to do and the first thing is named, green ("Settings complete") when keys are
+  saved, the SSH identity is ready and every image repository has a saved pull-access
+  validation. Provider accounts are still checked when a cloud starts.
+- Cards (provider, agents, container registry, workspace) are `PANEL_BG`, 1 px
+  `BORDER_SUBTLE`, radius 12, margin 16, 16 apart, in two columns from 760 wide and
+  stacked below. A card has a 15 strong title, a 12 `FG_DIM` note and a status at the
+  right: a dot plus a word (`PALETTE_GREEN` saved or verified, `PALETTE_YELLOW` needs
+  something, `FG_DIM` off or optional). Color never stands alone.
+- A saved key is a masked well (`BG`, radius 8) with Replace; a key is never shown
+  back. Fields are 36 high with a 12 `FG_SOFT` label above.
 - A separator sits above the footer. The primary ("Save settings", or
   "Save and start" while continuing a first cloud) is 148 x 40 with a
   `blend(PANEL_BG_ALT, ACCENT, 0.35)` fill and the default label; `Cancel` is
