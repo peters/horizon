@@ -343,8 +343,11 @@ stays in each provider's currency. An incomplete catalog or missing exchange rat
 keeps the offers visible without claiming a global cheapest choice. The initial
 choice is the cheapest matching worker when the comparison is complete; explicit
 choices stay selected during refresh. Provider buttons narrow both the cards and
-full list. With **In stock only** checked, starting points prefer workers in stock
-where the cloud may go, falling back to matching workers when none are available.
+full list. A single-provider scope ranks in its billing currency without exchange
+rates; cross-provider ranking requires a current dated quote. With **In stock only**
+checked, starting points include only workers reported in stock, using the exact
+capacity check for the selected CPU size. If none match, all three starting points
+are empty. Uncheck it to include unavailable workers.
 Hetzner availability is advisory and creation rechecks the exact type and location. CPU workers are more powerful with more vCPUs and then more memory; GPU types
 rank by price, which follows their performance more closely than their memory does.
 Search and the **In stock only** filter are always visible above the full worker
