@@ -61,7 +61,7 @@ enum Message {
 }
 
 enum Answer {
-    Recorded(Submitted),
+    Recorded(Owner, Submitted),
     /// An Ensure Ready for a declared companion that has no cloud to bind.
     Missing(Owner, companions::Declaration),
 }
@@ -135,9 +135,8 @@ impl HorizonApp {
                 } => {
                     let (answer, started) = match outcome {
                         Ok(answer) => match *answer {
-                            Answer::Recorded(submitted) => {
-                                let (answer, started) = self.answer_submitted(&request, &source, submitted, ctx);
-                                (Ok(answer), started)
+                            Answer::Recorded(owner, submitted) => {
+                                self.answer_recorded(&request, &source, &owner, submitted, ctx)
                             }
                             Answer::Missing(owner, declaration) => {
                                 (self.answer_missing(&request, &source, owner, declaration), false)
@@ -176,16 +175,7 @@ impl HorizonApp {
         owner: Owner,
         declaration: companions::Declaration,
     ) -> Result<Value, String> {
-        let current = self
-            .cloud_prototype
-            .production
-            .companions
-            .entries
-            .get(source)
-            .is_some_and(|entry| entry.owner == owner);
-        if !current {
-            return Err("cloud_companion_unavailable: the workspace session changed; send the request again".into());
-        }
+        self.validate_companion_owner(source, &owner)?;
         let alias = request
             .cloud_companion
             .as_ref()
@@ -193,6 +183,36 @@ impl HorizonApp {
             .unwrap_or_default();
         let id = operation_id(request)?;
         Ok(self.request_companion_creation(owner, &alias, declaration, id))
+    }
+
+    fn validate_companion_owner(&self, source: &str, owner: &Owner) -> Result<(), String> {
+        if self
+            .cloud_prototype
+            .production
+            .companions
+            .entries
+            .get(source)
+            .is_some_and(|entry| &entry.owner == owner)
+        {
+            Ok(())
+        } else {
+            Err("cloud_companion_unavailable: the workspace session changed; send the request again".into())
+        }
+    }
+
+    fn answer_recorded(
+        &mut self,
+        request: &UsageRequest,
+        source: &str,
+        owner: &Owner,
+        submitted: Submitted,
+        ctx: &egui::Context,
+    ) -> (Result<Value, String>, bool) {
+        if let Err(error) = self.validate_companion_owner(source, owner) {
+            return (Err(error), false);
+        }
+        let (answer, started) = self.answer_submitted(request, source, submitted, ctx);
+        (Ok(answer), started)
     }
 
     /// The answer to a recorded request, continuing its operation unless it is a
@@ -457,11 +477,14 @@ fn submit(
         }
         error => error.to_string(),
     })?;
-    Ok(Answer::Recorded(Submitted {
-        operation,
-        context,
-        alias,
-    }))
+    Ok(Answer::Recorded(
+        owner.clone(),
+        Submitted {
+            operation,
+            context,
+            alias,
+        },
+    ))
 }
 
 /// The declaration of a separate-cloud companion that no cloud in the workspace matches.

@@ -165,7 +165,7 @@ fn fail_before_start(runtime: &mut Runtime, action: Action, error: String) {
 }
 
 /// Resets what the card shows for a newly started worker operation.
-fn begin_operation(runtime: &mut Runtime, action: Action) {
+pub(super) fn begin_operation(runtime: &mut Runtime, action: Action) {
     if action == Action::Delete {
         // Until core reports its first step, the step it will start with stands
         // in, so Cancel shows only when that step can still be cancelled.

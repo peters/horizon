@@ -4,6 +4,8 @@ use super::{
     cloud_runtime, hint, lifecycle,
 };
 
+use super::super::super::lifecycle::{Action as CardAction, begin_operation};
+
 impl HorizonApp {
     pub(super) fn execute_on_card(
         &mut self,
@@ -57,11 +59,8 @@ impl HorizonApp {
                 runtime.desktop = None;
                 runtime.confirmation = super::super::super::Confirmation::None;
                 runtime.rebuild = None;
-                if runtime.progress.is_deletion() {
-                    runtime.progress.reset();
-                }
+                begin_operation(runtime, if stop { CardAction::Stop } else { CardAction::Resume });
                 runtime.error = None;
-                runtime.stage = Some(if stop { Stage::Stopping } else { Stage::Provision });
                 let (tx, rx) = channel();
                 runtime.receiver = Some(rx);
                 runtime.sender = Some(tx.clone());

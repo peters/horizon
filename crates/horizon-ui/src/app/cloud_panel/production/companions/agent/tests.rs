@@ -347,3 +347,138 @@ fn a_missing_companion_found_before_a_session_change_is_not_offered_after_it() {
     let asked = app.answer_missing(&request, "source", current, declaration).unwrap();
     assert_eq!(asked["phase"], "confirmation_required");
 }
+
+#[test]
+fn recorded_answers_cannot_restore_prompts_after_a_session_switch() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    app.cloud_prototype.groups = CloudGroups(vec![cloud(1, "source", "workspace"), cloud(2, "target", "workspace")]);
+    let state = &mut app.cloud_prototype.production.companions;
+    state.sync(Some("session"), &app.cloud_prototype.groups);
+    let previous = state.entries["source"].owner.clone();
+    let context = Context {
+        source: Target {
+            scope: previous.scope.clone(),
+            cloud_id: "source".into(),
+            declaration: Declaration::new("example/source", "dev"),
+        },
+        declarations: BTreeMap::from([("consumer".into(), Declaration::new("example/consumer", "dev"))]),
+        inventory: Vec::new(),
+    };
+    state.set_session(Some("other"));
+    state.sync(Some("other"), &app.cloud_prototype.groups);
+    for action in ["status", "ensure_ready"] {
+        let id = OperationId::generate();
+        let request: UsageRequest = serde_json::from_value(json!({
+            "request_id":"companion", "actor":"horizon:agent", "host_instance":"host",
+            "deadline_at_millis":i64::MAX, "claimed":true,
+            "cloud_companion":{"action":action,"cloud":"source","alias":"consumer","operation_id":id}
+        }))
+        .unwrap();
+        let submitted = || {
+            let mut submitted = Submitted {
+                operation: operation(
+                    intent::Action::EnsureReady,
+                    intent::State::Submitted,
+                    Phase::ConfirmationRequired,
+                ),
+                context: context.clone(),
+                alias: "consumer".into(),
+            };
+            submitted.operation.intent.operation_id = id;
+            submitted
+        };
+        let (answer, started) = app.answer_recorded(&request, "source", &previous, submitted(), &ctx);
+        assert!(answer.unwrap_err().starts_with("cloud_companion_unavailable"));
+        assert!(!started);
+        assert!(
+            app.cloud_prototype
+                .production
+                .companions
+                .agent
+                .creation
+                .answer("source", "consumer", None, id)
+                .is_none()
+        );
+        let current = app.cloud_prototype.production.companions.entries["source"]
+            .owner
+            .clone();
+        let (answer, started) = app.answer_recorded(&request, "source", &current, submitted(), &ctx);
+        assert_eq!(answer.unwrap()["phase"], "confirmation_required");
+        assert!(!started);
+        assert!(
+            app.cloud_prototype
+                .production
+                .companions
+                .agent
+                .creation
+                .answer("source", "consumer", None, id)
+                .is_some()
+        );
+        app.cloud_prototype.production.companions.agent.discard_creations();
+    }
+}
+
+#[test]
+fn agent_card_attempts_replace_old_operation_and_progress() {
+    use super::super::super::{Runtime, lifecycle::Action};
+    for (stop, action, stage) in [
+        (false, Action::Resume, Stage::Provision),
+        (true, Action::Stop, Stage::Stopping),
+    ] {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let root = temp.path().join("clouds");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(
+            root.join("settings.json"),
+            serde_json::to_vec(&json!({
+                "runpod_key_file":root.join("key"), "ssh_identity_file":root.join("identity"),
+                "docker_config":root.join("docker"), "registry_pull_auth_id":null,
+                "cpu_flavors":["cpu3c"], "gpu_types":[]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        app.cloud_prototype.root = Some(root);
+        app.cloud_prototype.groups =
+            CloudGroups(vec![cloud(1, "source", "workspace"), cloud(2, "target", "workspace")]);
+        app.cloud_prototype
+            .production
+            .companions
+            .sync(Some("session"), &app.cloud_prototype.groups);
+        let owner = app.cloud_prototype.production.companions.entries["source"]
+            .owner
+            .clone();
+        let context = Context {
+            source: Target {
+                scope: owner.scope,
+                cloud_id: "source".into(),
+                declaration: Declaration::new("example/source", "dev"),
+            },
+            declarations: BTreeMap::new(),
+            inventory: Vec::new(),
+        };
+        let mut runtime = Runtime {
+            operation: Some(Action::Deploy),
+            ..Runtime::default()
+        };
+        runtime.progress.stage(Stage::Ready, Instant::now());
+        let previous_attempt = runtime.progress.attempt();
+        app.cloud_prototype.production.runtimes.insert(2, runtime);
+        app.execute_on_card(
+            "source",
+            "target",
+            ("consumer", stop),
+            OperationId::generate(),
+            context,
+            &egui::Context::default(),
+        )
+        .unwrap();
+        let runtime = &app.cloud_prototype.production.runtimes[&2];
+        assert_eq!(runtime.operation, Some(action));
+        assert_eq!(runtime.stage, Some(stage));
+        assert_eq!(runtime.progress.attempt(), previous_attempt + 1);
+        assert!(runtime.progress.elapsed().is_none());
+        assert!(runtime.progress.ended_in(Stage::Ready).is_none());
+    }
+}
