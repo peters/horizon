@@ -65,7 +65,8 @@ class DetectionTests(unittest.TestCase):
 
     def test_source_and_manifest_changes_gate_the_release_matrix(self):
         for path in ["crates/horizon-ui/src/app/mod.rs", "Cargo.toml", "Cargo.lock",
-                     "rust-toolchain.toml", "assets/fonts/regular.ttf"]:
+                     "rust-toolchain.toml", "assets/fonts/regular.ttf",
+                     "scripts/install-ci-video-build-tools.sh"]:
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)

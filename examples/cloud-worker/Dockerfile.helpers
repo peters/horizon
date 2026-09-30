@@ -8,7 +8,7 @@ ARG HORIZON_REVISION
 FROM rust:1.98.1-slim-bookworm@sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730 AS build
 ARG HORIZON_REVISION
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential pkg-config libssl-dev libxkbcommon-dev git ca-certificates python3 \
+        build-essential pkg-config nasm libssl-dev libxkbcommon-dev git ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 # RUSTUP_TOOLCHAIN keeps the image's pinned compiler instead of the repository's stable channel.
 # Debian 12 links the helpers against glibc 2.36, so they run on any base the checker accepts.

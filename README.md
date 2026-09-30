@@ -289,7 +289,7 @@ git lfs pull
 cargo run --release
 ```
 
-> Requires **Git LFS** for bundled assets and **Rust 1.95+**. Linux needs system headers for GPU rendering — see [AGENTS.md](AGENTS.md#prerequisites) for per-distro install commands.
+> Requires **Git LFS** for bundled assets and **Rust 1.95+**. AV1 recording builds on x86_64 also need **NASM 2.15+** on `PATH`; ARM64 uses the platform C compiler's assembler. Linux needs system headers for GPU rendering — see [AGENTS.md](AGENTS.md#prerequisites) for installation commands.
 
 The build checks required embedded fonts and stops if one is missing or still a Git LFS pointer. Run `git lfs install` and `git lfs pull` from the repository root, then rebuild. If a font is still missing, restore it from a complete checkout with LFS assets; source archives must also contain the hydrated fonts.
 

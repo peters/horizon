@@ -42,7 +42,7 @@ while IFS= read -r path; do
       ;;
   esac
   case "$path" in
-    .github/workflows/ci.yml|scripts/package-release-asset.sh|rust-toolchain.toml|Cargo.toml|Cargo.lock|assets/*|crates/*)
+    .github/workflows/ci.yml|scripts/package-release-asset.sh|scripts/install-ci-video-build-tools.sh|rust-toolchain.toml|Cargo.toml|Cargo.lock|assets/*|crates/*)
       release_inputs=true
       ;;
   esac

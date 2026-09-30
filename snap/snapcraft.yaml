@@ -44,6 +44,7 @@ parts:
       - libvulkan-dev
       - libgl-dev
       - cmake
+      - nasm
     stage-packages:
       - libegl1
       - libfontconfig1

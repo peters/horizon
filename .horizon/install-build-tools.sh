@@ -49,7 +49,7 @@ printf 'Package: firefox*\nPin: origin packages.mozilla.org\nPin-Priority: 1000\
 apt-get update
 apt-get install -y --no-install-recommends \
     openssh-server tmux git git-lfs gh rsync tini util-linux \
-    build-essential pkg-config cmake clang libssl-dev \
+    build-essential pkg-config cmake clang nasm libssl-dev \
     libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libxcb-render0-dev libxcb-shape0-dev \
     libxcb-xfixes0-dev libvulkan-dev libgl-dev libasound2-dev \
     mesa-vulkan-drivers vulkan-tools glslc \

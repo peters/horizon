@@ -110,6 +110,8 @@ jobs:
         run: python3 scripts/check-browser-engine-dependencies.py
       - name: Test remote click geometry
         run: node --test scripts/browser-smoke/remote_click_geometry.test.cjs
+      - name: Install video assembler
+        run: bash scripts/install-ci-video-build-tools.sh
       - name: Test and lint standalone engine
         run: |
           for engine_features in "" video-capture; do
@@ -205,6 +207,8 @@ jobs:
       # Rust surface is identical to `speech` (they only toggle native
       # backends). cpal needs the ALSA headers on Linux.
       - run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
+      - name: Install video assembler
+        run: bash scripts/install-ci-video-build-tools.sh
       - name: Blocking tier
         run: cargo clippy --locked --all-targets --features speech,trace-profiling -- -D warnings
       # `--features speech` so the unwrap/expect ban also covers the speech
@@ -259,6 +263,9 @@ jobs:
       - name: Link the Swift runtime in macOS test binaries
         if: startsWith(matrix.os, 'macos-')
         run: echo "RUSTFLAGS=${RUSTFLAGS} -C link-arg=-Wl,-rpath,/usr/lib/swift" >> "$GITHUB_ENV"
+      - name: Install video assembler
+        shell: bash
+        run: bash scripts/install-ci-video-build-tools.sh
       - run: cargo test --locked --workspace
       # `speech` is declared by horizon-ui alone, so every other crate builds
       # identically with and without it and a second `--workspace` pass only
@@ -318,6 +325,9 @@ jobs:
           else
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Install video assembler
+        shell: bash
+        run: bash scripts/install-ci-video-build-tools.sh
       - run: cargo test --locked --workspace
       # The speech feature is advertised on Windows too (WASAPI capture via
       # cpal); build it so a Windows-only break cannot pass CI. Only the build
@@ -412,6 +422,9 @@ jobs:
           fi
       # The uploaded asset is the horizon binary. The other workspace bins are
       # outside its dependency graph, and each one repeated a thin-LTO link.
+      - name: Install video assembler
+        shell: bash
+        run: bash scripts/install-ci-video-build-tools.sh
       - run: cargo build --locked --release -p horizon-ui
       - name: Package release asset
         shell: bash
