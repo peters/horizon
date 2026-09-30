@@ -45,6 +45,7 @@ fn private_registry_intent_survives_failed_preparation_and_missing_bindings() {
             matches!(prepare_registry(&request, &store, &mut state), Err(Error::Invalid(message)) if message.contains("binding is missing"))
         );
         state.spec = Some(WorkerSpec {
+            exact_placement: false,
             operation_id: state.cloud_id.clone(),
             image_digest: format!("{}@sha256:{}", state.profile.image, "a".repeat(64)),
             profile: state.profile.clone(),
@@ -320,6 +321,7 @@ fn size_changes_apply_until_a_worker_is_requested() {
     let mut state = initial_state(&request, &store).unwrap();
     // A definite provider rejection keeps the built image's spec with its old size.
     state.spec = Some(WorkerSpec {
+        exact_placement: false,
         operation_id: "resize".into(),
         image_digest: format!("registry.example.com/worker@sha256:{}", "a".repeat(64)),
         profile: state.profile.clone(),
@@ -475,6 +477,7 @@ fn local_preparation_and_unsent_replacements_preserve_mutation_evidence() {
         if matches!(failure, "prepared" | "built") {
             state.stage = Stage::Ready;
             state.spec = Some(WorkerSpec {
+                exact_placement: false,
                 operation_id: state.cloud_id.clone(),
                 image_digest: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
                 profile: state.profile.clone(),

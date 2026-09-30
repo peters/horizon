@@ -1,283 +1,279 @@
-//! New cloud with more than one provider: the choice, and the fields each provider's
-//! description shows or hides.
+//! Shared provider comparison, selection and launch persistence.
 use super::*;
+use crate::app::cloud_panel::production::creation::selector;
+use horizon_core::cloud_runtime::offers::exchange::{OffsetDateTime, Rates};
+use std::collections::BTreeMap;
 
-#[test]
-fn hetzner_is_offered_beside_runpod_with_euro_prices_and_a_location_choice() {
-    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-        runtime_state: Box::new(RuntimeState::default()),
-    });
-    prepare(&mut app, &ctx, temp.path());
-    let output = tall_frame(&ctx, &mut app);
-    assert!(
-        !has_label(&output, "Provider"),
-        "no provider choice without a Hetzner binding"
-    );
-    let catalog = serde_json::from_value(serde_json::json!({
-        "offers": [
-            {"server_type": "cx33", "location": "hel1", "cores": 4, "memory_gb": 8.0, "disk_gb": 80,
-             "dedicated": false, "hourly_eur": 0.0136, "monthly_eur": 8.49, "available": false, "recommended": false},
-            {"server_type": "cpx32", "location": "hel1", "cores": 4, "memory_gb": 8.0, "disk_gb": 160,
-             "dedicated": false, "hourly_eur": 0.0569, "monthly_eur": 35.49, "available": true, "recommended": true},
-            {"server_type": "cx33", "location": "nbg1", "cores": 4, "memory_gb": 8.0, "disk_gb": 80,
-             "dedicated": false, "hourly_eur": 0.0136, "monthly_eur": 8.49, "available": true, "recommended": false},
-            {"server_type": "cx23", "location": "nbg1", "cores": 2, "memory_gb": 4.0, "disk_gb": 40,
-             "dedicated": false, "hourly_eur": 0.0088, "monthly_eur": 5.49, "available": true, "recommended": false}
-        ],
-        "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {"hel1": 0.5, "nbg1": 0.5},
-        "ipv4_hour_eur": {"hel1": 0.0008, "nbg1": 0.0008}, "regions": {"hel1": "EUROPE", "nbg1": "EUROPE"},
+fn catalog(available: bool) -> horizon_core::cloud_runtime::prices::HetznerCatalog {
+    serde_json::from_value(serde_json::json!({
+        "offers":[
+          {"server_type":"cx33","location":"hel1","cores":4,"memory_gb":8.0,"disk_gb":80,
+           "dedicated":false,"hourly_eur":0.0136,"monthly_eur":8.49,"available":available,"recommended":false},
+          {"server_type":"cpx32","location":"hel1","cores":4,"memory_gb":8.0,"disk_gb":160,
+           "dedicated":false,"hourly_eur":0.0569,"monthly_eur":35.49,"available":true,"recommended":true}],
+        "volume_gb_month_eur":0.0572,"ipv4_month_eur":{"hel1":0.5},"ipv4_hour_eur":{"hel1":0.0008},
+        "regions":{"hel1":"EUROPE"}
     }))
-    .unwrap();
-    app.cloud_prototype
-        .production
-        .prices
-        .hetzner
-        .answered_with_types(Some(catalog), &["cx23", "cx33", "cpx32"]);
-    let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(&output, "Provider"));
-    assert!(has_label(&output, "RunPod"), "the heading names the provider");
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
+    .unwrap()
+}
+
+fn hetzner_binding(app: &mut HorizonApp) {
+    app.cloud_prototype.production.prices.hetzner.answered_with_policy(
+        Some(catalog(true)),
+        &["cx33", "cpx32"],
+        &["hel1"],
     );
-    assert_eq!(
-        app.cloud_prototype.production.provider.map(|provider| provider.id),
-        Some("hetzner")
-    );
-    // The dialog grows to its new content on the next frame.
-    tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(&output, "Hetzner"), "the heading names the provider");
-    assert!(
-        has_label(&output, "8 GB"),
-        "RunPod flavor families are not shown for Hetzner"
-    );
-    // cx23 is too small for 4 vCPU / 8 GB, so cx33 is the first configured type that fits.
-    assert!(has_label(&output, "cx33 · 4 vCPU · 8 GB · €0.0136/h"));
-    assert!(has_label(&output, "If it is sold out: cpx32 at €0.0569/h."));
-    // 20 GB workspace volume by default: €1.14 kept while stopped. The cap is the shown
-    // type's in the location deployment tries first, and "any" says another can cost more.
-    assert!(has_label(
-        &output,
-        "On cx33 in hel1: at most €10.13 a month running, with the workspace volume and IPv4 address. €1.14 a month stopped: only the volume is kept."
-    ));
-    assert!(painted(&output).contains("Horizon tries this location first"));
-    assert!(has_label(
-        &output,
-        "Hetzner lists this type as unavailable here; creation confirms whether it can be rented."
-    ));
-    assert!(
-        !has_label(&output, "Region"),
-        "RunPod regions are not shown for Hetzner"
-    );
-    // The provider choice itself names the other provider's billing; nothing else may.
-    assert_absent(
-        &output,
-        &["$", "compute-optimized", "Secure Cloud", "Any region", "data center"],
-        "US dollars",
-    );
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "nbg1 · Europe\ncx33 · €0.0136/h").center(),
-    );
-    assert_eq!(app.cloud_prototype.production.placement.data_centers, ["nbg1"]);
+    app.cloud_prototype.production.prices.exchange.rates = Some(Rates {
+        date: OffsetDateTime::now_utc().date().to_string(),
+        usd_per_unit: BTreeMap::from([("USD".into(), 1.0), ("EUR".into(), 1.2)]),
+    });
+}
+
+fn selected(app: &HorizonApp) -> horizon_core::cloud_runtime::offers::Offer {
+    let catalog = selector::catalog(&app.cloud_prototype.production).unwrap();
+    catalog.offers[catalog.selected.unwrap()].clone()
+}
+
+fn painted(output: &egui::FullOutput) -> String {
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(text) => Some(text.galley.job.text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
-fn a_hetzner_cloud_records_its_provider_and_location_and_switching_back_clears_it() {
+fn both_providers_are_listed_and_cheapest_chooses_an_exact_hetzner_worker() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
     hetzner_binding(&mut app);
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
-    );
     tall_frame(&ctx, &mut app);
     let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "hel1 · Europe\ncx33 · €0.0136/h").center(),
+    let text = painted(&output);
+    assert!(
+        text.contains("All providers") && text.contains("RunPod") && text.contains("Hetzner"),
+        "{text}"
     );
+    assert!(text.contains("ECB rates dated") && text.contains("€"), "{text}");
+    let catalog = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(catalog.complete);
+    let offer = &catalog.offers[catalog.picks.cheapest.unwrap()];
+    assert_eq!(
+        (offer.provider, offer.id.as_str(), offer.location.as_deref()),
+        ("Hetzner", "cx33", Some("hel1"))
+    );
+    click(&ctx, &mut app, label_rect(&output, "Hetzner · cx33 · hel1").center());
+    tall_frame(&ctx, &mut app);
+    assert_eq!(selected(&app).provider, "Hetzner");
+    assert_eq!(app.cloud_prototype.production.placement.cpu_types, ["cx33"]);
     assert_eq!(app.cloud_prototype.production.placement.data_centers, ["hel1"]);
-    // Switching back to RunPod clears the Hetzner location.
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "RunPod\nUS dollars · CPU and GPU").center(),
-    );
-    assert_eq!(
-        app.cloud_prototype.production.provider.map(|provider| provider.id),
-        Some("runpod")
-    );
-    assert!(app.cloud_prototype.production.placement.is_any());
+    assert!(painted(&tall_frame(&ctx, &mut app)).contains("no fallback is rented"));
 }
 
 #[test]
-fn any_location_shows_the_offer_deployment_tries_first_in_the_settings_order() {
-    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-        runtime_state: Box::new(RuntimeState::default()),
-    });
-    prepare(&mut app, &ctx, temp.path());
-    let offer = |location: &str, hourly: f64| {
-        serde_json::json!({"server_type": "cx33", "location": location, "cores": 4, "memory_gb": 8.0, "disk_gb": 80,
-            "dedicated": false, "hourly_eur": hourly, "monthly_eur": 8.49, "available": true, "recommended": false})
-    };
-    let catalog = serde_json::from_value(serde_json::json!({
-        "offers": [offer("hel1", 0.0136), offer("nbg1", 0.02)],
-        "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {"hel1": 0.5, "nbg1": 0.5},
-        "ipv4_hour_eur": {"hel1": 0.0008, "nbg1": 0.0008}, "regions": {"hel1": "EUROPE", "nbg1": "EUROPE"},
-    }))
-    .unwrap();
-    // The settings try nbg1 first, although hel1 is cheaper.
-    app.cloud_prototype
-        .production
-        .prices
-        .hetzner
-        .answered_with_policy(Some(catalog), &["cx33"], &["nbg1", "hel1"]);
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
-    );
-    tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(&output, "cx33 · 4 vCPU · 8 GB · €0.0200/h"));
-    assert!(painted(&output).contains("On cx33 in nbg1"));
-}
-
-#[test]
-fn a_hetzner_cloud_is_created_with_its_provider_and_location() {
+fn launch_captures_type_location_and_provider_and_runpod_selection_clears_them() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
     hetzner_binding(&mut app);
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    selector::choose(
+        &mut app.cloud_prototype.production,
+        false,
+        &shown.offers[shown.picks.cheapest.unwrap()],
     );
-    tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "hel1 · Europe\ncx33 · €0.0136/h").center(),
+    let runpod = shown
+        .offers
+        .iter()
+        .take(shown.matching)
+        .find(|offer| offer.provider == "RunPod")
+        .unwrap();
+    selector::choose(&mut app.cloud_prototype.production, false, runpod);
+    assert!(app.cloud_prototype.production.placement.cpu_types.is_empty());
+    assert!(app.cloud_prototype.production.placement.data_centers.is_empty());
+    selector::choose(
+        &mut app.cloud_prototype.production,
+        false,
+        &shown.offers[shown.picks.cheapest.unwrap()],
     );
     let output = tall_frame(&ctx, &mut app);
     click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
-    super::finish_creation(&ctx, &mut app);
+    finish_creation(&ctx, &mut app);
     let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
     assert_eq!(launch.profile.provider, "hetzner");
+    assert_eq!(launch.placement.cpu_types, ["cx33"]);
     assert_eq!(launch.placement.data_centers, ["hel1"]);
-    assert_eq!(
-        app.cloud_prototype
-            .groups
-            .0
-            .last()
-            .unwrap()
-            .environment
-            .provider
-            .as_deref(),
-        Some("hetzner")
-    );
+    let roundtrip: horizon_core::cloud_panel::Placement =
+        serde_json::from_value(serde_json::to_value(&launch.placement).unwrap()).unwrap();
+    assert_eq!(roundtrip, launch.placement);
 }
 
 #[test]
-fn hetzner_fields_stay_consistent_as_its_catalog_and_the_profile_change() {
+fn a_refresh_never_substitutes_a_different_worker_for_a_removed_choice() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
     hetzner_binding(&mut app);
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    selector::choose(
+        &mut app.cloud_prototype.production,
+        false,
+        &shown.offers[shown.picks.cheapest.unwrap()],
     );
-    tall_frame(&ctx, &mut app);
+    let previous = app.cloud_prototype.production.placement.clone();
+    let mut removed = catalog(true);
+    removed.offers.retain(|offer| offer.server_type != "cx33");
+    app.cloud_prototype
+        .production
+        .prices
+        .hetzner
+        .answered_with_types(Some(removed), &["cx33", "cpx32"]);
     let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "hel1 · Europe\ncx33 · €0.0136/h").center(),
-    );
-    assert_eq!(app.cloud_prototype.production.placement.data_centers, ["hel1"]);
-    // A refreshed catalog without the chosen location clears it, so creation never goes
-    // somewhere other than the offer shown.
-    let catalog = serde_json::from_value(serde_json::json!({
-        "offers": [{"server_type": "cx33", "location": "nbg1", "cores": 4, "memory_gb": 8.0, "disk_gb": 80,
-            "dedicated": false, "hourly_eur": 0.0136, "monthly_eur": 8.49, "available": true, "recommended": true}],
-        "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {"nbg1": 0.5}, "ipv4_hour_eur": {"nbg1": 0.0008},
-        "regions": {"nbg1": "EUROPE"},
-    }))
-    .unwrap();
-    let production = &mut app.cloud_prototype.production;
-    production.prices.hetzner.answered_with_types(Some(catalog), &["cx33"]);
+    assert_eq!(app.cloud_prototype.production.placement, previous);
+    assert!(painted(&output).contains("selected worker is no longer offered"));
+    assert!(!crate::app::cloud_panel::production::creation::can_submit(
+        &app.cloud_prototype.production
+    ));
+}
+
+#[test]
+fn missing_or_stale_rates_keep_native_offers_without_a_cheapest_claim() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    app.cloud_prototype.production.prices.exchange.rates = None;
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(!shown.complete && shown.picks.cheapest.is_none());
+    assert!(shown.offers.iter().any(|offer| offer.provider == "RunPod"));
+    assert!(shown.offers.iter().any(|offer| offer.provider == "Hetzner"));
+    assert!(painted(&tall_frame(&ctx, &mut app)).contains("Comparison incomplete"));
+    hetzner_binding(&mut app);
+    app.cloud_prototype
+        .production
+        .prices
+        .exchange
+        .rates
+        .as_mut()
+        .unwrap()
+        .date = "2000-01-01".into();
+    assert!(!selector::catalog(&app.cloud_prototype.production).unwrap().complete);
+}
+
+#[test]
+fn a_hetzner_only_machine_selects_the_cheapest_matching_worker() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    app.cloud_prototype.production.prices.runpod_key_missing();
     tall_frame(&ctx, &mut app);
-    assert!(app.cloud_prototype.production.placement.is_any());
-    // A size RunPod does not offer is Hetzner's to judge: its card shows the server type
-    // that fits, and RunPod's size warning appears only once RunPod is chosen again.
-    let production = &mut app.cloud_prototype.production;
-    let profile = production
+    tall_frame(&ctx, &mut app);
+    assert_eq!(selected(&app).provider, "Hetzner");
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(shown.offers.iter().all(|offer| offer.provider == "Hetzner"));
+}
+
+#[test]
+fn unsupported_providers_do_not_block_gpu_comparisons() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    app.cloud_prototype.production.prices.hetzner.failed("unreachable");
+    app.cloud_prototype
+        .production
         .profiles
         .as_mut()
         .unwrap()
         .profiles
         .get_mut("development")
-        .unwrap();
-    profile.cpu = 3;
+        .unwrap()
+        .gpu = true;
     tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    assert!(
-        has_label(&output, "cx33 · 4 vCPU · 8 GB · €0.0136/h"),
-        "{}",
-        painted(&output)
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(shown.complete && shown.picks.cheapest.is_some());
+    assert!(shown.offers.iter().all(|offer| offer.provider == "RunPod"));
+}
+
+#[test]
+fn container_disk_minimums_disable_an_incompatible_chosen_server() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    selector::choose(
+        &mut app.cloud_prototype.production,
+        false,
+        &shown.offers[shown.picks.cheapest.unwrap()],
     );
-    assert!(!painted(&output).contains("RunPod offers no CPU worker"));
-    // Hetzner's sizes come from its configured server types, not RunPod's flavors: the
-    // profile's own 3 vCPU and cx33's 4 vCPU, with 8 GB, and no RunPod-only size.
-    for label in ["3 vCPU", "4 vCPU", "8 GB"] {
-        assert!(has_label(&output, label), "{label}: {}", painted(&output));
-    }
-    assert!(!has_label(&output, "2 vCPU") && !has_label(&output, "16 vCPU"));
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "RunPod\nUS dollars · CPU and GPU").center(),
-    );
+    app.cloud_prototype
+        .production
+        .profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("development")
+        .unwrap()
+        .storage
+        .container_gb = 81;
     tall_frame(&ctx, &mut app);
-    // RunPod offers larger sizes, and its own size warning names the 3 vCPU profile's.
-    assert!(
-        painted(&tall_frame(&ctx, &mut app))
-            .contains("Choose a CPU and memory size that supports this container disk before starting.")
+    assert!(!crate::app::cloud_panel::production::creation::can_submit(
+        &app.cloud_prototype.production
+    ));
+    assert_eq!(app.cloud_prototype.production.placement.cpu_types, ["cx33"]);
+    app.cloud_prototype
+        .production
+        .profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("development")
+        .unwrap()
+        .storage
+        .container_gb = 80;
+    tall_frame(&ctx, &mut app);
+    assert!(crate::app::cloud_panel::production::creation::can_submit(
+        &app.cloud_prototype.production
+    ));
+}
+
+#[test]
+fn failed_refresh_keeps_choices_visible_and_selection_unchanged() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    selector::choose(
+        &mut app.cloud_prototype.production,
+        false,
+        &shown.offers[shown.picks.cheapest.unwrap()],
     );
-    // A binding whose catalog could not be fetched still offers the choice, with the reason.
+    let previous = app.cloud_prototype.production.placement.clone();
     app.cloud_prototype
         .production
         .prices
         .hetzner
-        .failed("Hetzner answered 503");
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
-    );
+        .refresh_failed("unreachable");
     tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(&output, "Hetzner prices unavailable: Hetzner answered 503"));
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(!shown.complete && shown.offers.iter().any(|offer| offer.provider == "Hetzner"));
+    assert_eq!(app.cloud_prototype.production.placement, previous);
 }
 
 #[test]
@@ -303,48 +299,21 @@ fn a_launch_is_refused_when_the_chosen_provider_does_not_accept_the_profile() {
 }
 
 #[test]
-fn a_hetzner_only_machine_offers_only_hetzner_and_never_moves_a_runpod_profile_on_its_own() {
+fn a_size_is_kept_by_the_chosen_providers_rules() {
+    use crate::app::cloud_panel::production::creation::provider::sized;
+    use horizon_core::cloud_runtime::provider::{HETZNER, RUNPOD};
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
-    // As the price fetch finds it on a machine set up for Hetzner alone.
-    app.cloud_prototype.production.prices.runpod_key_missing();
-    hetzner_binding(&mut app);
-    let groups = app.cloud_prototype.groups.0.len();
-    tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    // The profile names RunPod, so the one usable provider is offered, not chosen.
-    assert!(has_label(&output, "Provider"));
-    assert!(painted(&output).contains("which this machine has no credentials for"));
-    assert!(!has_label(&output, "RunPod\nUS dollars · CPU and GPU"));
-    assert!(app.cloud_prototype.production.provider.is_none());
-    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
-    tall_frame(&ctx, &mut app);
-    // Refused before anything is recorded or validated.
-    assert!(app.cloud_prototype.production.pending_creation.is_none());
+    let profile = app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["development"].clone();
+    // 48 vCPU / 192 GB is a Hetzner server size but no RunPod flavor.
+    let hetzner = sized(&HETZNER, &profile, Some((48, 192))).unwrap();
     assert_eq!(
-        app.cloud_prototype.groups.0.len(),
-        groups,
-        "nothing is recorded for RunPod"
+        (hetzner.provider.as_str(), hetzner.cpu, hetzner.memory_gb),
+        ("hetzner", 48, 192)
     );
-    assert_eq!(
-        app.cloud_prototype.error.take().as_deref(),
-        Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING)
-    );
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
-    );
-    tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    assert!(!painted(&output).contains("which this machine has no credentials for"));
-    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
-    super::finish_creation(&ctx, &mut app);
-    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
-    assert_eq!(launch.profile.provider, "hetzner");
+    assert!(sized(&RUNPOD, &profile, Some((48, 192))).is_err());
 }
 
 #[test]
@@ -371,262 +340,36 @@ fn a_runpod_cloud_waits_for_the_first_check_of_the_runpod_key() {
     assert_eq!(launch.profile.provider, "runpod");
 }
 
-/// A Hetzner catalog as the running Horizon would have it with a binding.
-fn hetzner_binding(app: &mut HorizonApp) {
-    let catalog = serde_json::from_value(serde_json::json!({
-        "offers": [{"server_type": "cx33", "location": "hel1", "cores": 4, "memory_gb": 8.0, "disk_gb": 80,
-            "dedicated": false, "hourly_eur": 0.0136, "monthly_eur": 8.49, "available": true, "recommended": true}],
-        "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {"hel1": 0.5}, "ipv4_hour_eur": {"hel1": 0.0008},
-        "regions": {"hel1": "EUROPE"},
-    }))
-    .unwrap();
-    app.cloud_prototype
-        .production
-        .prices
-        .hetzner
-        .answered_with_types(Some(catalog), &["cx33"]);
-}
-
-/// Every painted text, joined, for checking that a provider's own terms never appear.
-fn painted(output: &egui::FullOutput) -> String {
-    output
+#[test]
+fn runpod_filter_can_rank_without_foreign_exchange_rates() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    app.cloud_prototype.production.prices.exchange.rates = None;
+    let output = tall_frame(&ctx, &mut app);
+    assert!(!selector::catalog(&app.cloud_prototype.production).unwrap().complete);
+    let provider_button = output
         .shapes
         .iter()
         .filter_map(|shape| match &shape.shape {
-            Shape::Text(text) => Some(text.galley.job.text.clone()),
+            Shape::Text(text) if text.galley.job.text == "RunPod" => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()))
+            }
             _ => None,
         })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-#[test]
-fn runpod_shows_only_its_own_fields_and_hetzner_terms_never_appear() {
-    use horizon_core::cloud_runtime::prices::{CpuFlavorPrice, DataCenter, PriceList, RUNPOD_STORAGE};
-    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-        runtime_state: Box::new(RuntimeState::default()),
-    });
-    prepare(&mut app, &ctx, temp.path());
-    let list = PriceList {
-        provider: "RunPod",
-        cpu: vec![CpuFlavorPrice {
-            id: "cpu3c".into(),
-            name: "Compute-Optimized".into(),
-            per_vcpu_hour: 0.03,
-        }],
-        gpus: Vec::new(),
-        data_centers: vec![
-            DataCenter {
-                id: "EU-RO-1".into(),
-                region: "EUROPE".into(),
-                workspace_storage: true,
-                high_performance_storage: false,
-                cpus: Vec::new(),
-                gpus: Vec::new(),
-            },
-            DataCenter {
-                id: "US-MO-2".into(),
-                region: "NORTH_AMERICA".into(),
-                workspace_storage: true,
-                high_performance_storage: false,
-                cpus: Vec::new(),
-                gpus: Vec::new(),
-            },
-        ],
-        regions: std::collections::BTreeMap::new(),
-        storage: RUNPOD_STORAGE,
-    };
-    let preferences = horizon_core::cloud_runtime::prices::Preferences {
-        cpu_flavors: vec!["cpu3c".into()],
-        gpu_types: Vec::new(),
-    };
-    let profile = app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["development"].clone();
-    let stock = horizon_core::cloud_runtime::prices::SizeAvailability {
-        centers: vec![(
-            "EU-RO-1".into(),
-            horizon_core::cloud_runtime::prices::Availability::High,
-        )],
-    };
-    app.cloud_prototype
-        .production
-        .prices
-        .answered(list, preferences, vec![(profile, stock)]);
+        .nth(1)
+        .unwrap(); // The first RunPod label is the dialog heading.
+    click(&ctx, &mut app, provider_button.center());
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(shown.complete);
+    assert_eq!(shown.offers[shown.picks.cheapest.unwrap()].provider, "RunPod");
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Hetzner").center());
+    assert!(!selector::catalog(&app.cloud_prototype.production).unwrap().complete);
     hetzner_binding(&mut app);
-    tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    // Both providers are configured and support the CPU profile, so the choice appears,
-    // with RunPod, the profile's own provider, selected.
-    assert!(has_label(&output, "Provider"));
-    assert!(has_label(&output, "RunPod"), "the heading names RunPod");
-    assert!(has_label(&output, "Data center"), "RunPod's data center picker");
-    assert!(
-        painted(&output).contains("Compute-Optimized"),
-        "RunPod's flavor families"
-    );
-    assert_absent(
-        &output,
-        &["Location", "€", "server type", "If it is sold out"],
-        "euros, net of VAT",
-    );
-    // RunPod's data centers are offered only while RunPod is chosen.
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
-    );
-    assert_eq!(
-        app.cloud_prototype.production.provider.map(|provider| provider.id),
-        Some("hetzner")
-    );
-    tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    assert!(!has_label(&output, "Data center") && !has_label(&output, "EU-RO-1"));
-}
-
-#[test]
-fn a_size_is_kept_by_the_chosen_providers_rules() {
-    use crate::app::cloud_panel::production::creation::provider::sized;
-    use horizon_core::cloud_runtime::provider::{HETZNER, RUNPOD};
-    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-        runtime_state: Box::new(RuntimeState::default()),
-    });
-    prepare(&mut app, &ctx, temp.path());
-    let profile = app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["development"].clone();
-    // 48 vCPU / 192 GB is a Hetzner server size but no RunPod flavor.
-    let hetzner = sized(&HETZNER, &profile, Some((48, 192))).unwrap();
-    assert_eq!(
-        (hetzner.provider.as_str(), hetzner.cpu, hetzner.memory_gb),
-        ("hetzner", 48, 192)
-    );
-    assert!(sized(&RUNPOD, &profile, Some((48, 192))).is_err());
-}
-
-#[test]
-fn the_provider_choice_needs_two_providers_that_support_the_profile() {
-    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-        runtime_state: Box::new(RuntimeState::default()),
-    });
-    prepare(&mut app, &ctx, temp.path());
-    // Without a Hetzner binding only RunPod is configured.
-    tall_frame(&ctx, &mut app);
-    assert!(!has_label(&tall_frame(&ctx, &mut app), "Provider"));
-    // A GPU profile runs only on RunPod, even with a Hetzner binding, and a Hetzner choice
-    // made while the profile was CPU is dropped with its location.
-    hetzner_binding(&mut app);
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
-    );
-    tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "hel1 · Europe\ncx33 · €0.0136/h").center(),
-    );
-    assert_eq!(app.cloud_prototype.production.placement.data_centers, ["hel1"]);
-    let production = &mut app.cloud_prototype.production;
-    let profile = production
-        .profiles
-        .as_mut()
-        .unwrap()
-        .profiles
-        .get_mut("development")
-        .unwrap();
-    profile.gpu = true;
-    tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    assert!(!has_label(&output, "Provider"));
-    assert!(!has_label(&output, "Location"));
-    let production = &app.cloud_prototype.production;
-    assert!(production.provider.is_none() && production.placement.is_any());
-}
-
-/// Asserts that no painted line, other than those starting with `allowed`, contains any of `terms`.
-fn assert_absent(output: &egui::FullOutput, terms: &[&str], allowed: &str) {
-    let text = painted(output);
-    for term in terms {
-        let shown = text
-            .lines()
-            .filter(|line| !line.starts_with(allowed))
-            .any(|line| line.contains(term));
-        assert!(!shown, "{term} appears:\n{text}");
-    }
-}
-
-#[test]
-fn incompatible_hetzner_system_disk_blocks_launch_until_corrected() {
-    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-        runtime_state: Box::new(RuntimeState::default()),
-    });
-    prepare(&mut app, &ctx, temp.path());
-    hetzner_binding(&mut app);
-    let form = &mut app.cloud_prototype.production;
-    form.provider = Some(&horizon_core::cloud_runtime::provider::HETZNER);
-    form.placement.data_centers = vec!["hel1".into()];
-    form.profiles
-        .as_mut()
-        .unwrap()
-        .profiles
-        .get_mut("development")
-        .unwrap()
-        .storage
-        .container_gb = 81;
-    let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(
-        &output,
-        "Choose a system disk and CPU size supported by a server in the selected location."
-    ));
-    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
-    assert!(app.cloud_creation_open());
-    assert!(!app.cloud_prototype.production.launch.submitted);
-    let form = &mut app.cloud_prototype.production;
-    form.profiles
-        .as_mut()
-        .unwrap()
-        .profiles
-        .get_mut("development")
-        .unwrap()
-        .storage
-        .container_gb = 80;
-    let output = tall_frame(&ctx, &mut app);
-    assert!(!has_label(
-        &output,
-        "Choose a system disk and CPU size supported by a server in the selected location."
-    ));
-    assert!(app.cloud_prototype.production.placement.is_any());
-    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
-    finish_creation(&ctx, &mut app);
-    assert!(!app.cloud_creation_open());
-}
-
-#[test]
-fn a_failed_hetzner_refresh_keeps_its_last_catalog_on_show_with_the_reason() {
-    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-        runtime_state: Box::new(RuntimeState::default()),
-    });
-    prepare(&mut app, &ctx, temp.path());
-    hetzner_binding(&mut app);
-    let output = tall_frame(&ctx, &mut app);
-    click(
-        &ctx,
-        &mut app,
-        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
-    );
-    app.cloud_prototype
-        .production
-        .prices
-        .hetzner
-        .refresh_failed("Hetzner answered 503");
-    tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    let text = painted(&output);
-    assert!(
-        text.contains("Could not refresh Hetzner prices (Hetzner answered 503). Showing prices from "),
-        "{text}"
-    );
-    assert!(has_label(&output, "cx33 · 4 vCPU · 8 GB · €0.0136/h"), "{text}");
-    assert!(!text.contains("Hetzner prices unavailable"));
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(shown.complete);
+    assert_eq!(shown.offers[shown.picks.cheapest.unwrap()].provider, "Hetzner");
 }

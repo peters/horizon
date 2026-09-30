@@ -335,10 +335,17 @@ same meaning. To migrate a profile, rename those keys without changing the value
 do not specify both names for a resource. Saved worker records keep their existing
 CPU and memory keys and their allocated sizes.
 
-**Machine** shows three starting points from RunPod's current catalog: **Cheapest**,
-**Most powerful** and **Balanced**, priced between the two. They are chosen among
-workers in stock where the cloud may go, or among every matching worker when none
-is. CPU workers are more powerful with more vCPUs and then more memory; GPU types
+**Machine** combines the current catalogs of supported, configured providers:
+RunPod for CPU and GPU, and Hetzner for compatible CPU profiles. **Cheapest**,
+**Most powerful** and **Balanced** use estimated total cost for the chosen run length,
+including storage and Hetzner IPv4, in USD using dated ECB reference rates. Billing
+stays in each provider's currency. An incomplete catalog or missing exchange rate
+keeps the offers visible without claiming a global cheapest choice. The initial
+choice is the cheapest matching worker when the comparison is complete; explicit
+choices stay selected during refresh. Provider buttons narrow both the cards and
+full list. With **In stock only** checked, starting points prefer workers in stock
+where the cloud may go, falling back to matching workers when none are available.
+Hetzner availability is advisory and creation rechecks the exact type and location. CPU workers are more powerful with more vCPUs and then more memory; GPU types
 rank by price, which follows their performance more closely than their memory does.
 Search and the **In stock only** filter are always visible above the full worker
 list, with a count of the results and workers hidden by requirements. **In stock

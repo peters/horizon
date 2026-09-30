@@ -90,6 +90,7 @@ fn form(profile: &str) -> Production {
     };
     form.launch.accounts_checked = true;
     form.prices.answered(list(None), preferences(), Vec::new());
+    form.prices.hetzner.answered(None);
     form
 }
 
@@ -329,6 +330,7 @@ fn the_wait_checkbox_appears_only_for_a_sold_out_selection() {
     assert!(!labels.iter().any(|label| label == "Start new cloud once available"));
     assert!(labels.iter().any(|label| label == "Start cloud"));
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: vec!["a5000".into()],
@@ -349,6 +351,7 @@ fn the_wait_checkbox_appears_only_for_a_sold_out_selection() {
 fn a_watch_needs_one_data_center_and_never_starts_above_the_price_shown() {
     let mut form = form("gpu");
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into(), "EU-2".into()],
         gpu_types: vec!["a5000".into()],
@@ -403,14 +406,15 @@ fn old_runpod_prices_never_hold_back_another_provider() {
     fetched.at = Instant::now().checked_sub(std::time::Duration::from_hours(2)).unwrap();
     assert!(!can_submit(&form));
     form.provider = Some(&horizon_core::cloud_runtime::provider::HETZNER);
-    assert_eq!(submit_reason(&form), None);
-    assert!(can_submit(&form));
+    assert_eq!(submit_reason(&form), Some("Choose a Hetzner worker and location."));
+    assert!(!can_submit(&form));
 }
 
 #[test]
 fn a_watch_never_arms_without_a_price_to_hold_it_to() {
     let mut form = form("gpu");
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: vec!["a5000".into()],
@@ -433,6 +437,7 @@ fn a_watch_never_arms_without_a_price_to_hold_it_to() {
 fn a_data_center_without_the_chosen_volume_blocks_start_instead_of_moving() {
     let mut form = form("cpu");
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: Vec::new(),
@@ -468,6 +473,7 @@ fn a_chosen_gpu_type_is_never_replaced_once_it_is_no_longer_offered() {
 fn only_stock_is_waited_for_and_a_new_profile_clears_the_search() {
     let mut form = form("cpu");
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: Vec::new(),
@@ -628,6 +634,7 @@ fn only_the_chosen_cpu_size_reads_exact_stock_and_the_rest_say_likely() {
 fn start_arms_the_watch_for_a_checked_sold_out_worker_whether_clicked_or_entered() {
     let mut form = form("gpu");
     form.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: vec!["a5000".into()],
@@ -658,6 +665,7 @@ fn a_vanished_data_center_or_price_ends_what_depends_on_it() {
     // A watched GPU the catalog stops pricing ends the watch instead of waiting forever.
     let mut watched = form("gpu");
     watched.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: vec!["a5000".into()],
@@ -678,6 +686,7 @@ fn a_vanished_data_center_or_price_ends_what_depends_on_it() {
 fn an_old_catalog_keeps_a_watch_waiting_and_a_volume_nobody_holds_is_named() {
     let mut watched = form("gpu");
     watched.placement = Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-1".into()],
         gpu_types: vec!["a5000".into()],

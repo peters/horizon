@@ -197,6 +197,9 @@ pub fn catalog(
             (hours, storage_gb, tier, container_gb),
         )
     };
+    for offer in &mut offers {
+        offer.estimated_total += list.storage.container * f64::from(container_gb) * hours / MONTH_HOURS;
+    }
     offers.retain(|offer| requirements.max_hourly.is_none_or(|max| offer.hourly <= max));
     offers.sort_by(|a, b| {
         a.estimated_total
@@ -384,10 +387,14 @@ fn level(availability: Availability) -> &'static str {
     }
 }
 
+pub mod comparison;
+pub mod exchange;
+mod workers;
+pub use workers::{Workers, workers};
 mod hetzner;
 mod picks;
-pub use hetzner::{DEPLOYABLE as HETZNER_DEPLOYABLE, hetzner, hetzner_section};
-pub use picks::{Picks, Place, picks, places};
+pub use hetzner::{DEPLOYABLE as HETZNER_DEPLOYABLE, hetzner, hetzner_catalog, hetzner_section};
+pub use picks::{Picks, Place, picks, picks_by, picks_matching, places};
 
 #[cfg(test)]
 mod tests;

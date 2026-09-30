@@ -60,9 +60,11 @@ Hetzner off removes the binding.
 
 A machine can use Hetzner alone: with Hetzner on, the RunPod API key may stay
 empty. New cloud then offers only Hetzner, and only profiles Hetzner can run (CPU
-profiles without hosted devices) are ready. A profile that names RunPod is never
-moved on its own: the dialog shows the provider choice and Start cloud is refused
-until Hetzner is picked. Turning Hetzner off requires a RunPod key again.
+profiles without hosted devices) are ready. The shared picker can select the cheapest
+matching Hetzner worker even when the repository profile names RunPod. It preserves
+the profile's minimum requirements and displays the chosen provider, server type and
+location before Start cloud. Explicit choices stay selected during refresh. Turning
+Hetzner off requires a RunPod key again.
 
 ```json
 "hetzner": {
@@ -190,14 +192,18 @@ integration.
 With a `hetzner` binding, Hetzner offers appear beside RunPod's wherever offers are
 ranked: `cloud_deploy offers SETTINGS [REQUIREMENTS_JSON]` from this computer, and the
 `cloud_offers` tool for agents on its workers once the host sends them the catalog.
-Hetzner comes in `other_providers`, ranked on its own and never mixed with RunPod:
+Native Hetzner offers remain in `other_providers`. The additional `comparison`
+orders offers from every configured provider by `estimated_total_usd`, using dated
+ECB reference rates. Check `comparison.complete` before calling its first offer
+the cheapest match; a failed catalog or unavailable conversion makes it false.
+Billing stays in each provider's currency.
 
-- amounts are euros, net of VAT, never converted, and `max_hourly` is read in euros for them;
+- native amounts are euros, net of VAT, and `max_hourly` is read in euros for them;
 - each estimate is for a run that starts now, billed per started hour and capped per
   calendar month (UTC) for compute, the workspace volume and the IPv4 address;
 - `stopped_monthly` is the kept volume only, since a stopped Hetzner cloud releases its
   server and address;
-- only the locations in `locations` are listed, with every server type, and
+- only configured `server_types` in allowed `locations` are listed, and
   `availability` is Hetzner's advisory flag (`listed` or `unlisted`), never a filter;
 - offers are `rentable`: Horizon creates Hetzner clouds.
 
@@ -209,26 +215,35 @@ offered for the rest of their 20 minutes.
 
 ## New cloud
 
-With a Hetzner binding, **New cloud** shows a Provider choice for CPU profiles.
-Choosing Hetzner replaces RunPod's regions and prices with Hetzner's offers for
-the chosen size:
+With a Hetzner binding, **New cloud** lists RunPod and Hetzner workers together.
+Repository `min_cpu` and `min_memory_gb` define minimum requirements. The picker
+shows cheapest, balanced and most powerful matches for the requested duration,
+with storage and IPv4 included. All providers is the default browsing scope;
+provider buttons narrow it. In stock only starts checked; below-minimum workers
+start hidden and can be inspected but cannot be selected. Hetzner's listed stock
+is advisory, and unchecking the stock filter exposes unlisted types too.
 
-- one entry per allowed location, in the order of `locations`, showing the first
-  server type from `server_types` that has the size, which is the one Horizon
-  requests first;
-- its hourly price, the most a month of running costs with the workspace volume
-  and IPv4 address, and what a stopped cloud keeps paying (the volume only);
-- the types tried next if it is sold out, each at its own hourly price, and
-  Hetzner's advisory availability.
+The estimate uses USD for comparisons and retains euro prices for billing.
+Reference rates come from the [ECB](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html),
+with their date shown. Quotes over seven days old or dated in the future are
+refused. The UI fetches rates in the background, refreshing every six hours;
+CLI and worker offer queries need read-only HTTPS access to
+`data-api.ecb.europa.eu`. Missing rates leave native prices visible and the
+comparison incomplete. These estimates exclude taxes and invoice conversion
+fees; reference rates are informational and are not an invoice exchange rate.
 
-Choosing a location places the cloud there; if every configured type is sold
-out there, creation stops with a capacity error. **Any allowed location** tries
-the locations in `locations` in order, starting with the first where a
-configured type has the size, and shows that offer. When every type is sold out
-in a location, Horizon deletes the still-empty workspace volume it created there
-and tries the next allowed location. A cloud whose volume already exists never
-moves. The new cloud records `provider: hetzner` even when the
-repository profile names RunPod, and Start cloud deploys it on Hetzner. A
-repository profile that names `provider: hetzner` is offered too. The cloud's
-card shows its fixed size, and RunPod billing is not read for it.
+A Hetzner row selects that exact server type and location. Start cloud records
+its provider and explicit placement; a capacity refusal never rents a different
+type or location. Refreshing prices preserves the chosen identity. A removed
+or incompatible choice blocks Start until another worker is selected. Saved
+worker specifications preserve explicit placement through stop, resume,
+reconnect and image rebuild, including CLI lifecycle calls with plain settings.
+Legacy records without an explicit choice retain their configured fallback policy.
 
+To deploy a listed offer through the CLI, save the selected offer object as JSON
+and pass `--worker-choice OFFER_JSON_FILE` to `cloud_deploy deploy`. The CLI
+resolves its provider/type/location against a fresh catalog and machine policy,
+then verifies repository minimums; caller-supplied resource or price fields do
+not override those checks. `cloud_offers` remains read-only on host and worker
+MCP interfaces; its offer identity can be used with this explicit CLI deployment
+path. No worker is rented by inspecting offers.

@@ -33,16 +33,24 @@ impl HorizonApp {
             prices.recheck_runpod();
             prices.request_fresh_list(&root, ctx);
             let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
-            return Some(Ok(serde_json::json!({
+            let answer = serde_json::json!({
                 "provider": "RunPod",
                 "unavailable": horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING,
                 "offers": [],
                 "other_providers": other_providers,
-            })));
+            });
+            return compared(answer, prices, deadline_in);
         }
         // Every request waiting on a failed fetch gets its error; a later one asks again.
-        if let Some(error) = prices.recent_list_error() {
-            return Some(Err(format!("cloud_offers_unavailable: {error}")));
+        if let Some(error) = prices.recent_list_error().map(str::to_owned) {
+            if !prices.hetzner.bound() || requirements.gpu {
+                return Some(Err(format!("cloud_offers_unavailable: {error}")));
+            }
+            prices.request_fresh_list(&root, ctx);
+            let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
+            let answer =
+                serde_json::json!({"provider":"RunPod", "error":error, "offers":[], "other_providers":other_providers});
+            return compared(answer, prices, deadline_in);
         }
         prices.request_fresh_list(&root, ctx);
         // Other providers are ranked on their own, in their own currency, and a failed
@@ -54,14 +62,32 @@ impl HorizonApp {
             .checked_sub(fetched.at.elapsed())
             .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|at| u64::try_from(at.as_millis()).unwrap_or(u64::MAX));
-        Some(Ok(serde_json::json!({
+        let answer = serde_json::json!({
             "provider": list.provider,
             "observed_at_millis": observed,
             "observed_seconds_ago": fetched.at.elapsed().as_secs(),
             "offers": offers(list, preferences, &requirements),
             "other_providers": other_providers,
-        })))
+        });
+        compared(answer, prices, deadline_in)
     }
+}
+
+fn compared(
+    mut answer: serde_json::Value,
+    prices: &super::prices::State,
+    deadline_in: i64,
+) -> Option<Result<serde_json::Value, String>> {
+    use horizon_core::cloud_runtime::offers::comparison;
+    if comparison::needs_rates(&answer)
+        && prices.exchange.rates.is_none()
+        && prices.exchange.waiting()
+        && deadline_in > 1_000
+    {
+        return None;
+    }
+    comparison::append(&mut answer, prices.exchange.rates.as_ref());
+    Some(Ok(answer))
 }
 
 #[cfg(all(test, unix))]

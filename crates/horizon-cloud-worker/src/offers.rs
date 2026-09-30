@@ -1,5 +1,5 @@
 //! Cloud offers for agents on this worker, ranked from the prices the owning Horizon
-//! last sent. The worker holds no provider account, so it never fetches prices itself.
+//! last sent. The worker holds no provider account; only public FX reference rates are fetched.
 #[cfg(test)]
 mod tests;
 
@@ -17,6 +17,7 @@ use std::{
 const SNAPSHOT: &str = "/run/sshd/cloud-offers.json";
 /// Hetzner's catalog, beside the price list, when the owning Horizon has a Hetzner binding.
 const HETZNER: &str = "cloud-offers-hetzner.json";
+const RUNPOD_UNCONFIGURED: &str = "cloud-offers-runpod-unconfigured.json";
 /// One directory per agent session this worker runs.
 const SESSIONS: &str = "/workspace/sessions";
 /// The owning Horizon sends prices at most 15 minutes old while it runs; older ones are
@@ -49,7 +50,13 @@ fn publish(reader: impl Read, path: &Path, now: i64) -> io::Result<()> {
             "Cloud offer prices are dated in the future; check this computer's and the worker's clocks",
         ));
     }
-    write_private(path, &serde_json::to_vec(&snapshot)?)
+    write_private(path, &serde_json::to_vec(&snapshot)?)?;
+    if let Err(error) = std::fs::remove_file(path.with_file_name(RUNPOD_UNCONFIGURED))
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Removes the `RunPod` prices, as when the owning Horizon no longer has a `RunPod` key,
@@ -62,11 +69,7 @@ fn clear_runpod(reader: impl Read, path: &Path) -> io::Result<()> {
     {
         return Err(error);
     }
-    #[cfg(unix)]
-    if let Some(directory) = path.parent() {
-        std::fs::File::open(directory)?.sync_all()?;
-    }
-    Ok(())
+    write_private(&path.with_file_name(RUNPOD_UNCONFIGURED), b"{}")
 }
 
 fn hetzner_path(snapshot: &Path) -> std::path::PathBuf {
@@ -175,7 +178,12 @@ fn ranked(
     }
     let requirements: Requirements = serde_json::from_value(request.cloud_offers.clone().unwrap_or_default())
         .map_err(|error| format!("cloud_offers_invalid_request: {error}"))?;
-    rank(&requirements, path, now)
+    rank_with(
+        &requirements,
+        path,
+        now,
+        request.deadline_at_millis.saturating_sub(now) > 6_000,
+    )
 }
 
 /// Offers for `requirements` from the prices on this worker, for agents' MCP tools.
@@ -187,6 +195,25 @@ const NO_PRICES_YET: &str =
     "cloud_offers_unavailable: no prices from the Horizon that owns this cloud yet; they arrive while it runs";
 
 fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json::Value, String> {
+    rank_with(requirements, path, now, true)
+}
+
+fn rank_with(
+    requirements: &Requirements,
+    path: &Path,
+    now: i64,
+    fetch_rates: bool,
+) -> Result<serde_json::Value, String> {
+    let mut answer = native_rank(requirements, path, now)?;
+    if cfg!(test) || !fetch_rates {
+        horizon_cloud::offers::comparison::append(&mut answer, None);
+    } else {
+        horizon_cloud::offers::comparison::fetch_append(&mut answer);
+    }
+    Ok(answer)
+}
+
+fn native_rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json::Value, String> {
     requirements
         .validate()
         .map_err(|error| format!("cloud_offers_invalid_request: {error}"))?;
@@ -198,7 +225,9 @@ fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json
             if other_providers.is_empty() {
                 return Err(NO_PRICES_YET.to_owned());
             }
+            let configured = path.with_file_name(RUNPOD_UNCONFIGURED).is_file();
             return Ok(serde_json::json!({
+                "comparison_incomplete": (!configured).then_some(true),
                 "provider": "RunPod",
                 "unavailable": "The Horizon that owns this cloud sends no RunPod prices",
                 "offers": [],
@@ -227,6 +256,7 @@ fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json
                     age / 60_000
                 ),
                 "offers": [],
+                "comparison_incomplete": true,
                 "other_providers": other_providers,
             }));
         }
@@ -237,6 +267,7 @@ fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json
     }
     Ok(serde_json::json!({
         "provider": snapshot.list.provider,
+        "comparison_incomplete": !requirements.gpu && !hetzner_path(path).is_file(),
         "observed_at_millis": snapshot.observed_at_millis,
         "observed_seconds_ago": age / 1_000,
         "offers": offers(&snapshot.list, &snapshot.preferences, requirements),
@@ -245,8 +276,11 @@ fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json
 }
 
 /// Offers from providers besides the price list, each in its own currency and never
-/// ranked with another's. Empty when the owning Horizon sent no such catalog.
+/// ranked together here. Empty when the owning Horizon sent no such catalog.
 fn other_providers(requirements: &Requirements, path: &Path, now: i64) -> Vec<serde_json::Value> {
+    if requirements.gpu {
+        return Vec::new();
+    }
     let unavailable = |error: String| serde_json::json!({"provider": "Hetzner", "error": error});
     let file = match std::fs::File::open(path) {
         Ok(file) => file,

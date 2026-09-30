@@ -38,6 +38,7 @@ pub(in crate::app) struct State {
     started: Option<Instant>,
     /// When the settings the last fetch read were saved.
     settings_saved: Option<SystemTime>,
+    refreshed_after: Option<Instant>,
 }
 
 impl State {
@@ -58,10 +59,9 @@ impl State {
         }
         if self.job.is_none()
             && self.error.is_none()
-            && self
-                .fetched
-                .as_ref()
-                .is_none_or(|fetched| fetched.at.elapsed() >= FRESH)
+            && self.fetched.as_ref().is_none_or(|fetched| {
+                fetched.at.elapsed() >= FRESH || self.refreshed_after.is_some_and(|refresh| fetched.at < refresh)
+            })
         {
             self.job = Some(spawn(root, ctx, |settings, cancel| {
                 let (server_types, locations) = settings
@@ -141,11 +141,13 @@ impl State {
     }
 
     /// The server types this machine's settings try, in order.
+    #[cfg(test)]
     pub fn server_types(&self) -> &[String] {
         &self.server_types
     }
 
     /// The locations this machine's settings allow, in the order deployment tries them.
+    #[cfg(test)]
     pub fn locations(&self) -> &[String] {
         &self.locations
     }
@@ -156,8 +158,16 @@ impl State {
     }
 
     /// The current catalog, when this machine has a Hetzner binding.
+    pub fn refresh(&mut self) {
+        self.refreshed_after = Some(Instant::now());
+        self.failed_at = None;
+        self.error = None;
+    }
+
     pub fn fresh(&self) -> Option<&Fetched<Option<HetznerCatalog>>> {
-        self.fetched.as_ref().filter(|fetched| fetched.at.elapsed() < FRESH)
+        self.fetched.as_ref().filter(|fetched| {
+            fetched.at.elapsed() < FRESH && self.refreshed_after.is_none_or(|refresh| fetched.at >= refresh)
+        })
     }
 
     /// The last catalog fetched, however old, for showing choices while a refresh runs
@@ -188,6 +198,9 @@ impl State {
         requirements: &horizon_core::cloud_runtime::offers::Requirements,
         deadline_in_millis: i64,
     ) -> Option<Vec<serde_json::Value>> {
+        if requirements.gpu {
+            return Some(Vec::new());
+        }
         if self.job.is_some() {
             if deadline_in_millis > ANSWER_MARGIN_MILLIS {
                 return None;
@@ -304,7 +317,8 @@ mod tests {
         prices.hetzner.job = Some(receiver);
         prices.refresh();
         assert!(prices.runpod_bound() && prices.hetzner.bound());
-        assert!(prices.hetzner.fresh().is_some());
+        assert!(prices.hetzner.fresh().is_none());
+        assert!(prices.hetzner.displayed().is_some());
         assert_eq!(prices.hetzner.server_types(), ["cx43"]);
         assert_eq!(prices.hetzner.locations(), ["hel1"]);
         sender.send(Err("Synthetic failure".into())).unwrap();

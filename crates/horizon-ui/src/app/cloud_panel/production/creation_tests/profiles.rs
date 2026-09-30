@@ -306,6 +306,7 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_remain_selectable()
     assert_eq!(
         app.cloud_prototype.production.placement,
         horizon_core::cloud_panel::Placement {
+            cpu_types: Vec::new(),
             region: Some("North America".into()),
             data_centers: vec!["US-MO-2".into()],
             gpu_types: Vec::new(),
@@ -315,6 +316,7 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_remain_selectable()
     let output = tall_frame(&ctx, &mut app);
     click(&ctx, &mut app, label_rect(&output, "Europe\n1 in stock").center());
     let europe = horizon_core::cloud_panel::Placement {
+        cpu_types: Vec::new(),
         region: Some("Europe".into()),
         data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
         gpu_types: Vec::new(),
@@ -609,6 +611,7 @@ fn disk_edits_preserve_gpu_placement_and_survive_launch_capture() {
         .unwrap()
         .gpu = true;
     let selected = horizon_core::cloud_panel::Placement {
+        cpu_types: Vec::new(),
         region: Some("Chosen region".into()),
         data_centers: vec!["EU-RO-1".into()],
         gpu_types: vec!["chosen-gpu".into()],

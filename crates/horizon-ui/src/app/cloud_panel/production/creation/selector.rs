@@ -5,7 +5,7 @@ use super::{Production, placement};
 use crate::theme;
 use egui::{RichText, Ui};
 use horizon_core::cloud_runtime::{
-    offers::{self, Offer, Picks, Place, Requirements},
+    offers::{self, Offer, Picks, Place},
     prices::{Availability, Profile},
 };
 use std::time::Duration;
@@ -17,6 +17,8 @@ mod widgets;
 /// How the catalog is being browsed; none of it is part of the cloud.
 pub(in crate::app::cloud_panel::production) struct State {
     search: String,
+    provider_filter: Option<String>,
+    hours: f64,
     in_stock_only: bool,
     show_below_minimums: bool,
     /// The person checked "Start new cloud once available".
@@ -27,6 +29,8 @@ impl Default for State {
     fn default() -> Self {
         Self {
             search: String::new(),
+            provider_filter: None,
+            hours: 1.0,
             in_stock_only: true,
             show_below_minimums: false,
             wait_for_stock: false,
@@ -44,13 +48,13 @@ impl State {
 /// A worker's stock where the cloud may go, and whether it is exact for that worker
 /// rather than its CPU flavor family's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Stock {
+pub(in crate::app::cloud_panel::production) struct Stock {
     pub level: Availability,
     pub exact: bool,
 }
 
 /// The workers a repository profile allows, from the latest catalog, current or not.
-pub(super) struct Catalog {
+pub(in crate::app::cloud_panel::production) struct Catalog {
     pub offers: Vec<Offer>,
     /// Matching workers come first; remaining rows are for inspection only.
     pub matching: usize,
@@ -59,6 +63,7 @@ pub(super) struct Catalog {
     pub picks: Picks,
     pub selected: Option<usize>,
     pub gpu: bool,
+    pub complete: bool,
 }
 
 impl Catalog {
@@ -67,7 +72,8 @@ impl Catalog {
     /// GPU stock is the type's own. A CPU offer's catalog stock is its flavor family's,
     /// so only the chosen size, once its exact check has answered, reads as exact.
     pub fn stock(&self, index: usize, form: &Production) -> Option<Stock> {
-        if !self.gpu
+        if self.offers[index].location.is_none()
+            && !self.gpu
             && self.selected == Some(index)
             && let Some(profile) = profile(form)
         {
@@ -79,7 +85,14 @@ impl Catalog {
         }
         self.places[index]
             .iter()
-            .filter(|place| form.placement.is_any() || form.placement.data_centers.contains(&place.id))
+            .filter(|place| {
+                self.offers[index].location.is_some()
+                    || profile(form).is_some_and(|profile| {
+                        super::provider::current(form.provider, profile).label != self.offers[index].provider
+                    })
+                    || form.placement.is_any()
+                    || form.placement.data_centers.contains(&place.id)
+            })
             .map(|place| place.availability)
             .min()
             .map(|level| Stock { level, exact: self.gpu })
@@ -91,40 +104,92 @@ pub(super) fn profile(form: &Production) -> Option<&Profile> {
     form.profiles.as_ref()?.profiles.get(&form.selected_profile)
 }
 
-pub(super) fn catalog(form: &Production) -> Option<Catalog> {
+pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Option<Catalog> {
     let profile = profile(form)?;
-    let (list, preferences) = &form.prices.list.as_ref()?.value;
-    let tier = profile.storage.volume_tier;
-    // CPU sizes request only flavors that hold the profile's container disk, as a
-    // deployment of that size would.
-    let requirements = Requirements::for_profile(profile);
-    let browsing = Requirements {
-        min_vcpu: None,
-        min_memory_gb: None,
-        min_gpu_memory_gb: None,
-        ..requirements.clone()
+    let runpod = form
+        .prices
+        .list
+        .as_ref()
+        .filter(|_| form.prices.runpod_bound())
+        .map(|fetched| &fetched.value);
+    let hetzner = form
+        .prices
+        .hetzner
+        .displayed()
+        .and_then(|fetched| fetched.value.as_ref());
+    if runpod.is_none() && hetzner.is_none() {
+        return None;
+    }
+    let workers = offers::workers(profile, form.launch.selector.hours, runpod, hetzner);
+    let offers::Workers {
+        offers,
+        matching,
+        places,
+    } = workers;
+    let cost = |offer: &Offer| {
+        offers::comparison::dollars(
+            offer.estimated_total,
+            offer.currency,
+            form.prices.exchange.rates.as_ref(),
+        )
     };
-    let all = offers::catalog(list, preferences, &browsing, (tier, profile.storage.container_gb));
-    let (mut offers, excluded): (Vec<_>, Vec<_>) = all
-        .into_iter()
-        .partition(|offer| requirements.resource_reason(offer).is_none());
-    let matching = offers.len();
-    offers.extend(excluded);
-    let places: Vec<Vec<Place>> = offers.iter().map(|offer| offers::places(list, offer, tier)).collect();
-    // Offer IDs are unique within one kind of worker.
-    let stocked: std::collections::HashSet<&str> = offers
-        .iter()
-        .take(matching)
-        .zip(&places)
-        .filter(|(_, places)| {
-            places.iter().any(|place| {
-                place.availability != Availability::None
-                    && (form.placement.is_any() || form.placement.data_centers.contains(&place.id))
+    let interested = |provider: &horizon_core::cloud_runtime::provider::Description| {
+        provider.supports(profile)
+            && form
+                .launch
+                .selector
+                .provider_filter
+                .as_ref()
+                .is_none_or(|filter| filter == provider.label)
+    };
+    let complete = (!interested(&horizon_core::cloud_runtime::provider::RUNPOD)
+        || !form.prices.runpod_bound()
+        || runpod.is_some() && !form.prices.too_old() && form.prices.list_error.is_none())
+        && (!interested(&horizon_core::cloud_runtime::provider::HETZNER)
+            || !form.prices.hetzner.bound()
+            || hetzner.is_some() && !form.prices.hetzner.too_old() && form.prices.hetzner.error().is_none())
+        && (!interested(&horizon_core::cloud_runtime::provider::HETZNER) || form.prices.hetzner.displayed().is_some())
+        && offers
+            .iter()
+            .take(matching)
+            .filter(|offer| {
+                form.launch
+                    .selector
+                    .provider_filter
+                    .as_ref()
+                    .is_none_or(|filter| filter == offer.provider)
             })
+            .all(|offer| cost(offer).is_some())
+        && (profile.gpu || profile.storage.volume_tier == horizon_core::cloud_runtime::prices::StorageTier::Standard);
+    let stocked: std::collections::HashSet<_> = offers
+        .iter()
+        .zip(&places)
+        .filter(|(offer, places)| {
+            places
+                .iter()
+                .any(|place| place.availability != Availability::None && place_allowed(offer, place, form, profile))
         })
-        .map(|(offer, _)| offer.id.as_str())
+        .map(|(offer, _)| (offer.provider, offer.id.as_str(), offer.location.as_deref()))
         .collect();
-    let picks = offers::picks(&offers[..matching], |offer| stocked.contains(offer.id.as_str()));
+    let picks = if complete {
+        offers::picks_matching(
+            &offers[..matching],
+            |offer| {
+                form.launch
+                    .selector
+                    .provider_filter
+                    .as_ref()
+                    .is_none_or(|provider| provider == offer.provider)
+            },
+            |offer| {
+                form.launch.selector.in_stock_only
+                    && stocked.contains(&(offer.provider, offer.id.as_str(), offer.location.as_deref()))
+            },
+            |offer| cost(offer).unwrap_or(f64::INFINITY),
+        )
+    } else {
+        Picks::default()
+    };
     let selected = offers
         .iter()
         .take(matching)
@@ -136,10 +201,26 @@ pub(super) fn catalog(form: &Production) -> Option<Catalog> {
         picks,
         selected,
         gpu: profile.gpu,
+        complete,
     })
 }
 
+fn place_allowed(offer: &Offer, place: &Place, form: &Production, profile: &Profile) -> bool {
+    offer.location.is_some()
+        || super::provider::current(form.provider, profile).label != offer.provider
+        || form.placement.is_any()
+        || form.placement.data_centers.contains(&place.id)
+}
+
 fn is_selected(form: &Production, profile: &Profile, offer: &Offer) -> bool {
+    let provider = super::provider::current(form.provider, profile);
+    if provider.label != offer.provider {
+        return false;
+    }
+    if offer.location.is_some() {
+        return form.placement.cpu_types.first() == Some(&offer.id)
+            && matches!(form.placement.data_centers.as_slice(), [location] if Some(location) == offer.location.as_ref());
+    }
     if profile.gpu {
         form.placement.gpu_types.first() == Some(&offer.id)
     } else {
@@ -149,11 +230,21 @@ fn is_selected(form: &Production, profile: &Profile, offer: &Offer) -> bool {
 }
 
 /// Requests `offer` for the new cloud: its GPU type alone, or its CPU size.
-fn choose(form: &mut Production, gpu: bool, offer: &Offer) {
-    if gpu {
-        form.placement.gpu_types = vec![offer.id.clone()];
-    } else if let (Some(cpu), Some(memory_gb)) = (offer.vcpu, offer.memory_gb) {
-        form.size = Some((cpu, memory_gb));
+pub(in crate::app::cloud_panel::production) fn choose(form: &mut Production, _gpu: bool, offer: &Offer) {
+    let Some(profile) = profile(form) else {
+        return;
+    };
+    let Ok(chosen) = horizon_core::cloud_panel::WorkerChoice::from(offer).for_profile(profile) else {
+        return;
+    };
+    let keep_places = super::provider::current(form.provider, profile) == chosen.provider && offer.location.is_none();
+    let old_places = std::mem::take(&mut form.placement);
+    form.provider = Some(chosen.provider);
+    form.size = chosen.size;
+    form.placement = chosen.placement;
+    if keep_places {
+        form.placement.data_centers = old_places.data_centers;
+        form.placement.region = old_places.region;
     }
 }
 
@@ -165,7 +256,23 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
     };
     widgets::heading(ui, "Machine", &requirement(&profile, &form.selected_profile));
     freshness(ui, form);
-    let Some(catalog) = catalog(form) else {
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Compare for");
+        ui.add(
+            egui::DragValue::new(&mut form.launch.selector.hours)
+                .range(1.0..=8760.0)
+                .suffix(" hours"),
+        );
+        ui.selectable_value(&mut form.launch.selector.provider_filter, None, "All providers");
+        for provider in super::provider::choices(&form.prices, &profile) {
+            ui.selectable_value(
+                &mut form.launch.selector.provider_filter,
+                Some(provider.label.to_owned()),
+                provider.label,
+            );
+        }
+    });
+    let Some(mut catalog) = catalog(form) else {
         return;
     };
     if catalog.matching == 0 {
@@ -173,12 +280,15 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
     }
     // A GPU profile always requests one explicit type, the cheapest to start with. A
     // type the person chose is never replaced, even once it is no longer offered.
-    if catalog.gpu
-        && form.placement.gpu_types.is_empty()
+    if (catalog.gpu && form.placement.gpu_types.is_empty()
+        || form.provider.is_none()
+            && form.size.is_none()
+            && form.placement.is_default()
+            && catalog.selected != catalog.picks.cheapest)
         && let Some(index) = catalog.picks.cheapest
     {
-        choose(form, true, &catalog.offers[index]);
-        return;
+        choose(form, catalog.gpu, &catalog.offers[index]);
+        catalog.selected = Some(index);
     }
     if catalog.gpu && catalog.selected.is_none() && !form.placement.gpu_types.is_empty() {
         widgets::note(
@@ -189,11 +299,35 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
             ),
         );
     }
+    if !catalog.complete {
+        widgets::note(
+            ui,
+            "Comparison incomplete: waiting for current provider prices and exchange rates. Choose a worker explicitly.",
+        );
+    }
+    if let Some(rates) = &form.prices.exchange.rates {
+        widgets::note(
+            ui,
+            &format!(
+                "Estimated totals in USD · ECB rates dated {} · provider billing currency retained",
+                rates.date
+            ),
+        );
+    }
     let mut chosen = cards::picks(ui, &catalog, form);
     ui.add_space(4.0);
     chosen = cards::all(ui, &catalog, form).or(chosen);
     if let Some(index) = chosen.filter(|&index| index < catalog.matching) {
         choose(form, catalog.gpu, &catalog.offers[index]);
+    }
+    if super::provider::current(form.provider, &profile).placement
+        != horizon_core::cloud_runtime::provider::Placement::DataCenters
+    {
+        widgets::note(
+            ui,
+            "Hetzner availability is advisory. Choosing a row fixes that server type and location; no fallback is rented.",
+        );
+        return;
     }
     ui.add_space(10.0);
     widgets::heading(ui, "Data center", "");
@@ -230,6 +364,21 @@ fn requirement(profile: &Profile, name: &str) -> String {
 /// How old the prices on show are, and why they are not current.
 fn freshness(ui: &mut Ui, form: &mut Production) {
     let prices = &form.prices;
+    if let Some(error) = prices.hetzner.error() {
+        widgets::note(
+            ui,
+            &format!("Hetzner prices unavailable: {error}. Retaining the last catalog for inspection."),
+        );
+    }
+    if let Some(error) = &prices.exchange.error {
+        widgets::note(ui, error);
+    }
+    if profile(form).is_some_and(|profile| !profile.gpu && !profile.storage.standard_tier()) {
+        widgets::note(
+            ui,
+            "High-performance storage prices are unpublished. Choose standard storage to compare complete totals.",
+        );
+    }
     let Some(list) = &prices.list else {
         if let Some(error) = &prices.list_error {
             widgets::note(ui, &format!("Prices are unavailable: {error}"));
@@ -238,6 +387,9 @@ fn freshness(ui: &mut Ui, form: &mut Production) {
                 ui.spinner();
                 ui.label(RichText::new("Fetching prices and stock…").color(theme::FG_SOFT()));
             });
+        }
+        if ui.small_button("Refresh").clicked() {
+            form.prices.refresh();
         }
         return;
     };

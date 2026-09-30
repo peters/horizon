@@ -193,6 +193,7 @@ pub(super) fn field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Pl
                 .clicked()
             {
                 chosen = Some(Placement {
+                    cpu_types: Vec::new(),
                     region: Some(region.name.clone()),
                     data_centers: region.data_centers.clone(),
                     gpu_types: current.gpu_types.clone(),
@@ -251,6 +252,7 @@ fn data_centers(
                     .clicked()
                 {
                     *chosen = Some(Placement {
+                        cpu_types: Vec::new(),
                         region: Some(candidate.region.clone()),
                         data_centers: vec![candidate.center.id.clone()],
                         gpu_types: current.gpu_types.clone(),
@@ -597,6 +599,7 @@ mod tests {
     fn the_dialog_says_where_the_workspace_stays() {
         assert!(where_it_lives(&Placement::default()).starts_with("Horizon picks a data center with stock."));
         let europe = Placement {
+            cpu_types: Vec::new(),
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
             gpu_types: Vec::new(),
@@ -606,6 +609,7 @@ mod tests {
             "The workspace stays in Europe, and a stopped cloud resumes there."
         );
         let one = Placement {
+            cpu_types: Vec::new(),
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into()],
             gpu_types: Vec::new(),

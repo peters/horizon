@@ -1,5 +1,7 @@
 //! Exercise the same deployment coordinator as the UI with private machine settings.
 #![forbid(unsafe_code)]
+#[path = "cloud_deploy/choice.rs"]
+mod choice;
 #[path = "cloud_deploy/registry.rs"]
 mod registry;
 #[path = "cloud_deploy/registry_mcp.rs"]
@@ -34,7 +36,7 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume.",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--worker-choice OFFER_JSON_FILE] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume.",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -75,6 +77,7 @@ fn run() -> cloud_runtime::Result<()> {
     if matches!(args[0].as_str(), "rebuild" | "continue-rebuild" | "cancel-rebuild") {
         return rebuild(&args, settings, &cancel);
     }
+    let (args, worker_choice) = choice::arguments(&args)?;
     let (args, siblings) = sibling_bindings(&args)?;
     if !matches!(args[0].as_str(), "deploy" | "prepare-image")
         || !(6..=7).contains(&args.len())
@@ -92,6 +95,12 @@ fn run() -> cloud_runtime::Result<()> {
         .get(&args[3])
         .cloned()
         .ok_or(cloud_runtime::Error::Invalid("Profile does not exist"))?;
+    let mut settings = settings;
+    let profile = if let Some(path) = worker_choice {
+        choice::apply(&profile, &mut settings, &path, &cancel)?
+    } else {
+        profile
+    };
     let request = deployment::Request::new(
         args[5].clone(),
         repository,
@@ -292,25 +301,30 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
     let settings = Settings::load(settings)?;
     let cancel = Cancellation::default();
     // A machine set up for Hetzner alone has no RunPod offers, and says why.
-    let runpod = if settings.runpod_configured() {
-        Some(cloud_runtime::prices::price_list(&settings, &cancel)?)
-    } else {
-        None
-    };
+    let runpod = settings
+        .runpod_configured()
+        .then(|| cloud_runtime::prices::price_list(&settings, &cancel));
     // A Hetzner failure is reported beside RunPod's offers, as agents' answers do.
-    let other_providers: Vec<serde_json::Value> = match cloud_runtime::prices::hetzner_catalog(&settings, &cancel) {
+    let other_providers: Vec<serde_json::Value> = match if requirements.gpu {
+        Ok(None)
+    } else {
+        cloud_runtime::prices::hetzner_catalog(&settings, &cancel)
+    } {
         Ok(catalog) => catalog
             .map(|catalog| hetzner_section(&catalog, &requirements))
             .into_iter()
             .collect(),
         Err(error) => vec![serde_json::json!({"provider": "Hetzner", "error": error.to_string()})],
     };
-    let answer = match &runpod {
-        Some((list, preferences)) => serde_json::json!({
+    let mut answer = match &runpod {
+        Some(Ok((list, preferences))) => serde_json::json!({
             "provider": list.provider,
             "offers": offers(list, preferences, &requirements),
             "other_providers": other_providers,
         }),
+        Some(Err(error)) => {
+            serde_json::json!({"provider":"RunPod", "error": error.to_string(), "offers":[], "other_providers":other_providers})
+        }
         None => serde_json::json!({
             "provider": "RunPod",
             "unavailable": cloud_runtime::settings::RUNPOD_KEY_MISSING,
@@ -318,6 +332,7 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
             "other_providers": other_providers,
         }),
     };
+    horizon_cloud::offers::comparison::fetch_append(&mut answer);
     println!(
         "{}",
         serde_json::to_string_pretty(&answer).map_err(|_| cloud_runtime::Error::Json)?

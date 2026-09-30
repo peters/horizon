@@ -517,6 +517,15 @@ worker image under Docker on a rented virtual machine; it performs no provider I
 currency, GPU support, placement kind (data centers or locations), what happens to
 the worker on stop, and the choices it supports. Interfaces read this description
 to show exactly the fields that apply instead of branching on provider names.
+`offers::workers` assembles policy-filtered provider catalogs for a repository's
+requirements. `offers::{exchange, comparison}` own dated reference rates and the
+common estimated-total ordering used by UI, CLI and MCP. The UI's `prices::exchange`
+fetches reference rates off the render thread. `cloud_panel::selection` translates
+an offer identity to launch size and persisted placement. Explicit Hetzner choices
+set `WorkerSpec::exact_placement`; allocation and lifecycle policy intersect those
+saved types and locations with current machine policy, preserving legacy fallback
+semantics for records without the flag.
+
 `hetzner` is the Hetzner Cloud REST adapter that `cloud_runtime::deployment::hetzner`
 calls to deploy Hetzner clouds. It uses
 the same `CreateState` fence for servers and volumes, reconciles a lost create

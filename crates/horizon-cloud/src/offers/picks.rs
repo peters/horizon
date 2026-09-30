@@ -119,28 +119,49 @@ pub struct Picks {
 /// generation. Each offer is picked at most once.
 #[must_use]
 pub fn picks(offers: &[Offer], in_stock: impl Fn(&Offer) -> bool) -> Picks {
-    let stocked: Vec<usize> = (0..offers.len()).filter(|&index| in_stock(&offers[index])).collect();
-    let pool = if stocked.is_empty() {
-        (0..offers.len()).collect()
-    } else {
-        stocked
-    };
+    picks_by(offers, in_stock, |offer| offer.hourly)
+}
+
+/// The same resource choices, ranked by a caller's comparable estimated cost.
+#[must_use]
+pub fn picks_by(offers: &[Offer], in_stock: impl Fn(&Offer) -> bool, price: impl Fn(&Offer) -> f64) -> Picks {
+    picks_matching(offers, |_| true, in_stock, price)
+}
+
+/// Picks respecting a provider or location filter, retaining original catalog indices.
+#[must_use]
+pub fn picks_matching(
+    offers: &[Offer],
+    eligible: impl Fn(&Offer) -> bool,
+    in_stock: impl Fn(&Offer) -> bool,
+    price: impl Fn(&Offer) -> f64,
+) -> Picks {
+    let eligible: Vec<usize> = (0..offers.len()).filter(|&index| eligible(&offers[index])).collect();
+    let stocked: Vec<usize> = eligible
+        .iter()
+        .copied()
+        .filter(|&index| in_stock(&offers[index]))
+        .collect();
+    let pool = if stocked.is_empty() { eligible } else { stocked };
     let cheapest = pool
         .iter()
         .copied()
-        .min_by(|&a, &b| offers[a].hourly.total_cmp(&offers[b].hourly));
+        .min_by(|&a, &b| price(&offers[a]).total_cmp(&price(&offers[b])));
     let powerful = pool
         .iter()
         .copied()
-        .max_by(|&a, &b| capability(&offers[a], &offers[b]))
+        .max_by(|&a, &b| capability(&offers[a], &offers[b], &price))
         .filter(|&index| Some(index) != cheapest);
     let balanced = cheapest.zip(powerful).and_then(|(low, high)| {
-        let target = f64::midpoint(offers[low].hourly.ln(), offers[high].hourly.ln());
+        let target = f64::midpoint(
+            price(&offers[low]).max(f64::MIN_POSITIVE).ln(),
+            price(&offers[high]).max(f64::MIN_POSITIVE).ln(),
+        );
         pool.iter()
             .copied()
             .filter(|&index| index != low && index != high)
             .min_by(|&a, &b| {
-                let distance = |index: usize| (offers[index].hourly.ln() - target).abs();
+                let distance = |index: usize| (price(&offers[index]).max(f64::MIN_POSITIVE).ln() - target).abs();
                 distance(a).total_cmp(&distance(b))
             })
     });
@@ -151,14 +172,14 @@ pub fn picks(offers: &[Offer], in_stock: impl Fn(&Offer) -> bool) -> Picks {
     }
 }
 
-fn capability(a: &Offer, b: &Offer) -> Ordering {
+fn capability(a: &Offer, b: &Offer, price: &impl Fn(&Offer) -> f64) -> Ordering {
     let size = |offer: &Offer| (offer.vcpu.unwrap_or(0), offer.memory_gb.unwrap_or(0));
     let by_size = if a.kind == "gpu" {
         Ordering::Equal
     } else {
         size(a).cmp(&size(b))
     };
-    by_size.then_with(|| a.hourly.total_cmp(&b.hourly))
+    by_size.then_with(|| price(a).total_cmp(&price(b)))
 }
 
 #[cfg(test)]

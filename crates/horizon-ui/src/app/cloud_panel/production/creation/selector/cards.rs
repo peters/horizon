@@ -13,17 +13,37 @@ fn title(offer: &Offer) -> (String, String) {
             .gpu_memory_gb
             .map(|gb| format!("{gb} GB GPU memory"))
             .unwrap_or_default();
-        (offer.name.clone(), memory)
+        (offer.name.clone(), format!("{} · {memory}", offer.provider))
     } else {
         let size = format!("{} vCPU · {} GB", offer.vcpu.unwrap_or(0), offer.memory_gb.unwrap_or(0));
         let family = offer.name.split(" · ").next().unwrap_or_default().to_owned();
-        (size, family)
+        (
+            size,
+            format!(
+                "{} · {family}{}",
+                offer.provider,
+                offer
+                    .location
+                    .as_ref()
+                    .map(|place| format!(" · {place}"))
+                    .unwrap_or_default()
+            ),
+        )
     }
 }
 
 fn price(offer: &Offer) -> String {
     let prefix = if offer.flavors.len() > 1 { "up to " } else { "" };
-    format!("{prefix}${:.2}/hr", offer.hourly)
+    let symbol = match offer.currency {
+        "EUR" => "€",
+        "USD" => "$",
+        currency => currency,
+    };
+    if offer.currency == "EUR" {
+        format!("{prefix}{symbol}{:.4}/hr", offer.hourly)
+    } else {
+        format!("{prefix}{symbol}{:.2}/hr", offer.hourly)
+    }
 }
 
 /// The three starting points. Returns the one clicked.
@@ -53,7 +73,9 @@ pub(super) fn picks(ui: &mut Ui, catalog: &Catalog, form: &Production) -> Option
 fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool {
     let offer = &catalog.offers[index];
     let selected = catalog.selected == Some(index);
-    let id = ui.id().with(("worker-card", &offer.id));
+    let id = ui
+        .id()
+        .with(("worker-card", offer.provider, &offer.id, &offer.location));
     let hovered = ui.is_enabled() && ui.ctx().read_response(id).is_some_and(|response| response.hovered());
     // Cards take keyboard focus like buttons, and Enter or Space chooses one.
     let focused = ui.memory(|memory| memory.has_focus(id));
@@ -69,7 +91,7 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
     };
     let stroke = if focused { Stroke::new(2.0, theme::FG()) } else { stroke };
     let (name, detail) = title(offer);
-    let (stock, color) = widgets::stock(catalog.stock(index, form));
+    let (stock, color) = stock(catalog, index, form);
     let frame = Frame::new()
         .fill(fill)
         .stroke(stroke)
@@ -82,6 +104,17 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
             ui.label(RichText::new(detail).size(12.5).color(theme::FG_SOFT()));
             ui.add_space(4.0);
             ui.label(RichText::new(price(offer)).size(19.0).strong().color(theme::FG()));
+            if let Some(total) = horizon_core::cloud_runtime::offers::comparison::dollars(
+                offer.estimated_total,
+                offer.currency,
+                form.prices.exchange.rates.as_ref(),
+            ) {
+                ui.label(
+                    RichText::new(format!("≈ ${total:.3} total"))
+                        .size(12.0)
+                        .color(theme::FG_SOFT()),
+                );
+            }
             ui.horizontal(|ui| widgets::pill(ui, stock, color));
         });
     let response = ui
@@ -119,6 +152,13 @@ pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Opti
     let show_below_minimums = state.show_below_minimums;
     let form = &*form;
     let rows: Vec<usize> = (0..catalog.offers.len())
+        .filter(|&index| {
+            form.launch
+                .selector
+                .provider_filter
+                .as_ref()
+                .is_none_or(|provider| provider == catalog.offers[index].provider)
+        })
         .filter(|&index| show_below_minimums || index < catalog.matching)
         .filter(|&index| {
             let (name, detail) = title(&catalog.offers[index]);
@@ -177,7 +217,7 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
     let (stock, stock_color) = if reason.is_some() {
         ("Below requirements", theme::FG_DIM())
     } else {
-        widgets::stock(catalog.stock(index, form))
+        stock(catalog, index, form)
     };
     let painter = ui.painter();
     let fill = if selected {
@@ -252,4 +292,16 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
         response
     };
     response.clicked()
+}
+
+fn stock(catalog: &Catalog, index: usize, form: &Production) -> (&'static str, egui::Color32) {
+    let offer = &catalog.offers[index];
+    if offer.location.is_some() {
+        return if offer.availability == "listed" {
+            ("Listed available", theme::PALETTE_GREEN())
+        } else {
+            ("Unlisted · advisory", theme::PALETTE_YELLOW())
+        };
+    }
+    widgets::stock(catalog.stock(index, form))
 }

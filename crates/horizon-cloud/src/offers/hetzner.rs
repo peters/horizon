@@ -34,6 +34,18 @@ pub fn hetzner_section(catalog: &Catalog, requirements: &Requirements) -> serde_
 /// calendar month (UTC), so the estimate follows the month boundaries after `start`.
 #[must_use]
 pub fn hetzner_at(catalog: &Catalog, requirements: &Requirements, start: OffsetDateTime) -> Vec<Offer> {
+    let mut offers = hetzner_catalog_at(catalog, requirements, start);
+    offers.truncate(requirements.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT));
+    offers
+}
+
+/// Every matching Hetzner offer, before presentation limits.
+#[must_use]
+pub fn hetzner_catalog(catalog: &Catalog, requirements: &Requirements) -> Vec<Offer> {
+    hetzner_catalog_at(catalog, requirements, OffsetDateTime::now_utc())
+}
+
+fn hetzner_catalog_at(catalog: &Catalog, requirements: &Requirements, start: OffsetDateTime) -> Vec<Offer> {
     if requirements.gpu {
         return Vec::new();
     }
@@ -73,7 +85,6 @@ pub fn hetzner_at(catalog: &Catalog, requirements: &Requirements, start: OffsetD
             .then_with(|| a.id.cmp(&b.id))
             .then_with(|| a.location.cmp(&b.location))
     });
-    offers.truncate(requirements.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT));
     offers
 }
 

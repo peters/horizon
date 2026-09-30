@@ -156,6 +156,7 @@ mod tests {
         }))
         .unwrap();
         let spec = WorkerSpec {
+            exact_placement: false,
             operation_id: state.cloud_id.clone(),
             image_digest: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
             profile: state.profile.clone(),
@@ -237,6 +238,7 @@ mod tests {
         }))
         .unwrap();
         let spec = WorkerSpec {
+            exact_placement: false,
             operation_id: state.cloud_id.clone(),
             image_digest: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
             profile: state.profile.clone(),
