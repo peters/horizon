@@ -470,7 +470,7 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
 
 /// The worker for the selected profile: the wide selector where the provider lists its
 /// offers, and the provider's own size and location fields otherwise. Returns whether
-/// the selector was shown.
+/// the summary leaves the container disk editor to More options.
 fn machine(ui: &mut Ui, form: &mut Production) -> bool {
     if let Some(profile) = selector::profile(form) {
         let gpu = profile.gpu;
@@ -485,7 +485,10 @@ fn machine(ui: &mut Ui, form: &mut Production) -> bool {
         form.placement = form.placement.for_profile(gpu);
     }
     selector::section(ui, form);
-    true
+    selector::profile(form).is_some_and(|profile| {
+        provider::current(form.provider, profile).placement
+            == horizon_core::cloud_runtime::provider::Placement::DataCenters
+    })
 }
 
 fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {

@@ -440,3 +440,116 @@ fn runpod_storage_requirements_are_not_silently_changed_for_hetzner() {
         horizon_core::cloud_runtime::prices::StorageTier::HighPerformance
     );
 }
+
+#[test]
+fn exchange_status_follows_matching_currencies_even_with_both_providers_configured() {
+    for only_hetzner_matches in [false, true] {
+        let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        prepare(&mut app, &ctx, temp.path());
+        hetzner_binding(&mut app);
+        let form = &mut app.cloud_prototype.production;
+        if only_hetzner_matches {
+            form.prices.list.as_mut().unwrap().value.0.cpu.clear();
+        } else {
+            form.profiles
+                .as_mut()
+                .unwrap()
+                .profiles
+                .get_mut("development")
+                .unwrap()
+                .cpu = 8;
+        }
+        let shown = selector::catalog(form).unwrap();
+        assert!(shown.complete && shown.picks.cheapest.is_some());
+        assert_eq!(shown.currency, if only_hetzner_matches { "EUR" } else { "USD" });
+        assert!(!painted(&tall_frame(&ctx, &mut app)).contains("ECB rates dated"));
+        app.cloud_prototype.production.prices.exchange.refresh();
+        app.cloud_prototype.production.prices.exchange.error = Some("Synthetic exchange failure".into());
+        let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+        assert!(shown.complete && shown.picks.cheapest.is_some());
+        let text = painted(&tall_frame(&ctx, &mut app));
+        assert!(
+            !text.contains("Synthetic exchange failure") && !text.contains("ECB rates dated"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn matching_foreign_offers_still_report_exchange_failure() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    app.cloud_prototype.production.prices.exchange.refresh();
+    app.cloud_prototype.production.prices.exchange.error = Some("Synthetic exchange failure".into());
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(!shown.complete && shown.picks.cheapest.is_none());
+    assert!(painted(&tall_frame(&ctx, &mut app)).contains("Synthetic exchange failure"));
+}
+
+#[test]
+fn provider_filter_counts_only_its_own_matching_and_excluded_workers() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    let filter = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.job.text == "Hetzner" => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()))
+            }
+            _ => None,
+        })
+        .nth(1)
+        .unwrap(); // The first Hetzner label identifies the selected worker's provider.
+    click(&ctx, &mut app, filter.center());
+    let output = tall_frame(&ctx, &mut app);
+    let text = painted(&output);
+    assert!(
+        text.contains("Showing 2 of 2 workers · 0 below requirements hidden"),
+        "{text}"
+    );
+    assert!(!text.contains("Show workers below requirements"));
+    let mut below_minimum = catalog(true);
+    below_minimum.offers[0].cores = 2;
+    app.cloud_prototype.production.prices.hetzner.answered_with_policy(
+        Some(below_minimum),
+        &["cx33", "cpx32"],
+        &["hel1"],
+    );
+    let text = painted(&tall_frame(&ctx, &mut app));
+    assert!(
+        text.contains("Showing 1 of 2 workers · 1 below requirements hidden"),
+        "{text}"
+    );
+    assert!(text.contains("Show workers below requirements"));
+}
+
+#[test]
+fn hetzner_summary_owns_the_system_disk_editor_with_more_options_open() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    selector::choose(
+        &mut app.cloud_prototype.production,
+        false,
+        &shown.offers[shown.picks.cheapest.unwrap()],
+    );
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "More options").center());
+    let text = painted(&tall_frame(&ctx, &mut app));
+    assert!(text.contains("Committed base revision"), "{text}");
+    assert_eq!(text.matches("System disk requirement").count(), 1, "{text}");
+    assert!(!text.contains("Container disk"), "{text}");
+}

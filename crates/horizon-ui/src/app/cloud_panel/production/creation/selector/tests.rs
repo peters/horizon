@@ -179,13 +179,10 @@ fn provider_and_exchange_failures_only_appear_in_the_comparison_scope() {
     let contains = |labels: &[String], text: &str| labels.iter().any(|label| label.contains(text));
     let mut all = failed("cpu");
     let labels = render(&mut all);
-    for error in [
-        "Synthetic Hetzner failure",
-        "Synthetic exchange failure",
-        "Synthetic RunPod failure",
-    ] {
+    for error in ["Synthetic Hetzner failure", "Synthetic RunPod failure"] {
         assert!(contains(&labels, error), "missing {error}");
     }
+    assert!(!contains(&labels, "Synthetic exchange failure"));
     for profile in ["cpu", "gpu"] {
         let mut runpod = failed(profile);
         runpod.launch.selector.provider_filter = Some("RunPod".into());

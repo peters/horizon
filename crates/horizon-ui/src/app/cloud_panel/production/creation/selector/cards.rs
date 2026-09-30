@@ -134,6 +134,10 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
 
 /// Search and eligibility controls keep their place when rankings refresh.
 pub(super) fn filters(ui: &mut Ui, catalog: &Catalog, form: &mut Production) {
+    let excluded = catalog
+        .scoped_offers(form)
+        .filter(|(index, _)| *index >= catalog.matching)
+        .count();
     let state = &mut form.launch.selector;
     ui.horizontal_wrapped(|ui| {
         ui.add(
@@ -143,7 +147,6 @@ pub(super) fn filters(ui: &mut Ui, catalog: &Catalog, form: &mut Production) {
         );
         widgets::checkbox(ui, &mut state.in_stock_only, "In stock only");
     });
-    let excluded = catalog.offers.len() - catalog.matching;
     if excluded > 0 {
         widgets::checkbox(ui, &mut state.show_below_minimums, "Show workers below requirements");
     }
@@ -152,19 +155,18 @@ pub(super) fn filters(ui: &mut Ui, catalog: &Catalog, form: &mut Production) {
 /// Excluded workers can be inspected, but never chosen.
 pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Option<usize> {
     let state = &form.launch.selector;
-    let excluded = catalog.offers.len() - catalog.matching;
+    let total = catalog.scoped_offers(form).count();
+    let excluded = catalog
+        .scoped_offers(form)
+        .filter(|(index, _)| *index >= catalog.matching)
+        .count();
     let search = state.search.trim().to_lowercase();
     let in_stock_only = state.in_stock_only;
     let show_below_minimums = state.show_below_minimums;
     let form = &*form;
-    let rows: Vec<usize> = (0..catalog.offers.len())
-        .filter(|&index| {
-            form.launch
-                .selector
-                .provider_filter
-                .as_ref()
-                .is_none_or(|provider| provider == catalog.offers[index].provider)
-        })
+    let rows: Vec<usize> = catalog
+        .scoped_offers(form)
+        .map(|(index, _)| index)
         .filter(|&index| show_below_minimums || index < catalog.matching)
         .filter(|&index| {
             let (name, detail) = title(&catalog.offers[index]);
@@ -183,7 +185,7 @@ pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Opti
         &format!(
             "Showing {} of {} workers · {hidden} below requirements hidden",
             rows.len(),
-            catalog.offers.len()
+            total
         ),
     );
     if rows.is_empty() {

@@ -68,6 +68,18 @@ pub(in crate::app::cloud_panel::production) struct Catalog {
 }
 
 impl Catalog {
+    fn scoped_offers<'a>(&'a self, form: &'a Production) -> impl Iterator<Item = (usize, &'a Offer)> {
+        self.offers
+            .iter()
+            .enumerate()
+            .filter(|(_, offer)| in_provider_scope(form, offer))
+    }
+
+    fn uses_exchange(&self, form: &Production) -> bool {
+        self.scoped_offers(form)
+            .any(|(index, offer)| index < self.matching && offer.currency != self.currency)
+    }
+
     pub fn total(&self, offer: &Offer, form: &Production) -> Option<f64> {
         offers::comparison::in_currency(
             offer.estimated_total,
@@ -137,7 +149,19 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
     } = workers;
     let interested = |provider| interested(form, profile, provider);
     let scope = Scope::new(form, profile);
-    let currency = comparison_currency(scope.runpod, scope.hetzner);
+    let matching_currency = |currency| {
+        offers
+            .iter()
+            .take(matching)
+            .any(|offer| in_provider_scope(form, offer) && offer.currency == currency)
+    };
+    let runpod_currency = matching_currency("USD");
+    let hetzner_currency = matching_currency("EUR");
+    let currency = if runpod_currency || hetzner_currency {
+        comparison_currency(runpod_currency, hetzner_currency)
+    } else {
+        comparison_currency(scope.runpod, scope.hetzner)
+    };
     let cost = |offer: &Offer| {
         offers::comparison::in_currency(
             offer.estimated_total,
@@ -152,13 +176,7 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
         && offers
             .iter()
             .take(matching)
-            .filter(|offer| {
-                form.launch
-                    .selector
-                    .provider_filter
-                    .as_ref()
-                    .is_none_or(|filter| filter == offer.provider)
-            })
+            .filter(|offer| in_provider_scope(form, offer))
             .all(|offer| cost(offer).is_some())
         && (profile.gpu
             || !scope.runpod
@@ -192,11 +210,7 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
         catalog.picks = offers::picks_matching(
             &catalog.offers[..matching],
             |offer| {
-                form.launch
-                    .selector
-                    .provider_filter
-                    .as_ref()
-                    .is_none_or(|provider| provider == offer.provider)
+                in_provider_scope(form, offer)
                     && (!form.launch.selector.in_stock_only
                         || stocked.contains(&(offer.provider, offer.id.as_str(), offer.location.as_deref())))
             },
@@ -235,10 +249,14 @@ impl Scope {
                 && form.prices.hetzner.bound(),
         }
     }
+}
 
-    fn uses_exchange(&self) -> bool {
-        self.runpod && self.hetzner
-    }
+fn in_provider_scope(form: &Production, offer: &Offer) -> bool {
+    form.launch
+        .selector
+        .provider_filter
+        .as_ref()
+        .is_none_or(|provider| provider == offer.provider)
 }
 
 fn comparison_currency(runpod: bool, hetzner: bool) -> &'static str {
@@ -352,7 +370,7 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
                 catalog.currency
             ),
         );
-    } else if Scope::new(form, &profile).uses_exchange()
+    } else if catalog.uses_exchange(form)
         && let Some(rates) = form.prices.exchange.fresh()
     {
         widgets::note(
@@ -413,6 +431,7 @@ fn requirement(profile: &Profile, name: &str) -> String {
 /// How old the prices on show are, and why they are not current.
 fn freshness(ui: &mut Ui, form: &mut Production, profile: &Profile) {
     let scope = Scope::new(form, profile);
+    let uses_exchange = catalog(form).is_some_and(|catalog| catalog.uses_exchange(form));
     let prices = &form.prices;
     if scope.hetzner
         && let Some(error) = prices.hetzner.error()
@@ -422,9 +441,7 @@ fn freshness(ui: &mut Ui, form: &mut Production, profile: &Profile) {
             &format!("Hetzner prices unavailable: {error}. Retaining the last catalog for inspection."),
         );
     }
-    if scope.uses_exchange()
-        && let Some(error) = &prices.exchange.error
-    {
+    if uses_exchange && let Some(error) = &prices.exchange.error {
         widgets::note(ui, error);
     }
     if scope.runpod && !profile.gpu && !profile.storage.standard_tier() {
