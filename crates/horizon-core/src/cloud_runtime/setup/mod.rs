@@ -194,6 +194,30 @@ impl Draft {
     }
 }
 
+/// The one compute account a first cloud needs.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Provider {
+    RunPod,
+    Hetzner,
+}
+
+/// Saves `key` for `provider` with the machine's other settings, making an SSH identity on
+/// first use, so a first cloud can be started without visiting the settings form.
+/// Run off the UI thread: it may invoke `ssh-keygen`.
+/// # Errors
+/// As [`Draft::save`].
+pub fn save_provider_key(root: &Path, provider: Provider, key: &str) -> Result<Settings> {
+    let mut draft = Draft::load(root)?;
+    match provider {
+        Provider::RunPod => draft.runpod_key = Zeroizing::new(key.trim().to_owned()),
+        Provider::Hetzner => {
+            draft.hetzner.enabled = true;
+            draft.hetzner.token = Zeroizing::new(key.trim().to_owned());
+        }
+    }
+    draft.save()
+}
+
 fn authentication(binding: Option<&PathBuf>) -> Authentication {
     if binding.is_some() {
         Authentication::ApiKey

@@ -28,12 +28,10 @@ fn keyboard_chooses_a_typed_repository_and_returns_focus_to_the_field() {
         .unwrap(),
     );
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
-    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
-    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
     assert!(
         app.dir_picker.is_some(),
-        "Enter opens the picker without also confirming it"
+        "Enter on Browse… opens the picker without also confirming it"
     );
     frame(
         &ctx,
@@ -48,17 +46,21 @@ fn keyboard_chooses_a_typed_repository_and_returns_focus_to_the_field() {
         app.cloud_prototype.production.profiles.is_none(),
         "a different repository needs its own profiles"
     );
-    key(&ctx, &mut app, Key::Enter, Modifiers::COMMAND);
     assert!(
-        app.dir_picker.is_some(),
-        "focus returns to the field after choosing, and a modified Enter does not confirm"
+        ctx.memory(|memory| memory.has_focus(Id::new("cloud-source"))),
+        "focus returns to the field after choosing"
     );
+    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
+    key(&ctx, &mut app, Key::Enter, Modifiers::COMMAND);
+    assert!(app.dir_picker.is_some(), "Browse… opens the picker again");
     key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
     assert!(app.dir_picker.is_none());
     assert!(app.cloud_creation_open(), "Escape closes only the picker");
     assert_eq!(app.cloud_prototype.production.repository, repository.to_string_lossy());
-    key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
-    assert!(app.dir_picker.is_some(), "focus also returns after cancelling");
+    assert!(
+        ctx.memory(|memory| memory.has_focus(Id::new("cloud-source"))),
+        "focus also returns after cancelling"
+    );
 }
 
 #[test]
@@ -104,12 +106,11 @@ fn release(ctx: &egui::Context, app: &mut HorizonApp, held: Key) {
 }
 
 #[test]
-fn holding_enter_on_the_repository_field_leaves_the_picker_open_and_empty() {
+fn holding_enter_on_browse_leaves_the_picker_open_and_empty() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
     open_creation(&ctx, &mut app, temp.path().join("clouds"));
-    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     hold(&ctx, &mut app, Key::Enter);
     assert!(app.dir_picker.is_some(), "repeats must not confirm the picker");
@@ -126,7 +127,6 @@ fn holding_escape_in_the_picker_keeps_the_dialog_open() {
     });
     open_creation(&ctx, &mut app, temp.path().join("clouds"));
     app.cloud_prototype.production.title = "Held keys".into();
-    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
     assert!(app.dir_picker.is_some());
@@ -176,5 +176,98 @@ fn choosing_another_repository_clears_its_stale_error() {
         app.cloud_prototype.error.as_deref(),
         Some("unrelated"),
         "choosing the same repository keeps its error"
+    );
+}
+
+#[test]
+fn a_typed_folder_becomes_the_repository_and_names_the_cloud() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    let repository = temp.path().join("demo-atlas");
+    std::fs::create_dir_all(repository.join(".git")).unwrap();
+    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    frame(
+        &ctx,
+        &mut app,
+        vec![Event::Text(repository.to_string_lossy().into())],
+        Modifiers::NONE,
+    );
+    for _ in 0..3 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    assert!(
+        app.cloud_prototype.production.repository.is_empty(),
+        "a path is not taken at the first repository it passes on the way to a longer one"
+    );
+    std::thread::sleep(Duration::from_millis(600));
+    for _ in 0..3 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    assert_eq!(
+        std::path::Path::new(&app.cloud_prototype.production.repository),
+        repository,
+        "a folder that holds a repository is taken without a Continue once typing stops"
+    );
+    assert_eq!(app.cloud_prototype.production.title, "demo-atlas");
+}
+
+#[test]
+fn a_pasted_link_waits_for_continue() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    frame(
+        &ctx,
+        &mut app,
+        vec![Event::Text("github.com/demo-org/demo-atlas".into())],
+        Modifiers::NONE,
+    );
+    for _ in 0..3 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    assert!(
+        app.cloud_prototype.production.repository.is_empty(),
+        "a link is cloned only when the person continues"
+    );
+    assert_eq!(
+        app.cloud_prototype.production.source.input(),
+        "github.com/demo-org/demo-atlas"
+    );
+}
+
+#[test]
+fn closing_the_dialog_forgets_what_was_typed_in_the_source_field() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    frame(
+        &ctx,
+        &mut app,
+        vec![Event::Text("github.com/demo-org/demo-atlas".into())],
+        Modifiers::NONE,
+    );
+    assert!(!app.cloud_prototype.production.source.input().is_empty());
+    key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
+    assert!(!app.cloud_creation_open());
+    assert!(app.cloud_prototype.production.source.input().is_empty());
+}
+
+#[test]
+fn a_picker_closed_without_a_repository_reads_nothing() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    app.cloud_prototype.production.choosing_repository = true;
+    for _ in 0..3 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    assert!(
+        app.cloud_prototype.error.is_none(),
+        "no repository, so no error about reading one: {:?}",
+        app.cloud_prototype.error
     );
 }

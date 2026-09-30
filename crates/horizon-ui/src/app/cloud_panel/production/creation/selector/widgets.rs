@@ -17,7 +17,7 @@ pub(super) fn note(ui: &mut Ui, text: &str) {
 }
 
 /// A small upper-case caption, as over each starting point.
-pub(super) fn caption(ui: &mut Ui, text: &str) {
+pub(in super::super) fn caption(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).size(10.5).strong().color(theme::FG_DIM()));
 }
 
@@ -79,7 +79,7 @@ pub(super) fn line(ui: &mut Ui, label: &str, value: &str, strong: bool) {
 }
 
 /// A checkbox drawn to read clearly on the dialog's dark panels.
-pub(super) fn checkbox(ui: &mut Ui, checked: &mut bool, label: &str) -> egui::Response {
+pub(in super::super) fn checkbox(ui: &mut Ui, checked: &mut bool, label: &str) -> egui::Response {
     const BOX: f32 = 16.0;
     let text = ui
         .painter()

@@ -156,8 +156,7 @@ impl HorizonApp {
         let Some(pending) = &form.pending_creation else { return };
         if !form.creating || pending.session != self.active_session.as_ref().map(|session| session.session_id.clone()) {
             pending.cancel.0.cancel();
-            form.pending_creation = None;
-            form.creating = false;
+            self.close_cloud_creation();
             return;
         }
         let result = match pending.receiver.try_recv() {
@@ -206,6 +205,9 @@ impl HorizonApp {
             siblings,
         )?;
         self.cloud_prototype.production.creating = false;
+        // What this dialog held (a clone, a token, a typed key, its checks) does not outlive it.
+        self.cloud_prototype.production.source = super::creation::source::State::default();
+        self.cloud_prototype.production.checks = super::creation::checks::State::default();
         // The next cloud authorizes its own siblings; a reopened form starts unchecked.
         self.cloud_prototype.production.launch.siblings = super::creation::siblings::State::default();
         self.cloud_overview(ctx);

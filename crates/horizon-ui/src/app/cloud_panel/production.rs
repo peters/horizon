@@ -64,6 +64,10 @@ pub(super) struct Production {
     title: String,
     repository: String,
     choosing_repository: bool,
+    /// Where the new cloud's code comes from: a link to clone, or a folder.
+    source: creation::source::State,
+    /// What Start depends on, confirmed before it is offered.
+    checks: creation::checks::State,
     revision: String,
     profiles: Option<CloudConfig>,
     selected_profile: String,

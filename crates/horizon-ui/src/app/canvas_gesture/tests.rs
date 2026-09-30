@@ -572,6 +572,122 @@ fn repeated_native_modifier_snapshots_do_not_release_reserved_clicks() {
 }
 
 #[test]
+fn empty_wayland_preedits_do_not_interrupt_a_modified_double_click() {
+    let pos = Pos2::new(300.0, 300.0);
+    for active_range_chars in [None, Some(0..0)] {
+        let mut gesture = CanvasGesture::default();
+        let preedit = Event::Ime(egui::ImeEvent::Preedit {
+            text: String::new(),
+            active_range_chars,
+        });
+        for (time, events, expected) in [
+            (1.0, vec![button(pos, true), preedit.clone()], vec![preedit.clone()]),
+            (1.05, vec![preedit.clone(), button(pos, false)], vec![preedit.clone()]),
+            (1.1, vec![preedit.clone()], vec![preedit.clone()]),
+            (1.15, vec![preedit.clone(), button(pos, true)], vec![preedit.clone()]),
+            (1.2, vec![button(pos, false), preedit.clone()], vec![preedit]),
+        ] {
+            assert_eq!(feed(&mut gesture, time, events).events, expected);
+        }
+        assert_eq!(gesture.take_completed(), Some(pos));
+        assert!(gesture.pending.is_none());
+        assert!(!gesture.cancelled_down);
+    }
+}
+
+#[test]
+fn composition_and_committed_text_still_interrupt_modified_clicks() {
+    let pos = Pos2::new(300.0, 300.0);
+    for ime in [
+        egui::ImeEvent::Preedit {
+            text: "compose".into(),
+            active_range_chars: Some(0..7),
+        },
+        egui::ImeEvent::Commit("committed".into()),
+    ] {
+        for released in [false, true] {
+            let mut gesture = CanvasGesture::default();
+            feed(&mut gesture, 1.0, vec![button(pos, true)]);
+            if released {
+                feed(&mut gesture, 1.05, vec![button(pos, false)]);
+            }
+            let event = Event::Ime(ime.clone());
+            let output = feed(&mut gesture, 1.1, vec![event.clone()]);
+            if released {
+                assert_eq!(output.events, vec![button(pos, true), button(pos, false)]);
+                assert_eq!(feed(&mut gesture, 1.11, vec![]).events, vec![event]);
+            } else {
+                assert_eq!(output.events, vec![button(pos, true), event]);
+            }
+            assert!(gesture.pending.is_none());
+            assert!(gesture.take_completed().is_none());
+        }
+    }
+}
+
+#[test]
+fn empty_preedits_preserve_a_single_click_until_its_timeout() {
+    let mut gesture = CanvasGesture::default();
+    let pos = Pos2::new(300.0, 300.0);
+    let preedit = Event::Ime(egui::ImeEvent::Preedit {
+        text: String::new(),
+        active_range_chars: None,
+    });
+    feed(&mut gesture, 1.0, vec![button(pos, true)]);
+    feed(&mut gesture, 1.05, vec![button(pos, false)]);
+    for time in [1.1, 1.2, 1.3] {
+        assert_eq!(
+            feed(&mut gesture, time, vec![preedit.clone()]).events,
+            vec![preedit.clone()]
+        );
+    }
+    assert_eq!(
+        feed(&mut gesture, 1.36, vec![]).events,
+        vec![button(pos, true), button(pos, false)]
+    );
+    assert!(feed(&mut gesture, 1.4, vec![]).events.is_empty());
+    assert!(gesture.take_completed().is_none());
+}
+
+#[test]
+fn empty_wayland_preedits_still_allow_the_workspace_panel_picker_to_open() {
+    use crate::app::test_support::{
+        editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup,
+    };
+    use horizon_core::{RuntimeState, StartupDecision};
+
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState {
+            workspaces: vec![editor_workspace_state("fixture", [0.0, 0.0])],
+            ..RuntimeState::default()
+        }),
+    });
+    for _ in 0..3 {
+        run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    }
+    let (workspace, rect) = app.workspace_screen_rects[0];
+    let pos = rect.center();
+    for (time, pressed) in [(1.0, true), (1.05, false), (1.15, true), (1.2, false)] {
+        let mut raw = raw_input([1400.0, 900.0], None);
+        raw.time = Some(time);
+        raw.events = vec![
+            Event::PointerMoved(pos),
+            button(pos, pressed),
+            Event::Ime(egui::ImeEvent::Preedit {
+                text: String::new(),
+                active_range_chars: None,
+            }),
+        ];
+        app.filter_canvas_gesture(&ctx, &mut raw);
+        run_app_frame_with_input(&ctx, &mut app, raw);
+    }
+    assert_eq!(
+        app.pending_preset_pick.map(|(target, _, _)| target),
+        Some(Some(workspace))
+    );
+}
+
+#[test]
 fn focus_loss_after_a_forwarded_drag_allows_the_next_modified_double_click() {
     let mut gesture = CanvasGesture::default();
     let pos = Pos2::new(300.0, 300.0);

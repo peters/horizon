@@ -70,31 +70,35 @@ fn creation_dialog_and_actions_fit_after_shrinking_with_scrolling_content() {
     }
     app.cloud_prototype.production.creating = true;
     app.cloud_prototype.error = Some("Configuration needs correction before deployment.\n".repeat(30));
-    for size in [[3840.0, 2140.0], [900.0, 700.0], [800.0, 600.0]] {
-        for _ in 0..8 {
-            run_app_frame_with_input(&ctx, &mut app, raw_input(size, None));
-        }
-        let output = run_app_frame_with_input(&ctx, &mut app, raw_input(size, None));
-        let dialog = ctx
-            .memory(|memory| memory.area_rect(Id::new("cloud-creation")))
-            .unwrap();
-        let viewport = Rect::from_min_size(Pos2::ZERO, egui::vec2(size[0], size[1]));
-        assert!(
-            viewport.contains_rect(dialog),
-            "{size:?}: dialog {dialog:?} exceeds {viewport:?}"
-        );
-        for label in ["Start cloud", "Cancel"] {
-            let shape = output
-                .shapes
-                .iter()
-                .find(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.job.text == label))
+    // Before a repository is chosen the dialog offers Continue; after, Start cloud.
+    for (repository, action) in [("", "Continue"), ("/work/atlas", "Start cloud")] {
+        app.cloud_prototype.production.repository = repository.into();
+        for size in [[3840.0, 2140.0], [900.0, 700.0], [800.0, 600.0]] {
+            for _ in 0..8 {
+                run_app_frame_with_input(&ctx, &mut app, raw_input(size, None));
+            }
+            let output = run_app_frame_with_input(&ctx, &mut app, raw_input(size, None));
+            let dialog = ctx
+                .memory(|memory| memory.area_rect(Id::new("cloud-creation")))
                 .unwrap();
-            let Shape::Text(text) = &shape.shape else {
-                unreachable!()
-            };
-            let bounds = Rect::from_min_size(text.pos, text.galley.size());
-            assert!(viewport.contains_rect(bounds));
-            assert!(shape.clip_rect.contains_rect(bounds), "{label} is clipped at {size:?}");
+            let viewport = Rect::from_min_size(Pos2::ZERO, egui::vec2(size[0], size[1]));
+            assert!(
+                viewport.contains_rect(dialog),
+                "{size:?}: dialog {dialog:?} exceeds {viewport:?}"
+            );
+            for label in [action, "Cancel"] {
+                let shape = output
+                    .shapes
+                    .iter()
+                    .find(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.job.text == label))
+                    .unwrap();
+                let Shape::Text(text) = &shape.shape else {
+                    unreachable!()
+                };
+                let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                assert!(viewport.contains_rect(bounds));
+                assert!(shape.clip_rect.contains_rect(bounds), "{label} is clipped at {size:?}");
+            }
         }
     }
 }

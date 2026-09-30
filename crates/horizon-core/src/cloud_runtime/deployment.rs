@@ -1,4 +1,6 @@
 //! Deployment orchestration. Credentials, images and source are ready before allocation.
+mod admission;
+pub use admission::{Problem, problems as admission_problems};
 mod agent_credentials;
 mod compute;
 pub(in crate::cloud_runtime) use compute::Compute;
