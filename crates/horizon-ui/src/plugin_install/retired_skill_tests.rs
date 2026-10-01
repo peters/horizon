@@ -18,8 +18,8 @@ fn retired_skill_is_cleanup_only_in_default_and_overridden_homes() {
         (None, Some(custom.as_path()), custom.clone()),
     ] {
         let retired = root.join("skills").join(RETIRED_OFFLOAD_SKILL);
-        let active = user_skill_lease_dirs(user_home, None, override_home);
-        let cleanup = user_skill_cleanup_dirs(user_home, override_home);
+        let active = user_skill_lease_dirs(user_home, override_home);
+        let cleanup = user_skill_cleanup_dirs(user_home, None, override_home);
         assert!(cleanup.contains(&retired));
         assert!(!active.contains(&retired));
         write_skill(&retired);
@@ -51,11 +51,32 @@ fn retired_skill_cleanup_preserves_an_older_live_host() {
         .expect("old skill lease");
     write_skill(&retired);
     let mut new = AgentPluginHostLease::acquire(temp.path().join("hosts/new")).expect("new host");
-    let cleanup = user_skill_cleanup_dirs(None, Some(&root));
+    let cleanup = user_skill_cleanup_dirs(None, None, Some(&root));
     new.bind_user_skills_with_cleanup(&[], &cleanup).expect("cleanup lease");
     assert!(retired.join("SKILL.md").is_file());
     drop(new);
     assert!(retired.join("SKILL.md").is_file());
     drop(old);
     assert!(!retired.exists());
+}
+
+#[test]
+fn retired_skill_is_removed_when_the_older_host_exits_before_the_cleanup_host() {
+    let temp = tempfile::tempdir().expect("temp directory");
+    let root = temp.path().join("custom");
+    let retired = root.join("skills").join(RETIRED_OFFLOAD_SKILL);
+    let mut old = AgentPluginHostLease::acquire(temp.path().join("hosts/old")).expect("old host");
+    old.bind_user_skills(std::slice::from_ref(&retired))
+        .expect("old skill lease");
+    write_skill(&retired);
+    let mut new = AgentPluginHostLease::acquire(temp.path().join("hosts/new")).expect("new host");
+    let cleanup = user_skill_cleanup_dirs(None, None, Some(&root));
+    new.bind_user_skills_with_cleanup(&[], &cleanup).expect("cleanup lease");
+    assert!(retired.join("SKILL.md").is_file());
+    drop(old);
+    assert!(
+        !retired.exists(),
+        "the last installing host leaving removes the retired copy while the cleanup host runs on"
+    );
+    drop(new);
 }

@@ -2,19 +2,19 @@
 //!
 //! Coordination is per target skill directory so `CODEX_HOME` / `GROK_HOME`
 //! overrides share a lock even when `HOME` differs across Horizon processes.
-//! Liveness is per skill name so a notify-only host cannot strand a sibling
-//! `horizon-browser` directory leased by another host.
+//! Liveness is per skill name so a host cannot strand a sibling skill
+//! directory leased by another host.
 
 use std::ffi::OsStr;
 use std::fs::{OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub(super) const HORIZON_NOTIFY_SKILL: &str = "horizon-notify";
 pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
 pub(super) const HORIZON_DEVICE_SKILL: &str = "horizon-device";
 pub(super) const HORIZON_SPEECH_SKILL: &str = "horizon-speech";
 // Recognized only for migration cleanup; never installed by this version.
+pub(super) const RETIRED_NOTIFY_SKILL: &str = "horizon-notify";
 pub(super) const RETIRED_OFFLOAD_SKILL: &str = "horizon-offload";
 const LEASES_DIR: &str = ".horizon-leases";
 
@@ -154,23 +154,30 @@ fn acquire_skill_root(
         name.push(".live");
         live_dir.join(name)
     };
-    let live_lock = open_lock_file(&live_path)?;
-    match live_lock.try_lock() {
-        Ok(()) => {}
-        Err(error) => {
-            drop(coord);
-            let _ = std::fs::remove_file(&live_path);
-            return Err(match error {
-                TryLockError::WouldBlock => io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    format!("skill root is already leased: {}", skill_dir.display()),
-                ),
-                TryLockError::Error(error) => error,
-            });
+    // Only installing hosts publish a live marker. A cleanup-only host serves
+    // nothing from this directory, so its marker would make an older host that
+    // exits first keep the retired copy until the cleanup host exits too.
+    let live_lock = if install {
+        let live_lock = open_lock_file(&live_path)?;
+        match live_lock.try_lock() {
+            Ok(()) => Some(live_lock),
+            Err(error) => {
+                drop(coord);
+                let _ = std::fs::remove_file(&live_path);
+                return Err(match error {
+                    TryLockError::WouldBlock => io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        format!("skill root is already leased: {}", skill_dir.display()),
+                    ),
+                    TryLockError::Error(error) => error,
+                });
+            }
         }
-    }
+    } else {
+        None
+    };
     // Cleanup-only roots may belong to an older running host. Keep its files
-    // until the last lease exits, but remove abandoned copies at startup.
+    // until the last installing host exits, but remove abandoned copies at startup.
     if !install && !another_live_host(&live_dir, &live_path)? {
         remove_horizon_skill_dir(&skill_dir);
     }
@@ -180,7 +187,7 @@ fn acquire_skill_root(
         skill_dir,
         install,
         live_path,
-        live_lock: Some(live_lock),
+        live_lock,
     })
 }
 
@@ -239,7 +246,7 @@ pub(super) fn remove_horizon_skill_dir(path: &Path) {
     let Some(name) = path.file_name() else {
         return;
     };
-    if name != HORIZON_NOTIFY_SKILL
+    if name != RETIRED_NOTIFY_SKILL
         && name != HORIZON_BROWSER_SKILL
         && name != HORIZON_DEVICE_SKILL
         && name != HORIZON_SPEECH_SKILL
