@@ -62,10 +62,16 @@ pub(super) struct Summon {
     deck_dismissed: usize,
     /// A workspace the script asked to go to, for the dock to carry out.
     pending_workspace: Option<usize>,
+    /// A panel the script asked to reveal, for the dock to carry out.
+    pending_reveal: Option<horizon_core::PanelId>,
     /// Which design the dock is drawn as; the environment decides until one is chosen.
     dock_style: Option<dock::DockStyle>,
     /// The scope follows the workspace the person is in.
     scope_follow: bool,
+    /// Chat or plan, in the concierge's composer.
+    plan_mode: bool,
+    /// The board shows the conversation beside the columns.
+    board_chat: bool,
     /// The bar is shrunk to rest above the dock, in this design.
     mini: Option<MiniStyle>,
     /// The design mini mode returns to.

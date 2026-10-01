@@ -242,7 +242,7 @@ impl HorizonApp {
                 };
             }
             "collapse" => self.assistant.summon.expanded = false,
-            "answer" => self.demo_answer(argument),
+            "answer" => self.demo_answer(argument, rest),
             "ws" => {
                 self.assistant.summon.pending_workspace = argument
                     .and_then(|value| value.parse::<usize>().ok())
@@ -327,14 +327,45 @@ impl HorizonApp {
             "unmini" => self.assistant.summon.mini = None,
             "dock" => {
                 self.assistant.summon.dock_style = Some(match argument {
-                    Some("r") => super::dock::DockStyle::Rail,
-                    Some("s") => super::dock::DockStyle::Palette,
-                    _ => super::dock::DockStyle::Pill,
+                    Some("m") => super::dock::DockStyle::Mission,
+                    Some("l") => super::dock::DockStyle::Lens,
+                    _ => super::dock::DockStyle::Concierge,
                 });
             }
             "you" => self.assistant.feed.you(&text, true),
             "said" => self.assistant.feed.said(&text),
             "did" => self.assistant.feed.did(text),
+            "thread" => {
+                // `thread <space>|<title>|<minutes ago>`: a thread to show in the history.
+                let parts: Vec<&str> = text.split('|').map(str::trim).collect();
+                if let [space, title, minutes] = parts[..] {
+                    let ago = minutes.parse::<i64>().unwrap_or(0) * 60_000;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(0));
+                    self.assistant.threads.upsert(horizon_core::assistant::Thread {
+                        session_id: format!("demo-{title}"),
+                        agent: horizon_core::PanelKind::Claude,
+                        title: title.to_string(),
+                        space: space.to_string(),
+                        cwd: None,
+                        updated_at: now - ago,
+                    });
+                }
+            }
+            "allowlow" => {
+                if let Some(demo) = self.assistant.demo.as_mut() {
+                    demo.press = Some(Instant::now());
+                }
+                self.allow_low_risk();
+            }
+            "next" => {
+                // The "Next" button of the lens: the panel of the most careful question.
+                if let Some(ask) = self.inbox().first() {
+                    self.assistant.summon.pending_reveal = Some(ask.id);
+                }
+            }
+            "chat" => self.assistant.summon.board_chat = argument != Some("off"),
             "feedclear" => self.assistant.feed.clear(),
             "follow" => self.assistant.summon.scope_follow = argument != Some("off"),
             "feed" => {
@@ -358,12 +389,13 @@ impl HorizonApp {
     }
 
     /// `answer yes|no`: the person presses the button on the card of the first agent that asked.
-    fn demo_answer(&mut self, argument: Option<&str>) {
+    fn demo_answer(&mut self, argument: Option<&str>, agent: Option<&str>) {
         let asking = self
             .board
             .panels
             .iter()
-            .find(|panel| self.board.agent_state(panel.id) == Some(AgentState::NeedsInput))
+            .filter(|panel| self.board.agent_state(panel.id) == Some(AgentState::NeedsInput))
+            .find(|panel| agent.is_none_or(|title| panel.display_title() == title))
             .map(|panel| panel.id);
         if let Some(id) = asking {
             if let Some(demo) = self.assistant.demo.as_mut() {

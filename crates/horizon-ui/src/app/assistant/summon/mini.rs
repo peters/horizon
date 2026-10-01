@@ -581,7 +581,7 @@ fn status_chip(ui: &Ui, left_centre: egui::Pos2, text: &str, color: Color32) -> 
 }
 
 pub(super) fn small_button(ui: &mut Ui, rect: Rect, text: &str, primary: bool) -> egui::Response {
-    let response = ui.interact(rect, egui::Id::new(("mini_btn", text)), Sense::click());
+    let response = ui.interact(rect, ui.id().with(("mini_btn", text)), Sense::click());
     let fill = if primary {
         theme::ACCENT()
     } else if response.hovered() {

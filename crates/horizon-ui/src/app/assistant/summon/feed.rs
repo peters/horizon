@@ -125,8 +125,8 @@ pub(super) struct AgentRow {
     pub(super) id: PanelId,
     pub(super) title: String,
     kind: String,
-    workspace: usize,
-    workspace_name: String,
+    pub(super) workspace: usize,
+    pub(super) workspace_name: String,
     pub(super) state: AgentState,
     pub(super) last: String,
 }
@@ -216,7 +216,10 @@ impl HorizonApp {
         // The cards view keeps only a question pinned: the plan and the agents are in the card.
         let cards = self.assistant.summon.feed_style == super::turns::FeedStyle::Cards;
         let pinned = |this: &Self, ui: &mut Ui, actions: &mut Vec<FeedAction>| {
-            this.draw_attention(ui, &agents, actions);
+            // The dock shows questions itself: in a card, on a board or on the panel that asked.
+            if !super::dock_enabled() {
+                this.draw_attention(ui, &agents, actions);
+            }
             if cards {
                 return;
             }
