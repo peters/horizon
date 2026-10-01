@@ -369,7 +369,7 @@ features:
     }
     #[test]
     fn config_without_speech_block_still_parses() {
-        let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("parse");
+        let config = Config::from_yaml("features:\n  sidebar_accordion: false\n").expect("parse");
         assert!(!config.features.speech.enabled);
         assert!(!config.features.speech.desktop_injection);
     }

@@ -6,9 +6,7 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder,
     Vec2,
 };
-use horizon_core::{
-    AttentionItem, AttentionSeverity, PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout,
-};
+use horizon_core::{PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
 
@@ -26,7 +24,6 @@ struct WorkspaceSidebarEntry {
     detached: bool,
     capabilities: WorkspaceLayoutCapabilities,
     panels: Vec<SidebarPanelEntry>,
-    attention_count: usize,
 }
 
 #[derive(Clone)]
@@ -35,7 +32,6 @@ struct SidebarPanelEntry {
     title: String,
     kind: PanelKind,
     is_focused: bool,
-    attention: Option<AttentionItem>,
 }
 
 #[derive(Clone, Copy)]
@@ -113,17 +109,11 @@ impl HorizonApp {
     }
 
     fn sidebar_workspace_data(&self) -> Vec<WorkspaceSidebarEntry> {
-        let attention_enabled = self.template_config.features.attention_feed;
         let panel_data = self
             .board
             .panels
             .iter()
             .map(|panel| {
-                let attention = if attention_enabled {
-                    self.board.unresolved_attention_for_panel(panel.id).cloned()
-                } else {
-                    None
-                };
                 (
                     panel.id,
                     SidebarPanelEntry {
@@ -131,7 +121,6 @@ impl HorizonApp {
                         title: panel.display_title().into_owned(),
                         kind: panel.kind,
                         is_focused: self.board.focused == Some(panel.id),
-                        attention,
                     },
                 )
             })
@@ -146,7 +135,6 @@ impl HorizonApp {
                     .iter()
                     .filter_map(|panel_id| panel_data.get(panel_id).cloned())
                     .collect::<Vec<_>>();
-                let attention_count = panels.iter().filter(|panel| panel.attention.is_some()).count();
 
                 WorkspaceSidebarEntry {
                     id: workspace.id,
@@ -156,7 +144,6 @@ impl HorizonApp {
                     detached: self.workspace_is_detached(workspace.id),
                     capabilities: self.workspace_layout_capabilities(workspace.id),
                     panels,
-                    attention_count,
                 }
             })
             .collect()
@@ -459,8 +446,7 @@ impl HorizonApp {
         panel: &SidebarPanelEntry,
         actions: &mut SidebarActions,
     ) {
-        let row_height = if panel.attention.is_some() { 46.0 } else { 30.0 };
-        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), row_height)).1;
+        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), 30.0)).1;
         let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
         let mut row_clicked = false;
         paint_panel_row_bg(ui, row_rect, workspace.color, panel.is_focused, click_target_hovered);
@@ -513,32 +499,6 @@ impl HorizonApp {
                         close_clicked = true;
                     }
                 });
-
-                if let Some(attention_item) = &panel.attention {
-                    let (label, color) = sidebar_attention_tag(attention_item.severity);
-                    ui.horizontal(|ui| {
-                        ui.add_space(56.0);
-                        let tag_response = ui.add(
-                            egui::Label::new(egui::RichText::new(label).size(8.5).color(color).strong())
-                                .sense(Sense::click()),
-                        );
-                        click_target_hovered |= tag_response.hovered();
-                        row_clicked |= tag_response.clicked();
-                        ui.add_space(4.0);
-                        let summary_response = ui.add_sized(
-                            Vec2::new(ui.available_width(), 14.0),
-                            egui::Label::new(
-                                egui::RichText::new(&attention_item.summary)
-                                    .size(9.0)
-                                    .color(theme::alpha(color, 180)),
-                            )
-                            .truncate()
-                            .sense(Sense::click()),
-                        );
-                        click_target_hovered |= summary_response.hovered();
-                        row_clicked |= summary_response.clicked();
-                    });
-                }
             },
         );
 
@@ -767,11 +727,7 @@ fn render_sidebar_workspace_row_contents(
 
     ui.add_space(14.0);
 
-    let bar_color = if workspace.attention_count > 0 {
-        theme::PALETTE_RED()
-    } else {
-        theme::alpha(workspace.color, if workspace.is_active { 240 } else { 110 })
-    };
+    let bar_color = theme::alpha(workspace.color, if workspace.is_active { 240 } else { 110 });
     let bar_rect = ui.allocate_space(Vec2::new(3.0, 22.0)).1;
     ui.painter().rect_filled(bar_rect, CornerRadius::same(2), bar_color);
 
@@ -878,14 +834,6 @@ fn paint_workspace_drop_indicator(
         [Pos2::new(left, y), Pos2::new(right, y)],
         Stroke::new(2.0_f32, theme::alpha(workspace_color, 220)),
     );
-}
-
-fn sidebar_attention_tag(severity: AttentionSeverity) -> (&'static str, Color32) {
-    match severity {
-        AttentionSeverity::High => ("NEEDS INPUT", theme::PALETTE_RED()),
-        AttentionSeverity::Medium => ("DONE", theme::PALETTE_GREEN()),
-        AttentionSeverity::Low => ("INFO", theme::ACCENT()),
-    }
 }
 
 fn paint_panel_row_bg(ui: &mut egui::Ui, item_rect: Rect, workspace_color: Color32, is_focused: bool, hovered: bool) {
@@ -1131,7 +1079,6 @@ mod tests {
             title: "panel".to_string(),
             kind: horizon_core::PanelKind::Editor,
             is_focused,
-            attention: None,
         }
     }
 

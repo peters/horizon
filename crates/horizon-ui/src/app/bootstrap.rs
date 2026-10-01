@@ -70,8 +70,7 @@ impl HorizonApp {
         let action_commands_cache = command_registry::action_commands(&shortcuts, util::primary_shortcut_label());
         pin_chrome_to_native_display_scale(egui_ctx);
         egui_ctx.set_fonts(configure_fonts());
-        let mut board = Board::new();
-        board.attention_enabled = config.features.attention_feed;
+        let board = Board::new();
         let resolved_theme = theme::resolve_theme(config.appearance.theme, egui_ctx.system_theme());
         theme::set_theme(resolved_theme);
 

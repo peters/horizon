@@ -140,15 +140,7 @@ impl HorizonApp {
         match result {
             Some(Ok(())) => self.queue_panel_restart(panel_id),
             Some(Err(error)) => {
-                if let Some(workspace) = self.board.panel_workspace_id(panel_id) {
-                    self.board.create_attention(
-                        workspace,
-                        Some(panel_id),
-                        "resume",
-                        error.to_string(),
-                        horizon_core::AttentionSeverity::High,
-                    );
-                }
+                tracing::error!(panel_id = panel_id.0, %error, "failed to request work resume");
             }
             None => {}
         }

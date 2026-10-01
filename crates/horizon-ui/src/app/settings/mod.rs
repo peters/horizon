@@ -306,7 +306,6 @@ impl HorizonApp {
         self.action_commands_cache =
             crate::command_registry::action_commands(&self.shortcuts, util::primary_shortcut_label());
         self.presets = config.resolved_presets();
-        self.board.attention_enabled = config.features.attention_feed;
         if self.appearance_theme != config.appearance.theme {
             self.appearance_theme = config.appearance.theme;
             self.theme_applied = false;

@@ -102,18 +102,14 @@ impl HorizonApp {
         dropped: &[egui::DroppedFileHandle],
         viewport_id: ViewportId,
     ) -> bool {
-        if let Some(workspace_id) = self
+        if self
             .board
             .panel(panel_id)
-            .filter(|panel| panel.remote_workspace().is_some())
-            .map(|panel| panel.workspace_id)
+            .is_some_and(|panel| panel.remote_workspace().is_some())
         {
-            self.board.create_attention(
-                workspace_id,
-                Some(panel_id),
-                "remote",
-                "Remote development has been removed. File upload is disabled for this retired view.",
-                horizon_core::AttentionSeverity::Medium,
+            tracing::warn!(
+                panel_id = panel_id.0,
+                "remote development has been removed; file upload is disabled for this retired view"
             );
             return true;
         }
@@ -559,7 +555,6 @@ mod tests {
                 app.ssh_upload_flow.is_none(),
                 "no preparation worker or transport may be constructed"
             );
-            assert!(app.board.unresolved_attention_for_panel(panel_id).is_some());
             assert!(app.board.restart_panel(panel_id).is_err());
             assert!(!marker.exists());
         }

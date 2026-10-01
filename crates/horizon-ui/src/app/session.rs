@@ -204,7 +204,6 @@ impl HorizonApp {
         self.startup_receiver = needs_bootstrap.then(|| Self::spawn_startup_bootstrap(runtime_state.clone()));
         if self.startup_receiver.is_some() {
             self.board = Board::new();
-            self.board.attention_enabled = self.template_config.features.attention_feed;
         } else {
             self.restore_startup_runtime_state(runtime_state);
         }
@@ -438,7 +437,6 @@ impl HorizonApp {
                 tracing::error!("failed to restore runtime state: {error}");
                 Board::new()
             });
-        self.board.attention_enabled = self.template_config.features.attention_feed;
         self.startup_selection_restored = runtime_state_selection_was_restored(&self.board, &runtime_state);
     }
 

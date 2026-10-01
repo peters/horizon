@@ -60,16 +60,8 @@ pub struct TerminalSpawnOptions {
     pub kitty_keyboard: bool,
 }
 
-/// A structured notification parsed from an OSC title sequence.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentNotification {
-    pub severity: String,
-    pub message: String,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum HorizonOscTitle {
-    Notification(AgentNotification),
     SetTitle(String),
     ClearTitle,
     Ignore,
@@ -98,23 +90,15 @@ impl RuntimeTitle {
         }
     }
 
-    fn apply_incoming(&mut self, incoming: &str) -> Option<AgentNotification> {
+    fn apply_incoming(&mut self, incoming: &str) {
         match Terminal::parse_horizon_title(incoming) {
-            Some(HorizonOscTitle::Notification(notification)) => Some(notification),
-            Some(HorizonOscTitle::SetTitle(next_title)) => {
-                *self = Self::Pinned(next_title);
-                None
-            }
-            Some(HorizonOscTitle::ClearTitle) => {
-                *self = Self::Open(String::new());
-                None
-            }
-            Some(HorizonOscTitle::Ignore) => None,
+            Some(HorizonOscTitle::SetTitle(next_title)) => *self = Self::Pinned(next_title),
+            Some(HorizonOscTitle::ClearTitle) => *self = Self::Open(String::new()),
+            Some(HorizonOscTitle::Ignore) => {}
             None => {
                 if let Self::Open(title) = self {
                     incoming.clone_into(title);
                 }
-                None
             }
         }
     }
@@ -214,8 +198,6 @@ pub struct Terminal {
     pty_resized: bool,
     child_exited: bool,
     child_exit_status: Option<std::process::ExitStatus>,
-    bell_pending: bool,
-    pending_notification: Option<AgentNotification>,
 }
 
 #[cfg(test)]
@@ -228,8 +210,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::current_cwd_for_pid;
     use super::{
-        AgentNotification, HorizonOscTitle, RuntimeTitle, Terminal, TerminalDimensions, TerminalEventProxy,
-        TerminalSpawnOptions, TerminalSshTrust, default_terminal_rgb, find_file_path_at_column, find_url_at_column,
+        HorizonOscTitle, RuntimeTitle, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
+        TerminalSshTrust, default_terminal_rgb, find_file_path_at_column, find_url_at_column,
         queue_debounced_pty_resize, replay_terminal_bytes, should_debounce_pty_resize,
     };
     use alacritty_terminal::event::Event;
@@ -303,13 +285,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_horizon_notify_title() {
+    fn parse_retired_horizon_notify_title_is_ignored() {
         assert_eq!(
             Terminal::parse_horizon_title("HORIZON_NOTIFY:attention:Need review"),
-            Some(HorizonOscTitle::Notification(AgentNotification {
-                severity: "attention".to_string(),
-                message: "Need review".to_string(),
-            })),
+            Some(HorizonOscTitle::Ignore),
         );
     }
 
@@ -333,22 +312,6 @@ mod tests {
     fn parse_invalid_horizon_title_command_is_ignored() {
         assert_eq!(
             Terminal::parse_horizon_title("HORIZON_TITLE:rename:Fix issue #42"),
-            Some(HorizonOscTitle::Ignore),
-        );
-    }
-
-    #[test]
-    fn parse_notify_without_message_separator_is_ignored() {
-        assert_eq!(
-            Terminal::parse_horizon_title("HORIZON_NOTIFY:attention"),
-            Some(HorizonOscTitle::Ignore),
-        );
-    }
-
-    #[test]
-    fn parse_notify_without_severity_is_ignored() {
-        assert_eq!(
-            Terminal::parse_horizon_title("HORIZON_NOTIFY::Saved"),
             Some(HorizonOscTitle::Ignore),
         );
     }
@@ -405,25 +368,18 @@ mod tests {
     }
 
     #[test]
-    fn horizon_notify_event_sets_notification_without_overwriting_title() {
+    fn retired_horizon_notify_event_does_not_overwrite_title() {
         let mut terminal = spawn_test_terminal();
         terminal.title = RuntimeTitle::Open("Existing title".to_string());
 
         terminal.handle_event(Event::Title("HORIZON_NOTIFY:info:Saved".to_string()));
 
         assert_eq!(terminal.title(), "Existing title");
-        assert_eq!(
-            terminal.take_notification(),
-            Some(AgentNotification {
-                severity: "info".to_string(),
-                message: "Saved".to_string(),
-            })
-        );
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
     #[test]
-    fn horizon_notify_does_not_unlock_horizon_title() {
+    fn retired_horizon_notify_does_not_unlock_horizon_title() {
         let mut terminal = spawn_test_terminal();
 
         terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
@@ -431,24 +387,16 @@ mod tests {
         terminal.handle_event(Event::Title(": horizon".to_string()));
 
         assert_eq!(terminal.title(), "Build running");
-        assert_eq!(
-            terminal.take_notification(),
-            Some(AgentNotification {
-                severity: "info".to_string(),
-                message: "Saved".to_string(),
-            })
-        );
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
     #[test]
-    fn horizon_title_set_event_updates_title_without_notification() {
+    fn horizon_title_set_event_updates_title() {
         let mut terminal = spawn_test_terminal();
 
         terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
 
         assert_eq!(terminal.title(), "Build running");
-        assert_eq!(terminal.take_notification(), None);
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -460,7 +408,6 @@ mod tests {
         terminal.handle_event(Event::Title("HORIZON_TITLE:clear".to_string()));
 
         assert!(terminal.title().is_empty());
-        assert_eq!(terminal.take_notification(), None);
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -472,19 +419,6 @@ mod tests {
         terminal.handle_event(Event::Title("HORIZON_TITLE:rename:other".to_string()));
 
         assert_eq!(terminal.title(), "Build running");
-        assert_eq!(terminal.take_notification(), None);
-        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
-    }
-
-    #[test]
-    fn malformed_horizon_notify_event_does_not_leak_into_visible_title() {
-        let mut terminal = spawn_test_terminal();
-        terminal.title = RuntimeTitle::Open("Existing title".to_string());
-
-        terminal.handle_event(Event::Title("HORIZON_NOTIFY:attention".to_string()));
-
-        assert_eq!(terminal.title(), "Existing title");
-        assert_eq!(terminal.take_notification(), None);
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -512,7 +446,6 @@ mod tests {
         terminal.handle_event(Event::ResetTitle);
 
         assert_eq!(terminal.title(), "PR comments: Docker lifecycle");
-        assert_eq!(terminal.take_notification(), None);
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -525,7 +458,6 @@ mod tests {
         terminal.handle_event(Event::Title("cargo test".to_string()));
 
         assert_eq!(terminal.title(), "cargo test");
-        assert_eq!(terminal.take_notification(), None);
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -567,7 +499,6 @@ mod tests {
         terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
 
         assert_eq!(terminal.title(), "Build running");
-        assert_eq!(terminal.take_notification(), None);
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 

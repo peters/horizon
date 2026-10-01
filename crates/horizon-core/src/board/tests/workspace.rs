@@ -717,7 +717,6 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
         .expect("placeholder terminal")
         .last_lines_text(24);
     assert!(placeholder_text.contains("Horizon could not restore this panel"));
-    assert!(board.unresolved_attention_for_panel(failed_panel_id).is_some());
 
     let saved_state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
     let saved_failed_panel = saved_state

@@ -235,7 +235,7 @@ impl HorizonApp {
         self.record_detached_device_presentation(workspace_id, canvas_rect);
         self.render_panels_for_workspace(ctx, workspace_id);
         self.render_file_drop_highlight(ctx);
-        let _ = self.render_workspace_minimap(
+        self.render_workspace_minimap(
             ctx,
             &workspace_bounds,
             workspace_id,

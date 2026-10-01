@@ -15,15 +15,14 @@ pub(super) fn render_scoped_minimap(
     canvas_rect: Rect,
     scope: MinimapScope,
     overlay_id: Id,
-) -> f32 {
+) {
     if !app.fixed_overlays_visible() || !app.minimap_visible || !scope_has_content(app, scope) {
-        return 0.0;
+        return;
     }
 
     let Some(model) = minimap_model(app, canvas_rect, workspace_bounds, scope) else {
-        return 0.0;
+        return;
     };
-    let minimap_height = model.outer_size.y;
 
     let response = egui::Area::new(overlay_id)
         .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-MINIMAP_MARGIN, -MINIMAP_MARGIN))
@@ -72,8 +71,6 @@ pub(super) fn render_scoped_minimap(
             }
         }
     }
-
-    minimap_height
 }
 
 fn center_minimap_point(app: &mut HorizonApp, model: &MinimapModel, canvas_rect: Rect, origin: Pos2, pointer: Pos2) {

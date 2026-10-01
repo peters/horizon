@@ -1,4 +1,4 @@
-use super::{AgentNotification, ColorLookup, Event, HorizonOscTitle, Rgb, TermMode, Terminal, term};
+use super::{ColorLookup, Event, HorizonOscTitle, Rgb, TermMode, Terminal, term};
 
 impl Terminal {
     /// Drain pending PTY events. Returns `true` if any events were processed.
@@ -13,27 +13,11 @@ impl Terminal {
         had_events
     }
 
-    /// Returns `true` if a bell has fired since the last call, then clears.
-    pub fn take_bell(&mut self) -> bool {
-        std::mem::take(&mut self.bell_pending)
-    }
-
-    pub fn take_notification(&mut self) -> Option<AgentNotification> {
-        self.pending_notification.take()
-    }
-
     pub(super) fn parse_horizon_title(title: &str) -> Option<HorizonOscTitle> {
-        if let Some(payload) = title.strip_prefix("HORIZON_NOTIFY:") {
-            let Some((severity, message)) = payload.split_once(':') else {
-                return Some(HorizonOscTitle::Ignore);
-            };
-            if severity.is_empty() || message.is_empty() {
-                return Some(HorizonOscTitle::Ignore);
-            }
-            return Some(HorizonOscTitle::Notification(AgentNotification {
-                severity: severity.to_string(),
-                message: message.to_string(),
-            }));
+        // Retired protocol: older `horizon-notify` skills may still emit it,
+        // and it must not surface as the panel title.
+        if title.starts_with("HORIZON_NOTIFY:") {
+            return Some(HorizonOscTitle::Ignore);
         }
 
         let payload = title.strip_prefix("HORIZON_TITLE:")?;
@@ -78,11 +62,7 @@ impl Terminal {
 
     pub(crate) fn handle_event(&mut self, event: Event) {
         match event {
-            Event::Title(title) => {
-                if let Some(notification) = self.title.apply_incoming(&title) {
-                    self.pending_notification = Some(notification);
-                }
-            }
+            Event::Title(title) => self.title.apply_incoming(&title),
             Event::ResetTitle => self.title.reset(),
             Event::ClipboardStore(clipboard, contents) => match clipboard {
                 term::ClipboardType::Clipboard => self.clipboard_contents = contents,
@@ -112,10 +92,7 @@ impl Terminal {
                 self.child_exited = true;
                 self.child_exit_status = Some(status);
             }
-            Event::Bell => {
-                self.bell_pending = true;
-            }
-            Event::MouseCursorDirty | Event::CursorBlinkingChange | Event::Wakeup => {}
+            Event::Bell | Event::MouseCursorDirty | Event::CursorBlinkingChange | Event::Wakeup => {}
         }
     }
 

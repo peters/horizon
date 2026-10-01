@@ -5,7 +5,7 @@ use egui::{Button, Context, Pos2, Rect, Stroke, Vec2};
 use crate::theme;
 
 /// Screen-space rectangles occupied by fixed overlay widgets (sidebar,
-/// minimap, attention feed).  Canvas-space elements such as workspace
+/// minimap).  Canvas-space elements such as workspace
 /// labels must not render inside these regions.
 ///
 /// Register any new fixed widget here so canvas-space content avoids it.

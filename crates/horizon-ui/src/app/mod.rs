@@ -1,5 +1,4 @@
 mod actions;
-mod attention_feed;
 mod bootstrap;
 mod browser_cleanup;
 mod browser_close_requests;

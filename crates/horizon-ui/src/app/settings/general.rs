@@ -110,15 +110,6 @@ fn render_features_section(
     super::section_card(ui, |ui| {
         changed |= ui
             .checkbox(
-                &mut config.features.attention_feed,
-                egui::RichText::new("Attention Feed").color(theme::FG()).size(12.0),
-            )
-            .changed();
-        super::dim_label(ui, "Show a notification feed for agent activity.");
-
-        ui.add_space(10.0);
-        changed |= ui
-            .checkbox(
                 &mut config.features.organize_workspaces_on_session_load,
                 egui::RichText::new("Organize Workspaces on Session Load")
                     .color(theme::FG())
@@ -159,27 +150,6 @@ fn render_overlays_section(ui: &mut Ui, config: &mut Config) -> bool {
             .num_columns(4)
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Feed Width").color(theme::FG_SOFT()).size(12.0));
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut config.overlays.attention_feed_width)
-                            .range(120.0..=800.0)
-                            .speed(1.0)
-                            .suffix(" px"),
-                    )
-                    .changed();
-
-                ui.label(egui::RichText::new("Feed Height").color(theme::FG_SOFT()).size(12.0));
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut config.overlays.attention_feed_height)
-                            .range(100.0..=1200.0)
-                            .speed(1.0)
-                            .suffix(" px"),
-                    )
-                    .changed();
-                ui.end_row();
-
                 ui.label(egui::RichText::new("Map Width").color(theme::FG_SOFT()).size(12.0));
                 changed |= ui
                     .add(

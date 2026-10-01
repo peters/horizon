@@ -7,9 +7,9 @@ use horizon_core::{Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
 use super::super::input;
 use crate::theme;
 
+use super::HorizonApp;
 use super::canvas::CanvasGridCache;
 use super::canvas_scroll::reset_canvas_scroll;
-use super::{HorizonApp, attention_feed};
 
 mod shutdown;
 mod startup_workspace;
@@ -226,15 +226,6 @@ impl HorizonApp {
         for panel_id in panels_to_restart {
             if let Err(error) = self.board.restart_panel(panel_id) {
                 tracing::error!(panel_id = panel_id.0, %error, "failed to restart panel");
-                if let Some(workspace) = self.board.panel_workspace_id(panel_id) {
-                    self.board.create_attention(
-                        workspace,
-                        Some(panel_id),
-                        "restart",
-                        error.to_string(),
-                        horizon_core::AttentionSeverity::High,
-                    );
-                }
             } else {
                 self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
                 self.panel_render_caches.editor_preview_cache.remove(&panel_id);
@@ -363,17 +354,7 @@ impl HorizonApp {
         self.render_cloud_ownership(ui.ctx());
         self.render_file_drop_highlight(ui);
         self.render_preset_picker(ui);
-        let minimap_height = self.render_minimap(ui, workspace_bounds);
-        if self.fixed_overlays_visible() && self.template_config.features.attention_feed {
-            let feed_result =
-                attention_feed::render_attention_feed(ui, &self.board, minimap_height, &self.template_config.overlays);
-            for attention_id in feed_result.dismissed_ids {
-                let _ = self.board.dismiss_attention(attention_id);
-            }
-            if let Some(panel_id) = feed_result.focus_panel {
-                self.reveal_selected_panel(ui.ctx(), panel_id);
-            }
-        }
+        self.render_minimap(ui, workspace_bounds);
         #[cfg(feature = "cloud-workspaces")]
         self.render_cloud_controls(ui.ctx());
         self.render_canvas_hud(ui);

@@ -91,8 +91,6 @@ impl Terminal {
             pty_resized: false,
             child_exited: false,
             child_exit_status: None,
-            bell_pending: false,
-            pending_notification: None,
         };
         terminal.process_events();
         Ok(terminal)
