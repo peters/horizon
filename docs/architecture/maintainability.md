@@ -897,6 +897,6 @@ in a colocated tree. UI
 `browser_widget/orientation` renders measured status and buttons. Direct CLI
 orientation commands generate one durable MCP plan in a separate `orientation`
 leaf rather than expanding the CLI parser with browser-driver logic.
-Cloud worker `browser/orientation` preserves matching queue-refusal acknowledgements.
+Cloud worker `browser/orientation` preserves matching queue-refusal acknowledgements and merges bounded completion history with reserved capacity for both driver and refusal sources.
 Bounded per-request completions prevent latest-only polling from losing superseded
 user requests; the core adapter bounds lost-status waiting and surfaces uncertainty.

@@ -72,10 +72,12 @@ pub struct RemoteOrientationCompletion {
     pub error: Option<String>,
 }
 impl RemoteOrientationView {
+    pub const COMPLETION_LIMIT: usize = 64;
+
     pub fn record_completion(&mut self, completion: RemoteOrientationCompletion) {
         self.completed.retain(|entry| entry.action_id != completion.action_id);
         self.completed.push(completion);
-        if self.completed.len() > 64 {
+        if self.completed.len() > Self::COMPLETION_LIMIT {
             self.completed.remove(0);
         }
     }

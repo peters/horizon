@@ -184,11 +184,8 @@ impl Host {
                         browser.start_orientation_failure =
                             Some(horizon_browser::RemoteStartFailure::OrientationRejected { code, released });
                     }
-                    BrowserEvent::OrientationChanged(mut view) => {
-                        for rejection in &browser.orientation_rejections.completed {
-                            view.record_completion(rejection.clone());
-                        }
-                        browser.state.orientation = view;
+                    BrowserEvent::OrientationChanged(view) => {
+                        browser.state.orientation = orientation::merge(view, &browser.orientation_rejections);
                     }
                     BrowserEvent::Ready => browser.state.ready = true,
                     BrowserEvent::Title(title) => browser.state.title = title,

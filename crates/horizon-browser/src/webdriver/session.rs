@@ -261,11 +261,13 @@ impl Driver {
         event_tx: &BrowserEventSender,
         stop_requested: &AtomicBool,
     ) {
+        self.invalidate_document_orientation();
         self.enable_file_chooser(event_tx);
         if self.firefox_bidi() {
             self.set_viewport(config.width, config.height, event_tx);
         }
         self.initialize_coordination();
+        self.publish_orientation(event_tx, None);
         self.initialize_classic_document_identity();
         let capabilities = self.active_capabilities();
         frame_slot.publish_backend_capabilities(capabilities);

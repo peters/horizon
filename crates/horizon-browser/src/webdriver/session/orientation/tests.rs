@@ -3,6 +3,8 @@ use super::*;
 use crate::webdriver::test_server::{Reply, Server};
 use serde_json::json;
 
+mod startup;
+
 fn rotation_request() -> AgentAction {
     AgentAction {
         action_id: "rotation".into(),
@@ -44,15 +46,18 @@ fn observation(width: u32, height: u32) -> Vec<Reply> {
 struct Owner(
     std::sync::Mutex<Option<String>>,
     std::sync::Mutex<Vec<crate::BrowserAuditStatus>>,
+    std::sync::Mutex<Vec<Option<crate::remote::RemoteOrientationState>>>,
 );
 impl crate::BrowserCoordination for Owner {
     fn prepare(&self, _: &str, _: Duration) -> bool {
         true
     }
-    fn initialize(&self, _: &str, _: &crate::CoordinationState) -> std::io::Result<()> {
+    fn initialize(&self, _: &str, state: &crate::CoordinationState) -> std::io::Result<()> {
+        self.2.lock().unwrap().push(state.remote_orientation);
         Ok(())
     }
-    fn update(&self, _: &str, _: &crate::CoordinationState) -> std::io::Result<()> {
+    fn update(&self, _: &str, state: &crate::CoordinationState) -> std::io::Result<()> {
+        self.2.lock().unwrap().push(state.remote_orientation);
         Ok(())
     }
     fn set_user_active(&self, _: &str, _: bool) -> std::io::Result<()> {
@@ -87,6 +92,7 @@ fn dispatch_is_audited_before_provider_reply_and_refusals_do_not_dispatch() {
     let mut driver = fixture_driver(&classic, link);
     let owner = Arc::new(Owner(
         std::sync::Mutex::new(Some("agent".into())),
+        std::sync::Mutex::new(Vec::new()),
         std::sync::Mutex::new(Vec::new()),
     ));
     driver.config.coordination = Some(owner.clone());
@@ -126,7 +132,11 @@ fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_
     let classic = Server::start(replies);
     let (link, worker) = bidi_fixture(false, false);
     let mut driver = fixture_driver(&classic, link);
-    let owner = Arc::new(Owner(std::sync::Mutex::new(None), std::sync::Mutex::new(Vec::new())));
+    let owner = Arc::new(Owner(
+        std::sync::Mutex::new(None),
+        std::sync::Mutex::new(Vec::new()),
+        std::sync::Mutex::new(Vec::new()),
+    ));
     driver.owner_seen = None;
     driver.config.coordination = Some(owner.clone());
     driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
@@ -235,6 +245,7 @@ fn user_rotation_failure_and_input_takeover_preserve_nonfatal_ui_status() {
         let owner = Arc::new(Owner(
             std::sync::Mutex::new(Some("agent".into())),
             std::sync::Mutex::new(Vec::new()),
+            std::sync::Mutex::new(Vec::new()),
         ));
         driver.config.coordination = Some(owner.clone());
         driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
@@ -291,6 +302,7 @@ fn stale_portrait_frames_wait_and_takeover_during_identity_cannot_succeed() {
         let mut driver = fixture_driver(&classic, link);
         let owner = Arc::new(Owner(
             std::sync::Mutex::new(Some("agent".into())),
+            std::sync::Mutex::new(Vec::new()),
             std::sync::Mutex::new(Vec::new()),
         ));
         driver.config.coordination = Some(owner.clone());

@@ -41,8 +41,8 @@ a pass from mocks or use a different browser controller.
 1. Create a remote tablet without an orientation override. Confirm the panel
    reports provider-confirmed physical device identity and observed
    orientation/support. Verified requires device, inner viewport and visual
-   viewport agreement on the committed document. A pending start page must stay
-   unverified until commit; disagreement or unavailable geometry must not claim
+   viewport agreement on the committed document. Startup status must clear allocation-document orientation before issuing
+   navigation. A pending start page must stay unverified until commit; disagreement or unavailable geometry must not claim
    verified orientation. Missing config fields must retain existing behavior.
 2. Close that owned session and verify release. Do not retry an unknown
    allocation; reconcile its exact reference through public tooling first.
@@ -102,7 +102,7 @@ a pass from mocks or use a different browser controller.
   applied orientation/viewport and durable report evidence. This CLI lane needs an
   explicitly authorized test executor; the implementing agent continues using
   only public browser MCP tools for browser interaction.
-- With two cloud viewers, rotate from the second while the first waits; the first must receive superseded status and recover when the active rotation settles. Cover driver queue refusal and lost-status timeout through deterministic tests, including expiry followed by an unrelated idle poll, stale original pending poll, matching acknowledgement and another viewer finishing after ledger eviction.
+- With two cloud viewers, rotate from the second while the first waits; the first must receive superseded status and recover when the active rotation settles. Cover driver queue refusal and lost-status timeout through deterministic tests, including expiry followed by an unrelated idle poll, stale original pending poll, matching acknowledgement and another viewer finishing after ledger eviction. Saturated driver and worker-refusal histories must both retain their freshest results across repeated snapshots.
 - Capture the UI button round trip in the final native-viewed PR GIF.
 
 ## Refusals and recovery
