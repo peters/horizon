@@ -12,9 +12,12 @@ use std::sync::OnceLock;
 
 mod concierge;
 mod inbox;
+mod layouts;
 mod lens;
 mod mission;
 mod scope;
+
+pub(in crate::app::assistant) use layouts::{Channel, Layout3, Pick};
 
 use egui::{
     Align, Context, CornerRadius, FontId, Frame, Id, Layout, Margin, Rect, RichText, Sense, Stroke, TextEdit, Ui, vec2,
@@ -63,6 +66,8 @@ impl HorizonApp {
             return;
         }
         self.run_demo(ctx);
+        // A change of engine closes the running agent; the next line starts the new one.
+        self.close_assistant_if_restarting();
         self.ensure_assistant_panel(ctx);
         self.follow_assistant_transcript();
         if let Some(index) = self.assistant.summon.pending_workspace.take()
@@ -104,6 +109,7 @@ impl HorizonApp {
             MiniAction::Dismiss(turn) => self.assistant.summon.deck_dismissed = turn + 1,
             MiniAction::Dictate => self.toggle_assistant_dictation(ctx),
             MiniAction::Answer(id, allow) => self.answer_agent(id, allow),
+            MiniAction::Drag(delta) => self.assistant.summon.mini_offset += delta,
             MiniAction::Go(_) | MiniAction::Style(_) => {}
         }
     }

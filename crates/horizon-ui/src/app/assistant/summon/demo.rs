@@ -309,6 +309,66 @@ impl HorizonApp {
         }
     }
 
+    /// The commands that arrange the concierge and its text agent: `layout`, `engine`, `typeto`, `pick`,
+    /// `sheet`, `drawer` and `channel`. Returns whether the command was one of them.
+    fn demo_agents(&mut self, command: &str, argument: Option<&str>, rest: Option<&str>, text: &str) -> bool {
+        match command {
+            "layout" => {
+                self.assistant.summon.layout = match argument {
+                    Some("b") => super::dock::Layout3::Feed,
+                    Some("c") => super::dock::Layout3::Roster,
+                    _ => super::dock::Layout3::Split,
+                };
+                self.assistant.summon.sheet = None;
+            }
+            "engine" => {
+                let kind = match argument {
+                    Some("codex") => horizon_core::PanelKind::Codex,
+                    Some("grok") => horizon_core::PanelKind::Grok,
+                    _ => horizon_core::PanelKind::Claude,
+                };
+                self.assistant.draft.agent = kind;
+                self.apply_assistant_engine();
+            }
+            "typeto" => {
+                // Types into the text agent, as the person would in its terminal.
+                if let Some(id) = self.board.assistant_panel() {
+                    self.send_to_agent(id, text, true, Instant::now());
+                }
+            }
+            "pick" => {
+                self.assistant.summon.pick = match argument {
+                    Some("text") => super::dock::Pick::Text,
+                    Some("worker") => rest
+                        .and_then(|title| self.board.panels.iter().find(|panel| panel.display_title() == title))
+                        .map_or(super::dock::Pick::Voice, |panel| super::dock::Pick::Worker(panel.id)),
+                    _ => super::dock::Pick::Voice,
+                };
+            }
+            "sheet" => {
+                // `sheet <width> <height>`, or `sheet reset`: as if the window had been resized.
+                let size = match (
+                    argument.and_then(|w| w.parse::<f32>().ok()),
+                    rest.and_then(|h| h.parse::<f32>().ok()),
+                ) {
+                    (Some(width), Some(height)) => [width, height],
+                    _ => [0.0, 0.0],
+                };
+                self.assistant.summon.sheet_request = Some(size);
+            }
+            "drawer" => self.assistant.summon.drawer_open = argument != Some("off"),
+            "channel" => {
+                self.assistant.summon.channel = if argument == Some("text") {
+                    super::dock::Channel::Text
+                } else {
+                    super::dock::Channel::Voice
+                };
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// The commands that change how the bar looks: `mini`, `unmini`, `feed`, `terminal`, `deck`.
     /// Returns whether the command was one of them.
     fn demo_view(&mut self, command: &str, argument: Option<&str>, rest: Option<&str>) -> bool {
@@ -383,7 +443,7 @@ impl HorizonApp {
                 self.assistant.summon.feed_style = super::FeedStyle::Cards;
                 self.assistant.summon.raw = argument == Some("terminal");
             }
-            _ => return false,
+            _ => return self.demo_agents(command, argument, rest, &text),
         }
         true
     }

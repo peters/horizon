@@ -68,8 +68,25 @@ pub(super) struct Summon {
     dock_style: Option<dock::DockStyle>,
     /// The scope follows the workspace the person is in.
     scope_follow: bool,
-    /// Chat or plan, in the concierge's composer.
-    plan_mode: bool,
+    /// Where the expanded concierge is and how big, once it has been moved or resized.
+    sheet: Option<Rect>,
+    /// How far the mini dock was dragged from its place.
+    mini_offset: egui::Vec2,
+    /// A size the script asked the sheet to take; zero means back to the default.
+    sheet_request: Option<[f32; 2]>,
+    /// How the text agent sits beside the voice assistant.
+    layout: dock::Layout3,
+    /// The share of the width the voice side takes in the split layout.
+    split: f32,
+    /// The thread rail in the split layout.
+    rail_open: bool,
+    /// The terminal drawer of the feed layout.
+    drawer_open: bool,
+    drawer: f32,
+    /// Where the composer sends, in the feed layout.
+    channel: dock::Channel,
+    /// Who the roster layout shows.
+    pick: dock::Pick,
     /// The board shows the conversation beside the columns.
     board_chat: bool,
     /// The bar is shrunk to rest above the dock, in this design.

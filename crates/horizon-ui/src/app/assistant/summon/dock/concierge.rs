@@ -19,9 +19,6 @@ use crate::theme;
 
 const PILL_HEIGHT: f32 = 64.0;
 const PILL_WIDTH: f32 = 800.0;
-const PANEL_WIDTH: f32 = 1040.0;
-const PANEL_HEIGHT: f32 = 740.0;
-const RAIL: f32 = 230.0;
 const MARGIN_BOTTOM: f32 = 24.0;
 /// The global space of threads: not attached to a workspace.
 const EVERYWHERE: &str = "Everywhere";
@@ -40,7 +37,7 @@ impl HorizonApp {
         let area = Area::new(Id::new("assistant_dock"))
             .order(Order::Tooltip)
             .pivot(Align2::CENTER_BOTTOM)
-            .fixed_pos(pos2(canvas.center().x, canvas.bottom() - MARGIN_BOTTOM))
+            .fixed_pos(pos2(canvas.center().x, canvas.bottom() - MARGIN_BOTTOM) + self.assistant.summon.mini_offset)
             .show(ctx, |ui| {
                 let (pill, _) = ui.allocate_exact_size(vec2(width, PILL_HEIGHT), Sense::hover());
                 (key, allow_low) = self.paint_concierge_pill(ui, pill, id, &asks, &mut actions);
@@ -92,15 +89,17 @@ impl HorizonApp {
             .rect_stroke(pill, radius, Stroke::new(1.3, accent), StrokeKind::Inside);
         let centre = pos2(pill.left() + 38.0, pill.center().y);
         self.paint_orb(ui, centre, 24.0, &agents, now);
-        if ui
+        let orb = ui
             .interact(
                 Rect::from_center_size(centre, vec2(52.0, 52.0)),
                 Id::new("concierge_orb"),
-                Sense::click(),
+                Sense::click_and_drag(),
             )
-            .on_hover_text("Open the conversation")
-            .clicked()
-        {
+            .on_hover_text("Click to open, drag to move");
+        if orb.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            actions.push(MiniAction::Drag(orb.drag_delta()));
+        } else if orb.clicked() {
             actions.push(MiniAction::Expand);
         }
         let expand = Rect::from_center_size(pos2(pill.right() - 32.0, pill.center().y), vec2(34.0, 34.0));
@@ -225,108 +224,6 @@ impl HorizonApp {
 
     // ---- expanded ----------------------------------------------------------------------
 
-    pub(super) fn concierge_panel(&mut self, ctx: &Context) {
-        let canvas = self.canvas_rect(ctx);
-        let width = PANEL_WIDTH.min(canvas.width() - 48.0).max(560.0);
-        let height = PANEL_HEIGHT.min(canvas.height() - 40.0).max(420.0);
-        let tiles = self.dock_tiles();
-        let asks = self.inbox();
-        let mut action = None;
-        let mut allow_low = false;
-        let mut answers: Vec<(horizon_core::PanelId, bool)> = Vec::new();
-        let area = Area::new(Id::new("assistant_dock"))
-            .order(Order::Tooltip)
-            .pivot(Align2::CENTER_BOTTOM)
-            .fixed_pos(pos2(canvas.center().x, canvas.bottom() - MARGIN_BOTTOM))
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(theme::BG_ELEVATED())
-                    .stroke(Stroke::new(1.2, theme::ACCENT().gamma_multiply(0.5)))
-                    .corner_radius(CornerRadius::same(26))
-                    .inner_margin(Margin::same(0))
-                    .shadow(Shadow {
-                        offset: [0, 26],
-                        blur: 72,
-                        spread: 0,
-                        color: Color32::from_black_alpha(165),
-                    })
-                    .show(ui, |ui| {
-                        ui.set_width(width);
-                        ui.set_height(height);
-                        let whole = ui.max_rect();
-                        let rail = Rect::from_min_max(whole.min, pos2(whole.left() + RAIL, whole.bottom()));
-                        let main = Rect::from_min_max(pos2(rail.right(), whole.top()), whole.max);
-                        ui.painter().rect_filled(
-                            rail,
-                            CornerRadius {
-                                nw: 26,
-                                sw: 26,
-                                ne: 0,
-                                se: 0,
-                            },
-                            theme::PANEL_BG(),
-                        );
-                        let mut left = ui.new_child(egui::UiBuilder::new().max_rect(rail.shrink2(vec2(14.0, 16.0))));
-                        self.thread_rail(&mut left);
-                        let mut right = ui.new_child(egui::UiBuilder::new().max_rect(main.shrink2(vec2(18.0, 16.0))));
-                        self.concierge_main(&mut right, &asks, &mut action, &mut allow_low, &mut answers);
-                    });
-            });
-        ctx.move_to_top(area.response.layer_id);
-        self.assistant.summon.rect = Some(area.response.rect);
-        self.render_scope_popup(ctx, &tiles);
-        if allow_low {
-            self.allow_low_risk();
-        }
-        for (id, allow) in answers {
-            self.answer_agent(id, allow);
-        }
-        self.apply_sheet_action(ctx, action);
-    }
-
-    fn concierge_main(
-        &mut self,
-        ui: &mut Ui,
-        asks: &[Ask],
-        action: &mut Option<Action>,
-        allow_low: &mut bool,
-        answers: &mut Vec<(horizon_core::PanelId, bool)>,
-    ) {
-        self.dock_header(ui, action);
-        ui.add_space(8.0);
-        self.scope_strip(ui);
-        ui.add_space(8.0);
-        if !asks.is_empty() {
-            approvals_card(ui, asks, allow_low, answers);
-            ui.add_space(8.0);
-        }
-        let body = (ui.available_height() - 62.0 - 40.0 - 26.0).max(120.0);
-        self.conversation(ui, body, false);
-        ui.add_space(6.0);
-        self.composer_chips(ui);
-        ui.add_space(4.0);
-        self.desk_prompt(ui, action);
-    }
-
-    /// The mode of the conversation, the agent behind it and how much it may do on its own.
-    fn composer_chips(&mut self, ui: &mut Ui) {
-        let agent = horizon_core::agent_definition(self.assistant.settings.agent).map_or("Agent", |a| a.display_name);
-        let mode = self.assistant.settings.mode.label();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            let plan = self.assistant.summon.plan_mode;
-            if mode_chip(ui, "Chat", !plan).clicked() {
-                self.assistant.summon.plan_mode = false;
-            }
-            if mode_chip(ui, "Plan", plan).clicked() {
-                self.assistant.summon.plan_mode = true;
-            }
-            ui.add_space(8.0);
-            static_chip(ui, &format!("Agent  {agent}"));
-            static_chip(ui, &format!("May do  {mode}"));
-        });
-    }
-
     /// Threads: global ones first, then the ones of the workspace in scope.
     pub(super) fn thread_rail(&mut self, ui: &mut Ui) {
         ui.label(
@@ -408,7 +305,12 @@ impl HorizonApp {
 // ---- painting ---------------------------------------------------------------------------
 
 /// A question with its risk and Allow and Deny, and above the rows the one button for the harmless ones.
-fn approvals_card(ui: &mut Ui, asks: &[Ask], allow_low: &mut bool, answers: &mut Vec<(horizon_core::PanelId, bool)>) {
+pub(super) fn approvals_card(
+    ui: &mut Ui,
+    asks: &[Ask],
+    allow_low: &mut bool,
+    answers: &mut Vec<(horizon_core::PanelId, bool)>,
+) {
     let low = asks.iter().filter(|ask| ask.risk == Risk::Low).count();
     Frame::new()
         .fill(theme::blend(theme::PANEL_BG(), theme::PALETTE_YELLOW(), 0.07))
@@ -545,7 +447,7 @@ pub(super) fn count_chip(ui: &Ui, right_centre: egui::Pos2, text: &str) {
     );
 }
 
-fn mode_chip(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
+pub(super) fn mode_chip(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
     let button =
         egui::Button::new(
             RichText::new(text)
@@ -570,7 +472,7 @@ fn mode_chip(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
     ui.add(button)
 }
 
-fn static_chip(ui: &mut Ui, text: &str) {
+pub(super) fn static_chip(ui: &mut Ui, text: &str) {
     let button = egui::Button::new(RichText::new(text).size(12.0).color(theme::FG_SOFT()))
         .fill(theme::PANEL_BG())
         .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))

@@ -80,6 +80,8 @@ pub(super) enum MiniAction {
     },
     /// Hide the deck's cards for every turn up to and including this one.
     Dismiss(usize),
+    /// The mini dock was dragged.
+    Drag(egui::Vec2),
     Go(usize),
     Dictate,
     Style(MiniStyle),
@@ -107,6 +109,7 @@ impl HorizonApp {
                     self.assistant.summon.raw = terminal;
                 }
                 MiniAction::Dismiss(turn) => self.assistant.summon.deck_dismissed = turn + 1,
+                MiniAction::Drag(_) => {}
                 MiniAction::Go(index) => {
                     if let Some(desk) = self.assistant.desk.as_ref() {
                         desk.switch(index);
