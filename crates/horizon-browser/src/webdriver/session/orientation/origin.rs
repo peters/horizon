@@ -86,7 +86,7 @@ impl Driver {
         } else {
             self.audit_user_orientation(&pending, BrowserAuditStatus::Dispatched);
             self.orientation_error = None;
-            if let Err(error) = self.dispatch_orientation(pending) {
+            if let Err(error) = self.dispatch_orientation(pending, events, stopped) {
                 self.orientation_error = Some(format!("{}: {}", error.code, error.message));
             }
         }

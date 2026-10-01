@@ -335,7 +335,7 @@ impl Driver {
             return;
         }
         if matches!(request.action, crate::BrowserControlAction::Orientation { .. }) {
-            self.begin_orientation(request, stop);
+            self.begin_orientation(request, events, stop);
             self.publish_orientation(events, None);
         } else if self.pending_orientation.is_some() {
             self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);

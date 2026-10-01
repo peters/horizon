@@ -4,6 +4,7 @@ use crate::webdriver::test_server::{Reply, Server};
 use serde_json::json;
 
 mod navigation;
+mod publication;
 mod recovery;
 mod startup;
 
@@ -101,7 +102,7 @@ fn dispatch_is_audited_before_provider_reply_and_refusals_do_not_dispatch() {
     driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
     let mut invalid = rotation_request();
     invalid.actor = "other".into();
-    driver.begin_orientation(&invalid, &AtomicBool::new(false));
+    driver.begin_orientation(&invalid, &events(), &AtomicBool::new(false));
     assert_eq!(
         *owner.1.lock().unwrap(),
         vec![BrowserAuditStatus::Rejected, BrowserAuditStatus::Failed]
@@ -109,7 +110,7 @@ fn dispatch_is_audited_before_provider_reply_and_refusals_do_not_dispatch() {
     assert!(classic.recorded().is_empty());
     owner.1.lock().unwrap().clear();
     let rotation = std::thread::spawn(move || {
-        driver.begin_orientation(&rotation_request(), &AtomicBool::new(false));
+        driver.begin_orientation(&rotation_request(), &events(), &AtomicBool::new(false));
         driver
     });
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -309,7 +310,7 @@ fn stale_portrait_frames_wait_and_takeover_during_identity_cannot_succeed() {
         ));
         driver.config.coordination = Some(owner.clone());
         driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
-        driver.begin_orientation(&rotation_request(), &AtomicBool::new(false));
+        driver.begin_orientation(&rotation_request(), &events(), &AtomicBool::new(false));
         let mut pending = driver.pending_orientation.take().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         assert_eq!(
@@ -366,7 +367,7 @@ fn a_stalled_screenshot_uses_the_remaining_rotation_deadline() {
     let (link, worker) = bidi_fixture(false, false);
     let mut driver = fixture_driver(&classic, link);
     driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
-    driver.begin_orientation(&rotation_request(), &AtomicBool::new(false));
+    driver.begin_orientation(&rotation_request(), &events(), &AtomicBool::new(false));
     let mut pending = driver.pending_orientation.take().unwrap();
     pending.deadline = Instant::now() + Duration::from_millis(300);
     let started = Instant::now();
@@ -405,7 +406,7 @@ fn rotation_invalidates_refs_and_waits_for_current_ownership() {
             },
             options: Vec::new(),
         });
-    driver.begin_orientation(&request, &AtomicBool::new(false));
+    driver.begin_orientation(&request, &events(), &AtomicBool::new(false));
     assert_ne!(driver.semantic.generation(), before);
     assert!(
         driver.panel_slot.native_select_popup().is_none(),
@@ -564,7 +565,7 @@ fn document_remeasurement_cannot_take_over_pending_runtime_rotation() {
     let mut driver = fixture_driver(&classic, link);
     driver.owner_seen = Some("agent".into());
     driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
-    driver.begin_orientation(&rotation_request(), &AtomicBool::new(false));
+    driver.begin_orientation(&rotation_request(), &events(), &AtomicBool::new(false));
     driver.invalidate_document_orientation();
     driver.refresh_document_orientation(&events());
     assert!(driver.pending_orientation.is_some());

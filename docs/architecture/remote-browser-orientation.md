@@ -155,6 +155,10 @@ failure settles, the driver schedules a read-only device/page measurement so
 panel status can recover the actual applied orientation without repeating the
 mutation. The original request keeps its failure result; recovered status does
 not turn that request into a success.
+The driver publishes unknown applied orientation and pending rotation to the UI
+and clears coordinated status before the blocking POST. Publication consumes
+the same deadline; if it uses the remaining time, no rotation is dispatched.
+Stop and Teach cancellation are checked again after publication and before POST.
 
 Rotation invalidates semantic refs, scroll geometry and native-select coordinates.
 Take a fresh `browser_snapshot` or `browser_query` before the next element action.

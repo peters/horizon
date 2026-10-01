@@ -86,7 +86,7 @@ fn every_navigation_path_publishes_and_persists_unverified_before_completion() {
 }
 
 #[derive(Debug)]
-struct SlowPublication;
+pub(super) struct SlowPublication;
 impl crate::BrowserCoordination for SlowPublication {
     fn prepare(&self, _: &str, _: Duration) -> bool {
         true

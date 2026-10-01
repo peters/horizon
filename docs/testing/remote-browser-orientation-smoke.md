@@ -6,11 +6,12 @@ expected behavior; the exact candidate's PR records what actually passed, failed
 or was blocked. Keep this procedure after validation.
 
 Run-specific qualification results are recorded on the PR. For the initial
-[PR #1183](https://github.com/peters/horizon/pull/1183), the user explicitly ordered
-physical/UI smoke after a fresh positive exact-head review recommendation and
-settled CI. Prepare the candidate and fixtures beforehand; do not run interactions
-before that gate. Future PRs follow the repository's review and UI validation order
-unless the user authorizes a different sequence.
+[PR #1183](https://github.com/peters/horizon/pull/1183), the user authorized
+physical/UI smoke after settled green exact-head CI, followed by a final review
+approval request with the completed evidence. Resolve known actionable findings
+and complete local review before testing the candidate. Future PRs follow the
+repository's review and UI validation order unless the user authorizes a different
+sequence.
 
 ## Choose coverage for a change
 
@@ -31,6 +32,34 @@ is not physical-device qualification.
 The complete qualification requested for #1182 runs every applicable section,
 not just the lanes selected for a small later change. Report each unsupported
 platform or unavailable environment separately; do not mark it passed from CI.
+
+## Adding a provider or extending the feature
+
+Use the same assertions below for every provider. The BrowserStack device matrix
+is an initial qualification example; substitute the new provider's returned
+catalog targets, credential references and reported device/OS evidence. Keep the
+shared UI, MCP and CLI contract and exact-release assertions unchanged.
+
+1. Document the provider's allocation capability mapping, orientation endpoint,
+   supported device/browser combinations, credential requirements and unsupported
+   cases in the feature document. Reuse the shared adapter and credential policy.
+2. Add deterministic adapter tests for portrait, landscape, omitted orientation,
+   create override and conflicting extension keys. Test supported, unsupported,
+   malformed and unavailable replies without allocating a live device.
+3. Exercise explicit startup agreement and rejection, committed-page measurement,
+   pending navigation, cancellation, timeout and confirmed/uncertain release.
+   Assert typed failures and credential/session-id redaction through each interface.
+4. Qualify one available physical device per supported OS/browser combination
+   through configured and catalog starts. Run the runtime, input, document, UI and
+   release sections below; repeat three portrait/landscape round trips per device.
+   Allocate sequentially and reconcile uncertainty before another create.
+5. For an added operation or status field, extend the change-to-test matrix,
+   deterministic regressions, UI controls, public MCP/CLI examples and cloud
+   propagation assertions together. Check older configuration compatibility and
+   unsupported providers explicitly.
+6. Record exact candidate hashes, observed geometry, device evidence, interface
+   outcomes and release results in the PR. Distinguish mock coverage, physical
+   qualification and host-platform checks, and list unavailable lanes honestly.
 
 ## Candidate and environment
 
@@ -103,9 +132,10 @@ Use `browser_evaluate` only for the geometry that semantic tools cannot report:
 `innerWidth`, `innerHeight`, `visualViewport` width/height/offsets/scale,
 `screen.orientation.type` and `window.orientation`. Record absent APIs explicitly.
 Wait for the intended committed document and dismiss the keyboard before treating
-width/height as independent orientation evidence. Take screenshots through the
-public browser contract and native desktop controller; do not capture the user's
-desktop or inspect private runtime files.
+width/height as independent orientation evidence. Capture the rendered page and
+chrome with the isolated native desktop controller. Use `browser_video` only when
+the panel advertises that capability; the public MCP contract has no screenshot
+operation. Do not capture the user's desktop or inspect private runtime files.
 
 Accept a rotation only when its tool result, current support/applied status,
 measured nonzero geometry and live native image agree. In landscape both inner
@@ -223,6 +253,13 @@ identity and refusal evidence before closing the owned session.
   original typed failure to remain unchanged while read-only device/page
   remeasurement recovers applied status after the pending request settles.
   Assert that recovery issues no second orientation POST.
+- Hold a rotation POST behind a reply latch. Before releasing it, require
+  pending UI status and cleared coordinated applied orientation for both agent
+  and user requests. Publication that consumes the action's deadline must return
+  `orientation_timeout` without sending the rotation POST.
+- Activate Stop or Teach while coordination publication is latched, then release
+  it before the deadline. Both user and agent requests must fail without POST,
+  clear pending state, publish the terminal error and retain failed audit evidence.
 - Unsupported, transient and malformed GET replies must remain distinct;
   do not advertise success from dimensions alone when device evidence differs.
 

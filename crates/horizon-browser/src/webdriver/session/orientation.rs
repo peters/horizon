@@ -27,14 +27,19 @@ impl Driver {
                 .last_user_active_stamp
                 .is_some_and(|at| at.elapsed() < super::coordination::USER_ACTIVE_TTL)
     }
-    pub(super) fn begin_orientation(&mut self, request: &AgentAction, stopped: &AtomicBool) {
+    pub(super) fn begin_orientation(
+        &mut self,
+        request: &AgentAction,
+        events: &BrowserEventSender,
+        stopped: &AtomicBool,
+    ) {
         let prepared = self.prepare_orientation(request, stopped);
         match prepared {
             Ok(pending) => {
                 self.orientation_action_id = Some(request.action_id.clone());
                 self.orientation_error = None;
                 self.audit_agent_action(request, crate::BrowserAuditStatus::Dispatched);
-                if let Err(error) = self.dispatch_orientation(pending) {
+                if let Err(error) = self.dispatch_orientation(pending, events, stopped) {
                     self.orientation_error = Some(format!("{}: {}", error.code, error.message));
                     self.complete_agent_action(request, Err(error));
                 }
@@ -123,7 +128,12 @@ impl Driver {
             verified: None,
         })
     }
-    fn dispatch_orientation(&mut self, mut pending: Pending) -> Result<(), BrowserControlFailure> {
+    fn dispatch_orientation(
+        &mut self,
+        mut pending: Pending,
+        events: &BrowserEventSender,
+        stopped: &AtomicBool,
+    ) -> Result<(), BrowserControlFailure> {
         self.finish_orientation(
             "orientation_superseded",
             "a newer rotation superseded this request; inspect applied orientation",
@@ -136,25 +146,38 @@ impl Driver {
         self.semantic.invalidate();
         self.advance_viewport_generation();
         self.frames.invalidate();
-        let result = set(
-            self.host.transport(),
-            &format!("/session/{}", self.session_id),
-            pending.requested,
-            pending.deadline,
-        );
+        pending.generation = self.semantic.generation();
+        let requested = pending.requested;
+        let deadline = pending.deadline;
+        self.pending_orientation = Some(pending);
+        self.publish_document_orientation_invalidation(events);
+        let pending = self.pending_orientation.take().ok_or_else(|| {
+            BrowserControlFailure::new("invalid_action_state", "rotation disappeared during publication")
+        })?;
+        let guarded = self.guard_orientation(&pending, stopped);
+        self.pending_orientation = Some(pending);
+        let result = guarded.and_then(|()| {
+            set(
+                self.host.transport(),
+                &format!("/session/{}", self.session_id),
+                requested,
+                deadline,
+            )
+        });
         if let Err(error) = result {
-            if matches!(pending.origin, Origin::User { .. }) {
+            if let Some(pending) = self.pending_orientation.take()
+                && matches!(pending.origin, Origin::User { .. })
+            {
                 self.complete_orientation(&pending, Err(error.clone()));
             }
             if error.code == "orientation_unsupported"
                 && let Some(state) = self.remote_orientation.as_mut()
             {
                 state.support = OrientationSupport::Unsupported;
+                self.coordination_dirty = true;
             }
             return Err(error);
         }
-        pending.generation = self.semantic.generation();
-        self.pending_orientation = Some(pending);
         Ok(())
     }
     pub(super) fn finish_orientation(&mut self, code: &str, message: &str) {

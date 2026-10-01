@@ -32,11 +32,11 @@ fn lost_post_reply_remeasures_applied_orientation_without_repeating_mutation() {
                 &AtomicBool::new(false),
             );
         } else {
-            driver.begin_orientation(&rotation_request(), &AtomicBool::new(false));
+            driver.begin_orientation(&rotation_request(), &events(), &AtomicBool::new(false));
         }
         assert!(driver.pending_orientation.is_none());
         assert_eq!(driver.remote_orientation.unwrap().applied, None);
-        assert_eq!(driver.orientation_document, DocumentOrientation::NeedsPublication);
+        assert_eq!(driver.orientation_document, DocumentOrientation::NeedsMeasurement);
         let error = driver.orientation_error.clone().unwrap();
         assert!(error.starts_with("orientation_unverified:"));
         assert_eq!(classic.recorded().len(), 1);
@@ -83,7 +83,7 @@ fn acknowledgement_timeout_defers_read_only_recovery_until_request_settles() {
         applied: Some(RemoteOrientation::Portrait),
     });
     driver.orientation_document = DocumentOrientation::Clean;
-    driver.begin_orientation(&rotation_request(), &AtomicBool::new(false));
+    driver.begin_orientation(&rotation_request(), &events(), &AtomicBool::new(false));
     assert!(driver.pending_orientation.is_some());
     driver.refresh_document_orientation(&events());
     assert_eq!(classic.recorded().len(), 1, "pending rotation owns measurement");
