@@ -73,6 +73,34 @@ fn malformed_operations_are_refused_before_they_are_queued() {
 }
 
 #[test]
+fn notes_need_a_short_title_and_a_bounded_body() {
+    let root = tempfile::tempdir().unwrap();
+    let note = |title: &str, markdown: &str| Operation::Note {
+        title: title.into(),
+        markdown: markdown.into(),
+    };
+    for refused in [
+        note("", "body"),
+        note("two\nlines", "body"),
+        note(&"t".repeat(MAX_NOTE_TITLE_BYTES + 1), "body"),
+        note("title", "  "),
+        note("title", &"m".repeat(MAX_NOTE_BYTES + 1)),
+    ] {
+        let error = enqueue_at(root.path(), identity(), refused, Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+    assert!(
+        enqueue_at(
+            root.path(),
+            identity(),
+            note("Summary", "- **done**"),
+            Duration::from_secs(5)
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn queue_is_host_bound_single_claim_and_result_is_identity_bound() {
     let root = tempfile::tempdir().unwrap();
     let request = enqueue_at(root.path(), identity(), Operation::List, Duration::from_secs(5)).unwrap();

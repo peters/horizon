@@ -496,11 +496,16 @@ from its injected identity on every call.
 | `list` | The agent panels in the workspace: `panel_id`, `title`, `kind`, `directory`, `state` and `is_caller`. |
 | `send` | Types `text` into another agent's prompt as a bracketed paste, then presses Enter (`submit`, default true). |
 | `read` | The newest `lines` (default 40, at most 200) of another agent's terminal. |
+| `note` | Shows the person a markdown note (`title` up to 80 bytes, `markdown` up to 2000 bytes) as a card in the drawer. |
 
 Rules the host enforces:
 
-- Only the assistant (the agent in the assistant drawer) can `send`; every
-  agent can `list` and `read`. Others get `assistant_only`.
+- Only the assistant (the agent in the assistant drawer) can `send` and `note`;
+  every agent can `list` and `read`. Others get `assistant_only`.
+- By default a `send` waits for the person: the call answers
+  `awaiting_approval`, nothing is typed, and a card with the message and
+  Send / Don't send buttons appears in the drawer. The person can turn the
+  approval off in the drawer's Engine popup.
 - A send needs the target to be `idle`: its interface is up (bracketed paste is
   on), it is not working or recently active, and no approval or question is
   pending. Otherwise it is refused with `agent_busy`, `agent_needs_input`,

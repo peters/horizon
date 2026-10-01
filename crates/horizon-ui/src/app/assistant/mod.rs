@@ -4,11 +4,15 @@
 //! created hidden, so it never appears on the canvas, and the drawer draws its
 //! terminal. Closing the drawer leaves the agent running.
 
+mod blocks;
+mod cards;
 mod drawer;
 mod engine;
+mod icons;
 mod reach;
 
 use egui::{Context, Id, Pos2, Rect};
+use egui_commonmark::CommonMarkCache;
 use horizon_core::assistant::{ASSISTANT_PANEL_LOCAL_ID, AssistantSettings};
 use horizon_core::{HorizonHome, PanelId, PanelOptions};
 use zeroize::Zeroizing;
@@ -33,6 +37,8 @@ pub(super) struct AssistantDrawer {
     restart_requested: bool,
     engine_open: bool,
     engine_anchor: Option<Rect>,
+    cards: cards::Cards,
+    md_cache: CommonMarkCache,
     key_input: Zeroizing<String>,
     notice: Option<String>,
 }
@@ -49,6 +55,8 @@ impl AssistantDrawer {
             restart_requested: false,
             engine_open: false,
             engine_anchor: None,
+            cards: cards::Cards::default(),
+            md_cache: CommonMarkCache::default(),
             key_input: Zeroizing::new(String::new()),
             notice: None,
         }
@@ -181,7 +189,7 @@ impl HorizonApp {
     /// Applies the engine chosen in the popup, restarting the agent when it changed.
     fn apply_assistant_engine(&mut self) {
         let draft = self.assistant.draft;
-        if draft == self.assistant.settings {
+        if draft.same_engine(&self.assistant.settings) {
             return;
         }
         if let Err(error) = draft.save(&HorizonHome::resolve()) {

@@ -41,6 +41,13 @@ pub struct AssistantSettings {
     pub agent: PanelKind,
     #[serde(default)]
     pub auth: AssistantAuth,
+    /// Ask the person before the assistant types into another agent.
+    #[serde(default = "ask_before_send_by_default")]
+    pub ask_before_send: bool,
+}
+
+const fn ask_before_send_by_default() -> bool {
+    true
 }
 
 impl Default for AssistantSettings {
@@ -48,6 +55,7 @@ impl Default for AssistantSettings {
         Self {
             agent: PanelKind::Claude,
             auth: AssistantAuth::Subscription,
+            ask_before_send: true,
         }
     }
 }
@@ -64,6 +72,13 @@ pub const fn api_key_binding(kind: PanelKind) -> Option<(&'static str, &'static 
 }
 
 impl AssistantSettings {
+    /// Whether another set of settings needs the same agent process: the agent
+    /// and how it signs in, but not the approval preference.
+    #[must_use]
+    pub fn same_engine(&self, other: &Self) -> bool {
+        self.agent == other.agent && self.auth == other.auth
+    }
+
     /// Reads the stored choice, falling back to the default when absent or unreadable.
     #[must_use]
     pub fn load(home: &HorizonHome) -> Self {

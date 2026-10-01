@@ -20,6 +20,7 @@ fn settings_round_trip() {
     let settings = AssistantSettings {
         agent: PanelKind::Codex,
         auth: AssistantAuth::ApiKey,
+        ..AssistantSettings::default()
     };
     settings.save(&home).expect("save");
     assert_eq!(AssistantSettings::load(&home), settings);
@@ -51,6 +52,7 @@ fn api_key_mode_requires_a_saved_key() {
     let settings = AssistantSettings {
         agent: PanelKind::Claude,
         auth: AssistantAuth::ApiKey,
+        ..AssistantSettings::default()
     };
     assert!(settings.launch_readiness(&home).is_err());
     save_api_key(&home, PanelKind::Claude, "  sk-test  \n").expect("save key");
@@ -66,6 +68,7 @@ fn codex_key_uses_the_openai_variable() {
     let settings = AssistantSettings {
         agent: PanelKind::Codex,
         auth: AssistantAuth::ApiKey,
+        ..AssistantSettings::default()
     };
     let env = settings.launch_env(&home).expect("env");
     assert_eq!(env.get("OPENAI_API_KEY").map(String::as_str), Some("sk-codex"));
@@ -77,6 +80,7 @@ fn agents_without_a_key_binding_reject_api_key_mode() {
     let settings = AssistantSettings {
         agent: PanelKind::Gemini,
         auth: AssistantAuth::ApiKey,
+        ..AssistantSettings::default()
     };
     assert!(settings.launch_readiness(&home).is_err());
     assert!(save_api_key(&home, PanelKind::Gemini, "key").is_err());
@@ -110,4 +114,29 @@ fn stored_key_is_private() {
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn asking_before_sending_is_the_default_and_is_not_part_of_the_engine() {
+    let (dir, home) = home();
+    assert!(AssistantSettings::default().ask_before_send);
+    // Settings written before the preference existed keep the safe default.
+    std::fs::create_dir_all(dir.path().join("assistant")).expect("dir");
+    std::fs::write(
+        dir.path().join("assistant/settings.json"),
+        r#"{"agent":"claude","auth":"subscription"}"#,
+    )
+    .expect("write");
+    assert!(AssistantSettings::load(&home).ask_before_send);
+
+    let relaxed = AssistantSettings {
+        ask_before_send: false,
+        ..AssistantSettings::default()
+    };
+    assert!(relaxed.same_engine(&AssistantSettings::default()));
+    let other = AssistantSettings {
+        agent: PanelKind::Codex,
+        ..AssistantSettings::default()
+    };
+    assert!(!other.same_engine(&AssistantSettings::default()));
 }

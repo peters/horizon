@@ -315,7 +315,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     by `panels/assistant.rs` through the shared terminal widget. It restores
     hidden, is excluded from the sidebar and palette, and the drawer closes it
     directly because `render_panels` rebuilds the shared close queue each frame.
-    `reach.rs` renders the strip of other agents and their state
+    `reach.rs` renders the strip of other agents and their state, and
+    `cards.rs` the Activity tray (approval, sent and note cards, built by
+    Horizon from host facts) on the shared look in `blocks.rs` and `icons.rs`
   - `agent_panel_requests`: host side of the `agent_panels` MCP tool. It claims
     requests from the `manifest::agent_panels` queue (built on the generic
     `manifest::typed_queue`), answers list/send/read from `Board` state in

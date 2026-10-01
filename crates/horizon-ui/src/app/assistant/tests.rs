@@ -106,3 +106,54 @@ fn restart_replaces_the_agent_at_the_next_drawer_render() {
     let second = app.board.assistant_panel().expect("assistant should be recreated");
     assert_ne!(first, second);
 }
+
+fn first_card_kind(app: &HorizonApp) -> Option<&cards::CardKind> {
+    app.assistant.cards.first_kind()
+}
+
+#[test]
+fn a_note_opens_the_drawer_and_shows_one_card() {
+    let (_temp, mut app) = test_app();
+    assert!(!app.assistant.open);
+    app.assistant_post_note("Summary".to_string(), "- **done**".to_string());
+    assert!(app.assistant.open, "a note must be visible to the person");
+    assert!(matches!(
+        first_card_kind(&app),
+        Some(cards::CardKind::Note { title, .. }) if title == "Summary"
+    ));
+}
+
+#[test]
+fn declining_an_approval_types_nothing_and_says_so() {
+    let (_temp, mut app) = test_app();
+    app.assistant_request_approval(PanelId(5), "codex".to_string(), "run the tests".to_string(), true);
+    assert!(app.assistant.open, "an approval must be visible to the person");
+    let id = app.assistant.cards.first_id().expect("card");
+
+    app.resolve_approval(id, false);
+
+    assert!(matches!(
+        first_card_kind(&app),
+        Some(cards::CardKind::Declined { reason, .. }) if reason.contains("declined")
+    ));
+}
+
+#[test]
+fn approving_for_an_agent_that_is_gone_is_declined_with_the_reason() {
+    let (_temp, mut app) = test_app();
+    let ctx = Context::default();
+    app.toggle_assistant();
+    frame(&ctx, &mut app);
+    app.assistant_request_approval(PanelId(424_242), "ghost".to_string(), "hello".to_string(), true);
+    let id = app.assistant.cards.first_id().expect("card");
+
+    app.resolve_approval(id, true);
+
+    assert!(matches!(first_card_kind(&app), Some(cards::CardKind::Declined { .. })));
+}
+
+#[test]
+fn asking_before_sending_is_on_by_default() {
+    let (_temp, app) = test_app();
+    assert!(app.assistant_asks_before_send());
+}

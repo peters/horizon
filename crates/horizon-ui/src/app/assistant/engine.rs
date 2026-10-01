@@ -107,9 +107,22 @@ impl HorizonApp {
         }
 
         ui.add_space(12.0);
+        let mut ask = self.assistant.settings.ask_before_send;
+        if ui
+            .checkbox(&mut ask, "Ask before typing into other agents")
+            .on_hover_text("When on, a message the assistant wants to send waits for your approval in the drawer.")
+            .changed()
+        {
+            self.assistant.settings.ask_before_send = ask;
+            self.assistant.draft.ask_before_send = ask;
+            if let Err(error) = self.assistant.settings.save(&HorizonHome::resolve()) {
+                self.assistant.notice = Some(format!("Could not save the setting: {error}"));
+            }
+        }
+        ui.add_space(10.0);
         let home = HorizonHome::resolve();
         let readiness = self.assistant.draft.launch_readiness(&home);
-        let changed = self.assistant.draft != self.assistant.settings;
+        let changed = !self.assistant.draft.same_engine(&self.assistant.settings);
         ui.horizontal(|ui| {
             let apply = ui.add_enabled(
                 changed && readiness.is_ok(),

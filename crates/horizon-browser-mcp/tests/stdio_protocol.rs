@@ -198,7 +198,16 @@ fn assert_device_panel_contract(tools: &Value) {
 
 fn assert_agent_panels_contract(tools: &Value) {
     let agents = listed_tool(tools, "agent_panels").to_string();
-    for operation in ["list", "send", "read", "panel_id", "needs_input", "untrusted"] {
+    for operation in [
+        "list",
+        "send",
+        "read",
+        "note",
+        "panel_id",
+        "needs_input",
+        "untrusted",
+        "awaiting_approval",
+    ] {
         assert!(agents.contains(operation), "agent_panels lacks {operation}");
     }
 }

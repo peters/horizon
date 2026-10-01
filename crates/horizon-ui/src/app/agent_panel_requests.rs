@@ -20,6 +20,8 @@ use crate::input::{KeyEventContext, KeyIdentity, paste_bytes, translate_key_even
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// Gap between the pasted text and Enter, so a TUI's paste handling has finished.
 const SUBMIT_DELAY: Duration = Duration::from_millis(150);
+const APPROVAL_MESSAGE: &str =
+    "The person has to approve this message in the assistant drawer. Nothing was typed; do not send it again.";
 
 struct PendingSubmit {
     panel_id: PanelId,
@@ -97,16 +99,16 @@ impl HorizonApp {
                     _ => unavailable(),
                 }
             }
+            Operation::Note { title, markdown } => {
+                if !self.is_assistant_panel(caller.panel_id) {
+                    return only_the_assistant("post notes");
+                }
+                self.assistant_post_note(title.trim().to_string(), markdown.clone());
+                Outcome::Noted
+            }
             Operation::Send { panel_id, text, submit } => {
-                if !self
-                    .board
-                    .panel(caller.panel_id)
-                    .is_some_and(horizon_core::Panel::is_assistant)
-                {
-                    return Outcome::failed(
-                        "assistant_only",
-                        "Only the assistant can send messages to other agents.",
-                    );
+                if !self.is_assistant_panel(caller.panel_id) {
+                    return only_the_assistant("send messages to other agents");
                 }
                 let Some(target) = self.agent_in_workspace(panel_id, caller.workspace_id) else {
                     return unavailable();
@@ -114,21 +116,47 @@ impl HorizonApp {
                 if let Err(refusal) = self.board.check_agent_can_receive(caller.panel_id, target) {
                     return Outcome::failed(refusal.code(), refusal.message());
                 }
-                if !self.type_into_agent(target, text) {
+                let title = self
+                    .board
+                    .panel(target)
+                    .map_or_else(String::new, |panel| panel.display_title().into_owned());
+                if self.assistant_asks_before_send() {
+                    self.assistant_request_approval(target, title, text.clone(), *submit);
+                    return Outcome::AwaitingApproval {
+                        panel_id: panel_id.clone(),
+                        message: APPROVAL_MESSAGE.to_string(),
+                    };
+                }
+                if !self.send_to_agent(target, text, *submit, now) {
                     return unavailable();
                 }
-                if *submit {
-                    self.agent_panel_requests.pending_submits.push(PendingSubmit {
-                        panel_id: target,
-                        at: now + SUBMIT_DELAY,
-                    });
-                }
+                self.assistant_record_sent(target, title, text.clone());
                 Outcome::Sent {
                     panel_id: panel_id.clone(),
                     submitted: *submit,
                 }
             }
         }
+    }
+
+    fn is_assistant_panel(&self, panel_id: PanelId) -> bool {
+        self.board
+            .panel(panel_id)
+            .is_some_and(horizon_core::Panel::is_assistant)
+    }
+
+    /// Types `text` into the agent and, if asked, presses Enter shortly after.
+    pub(super) fn send_to_agent(&mut self, target: PanelId, text: &str, submit: bool, now: Instant) -> bool {
+        if !self.type_into_agent(target, text) {
+            return false;
+        }
+        if submit {
+            self.agent_panel_requests.pending_submits.push(PendingSubmit {
+                panel_id: target,
+                at: now + SUBMIT_DELAY,
+            });
+        }
+        true
     }
 
     fn agent_in_workspace(&self, local_id: &str, workspace: WorkspaceId) -> Option<PanelId> {
@@ -175,6 +203,10 @@ impl HorizonApp {
             ctx.request_repaint_after(SUBMIT_DELAY);
         }
     }
+}
+
+fn only_the_assistant(action: &str) -> Outcome {
+    Outcome::failed("assistant_only", &format!("Only the assistant can {action}."))
 }
 
 fn unavailable() -> Outcome {
