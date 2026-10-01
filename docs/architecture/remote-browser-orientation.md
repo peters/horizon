@@ -160,20 +160,25 @@ the current document identity within its deadline. A previously cached identity 
 establishes the pre-mutation baseline; an identity change after dispatch still
 refuses the request. Stop and Teach mode are checked again after this bounded
 read, before any mutation.
-Classic WebDriver observations use the server's Get Current URL and Find Element
-`:root` reference, never a token stored in the page's JavaScript realm. Two complete
-URL/root samples must agree within one deadline. Semantic scans additionally
-check the anchor before and after execution; a changed anchor discards the scan
-instead of assigning old nodes to the replacement page. Copied page properties,
-privacy-clock drift and layout changes cannot impersonate this native reference.
+Classic WebDriver observations retain a provider-issued `:root` reference and
+bracket its native validity check with Get Current URL. [Get Element Tag Name](https://w3c.github.io/webdriver/#get-element-tag-name)
+must validate the retained reference against the current active Document. Only
+typed stale-element or missing-element responses trigger renewal, and they
+invalidate generation even if the provider reuses the same opaque ID. Unsupported,
+malformed or other failures refuse verification. All components share one deadline.
+Semantic scans additionally check before and after execution; a changed observation
+discards the scan. No page-owned token controls identity or generation. Fresh
+Find Element aliases need not compare equal, and privacy-clock drift does not
+invalidate layout-only changes.
 
-The classic protocol identifies a root **Node**, not a Document. Replacing the
-root conservatively invalidates references even within one Document. Re-adopting
-the exact same root Node into another same-URL Document can retain its provider
-reference; classic WebDriver alone cannot prove detection of that hostile case.
-Providers needing a stronger isolation guarantee must expose a native document
-lifecycle identifier or isolated execution realm and qualify it separately.
-CDP/BiDi lifecycle events continue to provide their existing invalidation paths.
+The classic protocol identifies a **Node**, not a Document. A retained root moved
+under a new root while remaining connected, or adopted into another same-URL
+Document, may retain a valid provider reference. Classic WebDriver alone cannot
+prove detection of those hostile cases. Providers needing a stronger isolation
+guarantee must expose a native document lifecycle identifier or isolated execution
+realm and qualify it separately. Qualify native staleness with a page-triggered
+same-URL reload before relying on this guard. CDP/BiDi lifecycle events continue
+to provide their existing invalidation paths.
 
 After the normal ownership acknowledgement, the driver checks the document
 again, observes current ownership without claiming queued actions, and checks

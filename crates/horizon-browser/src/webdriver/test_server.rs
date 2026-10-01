@@ -34,12 +34,41 @@ impl Reply {
         }
     }
 
-    /// Two complete native URL/root samples, with every HTTP call recorded.
+    /// Establish a new provider-issued root and verify native staleness.
     pub(super) fn native_document(root: &str) -> Self {
         let url = serde_json::json!({"value":"https://example.test/"});
-        let node = serde_json::json!({"value":{"element-6066-11e4-a52e-4f735466cecf":root}});
         let mut first = Self::json(200, &url);
-        first.following = vec![Self::json(200, &node), Self::json(200, &url), Self::json(200, &node)];
+        first.following = vec![
+            Self::json(
+                200,
+                &serde_json::json!({"value":{"element-6066-11e4-a52e-4f735466cecf":root}}),
+            ),
+            Self::json(200, &serde_json::json!({"value":"html"})),
+            Self::json(200, &url),
+        ];
+        first
+    }
+
+    /// Validate a retained reference without requiring a stable new alias.
+    pub(super) fn same_document() -> Self {
+        let url = serde_json::json!({"value":"https://example.test/"});
+        let mut first = Self::json(200, &url);
+        first.following = vec![
+            Self::json(200, &serde_json::json!({"value":"html"})),
+            Self::json(200, &url),
+        ];
+        first
+    }
+
+    pub(super) fn replaced_document(root: &str) -> Self {
+        let mut first = Self::native_document(root);
+        first.following.insert(
+            0,
+            Self::json(
+                404,
+                &serde_json::json!({"value":{"error":"stale element reference","message":"old document"}}),
+            ),
+        );
         first
     }
 

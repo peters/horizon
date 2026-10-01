@@ -182,17 +182,22 @@ identity and refusal evidence before closing the owned session.
    scroll, fill and keyboard dismissal. Deterministic tests must distinguish a
    stale cached identity found before mutation from a document change after
    dispatch, and stop, Teach mode or timeout during the bounded baseline read.
-   Exercise stable native URL/root observations through rotation, resize, scroll
-   and fill; a normal same-URL reload must invalidate earlier refs. In deterministic
-   classic tests, return identical forged page markers for two same-URL roots and
+   Exercise retained native-reference validation through rotation, resize, scroll
+   and fill. Include a synthetic page button that reloads the same URL, with the
+   same forged page marker on every load. Activate through `browser_act`, without
+   an explicit Horizon reload, then require a new generation and old-ref refusal
+   before acquiring new refs. Do this on each provider/OS/browser combination.
+   In deterministic classic tests, return identical forged page markers for two same-URL roots and
    require fresh generations and stale-ref rejection. Change the native anchor
-   during a scan and between URL/root samples: neither result may be registered.
-   Test malformed native replies and delayed components under one original bound.
+   during a scan and between URL reads: neither result may be registered.
+   A typed stale event must invalidate even when a replacement reuses its ID;
+   unknown errors and unsupported or malformed names must not renew the reference.
+   Test delayed URL/name/find components under one original bound.
    Run `cargo test -p horizon-browser webdriver::session::document` and
-   `node --test scripts/browser-smoke/*.test.cjs`. A root replacement within one
-   Document also invalidates conservatively. Same-Node adoption into a new
-   same-URL Document is an explicit classic-protocol limitation, not a qualified
-   isolation guarantee; new providers must document their lifecycle semantics.
+   `node --test scripts/browser-smoke/*.test.cjs`. A retained root that remains
+   connected after reparenting or same-Node adoption can stay valid. These are
+   explicit classic-protocol limits, not qualified isolation guarantees; new
+   providers must document their lifecycle semantics.
    Also replace the document after measurement and during the final ownership
    observation. No success may reuse the old viewport. Cover Stop/Teach,
    owner/handoff takeover and the original deadline during final document reads,

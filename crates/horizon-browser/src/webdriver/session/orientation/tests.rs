@@ -13,6 +13,9 @@ mod startup;
 fn baseline() -> Reply {
     Reply::native_document("document")
 }
+fn stable() -> Reply {
+    Reply::same_document()
+}
 
 fn rotation_request() -> AgentAction {
     AgentAction {
@@ -144,8 +147,8 @@ fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_
     use std::sync::Arc;
     let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
     replies.extend(observation(4, 2));
-    replies.push(Reply::native_document("document"));
-    replies.extend([baseline(), baseline()]);
+    replies.push(stable());
+    replies.extend([stable(), stable()]);
     let classic = Server::start(replies);
     let (link, worker) = bidi_fixture(false, false);
     let mut driver = fixture_driver(&classic, link);
@@ -206,7 +209,7 @@ fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_
         driver.pending_orientation.as_ref().unwrap().verified.is_some(),
         "GET, page geometry, fresh screenshot and document identity were verified"
     );
-    assert_eq!(classic.recorded().len(), 13);
+    assert_eq!(classic.recorded().len(), 12);
     driver.signal_epoch += 1;
     driver.tick_orientation(&events(), &AtomicBool::new(false));
     assert!(driver.pending_orientation.is_none());
@@ -224,7 +227,7 @@ fn user_supersession_retains_the_previous_request_completion() {
     let classic = Server::start(vec![
         baseline(),
         Reply::json(200, &json!({"value":null})),
-        baseline(),
+        stable(),
         Reply::json(200, &json!({"value":null})),
     ]);
     let (link, worker) = bidi_fixture(false, false);
@@ -238,6 +241,15 @@ fn user_supersession_retains_the_previous_request_completion() {
             &AtomicBool::new(false),
         );
     }
+    assert!(driver.pending_orientation.is_some());
+    assert_eq!(
+        classic
+            .recorded()
+            .iter()
+            .filter(|r| r.method == "POST" && r.path.ends_with("/orientation"))
+            .count(),
+        2
+    );
     assert_eq!(driver.orientation_action_id.as_deref(), Some("viewer-b"));
     assert_eq!(driver.orientation_completed.completed[0].action_id, "viewer-a");
     assert!(
@@ -315,7 +327,7 @@ fn stale_portrait_frames_wait_and_takeover_during_identity_cannot_succeed() {
         let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
         replies.extend(observation(2, 4));
         replies.extend(observation(4, 2));
-        replies.push(Reply::native_document("document").delayed(Duration::from_millis(100)));
+        replies.push(stable().delayed(Duration::from_millis(100)));
         let classic = Server::start(replies);
         let (link, worker) = bidi_fixture(false, false);
         let mut driver = fixture_driver(&classic, link);

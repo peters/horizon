@@ -6,15 +6,10 @@ use serde_json::{Value, json};
 
 use crate::{BackendKind, BrowserControlFailure};
 
+use super::super::{http::HttpError, transport::encode_path_segment};
 use super::{Driver, webdriver_value};
 
 pub(super) const OBSERVATION_BUDGET: Duration = crate::wait::RELEASE_CHECK_BUDGET;
-
-#[derive(Debug, PartialEq, Eq)]
-struct Anchor {
-    url: String,
-    root: String,
-}
 
 impl Driver {
     fn tracks_classic_document_identity(&self) -> bool {
@@ -35,36 +30,66 @@ impl Driver {
             return Ok(false);
         }
         let deadline = Instant::now() + timeout;
-        let first = self.native_document_anchor(deadline)?;
-        let second = self.native_document_anchor(deadline)?;
-        if first != second {
+        let url = self.native_document_url(deadline)?;
+        let previous = self
+            .classic_document_identity
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<[String; 2]>(value).ok());
+        let mut stale = previous.as_ref().is_some_and(|value| value[0] != url);
+        if stale {
+            self.invalidate_classic_document();
+        }
+        let root = if let Some([_, root]) = previous.filter(|value| value[0] == url) {
+            if self.native_root_is_current(&root, deadline)? {
+                root
+            } else {
+                // A provider may reuse the opaque string for a replacement.
+                // Native staleness invalidates independently of ID equality.
+                self.invalidate_classic_document();
+                stale = true;
+                self.find_native_root(deadline)?
+            }
+        } else {
+            self.find_native_root(deadline)?
+        };
+        if self.native_document_url(deadline)? != url {
             self.invalidate_classic_document();
             return Err(BrowserControlFailure::new(
                 "document_navigation_invalidated",
                 "the page changed during native document observation",
             ));
         }
-        let identity = serde_json::to_string(&[second.url, second.root]).map_err(|_| invalid_anchor())?;
-        Ok(self.record_classic_document_identity(&identity))
+        let identity = serde_json::to_string(&[url, root]).map_err(|_| invalid_anchor())?;
+        let changed = self
+            .classic_document_identity
+            .replace(identity.clone())
+            .is_some_and(|previous| previous != identity);
+        if changed && !stale {
+            self.invalidate_classic_document();
+        }
+        Ok(stale || changed)
     }
 
-    fn native_document_anchor(&self, deadline: Instant) -> Result<Anchor, BrowserControlFailure> {
+    fn native_document_url(&self, deadline: Instant) -> Result<String, BrowserControlFailure> {
         let result = self.classic_get_within("url", remaining(deadline)?);
         remaining(deadline)?;
-        let url_response = result.map_err(|_| invalid_anchor())?;
-        let url = webdriver_value(&url_response)
+        let response = result.map_err(|_| invalid_anchor())?;
+        webdriver_value(&response)
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .ok_or_else(invalid_anchor)?
-            .to_owned();
+            .map(str::to_owned)
+            .ok_or_else(invalid_anchor)
+    }
+
+    fn find_native_root(&mut self, deadline: Instant) -> Result<String, BrowserControlFailure> {
         let result = self.classic_navigation_post_within(
             "element",
             &json!({"using":"css selector","value":":root"}),
             remaining(deadline)?,
         );
         remaining(deadline)?;
-        let root_response = result.map_err(|_| invalid_anchor())?;
-        let root = webdriver_value(&root_response)
+        let response = result.map_err(|_| invalid_anchor())?;
+        let root = webdriver_value(&response)
             .and_then(|value| {
                 value
                     .get("element-6066-11e4-a52e-4f735466cecf")
@@ -74,7 +99,35 @@ impl Driver {
             .filter(|value| !value.is_empty())
             .ok_or_else(invalid_anchor)?
             .to_owned();
-        Ok(Anchor { url, root })
+        if !self.native_root_is_current(&root, deadline)? {
+            self.invalidate_classic_document();
+            return Err(BrowserControlFailure::new(
+                "document_navigation_invalidated",
+                "the replacement root became stale during native observation",
+            ));
+        }
+        Ok(root)
+    }
+
+    fn native_root_is_current(&self, root: &str, deadline: Instant) -> Result<bool, BrowserControlFailure> {
+        let path = self.session_path(&format!("element/{}/name", encode_path_segment(root)));
+        let result = self.host.transport().get_with_read_timeout(&path, remaining(deadline)?);
+        remaining(deadline)?;
+        match result {
+            Err(HttpError::WebDriver { error, .. })
+                if matches!(error.as_str(), "stale element reference" | "no such element") =>
+            {
+                Ok(false)
+            }
+            Ok(response)
+                if webdriver_value(&response)
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| !name.is_empty()) =>
+            {
+                Ok(true)
+            }
+            _ => Err(invalid_anchor()),
+        }
     }
 
     pub(super) fn guarded_semantic_scan(
@@ -97,17 +150,6 @@ impl Driver {
             ));
         }
         Ok(value)
-    }
-
-    fn record_classic_document_identity(&mut self, identity: &str) -> bool {
-        let changed = self
-            .classic_document_identity
-            .replace(identity.to_owned())
-            .is_some_and(|previous| previous != identity);
-        if changed {
-            self.invalidate_classic_document();
-        }
-        changed
     }
 
     fn invalidate_classic_document(&mut self) {

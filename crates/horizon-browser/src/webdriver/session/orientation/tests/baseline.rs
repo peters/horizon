@@ -15,12 +15,12 @@ fn cached_identity_change_before_rotation_succeeds_but_postdispatch_change_is_re
         for changed_after in [false, true] {
             let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
             replies.extend(observation(4, 2));
-            replies.push(Reply::native_document(if changed_after {
-                "new-document"
+            replies.push(if changed_after {
+                Reply::replaced_document("new-document")
             } else {
-                "document"
-            }));
-            replies.push(baseline());
+                stable()
+            });
+            replies.push(stable());
             let classic = Server::start(replies);
             let (link, worker) = bidi_fixture(false, false);
             let mut driver = fixture_driver(&classic, link);

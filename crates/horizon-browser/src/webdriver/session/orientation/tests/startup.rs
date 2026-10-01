@@ -192,7 +192,7 @@ fn committed_initial_replies(orientation: &str) -> Vec<Reply> {
         Reply::json(200, &json!({"value":null})),
         Reply::json(200, &json!({"value":"https://example.test/ready"})),
         Reply::json(200, &json!({"value":"Orientation demo"})),
-        Reply::native_document("new-document"),
+        Reply::replaced_document("new-document"),
         Reply::json(200, &json!({"value":orientation})),
         if orientation == "LANDSCAPE" {
             measured(900, 600, "landscape")
@@ -387,6 +387,7 @@ fn allocation_page_cannot_reject_an_explicit_start_before_matching_first_documen
             500,
             &json!({"value":{"error":"javascript error","message":"temporary page unavailable"}}),
         );
+        document[7] = Reply::native_document("new-document");
         replies.extend(document);
         replies.push(Reply::json(200, &json!({"value":null})));
         let classic = Server::start(replies);

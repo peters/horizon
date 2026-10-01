@@ -892,9 +892,10 @@ Remote orientation verification lives in `horizon-browser`'s
 `webdriver/session/orientation`, with request-origin and user audit policy in its
 `origin` leaf; `document` remeasures observed document replacements outside
 bounded semantic and wait calls. The separate `webdriver/session/document`
-leaf brackets classic semantic scans with native URL/root references under one
-deadline, independent of page-owned tokens and privacy clocks. It rejects mixed
-samples and documents the Node-adoption limit of classic WebDriver. The core
+leaf brackets classic semantic scans with native URL reads and retained-root
+staleness validation under one deadline, independent of page-owned tokens and
+privacy clocks. It refuses unverified reads and documents the live-Node reuse
+limits of classic WebDriver. The core
 `browser/orientation` adapter queues
 user commands and preserves unresolved request acknowledgements; its tests live
 in a colocated tree. UI

@@ -57,7 +57,7 @@ fn measured(
 ) {
     let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
     replies.extend(observation(4, 2));
-    replies.push(baseline());
+    replies.push(stable());
     replies.extend(final_replies);
     let classic = Server::start(replies);
     let (link, worker) = bidi_fixture(false, false);
@@ -88,7 +88,7 @@ fn measured(
     }
     driver.tick_orientation(&events(), &AtomicBool::new(false));
     assert!(driver.pending_orientation.as_ref().unwrap().verified.is_some());
-    assert_eq!(classic.recorded().len(), 13);
+    assert_eq!(classic.recorded().len(), 12);
     assert!(driver.tick_coordination(&events()).is_empty());
     (driver, classic, worker, owner)
 }
@@ -120,9 +120,9 @@ fn failed_once(driver: &Driver, owner: &Observer, user: bool, code: &str) {
 fn document_replacement_after_measurement_or_during_final_ownership_never_acknowledges() {
     for user in [false, true] {
         for after_ownership in [false, true] {
-            let changed = Reply::native_document("replacement-document");
+            let changed = Reply::replaced_document("replacement-document");
             let replies = if after_ownership {
-                vec![baseline(), changed]
+                vec![stable(), changed]
             } else {
                 vec![changed]
             };
@@ -151,8 +151,7 @@ fn stop_teach_and_ownership_takeover_during_final_read_refuse_once() {
                 continue;
             }
             let (release, blocked) = mpsc::channel();
-            let (mut driver, classic, worker, owner) =
-                measured(user, vec![baseline().blocked_until(blocked), baseline()]);
+            let (mut driver, classic, worker, owner) = measured(user, vec![stable().blocked_until(blocked), stable()]);
             let panel_slot = driver.panel_slot.clone();
             let stopped = Arc::new(AtomicBool::new(false));
             let rotation_stopped = stopped.clone();
@@ -161,7 +160,7 @@ fn stop_teach_and_ownership_takeover_during_final_read_refuse_once() {
                 driver
             });
             let deadline = Instant::now() + Duration::from_secs(3);
-            while classic.recorded().len() < 14 {
+            while classic.recorded().len() < 13 {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -201,11 +200,11 @@ fn final_read_deadline_and_observer_failure_keep_measured_results_unacknowledged
     for user in [false, true] {
         for timeout in [false, true] {
             let reply = if timeout {
-                baseline().delayed(Duration::from_millis(300))
+                stable().delayed(Duration::from_millis(300))
             } else {
-                baseline()
+                stable()
             };
-            let (mut driver, _classic, worker, owner) = measured(user, vec![reply, baseline()]);
+            let (mut driver, _classic, worker, owner) = measured(user, vec![reply, stable()]);
             if timeout {
                 driver.pending_orientation.as_mut().unwrap().deadline = Instant::now() + Duration::from_millis(100);
             } else {
@@ -238,7 +237,7 @@ fn final_read_deadline_and_observer_failure_keep_measured_results_unacknowledged
 #[test]
 fn custom_coordinator_without_readonly_observation_refuses_confirmation() {
     for user in [false, true] {
-        let (mut driver, _classic, worker, _) = measured(user, vec![baseline()]);
+        let (mut driver, _classic, worker, _) = measured(user, vec![stable()]);
         driver.config.coordination = Some(Arc::new(super::navigation::SlowPublication));
         driver.tick_orientation(&events(), &AtomicBool::new(false));
         assert!(driver.pending_orientation.is_none());
