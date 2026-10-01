@@ -255,7 +255,7 @@ impl HorizonApp {
         }
         let allowed = self.session_rebind_options(owner);
         let mut unavailable = Vec::new();
-        let sessions: Vec<_> = requested
+        let sessions: Arc<[_]> = requested
             .into_iter()
             .filter(|requested| {
                 let eligible = allowed
@@ -279,13 +279,7 @@ impl HorizonApp {
         let reservation = match horizon_core::reserve_saved_session_deletions(&sessions) {
             Ok(reservation) => Arc::new(reservation),
             Err(error) => {
-                let report = AgentSessionDeletionReport {
-                    failures: vec![horizon_core::AgentSessionDeletionFailure {
-                        session_id: "Selection".into(),
-                        message: error.to_string(),
-                    }],
-                    ..Default::default()
-                };
+                let report = failed_deletion_start(&sessions, unavailable, &error.to_string());
                 ctx.data_mut(|data| data.insert_temp(receipt_id(), Arc::new(report.clone())));
                 finish_session_deletion(ctx, owner, ctx.viewport_id(), allowed, &report);
                 return;
@@ -308,12 +302,13 @@ impl HorizonApp {
         };
         let state = Arc::clone(&job.state);
         let reservation = Arc::clone(&job.reservation);
+        let worker_sessions = Arc::clone(&sessions);
         let repaint = ctx.clone();
         let worker = std::thread::Builder::new()
             .name("conversation-deletion".into())
             .spawn(move || {
-                for session in sessions {
-                    let report = reservation.delete_saved_sessions(&catalog, &[session], &protected);
+                for session in worker_sessions.iter() {
+                    let report = reservation.delete_saved_sessions(&catalog, std::slice::from_ref(session), &protected);
                     let mut progress = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     progress.done += 1;
                     progress.report.deleted.extend(report.deleted);
@@ -326,18 +321,42 @@ impl HorizonApp {
                 repaint.request_repaint();
             });
         if let Err(error) = worker {
-            let report = AgentSessionDeletionReport {
-                failures: vec![horizon_core::AgentSessionDeletionFailure {
-                    session_id: "Worker".into(),
-                    message: error.to_string(),
-                }],
-                ..Default::default()
-            };
+            let unavailable = std::mem::take(
+                &mut job
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .report
+                    .failures,
+            );
+            let report = failed_deletion_start(&sessions, unavailable, &error.to_string());
             ctx.data_mut(|data| data.insert_temp(receipt_id(), Arc::new(report.clone())));
             finish_session_deletion(ctx, owner, ctx.viewport_id(), allowed, &report);
         } else {
             ctx.data_mut(|data| data.insert_temp(job_id(), job));
         }
+    }
+}
+
+fn failed_deletion_start(
+    sessions: &[AgentSessionBinding],
+    mut failures: Vec<horizon_core::AgentSessionDeletionFailure>,
+    message: &str,
+) -> AgentSessionDeletionReport {
+    let mut seen = HashSet::new();
+    failures.retain(|failure| seen.insert(failure.session_id.clone()));
+    failures.extend(
+        sessions
+            .iter()
+            .filter(|session| seen.insert(session.session_id.clone()))
+            .map(|session| horizon_core::AgentSessionDeletionFailure {
+                session_id: session.session_id.clone(),
+                message: message.to_owned(),
+            }),
+    );
+    AgentSessionDeletionReport {
+        failures,
+        ..Default::default()
     }
 }
 
@@ -355,6 +374,45 @@ pub(super) fn take_deletion_request(ctx: &egui::Context) -> Option<Vec<AgentSess
 mod tests {
     use super::*;
     use crate::test_egui::DiscardTextures;
+
+    #[test]
+    fn batch_start_failure_counts_every_conversation_and_preserves_preflight_failures() {
+        let sessions: Vec<_> = (0..10)
+            .map(|index| {
+                AgentSessionBinding::new(
+                    horizon_core::PanelKind::Codex,
+                    format!("session-{index}"),
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .collect();
+        let unavailable = vec![horizon_core::AgentSessionDeletionFailure {
+            session_id: "already-attached".into(),
+            message: "Attached to an open panel".into(),
+        }];
+        let mut duplicated = sessions.clone();
+        duplicated.push(sessions[0].clone());
+        for error in ["Reservation conflict", "Worker could not start"] {
+            let report = failed_deletion_start(&duplicated, unavailable.clone(), error);
+            assert!(report.deleted.is_empty());
+            assert_eq!(report.failures.len(), 11);
+            assert_eq!(report.failures[0].session_id, "already-attached");
+            assert_eq!(report.failures[0].message, "Attached to an open panel");
+            for session in &sessions {
+                assert!(
+                    report
+                        .failures
+                        .iter()
+                        .any(|failure| failure.session_id == session.session_id && failure.message == error)
+                );
+            }
+            let mut ui = SessionDeletionUi::default();
+            ui.finish(&report);
+            assert_eq!(ui.message.as_deref(), Some("Deleted 0 conversations. 11 failed."));
+        }
+    }
 
     #[test]
     fn completion_report_survives_dismissal_and_reopening() {

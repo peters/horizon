@@ -362,7 +362,7 @@ mod tests {
             sessions: vec![AgentSessionRecord {
                 kind: session.kind,
                 session_id: session.session_id.clone(),
-                cwd: session.cwd.clone(),
+                cwd: normalize_cwd(session.cwd.as_deref()),
                 label: None,
                 updated_at: 0,
                 interactive: true,
