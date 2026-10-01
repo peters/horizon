@@ -285,7 +285,7 @@ When cutting a new release, generate concise release notes from the commits sinc
 #### Test Environment Pitfalls
 
 - A stray `.git` directory in the system temp directory (for example `/tmp/.git`) makes `only_a_folder_inside_a_checkout_stands_for_a_repository` fail. Run the `horizon-ui` tests with a private `TMPDIR`; the `horizon-browser-routines` private-mode tests need the default temp directory, so run them in a separate invocation without that override.
-- Share one `CARGO_TARGET_DIR` between worktrees so the dependency tree is built once. Clippy lints test code too: casts, more than three `bool` fields or parameters, `Default::default()` where the type is known, `struct_field_names`, `unused_self`, `collapsible_if` (use let chains) and the 100-line function limit all fail CI. Run both clippy tiers, not only `cargo test`, before a commit.
+- Share one `CARGO_TARGET_DIR` between worktrees so the dependency tree is built once. Clippy lints test code too: casts, more than three `bool` parameters (`fn_params_excessive_bools`; many bool fields in a struct are allowed), `Default::default()` where the type is known, `struct_field_names`, `unused_self`, `collapsible_if` (use let chains) and the 100-line function limit all fail CI. Run both clippy tiers, not only `cargo test`, before a commit.
 - When a function is at the line limit, split it by behaviour (one method per operation) instead of squeezing lines or adding an `allow`.
 
 ### Isolated UI Testing Through Horizon Native VNC
@@ -335,9 +335,9 @@ Multi-machine validation (e.g. macOS/Metal on one box, Linux/CUDA on another) is
 #### Driving Agent Terminals in the Fixture
 
 - Exercise paste, submit, state detection and MCP flows with stand-in agents: small scripts named `claude` or `codex` placed earlier on the fixture's `PATH` that enable bracketed paste (`ESC[?2004h`), echo what they read and can call the MCP server. This is deterministic and needs no account or spend. Strip the `ESC[200~` and `ESC[201~` markers in the script, otherwise commands never match. A stand-in does not replace one pass against the real CLI for screen-derived state, Enter after a paste and slash menus.
-- The sandbox gives the fixture its own `/tmp`. Files a stand-in or the application must read have to live under the `--tools` root.
+- The sandbox gives the fixture its own `/tmp`. Files a stand-in or the application must read have to live under the `--tools` root or the fixture's `--state` directory, which the sandbox also binds; the host home and `/tmp` are hidden.
 - `horizon-device act` with a `type` action is unreliable for long text containing quotes, braces or brackets: the text can be dropped entirely. Put such input in a file under the tools root and type its path.
-- Never stop a fixture with `kill $(pgrep -f 'serve.py ...')` from the same command: the pattern matches the calling shell and kills it. Use `ps -eo pid,cmd | awk '/[s]erve.py/{print $1; exit}'`, then `kill -TERM`.
+- Record the launcher's PID when you start a fixture (`$!`) and stop exactly that PID with `kill -TERM`. Never match by command name: `kill $(pgrep -f 'serve.py ...')` from the same command matches the calling shell and kills it, and a system-wide match can stop another task's fixture.
 - A running executable cannot be overwritten (`Text file busy`). Stop the fixture, wait until the application process is gone, then copy the candidate to a new name and record its hash before launching.
 - After a click, wait about a second and take a screenshot before typing. `dispatched` means delivered, not applied, and a click on non-interactive padding drops a text field's focus.
 - Re-run the whole interaction on the final binary after any UI fix. Earlier passes on a previous build prove nothing about the new one.
