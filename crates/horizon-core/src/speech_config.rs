@@ -295,6 +295,7 @@ fn validate_speech_binding(
         ("align_workspaces_horizontally", shortcuts.align_workspaces_horizontally),
         ("toggle_settings", shortcuts.toggle_settings),
         ("toggle_assistant", shortcuts.toggle_assistant),
+        ("summon_assistant", shortcuts.summon_assistant),
         ("zoom_reset", shortcuts.zoom_reset),
         ("zoom_in", shortcuts.zoom_in),
         ("zoom_out", shortcuts.zoom_out),

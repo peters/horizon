@@ -51,7 +51,7 @@ pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
 pub use board::{
-    Board, ForcedBrowserShutdownStatus, OrphanedRemoteHold, SendRefusal, ShutdownProgress, WorkspaceAlignment,
+    Board, ForcedBrowserShutdownStatus, OrphanedRemoteHold, Reach, SendRefusal, ShutdownProgress, WorkspaceAlignment,
     WorkspaceDockSide, WorkspaceLayout,
 };
 pub use config::{

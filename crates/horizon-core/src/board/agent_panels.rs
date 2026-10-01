@@ -22,6 +22,32 @@ const QUIET_BEFORE_SEND: Duration = Duration::from_millis(2500);
 /// Matches the attention detector, which ignores a panel's first ten seconds.
 const SETTLE_AFTER_LAUNCH_MS: i64 = 10_000;
 
+/// The workspaces a caller's `agent_panels` calls can reach. An agent that is
+/// not the assistant reaches only its own workspace; the assistant reaches
+/// whatever the person has put in its scope, which is every workspace by default.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Reach {
+    #[default]
+    All,
+    Only(Vec<WorkspaceId>),
+}
+
+impl Reach {
+    /// Reach of one workspace.
+    #[must_use]
+    pub fn workspace(id: WorkspaceId) -> Self {
+        Self::Only(vec![id])
+    }
+
+    #[must_use]
+    pub fn contains(&self, id: WorkspaceId) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(ids) => ids.contains(&id),
+        }
+    }
+}
+
 /// Why a message cannot be typed into an agent right now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendRefusal {
@@ -51,7 +77,7 @@ impl SendRefusal {
     #[must_use]
     pub const fn message(self) -> &'static str {
         match self {
-            Self::UnknownPanel => "No agent with that panel_id is in this workspace. List the agents first.",
+            Self::UnknownPanel => "No agent with that panel_id is in reach. List the agents first.",
             Self::NotAnAgent => "That panel is not an agent.",
             Self::Caller => "An agent cannot send a message to itself.",
             Self::Exited => "That agent's process has ended.",
@@ -114,23 +140,36 @@ impl Board {
         })
     }
 
-    /// The agents in `workspace`, marking the one that asked. The assistant is
-    /// the person's own conversation, so other agents never see it.
+    /// The agents in `reach`, marking the one that asked. The assistant is the
+    /// person's own conversation, so other agents never see it.
     #[must_use]
-    pub fn agent_panels_in_workspace(&self, workspace: WorkspaceId, caller: PanelId) -> Vec<AgentPanel> {
+    pub fn agent_panels_in(&self, reach: &Reach, caller: PanelId) -> Vec<AgentPanel> {
         self.panels
             .iter()
-            .filter(|panel| panel.workspace_id == workspace && panel.kind.is_agent())
+            .filter(|panel| reach.contains(panel.workspace_id) && panel.kind.is_agent())
             .filter(|panel| !panel.is_assistant() || panel.id == caller)
             .map(|panel| AgentPanel {
                 panel_id: panel.local_id.clone(),
                 title: panel.display_title().into_owned(),
                 kind: agent_definition(panel.kind).map_or_else(String::new, |agent| agent.id.to_string()),
                 state: self.agent_state_of(panel),
+                workspace: self
+                    .workspace(panel.workspace_id)
+                    .map_or_else(String::new, |workspace| workspace.name.clone()),
                 directory: panel.launch_cwd.as_ref().map(|path| path.display().to_string()),
                 is_caller: panel.id == caller,
             })
             .collect()
+    }
+
+    /// The agent with this `panel_id` if it is in `reach`. The assistant is
+    /// never a target.
+    #[must_use]
+    pub fn agent_in_reach(&self, local_id: &str, reach: &Reach) -> Option<PanelId> {
+        self.panel_id_by_local_id(local_id).filter(|id| {
+            self.panel(*id)
+                .is_some_and(|panel| reach.contains(panel.workspace_id) && !panel.is_assistant())
+        })
     }
 
     /// The state of one agent panel, if it is an agent.

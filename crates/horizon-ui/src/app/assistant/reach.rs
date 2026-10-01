@@ -2,8 +2,8 @@
 //! each is doing. Clicking one brings it into view on the canvas.
 
 use egui::{Color32, CornerRadius, FontId, Margin, Response, RichText, Sense, Stroke, StrokeKind, Ui, vec2};
+use horizon_core::PanelId;
 use horizon_core::browser::manifest::agent_panels::{AgentPanel, AgentState};
-use horizon_core::{PanelId, WorkspaceId};
 
 use super::HorizonApp;
 use crate::theme;
@@ -12,7 +12,7 @@ use crate::theme;
 const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
 
 impl HorizonApp {
-    fn reach_agents(&mut self, ctx: &egui::Context, workspace: WorkspaceId, assistant: PanelId) -> Vec<AgentPanel> {
+    fn reach_agents(&mut self, ctx: &egui::Context, assistant: PanelId) -> Vec<AgentPanel> {
         let now = std::time::Instant::now();
         if let Some((read_at, agents)) = &self.assistant.reach_cache
             && now.duration_since(*read_at) < REFRESH_EVERY
@@ -22,7 +22,7 @@ impl HorizonApp {
         }
         let agents: Vec<_> = self
             .board
-            .agent_panels_in_workspace(workspace, assistant)
+            .agent_panels_in(&self.assistant_reach(), assistant)
             .into_iter()
             .filter(|agent| !agent.is_caller)
             .collect();
@@ -35,10 +35,7 @@ impl HorizonApp {
         let Some(assistant) = self.board.assistant_panel() else {
             return;
         };
-        let Some(workspace) = self.board.panel(assistant).map(|panel| panel.workspace_id) else {
-            return;
-        };
-        let agents = self.reach_agents(ui.ctx(), workspace, assistant);
+        let agents = self.reach_agents(ui.ctx(), assistant);
         if agents.is_empty() {
             return;
         }

@@ -1,0 +1,7 @@
+{
+  "uuid": "horizon-desk@horizon",
+  "name": "Horizon desk bridge",
+  "description": "Prototype: lets Horizon place its windows on desktop workspaces and keep its command bar on all of them.",
+  "shell-version": ["50"],
+  "version": 1
+}

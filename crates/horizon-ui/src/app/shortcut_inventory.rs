@@ -2,7 +2,7 @@ use horizon_core::{AppShortcuts, ShortcutBinding};
 
 use crate::terminal_widget::SSH_RECONNECT_SHORTCUT;
 
-const GLOBAL_SHORTCUT_COUNT: usize = 20;
+const GLOBAL_SHORTCUT_COUNT: usize = 21;
 
 pub(crate) fn global_shortcut_bindings(shortcuts: &AppShortcuts) -> [ShortcutBinding; GLOBAL_SHORTCUT_COUNT] {
     [
@@ -18,6 +18,7 @@ pub(crate) fn global_shortcut_bindings(shortcuts: &AppShortcuts) -> [ShortcutBin
         shortcuts.align_workspaces_horizontally,
         shortcuts.toggle_settings,
         shortcuts.toggle_assistant,
+        shortcuts.summon_assistant,
         shortcuts.zoom_reset,
         shortcuts.zoom_in,
         shortcuts.zoom_out,

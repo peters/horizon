@@ -303,6 +303,10 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn render_active_view(&mut self, ui: &mut egui::Ui, root_interaction_suppressed: bool) {
+        if self.desk_mode() {
+            self.render_desk_root(ui);
+            return;
+        }
         self.process_pending_detached_reattach(ui.ctx());
         #[cfg(feature = "cloud-workspaces")]
         self.prepare_cloud_prototype(ui.ctx());
@@ -326,6 +330,7 @@ impl HorizonApp {
             self.render_settings(ui);
         }
         self.render_assistant_drawer(ui);
+        self.render_summon(ui.ctx());
 
         #[cfg(feature = "cloud-workspaces")]
         if self.render_fullscreen_cloud(ui) {

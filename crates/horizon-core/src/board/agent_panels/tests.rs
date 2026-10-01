@@ -92,7 +92,7 @@ fn lists_only_the_agents_of_the_workspace_and_marks_the_caller() {
         )
         .expect("panel should start");
 
-    let panels = board.agent_panels_in_workspace(workspace, ids[0]);
+    let panels = board.agent_panels_in(&Reach::workspace(workspace), ids[0]);
 
     let listed: Vec<_> = panels.iter().map(|panel| panel.panel_id.as_str()).collect();
     assert_eq!(listed, ["claude-one", "codex-one"]);
@@ -143,11 +143,72 @@ fn other_agents_never_see_the_assistant_but_it_sees_itself_and_them() {
     ]);
     let (assistant, codex) = (ids[0], ids[1]);
 
-    let seen_by_codex = board.agent_panels_in_workspace(workspace, codex);
+    let seen_by_codex = board.agent_panels_in(&Reach::workspace(workspace), codex);
     let ids_seen_by_codex: Vec<_> = seen_by_codex.iter().map(|panel| panel.panel_id.as_str()).collect();
     assert_eq!(ids_seen_by_codex, ["codex-one"]);
 
-    let seen_by_assistant = board.agent_panels_in_workspace(workspace, assistant);
+    let seen_by_assistant = board.agent_panels_in(&Reach::workspace(workspace), assistant);
     assert_eq!(seen_by_assistant.len(), 2);
     assert!(seen_by_assistant.iter().any(|panel| panel.is_caller));
+}
+
+#[test]
+fn the_assistant_can_reach_every_workspace_or_only_the_ones_chosen() {
+    let (mut board, first, ids) = board_with(&[
+        (crate::assistant::ASSISTANT_PANEL_LOCAL_ID, PanelKind::Claude),
+        ("claude-one", PanelKind::Claude),
+    ]);
+    let assistant = ids[0];
+    let second = board.create_workspace("docs site");
+    board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Codex,
+                local_id: Some("codex-docs".to_string()),
+                ..PanelOptions::default()
+            },
+            second,
+        )
+        .expect("panel should start");
+
+    let everything = board.agent_panels_in(&Reach::All, assistant);
+    let names: Vec<_> = everything.iter().map(|panel| panel.workspace.as_str()).collect();
+    assert_eq!(everything.len(), 3);
+    assert!(names.contains(&"docs site"), "each agent says which workspace it is in");
+
+    let only_docs = board.agent_panels_in(&Reach::workspace(second), assistant);
+    let docs: Vec<_> = only_docs.iter().map(|panel| panel.panel_id.as_str()).collect();
+    assert_eq!(docs, ["codex-docs"]);
+
+    let both = board.agent_panels_in(&Reach::Only(vec![first, second]), assistant);
+    assert_eq!(both.len(), 3);
+    assert!(board.agent_panels_in(&Reach::Only(Vec::new()), assistant).is_empty());
+}
+
+#[test]
+fn a_target_must_be_in_reach_and_is_never_the_assistant() {
+    let (mut board, first, _ids) = board_with(&[
+        (crate::assistant::ASSISTANT_PANEL_LOCAL_ID, PanelKind::Claude),
+        ("claude-one", PanelKind::Claude),
+    ]);
+    let second = board.create_workspace("docs site");
+    board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Codex,
+                local_id: Some("codex-docs".to_string()),
+                ..PanelOptions::default()
+            },
+            second,
+        )
+        .expect("panel should start");
+
+    assert!(board.agent_in_reach("codex-docs", &Reach::All).is_some());
+    assert!(board.agent_in_reach("codex-docs", &Reach::workspace(second)).is_some());
+    assert!(board.agent_in_reach("codex-docs", &Reach::workspace(first)).is_none());
+    assert!(
+        board
+            .agent_in_reach(crate::assistant::ASSISTANT_PANEL_LOCAL_ID, &Reach::All)
+            .is_none()
+    );
 }

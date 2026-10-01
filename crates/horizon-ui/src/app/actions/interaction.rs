@@ -183,6 +183,12 @@ impl HorizonApp {
         visible_workspace: Option<WorkspaceId>,
     ) {
         if self.host_dialog_open()
+            || ctx.input(|input| {
+                input
+                    .pointer
+                    .hover_pos()
+                    .is_some_and(|position| self.assistant_summon_covers(position))
+            })
             || self.preset_picker_rect(ctx).is_some_and(|rect| {
                 ctx.input(|input| {
                     input
@@ -271,6 +277,9 @@ impl HorizonApp {
         // egui's persisted Middle-layer order, with board order as a fallback
         // before egui has registered their areas.
         let panel_under_pointer = pointer_position.and_then(|position| {
+            if self.assistant_summon_covers(position) {
+                return None;
+            }
             let hits = |id: PanelId| {
                 panel_geometry
                     .iter()

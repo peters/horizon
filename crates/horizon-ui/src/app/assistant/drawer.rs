@@ -3,6 +3,7 @@ use horizon_core::agent_definition;
 use horizon_core::assistant::{AssistantAuth, AssistantSettings};
 
 use super::command_bar::{BAR_GAP, BAR_HEIGHT};
+use super::icons;
 use super::{DEFAULT_WIDTH, HorizonApp, MIN_WIDTH, TOOLBAR_HEIGHT};
 use crate::app::util::viewport_local_rect;
 use crate::theme;
@@ -53,7 +54,7 @@ impl HorizonApp {
                 .max_rect(rect.shrink2(vec2(14.0, 0.0)))
                 .layout(Layout::left_to_right(Align::Center)),
         );
-        paint_spark_tile(&mut header);
+        paint_mark_tile(&mut header);
         header.vertical(|ui| {
             ui.add_space(10.0);
             ui.label(RichText::new("Assistant").size(14.5).strong().color(theme::FG()));
@@ -86,6 +87,7 @@ impl HorizonApp {
         };
         self.render_thread_bar(ui);
         self.render_reach_strip(ui);
+        self.render_plan_block(ui);
         self.render_cards_tray(ui);
         let rect = ui.available_rect_before_wrap().shrink2(vec2(10.0, 8.0));
         let bar_rect = Rect::from_min_max(pos2(rect.min.x, rect.max.y - BAR_HEIGHT), rect.max);
@@ -104,6 +106,11 @@ impl HorizonApp {
     /// Shown while there is no agent: the reason it cannot start, or a start in progress.
     fn render_drawer_waiting(&mut self, ui: &mut Ui) {
         ui.add_space(24.0);
+        ui.vertical_centered(|ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(64.0, 64.0), Sense::hover());
+            icons::paint_mark(ui.painter(), rect);
+        });
+        ui.add_space(14.0);
         Frame::new()
             .fill(theme::BG_ELEVATED())
             .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
@@ -154,27 +161,8 @@ fn header_button(ui: &mut Ui, label: &str) -> egui::Response {
     )
 }
 
-/// Four-point sparkle on a tinted tile, the assistant's mark.
-fn paint_spark_tile(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
-    let accent = theme::ACCENT();
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(10), accent.gamma_multiply(0.18));
-    let c = rect.center();
-    let r = 8.0;
-    let points = [
-        (0.0, -r),
-        (1.9, -1.9),
-        (r, 0.0),
-        (1.9, 1.9),
-        (0.0, r),
-        (-1.9, 1.9),
-        (-r, 0.0),
-        (-1.9, -1.9),
-    ]
-    .iter()
-    .map(|(x, y)| c + vec2(*x, *y))
-    .collect();
-    ui.painter()
-        .add(egui::Shape::convex_polygon(points, accent, Stroke::NONE));
+/// The assistant's mark in the header.
+fn paint_mark_tile(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
+    icons::paint_mark(ui.painter(), rect);
 }

@@ -1,0 +1,42 @@
+#!/bin/bash
+# Stand-in agent for demos. As the assistant (it holds the assistant secret) it runs /tool and /script
+# lines; as any other agent it "works" on whatever it is told and then reports.
+name=$(basename "$0")
+DIR=$(dirname "$0")
+stty -echo 2>/dev/null
+printf '\e[?2004h'
+clear
+if [ -n "$HORIZON_ASSISTANT_TOKEN" ]; then
+  printf '\e[1;36m Assistant ready\e[0m  (stand-in)\n\n'
+else
+  printf '\e[1;32m %s\e[0m  ready\n\n' "$name"
+fi
+printf '> '
+while IFS= read -r line; do
+  line=${line//$'\e[200~'/}; line=${line//$'\e[201~'/}
+  [ -z "$line" ] && { printf '> '; continue; }
+  if [ -n "$HORIZON_ASSISTANT_TOKEN" ]; then
+    case "$line" in
+      "/tool "*) python3 "$DIR/mcp_call.py" ${line#/tool } ;;
+      "/script "*) bash "${line#/script }" ;;
+      *) printf '\e[1;37mYou\e[0m   %s\n\n' "$line"
+         printf '\e[36m●\e[0m Splitting this into three tasks across your workspaces.\n'
+         [ -n "$HORIZON_DEMO_ASSISTANT" ] && bash "$HORIZON_DEMO_ASSISTANT" ;;
+    esac
+  else
+    printf '\e[1m%s\e[0m\n' "$line"
+    steps=("Reading the code" "Planning the change" "Editing files" "Running checks" "Preparing the summary")
+    for step in "${steps[@]}"; do
+      printf '  \e[33m●\e[0m %s...\n' "$step"
+      sleep "${HORIZON_STUB_STEP:-1.6}"
+    done
+    printf '\e[32m✓ Done.\e[0m %s\n' "${line:0:70}"
+    [ "$name" = codex ] && cp "$DIR/../demo/site/pricing-after.html" "$DIR/../demo/site/pricing.html"
+    case "$line" in *cloud*|*environment*)
+      printf '\e[1;33mAllow stopping hetzner-cx42? (y/n)\e[0m\n'
+      read -r answer
+      printf '\e[32m✓ Stopped.\e[0m\n' ;;
+    esac
+  fi
+  printf '> '
+done

@@ -1,0 +1,1 @@
+[{"title": "Fix the failing API test", "detail": "api-agent", "status": "done"}, {"title": "Update the pricing page copy", "detail": "site-agent", "status": "done"}, {"title": "Check the idle cloud environment", "detail": "infra-agent", "status": "running"}, {"title": "Report back", "status": "running"}]

@@ -89,22 +89,17 @@ mod in_the_app {
     fn a_message_is_typed_into_the_assistant_and_the_field_clears() {
         let (_temp, _ctx, mut app) = running_assistant();
         let panel = app.board.assistant_panel().expect("assistant");
-        app.assistant.command.text = "what is running?".to_string();
+        let used = app.run_command(&parse("what is running?"));
 
-        app.run_command(&parse("what is running?"));
-
-        assert!(app.assistant.command.text.is_empty());
+        assert!(used);
         assert!(app.agent_panel_requests.in_flight(panel, Instant::now()));
     }
 
     #[test]
-    fn a_message_without_an_assistant_keeps_the_text_and_says_why() {
+    fn a_message_without_an_assistant_is_not_used_and_says_why() {
         let (_temp, mut app) = crate::app::test_support::test_app();
-        app.assistant.command.text = "hello".to_string();
 
-        app.run_command(&parse("hello"));
-
-        assert_eq!(app.assistant.command.text, "hello");
+        assert!(!app.run_command(&parse("hello")));
         assert!(app.assistant.command.feedback.is_some());
     }
 

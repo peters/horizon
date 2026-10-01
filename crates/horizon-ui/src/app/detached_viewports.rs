@@ -223,7 +223,9 @@ impl HorizonApp {
         if !self.host_dialog_open() {
             self.handle_detached_shortcuts(ctx, workspace_id);
         }
-        self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
+        if !super::desk::enabled() {
+            self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
+        }
 
         let canvas_rect = detached_canvas_rect(ctx);
         self.apply_pending_device_reveal(workspace_local_id, canvas_rect);
@@ -235,13 +237,15 @@ impl HorizonApp {
         self.record_detached_device_presentation(workspace_id, canvas_rect);
         self.render_panels_for_workspace(ctx, workspace_id);
         self.render_file_drop_highlight(ctx);
-        let _ = self.render_workspace_minimap(
-            ctx,
-            &workspace_bounds,
-            workspace_id,
-            canvas_rect,
-            egui::Id::new(("detached_workspace_minimap", workspace_local_id)),
-        );
+        if !super::desk::enabled() {
+            let _ = self.render_workspace_minimap(
+                ctx,
+                &workspace_bounds,
+                workspace_id,
+                canvas_rect,
+                egui::Id::new(("detached_workspace_minimap", workspace_local_id)),
+            );
+        }
         if !self.host_dialog_open() {
             self.handle_workspace_file_drop(ctx, workspace_id, canvas_rect);
         }
@@ -571,7 +575,9 @@ fn consume_detached_position_restore(
 
 fn detached_canvas_rect(ctx: &Context) -> Rect {
     let viewport = viewport_local_rect(ctx);
-    Rect::from_min_max(Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT), viewport.max)
+    // Desktop-workspace mode has no toolbar: the workspace fills its window.
+    let toolbar = if super::desk::enabled() { 0.0 } else { TOOLBAR_HEIGHT };
+    Rect::from_min_max(Pos2::new(viewport.min.x, viewport.min.y + toolbar), viewport.max)
 }
 
 fn detached_viewport_builder(
@@ -582,7 +588,7 @@ fn detached_viewport_builder(
     let mut builder = ViewportBuilder::default()
         .with_title(format!("{workspace_name} · {}", branding::APP_NAME))
         .with_icon(branding::app_icon())
-        .with_decorations(true)
+        .with_decorations(!super::desk::enabled())
         .with_transparent(false)
         .with_min_inner_size([800.0, 600.0])
         .with_resizable(true);

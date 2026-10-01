@@ -29,6 +29,7 @@ pub enum CommandId {
     // Settings
     ToggleSettings,
     ToggleAssistant,
+    SummonAssistant,
 
     // Search
     ToggleSearch,
@@ -187,6 +188,12 @@ fn global_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Command
             "Assistant",
             shortcuts.toggle_assistant.display_label(primary_label),
             &["assistant", "agent", "chat", "drawer", "orchestrate"],
+        ),
+        command_entry(
+            CommandId::SummonAssistant,
+            "Ask the assistant",
+            shortcuts.summon_assistant.display_label(primary_label),
+            &["assistant", "ask", "command bar", "prompt", "summon"],
         ),
         command_entry(
             CommandId::ToggleSearch,

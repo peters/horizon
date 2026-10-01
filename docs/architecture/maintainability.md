@@ -318,7 +318,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     `reach.rs` renders the strip of other agents and their state, and
     `cards.rs` the Activity tray (approval, sent and note cards, built by
     Horizon from host facts) on the shared look in `blocks.rs` and `icons.rs`,
-    `threads.rs` the thread bar and menu, and `command_bar.rs` the bar docked
+    `threads.rs` the thread bar and menu, `summon.rs` the floating prompt
+    (opened by its own shortcut, with the plan rows from `plan.rs` and the
+    assistant mark from `icons.rs`), and `command_bar.rs` the bar docked
     under the terminal (plain text and forwarded slash commands, plus the few
     Horizon commands). A thread is a session of the
     hosted agent, recorded from the assistant panel's session binding into

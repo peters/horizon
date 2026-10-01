@@ -144,6 +144,7 @@ fn outcomes_round_trip_through_the_result_file() {
         title: "codex".into(),
         kind: "codex".into(),
         state: AgentState::NeedsInput,
+        workspace: "api".into(),
         directory: Some("/work".into()),
         is_caller: false,
     };
@@ -198,4 +199,49 @@ fn the_credential_travels_with_the_request_and_is_optional() {
     claimed.sort_by_key(|request| request.credential.is_none());
     assert_eq!(claimed[0].credential.as_deref(), Some("secret"));
     assert_eq!(claimed[1].credential, None);
+}
+
+fn step(title: &str, detail: Option<&str>) -> PlanStep {
+    PlanStep {
+        title: title.to_string(),
+        detail: detail.map(str::to_string),
+        status: StepStatus::Pending,
+    }
+}
+
+#[test]
+fn a_plan_parses_and_an_empty_plan_clears() {
+    let operation: Operation = serde_json::from_value(serde_json::json!({
+        "operation": "plan",
+        "steps": [
+            {"title": "Set cloud auto-stop", "detail": "120 -> 90 min", "status": "done"},
+            {"title": "Report back", "status": "pending"}
+        ]
+    }))
+    .expect("plan");
+    assert!(operation.validate().is_ok());
+    let clear = Operation::Plan { steps: Vec::new() };
+    assert!(clear.validate().is_ok());
+    assert!(
+        serde_json::from_value::<Operation>(
+            serde_json::json!({"operation": "plan", "steps": [{"title": "x", "status": "soon"}]})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn plan_steps_are_short_single_lines_and_bounded() {
+    let refused = |steps: Vec<PlanStep>| Operation::Plan { steps }.validate().is_err();
+    assert!(refused(vec![step("  ", None)]));
+    assert!(refused(vec![step("two\nlines", None)]));
+    assert!(refused(vec![step(&"t".repeat(MAX_STEP_TITLE_BYTES + 1), None)]));
+    assert!(refused(vec![step("ok", Some(&"d".repeat(MAX_STEP_DETAIL_BYTES + 1)))]));
+    assert!(refused(vec![step("ok", Some("a\nb"))]));
+    assert!(refused(
+        (0..=MAX_PLAN_STEPS).map(|i| step(&format!("step {i}"), None)).collect()
+    ));
+    assert!(!refused(
+        (0..MAX_PLAN_STEPS).map(|i| step(&format!("step {i}"), None)).collect()
+    ));
 }

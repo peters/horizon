@@ -90,6 +90,17 @@ fn main() -> eframe::Result {
     if let (Some(x), Some(y)) = (window.x, window.y) {
         viewport = viewport.with_position([x, y]);
     }
+    // Desktop-workspace prototype: the root window is only the command bar.
+    let desk_mode = std::env::var_os("HORIZON_DESK_MODE").is_some_and(|value| !value.is_empty());
+    if desk_mode {
+        viewport = egui::ViewportBuilder::default()
+            .with_title("Horizon Command Bar")
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_inner_size([960.0, 300.0])
+            .with_min_inner_size([480.0, 120.0])
+            .with_resizable(true);
+    }
 
     if cfg!(target_os = "linux") {
         viewport = viewport.with_app_id(branding::APP_ID);

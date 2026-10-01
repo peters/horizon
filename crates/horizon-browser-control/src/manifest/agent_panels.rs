@@ -27,6 +27,12 @@ pub const MAX_PENDING_APPROVALS: usize = 5;
 pub const MAX_NOTE_TITLE_BYTES: usize = 80;
 /// Longest note body.
 pub const MAX_NOTE_BYTES: usize = 2000;
+/// Most steps a plan shows.
+pub const MAX_PLAN_STEPS: usize = 12;
+/// Longest step title.
+pub const MAX_STEP_TITLE_BYTES: usize = 80;
+/// Longest step detail, shown at the end of its row.
+pub const MAX_STEP_DETAIL_BYTES: usize = 40;
 
 const QUEUE: TypedQueue = TypedQueue::new("agent-panel-requests", "Agent panel");
 
@@ -60,6 +66,11 @@ pub enum Operation {
         /// The body, as markdown.
         markdown: String,
     },
+    /// Show the person the steps of what they asked for, with where each one
+    /// stands. Each call replaces the whole plan; an empty list clears it.
+    /// Only the assistant can post. The statuses are the assistant's own report,
+    /// so the person sees them as such.
+    Plan { steps: Vec<PlanStep> },
     /// What happened to the messages that needed approval: still waiting,
     /// sent, or declined (with the reason). Only the assistant can ask.
     Approvals,
@@ -72,6 +83,28 @@ pub enum Operation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lines: Option<u16>,
     },
+}
+
+/// One row of a plan.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanStep {
+    /// What this step does, in a few words.
+    pub title: String,
+    /// A short value shown at the end of the row, such as `120 -> 90 min`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub status: StepStatus,
+}
+
+/// Where a plan step stands, as reported by the assistant.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StepStatus {
+    Pending,
+    Running,
+    Done,
+    Failed,
 }
 
 const fn submit_by_default() -> bool {
@@ -102,6 +135,9 @@ pub struct AgentPanel {
     /// Agent kind, for example `claude` or `codex`.
     pub kind: String,
     pub state: AgentState,
+    /// The workspace the agent is in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub workspace: String,
     /// Where the agent was started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directory: Option<String>,
@@ -128,6 +164,10 @@ pub enum Outcome {
     },
     /// The note is shown in the drawer.
     Noted,
+    /// The plan is shown to the person.
+    Planned {
+        steps: usize,
+    },
     /// The messages the person was asked to approve, oldest first.
     Approvals {
         items: Vec<Approval>,
@@ -217,6 +257,28 @@ impl Operation {
                 }
                 if markdown.trim().is_empty() || markdown.len() > MAX_NOTE_BYTES {
                     return invalid("markdown must be present and at most 2000 bytes");
+                }
+                Ok(())
+            }
+            Self::Plan { steps } => {
+                if steps.len() > MAX_PLAN_STEPS {
+                    return invalid("a plan has at most 12 steps");
+                }
+                for step in steps {
+                    let single_line = |text: &str| !text.chars().any(char::is_control);
+                    if step.title.trim().is_empty()
+                        || step.title.len() > MAX_STEP_TITLE_BYTES
+                        || !single_line(&step.title)
+                    {
+                        return invalid("each step title must be a short single line");
+                    }
+                    if step
+                        .detail
+                        .as_deref()
+                        .is_some_and(|detail| detail.len() > MAX_STEP_DETAIL_BYTES || !single_line(detail))
+                    {
+                        return invalid("a step detail must be a short single line of at most 40 bytes");
+                    }
                 }
                 Ok(())
             }

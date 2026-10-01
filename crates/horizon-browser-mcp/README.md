@@ -497,12 +497,13 @@ from its injected identity on every call.
 | `list` | The agent panels in the workspace: `panel_id`, `title`, `kind`, `directory`, `state` and `is_caller`. |
 | `send` | Types `text` into another agent's prompt as a bracketed paste, then presses Enter (`submit`, default true). |
 | `read` | The newest `lines` (default 40, at most 200) of another agent's terminal. |
+| `plan` | Shows the person the steps of what they asked for (at most 12; `title` up to 80 bytes, optional `detail` up to 40 bytes, `status` `pending`, `running`, `done` or `failed`). Each call replaces the whole plan and an empty list clears it. The statuses are the assistant's own report and are shown as such. |
 | `approvals` | What became of the messages that needed approval (`pending`, `sent` or `declined`, with a reason), so the assistant need not guess. At most 5 can wait at once (`too_many_pending`). |
 | `note` | Shows the person a markdown note (`title` up to 80 bytes, `markdown` up to 2000 bytes) as a card in the drawer. |
 
 Rules the host enforces:
 
-- Only the assistant (the agent in the assistant drawer) can `send`, `note` and
+- Only the assistant (the agent in the assistant drawer) can `send`, `note`, `plan` and
   read `approvals`; every agent can `list` and `read`. Others get
   `assistant_only`. The assistant proves itself with a secret that Horizon puts
   in its own environment (`HORIZON_ASSISTANT_TOKEN`), so naming its panel is

@@ -13,7 +13,7 @@ use horizon_core::browser::manifest::{
     self,
     agent_panels::{self, DEFAULT_READ_LINES, MAX_PENDING_APPROVALS, Operation, Outcome, Request},
 };
-use horizon_core::{PanelId, WorkspaceId};
+use horizon_core::{PanelId, Reach};
 
 use super::{HorizonApp, browser_requests::actor_panel};
 use crate::input::{KeyEventContext, KeyIdentity, paste_bytes, translate_key_event_with_physical};
@@ -114,14 +114,18 @@ impl HorizonApp {
             .panel(caller.panel_id)
             .is_some_and(horizon_core::Panel::is_assistant)
             && horizon_core::assistant::token_matches(request.credential.as_deref());
+        // The assistant is not tied to a workspace; any other agent sees only its own.
+        let reach = if is_assistant {
+            self.assistant_reach()
+        } else {
+            Reach::workspace(caller.workspace_id)
+        };
         match &request.operation {
             Operation::List => Outcome::Panels {
-                panels: self
-                    .board
-                    .agent_panels_in_workspace(caller.workspace_id, caller.panel_id),
+                panels: self.board.agent_panels_in(&reach, caller.panel_id),
             },
             Operation::Read { panel_id, lines } => {
-                let Some(target) = self.agent_in_workspace(panel_id, caller.workspace_id) else {
+                let Some(target) = self.board.agent_in_reach(panel_id, &reach) else {
                     return unavailable();
                 };
                 let wanted = usize::from(lines.unwrap_or(DEFAULT_READ_LINES));
@@ -143,6 +147,14 @@ impl HorizonApp {
                     items: self.assistant_approvals(),
                 }
             }
+            Operation::Plan { steps } => {
+                if !is_assistant {
+                    return only_the_assistant("post a plan");
+                }
+                let count = steps.len();
+                self.assistant_set_plan(steps.clone());
+                Outcome::Planned { steps: count }
+            }
             Operation::Note { title, markdown } => {
                 if !is_assistant {
                     return only_the_assistant("post notes");
@@ -154,44 +166,57 @@ impl HorizonApp {
                 if !is_assistant {
                     return only_the_assistant("send messages to other agents");
                 }
-                let Some(target) = self.agent_in_workspace(panel_id, caller.workspace_id) else {
-                    return unavailable();
-                };
-                if self.agent_panel_requests.in_flight(target, now) {
-                    return Outcome::failed(
-                        "agent_busy",
-                        "A message was just sent to that agent. Wait until list shows it idle again.",
-                    );
-                }
-                if let Err(refusal) = self.board.check_agent_can_receive(caller.panel_id, target) {
-                    return Outcome::failed(refusal.code(), refusal.message());
-                }
-                // The person approves, and the agent receives, exactly this text.
-                let clean = agent_panels::printable(text);
-                if self.assistant_asks_before_send() {
-                    if self.assistant_pending_approvals() >= MAX_PENDING_APPROVALS {
-                        return Outcome::failed(
-                            "too_many_pending",
-                            "Several messages are already waiting for the person. Wait for them to answer.",
-                        );
-                    }
-                    if !self.assistant_request_approval(target, clean, *submit) {
-                        return unavailable();
-                    }
-                    return Outcome::AwaitingApproval {
-                        panel_id: panel_id.clone(),
-                        message: APPROVAL_MESSAGE.to_string(),
-                    };
-                }
-                if !self.send_to_agent(target, &clean, *submit, now) {
-                    return unavailable();
-                }
-                self.assistant_record_sent(target, clean);
-                Outcome::Sent {
-                    panel_id: panel_id.clone(),
-                    submitted: *submit,
-                }
+                self.send_for_assistant(caller.panel_id, &reach, panel_id, text, *submit, now)
             }
+        }
+    }
+
+    /// Types a message into another agent for the assistant, or asks the person first.
+    fn send_for_assistant(
+        &mut self,
+        caller: PanelId,
+        reach: &Reach,
+        panel_id: &str,
+        text: &str,
+        submit: bool,
+        now: Instant,
+    ) -> Outcome {
+        let Some(target) = self.board.agent_in_reach(panel_id, reach) else {
+            return unavailable();
+        };
+        if self.agent_panel_requests.in_flight(target, now) {
+            return Outcome::failed(
+                "agent_busy",
+                "A message was just sent to that agent. Wait until list shows it idle again.",
+            );
+        }
+        if let Err(refusal) = self.board.check_agent_can_receive(caller, target) {
+            return Outcome::failed(refusal.code(), refusal.message());
+        }
+        // The person approves, and the agent receives, exactly this text.
+        let clean = agent_panels::printable(text);
+        if self.assistant_asks_before_send() {
+            if self.assistant_pending_approvals() >= MAX_PENDING_APPROVALS {
+                return Outcome::failed(
+                    "too_many_pending",
+                    "Several messages are already waiting for the person. Wait for them to answer.",
+                );
+            }
+            if !self.assistant_request_approval(target, clean, submit) {
+                return unavailable();
+            }
+            return Outcome::AwaitingApproval {
+                panel_id: panel_id.to_string(),
+                message: APPROVAL_MESSAGE.to_string(),
+            };
+        }
+        if !self.send_to_agent(target, &clean, submit, now) {
+            return unavailable();
+        }
+        self.assistant_record_sent(target, clean);
+        Outcome::Sent {
+            panel_id: panel_id.to_string(),
+            submitted: submit,
         }
     }
 
@@ -202,15 +227,6 @@ impl HorizonApp {
         }
         self.agent_panel_requests.note_sent(target, now, submit);
         true
-    }
-
-    /// The agents the assistant may talk to: its workspace, never itself.
-    fn agent_in_workspace(&self, local_id: &str, workspace: WorkspaceId) -> Option<PanelId> {
-        self.board.panel_id_by_local_id(local_id).filter(|id| {
-            self.board
-                .panel(*id)
-                .is_some_and(|panel| panel.workspace_id == workspace && !panel.is_assistant())
-        })
     }
 
     /// Pastes `text` into the agent's prompt. Returns false when the panel has no terminal.

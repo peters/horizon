@@ -164,9 +164,30 @@ pub(super) struct CommandBar {
     text: String,
     selected: usize,
     feedback: Option<(String, Instant)>,
+    /// Put the caret here on the next frame, for example after Tab from the overlay.
+    focus_requested: bool,
 }
 
 impl CommandBar {
+    #[cfg(test)]
+    pub(super) fn text_for_tests(&self) -> &str {
+        &self.text
+    }
+
+    /// The feedback line while it is still fresh.
+    pub(super) fn feedback_text(&self) -> Option<String> {
+        self.feedback
+            .as_ref()
+            .filter(|(_, shown)| shown.elapsed() < FEEDBACK_FOR)
+            .map(|(message, _)| message.clone())
+    }
+
+    /// Carries a line over from the summon overlay and puts the caret after it.
+    pub(super) fn continue_with(&mut self, text: String) {
+        self.text = text;
+        self.focus_requested = true;
+    }
+
     pub(super) fn show_feedback(&mut self, message: impl Into<String>) {
         self.feedback = Some((message.into(), Instant::now()));
     }
@@ -242,6 +263,9 @@ impl HorizonApp {
         let Some(response) = response else {
             return;
         };
+        if std::mem::take(&mut self.assistant.command.focus_requested) {
+            response.request_focus();
+        }
         if response.gained_focus() {
             self.claim_keyboard_for_bar();
         }
@@ -267,7 +291,11 @@ impl HorizonApp {
         }
         self.render_bar_feedback(&ctx, rect);
         match action {
-            Some(BarAction::Run(entry)) => self.run_command(&entry),
+            Some(BarAction::Run(entry)) => {
+                if self.run_command(&entry) {
+                    self.assistant.command.text.clear();
+                }
+            }
             Some(BarAction::Complete(name)) => {
                 self.assistant.command.text = format!("/{name}");
             }
@@ -375,40 +403,42 @@ impl HorizonApp {
     }
 
     /// The bar takes the keyboard from the terminal and from any canvas panel.
-    fn claim_keyboard_for_bar(&mut self) {
+    pub(super) fn claim_keyboard_for_bar(&mut self) {
         self.assistant.focused = false;
         if let Some(panel) = self.board.focused.take() {
             self.assistant.previous_focus = Some(panel);
         }
     }
 
-    /// Carries out a submitted line.
-    pub(super) fn run_command(&mut self, entry: &Entry) {
+    /// Carries out a submitted line. Returns whether it was used, so the caller
+    /// can clear the field it came from.
+    pub(super) fn run_command(&mut self, entry: &Entry) -> bool {
         match entry {
-            Entry::Nothing => {}
+            Entry::Nothing => false,
             Entry::Local(command) => {
-                self.assistant.command.text.clear();
                 self.run_local_command(*command);
+                true
             }
             Entry::Message(text) | Entry::Forward(text) => {
                 let Some(panel_id) = self.board.assistant_panel() else {
                     self.assistant
                         .command
                         .show_feedback("The assistant is not running yet.");
-                    return;
+                    return false;
                 };
                 if self.send_to_agent(panel_id, text, true, Instant::now()) {
-                    self.assistant.command.text.clear();
+                    true
                 } else {
                     self.assistant
                         .command
                         .show_feedback("The assistant cannot take input right now.");
+                    false
                 }
             }
         }
     }
 
-    fn run_local_command(&mut self, command: LocalCommand) {
+    pub(super) fn run_local_command(&mut self, command: LocalCommand) {
         match command {
             LocalCommand::NewThread => self.new_assistant_thread(),
             LocalCommand::Threads => self.assistant.thread_menu_open = true,
@@ -443,7 +473,7 @@ fn entry_for(command: Command) -> Entry {
     }
 }
 
-fn command_row(ui: &mut Ui, command: &Command, selected: bool, agent_name: &str) -> egui::Response {
+pub(super) fn command_row(ui: &mut Ui, command: &Command, selected: bool, agent_name: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
     if selected || response.hovered() {
         ui.painter().rect_filled(

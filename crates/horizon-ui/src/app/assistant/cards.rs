@@ -209,6 +209,9 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn assistant_record_sent(&mut self, target: PanelId, text: String) {
+        if let Some(demo) = self.assistant.demo.as_ref() {
+            demo.log("event sent");
+        }
         let title = self
             .board
             .panel(target)
@@ -232,6 +235,9 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn assistant_post_note(&mut self, title: String, markdown: String) {
+        if let Some(demo) = self.assistant.demo.as_ref() {
+            demo.log(&format!("event note {title}"));
+        }
         self.assistant.cards.push(CardKind::Note { title, markdown });
         self.assistant.open = true;
     }
@@ -307,22 +313,17 @@ impl HorizonApp {
     }
 
     /// Finds the approved agent again by its stable id inside the assistant's
-    /// workspace, so a card from another session or workspace cannot type into
-    /// whatever now holds an old panel number, then types the message.
+    /// reach, so a card from another session or a workspace since taken out of
+    /// scope cannot type into whatever now holds an old panel number, then types
+    /// the message.
     fn deliver_approved(&mut self, local_id: &str, text: &str, submit: bool) -> Result<PanelId, String> {
         let Some(assistant) = self.board.assistant_panel() else {
             return Err("The assistant is not running.".to_string());
         };
-        let workspace = self.board.panel(assistant).map(|panel| panel.workspace_id);
         let target = self
             .board
-            .panel_id_by_local_id(local_id)
-            .filter(|id| {
-                self.board
-                    .panel(*id)
-                    .is_some_and(|panel| Some(panel.workspace_id) == workspace && !panel.is_assistant())
-            })
-            .ok_or_else(|| "That agent is no longer in the assistant's workspace.".to_string())?;
+            .agent_in_reach(local_id, &self.assistant_reach())
+            .ok_or_else(|| "That agent is no longer in the assistant's reach.".to_string())?;
         let now = Instant::now();
         if self.agent_panel_requests.in_flight(target, now) {
             return Err("A message was just sent to that agent. Try again in a moment.".to_string());
@@ -357,7 +358,7 @@ impl HorizonApp {
                     .max_height(max_height)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        for card in &self.assistant.cards.items {
+                        for card in self.assistant.cards.items.iter().rev() {
                             let live = match &card.kind {
                                 CardKind::Sent { target, .. } => self.board.agent_state(*target),
                                 _ => None,

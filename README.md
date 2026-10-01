@@ -150,6 +150,8 @@ First-class **Grok**, **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, 
 
 **Ctrl+Shift+L** opens a drawer on the right edge that hosts one agent (Claude, Codex, Gemini, OpenCode or Grok). Claude and Codex receive the Horizon MCP tools, so you can ask them to drive Horizon from anywhere on the canvas; Gemini and OpenCode are plain terminals without them, and Grok only if its Horizon MCP registration was created by a recent Horizon. The canvas shrinks to make room, closing the drawer leaves the agent running, and it never appears as a panel on the canvas. Pick the agent and how it signs in from the drawer's **Engine** button: **Subscription** uses whatever the CLI is already signed in to, and **API key** passes a key you save (Claude and Codex) to the agent as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. The key is stored in a private file under `~/.horizon/assistant/`, never in the config. **New** starts a fresh session. The assistant can also coordinate the other agents in its workspace through the `agent_panels` MCP tool: it lists them, sends a message to one that is idle, and reads its reply. The drawer's **In reach** strip shows each agent's state, and clicking one brings it into view. Before the assistant types into another agent, an **Activity** card shows the message with Send and Don't send buttons (turn this off in the Engine popup), and the same card then follows the agent until it replies. The card shows the full text that will be typed, which agent receives it and whether Enter is pressed. The assistant can also post a markdown note card for readable summaries. Conversations are **threads**: each is a session of the hosted agent, remembered per workspace and shown in the bar under the header. The thread menu groups them by workspace, **New** starts a fresh thread, and picking an older one resumes that session with the agent's own resume flag (the old thread stays in the list, and "x" forgets it without touching the agent's history).
 
+**Ctrl+Shift+Y** summons the same assistant as a prompt that floats over the canvas, from anywhere: a mic button (dictation goes into the assistant's own prompt), a one-line field, chips for the hosted agent's tools and for approval, and **Open as chat** (or Tab) to continue in the drawer. While the assistant works it can post a **plan** (the `plan` operation of `agent_panels`): the steps it intends to take with where each stands, shown under the field and as a card in the drawer, labelled as the assistant's own report. Up arrow recalls earlier prompts.
+
 The **command bar** at the bottom of the drawer types a message into the assistant. Starting with `/` opens a command list: `/new`, `/threads`, `/engine` and `/ask` are Horizon's own, the rest (such as `/compact` or `/model`) are the hosted agent's and are forwarded as typed. Arrow keys and Tab pick, Enter runs, Esc leaves the bar for the terminal.
 
 ### Live Browser
@@ -319,6 +321,7 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row in sidebar order |
 | **Ctrl+Shift+,** | Open settings editor |
 | **Ctrl+Shift+L** | Toggle the assistant drawer (an agent docked to the right edge) |
+| **Ctrl+Shift+Y** | Ask the assistant: a prompt that floats over the canvas |
 | **Ctrl+Shift+F** | Focus the terminal search bar |
 | **Ctrl+0** | Reset canvas zoom to 100% |
 | **Ctrl+Plus** | Zoom canvas in |
@@ -376,6 +379,7 @@ shortcuts:
   align_workspaces_horizontally: Ctrl+Shift+A
   toggle_settings: Ctrl+Shift+Comma
   toggle_assistant: Ctrl+Shift+L
+  summon_assistant: Ctrl+Shift+Y
   zoom_reset: Ctrl+0
   zoom_in: Ctrl+Plus
   zoom_out: Ctrl+Minus

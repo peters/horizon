@@ -10,13 +10,17 @@ mod command_bar;
 mod drawer;
 mod engine;
 mod icons;
+mod num;
+mod plan;
 mod reach;
+mod scope;
+mod summon;
 mod threads;
 
 use egui::{Context, Id, Pos2, Rect};
 use egui_commonmark::CommonMarkCache;
 use horizon_core::assistant::{ASSISTANT_PANEL_LOCAL_ID, AssistantSettings, Thread, Threads};
-use horizon_core::browser::manifest::agent_panels::AgentPanel;
+use horizon_core::browser::manifest::agent_panels::{AgentPanel, PlanStep};
 use horizon_core::{HorizonHome, PanelId, PanelOptions, PanelResume};
 use zeroize::Zeroizing;
 
@@ -43,6 +47,17 @@ pub(super) struct AssistantDrawer {
     engine_anchor: Option<Rect>,
     cards: cards::Cards,
     command: command_bar::CommandBar,
+    summon: summon::Summon,
+    /// Which workspaces the assistant is looking at.
+    scope: scope::Scope,
+    scope_open: bool,
+    scope_anchor: Option<Rect>,
+    /// Desktop-workspace mode, when switched on.
+    desk: Option<crate::app::desk::Desk>,
+    /// Scripted input for demos, when asked for.
+    demo: Option<summon::demo::Demo>,
+    /// The assistant's own report of the steps of what was asked, if it sent one.
+    plan: Vec<PlanStep>,
     md_cache: CommonMarkCache,
     /// Where the assistant keeps its settings, key and threads.
     home: HorizonHome,
@@ -75,6 +90,13 @@ impl AssistantDrawer {
             engine_anchor: None,
             cards: cards::Cards::default(),
             command: command_bar::CommandBar::default(),
+            summon: summon::Summon::default(),
+            scope: scope::Scope::default(),
+            scope_open: false,
+            scope_anchor: None,
+            desk: crate::app::desk::Desk::from_env(),
+            demo: summon::demo::Demo::from_env(),
+            plan: Vec::new(),
             md_cache: CommonMarkCache::default(),
             home: home.clone(),
             threads: Threads::load(home),
@@ -95,6 +117,8 @@ impl AssistantDrawer {
     pub(super) fn reset_for_new_board(&mut self) {
         self.cards.clear();
         self.command = command_bar::CommandBar::default();
+        self.summon = summon::Summon::default();
+        self.plan.clear();
         self.focused = false;
         self.previous_focus = None;
         self.active_session = None;
