@@ -3,6 +3,7 @@ use super::*;
 use crate::webdriver::test_server::{Reply, Server};
 use serde_json::json;
 
+mod acknowledgement;
 mod baseline;
 mod navigation;
 mod publication;
@@ -77,6 +78,12 @@ impl crate::BrowserCoordination for Owner {
             ..Default::default()
         })
     }
+    fn observe_ownership(&self, _: &str) -> std::io::Result<crate::CoordinationOwnership> {
+        Ok(crate::CoordinationOwnership {
+            owner: self.0.lock().unwrap().clone(),
+            ..Default::default()
+        })
+    }
     fn acknowledge_handoff(&self, _: &str, _: &str) -> std::io::Result<bool> {
         Ok(false)
     }
@@ -138,6 +145,7 @@ fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_
     let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
     replies.extend(observation(4, 2));
     replies.push(Reply::json(200, &json!({"value":"document"})));
+    replies.extend([baseline(), baseline()]);
     let classic = Server::start(replies);
     let (link, worker) = bidi_fixture(false, false);
     let mut driver = fixture_driver(&classic, link);

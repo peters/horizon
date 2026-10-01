@@ -44,6 +44,7 @@ mod close;
 mod cloud_companion;
 mod create;
 pub mod device;
+mod ownership;
 pub mod provider_usage;
 pub mod recovery;
 mod request_queue;
@@ -771,6 +772,10 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.updated_at = manifest.user_active_at;
         })
         .map(|_| ())
+    }
+
+    fn observe_ownership(&self, panel_local_id: &str) -> std::io::Result<horizon_browser::CoordinationOwnership> {
+        ownership::observe(panel_local_id)
     }
 
     fn signals(&self, panel_local_id: &str) -> std::io::Result<horizon_browser::CoordinationSignals> {

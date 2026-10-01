@@ -186,6 +186,12 @@ identity and refusal evidence before closing the owned session.
    browser privacy clocks, rotation, resize, scroll and fill. The same Document
    must retain its identity; a same-URL reload must change it. Run
    `node --test scripts/browser-smoke/*.test.cjs` for these script regressions.
+   Also replace the document after measurement and during the final ownership
+   observation. No success may reuse the old viewport. Cover Stop/Teach,
+   owner/handoff takeover and the original deadline during final document reads,
+   as well as unavailable ownership observers. A read-only ownership observation
+   must preserve queued actions and legacy handoffs, enforce host adoption and
+   lease expiry, and fail closed on missing or malformed manifests.
 2. Rotate portrait to landscape through `browser_orientation`. Require the
    tool's applied orientation and measured viewport to agree. Observe the
    final frame live; compare the page with the Device-panel image.

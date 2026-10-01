@@ -153,6 +153,16 @@ Identity reads and semantic scans share an opaque marker owned by the Document.
 Browser privacy-clock drift and layout changes preserve it; a replacement
 Document or changed URL still invalidates the request.
 
+After the normal ownership acknowledgement, the driver checks the document
+again, observes current ownership without claiming queued actions, and checks
+the document once more before accepting the measured viewport. Each read
+consumes the original deadline and rechecks Stop, Teach mode and generation.
+This brackets one ownership observation with stable document observations;
+it is not an atomic transaction with the website. Custom coordination adapters
+must implement `BrowserCoordination::observe_ownership` without claiming actions
+or normalizing pending handoffs. Missing observation support or unreadable host
+state conservatively refuses confirmation.
+
 A request for the already applied
 orientation still requires measured acknowledgement. Human requests retain
 priority while pending; page input, replacement requests, document changes or
@@ -183,6 +193,7 @@ on remote devices remains unsupported.
 | --- | --- |
 | `orientation_unsupported` | Use the reported endpoint capability; do not substitute resize or allocate a helper session. |
 | `orientation_unverified` | Inspect support, page and device state. An explicit start is rejected and release is attempted. |
+| `orientation_ownership_unverified` | Ownership could not be observed without consuming actions. Inspect host state and the coordination adapter before retrying. |
 | `remote_orientation_mismatch` | The explicit start did not match; inspect its release outcome before creating again. |
 | `orientation_timeout` | The device may have rotated. Inspect before retrying; timeout is not rollback. |
 | `browser_unavailable` | The session stopped or startup was cancelled; inspect exact allocation cleanup. |

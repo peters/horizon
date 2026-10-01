@@ -900,5 +900,9 @@ in a colocated tree. UI
 orientation commands generate one durable MCP plan in a separate `orientation`
 leaf rather than expanding the CLI parser with browser-driver logic.
 Cloud worker `browser/orientation` preserves matching queue-refusal acknowledgements and merges bounded completion history with reserved capacity for both driver and refusal sources.
+`BrowserCoordination::observe_ownership` supplies a non-consuming ownership
+observation; `horizon-browser-control::manifest/ownership` reads the owned host
+snapshot without claiming actions or rewriting legacy handoffs. Final rotation
+confirmation brackets that observation with document checks.
 Bounded per-request completions prevent latest-only polling from losing superseded
 user requests; the core adapter bounds lost-status waiting and surfaces uncertainty.

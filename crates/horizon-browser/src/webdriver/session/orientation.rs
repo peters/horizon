@@ -296,6 +296,18 @@ impl Driver {
             if self.signal_epoch > epoch
                 || (self.config.coordination.is_none() && matches!(pending.origin, Origin::User { .. }))
             {
+                self.confirm_orientation_document(pending, stopped)?;
+                if self.config.coordination.is_some() {
+                    let ownership = self.observe_coordination_ownership(events);
+                    self.guard_orientation(pending, stopped)?;
+                    ownership.map_err(|_| {
+                        BrowserControlFailure::new(
+                            "orientation_ownership_unverified",
+                            "current ownership could not be verified before orientation acknowledgement",
+                        )
+                    })?;
+                    self.confirm_orientation_document(pending, stopped)?;
+                }
                 return Ok(Some(viewport));
             }
             return Ok(None);
@@ -341,6 +353,16 @@ impl Driver {
                 Ok(None)
             }
         }
+    }
+    fn confirm_orientation_document(
+        &mut self,
+        pending: &Pending,
+        stopped: &AtomicBool,
+    ) -> Result<(), BrowserControlFailure> {
+        let identity =
+            self.refresh_classic_document_identity_within(remaining(pending.deadline)?.min(Duration::from_secs(3)));
+        self.guard_orientation(pending, stopped)?;
+        identity.map(|_| ())
     }
 }
 

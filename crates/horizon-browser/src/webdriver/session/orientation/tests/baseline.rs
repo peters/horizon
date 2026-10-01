@@ -19,6 +19,7 @@ fn cached_identity_change_before_rotation_succeeds_but_postdispatch_change_is_re
                 200,
                 &json!({"value":if changed_after {"new-document"} else {"document"}}),
             ));
+            replies.push(baseline());
             let classic = Server::start(replies);
             let (link, worker) = bidi_fixture(false, false);
             let mut driver = fixture_driver(&classic, link);
