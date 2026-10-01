@@ -181,7 +181,7 @@ impl HorizonApp {
         let (Some(command), argument, rest) = (parts.next(), parts.next(), parts.next()) else {
             return;
         };
-        if self.demo_view(command, argument) {
+        if self.demo_view(command, argument, rest) {
             return;
         }
         match command {
@@ -311,7 +311,8 @@ impl HorizonApp {
 
     /// The commands that change how the bar looks: `mini`, `unmini`, `feed`, `terminal`, `deck`.
     /// Returns whether the command was one of them.
-    fn demo_view(&mut self, command: &str, argument: Option<&str>) -> bool {
+    fn demo_view(&mut self, command: &str, argument: Option<&str>, rest: Option<&str>) -> bool {
+        let text = [argument, rest].into_iter().flatten().collect::<Vec<_>>().join(" ");
         match command {
             "mini" => {
                 let style = match argument {
@@ -324,6 +325,18 @@ impl HorizonApp {
                 self.assistant.summon.mini = Some(style);
             }
             "unmini" => self.assistant.summon.mini = None,
+            "dock" => {
+                self.assistant.summon.dock_style = Some(match argument {
+                    Some("r") => super::dock::DockStyle::Rail,
+                    Some("s") => super::dock::DockStyle::Palette,
+                    _ => super::dock::DockStyle::Pill,
+                });
+            }
+            "you" => self.assistant.feed.you(&text, true),
+            "said" => self.assistant.feed.said(&text),
+            "did" => self.assistant.feed.did(text),
+            "feedclear" => self.assistant.feed.clear(),
+            "follow" => self.assistant.summon.scope_follow = argument != Some("off"),
             "feed" => {
                 self.assistant.summon.feed_style = match argument {
                     Some("b") => super::FeedStyle::Cards,

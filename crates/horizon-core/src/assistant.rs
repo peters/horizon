@@ -11,8 +11,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+mod mode;
 mod threads;
 
+pub use mode::AgentMode;
 pub use threads::{Thread, Threads};
 
 use crate::{Error, HorizonHome, PanelKind, Result};
@@ -69,6 +71,16 @@ pub struct AssistantSettings {
     /// Ask the person before the assistant types into another agent.
     #[serde(default = "ask_before_send_by_default")]
     pub ask_before_send: bool,
+    /// How much the agent may do on its own.
+    #[serde(default)]
+    pub mode: AgentMode,
+    /// The agent that makes plans, which may differ from the one that carries them out.
+    #[serde(default = "default_planner")]
+    pub planner: PanelKind,
+}
+
+const fn default_planner() -> PanelKind {
+    PanelKind::Claude
 }
 
 const fn ask_before_send_by_default() -> bool {
@@ -81,6 +93,8 @@ impl Default for AssistantSettings {
             agent: PanelKind::Claude,
             auth: AssistantAuth::Subscription,
             ask_before_send: true,
+            mode: AgentMode::default(),
+            planner: default_planner(),
         }
     }
 }
@@ -101,7 +115,24 @@ impl AssistantSettings {
     /// and how it signs in, but not the approval preference.
     #[must_use]
     pub fn same_engine(&self, other: &Self) -> bool {
-        self.agent == other.agent && self.auth == other.auth
+        self.agent == other.agent && self.auth == other.auth && self.mode == other.mode
+    }
+
+    /// The settings the agent actually runs with: while planning, the planner in plan mode.
+    #[must_use]
+    pub fn running(&self, planning: bool) -> Self {
+        if !planning {
+            return *self;
+        }
+        Self {
+            agent: self.planner,
+            mode: if AgentMode::Plan.supported_by(self.planner) {
+                AgentMode::Plan
+            } else {
+                AgentMode::Ask
+            },
+            ..*self
+        }
     }
 
     /// Reads the stored choice, falling back to the default when absent or unreadable.

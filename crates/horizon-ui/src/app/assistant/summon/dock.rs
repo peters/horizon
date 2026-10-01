@@ -10,6 +10,10 @@
 
 use std::sync::OnceLock;
 
+mod palette;
+mod rail;
+mod scope;
+
 use egui::{
     Align, Align2, Area, Color32, Context, CornerRadius, FontId, Frame, Id, Layout, Margin, Order, Rect, RichText,
     Sense, Shadow, Stroke, StrokeKind, TextEdit, Ui, pos2, vec2,
@@ -29,6 +33,28 @@ const PILL_WIDTH: f32 = 600.0;
 const SHEET_WIDTH: f32 = 800.0;
 const SHEET_HEIGHT: f32 = 720.0;
 const MARGIN_BOTTOM: f32 = 24.0;
+
+/// Which of the three designs the dock is drawn as.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::app) enum DockStyle {
+    /// A pill at the bottom with cards above it; a sheet above the pill.
+    #[default]
+    Pill,
+    /// A capsule on the left edge; a panel docked to the left.
+    Rail,
+    /// An orb in the corner; a palette over a dimmed canvas.
+    Palette,
+}
+
+impl DockStyle {
+    fn from_env() -> Self {
+        match std::env::var("HORIZON_ASSISTANT_DOCK").as_deref() {
+            Ok("rail") => Self::Rail,
+            Ok("palette") => Self::Palette,
+            _ => Self::Pill,
+        }
+    }
+}
 
 /// Whether the dock replaces the old summon bar and drawer.
 pub(in crate::app) fn enabled() -> bool {
@@ -50,10 +76,19 @@ impl HorizonApp {
         {
             self.focus_workspace_visible(ctx, id, false);
         }
-        if self.assistant.summon.expanded {
-            self.dock_sheet(ctx);
-        } else {
-            self.dock_pill(ctx);
+        self.follow_scope();
+        let style = *self.assistant.summon.dock_style.get_or_insert_with(DockStyle::from_env);
+        match (style, self.assistant.summon.expanded) {
+            (DockStyle::Pill, false) => self.dock_pill(ctx),
+            (DockStyle::Pill, true) => self.dock_sheet(ctx),
+            (DockStyle::Rail, false) => self.rail_mini(ctx),
+            (DockStyle::Rail, true) => self.rail_panel(ctx),
+            (DockStyle::Palette, false) => self.palette_mini(ctx),
+            (DockStyle::Palette, true) => self.palette_modal(ctx),
+        }
+        if self.assistant.scope_open {
+            let tiles = self.dock_tiles();
+            self.render_scope_popup(ctx, &tiles);
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(120));
     }
@@ -279,19 +314,7 @@ impl HorizonApp {
         let (canvas, anchor) = self.dock_anchor(ctx);
         let width = SHEET_WIDTH.min(canvas.width() - 48.0).max(420.0);
         let height = SHEET_HEIGHT.min(canvas.height() - 48.0).max(360.0);
-        let tiles: Vec<Tile> = self
-            .board
-            .workspaces
-            .iter()
-            .map(|workspace| Tile {
-                local_id: workspace.local_id.clone(),
-                name: workspace.name.clone(),
-                panels: Vec::new(),
-                agents: 0,
-                working: 0,
-                needs_you: 0,
-            })
-            .collect();
+        let tiles = self.dock_tiles();
         let mut action = None;
         let area = Area::new(Id::new("assistant_dock"))
             .order(Order::Tooltip)
@@ -313,7 +336,9 @@ impl HorizonApp {
                         ui.set_width(width - 36.0);
                         ui.set_height(height - 36.0);
                         self.dock_header(ui, &mut action);
-                        ui.add_space(12.0);
+                        ui.add_space(8.0);
+                        self.scope_strip(ui);
+                        ui.add_space(8.0);
                         let body = (ui.available_height() - 62.0 - 1.0 - 46.0 - 8.0).max(120.0);
                         self.conversation(ui, body, false);
                         ui.add_space(8.0);
@@ -325,6 +350,26 @@ impl HorizonApp {
         ctx.move_to_top(area.response.layer_id);
         self.assistant.summon.rect = Some(area.response.rect);
         self.render_scope_popup(ctx, &tiles);
+        self.apply_sheet_action(ctx, action);
+    }
+
+    fn dock_tiles(&self) -> Vec<Tile> {
+        self.board
+            .workspaces
+            .iter()
+            .map(|workspace| Tile {
+                local_id: workspace.local_id.clone(),
+                name: workspace.name.clone(),
+                panels: Vec::new(),
+                agents: 0,
+                working: 0,
+                needs_you: 0,
+            })
+            .collect()
+    }
+
+    /// What a press in an expanded dock asked for.
+    fn apply_sheet_action(&mut self, ctx: &Context, action: Option<Action>) {
         match action {
             Some(Action::Run(entry)) => self.submit_summon(&entry),
             Some(Action::Complete(name)) => self.assistant.summon.text = format!("/{name}"),
@@ -358,30 +403,35 @@ impl HorizonApp {
                     *action = Some(Action::Close);
                 }
                 ui.add_space(8.0);
-                let raw = self.assistant.summon.raw;
-                let style = self.assistant.summon.feed_style;
-                let choice = segmented(
-                    ui,
-                    &[
-                        ("Cards", !raw && style == FeedStyle::Cards),
-                        ("Chat", !raw && style == FeedStyle::Chat),
-                        ("Terminal", raw),
-                    ],
-                );
-                match choice {
-                    Some(0) => {
-                        self.assistant.summon.feed_style = FeedStyle::Cards;
-                        self.assistant.summon.raw = false;
-                    }
-                    Some(1) => {
-                        self.assistant.summon.feed_style = FeedStyle::Chat;
-                        self.assistant.summon.raw = false;
-                    }
-                    Some(_) => self.assistant.summon.raw = true,
-                    None => {}
-                }
+                self.view_choice(ui);
             });
         });
+    }
+
+    /// Cards, Chat or Terminal, as one control. Laid out right to left.
+    fn view_choice(&mut self, ui: &mut Ui) {
+        let raw = self.assistant.summon.raw;
+        let style = self.assistant.summon.feed_style;
+        let choice = segmented(
+            ui,
+            &[
+                ("Cards", !raw && style == FeedStyle::Cards),
+                ("Chat", !raw && style == FeedStyle::Chat),
+                ("Terminal", raw),
+            ],
+        );
+        match choice {
+            Some(0) => {
+                self.assistant.summon.feed_style = FeedStyle::Cards;
+                self.assistant.summon.raw = false;
+            }
+            Some(1) => {
+                self.assistant.summon.feed_style = FeedStyle::Chat;
+                self.assistant.summon.raw = false;
+            }
+            Some(_) => self.assistant.summon.raw = true,
+            None => {}
+        }
     }
 }
 

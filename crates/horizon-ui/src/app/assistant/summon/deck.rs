@@ -14,7 +14,7 @@ use super::turns::split_reply;
 use super::{HorizonApp, demo};
 use crate::theme;
 
-pub(super) const CARD_HEIGHT: f32 = 88.0;
+pub(super) const CARD_HEIGHT: f32 = 96.0;
 pub(super) const GAP: f32 = 8.0;
 const MAX_CARDS: usize = 3;
 
@@ -97,9 +97,9 @@ impl HorizonApp {
                     text_block(ui, card, title, body);
                     let close = Rect::from_center_size(pos2(card.right() - 24.0, card.top() + 24.0), vec2(30.0, 30.0));
                     let open =
-                        Rect::from_center_size(pos2(card.right() - 150.0, card.bottom() - 22.0), vec2(64.0, 28.0));
+                        Rect::from_center_size(pos2(card.right() - 150.0, card.bottom() - 21.0), vec2(64.0, 28.0));
                     let terminal =
-                        Rect::from_center_size(pos2(card.right() - 62.0, card.bottom() - 22.0), vec2(88.0, 28.0));
+                        Rect::from_center_size(pos2(card.right() - 62.0, card.bottom() - 21.0), vec2(88.0, 28.0));
                     if small_button(ui, open, "Open", true).clicked() {
                         actions.push(MiniAction::Open { terminal: false });
                     }
@@ -115,9 +115,9 @@ impl HorizonApp {
                     mark(ui, card, theme::PALETTE_YELLOW());
                     text_block(ui, card, title, question);
                     let allow =
-                        Rect::from_center_size(pos2(card.right() - 112.0, card.bottom() - 22.0), vec2(64.0, 28.0));
+                        Rect::from_center_size(pos2(card.right() - 112.0, card.bottom() - 21.0), vec2(64.0, 28.0));
                     let deny =
-                        Rect::from_center_size(pos2(card.right() - 44.0, card.bottom() - 22.0), vec2(60.0, 28.0));
+                        Rect::from_center_size(pos2(card.right() - 44.0, card.bottom() - 21.0), vec2(60.0, 28.0));
                     if small_button(ui, allow, "Allow", true).clicked() {
                         actions.push(MiniAction::Answer(*id, true));
                     }
@@ -161,9 +161,12 @@ fn mark(ui: &Ui, card: Rect, color: egui::Color32) {
 /// A title and up to two lines of body, to the right of the dot and clear of the buttons.
 fn text_block(ui: &Ui, card: Rect, title: &str, body: &str) {
     ui.painter().text(
-        card.left_top() + vec2(48.0, 28.0),
+        card.left_top() + vec2(48.0, 27.0),
         Align2::LEFT_CENTER,
-        elide(title, 64),
+        elide(
+            title,
+            super::super::num::index((card.width() - 130.0) / 7.4).clamp(16, 80),
+        ),
         FontId::proportional(14.5),
         theme::FG(),
     );
@@ -178,7 +181,7 @@ fn text_block(ui: &Ui, card: Rect, title: &str, body: &str) {
     job.wrap.overflow_character = Some('…');
     let galley = ui.painter().layout_job(job);
     ui.painter()
-        .galley(card.left_top() + Vec2::new(48.0, 42.0), galley, theme::FG_SOFT());
+        .galley(card.left_top() + Vec2::new(48.0, 41.0), galley, theme::FG_SOFT());
 }
 
 /// A light band travelling along a thin track.

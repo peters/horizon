@@ -365,7 +365,7 @@ impl HorizonApp {
     }
 
     /// The caption beside the orb: the question if an agent asks, else what is being said, else the latest news.
-    fn orb_caption(
+    pub(super) fn orb_caption(
         &self,
         ui: &mut Ui,
         caption: Rect,
