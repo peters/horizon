@@ -26,7 +26,7 @@ thiserror = "2"
 png = "0.18"
 jpeg-encoder = "0.7.1"
 base64 = "0.23.1"
-rmcp = { version = "3.1.4", default-features = false, features = ["macros", "server", "transport-io"], optional = true }
+rmcp = { version = "3.5.0", default-features = false, features = ["macros", "server", "transport-io"], optional = true }
 schemars = { version = "1", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"], optional = true }
 
