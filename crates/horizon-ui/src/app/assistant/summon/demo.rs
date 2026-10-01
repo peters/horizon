@@ -181,6 +181,9 @@ impl HorizonApp {
         let (Some(command), argument, rest) = (parts.next(), parts.next(), parts.next()) else {
             return;
         };
+        if self.demo_view(command, argument) {
+            return;
+        }
         match command {
             "say" => {
                 let millis: u64 = argument.and_then(|value| value.parse().ok()).unwrap_or(3000);
@@ -240,16 +243,6 @@ impl HorizonApp {
             }
             "collapse" => self.assistant.summon.expanded = false,
             "answer" => self.demo_answer(argument),
-            "mini" => {
-                let style = match argument {
-                    Some("b") => super::MiniStyle::Strip,
-                    Some("c") => super::MiniStyle::Orb,
-                    _ => super::MiniStyle::Pill,
-                };
-                self.assistant.summon.mini_style = style;
-                self.assistant.summon.mini = Some(style);
-            }
-            "unmini" => self.assistant.summon.mini = None,
             "hub" => {
                 self.assistant.summon.hub.style = match argument {
                     Some("b") => super::HubStyle::Window,
@@ -309,6 +302,41 @@ impl HorizonApp {
         if let Some(id) = target {
             self.send_to_agent(id, text, true, Instant::now());
         }
+    }
+
+    /// The commands that change how the bar looks: `mini`, `unmini`, `feed`, `terminal`, `deck`.
+    /// Returns whether the command was one of them.
+    fn demo_view(&mut self, command: &str, argument: Option<&str>) -> bool {
+        match command {
+            "mini" => {
+                let style = match argument {
+                    Some("b") => super::MiniStyle::Strip,
+                    Some("c") => super::MiniStyle::Orb,
+                    Some("d") => super::MiniStyle::Deck,
+                    _ => super::MiniStyle::Pill,
+                };
+                self.assistant.summon.mini_style = style;
+                self.assistant.summon.mini = Some(style);
+            }
+            "unmini" => self.assistant.summon.mini = None,
+            "feed" => {
+                self.assistant.summon.feed_style = match argument {
+                    Some("b") => super::FeedStyle::Cards,
+                    _ => super::FeedStyle::Chat,
+                };
+            }
+            "terminal" => self.assistant.summon.raw = argument != Some("off"),
+            "deck" => {
+                // The person presses a card's button: Open (the cards view) or Terminal.
+                self.assistant.summon.mini = None;
+                self.assistant.summon.expanded = true;
+                self.assistant.summon.style = super::ExpandStyle::Sheet;
+                self.assistant.summon.feed_style = super::FeedStyle::Cards;
+                self.assistant.summon.raw = argument == Some("terminal");
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// `answer yes|no`: the person presses the button on the card of the first agent that asked.

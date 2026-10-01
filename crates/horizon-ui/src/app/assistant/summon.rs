@@ -23,16 +23,19 @@ const HISTORY: usize = 50;
 /// Mic button plus the frame's padding above and below it.
 const PROMPT_ROW_HEIGHT: f32 = 62.0;
 
+mod deck;
 pub(super) mod demo;
 mod desk_bar;
 mod desk_windows;
 pub(super) mod feed;
 mod hub;
 mod mini;
+mod turns;
 
 pub(in crate::app) use desk_bar::ExpandStyle;
 pub(in crate::app) use hub::{HubPage, HubStyle};
 pub(in crate::app) use mini::MiniStyle;
+pub(in crate::app) use turns::FeedStyle;
 
 #[derive(Default)]
 pub(super) struct Summon {
@@ -51,6 +54,10 @@ pub(super) struct Summon {
     style: ExpandStyle,
     /// Show the assistant's raw terminal instead of the feed.
     raw: bool,
+    /// How the feed shows the conversation: as a chat, or as a card for each ask.
+    feed_style: FeedStyle,
+    /// Turns the person has dismissed from the deck, so only newer ones show.
+    deck_dismissed: usize,
     /// The bar is shrunk to rest above the dock, in this design.
     mini: Option<MiniStyle>,
     /// The design mini mode returns to.
@@ -480,7 +487,9 @@ impl HorizonApp {
             if !matches!(entry, Entry::Local(_)) {
                 self.assistant.summon.remember(&line);
                 let voice = self.assistant.demo.as_ref().is_some_and(demo::Demo::voice_active);
-                self.assistant.feed.you(&line, voice);
+                if !self.assistant.follow.active() {
+                    self.assistant.feed.you(&line, voice);
+                }
             }
             self.assistant.summon.text.clear();
             self.assistant.summon.selected = 0;

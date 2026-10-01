@@ -100,6 +100,7 @@ impl HorizonApp {
     pub(in crate::app) fn render_desk_root(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.run_demo(&ctx);
+        self.follow_assistant_transcript();
         self.render_panel_windows(&ctx);
         self.ensure_assistant_panel(&ctx);
         self.assistant.summon.open = true;
@@ -403,6 +404,28 @@ impl HorizonApp {
                     self.assistant.summon.raw = !raw;
                 }
                 ui.add_space(6.0);
+                for style in [super::FeedStyle::Cards, super::FeedStyle::Chat] {
+                    let selected = self.assistant.summon.feed_style == style && !raw;
+                    let label = RichText::new(style.label()).size(11.5).color(if selected {
+                        theme::FG()
+                    } else {
+                        theme::FG_DIM()
+                    });
+                    let button = egui::Button::new(label)
+                        .fill(if selected {
+                            theme::ACCENT().gamma_multiply(0.22)
+                        } else {
+                            theme::PANEL_BG_ALT()
+                        })
+                        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+                        .corner_radius(CornerRadius::same(8))
+                        .min_size(vec2(0.0, 26.0));
+                    if ui.add(button).clicked() {
+                        self.assistant.summon.feed_style = style;
+                        self.assistant.summon.raw = false;
+                    }
+                }
+                ui.add_space(6.0);
                 for style in ExpandStyle::ALL.iter().rev() {
                     let selected = self.assistant.summon.style == *style;
                     let label = RichText::new(style.label()).size(11.5).color(if selected {
@@ -562,7 +585,11 @@ impl HorizonApp {
             .input(|input| input.viewport().monitor_size)
             .map_or(MONITOR, |size| [size.x, size.y]);
         let size = if let Some(style) = self.assistant.summon.mini {
-            style.size(monitor[0])
+            let mut size = style.size(monitor[0]);
+            if style == super::mini::MiniStyle::Deck {
+                size[1] += self.deck_stack_height();
+            }
+            size
         } else if self.assistant.summon.expanded {
             self.assistant.summon.style.size()
         } else {
@@ -599,7 +626,10 @@ impl HorizonApp {
             ]);
         let bottom = super::super::num::px((work_height + 32).min(super::super::num::whole(monitor[1])));
         // The orb itself, not its caption, is what sits in the middle.
-        let centred = if self.assistant.summon.mini == Some(super::mini::MiniStyle::Orb) {
+        let centred = if matches!(
+            self.assistant.summon.mini,
+            Some(super::mini::MiniStyle::Orb | super::mini::MiniStyle::Deck)
+        ) {
             56.0
         } else {
             size[0] / 2.0

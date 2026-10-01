@@ -83,6 +83,43 @@ impl Feed {
     }
 }
 
+/// One ask and everything that followed it, until the next ask.
+#[derive(Clone, Default)]
+pub(in crate::app::assistant) struct Turn {
+    pub(in crate::app::assistant) asked: Option<String>,
+    pub(in crate::app::assistant) voice: bool,
+    pub(in crate::app::assistant) steps: Vec<String>,
+    pub(in crate::app::assistant) replies: Vec<String>,
+}
+
+impl Feed {
+    /// The conversation grouped by what the person asked.
+    pub(in crate::app::assistant) fn turns(&self) -> Vec<Turn> {
+        let mut turns: Vec<Turn> = Vec::new();
+        for entry in &self.entries {
+            if let Entry::You { text, voice } = entry {
+                turns.push(Turn {
+                    asked: Some(text.clone()),
+                    voice: *voice,
+                    ..Turn::default()
+                });
+                continue;
+            }
+            if turns.is_empty() {
+                turns.push(Turn::default());
+            }
+            if let Some(turn) = turns.last_mut() {
+                match entry {
+                    Entry::Said(text) => turn.replies.push(text.clone()),
+                    Entry::Did(text) => turn.steps.push(text.clone()),
+                    Entry::You { .. } => {}
+                }
+            }
+        }
+        turns
+    }
+}
+
 /// One agent as the feed shows it.
 pub(super) struct AgentRow {
     pub(super) id: PanelId,
@@ -176,8 +213,13 @@ impl HorizonApp {
         self.update_assistant_cards();
         // The state sits below the chat and does not scroll. Measure it with an invisible
         // pass so the chat gets exactly the height that is left.
+        // The cards view keeps only a question pinned: the plan and the agents are in the card.
+        let cards = self.assistant.summon.feed_style == super::turns::FeedStyle::Cards;
         let pinned = |this: &Self, ui: &mut Ui, actions: &mut Vec<FeedAction>| {
             this.draw_attention(ui, &agents, actions);
+            if cards {
+                return;
+            }
             if with_plan && !this.assistant.plan.is_empty() {
                 this.draw_plan_card(ui);
                 ui.add_space(8.0);
@@ -201,7 +243,10 @@ impl HorizonApp {
             .auto_shrink([false, false])
             .show(&mut chat_ui, |ui| {
                 ui.set_width(ui.available_width());
-                self.draw_entries(ui);
+                match self.assistant.summon.feed_style {
+                    super::turns::FeedStyle::Chat => self.draw_entries(ui),
+                    super::turns::FeedStyle::Cards => self.draw_turn_cards(ui),
+                }
                 self.draw_note_cards(ui);
             });
         let mut actions = Vec::new();
@@ -268,12 +313,14 @@ impl HorizonApp {
     /// With a real agent (Claude, Codex, ...) nobody reports what it says, so its latest terminal
     /// output stands in for its replies, until the feed has replies of its own.
     fn draw_agent_tail(&self, ui: &mut Ui, max: f32) {
-        if self
-            .assistant
-            .feed
-            .entries
-            .iter()
-            .any(|entry| matches!(entry, Entry::Said(_)))
+        // A scripted demo's stand-in agent has nothing worth showing; its replies come as events.
+        if self.assistant.demo.is_some()
+            || self
+                .assistant
+                .feed
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, Entry::Said(_)))
         {
             return;
         }

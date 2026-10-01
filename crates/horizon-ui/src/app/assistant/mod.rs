@@ -9,6 +9,8 @@ mod cards;
 mod command_bar;
 mod drawer;
 mod engine;
+mod events;
+mod follow;
 mod icons;
 mod num;
 mod plan;
@@ -48,6 +50,8 @@ pub(super) struct AssistantDrawer {
     cards: cards::Cards,
     /// The conversation as the desk-mode feed shows it.
     feed: summon::feed::Feed,
+    /// The real agent's transcript, when there is one to follow.
+    follow: follow::Follow,
     command: command_bar::CommandBar,
     summon: summon::Summon,
     /// Which workspaces the assistant is looking at.
@@ -92,6 +96,7 @@ impl AssistantDrawer {
             engine_anchor: None,
             cards: cards::Cards::default(),
             feed: summon::feed::Feed::default(),
+            follow: follow::Follow::default(),
             command: command_bar::CommandBar::default(),
             summon: summon::Summon::default(),
             scope: scope::Scope::default(),
@@ -120,6 +125,7 @@ impl AssistantDrawer {
     pub(super) fn reset_for_new_board(&mut self) {
         self.cards.clear();
         self.feed.clear();
+        self.follow = follow::Follow::default();
         self.command = command_bar::CommandBar::default();
         self.summon = summon::Summon::default();
         self.plan.clear();

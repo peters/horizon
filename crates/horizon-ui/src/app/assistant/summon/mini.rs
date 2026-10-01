@@ -26,16 +26,19 @@ pub(in crate::app) enum MiniStyle {
     Strip,
     /// A floating orb whose ring shows the agents, with a caption that appears when there is news.
     Orb,
+    /// The orb with the news as cards stacked above it: what was done, what is asked, what is under way.
+    Deck,
 }
 
 impl MiniStyle {
-    pub(super) const ALL: [Self; 3] = [Self::Pill, Self::Strip, Self::Orb];
+    pub(super) const ALL: [Self; 4] = [Self::Pill, Self::Strip, Self::Orb, Self::Deck];
 
     pub(super) const fn label(self) -> &'static str {
         match self {
             Self::Pill => "Pill",
             Self::Strip => "Strip",
             Self::Orb => "Orb",
+            Self::Deck => "Deck",
         }
     }
 
@@ -44,13 +47,13 @@ impl MiniStyle {
         match self {
             Self::Pill => [720.0, 76.0],
             Self::Strip => [(monitor_width - 160.0).clamp(900.0, 1560.0), 54.0],
-            Self::Orb => [600.0, 104.0],
+            Self::Orb | Self::Deck => [600.0, 104.0],
         }
     }
 
     /// Whether the window is drawn on a plate of its own, or the shapes float on the desktop.
     pub(super) const fn plated(self) -> bool {
-        !matches!(self, Self::Orb)
+        !matches!(self, Self::Orb | Self::Deck)
     }
 }
 
@@ -69,8 +72,14 @@ fn tile_color(tile: &Tile) -> Color32 {
     }
 }
 
-enum MiniAction {
+pub(super) enum MiniAction {
     Expand,
+    /// Open the cards view of the conversation, or its terminal.
+    Open {
+        terminal: bool,
+    },
+    /// Hide the deck's cards for every turn up to and including this one.
+    Dismiss(usize),
     Go(usize),
     Dictate,
     Style(MiniStyle),
@@ -84,11 +93,20 @@ impl HorizonApp {
         match style {
             MiniStyle::Pill => self.mini_pill(ui, tiles, desk, &mut actions),
             MiniStyle::Strip => self.mini_strip(ui, tiles, desk, &mut actions),
-            MiniStyle::Orb => self.mini_orb(ui, &mut actions),
+            MiniStyle::Orb => self.mini_orb(ui, &mut actions, false),
+            MiniStyle::Deck => self.mini_orb(ui, &mut actions, true),
         }
         for action in actions {
             match action {
                 MiniAction::Expand => self.leave_mini(),
+                MiniAction::Open { terminal } => {
+                    self.leave_mini();
+                    self.assistant.summon.expanded = true;
+                    self.assistant.summon.style = super::ExpandStyle::Sheet;
+                    self.assistant.summon.feed_style = super::FeedStyle::Cards;
+                    self.assistant.summon.raw = terminal;
+                }
+                MiniAction::Dismiss(turn) => self.assistant.summon.deck_dismissed = turn + 1,
                 MiniAction::Go(index) => {
                     if let Some(desk) = self.assistant.desk.as_ref() {
                         desk.switch(index);
@@ -243,9 +261,23 @@ impl HorizonApp {
 
     // ---- C: orb --------------------------------------------------------------
 
-    fn mini_orb(&mut self, ui: &mut Ui, actions: &mut Vec<MiniAction>) {
-        let area = ui.available_rect_before_wrap();
-        ui.allocate_rect(area, Sense::hover());
+    fn mini_orb(&mut self, ui: &mut Ui, actions: &mut Vec<MiniAction>, deck: bool) {
+        let full = ui.available_rect_before_wrap();
+        ui.allocate_rect(full, Sense::hover());
+        // The deck keeps its orb in the bottom row and stacks the cards above it.
+        let area = if deck {
+            Rect::from_min_max(
+                pos2(full.left(), full.bottom() - MiniStyle::Deck.size(0.0)[1]),
+                full.right_bottom(),
+            )
+        } else {
+            full
+        };
+        if deck {
+            let toasts = self.deck_toasts();
+            let stack = Rect::from_min_max(full.left_top(), pos2(full.right(), area.top()));
+            self.paint_toasts(ui, stack, &toasts, actions);
+        }
         let centre = pos2(area.left() + 52.0, area.center().y);
         let radius = 34.0;
         let agents = self.feed_agents();
@@ -263,7 +295,7 @@ impl HorizonApp {
             pos2(centre.x + radius + 16.0, area.top() + 14.0),
             pos2(area.right() - 2.0, area.bottom() - 14.0),
         );
-        self.orb_caption(ui, caption, &agents, now, actions);
+        self.orb_caption(ui, caption, &agents, now, deck, actions);
     }
 
     /// The orb: a breathing glow, a ring with an arc for each agent, the mark and a badge for who waits.
@@ -333,8 +365,20 @@ impl HorizonApp {
     }
 
     /// The caption beside the orb: the question if an agent asks, else what is being said, else the latest news.
-    fn orb_caption(&self, ui: &mut Ui, caption: Rect, agents: &[AgentRow], now: f32, actions: &mut Vec<MiniAction>) {
-        let asking = agents.iter().find(|agent| agent.state == AgentState::NeedsInput);
+    fn orb_caption(
+        &self,
+        ui: &mut Ui,
+        caption: Rect,
+        agents: &[AgentRow],
+        now: f32,
+        deck: bool,
+        actions: &mut Vec<MiniAction>,
+    ) {
+        // In the deck a question is a card above the orb.
+        let asking = agents
+            .iter()
+            .find(|agent| agent.state == AgentState::NeedsInput)
+            .filter(|_| !deck);
         let pressed = self.assistant.demo.as_ref().and_then(super::demo::Demo::press_progress);
         if let Some(agent) = asking {
             plate(ui, caption, theme::PALETTE_YELLOW());
@@ -497,7 +541,7 @@ impl HorizonApp {
 // ---- small painters -------------------------------------------------------
 
 /// A rounded plate with a tinted edge, behind the orb's caption.
-fn plate(ui: &Ui, rect: Rect, edge: Color32) {
+pub(super) fn plate(ui: &Ui, rect: Rect, edge: Color32) {
     ui.painter().rect(
         rect,
         CornerRadius::same(20),
@@ -527,7 +571,7 @@ fn status_chip(ui: &Ui, left_centre: egui::Pos2, text: &str, color: Color32) -> 
     rect.right()
 }
 
-fn small_button(ui: &mut Ui, rect: Rect, text: &str, primary: bool) -> egui::Response {
+pub(super) fn small_button(ui: &mut Ui, rect: Rect, text: &str, primary: bool) -> egui::Response {
     let response = ui.interact(rect, egui::Id::new(("mini_btn", text)), Sense::click());
     let fill = if primary {
         theme::ACCENT()
