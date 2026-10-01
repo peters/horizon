@@ -3,6 +3,7 @@ mod binding_bootstrap;
 mod claude_live_sessions;
 pub(crate) mod cloud_groups;
 mod models;
+mod session_display;
 mod versioning;
 
 use std::collections::HashSet;
