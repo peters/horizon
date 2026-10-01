@@ -17,7 +17,7 @@ use std::{
 pub struct HostedBrowser {
     pub session: BrowserSession,
     pub state: CloudViewState,
-    pub start_orientation_failure: Option<&'static str>,
+    pub start_orientation_failure: Option<horizon_browser::RemoteStartFailure>,
 }
 pub struct Host {
     pub capabilities: horizon_cloud::Capabilities,
@@ -175,8 +175,12 @@ impl Host {
                     }) => browser.state.remote_device = Some(identity.summary()),
                     BrowserEvent::RemoteSession(horizon_browser::RemoteSessionEvent::OrientationRejected {
                         code,
+                        released,
                         ..
-                    }) => browser.start_orientation_failure = Some(code),
+                    }) => {
+                        browser.start_orientation_failure =
+                            Some(horizon_browser::RemoteStartFailure::OrientationRejected { code, released });
+                    }
                     BrowserEvent::Ready => browser.state.ready = true,
                     BrowserEvent::Title(title) => browser.state.title = title,
                     BrowserEvent::UrlChanged(url) => browser.state.url = url,

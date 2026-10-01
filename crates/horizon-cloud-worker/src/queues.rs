@@ -69,9 +69,14 @@ fn create_requests(host: &mut Host) {
 fn pending_requests(host: &mut Host) {
     host.pending.retain(|request| {
         let id = format!("browser-{}", request.request_id);
-        if let Some(code) = host.browsers.get(&id).and_then(|browser| browser.start_orientation_failure) {
+        if let Some(horizon_browser::RemoteStartFailure::OrientationRejected { code, released }) = host
+            .browsers
+            .get(&id)
+            .and_then(|browser| browser.start_orientation_failure.as_ref())
+        {
+            let result = orientation_create_failure(request, code, released);
             host.pending_cleanup.insert(id);
-            return manifest::complete_create_request(&BrowserCreateResult::failed(request, code, "start orientation could not be verified; Horizon attempted to release the allocation, reconcile uncertain capacity before retrying")).is_err();
+            return manifest::complete_create_request(&result).is_err();
         }
         if let Some(message) = pending_failure(
             request,
@@ -121,6 +126,26 @@ fn pending_requests(host: &mut Host) {
         };
         result.is_none_or(|result| manifest::complete_create_request(&result).is_err())
     });
+}
+
+fn orientation_create_failure(
+    request: &manifest::BrowserCreateRequest,
+    code: &str,
+    released: &horizon_browser::RemoteReleaseOutcome,
+) -> BrowserCreateResult {
+    use horizon_browser::RemoteReleaseOutcome;
+    let message = match released {
+        RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone => {
+            "start orientation could not be verified; the provider confirmed session release"
+        }
+        RemoteReleaseOutcome::NeverAllocated => {
+            "start orientation could not be verified; no remote session was allocated"
+        }
+        RemoteReleaseOutcome::ReleaseUnknown { .. } | RemoteReleaseOutcome::Failed { .. } => {
+            "start orientation could not be verified; release is unconfirmed and capacity remains held, reconcile the retained allocation before creating again"
+        }
+    };
+    BrowserCreateResult::failed(request, code, message)
 }
 
 fn start_before_deadline(
@@ -223,6 +248,56 @@ fn host_controls(host: &mut Host) {
 mod tests {
     use super::*;
     use horizon_browser_protocol::cloud_view::CloudViewState;
+
+    #[test]
+    fn orientation_create_failure_preserves_code_and_only_warns_for_unconfirmed_release() {
+        use horizon_browser::RemoteReleaseOutcome;
+        use manifest::BrowserCreateOutcome;
+        let request = manifest::BrowserCreateRequest::for_tests("cloud-agent");
+        for (released, held) in [
+            (RemoteReleaseOutcome::Released, false),
+            (RemoteReleaseOutcome::AlreadyGone, false),
+            (RemoteReleaseOutcome::NeverAllocated, false),
+            (
+                RemoteReleaseOutcome::ReleaseUnknown {
+                    attempts: 3,
+                    reason: "private provider detail".into(),
+                },
+                true,
+            ),
+            (
+                RemoteReleaseOutcome::Failed {
+                    error: "private provider error".into(),
+                    message: "private provider detail".into(),
+                },
+                true,
+            ),
+        ] {
+            for code in [
+                "orientation_unsupported",
+                "orientation_unverified",
+                "browser_unavailable",
+                "remote_orientation_mismatch",
+            ] {
+                let result = orientation_create_failure(&request, code, &released);
+                let BrowserCreateOutcome::Failed { code: actual, message } = result.outcome else {
+                    panic!("failed startup reported ready")
+                };
+                assert_eq!(actual, code);
+                assert_eq!(result.request_id, request.request_id);
+                assert_eq!(result.actor, request.actor);
+                assert_eq!(message.contains("reconcile"), held);
+                assert_eq!(message.contains("capacity remains held"), held);
+                assert!(!message.contains("private provider"));
+                if matches!(
+                    released,
+                    RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone
+                ) {
+                    assert!(message.contains("confirmed session release"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn expired_create_never_invokes_the_allocator() {
