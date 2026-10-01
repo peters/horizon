@@ -13,7 +13,7 @@ use super::icons::{self, Icon};
 use crate::theme;
 
 const ROW_HEIGHT: f32 = 34.0;
-const MARKER: f32 = 20.0;
+pub(super) const MARKER: f32 = 20.0;
 
 /// Draws the rows of a plan, one line each.
 pub(super) fn draw_steps(ui: &mut Ui, steps: &[PlanStep]) {
@@ -56,7 +56,7 @@ pub(super) fn draw_steps(ui: &mut Ui, steps: &[PlanStep]) {
     }
 }
 
-fn paint_marker(ui: &Ui, rect: Rect, status: StepStatus) {
+pub(super) fn paint_marker(ui: &Ui, rect: Rect, status: StepStatus) {
     let painter = ui.painter();
     let center = rect.center();
     let radius = MARKER / 2.0;

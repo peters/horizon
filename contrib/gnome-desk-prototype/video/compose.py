@@ -96,7 +96,7 @@ T_SUB = text_layer("The infinite canvas, on every desktop.", font("Light", 42), 
 T_OUT1 = text_layer("One assistant.", font("Bold", 100), INK)
 T_OUT2 = text_layer("Every workspace.", font("Bold", 100), ACCENT)
 T_OUT3 = text_layer("Prototype running on Ubuntu 26.04  ·  GNOME on Wayland", font("Regular", 30), SOFT)
-T_OUT4 = text_layer("Scripted stand-in agents and a synthetic voice. No real model calls.", font("Regular", 24), (110, 124, 156))
+T_OUT4 = text_layer("A live OpenAI Realtime voice agent drove Horizon through MCP. Stand-in coding agents; the person's voice is a recording.", font("Regular", 24), (110, 124, 156))
 
 def intro_frame(t):
     img = BACK.copy()
@@ -118,26 +118,24 @@ def outro_frame(t):
 
 # ---- captions and camera --------------------------------------------------------------
 m = plan["marks"]
-g = rel["go"]
 CAPTIONS = [
-    (m["start"] + 0.3, m["tour"] - 0.2, "Panels are normal windows on your desktop.", "No canvas. No frame. Just your apps."),
+    (m["start"] + 0.3, m["tour"] - 0.2, "Every panel is a real window.", "Tagged Horizon, so you always know whose it is."),
     (m["tour"] + 0.1, m["native"] - 0.2, "A browser, an agent and a shell, side by side.", None),
-    (m["native"] + 0.1, m["keys"] - 0.2, "Native apps in a VNC viewer panel.", None),
-    (m["keys"] + 0.1, m["overview"] - 0.3, "Ctrl + Alt + arrows work too.", "A real GNOME desktop."),
-    (m["overview"] + 0.2, m["overview_close"] - 0.1, "Twenty real workspaces.", "GNOME's own overview shows every one."),
-    (m["overview_close"] + 0.2, m["voice"] - 0.1, "Twenty workspaces, one small bar.", None),
-    (m["voice"] + 0.1, m["enter"] + 0.3, "Just say what you want.", None),
-    (m["enter"] + 0.9, m["work2"] - 0.4, "One request. Three agents. Three workspaces.", None),
-    (m["work2"] + 0.1, m["work3"] - 0.3, "Each agent works in its own workspace.", None),
-    (m["work3"] + 0.2, m["work1"] - 0.2, "Watch the minimap, not the noise.", None),
-    (m["work1"] + 0.3, rel["note"] - 0.4, "The bar follows you to every workspace.", None),
-    (rel["note"] - 0.1, m["expA"] - 0.3, "A recap, not noise: two done, one needs you.", None),
-    (m["expA"] + 0.1, m["expB"] - 0.1, "Expand into the whole conversation.", "A  ·  Sheet"),
-    (m["expB"] + 0.1, m["expC"] - 0.1, "Expand into the whole conversation.", "B  ·  Split"),
-    (m["expC"] + 0.1, m["collapse"] - 0.1, "Expand into the whole conversation.", "C  ·  Stage"),
-    (m["move"] + 0.2, m["moved"] - 0.2, "Drag a window to another desktop.", "The panel follows."),
-    (m["moved"] + 0.1, m["scope"] - 0.3, "Same panel, new workspace.", None),
-    (m["scope"] - 0.2, m["end"], "Scope it to one workspace, or all of them.", None),
+    (m["native"] + 0.1, m["mini_a"] - 0.5, "Native apps in a VNC viewer panel.", None),
+    (m["mini_a"] + 0.1, m["mini_b"] - 0.1, "Mini mode rests just above the dock.", "A  ·  Pill"),
+    (m["mini_b"] + 0.1, m["mini_c"] - 0.1, "Mini mode rests just above the dock.", "B  ·  Strip"),
+    (m["mini_c"] + 0.1, m["voice"] - 0.1, "Mini mode rests just above the dock.", "C  ·  Orb"),
+    (m["voice"] + 0.4, m["voice"] + 18.0, "Just talk to it.", "A live voice agent, using Horizon's MCP tools"),
+    (m["voice"] + 18.4, m["agents"] + 1.0, "It lines up the work.", "Plan, then one task per agent"),
+    (m["agents"] + 1.6, m["agents"] + 14.0, "Each agent works in its own workspace.", None),
+    (m["asked"] - 0.2, m["feed"] - 0.1, "It tells you when an agent needs you.", None),
+    (m["feed"] + 0.2, m["allow"] - 0.1, "The whole conversation, as a feed.", "Plan, agents, and what needs you"),
+    (m["allow"] + 0.1, m["collapse"] - 0.1, "Approve in one click.", "The agent carries on"),
+    (m["hubA"] + 0.1, m["hubA_cloud"] - 0.1, "Remote hosts, in a window of its own.", "A  ·  Satellites, tied to the bar by an arrow", "tl"),
+    (m["hubA_cloud"] + 0.1, m["hubB"] - 0.3, "Cloud, quick nav, sessions: the same way.", "A  ·  Satellites", "tl"),
+    (m["hubB"] + 0.1, m["hubC"] - 0.3, "Or one hub window with tabs.", "B  ·  Hub", "tl"),
+    (m["hubC"] + 0.1, m["spaces"] - 0.3, "Or right inside the bar.", "C  ·  Inline", "tl"),
+    (m["spaces"] + 0.2, m["end"], "Twenty real workspaces.", "GNOME's own overview shows every one."),
 ]
 caption_cache = {}
 def caption_layer(main, sub):
@@ -167,11 +165,11 @@ def caption_alpha(tc, start, end):
 
 # camera keyframes: (capture time, zoom, centre x, centre y) in desktop pixels
 CAMERA = [
-    (0.0, 1.0, 960, 540), (m["voice"] - 0.8, 1.0, 960, 540), (m["voice"] + 0.0, 1.5, 960, 900),
-    (m["enter"] + 0.6, 1.5, 960, 900), (m["enter"] + 1.8, 1.0, 960, 540),
-    (rel["note"] - 1.2, 1.0, 960, 540), (rel["note"] - 0.2, 1.45, 960, 860), (m["expA"] - 0.8, 1.45, 960, 860),
-    (m["expA"] - 0.1, 1.0, 960, 540), (m["scope"] - 0.4, 1.0, 960, 540), (m["scope"] + 0.8, 1.45, 960, 900),
-    (m["end"] - 0.6, 1.45, 960, 900), (m["end"] + 0.6, 1.0, 960, 540), (D + 5, 1.0, 960, 540),
+    (0.0, 1.0, 960, 540), (m["start"] + 0.2, 1.0, 960, 540), (m["start"] + 1.0, 1.9, 380, 190),
+    (m["tour"] - 0.3, 1.9, 380, 190), (m["tour"] + 0.6, 1.0, 960, 540),
+    (m["mini_a"] - 0.5, 1.0, 960, 540), (m["mini_a"] + 0.4, 1.55, 960, 905),
+    (m["voice"] + 17.5, 1.55, 960, 905), (m["voice"] + 19.5, 1.0, 960, 540),
+    (m["feed"] - 0.3, 1.0, 960, 540), (D + 5, 1.0, 960, 540),
 ]
 def camera(tc):
     for i in range(len(CAMERA) - 1):
@@ -189,12 +187,16 @@ def capture_frame(tc, t):
     x0 = min(max(cx - bw / 2, 0), 1920 - bw); y0 = min(max(cy - bh / 2, 0), 1080 - bh)
     view = src.resize(AREA, Image.BICUBIC, box=(x0, y0, x0 + bw, y0 + bh))
     img = view.copy()
-    for start, end, main, sub in CAPTIONS:
+    for start, end, main, sub, *where in CAPTIONS:
         a = caption_alpha(tc, start, end)
         if a > 0.003:
             layer = caption_layer(main, sub)
             lift = 14 * (1 - ease((tc - start) / 0.4))
-            paste_alpha(img, layer, W / 2, 170 + lift, a)
+            if where:
+                # Out of the way of the windows in the middle of the screen.
+                paste_alpha(img, layer, 310, 125 + lift, a, 0.68)
+            else:
+                paste_alpha(img, layer, W / 2, 170 + lift, a)
     return img
 
 def frame_at(t):

@@ -449,6 +449,10 @@ impl eframe::App for HorizonApp {
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // The command bar is a rounded shape on the desktop, not a rectangle.
+        if self.desk_mode() {
+            return [0.0; 4];
+        }
         theme::bg_for(self.resolved_theme).to_normalized_gamma_f32()
     }
 

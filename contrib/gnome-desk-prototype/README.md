@@ -17,6 +17,19 @@ What it does, with `HORIZON_DESK_MODE=1`:
 - **The bar expands** into one of three layouts (A Sheet, B Split, C Stage) for the whole conversation.
 - **The assistant belongs to no workspace**: it reaches all of them unless its scope is narrowed in the chip's picker.
 - GNOME's own shortcuts (Ctrl+Alt+Left/Right) and Overview keep working; the minimap follows them.
+- **Windows are marked as Horizon's.** The extension draws a thin accent outline and a small "Horizon" tag in the
+  empty left of the title bar of every window whose app id starts with `horizon-panel-`. The windows themselves
+  are untouched, so a panel is recognisable at a glance among other applications.
+- **The conversation is a feed, not a terminal**: bubbles for what was said, pills for what the assistant did,
+  the plan as a progress bar with a chip per step, a card per agent, and a card with Allow / Deny when an agent
+  asks the person something (the answer is typed into that agent as the person would). The raw terminal is one
+  click away.
+- **Mini mode** shrinks the bar to rest just above the dock (the extension reports the work area, so placement
+  follows the dock). Three designs, switched live (right-click the mark): Pill, Strip and Orb.
+- **Quick nav, remote hosts, cloud, sessions and settings** have a row of buttons under the prompt. What opens is
+  also shown three ways: A, a native window per page with an arrow to its button; B, one hub window with tabs;
+  C, inline in the bar (right-click a button to switch). Hosts, sessions and quick nav show real data; cloud
+  shows sample environments.
 
 ## Pieces
 
@@ -54,13 +67,18 @@ story is replayed by `demo/take.sh`, which records frames of the private desktop
 
 Requirements that were true on Ubuntu 26.04 (GNOME Shell 50.1): `gnome-shell --headless --virtual-monitor 1920x1080`,
 `--unsafe-mode` for the screenshot interface, and `gdbus`. The demo also uses `Xvfb`, `openbox`, `x11vnc` and
-`gnome-calculator` (the native app in the VNC viewer), a Chromium binary, and `piper` for the voice.
+`gnome-calculator` (the native app in the VNC viewer), a Chromium binary, and Python 3 with `websockets` for the voice agent. `demo/up.sh` also enables the Ubuntu dock at the bottom so mini mode has something to rest on.
 
 ## Known limits
 
 - Linux with GNOME only. Wayland gives applications no way to place windows on a workspace, so this needs the
   extension. X11 would use the standard window-manager desktop property instead; macOS has no public API for it.
 - The extension is matched to windows by title (`<workspace name> · Horizon`), which is fine for a prototype.
-- The agents in the demo are scripts that print progress; the voice is synthesized. No model is called.
+- The coding agents in the demo are scripts that print progress. The assistant in the recorded take is a live
+  OpenAI Realtime voice agent (`demo/voice_agent.py`) that is told which MCP tools it may use and decides itself
+  what to call; the person's spoken request is a recording generated with OpenAI text-to-speech
+  (`demo/gen_request.py`) and streamed to it in real time. A harness nudge asks it to carry on if it stops before
+  posting the recap. Needs an API key file (`OPENAI_KEY_FILE`); the key is never part of the repo or the video.
 - Browser engines other than Chromium (Firefox, Safari) and remote BrowserStack sessions use the same panel model but were not exercised in the demo: they need a driver or an account. Cloud environments need a provider account, so the demo's "Cloud" workspace is a local stand-in.
-- The window of the bar is rectangular: requesting transparency did not take effect in the headless session.
+- On GNOME 50 the shell's workspace switcher handler takes an extra event argument; the extension handles both.
+- The three mini designs and the three hub designs are for comparison and will be reduced to one each.

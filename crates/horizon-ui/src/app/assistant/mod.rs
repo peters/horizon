@@ -46,6 +46,8 @@ pub(super) struct AssistantDrawer {
     engine_open: bool,
     engine_anchor: Option<Rect>,
     cards: cards::Cards,
+    /// The conversation as the desk-mode feed shows it.
+    feed: summon::feed::Feed,
     command: command_bar::CommandBar,
     summon: summon::Summon,
     /// Which workspaces the assistant is looking at.
@@ -89,6 +91,7 @@ impl AssistantDrawer {
             engine_open: false,
             engine_anchor: None,
             cards: cards::Cards::default(),
+            feed: summon::feed::Feed::default(),
             command: command_bar::CommandBar::default(),
             summon: summon::Summon::default(),
             scope: scope::Scope::default(),
@@ -116,6 +119,7 @@ impl AssistantDrawer {
     /// session point at panels that no longer exist.
     pub(super) fn reset_for_new_board(&mut self) {
         self.cards.clear();
+        self.feed.clear();
         self.command = command_bar::CommandBar::default();
         self.summon = summon::Summon::default();
         self.plan.clear();

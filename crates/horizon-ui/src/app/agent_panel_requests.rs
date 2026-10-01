@@ -121,14 +121,25 @@ impl HorizonApp {
             Reach::workspace(caller.workspace_id)
         };
         match &request.operation {
-            Operation::List => Outcome::Panels {
-                panels: self.board.agent_panels_in(&reach, caller.panel_id),
-            },
+            Operation::List => {
+                let panels = self.board.agent_panels_in(&reach, caller.panel_id);
+                if is_assistant {
+                    self.assistant_did(format!("Looked at {} agents", panels.len().saturating_sub(1)));
+                }
+                Outcome::Panels { panels }
+            }
             Operation::Read { panel_id, lines } => {
                 let Some(target) = self.board.agent_in_reach(panel_id, &reach) else {
                     return unavailable();
                 };
                 let wanted = usize::from(lines.unwrap_or(DEFAULT_READ_LINES));
+                if is_assistant {
+                    let title = self
+                        .board
+                        .panel(target)
+                        .map_or_else(String::new, |panel| panel.display_title().into_owned());
+                    self.assistant_did(format!("Read {title}"));
+                }
                 match (self.board.agent_output(target, wanted), self.board.agent_state(target)) {
                     (Some((text, truncated)), Some(state)) => Outcome::Output {
                         panel_id: panel_id.clone(),
@@ -152,6 +163,7 @@ impl HorizonApp {
                     return only_the_assistant("post a plan");
                 }
                 let count = steps.len();
+                self.assistant_did(format!("Planned {count} steps"));
                 self.assistant_set_plan(steps.clone());
                 Outcome::Planned { steps: count }
             }

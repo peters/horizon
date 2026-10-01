@@ -153,6 +153,29 @@ impl HorizonApp {
         }
     }
 
+    /// Looks for hosts again when the list is opened somewhere other than the overlay.
+    pub(in crate::app) fn refresh_remote_hosts_for_hub(&mut self) {
+        self.maybe_start_remote_hosts_refresh();
+    }
+
+    /// Opens a host of the catalog by its label, as an SSH terminal or a VNC viewer.
+    pub(in crate::app) fn open_remote_host_by_label(&mut self, ctx: &egui::Context, label: &str, vnc: bool) {
+        let Some(host) = self.remote_hosts_catalog.hosts.iter().find(|host| host.label == label) else {
+            return;
+        };
+        let launch = RemoteLaunch {
+            label: host.label.clone(),
+            connection: host.ssh_connection.clone(),
+            mode: if vnc {
+                crate::remote_hosts_overlay::RemoteConnectMode::Vnc
+            } else {
+                crate::remote_hosts_overlay::RemoteConnectMode::Ssh
+            },
+            vnc_port: None,
+        };
+        self.open_remote_host(ctx, launch, &crate::remote_hosts_overlay::WorkspaceChoice::Default);
+    }
+
     fn maybe_start_remote_hosts_refresh(&mut self) {
         if self.remote_hosts_refresh_in_flight {
             return;

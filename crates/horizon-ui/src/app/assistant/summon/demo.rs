@@ -8,6 +8,8 @@
 
 use std::time::{Duration, Instant};
 
+use horizon_core::browser::manifest::agent_panels::AgentState;
+
 use super::HorizonApp;
 use super::command_bar;
 
@@ -21,6 +23,14 @@ pub(in crate::app::assistant) struct Demo {
     click: Option<(usize, Instant)>,
     /// A workspace shortcut just pressed (true for right), for the keycap overlay.
     key: Option<(bool, Instant)>,
+    /// The latest level of a live voice (input or output), refreshed about twenty times a second.
+    live_level: Option<(f32, Instant)>,
+    /// What the assistant is saying right now.
+    speaking: Option<(String, Instant)>,
+    /// A button the script just pressed, for the click animation.
+    press: Option<Instant>,
+    /// A hub button the script just pressed.
+    page_press: Option<(super::HubPage, Instant)>,
 }
 
 struct Saying {
@@ -39,6 +49,10 @@ impl Demo {
             envelope: Vec::new(),
             click: None,
             key: None,
+            live_level: None,
+            speaking: None,
+            press: None,
+            page_press: None,
         })
     }
 
@@ -47,8 +61,13 @@ impl Demo {
         self.saying.is_some()
     }
 
-    /// How loud the voice is right now, while dictating with a recorded voice.
+    /// How loud the voice is right now: a live voice if one is reporting, else a recorded one.
     pub(in crate::app::assistant) fn level(&self) -> Option<f32> {
+        if let Some((level, at)) = self.live_level
+            && at.elapsed() < Duration::from_millis(250)
+        {
+            return Some(level);
+        }
         let saying = self.saying.as_ref()?;
         if self.envelope.is_empty() {
             return None;
@@ -62,6 +81,31 @@ impl Demo {
         let (tile, at) = self.click?;
         let progress = at.elapsed().as_secs_f32() / 0.9;
         (progress < 1.0).then_some((tile, progress))
+    }
+
+    /// Whether a live voice is being heard or is speaking.
+    pub(in crate::app::assistant) fn voice_active(&self) -> bool {
+        self.live_level
+            .is_some_and(|(_, at)| at.elapsed() < Duration::from_millis(250))
+    }
+
+    /// The hub button pressed in the last second, and how far its click animation has run.
+    pub(in crate::app::assistant) fn page_press(&self) -> Option<(super::HubPage, f32)> {
+        let (page, at) = self.page_press?;
+        let progress = at.elapsed().as_secs_f32() / 0.9;
+        (progress < 1.0).then_some((page, progress))
+    }
+
+    /// How far the click animation on a pressed button has run (0 to 1).
+    pub(in crate::app::assistant) fn press_progress(&self) -> Option<f32> {
+        let progress = self.press?.elapsed().as_secs_f32() / 0.9;
+        (progress < 1.0).then_some(progress)
+    }
+
+    /// The line the assistant is speaking, for a few seconds after it was reported.
+    pub(in crate::app::assistant) fn speaking_line(&self) -> Option<&str> {
+        let (text, at) = self.speaking.as_ref()?;
+        (at.elapsed() < Duration::from_secs(9)).then_some(text.as_str())
     }
 
     /// The shortcut pressed in the last second, and how far its animation has run (0 to 1).
@@ -128,7 +172,9 @@ impl HorizonApp {
     }
 
     fn run_demo_line(&mut self, line: &str) {
-        if let Some(demo) = self.assistant.demo.as_ref() {
+        if let Some(demo) = self.assistant.demo.as_ref()
+            && !line.trim_start().starts_with("level ")
+        {
             demo.log(line.trim());
         }
         let mut parts = line.trim().splitn(3, ' ');
@@ -151,6 +197,24 @@ impl HorizonApp {
                 }
                 self.assistant.summon.text.clear();
             }
+            "level" => {
+                let level = argument.and_then(|value| value.parse::<f32>().ok()).unwrap_or(0.0);
+                if let Some(demo) = self.assistant.demo.as_mut() {
+                    demo.live_level = Some((level.clamp(0.0, 1.0), Instant::now()));
+                }
+            }
+            "speaking" => {
+                let text = line
+                    .trim()
+                    .strip_prefix("speaking")
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                self.assistant.feed.said(&text);
+                if let Some(demo) = self.assistant.demo.as_mut() {
+                    demo.speaking = Some((text, Instant::now()));
+                }
+            }
             "voice" => {
                 // The level of the recorded voice, one number per line, 20 per second.
                 let levels = argument
@@ -166,6 +230,7 @@ impl HorizonApp {
                 self.submit_summon(&entry);
             }
             "expand" => {
+                self.assistant.summon.mini = None;
                 self.assistant.summon.expanded = true;
                 self.assistant.summon.style = match argument {
                     Some("b") => super::ExpandStyle::Split,
@@ -174,6 +239,27 @@ impl HorizonApp {
                 };
             }
             "collapse" => self.assistant.summon.expanded = false,
+            "answer" => self.demo_answer(argument),
+            "mini" => {
+                let style = match argument {
+                    Some("b") => super::MiniStyle::Strip,
+                    Some("c") => super::MiniStyle::Orb,
+                    _ => super::MiniStyle::Pill,
+                };
+                self.assistant.summon.mini_style = style;
+                self.assistant.summon.mini = Some(style);
+            }
+            "unmini" => self.assistant.summon.mini = None,
+            "hub" => {
+                self.assistant.summon.hub.style = match argument {
+                    Some("b") => super::HubStyle::Window,
+                    Some("c") => super::HubStyle::Inline,
+                    _ => super::HubStyle::Satellites,
+                };
+                self.assistant.summon.hub.close();
+            }
+            "page" => self.demo_page(argument),
+            "type" => self.demo_type(argument, rest),
             "overview" => {
                 if let Some(desk) = self.assistant.desk.as_ref() {
                     desk.toggle_overview();
@@ -187,6 +273,60 @@ impl HorizonApp {
             _ => {}
         }
     }
+    /// `page nav|hosts|cloud|sessions|settings|close`: presses that hub button.
+    fn demo_page(&mut self, argument: Option<&str>) {
+        let page = match argument {
+            Some("nav") => super::HubPage::Nav,
+            Some("hosts") => super::HubPage::Hosts,
+            Some("cloud") => super::HubPage::Cloud,
+            Some("sessions") => super::HubPage::Sessions,
+            Some("settings") => super::HubPage::Settings,
+            _ => {
+                self.assistant.summon.hub.close();
+                return;
+            }
+        };
+        if let Some(demo) = self.assistant.demo.as_mut() {
+            demo.page_press = Some((page, Instant::now()));
+        }
+        // Pressing a page that is open already would close it; the script means "show this one".
+        if self.assistant.summon.hub.page != Some(page) {
+            self.press_hub_button(page);
+        }
+    }
+
+    /// `type <panel title> <text>`: types a line into an agent, as the person would.
+    fn demo_type(&mut self, title: Option<&str>, text: Option<&str>) {
+        let (Some(title), Some(text)) = (title, text) else {
+            return;
+        };
+        let target = self
+            .board
+            .panels
+            .iter()
+            .find(|panel| panel.display_title() == title)
+            .map(|panel| panel.id);
+        if let Some(id) = target {
+            self.send_to_agent(id, text, true, Instant::now());
+        }
+    }
+
+    /// `answer yes|no`: the person presses the button on the card of the first agent that asked.
+    fn demo_answer(&mut self, argument: Option<&str>) {
+        let asking = self
+            .board
+            .panels
+            .iter()
+            .find(|panel| self.board.agent_state(panel.id) == Some(AgentState::NeedsInput))
+            .map(|panel| panel.id);
+        if let Some(id) = asking {
+            if let Some(demo) = self.assistant.demo.as_mut() {
+                demo.press = Some(Instant::now());
+            }
+            self.answer_agent(id, argument != Some("no"));
+        }
+    }
+
     /// `move <desktop number> <panel title>`: as if the window were dragged there.
     fn demo_move(&self, argument: Option<&str>, title: Option<&str>) {
         let (Some(number), Some(title)) = (argument.and_then(|value| value.parse::<usize>().ok()), title) else {

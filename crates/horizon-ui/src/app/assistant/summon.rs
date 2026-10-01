@@ -26,8 +26,13 @@ const PROMPT_ROW_HEIGHT: f32 = 62.0;
 pub(super) mod demo;
 mod desk_bar;
 mod desk_windows;
+pub(super) mod feed;
+mod hub;
+mod mini;
 
 pub(in crate::app) use desk_bar::ExpandStyle;
+pub(in crate::app) use hub::{HubPage, HubStyle};
+pub(in crate::app) use mini::MiniStyle;
 
 #[derive(Default)]
 pub(super) struct Summon {
@@ -44,6 +49,16 @@ pub(super) struct Summon {
     /// The bar shows the whole conversation, not just the prompt (desk mode).
     expanded: bool,
     style: ExpandStyle,
+    /// Show the assistant's raw terminal instead of the feed.
+    raw: bool,
+    /// The bar is shrunk to rest above the dock, in this design.
+    mini: Option<MiniStyle>,
+    /// The design mini mode returns to.
+    mini_style: MiniStyle,
+    /// Quick nav, hosts, cloud, sessions and settings.
+    hub: hub::Hub,
+    /// Where the bar's window is on the monitor: left, top, width, height.
+    bar_rect: Option<[f32; 4]>,
     /// The window size last asked for, so the window is only resized when it changes.
     window_size: Option<[f32; 2]>,
 }
@@ -249,9 +264,10 @@ impl HorizonApp {
                 if mic_button(ui, mic).clicked() {
                     *action = Some(Action::ToggleDictation);
                 }
+                let voice = self.assistant.demo.as_ref().is_some_and(demo::Demo::voice_active);
                 waveform(
                     ui,
-                    mic == Some(MicState::Recording),
+                    mic == Some(MicState::Recording) || voice,
                     self.assistant.demo.as_ref().and_then(demo::Demo::level),
                 );
                 let room = (ui.available_width() - 64.0).max(80.0);
@@ -263,7 +279,14 @@ impl HorizonApp {
                         .desired_width(room)
                         .font(FontId::proportional(15.0))
                         .text_color(theme::FG())
-                        .hint_text(RichText::new("Ask the assistant, or type / for commands").color(theme::FG_DIM())),
+                        .hint_text(
+                            RichText::new(if self.assistant.summon.mini.is_some() {
+                                "Ask anything"
+                            } else {
+                                "Ask the assistant, or type / for commands"
+                            })
+                            .color(theme::FG_DIM()),
+                        ),
                 );
                 if focus {
                     response.request_focus();
@@ -456,6 +479,8 @@ impl HorizonApp {
         if self.run_command(entry) {
             if !matches!(entry, Entry::Local(_)) {
                 self.assistant.summon.remember(&line);
+                let voice = self.assistant.demo.as_ref().is_some_and(demo::Demo::voice_active);
+                self.assistant.feed.you(&line, voice);
             }
             self.assistant.summon.text.clear();
             self.assistant.summon.selected = 0;

@@ -18,3 +18,20 @@ pub(super) fn seconds(ui: &Ui) -> f32 {
 pub(super) fn index(value: f32) -> usize {
     value.max(0.0) as usize
 }
+
+/// A pixel length reported by the shell, as a float. Screen sizes are far below the float's exact range.
+pub(super) fn px(value: i32) -> f32 {
+    f32::from(i16::try_from(value).unwrap_or(i16::MAX))
+}
+
+/// A float rounded to a whole pixel.
+#[allow(clippy::cast_possible_truncation)]
+pub(super) fn whole(value: f32) -> i32 {
+    value.round() as i32
+}
+
+/// An opacity from a float, clamped to a byte.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(super) fn alpha_byte(value: f32) -> u8 {
+    value.clamp(0.0, 255.0) as u8
+}

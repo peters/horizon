@@ -49,6 +49,9 @@ pub(super) struct Placement {
 pub(super) struct DeskState {
     pub active: usize,
     pub windows: Vec<DeskWindow>,
+    /// Left, top, width and height of the area windows may use: the monitor without the
+    /// top bar and the dock. All zero until the shell has reported it.
+    pub workarea: [i32; 4],
 }
 
 impl DeskState {
@@ -74,12 +77,19 @@ impl DeskState {
                     .collect()
             })
             .unwrap_or_default();
+        let mut workarea = [0; 4];
+        if let Some(numbers) = value["workarea"].as_array() {
+            for (slot, number) in workarea.iter_mut().zip(numbers) {
+                *slot = number.as_i64().and_then(|n| i32::try_from(n).ok()).unwrap_or(0);
+            }
+        }
         Self {
             active: value["active"]
                 .as_u64()
                 .and_then(|index| usize::try_from(index).ok())
                 .unwrap_or(0),
             windows,
+            workarea,
         }
     }
 }
@@ -112,6 +122,8 @@ pub(super) struct Desk {
     state: Arc<Mutex<DeskState>>,
     started: Instant,
     last_setup: Option<Instant>,
+    /// Until then the bar is placed again every moment: a window that is being resized can undo a first placement.
+    settle_until: Option<Instant>,
     /// When each panel window was first put on its desktop; after a moment the shell owns it.
     pub placed: std::collections::HashMap<horizon_core::PanelId, Placement>,
 }
@@ -134,13 +146,21 @@ impl Desk {
             state,
             started: Instant::now(),
             last_setup: None,
+            settle_until: None,
             placed: std::collections::HashMap::new(),
         })
+    }
+
+    /// Puts another window (found by its title) at this rectangle and above the rest.
+    pub(super) fn place_titled(&self, title: &str, rect: [i32; 4]) {
+        let _ = self.commands.send(Command_::Place(title.to_string(), rect));
+        let _ = self.commands.send(Command_::Above(title.to_string()));
     }
 
     /// Makes the next `place` call apply immediately, for example after a resize.
     pub(super) fn invalidate(&mut self) {
         self.last_setup = None;
+        self.settle_until = Some(Instant::now() + Duration::from_secs(5));
     }
 
     pub(super) fn snapshot(&self) -> DeskState {
@@ -181,9 +201,12 @@ impl Desk {
     pub(super) fn place_bar(&mut self, workspaces: usize, bar: [i32; 4]) {
         let now = Instant::now();
         let early = self.started.elapsed() < Duration::from_secs(40);
+        let settling = self.settle_until.is_some_and(|until| now < until);
         let due = self.last_setup.is_none_or(|last| {
             now.duration_since(last)
-                >= if early {
+                >= if settling {
+                    Duration::from_millis(500)
+                } else if early {
                     Duration::from_secs(2)
                 } else {
                     Duration::from_secs(30)

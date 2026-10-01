@@ -98,7 +98,7 @@ fn main() -> eframe::Result {
             .with_decorations(false)
             .with_transparent(true)
             .with_inner_size([960.0, 300.0])
-            .with_min_inner_size([480.0, 120.0])
+            .with_min_inner_size([96.0, 48.0])
             .with_resizable(true);
     }
 

@@ -208,6 +208,11 @@ impl HorizonApp {
         true
     }
 
+    /// Notes something the assistant did, for the feed.
+    pub(in crate::app) fn assistant_did(&mut self, text: String) {
+        self.assistant.feed.did(text);
+    }
+
     pub(in crate::app) fn assistant_record_sent(&mut self, target: PanelId, text: String) {
         if let Some(demo) = self.assistant.demo.as_ref() {
             demo.log("event sent");
@@ -216,6 +221,7 @@ impl HorizonApp {
             .board
             .panel(target)
             .map_or_else(String::new, |panel| panel.display_title().into_owned());
+        self.assistant.feed.did(format!("Sent a task to {title}"));
         self.assistant.cards.push(CardKind::Sent {
             target,
             title,
@@ -238,6 +244,7 @@ impl HorizonApp {
         if let Some(demo) = self.assistant.demo.as_ref() {
             demo.log(&format!("event note {title}"));
         }
+        self.assistant.feed.did(format!("Posted a recap: {title}"));
         self.assistant.cards.push(CardKind::Note { title, markdown });
         self.assistant.open = true;
     }
@@ -336,6 +343,35 @@ impl HorizonApp {
             .ok_or_else(|| "The agent is no longer available.".to_string())
     }
 
+    /// The cards one under the other, newest first, and what the person did with them.
+    pub(super) fn render_cards_list(&mut self, ui: &mut Ui, only_open: bool) {
+        let mut actions = Vec::new();
+        for card in self.assistant.cards.items.iter().rev() {
+            // The feed shows sent messages as agent cards; here only what is open or posted.
+            if only_open && matches!(card.kind, CardKind::Sent { .. } | CardKind::Declined { .. }) {
+                continue;
+            }
+            let live = match &card.kind {
+                CardKind::Sent { target, .. } => self.board.agent_state(*target),
+                _ => None,
+            };
+            draw_card(ui, card, live, &mut self.assistant.md_cache, &mut actions);
+            ui.add_space(8.0);
+        }
+        self.apply_card_actions(ui.ctx(), actions);
+    }
+
+    fn apply_card_actions(&mut self, ctx: &egui::Context, actions: Vec<CardAction>) {
+        for action in actions {
+            match action {
+                CardAction::Approve(id) => self.resolve_approval(id, true),
+                CardAction::Decline(id) => self.resolve_approval(id, false),
+                CardAction::Dismiss(id) => self.assistant.cards.dismiss(id),
+                CardAction::Reveal(target) => self.reveal_selected_panel(ctx, target),
+            }
+        }
+    }
+
     pub(super) fn render_cards_tray(&mut self, ui: &mut Ui) {
         self.update_assistant_cards();
         if self.assistant.cards.is_empty() {
@@ -373,14 +409,7 @@ impl HorizonApp {
             ui.cursor().top(),
             egui::Stroke::new(1.0, theme::BORDER_SUBTLE()),
         );
-        for action in actions {
-            match action {
-                CardAction::Approve(id) => self.resolve_approval(id, true),
-                CardAction::Decline(id) => self.resolve_approval(id, false),
-                CardAction::Dismiss(id) => self.assistant.cards.dismiss(id),
-                CardAction::Reveal(target) => self.reveal_selected_panel(ui.ctx(), target),
-            }
-        }
+        self.apply_card_actions(ui.ctx(), actions);
     }
 }
 

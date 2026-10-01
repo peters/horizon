@@ -17,7 +17,7 @@ use super::{Action, HorizonApp, command_bar, summon_divider};
 use crate::app::desk::DeskState;
 use crate::theme;
 
-mod paint;
+pub(super) mod paint;
 
 use paint::{
     kind_color, paint_click, paint_keycaps, paint_tile_frame, paint_tile_label, paint_tile_panels, scope_row,
@@ -31,7 +31,7 @@ const TILE_HEIGHT: f32 = 92.0;
 const COMPACT_ABOVE: usize = 6;
 const COMPACT_PREVIEW: f32 = 36.0;
 const PROMPT_AND_FOOTER: f32 = 62.0 + 1.0 + 46.0;
-const HINT: f32 = 40.0;
+const HINT: f32 = 96.0;
 const ROW: f32 = 34.0;
 pub(super) const MONITOR: [f32; 2] = [1920.0, 1080.0];
 
@@ -61,7 +61,7 @@ impl ExpandStyle {
     /// Window width and height when expanded.
     const fn size(self) -> [f32; 2] {
         match self {
-            Self::Sheet => [980.0, 800.0],
+            Self::Sheet => [980.0, 1000.0],
             Self::Split => [1320.0, 720.0],
             Self::Stage => [1480.0, 820.0],
         }
@@ -120,13 +120,29 @@ impl HorizonApp {
         let mut action = None;
         let mut tile_action = None;
         let background = theme::PANEL_BG();
+        let mini = self.assistant.summon.mini;
+        let plated = mini.is_none_or(super::mini::MiniStyle::plated);
         Frame::new()
-            .fill(background)
-            .stroke(Stroke::new(1.0, theme::ACCENT().gamma_multiply(0.45)))
-            .corner_radius(CornerRadius::same(22))
-            .inner_margin(Margin::same(MARGIN_PX))
+            .fill(if plated { background } else { Color32::TRANSPARENT })
+            .stroke(if plated {
+                Stroke::new(1.0, theme::ACCENT().gamma_multiply(0.45))
+            } else {
+                Stroke::NONE
+            })
+            .corner_radius(CornerRadius::same(if mini == Some(super::mini::MiniStyle::Strip) {
+                18
+            } else {
+                22
+            }))
+            .inner_margin(Margin::same(if plated {
+                if mini.is_some() { 10 } else { MARGIN_PX }
+            } else {
+                0
+            }))
             .show(ui, |ui| {
-                if expanded {
+                if let Some(style) = mini {
+                    self.desk_mini(ui, style, &tiles, &desk);
+                } else if expanded {
                     match style {
                         ExpandStyle::Sheet => self.desk_sheet(ui, &tiles, &desk, &mut action, &mut tile_action),
                         ExpandStyle::Split => self.desk_split(ui, &tiles, &desk, &mut action, &mut tile_action),
@@ -138,6 +154,7 @@ impl HorizonApp {
             });
 
         self.render_scope_popup(&ctx, &tiles);
+        self.render_hub_windows(&ctx);
         self.apply_desk_actions(&ctx, action, tile_action);
         self.fit_desk_window(&ctx, steps, tiles.len());
         ctx.request_repaint_after(std::time::Duration::from_millis(120));
@@ -249,15 +266,8 @@ impl HorizonApp {
         ui.add_space(8.0);
         self.minimap_strip(ui, tiles, desk, tile_action);
         ui.add_space(10.0);
-        let steps = self.assistant.plan.clone();
-        let body = (ui.available_height() - PROMPT_AND_FOOTER - HINT - plan_height(steps.len()) - 8.0).max(120.0);
-        self.conversation(ui, body);
-        if !steps.is_empty() {
-            ui.add_space(6.0);
-            Frame::new()
-                .inner_margin(Margin::symmetric(6, 0))
-                .show(ui, |ui| plan::draw_steps(ui, &steps));
-        }
+        let body = (ui.available_height() - PROMPT_AND_FOOTER - HINT - 8.0).max(120.0);
+        self.conversation(ui, body, true);
         ui.add_space(8.0);
         self.desk_prompt(ui, action);
         summon_divider(ui);
@@ -285,7 +295,7 @@ impl HorizonApp {
 
         let mut left_ui = ui.new_child(UiBuilder::new().max_rect(left));
         let body = (left.height() - PROMPT_AND_FOOTER - HINT - 8.0).max(120.0);
-        self.conversation(&mut left_ui, body);
+        self.conversation(&mut left_ui, body, false);
         left_ui.add_space(8.0);
         self.desk_prompt(&mut left_ui, action);
         summon_divider(&mut left_ui);
@@ -362,7 +372,7 @@ impl HorizonApp {
         self.render_cards_tray(&mut left_ui);
 
         let mut right_ui = ui.new_child(UiBuilder::new().max_rect(right));
-        self.conversation(&mut right_ui, right.height());
+        self.conversation(&mut right_ui, right.height(), false);
         ui.allocate_rect(left.union(right), Sense::hover());
         ui.add_space(10.0);
         self.desk_prompt(ui, action);
@@ -380,11 +390,17 @@ impl HorizonApp {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 ui.label(RichText::new("Assistant").size(14.5).strong().color(theme::FG()));
-                ui.label(RichText::new(self.scope_label()).size(11.5).color(theme::FG_DIM()));
+                let (status, color) = self.feed_status();
+                ui.label(RichText::new(status).size(11.5).color(color));
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if super::ghost_button(ui, "Collapse").clicked() {
                     *action = Some(Action::Close);
+                }
+                ui.add_space(6.0);
+                let raw = self.assistant.summon.raw;
+                if super::ghost_button(ui, if raw { "Feed" } else { "Terminal" }).clicked() {
+                    self.assistant.summon.raw = !raw;
                 }
                 ui.add_space(6.0);
                 for style in ExpandStyle::ALL.iter().rev() {
@@ -419,7 +435,17 @@ impl HorizonApp {
     }
 
     /// The assistant's terminal, `height` tall, on a rounded dark panel.
-    fn conversation(&mut self, ui: &mut Ui, height: f32) {
+    fn conversation(&mut self, ui: &mut Ui, height: f32, with_plan: bool) {
+        if let (Some(page), super::hub::HubStyle::Inline) =
+            (self.assistant.summon.hub.page, self.assistant.summon.hub.style)
+        {
+            self.inline_page(ui, height, page);
+            return;
+        }
+        if !self.assistant.summon.raw {
+            self.feed_view(ui, height, with_plan);
+            return;
+        }
         let Some(panel) = self.board.assistant_panel() else {
             ui.label(RichText::new("Starting the assistant...").color(theme::FG_DIM()));
             return;
@@ -441,7 +467,7 @@ impl HorizonApp {
         }
     }
 
-    fn desk_prompt(&mut self, ui: &mut Ui, action: &mut Option<Action>) {
+    pub(super) fn desk_prompt(&mut self, ui: &mut Ui, action: &mut Option<Action>) {
         let id = Id::new(super::INPUT_ID);
         let agent = self.assistant.settings.agent;
         let listed = command_bar::suggestions(&self.assistant.summon.text, agent);
@@ -472,10 +498,18 @@ impl HorizonApp {
         self.assistant.scope_anchor = Some(anchor);
     }
 
-    fn desk_hint(&self, ui: &mut Ui) {
-        ui.add_space(8.0);
+    fn desk_hint(&mut self, ui: &mut Ui) {
+        ui.add_space(6.0);
+        self.hub_rail(ui);
+        ui.add_space(2.0);
         if let Some((right, progress)) = self.assistant.demo.as_ref().and_then(super::demo::Demo::key_progress) {
             paint_keycaps(ui, right, progress);
+            return;
+        }
+        if let Some(line) = self.assistant.demo.as_ref().and_then(super::demo::Demo::speaking_line) {
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new(paint::elide(line, 120)).size(13.0).color(theme::FG()));
+            });
             return;
         }
         let hint = self.assistant.command.feedback_text().unwrap_or_else(|| {
@@ -506,6 +540,9 @@ impl HorizonApp {
             Some(Action::Close) => {
                 if self.assistant.summon.expanded {
                     self.assistant.summon.expanded = false;
+                } else {
+                    // Already small: rest above the dock.
+                    self.assistant.summon.mini = Some(self.assistant.summon.mini_style);
                 }
             }
             Some(Action::ToggleAsk) => self.run_local_command(command_bar::LocalCommand::ToggleAsk),
@@ -524,12 +561,21 @@ impl HorizonApp {
         let monitor = ctx
             .input(|input| input.viewport().monitor_size)
             .map_or(MONITOR, |size| [size.x, size.y]);
-        let size = if self.assistant.summon.expanded {
+        let size = if let Some(style) = self.assistant.summon.mini {
+            style.size(monitor[0])
+        } else if self.assistant.summon.expanded {
             self.assistant.summon.style.size()
         } else {
             [980.0, collapsed_height(plan_steps, tiles)]
         };
-        let size = [size[0].min(monitor[0] - 32.0), size[1].min(monitor[1] - 80.0)];
+        let area_height = self
+            .assistant
+            .desk
+            .as_ref()
+            .map(|desk| desk.snapshot().workarea[3])
+            .filter(|height| *height > 0)
+            .map_or(monitor[1] - 80.0, |height| super::super::num::px(height) - 26.0);
+        let size = [size[0].min(monitor[0] - 32.0), size[1].min(area_height)];
         if self.assistant.summon.window_size != Some(size) {
             self.assistant.summon.window_size = Some(size);
             ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(size[0], size[1])));
@@ -538,8 +584,29 @@ impl HorizonApp {
                 desk.invalidate();
             }
         }
-        let x = ((monitor[0] - size[0]) / 2.0).round();
-        let y = (monitor[1] - size[1] - 26.0).round();
+        // Above the dock: the shell reports the area left once the top bar and the dock are taken out.
+        let [work_x, _, work_width, work_height] = self
+            .assistant
+            .desk
+            .as_ref()
+            .map(|desk| desk.snapshot().workarea)
+            .filter(|area| area[2] > 0)
+            .unwrap_or([
+                0,
+                32,
+                super::super::num::whole(monitor[0]),
+                super::super::num::whole(monitor[1]) - 32,
+            ]);
+        let bottom = super::super::num::px((work_height + 32).min(super::super::num::whole(monitor[1])));
+        // The orb itself, not its caption, is what sits in the middle.
+        let centred = if self.assistant.summon.mini == Some(super::mini::MiniStyle::Orb) {
+            56.0
+        } else {
+            size[0] / 2.0
+        };
+        let x = (super::super::num::px(work_x) + super::super::num::px(work_width) / 2.0 - centred).round();
+        let y = (bottom - size[1] - 14.0).round();
+        self.assistant.summon.bar_rect = Some([x, y, size[0], size[1]]);
         let workspaces = self.board.workspaces.len();
         if let Some(desk) = self.assistant.desk.as_mut() {
             #[allow(clippy::cast_possible_truncation)]

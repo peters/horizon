@@ -189,7 +189,7 @@ pub(super) fn paint_compact_label(ui: &Ui, rect: Rect, index: usize, tile: &Tile
 }
 
 /// A scripted click: a ripple spreading from the tile's centre and a cursor settling on it.
-pub(super) fn paint_click(ui: &Ui, centre: egui::Pos2, progress: f32) {
+pub(in crate::app::assistant::summon) fn paint_click(ui: &Ui, centre: egui::Pos2, progress: f32) {
     let ease = 1.0 - (1.0 - progress).powi(3);
     ui.painter().circle_stroke(
         centre,
@@ -238,7 +238,7 @@ pub(super) fn scope_row(ui: &mut Ui, label: &str, on: bool) -> egui::Response {
     response
 }
 
-pub(super) fn section_label(ui: &mut Ui, text: &str) {
+pub(in crate::app::assistant::summon) fn section_label(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text.to_uppercase())
             .size(10.5)
@@ -261,7 +261,7 @@ pub(super) fn kind_color(kind: PanelKind) -> Color32 {
 }
 
 /// Colour of an agent's state dot, and whether it pulses.
-pub(super) fn state_color(state: AgentState) -> (Color32, bool) {
+pub(in crate::app::assistant::summon) fn state_color(state: AgentState) -> (Color32, bool) {
     match state {
         AgentState::Working => (theme::PALETTE_YELLOW(), true),
         AgentState::NeedsInput => (theme::PALETTE_RED(), true),
@@ -271,7 +271,7 @@ pub(super) fn state_color(state: AgentState) -> (Color32, bool) {
     }
 }
 
-pub(super) fn elide(text: &str, limit: usize) -> String {
+pub(in crate::app::assistant::summon) fn elide(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
     }
