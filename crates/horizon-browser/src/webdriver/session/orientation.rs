@@ -131,9 +131,7 @@ impl Driver {
         self.orientation_error = None;
         self.coordination_dirty = true;
         // A POST may mutate even when its response is lost. Discard stale geometry first.
-        if let Some(state) = self.remote_orientation.as_mut() {
-            state.applied = None;
-        }
+        self.invalidate_document_orientation();
         self.note_remote_activity();
         self.semantic.invalidate();
         self.advance_viewport_generation();

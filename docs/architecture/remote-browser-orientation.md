@@ -148,6 +148,14 @@ priority while pending; page input, replacement requests, document changes or
 ownership changes can supersede an acknowledgement. The caller must not treat a
 late or different request's result as its own.
 
+An expired rotation POST deadline returns `orientation_timeout`, including when
+the response is lost or arrives after the bound. Immediate transport failures
+remain `orientation_unverified`. After an uncertain POST or acknowledgement
+failure settles, the driver schedules a read-only device/page measurement so
+panel status can recover the actual applied orientation without repeating the
+mutation. The original request keeps its failure result; recovered status does
+not turn that request into a success.
+
 Rotation invalidates semantic refs, scroll geometry and native-select coordinates.
 Take a fresh `browser_snapshot` or `browser_query` before the next element action.
 Semantic input resolves fresh element and visual-viewport coordinates. Host

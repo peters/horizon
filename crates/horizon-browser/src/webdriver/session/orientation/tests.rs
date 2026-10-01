@@ -4,6 +4,7 @@ use crate::webdriver::test_server::{Reply, Server};
 use serde_json::json;
 
 mod navigation;
+mod recovery;
 mod startup;
 
 fn rotation_request() -> AgentAction {

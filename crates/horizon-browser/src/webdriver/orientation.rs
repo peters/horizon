@@ -152,14 +152,13 @@ pub(super) fn set(
     orientation: RemoteOrientation,
     deadline: Instant,
 ) -> Result<(), BrowserControlFailure> {
-    transport
-        .post_with_read_timeout(
-            &format!("{session}/orientation"),
-            &json!({"orientation":orientation.webdriver_value()}),
-            remaining(deadline)?,
-        )
-        .map(|_| ())
-        .map_err(|error| protocol_failure(&error))
+    let result = transport.post_with_read_timeout(
+        &format!("{session}/orientation"),
+        &json!({"orientation":orientation.webdriver_value()}),
+        remaining(deadline)?,
+    );
+    remaining(deadline)?;
+    result.map(|_| ()).map_err(|error| protocol_failure(&error))
 }
 fn protocol_failure(error: &HttpError) -> BrowserControlFailure {
     if unsupported(error) {

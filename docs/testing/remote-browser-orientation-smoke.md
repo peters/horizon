@@ -219,6 +219,10 @@ identity and refusal evidence before closing the owned session.
   replacement requests, ownership loss, timeout after POST, and panel close
   through deterministic mock tests. A real timeout may have changed the
   device: inspect before retrying, and preserve reported uncertainty.
+- Cover a lost POST reply and expired POST/acknowledgement deadline. Require the
+  original typed failure to remain unchanged while read-only device/page
+  remeasurement recovers applied status after the pending request settles.
+  Assert that recovery issues no second orientation POST.
 - Unsupported, transient and malformed GET replies must remain distinct;
   do not advertise success from dimensions alone when device evidence differs.
 

@@ -194,6 +194,57 @@ fn unsupported_rotation_has_a_typed_refusal() {
 }
 
 #[test]
+fn expired_post_response_is_a_timeout_even_when_mutation_may_have_succeeded() {
+    struct DeadlineTransport(bool);
+    impl ClassicTransport for DeadlineTransport {
+        fn request(
+            &self,
+            method: &str,
+            path: &str,
+            body: Option<&Value>,
+            timeout: Duration,
+        ) -> Result<Value, HttpError> {
+            assert_eq!(method, "POST");
+            assert_eq!(path, "/session/example/orientation");
+            assert_eq!(body, Some(&json!({"orientation":"LANDSCAPE"})));
+            std::thread::sleep(timeout + Duration::from_millis(10));
+            if self.0 {
+                Ok(json!({"value":null}))
+            } else {
+                Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into())
+            }
+        }
+    }
+    for late_success in [false, true] {
+        let error = set(
+            &DeadlineTransport(late_success),
+            "/session/example",
+            RemoteOrientation::Landscape,
+            Instant::now() + Duration::from_millis(20),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "orientation_timeout");
+        assert!(error.message.contains("may already have rotated"));
+    }
+}
+
+#[test]
+fn immediate_post_transport_failure_remains_unverified() {
+    let transport = Transport::new(vec![Err(HttpError::Transport("private provider detail".into()))]);
+    let error = set(
+        &transport,
+        "/session/example",
+        RemoteOrientation::Landscape,
+        Instant::now() + Duration::from_secs(1),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "orientation_unverified");
+    assert!(error.message.contains("may already have rotated"));
+    assert!(!error.message.contains("private"));
+    assert_eq!(transport.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
 fn allocation_support_discovery_never_measures_or_applies_temporary_page_orientation() {
     for (reply, expected) in [
         (Ok(json!({"value":"PORTRAIT"})), OrientationSupport::Supported),
