@@ -68,7 +68,9 @@ jobs:
           python3 -B scripts/test_check_surge_dependency.py -v
           python3 -B scripts/check_surge_dependency.py
       - name: Verify worker helper license provenance
-        run: python3 -B .horizon/test_collect_helper_notices.py -v
+        run: |
+          python3 -B .horizon/test_collect_helper_notices.py -v
+          python3 -O -B .horizon/test_collect_helper_notices.py -v
       - name: Isolated desktop session bus
         run: python3 -B -m unittest discover -s scripts/device-smoke/tests -v
       - name: Maintainability
