@@ -4,6 +4,7 @@ use super::Driver;
 mod document;
 pub(super) use document::DocumentOrientation;
 mod origin;
+mod startup;
 use crate::remote::{OrientationSupport, RemoteOrientation};
 use crate::session::BrowserEventSender;
 use crate::{AgentAction, BrowserControlAction, BrowserControlFailure, BrowserControlValue};

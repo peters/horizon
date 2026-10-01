@@ -16,6 +16,7 @@ pub(super) struct Reply {
     /// Pause between the header block and the body, to stall a body read.
     pub(super) body_delay: Duration,
     pub(super) declared_length: Option<usize>,
+    pub(super) release: Option<mpsc::Receiver<()>>,
 }
 
 impl Reply {
@@ -27,7 +28,13 @@ impl Reply {
             delay: Duration::ZERO,
             body_delay: Duration::ZERO,
             declared_length: None,
+            release: None,
         }
+    }
+
+    pub(super) fn blocked_until(mut self, release: mpsc::Receiver<()>) -> Self {
+        self.release = Some(release);
+        self
     }
 
     pub(super) fn delayed(mut self, delay: Duration) -> Self {
@@ -71,6 +78,9 @@ impl Server {
                     return;
                 };
                 recorder.lock().expect("lock").push(parse_request(&request, head_end));
+                if let Some(release) = reply.release {
+                    let _ = release.recv_timeout(Duration::from_secs(5));
+                }
                 thread::sleep(reply.delay);
                 let length = reply.declared_length.unwrap_or(reply.body.len());
                 let mut response = format!(

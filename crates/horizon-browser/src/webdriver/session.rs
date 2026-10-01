@@ -181,7 +181,10 @@ pub(crate) fn run_webdriver(
             return;
         }
     };
-    driver.prepare_ready(config, frame_slot, event_tx, stop_requested);
+    if !driver.prepare_ready(config, frame_slot, event_tx, stop_requested) {
+        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+        return;
+    }
 
     'session: while !stop_requested.load(Ordering::Acquire) {
         let mut stop = false;
@@ -260,8 +263,11 @@ impl Driver {
         frame_slot: &FrameSlot,
         event_tx: &BrowserEventSender,
         stop_requested: &AtomicBool,
-    ) {
+    ) -> bool {
         self.invalidate_document_orientation();
+        if stop_requested.load(Ordering::Acquire) {
+            return !self.reject_explicit_start_orientation(false, true, event_tx);
+        }
         self.enable_file_chooser(event_tx);
         if self.firefox_bidi() {
             self.set_viewport(config.width, config.height, event_tx);
@@ -281,9 +287,22 @@ impl Driver {
             self.invalidate_document_orientation();
             self.write_coordination(true);
         }
+        let stopped = stop_requested.load(Ordering::Acquire);
+        if (startup_navigation_pending || self.navigation_failed || stopped)
+            && self.reject_explicit_start_orientation(startup_navigation_pending, stopped, event_tx)
+        {
+            return false;
+        }
+        if stopped {
+            return true;
+        }
         self.refresh_document_orientation(event_tx);
-        if stop_requested.load(Ordering::Acquire) {
-            return;
+        let stopped = stop_requested.load(Ordering::Acquire);
+        if self.reject_explicit_start_orientation(startup_navigation_pending, stopped, event_tx) {
+            return false;
+        }
+        if stopped {
+            return true;
         }
         // `Ready` means the servicing loop below is about to run: commands and
         // agent actions are only usable from here on, so it must not be
@@ -295,6 +314,7 @@ impl Driver {
         if startup_navigation_pending {
             let _ = event_tx.send(BrowserEvent::Loading(true));
         }
+        true
     }
 
     fn service_browser_request(

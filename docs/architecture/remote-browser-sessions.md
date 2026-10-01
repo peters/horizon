@@ -329,39 +329,18 @@ the initial expectations:
 
 ## Remote orientation contract
 
-Remote panel chrome offers Portrait and Landscape buttons. The selected button
-represents measured device/page agreement, with Rotating, Unverified and
-Unsupported status and nonfatal errors. User requests share the driver's frame,
-deadline and document verification with agent requests, while retaining User
-audit identity. Teach mode disables rotation; subsequent page input cancels a
-pending acknowledgement. Desktop and cloud-host presentation use the same state.
+Configured and catalog targets can select portrait/landscape at create time and
+rotate through remote panel buttons, public MCP or the direct CLI command.
+Explicit starts require matching geometry on the first committed document before
+readiness; a pending, failed or unmeasurable first page is rejected with an exact
+release attempt. Runtime acknowledgement checks device/page/frame agreement,
+document identity and ownership. Physical viewport resize remains fixed.
 
-The direct CLI command is `horizon-browser orientation <PANEL-ID>
-<portrait|landscape> [--timeout-millis <1..60000>] [-o <REPORT.json|->]`. It runs
-`browser_orientation` through the durable MCP plan runner. Create-time orientation
-remains available through `browser_create` in CLI plans. All remote create
-requests use the versioned orientation queue, including configured targets
-without an explicit per-call override; they require a matching current host so
-older hosts cannot silently ignore a target's configured orientation.
-
-Targets optionally normalize `orientation: portrait | landscape`. Create-time
-overrides require a remote target and share the same adapter and credential
-policy across the UI host, cloud worker and MCP/CLI. BrowserStack uses
-`bstack:options.deviceOrientation`; generic Appium uses `appium:orientation`.
-Orientation extensions are rejected to prevent conflicting settings.
-
-The driver negotiates GET `/orientation` after allocation and reports
-`orientation_support` separately from observed `remote_orientation`. Explicit
-start requests are verified against device orientation and measured inner/visual
-viewport geometry before readiness. Unsupported or mismatching starts attempt
-release and preserve uncertain holds. Runtime `browser_orientation` sets the
-device and waits for matching page geometry and a fresh frame, then rechecks
-event-loop ownership and document identity before completing. It invalidates
-semantic refs and scroll geometry; subsequent semantic input resolves fresh
-element/visual-viewport coordinates. The current remote semantic input path
-does not retain a screenshot-origin offset. Remote manual steering remains
-unsupported, and the coordinate calibration described below remains a design
-requirement for any future screenshot-coordinate input path.
+The [orientation feature document](remote-browser-orientation.md) defines provider
+mapping, optional defaults, safe support/status, startup and runtime failures,
+interface examples and module boundaries. The permanent
+[test procedure](../testing/remote-browser-orientation-smoke.md) covers BrowserStack
+physical devices, UI/MCP/CLI parity, regressions for future changes and cleanup.
 
 ## Coordinates and screenshots
 

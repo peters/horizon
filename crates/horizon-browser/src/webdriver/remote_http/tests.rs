@@ -132,6 +132,7 @@ fn webdriver_errors_keep_their_codes_including_expired_sessions_and_rate_limits(
             delay: Duration::ZERO,
             body_delay: Duration::ZERO,
             declared_length: None,
+            release: None,
         },
         Reply {
             status: 503,
@@ -140,6 +141,7 @@ fn webdriver_errors_keep_their_codes_including_expired_sessions_and_rate_limits(
             delay: Duration::ZERO,
             body_delay: Duration::ZERO,
             declared_length: None,
+            release: None,
         },
     ]);
     let client = RemoteHttpClient::new(&server.endpoint(""), None).expect("client");
@@ -181,6 +183,7 @@ fn malformed_and_oversized_bodies_are_rejected_without_panics() {
             delay: Duration::ZERO,
             body_delay: Duration::ZERO,
             declared_length: None,
+            release: None,
         },
         Reply {
             status: 200,
@@ -189,6 +192,7 @@ fn malformed_and_oversized_bodies_are_rejected_without_panics() {
             delay: Duration::ZERO,
             body_delay: Duration::ZERO,
             declared_length: Some(65 * 1024 * 1024),
+            release: None,
         },
     ]);
     let client = RemoteHttpClient::new(&server.endpoint(""), None).expect("client");

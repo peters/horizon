@@ -187,6 +187,11 @@ as `after_event_id` until `has_more` is false. Treat `cursor_lost`,
 For remote devices, set `orientation: portrait` or `orientation: landscape` on
 a configured target, or supply `orientation` with `target` in `browser_create`
 for a session-only override. Configured and catalog targets use the same option.
+An explicit configured or per-call orientation requires matching measured geometry
+on the first committed document before readiness. A pending, failed or unmeasurable
+first page is rejected with a typed orientation error and exact-session release
+attempt; default creates without an explicit orientation keep the pending contract
+above. See `docs/architecture/remote-browser-orientation.md` for the feature contract.
 Check `orientation_support` (`supported`, `unsupported`, or `unverified`) and
 `remote_orientation`, then call `browser_orientation` with `panel_id` and
 `orientation` to rotate a supported session. The tool waits for the device and
