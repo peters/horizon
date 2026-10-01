@@ -1,7 +1,7 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
 use horizon_core::{
-    AgentSessionBinding, AgentStatus, AppShortcuts, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding,
-    SshConnectionStatus, WorkspaceId,
+    AgentSessionBinding, AgentStatus, AppShortcuts, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus,
+    WorkspaceId,
 };
 
 use super::super::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
@@ -44,7 +44,6 @@ struct PanelSnapshot {
     workspace_accent: Option<Color32>,
     is_focused: bool,
     is_renaming: bool,
-    attention_badge: Option<(AttentionSeverity, String)>,
     ssh_status: Option<SshConnectionStatus>,
     /// Browser panels only accept dictation while a driver session is alive.
     browser_dictation_ready: bool,
@@ -598,14 +597,6 @@ impl HorizonApp {
                     .find(|(workspace_id, _)| *workspace_id == panel.workspace_id)
                     .map(|(_, color)| *color);
 
-                let attention_badge = if self.template_config.features.attention_feed {
-                    self.board
-                        .unresolved_attention_for_panel(panel_id)
-                        .map(|item| (item.severity, item.summary.clone()))
-                } else {
-                    None
-                };
-
                 Some(PanelSnapshot {
                     screen_rect: geometry.screen_rect,
                     terminal_body_screen_rect: geometry.terminal_body_screen_rect,
@@ -619,7 +610,6 @@ impl HorizonApp {
                     workspace_accent,
                     is_focused: self.board.focused == Some(panel_id),
                     is_renaming: self.renaming_panel == Some(panel_id),
-                    attention_badge,
                     ssh_status: panel.ssh_status(),
                     browser_dictation_ready: panel.browser().is_none_or(|browser| browser.status.is_alive()),
                 })
@@ -798,7 +788,6 @@ impl HorizonApp {
                     focused: snapshot.is_focused,
                     close_hovered: close_response.hovered(),
                     workspace_accent: snapshot.workspace_accent,
-                    attention_badge: snapshot.attention_badge.as_ref(),
                     ssh_status: snapshot.ssh_status,
                     session_id,
                     mic: mic_response.as_ref().map(|mic| MicControl {

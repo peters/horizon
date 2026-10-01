@@ -449,8 +449,6 @@ presets:
     kind: usage
 
 features:
-  # Optional: disable the default attention feed
-  attention_feed: false
   # Optional: align attached workspaces whenever a session loads, including startup
   organize_workspaces_on_session_load: true
   # Optional: collapse inactive workspaces in the sidebar

@@ -50,7 +50,7 @@ impl HorizonApp {
         &mut self,
         ctx: &Context,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
-    ) -> f32 {
+    ) {
         render_scoped_minimap(
             self,
             ctx,
@@ -58,7 +58,7 @@ impl HorizonApp {
             self.canvas_rect(ctx),
             MinimapScope::Attached,
             Id::new("minimap_overlay"),
-        )
+        );
     }
 
     pub(super) fn render_workspace_minimap(
@@ -68,7 +68,7 @@ impl HorizonApp {
         workspace_id: WorkspaceId,
         canvas_rect: Rect,
         overlay_id: Id,
-    ) -> f32 {
+    ) {
         render_scoped_minimap(
             self,
             ctx,
@@ -76,7 +76,7 @@ impl HorizonApp {
             canvas_rect,
             MinimapScope::Workspace(workspace_id),
             overlay_id,
-        )
+        );
     }
 }
 

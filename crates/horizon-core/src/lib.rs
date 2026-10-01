@@ -2,7 +2,6 @@
 
 pub mod agent_work;
 mod agents;
-mod attention;
 mod board;
 pub mod browser;
 #[cfg(feature = "cloud-workspaces")]
@@ -48,7 +47,6 @@ pub use agents::{
 };
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
-pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
 pub use board::{
     Board, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress, WorkspaceAlignment, WorkspaceDockSide,
     WorkspaceLayout,
@@ -84,7 +82,7 @@ pub use session_store::{
 };
 pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
-pub use terminal::{AgentNotification, Terminal, open_url};
+pub use terminal::{Terminal, open_url};
 pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;
 pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_cost, format_tokens};

@@ -16,7 +16,7 @@ use crate::error::Result;
 use crate::git_changes::DiffViewer;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, RemoteWorkspaceReference};
 use crate::ssh::{SshConnection, SshConnectionStatus};
-use crate::terminal::{AgentNotification, Terminal};
+use crate::terminal::Terminal;
 #[cfg(test)]
 use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
@@ -230,7 +230,7 @@ pub struct Panel {
     pub template: Option<PanelTemplateRef>,
     pub launched_at_millis: i64,
     has_custom_name: bool,
-    /// Set by `process_output` each frame; read by attention detection to skip
+    /// Set by `process_output` each frame; read by agent status detection to skip
     /// the expensive `last_lines_text` scan for panels without new content.
     pub(crate) had_recent_output: bool,
     /// Working/idle state of the agent TUI, refreshed by
@@ -251,7 +251,7 @@ pub struct Panel {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PanelProcessActivity {
-    /// New terminal-grid output that may require attention/agent scanning.
+    /// New terminal-grid output that may require agent scanning.
     pub terminal: bool,
     /// Browser state/frame activity that requires repainting but must not
     /// trigger terminal-grid scans.
@@ -555,15 +555,6 @@ impl Panel {
         self.content.terminal().is_some_and(Terminal::child_exited)
     }
 
-    /// Returns `true` if the terminal bell has fired since the last call.
-    pub fn take_bell(&mut self) -> bool {
-        self.content.terminal_mut().is_some_and(Terminal::take_bell)
-    }
-
-    pub fn take_notification(&mut self) -> Option<AgentNotification> {
-        self.content.terminal_mut()?.take_notification()
-    }
-
     #[must_use]
     pub fn rename(&mut self, name: &str) -> bool {
         let trimmed = name.trim();
@@ -668,47 +659,6 @@ impl Panel {
         if let Some(terminal) = self.content.terminal_mut() {
             terminal.set_focused(focused);
         }
-    }
-
-    /// Check if this panel's terminal output suggests it needs user attention.
-    ///
-    /// Suppressed for the first 10 seconds after launch to avoid false positives
-    /// from initial prompt rendering on startup/restore.
-    #[must_use]
-    pub fn detect_attention(&self) -> Option<&'static str> {
-        if !self.kind.is_agent() {
-            return None;
-        }
-        let age_ms = current_unix_millis().saturating_sub(self.launched_at_millis);
-        if age_ms < 10_000 {
-            return None;
-        }
-        let terminal = self.content.terminal()?;
-        let text = terminal.last_lines_text(3);
-        if text.is_empty() {
-            return None;
-        }
-        for line in text.lines().rev() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed.starts_with("Allow")
-                || trimmed.starts_with("Do you want")
-                || trimmed.ends_with("[y/N]")
-                || trimmed.ends_with("[Y/n]")
-                || trimmed.ends_with("(y/n)")
-            {
-                return Some("Waiting for approval");
-            }
-            if trimmed.ends_with('?') && trimmed.len() > 2 {
-                return Some("Waiting for input");
-            }
-            if trimmed.starts_with('>') || trimmed.starts_with("❯") {
-                return Some("Ready for input");
-            }
-        }
-        None
     }
 
     /// Check whether this panel's agent TUI is rendering its working

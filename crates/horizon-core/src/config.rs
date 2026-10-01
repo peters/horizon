@@ -226,8 +226,6 @@ impl ShortcutsConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct OverlaysConfig {
-    pub attention_feed_height: f32,
-    pub attention_feed_width: f32,
     pub minimap_height: f32,
     pub minimap_width: f32,
 }
@@ -235,33 +233,19 @@ pub struct OverlaysConfig {
 impl Default for OverlaysConfig {
     fn default() -> Self {
         Self {
-            attention_feed_height: 600.0,
-            attention_feed_width: 320.0,
             minimap_height: 180.0,
             minimap_width: 320.0,
         }
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct FeaturesConfig {
-    pub attention_feed: bool,
     #[serde(alias = "organize_workspaces_on_startup")]
     pub organize_workspaces_on_session_load: bool,
     pub sidebar_accordion: bool,
     pub speech: SpeechConfig,
-}
-
-impl Default for FeaturesConfig {
-    fn default() -> Self {
-        Self {
-            attention_feed: true,
-            organize_workspaces_on_session_load: false,
-            sidebar_accordion: false,
-            speech: SpeechConfig::default(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -648,12 +632,6 @@ mod tests {
     }
 
     #[test]
-    fn features_default_enables_attention_feed() {
-        assert!(FeaturesConfig::default().attention_feed);
-        assert!(Config::default().features.attention_feed);
-    }
-
-    #[test]
     fn session_load_workspace_organization_defaults_disabled() {
         assert!(!FeaturesConfig::default().organize_workspaces_on_session_load);
         assert!(!Config::default().features.organize_workspaces_on_session_load);
@@ -667,7 +645,8 @@ mod tests {
 
     #[test]
     fn missing_sidebar_accordion_setting_keeps_it_disabled() {
-        let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("config should deserialize");
+        let config =
+            Config::from_yaml("features:\n  speech:\n    enabled: false\n").expect("config should deserialize");
 
         assert!(!config.features.sidebar_accordion);
     }
@@ -700,15 +679,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_features_block_keeps_attention_feed_enabled() {
-        let config: Config = serde_yaml::from_str("{}\n").expect("config should deserialize");
-
-        assert!(config.features.attention_feed);
-    }
-
-    #[test]
     fn missing_session_load_workspace_organization_setting_keeps_it_disabled() {
-        let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("config should deserialize");
+        let config =
+            Config::from_yaml("features:\n  speech:\n    enabled: false\n").expect("config should deserialize");
 
         assert!(!config.features.organize_workspaces_on_session_load);
     }
@@ -758,11 +731,13 @@ mod tests {
     }
 
     #[test]
-    fn explicit_attention_feed_false_is_preserved() {
-        let config: Config =
-            serde_yaml::from_str("features:\n  attention_feed: false\n").expect("config should deserialize");
+    fn retired_attention_feed_keys_are_ignored_and_dropped_on_save() {
+        let config =
+            Config::from_yaml("features:\n  attention_feed: false\noverlays:\n  attention_feed_width: 400.0\n")
+                .expect("config should deserialize");
 
-        assert!(!config.features.attention_feed);
+        let yaml = config.to_yaml().expect("config should serialize");
+        assert!(!yaml.contains("attention_feed"));
     }
 
     #[test]

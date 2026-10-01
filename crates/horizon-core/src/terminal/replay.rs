@@ -14,9 +14,7 @@ pub(super) fn drain_replay_events(event_rx: &mpsc::Receiver<Event>) -> ReplayRes
 
     while let Ok(event) = event_rx.try_recv() {
         match event {
-            Event::Title(title) => {
-                let _ = state.title.apply_incoming(&title);
-            }
+            Event::Title(title) => state.title.apply_incoming(&title),
             Event::ResetTitle => state.title.reset(),
             Event::ClipboardStore(_, _)
             | Event::ClipboardLoad(_, _)

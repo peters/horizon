@@ -307,8 +307,6 @@ impl Board {
         for ws in &mut self.workspaces {
             ws.remove_panel(id);
         }
-        self.attention.retain(|item| item.panel_id != Some(id));
-        self.panel_attention_signals.remove(&id);
         if self.focused == Some(id) {
             self.focus_most_recent_panel();
         }
@@ -323,7 +321,6 @@ impl Board {
                         .is_none_or(|workspace| workspace.remote_workspace.is_none())
                 {
                     self.workspaces.retain(|ws| ws.id != ws_id);
-                    self.attention.retain(|item| item.workspace_id != ws_id);
                     if self.active_workspace == Some(ws_id) {
                         self.active_workspace = self.workspaces.first().map(|ws| ws.id);
                     }
@@ -408,7 +405,6 @@ impl Board {
             }
         }
 
-        self.attention.retain(|item| item.workspace_id != id);
         self.retained_empty_workspaces.remove(&id);
         if self.active_workspace == Some(id) {
             self.active_workspace = Some(target_id);
@@ -520,7 +516,6 @@ impl Board {
             .collect();
         for ws_id in empty_ids {
             self.workspaces.retain(|ws| ws.id != ws_id);
-            self.attention.retain(|item| item.workspace_id != ws_id);
             if self.active_workspace == Some(ws_id) {
                 self.active_workspace = self.workspaces.first().map(|ws| ws.id);
             }

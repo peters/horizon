@@ -391,7 +391,7 @@ egui's normal or `.strong()` (a bolder rendering of the same family).
 | 12 - 12.5 | normal | Dense body: settings rows, secondary lines, chips, detail lines | `FG_SOFT` |
 | 11 - 11.5 | normal | Chrome buttons, hints under fields, badges | `FG_SOFT` / `FG_DIM` |
 | 10 - 10.5 | strong for captions | Upper-case section captions ("STORAGE"), key hints, palette section headers | `FG_DIM` |
-| 8.5 - 9 | normal or strong | Micro labels: fps unit, attention tags (`NEEDS INPUT`, `DONE`) | state color / `FG_DIM` |
+| 8.5 - 9 | normal or strong | Micro labels: fps unit | state color / `FG_DIM` |
 
 Terminal and code fonts:
 
@@ -663,8 +663,6 @@ outline).
 - Sidebar rows: 6 px inset, radius 10. Focused row `blend(.., accent, 0.22)`
   alpha 200 plus a 2 px accent edge; active workspace 0.12 alpha 140; hover
   `alpha(PANEL_BG_ALT, 160)`.
-- Attention tags in the sidebar: `NEEDS INPUT` in `PALETTE_RED`, `DONE` in
-  `PALETTE_GREEN`, `INFO` in `ACCENT`, 8.5 strong.
 
 ## Terminal
 

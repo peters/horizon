@@ -5,7 +5,6 @@ use egui::containers::panel::PanelState;
 use egui::{Context, Id, Pos2, Rect, Vec2};
 use horizon_core::{PanelId, WorkspaceId};
 
-use crate::app::attention_feed::estimated_outer_rect;
 use crate::app::root_chrome::effective_sidebar_width;
 use crate::app::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
 use crate::app::util::{OverlayExclusion, viewport_local_rect};
@@ -120,18 +119,7 @@ impl HorizonApp {
             zones.push(rect);
         }
 
-        let minimap_height = if let Some(rect) = self.minimap_overlay_rect(ctx) {
-            zones.push(rect);
-            rect.height()
-        } else {
-            0.0
-        };
-
-        if self.fixed_overlays_visible()
-            && self.template_config.features.attention_feed
-            && let Some(rect) =
-                estimated_outer_rect(viewport, minimap_height, &self.template_config.overlays, &self.board)
-        {
+        if let Some(rect) = self.minimap_overlay_rect(ctx) {
             zones.push(rect);
         }
 

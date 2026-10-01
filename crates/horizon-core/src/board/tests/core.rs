@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use crate::attention::{AttentionSeverity, AttentionState};
 use crate::panel::{PanelKind, PanelOptions};
 
 use super::super::*;
@@ -53,25 +52,6 @@ fn rename_panel_rejects_blank_names() {
 }
 
 #[test]
-fn close_panel_removes_panel_attention() {
-    let mut board = Board::new();
-    let workspace_id = board.create_workspace("frontend");
-    let panel_id = PanelId(7);
-
-    board.create_attention(
-        workspace_id,
-        Some(panel_id),
-        "codex-ui",
-        "Needs user feedback",
-        AttentionSeverity::High,
-    );
-
-    board.close_panel(panel_id);
-
-    assert!(board.unresolved_attention().next().is_none());
-}
-
-#[test]
 fn global_shutdown_inherits_browser_teardown_from_an_already_closed_panel() {
     let mut board = Board::new();
     let root = tempfile::tempdir().expect("temp dir");
@@ -117,69 +97,6 @@ fn retired_browser_cleanup_remains_pollable_after_the_last_panel_closes() {
     }
 
     assert!(!board.has_pending_browser_cleanup());
-}
-
-#[test]
-fn resolve_attention_marks_item_resolved() {
-    let mut board = Board::new();
-    let workspace_id = board.create_workspace("frontend");
-    let attention_id = board.create_attention(
-        workspace_id,
-        None,
-        "system",
-        "Review build result",
-        AttentionSeverity::Medium,
-    );
-
-    assert!(board.resolve_attention(attention_id));
-    assert!(board.unresolved_attention().next().is_none());
-}
-
-#[test]
-fn dismissing_attention_keeps_same_signal_suppressed_until_it_clears() {
-    let mut board = Board::new();
-    let workspace_id = board.create_workspace("agents");
-    let panel_id = PanelId(99);
-
-    board.reconcile_agent_attention_signal(panel_id, workspace_id, "Ready for input");
-    let attention_id = board.unresolved_attention().next().expect("open attention").id;
-    assert!(board.dismiss_attention(attention_id));
-
-    board.reconcile_agent_attention_signal(panel_id, workspace_id, "Ready for input");
-    assert!(board.unresolved_attention().next().is_none());
-
-    board.reconcile_agent_attention_signal(panel_id, workspace_id, "");
-    board.reconcile_agent_attention_signal(panel_id, workspace_id, "Ready for input");
-    assert!(board.unresolved_attention().next().is_some());
-}
-
-#[test]
-fn stale_ready_for_input_attention_auto_dismisses() {
-    let mut board = Board::new();
-    let workspace_id = board.create_workspace("agents");
-    let attention_id = board.create_attention(
-        workspace_id,
-        Some(PanelId(7)),
-        "agent",
-        "Ready for input",
-        AttentionSeverity::High,
-    );
-
-    let item = board
-        .attention
-        .iter_mut()
-        .find(|item| item.id == attention_id)
-        .expect("attention item");
-    item.created_at = std::time::SystemTime::now() - READY_FOR_INPUT_AUTO_DISMISS_AFTER - Duration::from_secs(1);
-
-    board.dismiss_expired_ready_attention(READY_FOR_INPUT_AUTO_DISMISS_AFTER);
-
-    let item = board
-        .attention
-        .iter()
-        .find(|item| item.id == attention_id)
-        .expect("attention item");
-    assert_eq!(item.state, AttentionState::Dismissed);
 }
 
 #[test]

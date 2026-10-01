@@ -1,6 +1,5 @@
 mod agent_status;
 mod arrangement;
-mod attention;
 mod geometry;
 mod shutdown;
 mod workspaces;
@@ -13,7 +12,7 @@ pub(crate) use arrangement::arranged_panel_layout;
 use shutdown::FORCED_BROWSER_SHUTDOWN_WAIT;
 pub use shutdown::{ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -21,7 +20,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::attention::{AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::panel::{Panel, PanelId, PanelKind, PanelOptions, PanelProcessActivity, PanelProcessOutput};
@@ -32,7 +30,6 @@ const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
 const TERMINAL_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const BROWSER_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-const READY_FOR_INPUT_AUTO_DISMISS_AFTER: Duration = Duration::from_secs(45);
 fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
     (left[0] - right[0]).abs() <= f32::EPSILON && (left[1] - right[1]).abs() <= f32::EPSILON
 }
@@ -93,8 +90,6 @@ pub struct Board {
     pub panels: Vec<Panel>,
     pub workspaces: Vec<Workspace>,
     pub cloud_groups: crate::runtime_state::cloud_groups::CloudGroupsState,
-    pub attention: Vec<AttentionItem>,
-    panel_attention_signals: HashMap<PanelId, String>,
     /// Browser panels already removed from the board whose exact Chrome
     /// process is still retiring. Global shutdown must inherit these signals
     /// instead of losing them in detached cleanup work.
@@ -108,10 +103,8 @@ pub struct Board {
     retained_empty_workspaces: HashSet<WorkspaceId>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
-    pub attention_enabled: bool,
     next_panel_id: u64,
     next_workspace_id: u64,
-    next_attention_id: u64,
 }
 
 /// A remote teardown that finished without an established release, kept so
@@ -137,17 +130,13 @@ impl Board {
             panels: Vec::new(),
             workspaces: Vec::new(),
             cloud_groups: crate::runtime_state::cloud_groups::CloudGroupsState::default(),
-            attention: Vec::new(),
-            panel_attention_signals: HashMap::new(),
             retired_browser_shutdown_signals: Vec::new(),
             unreleased_remote_holds: Vec::new(),
             retained_empty_workspaces: HashSet::new(),
             focused: None,
             active_workspace: None,
-            attention_enabled: false,
             next_panel_id: 1,
             next_workspace_id: 1,
-            next_attention_id: 1,
         }
     }
 
@@ -268,33 +257,13 @@ impl Board {
         );
 
         let options = panel_restore_options(panel_state, transcript_root, browser_config);
-        match self.create_failed_restore_panel(options, workspace_id, &error_message) {
-            Ok(panel_id) => {
-                self.create_attention(
-                    workspace_id,
-                    Some(panel_id),
-                    "restore",
-                    format!("Failed to restore {panel_label}: {error_message}"),
-                    AttentionSeverity::High,
-                );
-            }
-            Err(placeholder_error) => {
-                tracing::error!(
-                    workspace = %workspace_name,
-                    panel = %panel_label,
-                    error = %placeholder_error,
-                    "failed to create restore failure placeholder"
-                );
-                self.create_attention(
-                    workspace_id,
-                    None,
-                    "restore",
-                    format!(
-                        "Failed to restore {panel_label}: {error_message}. Also failed to show a placeholder: {placeholder_error}"
-                    ),
-                    AttentionSeverity::High,
-                );
-            }
+        if let Err(placeholder_error) = self.create_failed_restore_panel(options, workspace_id, &error_message) {
+            tracing::error!(
+                workspace = %workspace_name,
+                panel = %panel_label,
+                error = %placeholder_error,
+                "failed to create restore failure placeholder"
+            );
         }
     }
 
@@ -485,17 +454,9 @@ impl Board {
             output.cwd_changed |= panel_output.cwd_changed;
             output.persisted_state_changed |= panel_output.persisted_state_changed;
         }
-        // Only run attention detection when terminals actually produced new
-        // output.  The expensive path — `detect_attention()` — locks the
-        // terminal mutex and iterates the full display, so skipping it on
-        // idle frames is a significant CPU win.
-        if self.attention_enabled && output.activity.terminal {
-            self.update_attention();
-        }
         // Working-status refresh runs every frame: the per-panel check is a
         // cheap timestamp compare for quiet panels, and the screen scan only
-        // happens for panels with new output this frame. It is independent of
-        // the attention-feed feature flag.
+        // happens for panels with new output this frame.
         self.update_agent_status();
         output
     }

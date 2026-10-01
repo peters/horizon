@@ -160,7 +160,7 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   Preset models, panel-option conversion and existing default/migration helpers
   live in `config/presets.rs`, with stable public re-exports from the parent.
 - `board.rs` should stay orchestration-focused, with board-local submodules for
-  attention flows, agent working-status detection, workspace and panel
+  agent working-status detection, workspace and panel
   membership changes, arrangement/collision logic, geometry queries, and
   shutdown state. Preset slot collision and swapping lives in
   `board/arrangement/reordering.rs`; the panel resize collision cascade, which
