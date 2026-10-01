@@ -221,6 +221,9 @@ jobs:
         run: ./scripts/set-release-version.sh "${{ needs.validate-release.outputs.release_version }}"
       # The uploaded asset is the horizon binary. The other workspace bins are
       # outside its dependency graph, and each one repeated a thin-LTO link.
+      - name: Install video assembler
+        shell: bash
+        run: bash scripts/install-ci-video-build-tools.sh
       - run: cargo build --release -p horizon-ui
       - name: Package release asset
         shell: bash

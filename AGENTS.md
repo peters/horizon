@@ -26,11 +26,12 @@ No Rust toolchain or system headers are needed for this path.
 
 - **Rust stable ≥ 1.95** (edition 2024). Install via [rustup](https://rustup.rs) if not present.
 - **Linux only:** the eframe/wgpu rendering stack needs system headers. Install them before `cargo build`:
-  - Debian/Ubuntu: `sudo apt install -y build-essential pkg-config libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libgl-dev cmake`
-  - Fedora: `sudo dnf install -y gcc pkg-config wayland-devel libxkbcommon-devel vulkan-loader-devel mesa-libGL-devel cmake`
-  - Arch: `sudo pacman -S --needed base-devel wayland libxkbcommon vulkan-icd-loader cmake`
+  - Debian/Ubuntu: `sudo apt install -y build-essential pkg-config libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libgl-dev cmake nasm`
+  - Fedora: `sudo dnf install -y gcc pkg-config wayland-devel libxkbcommon-devel vulkan-loader-devel mesa-libGL-devel cmake nasm`
+  - Arch: `sudo pacman -S --needed base-devel wayland libxkbcommon vulkan-icd-loader cmake nasm`
 - **macOS:** Xcode Command Line Tools (`xcode-select --install`). Metal ships with the OS.
 - **Windows:** MSVC build tools (installed automatically by `rustup` on the `msvc` target). DX12/Vulkan drivers ship with the GPU driver.
+- **AV1 recording on x86_64:** NASM ≥ 2.15 must be on `PATH` for rav1e's runtime-dispatched assembly kernels. The Linux commands above include it; on Intel macOS use `brew install nasm`, and on Windows install [NASM](https://www.nasm.us/) and add its directory to `PATH`. ARM64 uses the platform C compiler's assembler. Builds without `video-capture` do not require NASM.
 - **Speech input (`--features speech`, opt-in):** additionally needs **CMake** and a **C++ compiler** (to build the vendored transcribe.cpp), plus on Linux the ALSA headers (`libasound2-dev`/`alsa-lib-devel`) for microphone capture. The default build does not require these.
 
 #### Build & Run
