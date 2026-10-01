@@ -84,6 +84,7 @@ impl HorizonApp {
             self.render_drawer_waiting(ui);
             return;
         };
+        self.render_reach_strip(ui);
         let rect = ui.available_rect_before_wrap().shrink2(vec2(10.0, 8.0));
         let body = ui.new_child(UiBuilder::new().max_rect(rect));
         let mut body = body;

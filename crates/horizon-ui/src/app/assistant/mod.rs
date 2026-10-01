@@ -6,6 +6,7 @@
 
 mod drawer;
 mod engine;
+mod reach;
 
 use egui::{Context, Id, Pos2, Rect};
 use horizon_core::assistant::{ASSISTANT_PANEL_LOCAL_ID, AssistantSettings};

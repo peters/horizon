@@ -1,3 +1,4 @@
+mod agent_panels;
 mod agent_status;
 mod arrangement;
 mod attention;
@@ -7,6 +8,7 @@ mod workspaces;
 
 pub(crate) use geometry::panel_visual_rect;
 
+pub use agent_panels::SendRefusal;
 pub use arrangement::WorkspaceAlignment;
 #[cfg(feature = "cloud-workspaces")]
 pub(crate) use arrangement::arranged_panel_layout;

@@ -1,4 +1,5 @@
 mod actions;
+mod agent_panel_requests;
 mod assistant;
 mod attention_feed;
 mod bootstrap;
@@ -307,6 +308,7 @@ pub struct HorizonApp {
     browser_create_host: BrowserCreateHostState,
     settings: Option<SettingsEditor>,
     assistant: assistant::AssistantDrawer,
+    agent_panel_requests: agent_panel_requests::AgentPanelRequests,
     speech_model_info_cache: settings::SpeechModelInfoCache,
     /// Session-only and OS-store provider credentials for remote browser targets.
     remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,

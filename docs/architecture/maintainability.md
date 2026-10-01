@@ -314,7 +314,13 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     (`horizon-core/src/assistant.rs` owns its settings and API key file), drawn
     by `panels/assistant.rs` through the shared terminal widget. It restores
     hidden, is excluded from the sidebar and palette, and the drawer closes it
-    directly because `render_panels` rebuilds the shared close queue each frame
+    directly because `render_panels` rebuilds the shared close queue each frame.
+    `reach.rs` renders the strip of other agents and their state
+  - `agent_panel_requests`: host side of the `agent_panels` MCP tool. It claims
+    requests from the `manifest::agent_panels` queue (built on the generic
+    `manifest::typed_queue`), answers list/send/read from `Board` state in
+    `horizon-core/src/board/agent_panels.rs`, and presses Enter a short delay
+    after a pasted message
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows, with startup
     result types in `session/types.rs` and loading/recovery rendering in

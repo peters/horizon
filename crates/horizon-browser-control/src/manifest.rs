@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
 mod agent;
+pub mod agent_panels;
 mod audit;
 mod capture;
 mod close;
@@ -48,6 +49,7 @@ pub mod provider_usage;
 pub mod recovery;
 mod request_queue;
 mod result;
+mod typed_queue;
 mod visibility;
 mod workspace;
 

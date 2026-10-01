@@ -121,7 +121,7 @@ impl HorizonApp {
     ) -> Self {
         Self {
             board, #[cfg(feature = "cloud-workspaces")] cloud_prototype: super::cloud_panel::CloudPrototype::default(),
-            panels_to_close: Vec::new(),
+            panels_to_close: Vec::new(), agent_panel_requests: super::agent_panel_requests::AgentPanelRequests::default(),
             panels_to_restart: Vec::new(),
             workspace_assignments: Vec::new(),
             workspace_creates: Vec::new(),

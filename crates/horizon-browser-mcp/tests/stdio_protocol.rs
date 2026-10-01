@@ -196,6 +196,13 @@ fn assert_device_panel_contract(tools: &Value) {
     }
 }
 
+fn assert_agent_panels_contract(tools: &Value) {
+    let agents = listed_tool(tools, "agent_panels").to_string();
+    for operation in ["list", "send", "read", "panel_id", "needs_input", "untrusted"] {
+        assert!(agents.contains(operation), "agent_panels lacks {operation}");
+    }
+}
+
 fn assert_provider_tools_contract(tools: &Value) {
     let usage = listed_tool(tools, "browser_provider_usage");
     assert!(usage["inputSchema"]["properties"].get("provider").is_some());
@@ -251,9 +258,10 @@ fn assert_companion_tools_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(28));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(29));
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);
+    assert_agent_panels_contract(tools);
     assert_provider_tools_contract(tools);
     assert_companion_tools_contract(tools);
     let resize = listed_tool(tools, "browser_resize");
