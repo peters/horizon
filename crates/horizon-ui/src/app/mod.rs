@@ -350,7 +350,8 @@ impl HorizonApp {
     fn update_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = &ui.ctx().clone();
         let now = Instant::now();
-        self.frame_stats.record_frame(now, ctx.requested_repaint_last_pass());
+        let continuous = ctx.requested_repaint_last_pass() || self.detached_viewport_requested_repaint_last_pass(ctx);
+        self.frame_stats.record_frame(now, continuous);
         self.remote_browser_credentials.poll();
         if self.remote_browser_credentials.is_busy() {
             // Worker answers arrive off-thread; keep frames coming until the

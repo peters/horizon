@@ -47,11 +47,14 @@ impl FrameStats {
                 self.run_open = true;
             }
             self.run_frame_starts.push_back(now);
+            // Always keep the latest interval, so a stall longer than the
+            // window still shows as one slow frame instead of reading as idle.
             while self.run_frame_starts.len() > MAX_FRAME_TIMESTAMPS
-                || self
-                    .run_frame_starts
-                    .front()
-                    .is_some_and(|first| now.saturating_duration_since(*first) > MEASUREMENT_WINDOW)
+                || (self.run_frame_starts.len() > 2
+                    && self
+                        .run_frame_starts
+                        .front()
+                        .is_some_and(|first| now.saturating_duration_since(*first) > MEASUREMENT_WINDOW))
             {
                 self.run_frame_starts.pop_front();
             }
@@ -188,6 +191,17 @@ mod tests {
         let snapshot = frame_stats.snapshot();
         assert_eq!(snapshot.sample_count, 3);
         assert!((snapshot.fps - (1000.0 / 300.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn frame_stats_show_a_stall_longer_than_the_window_as_one_slow_frame() {
+        let mut frame_stats = FrameStats::default();
+        render_continuously(&mut frame_stats, Instant::now(), &[16, 16, 16, 1_500]);
+
+        let snapshot = frame_stats.snapshot();
+        assert_eq!(snapshot.sample_count, 1);
+        assert!((snapshot.slowest_frame_time_ms - 1_500.0).abs() < 0.01);
+        assert!(snapshot.fps < 1.0);
     }
 
     #[test]
