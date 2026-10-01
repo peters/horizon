@@ -646,12 +646,16 @@ impl Driver {
         if let Some((until, committed)) = refresh_state {
             if committed {
                 self.classic_refresh = None;
+                if self.initial_orientation_pending {
+                    self.refresh_initial_orientation(false, event_tx);
+                }
                 self.frames.demand();
             } else if Instant::now() >= until {
                 // Classic WebDriver reports no later event, so a navigation
                 // that has not committed by the page-load window is failed
                 // explicitly instead of leaving the panel silently stale.
                 self.classic_refresh = None;
+                self.initial_orientation_pending = false;
                 self.navigation_failed = true;
                 self.frames.interaction_started_at = None;
                 let _ = event_tx.send(BrowserEvent::NavigationFailed(
@@ -682,6 +686,53 @@ pub(super) fn classic_error_is_page_load_timeout(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::ClassicNavigationRefresh;
+
+    #[test]
+    fn pending_startup_defers_orientation_until_document_commit() {
+        use super::super::viewport::tests::{bidi_fixture, events, fixture_driver};
+        use crate::remote::{OrientationSupport, RemoteOrientation, RemoteOrientationState};
+        use crate::webdriver::test_server::{Reply, Server};
+        use serde_json::json;
+        use std::time::{Duration, Instant};
+
+        let classic = Server::start(vec![
+            Reply::json(200, &json!({"value":"https://example.test/ready"})),
+            Reply::json(200, &json!({"value":"Ready"})),
+            Reply::json(200, &json!({"value":"committed-document"})),
+            Reply::json(200, &json!({"value":"PORTRAIT"})),
+            Reply::json(
+                200,
+                &json!({"value":{"width":600,"height":900,"visual_width":600,"visual_height":900,"orientation":"portrait"}}),
+            ),
+        ]);
+        let (link, worker) = bidi_fixture(false, false);
+        let mut driver = fixture_driver(&classic, link);
+        driver.remote_orientation = Some(RemoteOrientationState {
+            support: OrientationSupport::Supported,
+            applied: Some(RemoteOrientation::Landscape),
+        });
+        driver.url = "about:blank".into();
+        driver.classic_document_identity = Some("allocation-document".into());
+        driver.classic_refresh = Some(ClassicNavigationRefresh {
+            until: Instant::now() + Duration::from_secs(10),
+            previous_url: driver.url.clone(),
+            previous_document_identity: driver.classic_document_identity.clone(),
+        });
+        driver.refresh_pending_at = Some(Instant::now());
+        driver.refresh_initial_orientation(true, &events());
+        assert_eq!(driver.remote_orientation.as_ref().unwrap().applied, None);
+        assert!(classic.recorded().is_empty(), "do not measure the previous document");
+        driver.tick_page_state_refresh(&events());
+        assert_eq!(
+            driver.remote_orientation.as_ref().unwrap().applied,
+            Some(RemoteOrientation::Portrait)
+        );
+        assert!(!driver.initial_orientation_pending);
+        assert!(driver.classic_refresh.is_none());
+        assert_eq!(classic.recorded().len(), 5);
+        drop(driver);
+        assert!(worker.join().unwrap().is_empty());
+    }
 
     #[test]
     fn refresh_detects_document_replacement_without_misreading_origin_slashes() {

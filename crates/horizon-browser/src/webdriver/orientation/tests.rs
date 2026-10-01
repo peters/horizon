@@ -6,17 +6,20 @@ use std::sync::Mutex;
 struct Transport {
     replies: Mutex<VecDeque<Result<Value, HttpError>>>,
     calls: Mutex<Vec<(String, String, Option<Value>)>>,
+    timeouts: Mutex<Vec<Duration>>,
 }
 impl Transport {
     fn new(replies: Vec<Result<Value, HttpError>>) -> Self {
         Self {
             replies: Mutex::new(replies.into()),
             calls: Mutex::new(Vec::new()),
+            timeouts: Mutex::new(Vec::new()),
         }
     }
 }
 impl ClassicTransport for Transport {
-    fn request(&self, method: &str, path: &str, body: Option<&Value>, _: Duration) -> Result<Value, HttpError> {
+    fn request(&self, method: &str, path: &str, body: Option<&Value>, timeout: Duration) -> Result<Value, HttpError> {
+        self.timeouts.lock().unwrap().push(timeout);
         self.calls
             .lock()
             .unwrap()
@@ -29,38 +32,70 @@ fn page(width: u32, height: u32, orientation: &Value) -> Value {
 }
 #[test]
 fn negotiation_distinguishes_unsupported_unverified_and_confirmed() {
-    for (reply, support, applied) in [
+    for (replies, support, applied) in [
         (
-            Ok(json!({"value":"LANDSCAPE"})),
+            vec![
+                Ok(json!({"value":"LANDSCAPE"})),
+                Ok(page(900, 600, &json!("landscape"))),
+            ],
             OrientationSupport::Supported,
             Some(RemoteOrientation::Landscape),
         ),
-        (Ok(json!({"value":"invalid"})), OrientationSupport::Unverified, None),
         (
-            Err(HttpError::WebDriver {
+            vec![Ok(json!({"value":"LANDSCAPE"})), Ok(page(600, 900, &json!("portrait")))],
+            OrientationSupport::Supported,
+            None,
+        ),
+        (
+            vec![
+                Ok(json!({"value":"LANDSCAPE"})),
+                Err(HttpError::WebDriver {
+                    error: "javascript error".into(),
+                    message: "page unavailable".into(),
+                }),
+            ],
+            OrientationSupport::Supported,
+            None,
+        ),
+        (
+            vec![Ok(json!({"value":"invalid"}))],
+            OrientationSupport::Unverified,
+            None,
+        ),
+        (
+            vec![Err(HttpError::WebDriver {
                 error: "unknown command".into(),
                 message: "unsupported".into(),
-            }),
+            })],
             OrientationSupport::Unsupported,
             None,
         ),
         (
-            Err(HttpError::WebDriver {
+            vec![Err(HttpError::WebDriver {
                 error: "unknown error".into(),
                 message: "temporary".into(),
-            }),
+            })],
             OrientationSupport::Unverified,
             None,
         ),
     ] {
-        let transport = Transport::new(vec![reply]);
+        let call_count = replies.len();
+        let transport = Transport::new(replies);
         assert_eq!(
             probe(&transport, "/session/example"),
             RemoteOrientationState { support, applied }
         );
-        assert_eq!(transport.calls.lock().unwrap().len(), 1);
+        let calls = transport.calls.lock().unwrap();
+        assert_eq!(calls.len(), call_count);
+        assert_eq!(calls[0].0, "GET");
+        if call_count == 2 {
+            assert_eq!(calls[1].1, "/session/example/execute/sync");
+            let timeouts = transport.timeouts.lock().unwrap();
+            assert!(timeouts[1] < timeouts[0], "both observations share one deadline");
+        }
     }
 }
+
 #[test]
 fn round_trip_requires_device_and_page_acknowledgement() {
     let transport = Transport::new(vec![

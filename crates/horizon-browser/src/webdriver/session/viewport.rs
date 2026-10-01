@@ -346,7 +346,6 @@ pub(in crate::webdriver::session) mod tests {
         let frame_slot = &config.frame_slot;
         let host = DriverHost::Remote(RemoteHost::connect(&request).unwrap());
         let remote_release = Arc::default();
-        let remote_device = None;
         let session_id = "test".into();
         let bidi = Some(link);
         let automation_ws = String::new();
@@ -356,9 +355,10 @@ pub(in crate::webdriver::session) mod tests {
             config: config.clone(),
             host,
             remote_release,
-            remote_device,
+            remote_device: None,
             remote_orientation: None,
             pending_orientation: None,
+            initial_orientation_pending: false,
             orientation_error: None,
             orientation_action_id: None,
             orientation_completed: crate::remote::RemoteOrientationView::default(),

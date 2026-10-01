@@ -442,3 +442,30 @@ fn rotation_invalidates_refs_and_waits_for_current_ownership() {
     assert_eq!(classic.recorded().len(), 1);
     assert_eq!(classic.recorded()[0].path, "/session/test/orientation");
 }
+
+#[test]
+fn startup_remeasures_committed_page_instead_of_reusing_allocation_geometry() {
+    let classic = Server::start(vec![
+        Reply::json(200, &json!({"value":"LANDSCAPE"})),
+        Reply::json(
+            200,
+            &json!({"value":{"width":600,"height":900,"visual_width":600,"visual_height":900,"orientation":"portrait"}}),
+        ),
+    ]);
+    let (link, worker) = bidi_fixture(false, false);
+    let mut driver = fixture_driver(&classic, link);
+    driver.remote_orientation = Some(crate::remote::RemoteOrientationState {
+        support: OrientationSupport::Supported,
+        applied: Some(RemoteOrientation::Landscape),
+    });
+    driver.refresh_initial_orientation(false, &events());
+    assert_eq!(
+        driver.remote_orientation.as_ref().unwrap().support,
+        OrientationSupport::Supported
+    );
+    assert_eq!(driver.remote_orientation.as_ref().unwrap().applied, None);
+    assert!(!driver.initial_orientation_pending);
+    assert_eq!(classic.recorded().len(), 2);
+    drop(driver);
+    assert!(worker.join().unwrap().is_empty());
+}

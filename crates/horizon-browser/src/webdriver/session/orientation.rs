@@ -1,6 +1,7 @@
 //! Rotation requests observed from the servicing loop, with current ownership guards.
 use super::super::orientation::{observe, remaining, set};
 use super::Driver;
+mod initial;
 mod origin;
 use crate::remote::{OrientationSupport, RemoteOrientation};
 use crate::session::BrowserEventSender;

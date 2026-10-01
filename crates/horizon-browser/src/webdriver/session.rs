@@ -65,6 +65,7 @@ struct Driver {
     remote_device: Option<String>,
     remote_orientation: Option<crate::remote::RemoteOrientationState>,
     pending_orientation: Option<orientation::Pending>,
+    initial_orientation_pending: bool,
     orientation_error: Option<String>,
     orientation_action_id: Option<String>,
     orientation_completed: crate::remote::RemoteOrientationView,
@@ -180,7 +181,7 @@ pub(crate) fn run_webdriver(
             return;
         }
     };
-    driver.prepare_ready(config, frame_slot, event_tx);
+    driver.prepare_ready(config, frame_slot, event_tx, stop_requested);
 
     'session: while !stop_requested.load(Ordering::Acquire) {
         let mut stop = false;
@@ -252,7 +253,13 @@ pub(crate) fn run_webdriver(
 }
 
 impl Driver {
-    fn prepare_ready(&mut self, config: &BrowserSessionConfig, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
+    fn prepare_ready(
+        &mut self,
+        config: &BrowserSessionConfig,
+        frame_slot: &FrameSlot,
+        event_tx: &BrowserEventSender,
+        stop_requested: &AtomicBool,
+    ) {
         self.enable_file_chooser(event_tx);
         if self.firefox_bidi() {
             self.set_viewport(config.width, config.height, event_tx);
@@ -267,6 +274,10 @@ impl Driver {
             .as_deref()
             .filter(|url| !url.is_empty() && *url != "about:blank")
             .is_some_and(|url| self.navigate_initial(url, event_tx));
+        self.refresh_initial_orientation(startup_navigation_pending, event_tx);
+        if stop_requested.load(Ordering::Acquire) {
+            return;
+        }
         // `Ready` means the servicing loop below is about to run: commands and
         // agent actions are only usable from here on, so it must not be
         // published before the (bounded) startup navigation returned. The host
@@ -382,6 +393,7 @@ impl Driver {
             remote_device,
             remote_orientation,
             pending_orientation: None,
+            initial_orientation_pending: false,
             orientation_error: None,
             orientation_action_id: None,
             orientation_completed: crate::remote::RemoteOrientationView::default(),

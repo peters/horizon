@@ -14,11 +14,15 @@ pub(super) fn unsupported(error: &HttpError) -> bool {
 }
 
 pub(super) fn probe(transport: &dyn ClassicTransport, session: &str) -> RemoteOrientationState {
+    let deadline = Instant::now() + Duration::from_secs(3);
     match transport.get_with_read_timeout(&format!("{session}/orientation"), Duration::from_secs(3)) {
         Ok(value) => {
-            let applied = value["value"].as_str().and_then(RemoteOrientation::from_driver);
+            let device = value["value"].as_str().and_then(RemoteOrientation::from_driver);
+            let applied = device.filter(|orientation| {
+                measure_page(transport, session, deadline).is_ok_and(|page| page.confirms(*orientation))
+            });
             RemoteOrientationState {
-                support: if applied.is_some() {
+                support: if device.is_some() {
                     OrientationSupport::Supported
                 } else {
                     OrientationSupport::Unverified
@@ -94,6 +98,15 @@ pub(super) fn observe(
     if applied != requested {
         return Ok(None);
     }
+    let measured = measure_page(transport, session, deadline)?;
+    Ok(measured.confirms(requested).then_some(measured))
+}
+
+fn measure_page(
+    transport: &dyn ClassicTransport,
+    session: &str,
+    deadline: Instant,
+) -> Result<PageMeasurement, BrowserControlFailure> {
     let page = transport
         .post_with_read_timeout(
             &format!("{session}/execute/sync"),
@@ -114,7 +127,7 @@ pub(super) fn observe(
             "the page did not return consistent orientation geometry",
         ));
     }
-    Ok(measured.confirms(requested).then_some(measured))
+    Ok(measured)
 }
 
 pub(super) fn set(

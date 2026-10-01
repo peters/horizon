@@ -40,7 +40,10 @@ a pass from mocks or use a different browser controller.
 
 1. Create a remote tablet without an orientation override. Confirm the panel
    reports provider-confirmed physical device identity and observed
-   orientation/support. Missing config fields must retain existing behavior.
+   orientation/support. Verified requires device, inner viewport and visual
+   viewport agreement on the committed document. A pending start page must stay
+   unverified until commit; disagreement or unavailable geometry must not claim
+   verified orientation. Missing config fields must retain existing behavior.
 2. Close that owned session and verify release. Do not retry an unknown
    allocation; reconcile its exact reference through public tooling first.
 3. Configure the private tablet target with landscape. Create it, take the
