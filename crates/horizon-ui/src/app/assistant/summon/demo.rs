@@ -243,6 +243,11 @@ impl HorizonApp {
             }
             "collapse" => self.assistant.summon.expanded = false,
             "answer" => self.demo_answer(argument),
+            "ws" => {
+                self.assistant.summon.pending_workspace = argument
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .map(|number| number.saturating_sub(1));
+            }
             "hub" => {
                 self.assistant.summon.hub.style = match argument {
                     Some("b") => super::HubStyle::Window,

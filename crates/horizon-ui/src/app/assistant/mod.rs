@@ -28,6 +28,11 @@ use zeroize::Zeroizing;
 
 use super::{HorizonApp, TOOLBAR_HEIGHT};
 
+/// Whether the assistant lives in the dock rather than the drawer and the summon bar.
+pub(in crate::app) fn dock_enabled() -> bool {
+    summon::dock_enabled()
+}
+
 pub(super) const ASSISTANT_PANEL_ID: &str = "assistant_drawer";
 const DEFAULT_WIDTH: f32 = 460.0;
 const MIN_WIDTH: f32 = 340.0;

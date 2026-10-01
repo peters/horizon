@@ -27,12 +27,14 @@ mod deck;
 pub(super) mod demo;
 mod desk_bar;
 mod desk_windows;
+mod dock;
 pub(super) mod feed;
 mod hub;
 mod mini;
 mod turns;
 
 pub(in crate::app) use desk_bar::ExpandStyle;
+pub(in crate::app) use dock::enabled as dock_enabled;
 pub(in crate::app) use hub::{HubPage, HubStyle};
 pub(in crate::app) use mini::MiniStyle;
 pub(in crate::app) use turns::FeedStyle;
@@ -58,6 +60,8 @@ pub(super) struct Summon {
     feed_style: FeedStyle,
     /// Turns the person has dismissed from the deck, so only newer ones show.
     deck_dismissed: usize,
+    /// A workspace the script asked to go to, for the dock to carry out.
+    pending_workspace: Option<usize>,
     /// The bar is shrunk to rest above the dock, in this design.
     mini: Option<MiniStyle>,
     /// The design mini mode returns to.
@@ -136,12 +140,25 @@ impl HorizonApp {
         self.release_assistant_focus();
     }
 
+    /// The dock replaces this bar: its shortcut focuses the dock's field instead.
+    fn summon_yields_to_dock(&mut self) -> bool {
+        if !dock::enabled() {
+            return false;
+        }
+        if self.assistant.summon.open {
+            self.assistant.summon.open = false;
+            self.assistant.summon.focus_requested = true;
+        }
+        true
+    }
+
     /// Draws the overlay above the canvas while it is open.
     pub(in crate::app) fn render_summon(&mut self, ctx: &egui::Context) {
-        if !self.assistant.summon.is_open() {
-            return;
-        }
-        if self.settings.is_some() || self.fullscreen_panel.is_some() {
+        if self.summon_yields_to_dock()
+            || !self.assistant.summon.is_open()
+            || self.settings.is_some()
+            || self.fullscreen_panel.is_some()
+        {
             return;
         }
         // The agent has to be running for the prompt to reach it, drawer or not.

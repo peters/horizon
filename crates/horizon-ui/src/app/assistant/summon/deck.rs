@@ -14,8 +14,8 @@ use super::turns::split_reply;
 use super::{HorizonApp, demo};
 use crate::theme;
 
-const CARD_HEIGHT: f32 = 88.0;
-const GAP: f32 = 8.0;
+pub(super) const CARD_HEIGHT: f32 = 88.0;
+pub(super) const GAP: f32 = 8.0;
 const MAX_CARDS: usize = 3;
 
 pub(super) enum Toast {

@@ -458,7 +458,7 @@ impl HorizonApp {
     }
 
     /// The assistant's terminal, `height` tall, on a rounded dark panel.
-    fn conversation(&mut self, ui: &mut Ui, height: f32, with_plan: bool) {
+    pub(super) fn conversation(&mut self, ui: &mut Ui, height: f32, with_plan: bool) {
         if let (Some(page), super::hub::HubStyle::Inline) =
             (self.assistant.summon.hub.page, self.assistant.summon.hub.style)
         {
@@ -513,7 +513,7 @@ impl HorizonApp {
         }
     }
 
-    fn desk_footer(&mut self, ui: &mut Ui, action: &mut Option<Action>, expanded: bool) {
+    pub(super) fn desk_footer(&mut self, ui: &mut Ui, action: &mut Option<Action>, expanded: bool) {
         let agent = self.assistant.settings.agent;
         let ask = self.assistant.settings.ask_before_send;
         let steps = self.assistant.plan.clone();
@@ -783,7 +783,7 @@ impl HorizonApp {
 
     // ---- scope ---------------------------------------------------------
 
-    fn render_scope_popup(&mut self, ctx: &egui::Context, tiles: &[Tile]) {
+    pub(super) fn render_scope_popup(&mut self, ctx: &egui::Context, tiles: &[Tile]) {
         if !self.assistant.scope_open {
             return;
         }

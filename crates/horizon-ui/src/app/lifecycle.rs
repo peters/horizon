@@ -331,6 +331,7 @@ impl HorizonApp {
         }
         self.render_assistant_drawer(ui);
         self.render_summon(ui.ctx());
+        self.render_assistant_dock(ui.ctx());
 
         #[cfg(feature = "cloud-workspaces")]
         if self.render_fullscreen_cloud(ui) {
@@ -371,7 +372,10 @@ impl HorizonApp {
         self.render_file_drop_highlight(ui);
         self.render_preset_picker(ui);
         let minimap_height = self.render_minimap(ui, workspace_bounds);
-        if self.fixed_overlays_visible() && self.template_config.features.attention_feed {
+        if self.fixed_overlays_visible()
+            && self.template_config.features.attention_feed
+            && !super::assistant::dock_enabled()
+        {
             let feed_result = attention_feed::render_attention_feed(
                 ui,
                 &self.board,

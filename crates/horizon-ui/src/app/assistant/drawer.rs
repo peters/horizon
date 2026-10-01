@@ -11,6 +11,10 @@ use crate::theme;
 impl HorizonApp {
     /// Renders the drawer before the canvas so egui reserves its width first.
     pub(in crate::app) fn render_assistant_drawer(&mut self, ui: &mut Ui) {
+        // The dock is the assistant's place; the drawer stays shut.
+        if super::summon::dock_enabled() {
+            self.assistant.open = false;
+        }
         self.sync_assistant_focus();
         self.sync_assistant_thread();
         if !self.assistant_visible() {

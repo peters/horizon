@@ -299,7 +299,7 @@ impl HorizonApp {
     }
 
     /// The orb: a breathing glow, a ring with an arc for each agent, the mark and a badge for who waits.
-    fn paint_orb(&self, ui: &mut Ui, centre: Pos2, radius: f32, agents: &[AgentRow], now: f32) {
+    pub(super) fn paint_orb(&self, ui: &mut Ui, centre: Pos2, radius: f32, agents: &[AgentRow], now: f32) {
         let level = self.assistant.demo.as_ref().and_then(super::demo::Demo::level);
         let speaking = self.speaking_now();
         // A soft glow that breathes, and swells with the voice.
@@ -342,7 +342,7 @@ impl HorizonApp {
                 ui.painter().add(Shape::line(points, Stroke::new(4.0, color)));
             }
         }
-        let mark = Rect::from_center_size(centre, vec2(30.0, 30.0));
+        let mark = Rect::from_center_size(centre, vec2(radius * 0.9, radius * 0.9));
         icons::paint_mark(ui.painter(), mark);
 
         let needs = agents
@@ -474,7 +474,7 @@ impl HorizonApp {
 
     // ---- shared --------------------------------------------------------------
 
-    fn speaking_now(&self) -> bool {
+    pub(super) fn speaking_now(&self) -> bool {
         self.assistant
             .demo
             .as_ref()
@@ -542,6 +542,15 @@ impl HorizonApp {
 
 /// A rounded plate with a tinted edge, behind the orb's caption.
 pub(super) fn plate(ui: &Ui, rect: Rect, edge: Color32) {
+    ui.painter().add(
+        egui::Shadow {
+            offset: [0, 8],
+            blur: 26,
+            spread: 0,
+            color: Color32::from_black_alpha(110),
+        }
+        .as_shape(rect, CornerRadius::same(20)),
+    );
     ui.painter().rect(
         rect,
         CornerRadius::same(20),
@@ -595,7 +604,7 @@ pub(super) fn small_button(ui: &mut Ui, rect: Rect, text: &str, primary: bool) -
     response
 }
 
-fn round_button(ui: &mut Ui, rect: Rect, icon: icons::Icon, tip: &str, lit: bool) -> egui::Response {
+pub(super) fn round_button(ui: &mut Ui, rect: Rect, icon: icons::Icon, tip: &str, lit: bool) -> egui::Response {
     let response = ui.interact(rect, egui::Id::new(("mini_round", tip)), Sense::click());
     let fill = if lit {
         theme::ACCENT()
@@ -615,7 +624,7 @@ fn round_button(ui: &mut Ui, rect: Rect, icon: icons::Icon, tip: &str, lit: bool
     response.on_hover_text(tip)
 }
 
-fn chevron_button(ui: &mut Ui, rect: Rect) -> egui::Response {
+pub(super) fn chevron_button(ui: &mut Ui, rect: Rect) -> egui::Response {
     let response = ui.interact(rect, egui::Id::new("mini_chevron"), Sense::click());
     if response.hovered() {
         ui.painter()
