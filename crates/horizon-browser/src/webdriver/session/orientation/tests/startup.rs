@@ -183,9 +183,8 @@ fn explicit_start_waiting_for_navigation_is_refused_and_preserves_uncertain_rele
     assert!(worker.join().unwrap().is_empty());
 }
 
-#[test]
-fn explicit_start_success_publishes_matching_geometry_before_ready_and_does_not_release() {
-    let classic = Server::start(vec![
+fn committed_initial_replies(orientation: &str) -> Vec<Reply> {
+    vec![
         Reply::json(200, &json!({"value":"old-document"})),
         Reply::json(200, &json!({"value":null})),
         Reply::json(200, &json!({"value":null})),
@@ -194,9 +193,18 @@ fn explicit_start_success_publishes_matching_geometry_before_ready_and_does_not_
         Reply::json(200, &json!({"value":"https://example.test/ready"})),
         Reply::json(200, &json!({"value":"Orientation demo"})),
         Reply::json(200, &json!({"value":"new-document"})),
-        Reply::json(200, &json!({"value":"LANDSCAPE"})),
-        measured(900, 600, "landscape"),
-    ]);
+        Reply::json(200, &json!({"value":orientation})),
+        if orientation == "LANDSCAPE" {
+            measured(900, 600, "landscape")
+        } else {
+            measured(600, 900, "portrait")
+        },
+    ]
+}
+
+#[test]
+fn explicit_start_success_publishes_matching_geometry_before_ready_and_does_not_release() {
+    let classic = Server::start(committed_initial_replies("LANDSCAPE"));
     let (link, worker) = bidi_fixture(false, false);
     let mut driver = explicit_driver(&classic, link);
     driver.config.initial_url = Some("https://example.test/ready".into());
@@ -362,4 +370,178 @@ fn explicit_start_cancelled_before_preparation_releases_without_probing() {
     assert_eq!(classic.recorded()[0].path, "/session/test");
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
+}
+
+#[test]
+fn allocation_page_cannot_reject_an_explicit_start_before_matching_first_document_commits() {
+    for temporary_orientation in ["PORTRAIT", "LANDSCAPE", "invalid"] {
+        let mut replies = vec![
+            Reply::json(
+                200,
+                &json!({"value":{"sessionId":"test","capabilities":{"browserName":"safari"}}}),
+            ),
+            Reply::json(200, &json!({"value":temporary_orientation})),
+        ];
+        let mut document = committed_initial_replies("LANDSCAPE");
+        document[0] = Reply::json(
+            500,
+            &json!({"value":{"error":"javascript error","message":"temporary page unavailable"}}),
+        );
+        replies.extend(document);
+        replies.push(Reply::json(200, &json!({"value":null})));
+        let classic = Server::start(replies);
+        let (link, worker) = bidi_fixture(false, false);
+        let mut driver = explicit_driver(&classic, link);
+        driver.config.initial_url = Some("https://example.test/ready".into());
+        let report = crate::session::RemoteReleaseReport::default();
+        let (tx, rx) = mpsc::channel();
+        let events = BrowserEventSender { tx, ..events() };
+        let stop = AtomicBool::new(false);
+        let (host, session, _, orientation) =
+            super::super::super::startup::start_remote(driver.config.remote.as_ref().unwrap(), &events, &report, &stop)
+                .unwrap();
+        assert_eq!(orientation.applied, None);
+        assert_eq!(
+            classic.recorded().len(),
+            2,
+            "allocation must not inspect temporary page geometry"
+        );
+        driver.host = host;
+        driver.session_id = session.id;
+        driver.remote_orientation = Some(orientation);
+        driver.remote_release = report;
+        let config = driver.config.clone();
+        assert!(driver.prepare_ready(&config, &config.frame_slot, &events, &stop));
+        let observed: Vec<_> = rx.try_iter().collect();
+        assert!(observed.iter().any(|e| matches!(e, BrowserEvent::Ready)));
+        assert_eq!(
+            driver.remote_orientation.unwrap().applied,
+            Some(RemoteOrientation::Landscape)
+        );
+        let seen = classic.recorded();
+        assert!(seen.iter().all(|r| r.method != "DELETE"));
+        let navigation = seen
+            .iter()
+            .position(|r| r.method == "POST" && r.path == "/session/test/url")
+            .unwrap();
+        assert!(seen[..navigation].iter().all(|r| !r.body.contains("visual_width")));
+        assert_eq!(
+            driver.host.release(&driver.session_id),
+            Some(crate::RemoteReleaseOutcome::Released)
+        );
+        drop(driver);
+        assert!(worker.join().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn ignored_committed_orientation_is_rejected_and_exactly_released_after_successful_allocation() {
+    let mut replies = vec![
+        Reply::json(
+            200,
+            &json!({"value":{"sessionId":"test","capabilities":{"browserName":"safari"}}}),
+        ),
+        Reply::json(200, &json!({"value":"LANDSCAPE"})),
+    ];
+    replies.extend(committed_initial_replies("PORTRAIT"));
+    replies.push(Reply::json(200, &json!({"value":null})));
+    let classic = Server::start(replies);
+    let (link, worker) = bidi_fixture(false, false);
+    let mut driver = explicit_driver(&classic, link);
+    driver.config.initial_url = Some("https://example.test/ready".into());
+    let report = crate::session::RemoteReleaseReport::default();
+    let (tx, rx) = mpsc::channel();
+    let events = BrowserEventSender { tx, ..events() };
+    let stop = AtomicBool::new(false);
+    let (host, session, _, orientation) =
+        super::super::super::startup::start_remote(driver.config.remote.as_ref().unwrap(), &events, &report, &stop)
+            .unwrap();
+    driver.host = host;
+    driver.session_id = session.id;
+    driver.remote_orientation = Some(orientation);
+    driver.remote_release = report;
+    let config = driver.config.clone();
+    assert!(!driver.prepare_ready(&config, &config.frame_slot, &events, &stop));
+    let observed: Vec<_> = rx.try_iter().collect();
+    assert!(!observed.iter().any(|e| matches!(e, BrowserEvent::Ready)));
+    assert!(observed.iter().any(|e| matches!(
+        e,
+        BrowserEvent::RemoteSession(crate::RemoteSessionEvent::OrientationRejected {
+            code: "remote_orientation_mismatch",
+            released: crate::RemoteReleaseOutcome::Released,
+            ..
+        })
+    )));
+    let deletes: Vec<_> = classic
+        .recorded()
+        .into_iter()
+        .filter(|r| r.method == "DELETE")
+        .collect();
+    assert_eq!(deletes.len(), 1);
+    assert_eq!(deletes[0].path, "/session/test");
+    drop(driver);
+    assert!(worker.join().unwrap().is_empty());
+}
+
+#[test]
+fn unsupported_start_releases_at_readiness_and_preserves_unknown_release() {
+    for confirmed in [true, false] {
+        let mut replies = vec![
+            Reply::json(200, &json!({"value":{"sessionId":"test","capabilities":{}}})),
+            Reply::json(
+                404,
+                &json!({"value":{"error":"unknown command","message":"unsupported"}}),
+            ),
+            Reply::json(200, &json!({"value":"document"})),
+        ];
+        replies.extend((0..if confirmed { 1 } else { 3 }).map(|_| {
+            Reply::json(
+                200,
+                &if confirmed {
+                    json!({"value":null})
+                } else {
+                    json!({"value":"unrecognized"})
+                },
+            )
+        }));
+        let classic = Server::start(replies);
+        let (link, worker) = bidi_fixture(false, false);
+        let mut driver = explicit_driver(&classic, link);
+        let report = crate::session::RemoteReleaseReport::default();
+        let (tx, rx) = mpsc::channel();
+        let events = BrowserEventSender { tx, ..events() };
+        let stop = AtomicBool::new(false);
+        let (host, session, _, orientation) =
+            super::super::super::startup::start_remote(driver.config.remote.as_ref().unwrap(), &events, &report, &stop)
+                .unwrap();
+        assert_eq!(classic.recorded().len(), 2, "support discovery alone does not release");
+        driver.host = host;
+        driver.session_id = session.id;
+        driver.remote_orientation = Some(orientation);
+        driver.remote_release = report;
+        let config = driver.config.clone();
+        assert!(!driver.prepare_ready(&config, &config.frame_slot, &events, &stop));
+        let outcome = driver.remote_release.lock().unwrap().clone().unwrap();
+        assert_eq!(matches!(outcome, crate::RemoteReleaseOutcome::Released), confirmed);
+        if !confirmed {
+            assert!(matches!(outcome, crate::RemoteReleaseOutcome::ReleaseUnknown { .. }));
+        }
+        let seen = classic.recorded();
+        assert!(
+            seen[3..]
+                .iter()
+                .all(|r| r.method == "DELETE" && r.path == "/session/test")
+        );
+        let observed: Vec<_> = rx.try_iter().collect();
+        assert!(!observed.iter().any(|e| matches!(e, BrowserEvent::Ready)));
+        assert!(observed.iter().any(|e| matches!(
+            e,
+            BrowserEvent::RemoteSession(crate::RemoteSessionEvent::OrientationRejected {
+                code: "orientation_unsupported",
+                ..
+            })
+        )));
+        drop(driver);
+        assert!(worker.join().unwrap().is_empty());
+    }
 }

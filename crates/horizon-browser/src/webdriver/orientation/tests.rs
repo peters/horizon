@@ -161,7 +161,7 @@ fn geometry_and_orientation_disagreement_cannot_pass() {
     assert_eq!(transport.calls.lock().unwrap().len(), 1);
 }
 #[test]
-fn expired_action_and_cancelled_start_do_not_send_mutation() {
+fn expired_action_does_not_send_mutation() {
     let transport = Transport::new(vec![]);
     assert_eq!(
         set(
@@ -173,12 +173,6 @@ fn expired_action_and_cancelled_start_do_not_send_mutation() {
         .unwrap_err()
         .code,
         "orientation_timeout"
-    );
-    assert_eq!(
-        verify_start(&transport, "/session/example", RemoteOrientation::Landscape, || true)
-            .unwrap_err()
-            .code,
-        "browser_unavailable"
     );
     assert!(transport.calls.lock().unwrap().is_empty());
 }
@@ -200,60 +194,37 @@ fn unsupported_rotation_has_a_typed_refusal() {
 }
 
 #[test]
-fn ignored_start_orientation_is_a_mismatch_without_a_runtime_mutation() {
-    let transport = Transport::new(vec![Ok(json!({"value":"PORTRAIT"}))]);
-    let error = verify_start_until(
-        &transport,
-        "/session/example",
-        RemoteOrientation::Landscape,
-        || false,
-        Instant::now() + Duration::from_millis(20),
-    )
-    .unwrap_err();
-    assert_eq!(error.code, "remote_orientation_mismatch");
-    let calls = transport.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "GET");
-}
-
-#[test]
-fn start_observation_failures_remain_unverified() {
-    for replies in [
-        vec![Err(HttpError::WebDriver {
-            error: "unknown error".into(),
-            message: "private detail".into(),
-        })],
-        vec![Ok(json!({"value":"invalid"}))],
-        vec![Ok(json!({"value":"LANDSCAPE"})), Ok(json!({"value":null}))],
-        vec![Ok(json!({"value":"LANDSCAPE"})), Ok(page(0, 0, &Value::Null))],
+fn allocation_support_discovery_never_measures_or_applies_temporary_page_orientation() {
+    for (reply, expected) in [
+        (Ok(json!({"value":"PORTRAIT"})), OrientationSupport::Supported),
+        (Ok(json!({"value":"LANDSCAPE"})), OrientationSupport::Supported),
+        (Ok(json!({"value":"invalid"})), OrientationSupport::Unverified),
+        (
+            Err(HttpError::WebDriver {
+                error: "unknown command".into(),
+                message: "unsupported".into(),
+            }),
+            OrientationSupport::Unsupported,
+        ),
+        (
+            Err(HttpError::WebDriver {
+                error: "unknown error".into(),
+                message: "private transport detail".into(),
+            }),
+            OrientationSupport::Unverified,
+        ),
     ] {
-        let transport = Transport::new(replies);
-        let error = verify_start_until(
-            &transport,
-            "/session/example",
-            RemoteOrientation::Landscape,
-            || false,
-            Instant::now() + Duration::from_millis(20),
-        )
-        .unwrap_err();
-        assert_eq!(error.code, "orientation_unverified");
-        assert!(!error.message.contains("private detail"));
+        let transport = Transport::new(vec![reply]);
+        assert_eq!(
+            probe_support(&transport, "/session/example"),
+            RemoteOrientationState {
+                support: expected,
+                applied: None
+            }
+        );
+        let calls = transport.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], ("GET".into(), "/session/example/orientation".into(), None));
+        assert_eq!(*transport.timeouts.lock().unwrap(), vec![Duration::from_secs(3)]);
     }
-}
-
-#[test]
-fn cancellation_after_observation_preserves_browser_unavailable() {
-    let transport = Transport::new(vec![
-        Ok(json!({"value":"LANDSCAPE"})),
-        Ok(page(900, 600, &json!("landscape"))),
-    ]);
-    let error = verify_start_until(
-        &transport,
-        "/session/example",
-        RemoteOrientation::Landscape,
-        || !transport.calls.lock().unwrap().is_empty(),
-        Instant::now() + Duration::from_millis(20),
-    )
-    .unwrap_err();
-    assert_eq!(error.code, "browser_unavailable");
 }

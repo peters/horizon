@@ -22,7 +22,7 @@ is not physical-device qualification.
 | --- | --- | --- |
 | Config, import/export, create override or provider mapping | Protocol remote config, core remote profile, host/create queue, MCP create and remote startup | Baseline, configured start, override, catalog start and release |
 | Startup readiness or lifecycle | Startup pending/failure, unavailable/opposite/unsupported geometry, cancellation before/during measurement, confirmed/uncertain exact release | First snapshot on all explicit start lanes, baseline compatibility and release |
-| Device/page measurement or frame verification | Probe/verify-start and driver orientation tests, stale/contradictory frames, absent APIs, deadlines | Three round trips per device, geometry samples, no-op and UI round trip |
+| Device/page measurement or frame verification | Allocation support discovery, committed-page measurement and driver orientation tests, stale/contradictory frames, absent APIs, deadlines | Three round trips per device, geometry samples, no-op and UI round trip |
 | Refs, visual origin, scroll or document identity | Navigation and semantic invalidation, edge coordinates, delayed document commit, input during rotation | Edge clicks, scroll/fill, keyboard, navigate/reload/back/forward and fresh refs in both orientations |
 | Host publication, ownership or cloud status | Coordination publication, lock consuming deadline, takeover/cancel, supersession, timeout tombstones, ledger saturation/eviction, worker queue refusal | MCP plus UI, polling after completion; two-viewer cloud lane where configured |
 | UI presentation | Measured selection, progress, nonfatal error, disabled/wrapped controls | Buttons, narrow/wide panel, host resize/fit, screenshots, native video and final GIF |
@@ -120,8 +120,8 @@ identity and refusal evidence before closing the owned session.
 1. Create a remote tablet without an orientation override. Confirm the panel
    reports provider-confirmed physical device identity and observed
    orientation/support. Verified requires device, inner viewport and visual
-   viewport agreement on the committed document. Startup clears allocation-page
-   status before navigation. A default pending start stays unverified until commit.
+   viewport agreement on the committed document. Allocation discovers support without measuring its temporary page; startup
+   publishes unknown applied orientation before navigation. A default pending start stays unverified until commit.
    An explicit configured or per-call orientation must fail and release when the
    first page is pending, failed or unmeasurable; allocation-page evidence must not
    make it Ready. Cover forced cases with deterministic startup tests. Missing

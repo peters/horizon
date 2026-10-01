@@ -826,64 +826,6 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_start_releases_the_exact_allocation_and_preserves_unknown_release() {
-        use super::super::test_server::{Reply, Server};
-        use serde_json::json;
-        for confirmed in [true, false] {
-            let mut replies = vec![
-                Reply::json(
-                    200,
-                    &json!({"value":{"sessionId":"orientation-start","capabilities":{}}}),
-                ),
-                Reply::json(
-                    404,
-                    &json!({"value":{"error":"unknown command","message":"unsupported"}}),
-                ),
-            ];
-            replies.extend((0..if confirmed { 1 } else { 3 }).map(|_| {
-                Reply::json(
-                    200,
-                    &if confirmed {
-                        json!({"value":null})
-                    } else {
-                        json!({"value":"unrecognized"})
-                    },
-                )
-            }));
-            let server = Server::start(replies);
-            let mut request = super::super::remote::tests::request(&server.endpoint(""));
-            request.capabilities["appium:orientation"] = json!("LANDSCAPE");
-            let report = crate::session::RemoteReleaseReport::default();
-            let (tx, rx) = std::sync::mpsc::channel();
-            let events = crate::session::BrowserEventSender {
-                tx,
-                wake: crate::session::BrowserEventWake::default(),
-                committed_url: crate::session::CommittedUrl::default(),
-            };
-            assert!(start_remote(&request, &events, &report, &AtomicBool::new(false)).is_err());
-            let outcome = report.lock().unwrap().clone().unwrap();
-            assert_eq!(matches!(outcome, RemoteReleaseOutcome::Released), confirmed);
-            if !confirmed {
-                assert!(matches!(outcome, RemoteReleaseOutcome::ReleaseUnknown { .. }));
-            }
-            let seen = server.recorded();
-            assert_eq!(seen.iter().filter(|r| r.method == "POST").count(), 1);
-            assert!(
-                seen[2..]
-                    .iter()
-                    .all(|r| r.method == "DELETE" && r.path == "/session/orientation-start")
-            );
-            assert!(rx.try_iter().any(|e| matches!(
-                e,
-                crate::session::BrowserEvent::RemoteSession(RemoteSessionEvent::OrientationRejected {
-                    code: "orientation_unsupported",
-                    ..
-                })
-            )));
-        }
-    }
-
-    #[test]
     fn cancellation_during_unsupported_probe_releases_without_reporting_mismatch() {
         use super::super::test_server::{Reply, Server};
         use serde_json::json;

@@ -54,9 +54,11 @@ scope. Selecting or validating a target does not allocate a device.
 
 ## Readiness and observed status
 
-An allocation's orientation is not proof about the first loaded page. The driver
-clears the applied status before startup navigation and measures the committed
-document before publishing `Ready` for an explicit start orientation.
+Allocation uses a bounded orientation GET to discover endpoint support. It does
+not measure or apply orientation from the provider's temporary page, which can be
+unmeasurable or have different geometry. The driver publishes unknown applied
+orientation before startup navigation and measures the committed document before
+publishing `Ready` for an explicit start orientation.
 
 An explicit configured orientation or create override must match the device,
 inner viewport and visual viewport geometry. Nonzero, nonsquare geometry must

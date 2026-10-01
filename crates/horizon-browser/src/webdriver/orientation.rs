@@ -7,10 +7,26 @@ use serde_json::json;
 use std::time::{Duration, Instant};
 
 const SAMPLE_SCRIPT: &str = "return {width:innerWidth,height:innerHeight,visual_width:window.visualViewport?.width ?? innerWidth,visual_height:window.visualViewport?.height ?? innerHeight,orientation:screen.orientation?.type ?? (typeof window.orientation === 'number' ? (Math.abs(window.orientation)%180 === 90 ? 'landscape' : 'portrait') : null)};";
-pub(super) const START_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) fn unsupported(error: &HttpError) -> bool {
     matches!(error, HttpError::WebDriver { error, .. } if matches!(error.as_str(), "unknown command" | "unsupported operation" | "unknown method"))
+}
+
+/// Allocation discovers endpoint support without measuring its temporary page.
+pub(super) fn probe_support(transport: &dyn ClassicTransport, session: &str) -> RemoteOrientationState {
+    let support = match transport.get_with_read_timeout(&format!("{session}/orientation"), Duration::from_secs(3)) {
+        Ok(value)
+            if value["value"]
+                .as_str()
+                .and_then(RemoteOrientation::from_driver)
+                .is_some() =>
+        {
+            OrientationSupport::Supported
+        }
+        Err(error) if unsupported(&error) => OrientationSupport::Unsupported,
+        _ => OrientationSupport::Unverified,
+    };
+    RemoteOrientationState { support, applied: None }
 }
 
 pub(super) fn probe(transport: &dyn ClassicTransport, session: &str) -> RemoteOrientationState {
@@ -156,58 +172,6 @@ fn protocol_failure(error: &HttpError) -> BrowserControlFailure {
             "orientation_unverified",
             "the endpoint did not confirm orientation; the device may already have rotated, inspect before retrying",
         )
-    }
-}
-
-pub(super) fn verify_start(
-    transport: &dyn ClassicTransport,
-    session: &str,
-    requested: RemoteOrientation,
-    stopped: impl Fn() -> bool,
-) -> Result<(), BrowserControlFailure> {
-    verify_start_until(transport, session, requested, stopped, Instant::now() + START_TIMEOUT)
-}
-fn verify_start_until(
-    transport: &dyn ClassicTransport,
-    session: &str,
-    requested: RemoteOrientation,
-    stopped: impl Fn() -> bool,
-    deadline: Instant,
-) -> Result<(), BrowserControlFailure> {
-    let mut last_failure = BrowserControlFailure::new(
-        "orientation_unverified",
-        "start orientation could not be observed before the deadline",
-    );
-    loop {
-        if stopped() {
-            return Err(BrowserControlFailure::new(
-                "browser_unavailable",
-                "the panel closed before orientation was verified",
-            ));
-        }
-        if remaining(deadline).is_err() {
-            return Err(last_failure);
-        }
-        let observed = observe(transport, session, requested, deadline);
-        if stopped() {
-            return Err(BrowserControlFailure::new(
-                "browser_unavailable",
-                "the panel closed before orientation was verified",
-            ));
-        }
-        match observed {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) => {
-                last_failure = BrowserControlFailure::new(
-                    "remote_orientation_mismatch",
-                    "the provider did not confirm the requested start orientation and page geometry",
-                );
-            }
-            Err(error) if error.code == "orientation_unsupported" => return Err(error),
-            Err(error) if error.code != "orientation_timeout" => last_failure = error,
-            Err(_) => {}
-        }
-        std::thread::sleep(Duration::from_millis(100).min(deadline.saturating_duration_since(Instant::now())));
     }
 }
 

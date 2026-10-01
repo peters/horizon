@@ -67,36 +67,12 @@ pub(super) fn start_remote(
     let allocated = RemoteHost::connect(request).and_then(|mut host| {
         let allocation = host.allocate(request)?;
         let session_path = format!("/session/{}", allocation.session.id);
-        let mut orientation = super::super::orientation::probe(host.transport(), &session_path);
-        if let Some(requested) = request.orientation() {
-            let verification = if stop_requested.load(Ordering::Acquire) {
-                Err(crate::BrowserControlFailure::new(
-                    "browser_unavailable",
-                    "the panel closed before orientation was verified",
-                ))
-            } else if orientation.support == crate::remote::OrientationSupport::Unsupported {
-                Err(crate::BrowserControlFailure::new(
-                    "orientation_unsupported",
-                    "endpoint cannot verify start orientation",
-                ))
-            } else {
-                super::super::orientation::verify_start(host.transport(), &session_path, requested, || {
-                    stop_requested.load(Ordering::Acquire)
-                })
-            };
-            if let Err(error) = verification {
-                return Err(RemoteStartFailure::OrientationRejected {
-                    code: match error.code.as_str() {
-                        "orientation_unsupported" => "orientation_unsupported",
-                        "remote_orientation_mismatch" => "remote_orientation_mismatch",
-                        "browser_unavailable" => "browser_unavailable",
-                        _ => "orientation_unverified",
-                    },
-                    released: host.release(&allocation.session.id),
-                });
-            }
-            orientation.applied = Some(requested);
-            orientation.support = crate::remote::OrientationSupport::Supported;
+        let orientation = super::super::orientation::probe_support(host.transport(), &session_path);
+        if request.orientation().is_some() && stop_requested.load(Ordering::Acquire) {
+            return Err(RemoteStartFailure::OrientationRejected {
+                code: "browser_unavailable",
+                released: host.release(&allocation.session.id),
+            });
         }
         Ok((host, allocation, orientation))
     });
