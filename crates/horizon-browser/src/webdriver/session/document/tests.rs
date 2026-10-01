@@ -260,7 +260,13 @@ fn native_components_share_one_deadline_including_a_late_error() {
         "document_observation_timeout"
     );
     assert!(start.elapsed() < Duration::from_millis(500));
-    assert_eq!(classic.recorded().len(), 2);
+    let calls = classic.recorded();
+    // The URL read can exhaust the deadline before the next read is dispatched.
+    assert!((1..=2).contains(&calls.len()));
+    assert_eq!(calls[0].path, "/session/test/url");
+    if let Some(name) = calls.get(1) {
+        assert_eq!(name.path, "/session/test/element/retained/name");
+    }
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
 }

@@ -1,4 +1,4 @@
-use std::io::{BufRead as _, BufReader, Write as _};
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -6,7 +6,8 @@ use horizon_browser_control::manifest::provider_usage::{ProviderUsageSummary, Us
 use horizon_browser_control::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
-const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 3;
+// Process startup and manifest persistence must leave time for the blocking action.
+const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 6;
 const STDIN_EXECUTION_TIMEOUT: Duration = Duration::from_secs(1);
 const DEADLINE_ROUNDING_SLACK_MILLIS: u128 = 1;
 
@@ -965,7 +966,11 @@ fn run_deadline_after_action(
     }
     let mut child = command.spawn().expect("spawn deadline browser job");
     wait_for_manifest_action(&mut child, manifest_path);
-    wait_for_exit(&mut child, "deadline browser job");
+    wait_for_exit_with_timeout(
+        &mut child,
+        "deadline browser job",
+        Duration::from_secs(DEADLINE_TEST_TIMEOUT_SECONDS + 2),
+    );
     child.wait_with_output().expect("collect deadline browser job")
 }
 
@@ -1008,10 +1013,15 @@ fn wait_for_manifest_action(child: &mut Child, manifest_path: &std::path::Path) 
         {
             return;
         }
-        assert!(
-            child.try_wait().expect("poll browser job").is_none(),
-            "browser job exited before queueing its blocking action"
-        );
+        if let Some(status) = child.try_wait().expect("poll browser job") {
+            let mut stderr = String::new();
+            if let Some(stream) = child.stderr.as_mut() {
+                stream
+                    .read_to_string(&mut stderr)
+                    .expect("read exited browser job error");
+            }
+            panic!("browser job exited before queueing its blocking action ({status}): {stderr}");
+        }
         if Instant::now() >= deadline {
             child.kill().expect("kill stalled task-owned browser job");
             child.wait().expect("reap stalled task-owned browser job");
@@ -1058,7 +1068,11 @@ fn send_interrupt(pid: u32) {
 }
 
 fn wait_for_exit(child: &mut Child, description: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    wait_for_exit_with_timeout(child, description, Duration::from_secs(5));
+}
+
+fn wait_for_exit_with_timeout(child: &mut Child, description: &str, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
     loop {
         if child.try_wait().expect("poll task-owned browser job").is_some() {
             return;
