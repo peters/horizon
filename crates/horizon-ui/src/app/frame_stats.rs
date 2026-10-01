@@ -76,7 +76,7 @@ impl FrameStats {
         if since_run > IDLE_HOLD {
             return None;
         }
-        Some(IDLE_HOLD + IDLE_REFRESH_MARGIN - since_run)
+        Some((IDLE_HOLD + IDLE_REFRESH_MARGIN).saturating_sub(since_run))
     }
 
     pub(super) fn snapshot(&self) -> FrameStatsSnapshot {
@@ -212,7 +212,7 @@ mod tests {
 
         // Horizon's terminal poll backs off while idle; each wake comes from a timer.
         for poll_ms in [100, 100, 250, 250, 500, 500, 1_000] {
-            now += Duration::from_millis(poll_ms) - EGUI_PREDICTED_DT;
+            now += Duration::from_millis(poll_ms).saturating_sub(EGUI_PREDICTED_DT);
             frame_stats.record_frame(now, false);
             assert_eq!(
                 frame_stats.snapshot(),
@@ -238,7 +238,7 @@ mod tests {
             .idle_refresh_after(poll)
             .expect("refresh while the run is held");
         assert!(refresh > EGUI_PREDICTED_DT, "an idle refresh must not become immediate");
-        let refreshed_at = poll + refresh - EGUI_PREDICTED_DT;
+        let refreshed_at = poll + refresh.saturating_sub(EGUI_PREDICTED_DT);
         assert!(refreshed_at.saturating_duration_since(last) > IDLE_HOLD);
 
         frame_stats.record_frame(refreshed_at, false);
