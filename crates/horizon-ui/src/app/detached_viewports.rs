@@ -118,14 +118,6 @@ impl HorizonApp {
         true
     }
 
-    /// eframe repaints the root together with an immediate child viewport, so
-    /// continuous rendering in a detached window drives root frames too.
-    pub(super) fn detached_viewport_requested_repaint_last_pass(&self, ctx: &Context) -> bool {
-        self.detached_workspaces
-            .keys()
-            .any(|local_id| ctx.requested_repaint_last_pass_for(&detached_viewport_id(local_id)))
-    }
-
     pub(super) fn render_detached_viewports(&mut self, ctx: &Context) {
         let local_ids: Vec<_> = self.detached_workspaces.keys().cloned().collect();
         let mut stale_local_ids = Vec::new();
@@ -156,6 +148,12 @@ impl HorizonApp {
             let local_id_for_viewport = local_id.clone();
 
             ctx.show_viewport_immediate(viewport_id, builder, |viewport_ui, _class| {
+                // eframe repaints the root together with this child, so its
+                // immediate repaint makes the root frame continuous too. Read it
+                // here: egui advances the child's repaint state when its pass begins.
+                if viewport_ui.ctx().requested_repaint_last_pass() {
+                    self.frame_stats.mark_continuous();
+                }
                 // Feed the focus aggregate consumed by the end-of-frame
                 // unattended-recording privacy guard.
                 self.any_viewport_focused |= viewport_ui.input(|input| input.viewport().focused.unwrap_or(false));

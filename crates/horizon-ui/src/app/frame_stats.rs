@@ -34,35 +34,53 @@ pub(super) struct FrameStats {
     run_frame_starts: VecDeque<Instant>,
     run_open: bool,
     last_frame_at: Option<Instant>,
+    previous_frame_at: Option<Instant>,
+    last_frame_continuous: bool,
 }
 
 impl FrameStats {
     /// `continuous` is whether the previous pass requested an immediate repaint,
     /// which makes the interval since that frame pure render and present time.
     pub(super) fn record_frame(&mut self, now: Instant, continuous: bool) {
-        if continuous {
-            if !self.run_open {
-                self.run_frame_starts.clear();
-                self.run_frame_starts.extend(self.last_frame_at);
-                self.run_open = true;
-            }
-            self.run_frame_starts.push_back(now);
-            // Always keep the latest interval, so a stall longer than the
-            // window still shows as one slow frame instead of reading as idle.
-            while self.run_frame_starts.len() > MAX_FRAME_TIMESTAMPS
-                || (self.run_frame_starts.len() > 2
-                    && self
-                        .run_frame_starts
-                        .front()
-                        .is_some_and(|first| now.saturating_duration_since(*first) > MEASUREMENT_WINDOW))
-            {
-                self.run_frame_starts.pop_front();
-            }
-        } else {
+        // A frame that finished without being marked continuous ends the run.
+        if !self.last_frame_continuous {
             self.run_open = false;
         }
+        self.previous_frame_at = self.last_frame_at.replace(now);
+        self.last_frame_continuous = false;
+        if continuous {
+            self.mark_continuous();
+        }
+    }
 
-        self.last_frame_at = Some(now);
+    /// Marks the frame recorded last as continuous. Detached viewports learn this
+    /// only inside their own pass, after the root recorded the frame.
+    pub(super) fn mark_continuous(&mut self) {
+        let Some(now) = self.last_frame_at else {
+            return;
+        };
+        if self.last_frame_continuous {
+            return;
+        }
+        self.last_frame_continuous = true;
+
+        if !self.run_open {
+            self.run_frame_starts.clear();
+            self.run_frame_starts.extend(self.previous_frame_at);
+            self.run_open = true;
+        }
+        self.run_frame_starts.push_back(now);
+        // Always keep the latest interval, so a stall longer than the
+        // window still shows as one slow frame instead of reading as idle.
+        while self.run_frame_starts.len() > MAX_FRAME_TIMESTAMPS
+            || (self.run_frame_starts.len() > 2
+                && self
+                    .run_frame_starts
+                    .front()
+                    .is_some_and(|first| now.saturating_duration_since(*first) > MEASUREMENT_WINDOW))
+        {
+            self.run_frame_starts.pop_front();
+        }
     }
 
     /// When the held measurement should give way to idle, so the meter is
@@ -244,6 +262,34 @@ mod tests {
         frame_stats.record_frame(refreshed_at, false);
         assert_eq!(frame_stats.snapshot(), FrameStatsSnapshot::default());
         assert_eq!(frame_stats.idle_refresh_after(refreshed_at), None);
+    }
+
+    #[test]
+    fn frame_stats_extend_the_run_when_a_detached_viewport_marks_the_frame_late() {
+        let mut frame_stats = FrameStats::default();
+        let last = render_continuously(&mut frame_stats, Instant::now(), &[16; 10]);
+
+        frame_stats.record_frame(last + Duration::from_millis(16), false);
+        frame_stats.mark_continuous();
+        frame_stats.mark_continuous();
+
+        let snapshot = frame_stats.snapshot();
+        assert_eq!(snapshot.sample_count, 11);
+        assert!((snapshot.frame_time_ms - 16.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn frame_stats_close_the_run_when_no_viewport_marks_the_frame() {
+        let mut frame_stats = FrameStats::default();
+        let last = render_continuously(&mut frame_stats, Instant::now(), &[16; 10]);
+
+        let poll = last + Duration::from_millis(400);
+        frame_stats.record_frame(poll, false);
+        frame_stats.record_frame(poll + Duration::from_millis(16), true);
+
+        let snapshot = frame_stats.snapshot();
+        assert_eq!(snapshot.sample_count, 1);
+        assert!((snapshot.frame_time_ms - 16.0).abs() < 0.01);
     }
 
     #[test]
