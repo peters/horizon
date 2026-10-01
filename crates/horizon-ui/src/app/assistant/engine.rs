@@ -7,7 +7,7 @@ use egui::{
 use horizon_core::assistant::{
     ASSISTANT_AGENTS, AssistantAuth, api_key_binding, has_api_key, remove_api_key, save_api_key,
 };
-use horizon_core::{HorizonHome, PanelKind, agent_definition};
+use horizon_core::{PanelKind, agent_definition};
 
 use super::HorizonApp;
 use crate::theme;
@@ -115,12 +115,12 @@ impl HorizonApp {
         {
             self.assistant.settings.ask_before_send = ask;
             self.assistant.draft.ask_before_send = ask;
-            if let Err(error) = self.assistant.settings.save(&HorizonHome::resolve()) {
+            if let Err(error) = self.assistant.settings.save(&self.assistant.home) {
                 self.assistant.notice = Some(format!("Could not save the setting: {error}"));
             }
         }
         ui.add_space(10.0);
-        let home = HorizonHome::resolve();
+        let home = self.assistant.home.clone();
         let readiness = self.assistant.draft.launch_readiness(&home);
         let changed = !self.assistant.draft.same_engine(&self.assistant.settings);
         ui.horizontal(|ui| {
@@ -172,7 +172,7 @@ impl HorizonApp {
             );
             return;
         };
-        let home = HorizonHome::resolve();
+        let home = self.assistant.home.clone();
         ui.label(
             RichText::new(format!("Passed to the agent as {variable}, kept in a private file."))
                 .size(11.5)

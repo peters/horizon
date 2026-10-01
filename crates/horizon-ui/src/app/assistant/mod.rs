@@ -10,11 +10,12 @@ mod drawer;
 mod engine;
 mod icons;
 mod reach;
+mod threads;
 
 use egui::{Context, Id, Pos2, Rect};
 use egui_commonmark::CommonMarkCache;
-use horizon_core::assistant::{ASSISTANT_PANEL_LOCAL_ID, AssistantSettings};
-use horizon_core::{HorizonHome, PanelId, PanelOptions};
+use horizon_core::assistant::{ASSISTANT_PANEL_LOCAL_ID, AssistantSettings, Thread, Threads};
+use horizon_core::{HorizonHome, PanelId, PanelOptions, PanelResume};
 use zeroize::Zeroizing;
 
 use super::{HorizonApp, TOOLBAR_HEIGHT};
@@ -39,6 +40,16 @@ pub(super) struct AssistantDrawer {
     engine_anchor: Option<Rect>,
     cards: cards::Cards,
     md_cache: CommonMarkCache,
+    /// Where the assistant keeps its settings, key and threads.
+    home: HorizonHome,
+    threads: Threads,
+    /// The session the running agent is in, once it has one.
+    active_session: Option<String>,
+    last_thread_sync: Option<std::time::Instant>,
+    /// A thread to resume the next time the agent starts.
+    resume: Option<Thread>,
+    thread_menu_open: bool,
+    thread_anchor: Option<Rect>,
     key_input: Zeroizing<String>,
     notice: Option<String>,
 }
@@ -57,6 +68,13 @@ impl AssistantDrawer {
             engine_anchor: None,
             cards: cards::Cards::default(),
             md_cache: CommonMarkCache::default(),
+            home: home.clone(),
+            threads: Threads::load(home),
+            active_session: None,
+            last_thread_sync: None,
+            resume: None,
+            thread_menu_open: false,
+            thread_anchor: None,
             key_input: Zeroizing::new(String::new()),
             notice: None,
         }
@@ -142,7 +160,7 @@ impl HorizonApp {
         if self.board.assistant_panel().is_some() {
             return;
         }
-        if let Err(reason) = self.assistant.settings.launch_readiness(&HorizonHome::resolve()) {
+        if let Err(reason) = self.assistant.settings.launch_readiness(&self.assistant.home) {
             self.assistant.notice = Some(reason);
             return;
         }
@@ -150,12 +168,22 @@ impl HorizonApp {
             .board
             .active_workspace
             .unwrap_or_else(|| self.ensure_workspace_visible(ctx));
+        let resume = self.assistant.resume.take();
         let options = PanelOptions {
             kind: self.assistant.settings.agent,
             name: Some("Assistant".to_string()),
             name_is_custom: Some(true),
             local_id: Some(ASSISTANT_PANEL_LOCAL_ID.to_string()),
             visible: false,
+            resume: resume
+                .as_ref()
+                .map_or(PanelResume::Fresh, |thread| PanelResume::Session {
+                    session_id: thread.session_id.clone(),
+                }),
+            cwd: resume
+                .as_ref()
+                .and_then(|thread| thread.cwd.as_deref())
+                .map(std::path::PathBuf::from),
             ..PanelOptions::default()
         };
         match self.create_panel_with_options(options, workspace_id) {
@@ -192,7 +220,7 @@ impl HorizonApp {
         if draft.same_engine(&self.assistant.settings) {
             return;
         }
-        if let Err(error) = draft.save(&HorizonHome::resolve()) {
+        if let Err(error) = draft.save(&self.assistant.home) {
             self.assistant.notice = Some(format!("Could not save the assistant settings: {error}"));
             return;
         }

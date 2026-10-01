@@ -10,6 +10,7 @@ impl HorizonApp {
     /// Renders the drawer before the canvas so egui reserves its width first.
     pub(in crate::app) fn render_assistant_drawer(&mut self, ui: &mut Ui) {
         self.sync_assistant_focus();
+        self.sync_assistant_thread();
         if !self.assistant_visible() {
             return;
         }
@@ -39,6 +40,7 @@ impl HorizonApp {
                 self.render_drawer_body(ui);
             });
         self.render_assistant_engine_popup(ui.ctx());
+        self.render_thread_menu(ui.ctx());
     }
 
     fn render_drawer_header(&mut self, ui: &mut Ui) {
@@ -64,11 +66,8 @@ impl HorizonApp {
             if header_button(ui, "Close").clicked() {
                 self.toggle_assistant();
             }
-            if header_button(ui, "New")
-                .on_hover_text("Start a fresh session")
-                .clicked()
-            {
-                self.restart_assistant();
+            if header_button(ui, "New").on_hover_text("Start a new thread").clicked() {
+                self.new_assistant_thread();
             }
             let engine = header_button(ui, "Engine");
             if engine.clicked() {
@@ -84,6 +83,7 @@ impl HorizonApp {
             self.render_drawer_waiting(ui);
             return;
         };
+        self.render_thread_bar(ui);
         self.render_reach_strip(ui);
         self.render_cards_tray(ui);
         let rect = ui.available_rect_before_wrap().shrink2(vec2(10.0, 8.0));

@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+mod threads;
+
+pub use threads::{Thread, Threads};
+
 use crate::{Error, HorizonHome, PanelKind, Result};
 
 /// Local id of the one panel the drawer hosts.

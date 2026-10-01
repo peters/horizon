@@ -317,7 +317,11 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     directly because `render_panels` rebuilds the shared close queue each frame.
     `reach.rs` renders the strip of other agents and their state, and
     `cards.rs` the Activity tray (approval, sent and note cards, built by
-    Horizon from host facts) on the shared look in `blocks.rs` and `icons.rs`
+    Horizon from host facts) on the shared look in `blocks.rs` and `icons.rs`,
+    and `threads.rs` the thread bar and menu. A thread is a session of the
+    hosted agent, recorded from the assistant panel's session binding into
+    `horizon-core/src/assistant/threads.rs` (a private JSON store under the
+    Horizon home); switching restarts the agent with `PanelResume::Session`
   - `agent_panel_requests`: host side of the `agent_panels` MCP tool. It claims
     requests from the `manifest::agent_panels` queue (built on the generic
     `manifest::typed_queue`), answers list/send/read from `Board` state in
