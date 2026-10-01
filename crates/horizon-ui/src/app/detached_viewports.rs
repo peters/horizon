@@ -148,6 +148,12 @@ impl HorizonApp {
             let local_id_for_viewport = local_id.clone();
 
             ctx.show_viewport_immediate(viewport_id, builder, |viewport_ui, _class| {
+                // eframe repaints the root together with this child, so its
+                // immediate repaint makes the root frame continuous too. Read it
+                // here: egui advances the child's repaint state when its pass begins.
+                if viewport_ui.ctx().requested_repaint_last_pass() {
+                    self.frame_stats.mark_continuous();
+                }
                 // Feed the focus aggregate consumed by the end-of-frame
                 // unattended-recording privacy guard.
                 self.any_viewport_focused |= viewport_ui.input(|input| input.viewport().focused.unwrap_or(false));
