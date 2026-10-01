@@ -182,10 +182,17 @@ identity and refusal evidence before closing the owned session.
    scroll, fill and keyboard dismissal. Deterministic tests must distinguish a
    stale cached identity found before mutation from a document change after
    dispatch, and stop, Teach mode or timeout during the bounded baseline read.
-   Exercise repeated standalone identity reads and semantic scans with drifting
-   browser privacy clocks, rotation, resize, scroll and fill. The same Document
-   must retain its identity; a same-URL reload must change it. Run
-   `node --test scripts/browser-smoke/*.test.cjs` for these script regressions.
+   Exercise stable native URL/root observations through rotation, resize, scroll
+   and fill; a normal same-URL reload must invalidate earlier refs. In deterministic
+   classic tests, return identical forged page markers for two same-URL roots and
+   require fresh generations and stale-ref rejection. Change the native anchor
+   during a scan and between URL/root samples: neither result may be registered.
+   Test malformed native replies and delayed components under one original bound.
+   Run `cargo test -p horizon-browser webdriver::session::document` and
+   `node --test scripts/browser-smoke/*.test.cjs`. A root replacement within one
+   Document also invalidates conservatively. Same-Node adoption into a new
+   same-URL Document is an explicit classic-protocol limitation, not a qualified
+   isolation guarantee; new providers must document their lifecycle semantics.
    Also replace the document after measurement and during the final ownership
    observation. No success may reuse the old viewport. Cover Stop/Teach,
    owner/handoff takeover and the original deadline during final document reads,
@@ -317,7 +324,9 @@ completed smoke report.
 
 - Keep timestamps, candidate SHA/hash, device evidence, measured geometry,
   support status and per-step pass/fail/blocked results in a private report.
-- Decode representative recorded frames to prove the round trip and movement
+- Copy panel-owned exports to the private evidence directory before closing
+  the panel; close may delete its capture directory. Decode representative
+  recorded frames to prove the round trip and movement
   were captured. Make a synthetic GIF only after the complete flow passes,
   using palettegen/paletteuse at roughly 6 fps and 1000 px width, below 10 MB.
 - Inspect frames for private data, attach the final GIF through `gh --attach`

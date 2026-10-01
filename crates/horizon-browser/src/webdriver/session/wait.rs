@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use crate::navigation::{AgentActionExecution, PendingNavigation, now_millis};
 use crate::wait::{
-    BackendChecked, Observation, PendingWait, RELEASE_CHECK_BUDGET, WAIT_MAX_RESULTS, WaitResult, WaitStop,
-    defer_result_during_shutdown, run_while_backend_available,
+    BackendChecked, Observation, PendingWait, WAIT_MAX_RESULTS, WaitResult, WaitStop, defer_result_during_shutdown,
+    run_while_backend_available,
 };
 use crate::{AgentAction, BrowserControlAction, BrowserControlFailure};
 
@@ -129,7 +129,7 @@ impl Driver {
             // same-URL reload cannot return references from the old document.
             // The condition was met in time: this check runs on its own
             // budget and retry count, never against the elapsed wait bound.
-            if let Err(failure) = self.refresh_classic_document_identity_within(RELEASE_CHECK_BUDGET) {
+            if let Err(failure) = self.refresh_classic_document_identity_within(super::document::OBSERVATION_BUDGET) {
                 return pending.release_check_failure(failure);
             }
             if let Some(result) = pending.tick(self.semantic.generation(), Instant::now()) {

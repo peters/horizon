@@ -97,7 +97,7 @@ fn cancellation_during_publication_prevents_post_for_agent_and_user() {
                 "browser_unavailable:"
             };
             assert!(
-                classic.recorded().len() == 1 && classic.recorded()[0].path == "/session/test/execute/sync",
+                classic.recorded().len() == 4 && classic.recorded()[0].path == "/session/test/url",
                 "cancelled publication must not dispatch POST"
             );
             assert!(driver.pending_orientation.is_none());
@@ -164,7 +164,7 @@ fn rotation_publishes_pending_and_persists_cleared_state_before_blocking_post() 
             driver
         });
         let deadline = Instant::now() + Duration::from_secs(3);
-        while classic.recorded().len() < 2 {
+        while classic.recorded().len() < 5 {
             assert!(Instant::now() < deadline, "POST must reach the response latch");
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -188,7 +188,7 @@ fn rotation_publishes_pending_and_persists_cleared_state_before_blocking_post() 
         let driver = rotation.join().unwrap();
         assert!(driver.pending_orientation.is_some());
         assert_eq!(driver.orientation_document, DocumentOrientation::NeedsMeasurement);
-        assert_eq!(classic.recorded().len(), 2);
+        assert_eq!(classic.recorded().len(), 5);
         drop(driver);
         assert!(worker.join().unwrap().is_empty());
     }
@@ -224,7 +224,7 @@ fn publication_consuming_rotation_deadline_never_dispatches_post() {
             .starts_with("orientation_timeout:")
     );
     assert!(
-        classic.recorded().len() == 1 && classic.recorded()[0].path == "/session/test/execute/sync",
+        classic.recorded().len() == 4 && classic.recorded()[0].path == "/session/test/url",
         "no mutation after publication used its deadline"
     );
     let updates: Vec<_> = rx

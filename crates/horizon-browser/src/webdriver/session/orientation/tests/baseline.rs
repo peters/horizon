@@ -15,10 +15,11 @@ fn cached_identity_change_before_rotation_succeeds_but_postdispatch_change_is_re
         for changed_after in [false, true] {
             let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
             replies.extend(observation(4, 2));
-            replies.push(Reply::json(
-                200,
-                &json!({"value":if changed_after {"new-document"} else {"document"}}),
-            ));
+            replies.push(Reply::native_document(if changed_after {
+                "new-document"
+            } else {
+                "document"
+            }));
             replies.push(baseline());
             let classic = Server::start(replies);
             let (link, worker) = bidi_fixture(false, false);
@@ -30,9 +31,9 @@ fn cached_identity_change_before_rotation_succeeds_but_postdispatch_change_is_re
             assert!(driver.pending_orientation.is_some());
             assert!(driver.semantic.generation() > generation);
             let calls = classic.recorded();
-            assert_eq!(calls.len(), 2);
-            assert_eq!(calls[0].path, "/session/test/execute/sync");
-            assert_eq!(calls[1].path, "/session/test/orientation");
+            assert_eq!(calls.len(), 5);
+            assert_eq!(calls[0].path, "/session/test/url");
+            assert_eq!(calls[4].path, "/session/test/orientation");
             driver.tick_orientation(&events(), &AtomicBool::new(false));
             if !changed_after {
                 assert!(driver.pending_orientation.as_ref().unwrap().verified.is_some());
@@ -100,8 +101,8 @@ fn stop_and_teach_during_baseline_never_dispatch_mutation_and_complete_users_onc
                 "browser_unavailable:"
             };
             assert!(driver.orientation_error.as_deref().unwrap().starts_with(code));
-            assert_eq!(classic.recorded().len(), 1);
-            assert_eq!(classic.recorded()[0].path, "/session/test/execute/sync");
+            assert_eq!(classic.recorded().len(), 4);
+            assert_eq!(classic.recorded()[0].path, "/session/test/url");
             if user {
                 assert_eq!(driver.orientation_completed.completed.len(), 1);
                 assert!(
@@ -141,7 +142,7 @@ fn baseline_timeout_keeps_the_request_deadline_and_does_not_post() {
             .starts_with("orientation_timeout:")
     );
     assert_eq!(classic.recorded().len(), 1);
-    assert_eq!(classic.recorded()[0].path, "/session/test/execute/sync");
+    assert_eq!(classic.recorded()[0].path, "/session/test/url");
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
 }
@@ -163,7 +164,7 @@ fn unavailable_baseline_refuses_before_post_and_completes_users_once() {
                 .starts_with("invalid_result:")
         );
         assert_eq!(classic.recorded().len(), 1);
-        assert_eq!(classic.recorded()[0].path, "/session/test/execute/sync");
+        assert_eq!(classic.recorded()[0].path, "/session/test/url");
         if user {
             assert_eq!(driver.orientation_completed.completed.len(), 1);
             assert!(driver.orientation_completed.completed[0].error.is_some());

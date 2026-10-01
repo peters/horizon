@@ -11,7 +11,7 @@ mod recovery;
 mod startup;
 
 fn baseline() -> Reply {
-    Reply::json(200, &json!({"value":"document"}))
+    Reply::native_document("document")
 }
 
 fn rotation_request() -> AgentAction {
@@ -127,7 +127,7 @@ fn dispatch_is_audited_before_provider_reply_and_refusals_do_not_dispatch() {
         driver
     });
     let deadline = Instant::now() + Duration::from_secs(5);
-    while classic.recorded().len() < 2 {
+    while classic.recorded().len() < 5 {
         assert!(Instant::now() < deadline, "orientation POST never reached the mock");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -144,7 +144,7 @@ fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_
     use std::sync::Arc;
     let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
     replies.extend(observation(4, 2));
-    replies.push(Reply::json(200, &json!({"value":"document"})));
+    replies.push(Reply::native_document("document"));
     replies.extend([baseline(), baseline()]);
     let classic = Server::start(replies);
     let (link, worker) = bidi_fixture(false, false);
@@ -181,7 +181,7 @@ fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_
     );
     assert_eq!(
         classic.recorded().len(),
-        2,
+        5,
         "refused action must not reach the provider"
     );
     driver.last_user_active_stamp = Instant::now().checked_sub(Duration::from_secs(6));
@@ -206,7 +206,7 @@ fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_
         driver.pending_orientation.as_ref().unwrap().verified.is_some(),
         "GET, page geometry, fresh screenshot and document identity were verified"
     );
-    assert_eq!(classic.recorded().len(), 7);
+    assert_eq!(classic.recorded().len(), 13);
     driver.signal_epoch += 1;
     driver.tick_orientation(&events(), &AtomicBool::new(false));
     assert!(driver.pending_orientation.is_none());
@@ -315,7 +315,7 @@ fn stale_portrait_frames_wait_and_takeover_during_identity_cannot_succeed() {
         let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
         replies.extend(observation(2, 4));
         replies.extend(observation(4, 2));
-        replies.push(Reply::json(200, &json!({"value":"document"})).delayed(Duration::from_millis(100)));
+        replies.push(Reply::native_document("document").delayed(Duration::from_millis(100)));
         let classic = Server::start(replies);
         let (link, worker) = bidi_fixture(false, false);
         let mut driver = fixture_driver(&classic, link);
@@ -337,13 +337,13 @@ fn stale_portrait_frames_wait_and_takeover_during_identity_cannot_succeed() {
             pending.verified.is_none(),
             "new sequence with portrait pixels is still stale"
         );
-        assert_eq!(classic.recorded().len(), 6);
+        assert_eq!(classic.recorded().len(), 9);
         pending.next_sample = Instant::now();
         driver.scrollbar.refresh_at = Instant::now();
         let signal = stop.clone();
         let takeover = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(5);
-            while classic.recorded().len() < 11 {
+            while classic.recorded().len() < 14 {
                 assert!(Instant::now() < deadline, "identity request never reached the mock");
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -470,8 +470,8 @@ fn rotation_invalidates_refs_and_waits_for_current_ownership() {
     );
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
-    assert_eq!(classic.recorded().len(), 2);
-    assert_eq!(classic.recorded()[1].path, "/session/test/orientation");
+    assert_eq!(classic.recorded().len(), 5);
+    assert_eq!(classic.recorded()[4].path, "/session/test/orientation");
 }
 
 #[test]
@@ -505,7 +505,7 @@ fn startup_remeasures_committed_page_instead_of_reusing_allocation_geometry() {
 #[test]
 fn document_identity_invalidation_defers_measurement_outside_bounded_observation() {
     let classic = Server::start(vec![
-        Reply::json(200, &json!({"value":"new-document"})),
+        Reply::native_document("new-document"),
         Reply::json(200, &json!({"value":"LANDSCAPE"})),
         Reply::json(
             200,
@@ -528,13 +528,13 @@ fn document_identity_invalidation_defers_measurement_outside_bounded_observation
     assert_ne!(driver.orientation_document, DocumentOrientation::Clean);
     assert_eq!(
         classic.recorded().len(),
-        1,
+        4,
         "identity checks must not add an orientation roundtrip"
     );
     driver.refresh_document_orientation(&events());
     assert_eq!(driver.remote_orientation.as_ref().unwrap().applied, None);
     assert_eq!(driver.orientation_document, DocumentOrientation::Clean);
-    assert_eq!(classic.recorded().len(), 3);
+    assert_eq!(classic.recorded().len(), 6);
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
 }
@@ -546,7 +546,7 @@ fn synchronous_remote_navigation_schedules_fresh_document_measurement() {
         Reply::json(200, &json!({"value":"https://example.test/next"})),
         Reply::json(200, &json!({"value":"https://example.test/next"})),
         Reply::json(200, &json!({"value":"Next"})),
-        Reply::json(200, &json!({"value":"new-document"})),
+        Reply::native_document("new-document"),
         Reply::json(200, &json!({"value":"PORTRAIT"})),
         Reply::json(
             200,
@@ -569,7 +569,7 @@ fn synchronous_remote_navigation_schedules_fresh_document_measurement() {
         Some(RemoteOrientation::Portrait)
     );
     assert_eq!(driver.orientation_document, DocumentOrientation::Clean);
-    assert_eq!(classic.recorded().len(), 7);
+    assert_eq!(classic.recorded().len(), 10);
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
 }
@@ -586,7 +586,7 @@ fn document_remeasurement_cannot_take_over_pending_runtime_rotation() {
     driver.refresh_document_orientation(&events());
     assert!(driver.pending_orientation.is_some());
     assert_ne!(driver.orientation_document, DocumentOrientation::Clean);
-    assert_eq!(classic.recorded().len(), 2, "the active request owns measurement");
+    assert_eq!(classic.recorded().len(), 5, "the active request owns measurement");
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
 }

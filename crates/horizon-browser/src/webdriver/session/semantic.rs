@@ -2,7 +2,6 @@
 
 use serde_json::{Value, json};
 
-use crate::document_identity::document_identity_expression;
 use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
     target_rect_expression, wait_scan_expression,
@@ -265,7 +264,7 @@ impl Driver {
     }
 
     fn semantic_snapshot(&mut self, max_nodes: u32) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.evaluate_json(&scan_expression(None, max_nodes))?;
+        let value = self.guarded_semantic_scan(&scan_expression(None, max_nodes), None)?;
         let (generation, revision, nodes) = self.semantic.register_nodes(value)?;
         Ok(BrowserControlValue::Snapshot {
             snapshot: BrowserSnapshot {
@@ -283,7 +282,7 @@ impl Driver {
         selector: &str,
         max_results: u32,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.evaluate_json(&scan_expression(Some(selector), max_results))?;
+        let value = self.guarded_semantic_scan(&scan_expression(Some(selector), max_results), None)?;
         self.register_query(value)
     }
 
@@ -303,9 +302,8 @@ impl Driver {
         ),
         BrowserControlFailure,
     > {
-        let value = self.evaluate_json_within(&wait_scan_expression(selector, max_results), Some(timeout))?;
+        let value = self.guarded_semantic_scan(&wait_scan_expression(selector, max_results), Some(timeout))?;
         let peeked = self.semantic.peek_nodes(&value)?;
-        self.record_classic_document_identity(peeked.document_identity);
         Ok((self.semantic.generation(), peeked.nodes, peeked.summary, value))
     }
 
@@ -602,53 +600,6 @@ impl Driver {
             .cloned()
             .ok_or_else(|| BrowserControlFailure::new("invalid_result", "WebDriver returned no script value"))?;
         bounded_control_value(value)
-    }
-
-    /// Classic `WebDriver` has no navigation event stream, so a session that
-    /// runs on it alone tracks the document identity by script: Safari
-    /// locally, and every remote session whatever browser it drives.
-    fn tracks_classic_document_identity(&self) -> bool {
-        self.config.browser.backend == BackendKind::SafariWebDriver || self.host.is_remote()
-    }
-
-    pub(super) fn initialize_classic_document_identity(&mut self) {
-        if self.tracks_classic_document_identity() {
-            let _ = self.refresh_classic_document_identity_within(std::time::Duration::from_secs(1));
-        }
-    }
-
-    pub(super) fn refresh_classic_document_identity_within(
-        &mut self,
-        timeout: std::time::Duration,
-    ) -> Result<bool, BrowserControlFailure> {
-        if !self.tracks_classic_document_identity() {
-            return Ok(false);
-        }
-        let value = self.evaluate_json_within(&document_identity_expression(), Some(timeout))?;
-        let identity = value
-            .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| BrowserControlFailure::new("invalid_result", "WebDriver returned no document identity"))?;
-        Ok(self.record_classic_document_identity(Some(identity)))
-    }
-
-    fn record_classic_document_identity(&mut self, identity: Option<String>) -> bool {
-        if !self.tracks_classic_document_identity() {
-            return false;
-        }
-        let Some(identity) = identity else {
-            return false;
-        };
-        let changed = self
-            .classic_document_identity
-            .replace(identity.clone())
-            .is_some_and(|previous| previous != identity);
-        if changed {
-            self.invalidate_document_orientation();
-            self.semantic.invalidate();
-            self.advance_generation();
-        }
-        changed
     }
 }
 

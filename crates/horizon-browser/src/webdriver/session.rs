@@ -17,6 +17,7 @@ use super::host::DriverHost;
 
 mod bidi;
 mod coordination;
+mod document;
 mod file_chooser;
 mod frames;
 pub(super) mod handshake;

@@ -88,7 +88,7 @@ fn measured(
     }
     driver.tick_orientation(&events(), &AtomicBool::new(false));
     assert!(driver.pending_orientation.as_ref().unwrap().verified.is_some());
-    assert_eq!(classic.recorded().len(), 7);
+    assert_eq!(classic.recorded().len(), 13);
     assert!(driver.tick_coordination(&events()).is_empty());
     (driver, classic, worker, owner)
 }
@@ -120,7 +120,7 @@ fn failed_once(driver: &Driver, owner: &Observer, user: bool, code: &str) {
 fn document_replacement_after_measurement_or_during_final_ownership_never_acknowledges() {
     for user in [false, true] {
         for after_ownership in [false, true] {
-            let changed = Reply::json(200, &json!({"value":"replacement-document"}));
+            let changed = Reply::native_document("replacement-document");
             let replies = if after_ownership {
                 vec![baseline(), changed]
             } else {
@@ -161,7 +161,7 @@ fn stop_teach_and_ownership_takeover_during_final_read_refuse_once() {
                 driver
             });
             let deadline = Instant::now() + Duration::from_secs(3);
-            while classic.recorded().len() < 8 {
+            while classic.recorded().len() < 14 {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(1));
             }

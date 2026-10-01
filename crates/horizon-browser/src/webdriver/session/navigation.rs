@@ -599,7 +599,7 @@ impl Driver {
             .map_err(|error| error.to_string())
     }
 
-    fn classic_get_within(&self, suffix: &str, read_timeout: Duration) -> Result<serde_json::Value, String> {
+    pub(super) fn classic_get_within(&self, suffix: &str, read_timeout: Duration) -> Result<serde_json::Value, String> {
         self.host
             .transport()
             .get_with_read_timeout(&self.session_path(suffix), read_timeout)
@@ -626,7 +626,7 @@ impl Driver {
             self.observe_navigation_signal(crate::navigation::NavigationSignal::Title(&title));
         }
         let _ = event_tx.send(BrowserEvent::Loading(false));
-        let _ = self.refresh_classic_document_identity_within(Duration::from_secs(1));
+        let _ = self.refresh_classic_document_identity_within(super::document::OBSERVATION_BUDGET);
     }
 
     /// Restore the session page-load timeout a bounded classic navigation
@@ -713,7 +713,7 @@ mod tests {
         let classic = Server::start(vec![
             Reply::json(200, &json!({"value":"https://example.test/ready"})),
             Reply::json(200, &json!({"value":"Ready"})),
-            Reply::json(200, &json!({"value":"committed-document"})),
+            Reply::native_document("committed-document"),
             Reply::json(200, &json!({"value":"PORTRAIT"})),
             Reply::json(
                 200,
@@ -748,7 +748,7 @@ mod tests {
             super::super::orientation::DocumentOrientation::Clean
         );
         assert!(driver.classic_refresh.is_none());
-        assert_eq!(classic.recorded().len(), 5);
+        assert_eq!(classic.recorded().len(), 8);
         drop(driver);
         assert!(worker.join().unwrap().is_empty());
     }

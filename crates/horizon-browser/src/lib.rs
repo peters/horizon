@@ -10,7 +10,6 @@ pub mod cdp;
 mod challenge;
 mod coordination;
 mod disclosure;
-mod document_identity;
 mod error;
 mod evaluation;
 mod file_chooser;

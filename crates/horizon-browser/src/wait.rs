@@ -27,7 +27,7 @@ pub(crate) const WAIT_MAX_RESULTS: u32 = 20;
 /// read before a held match is returned) may block. The condition was met
 /// in time, so this check is bounded by its own budget and retry count, not
 /// by the wait's remaining time.
-pub(crate) const RELEASE_CHECK_BUDGET: Duration = Duration::from_secs(1);
+pub(crate) const RELEASE_CHECK_BUDGET: Duration = Duration::from_secs(3);
 
 /// Why a pending wait was cancelled before its condition was met.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

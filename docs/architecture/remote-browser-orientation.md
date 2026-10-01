@@ -11,6 +11,17 @@ For provider setup and cleanup, see [remote browser sessions](remote-browser-ses
 For repeatable qualification and future changes, use the permanent
 [orientation test procedure](../testing/remote-browser-orientation-smoke.md).
 
+## Remote iPad and provider boundaries
+
+A BrowserStack iPad target is a provider-hosted physical Safari browser session.
+The current remote adapter uses classic WebDriver, including its device
+orientation endpoint; it does not require a CDP connection. Public Horizon tools
+control page navigation, semantic input and supported capture capabilities, plus
+portrait/landscape. They do not expose arbitrary iPad OS control, other native
+apps or the device's Home screen. Check the actual panel capabilities before
+requesting an operation. Another provider or protocol requires its own supported
+adapter, device evidence and qualification through the same public interfaces.
+
 ## Select the starting orientation
 
 Add the optional field to an existing target in `browser.remote.targets`:
@@ -72,8 +83,8 @@ record for reconciliation.
 
 Without an explicit orientation, unavailable geometry remains nonfatal. The
 existing `navigation: pending` create behavior remains available; inspect
-`browser_panel` or wait for the page before acting. A new document never inherits
-verified orientation from its predecessor. Navigate, reload and history commands
+`browser_panel` or wait for the page before acting. Startup and observed document
+replacements clear the previous verified orientation. Navigate, reload and history commands
 publish cleared status before entering the transport; observed document changes
 also invalidate it until a new measurement completes.
 
@@ -144,14 +155,25 @@ per-request completion so another viewer or a later poll can see the outcome.
 ## Verification, input and failure handling
 
 Runtime success requires matching device and page geometry, a fresh frame, the
-same document and current event-loop ownership. Every request first refreshes
+stable document observations and current event-loop ownership. Every request first refreshes
 the current document identity within its deadline. A previously cached identity change
 establishes the pre-mutation baseline; an identity change after dispatch still
 refuses the request. Stop and Teach mode are checked again after this bounded
 read, before any mutation.
-Identity reads and semantic scans share an opaque marker owned by the Document.
-Browser privacy-clock drift and layout changes preserve it; a replacement
-Document or changed URL still invalidates the request.
+Classic WebDriver observations use the server's Get Current URL and Find Element
+`:root` reference, never a token stored in the page's JavaScript realm. Two complete
+URL/root samples must agree within one deadline. Semantic scans additionally
+check the anchor before and after execution; a changed anchor discards the scan
+instead of assigning old nodes to the replacement page. Copied page properties,
+privacy-clock drift and layout changes cannot impersonate this native reference.
+
+The classic protocol identifies a root **Node**, not a Document. Replacing the
+root conservatively invalidates references even within one Document. Re-adopting
+the exact same root Node into another same-URL Document can retain its provider
+reference; classic WebDriver alone cannot prove detection of that hostile case.
+Providers needing a stronger isolation guarantee must expose a native document
+lifecycle identifier or isolated execution realm and qualify it separately.
+CDP/BiDi lifecycle events continue to provide their existing invalidation paths.
 
 After the normal ownership acknowledgement, the driver checks the document
 again, observes current ownership without claiming queued actions, and checks

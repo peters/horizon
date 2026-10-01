@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, mpsc};
 #[test]
 fn startup_publishes_unverified_before_navigation_and_stays_unverified_while_pending() {
     let classic = Server::start(vec![
-        Reply::json(200, &json!({"value":"old-document"})),
+        Reply::native_document("old-document"),
         Reply::json(200, &json!({"value":null})),
         Reply::json(
             500,
@@ -39,7 +39,7 @@ fn startup_publishes_unverified_before_navigation_and_stays_unverified_while_pen
     );
     assert_eq!(
         classic.recorded().len(),
-        4,
+        7,
         "never measure the previous document while startup is pending"
     );
     let observed: Vec<_> = rx.try_iter().collect();
@@ -108,7 +108,7 @@ fn explicit_start_rejects_opposite_unavailable_and_unsupported_committed_geometr
             "orientation_unsupported",
         ),
     ] {
-        let mut replies = vec![Reply::json(200, &json!({"value":"document"}))];
+        let mut replies = vec![Reply::native_document("document")];
         replies.extend(measurement);
         replies.push(Reply::json(200, &json!({"value":null})));
         let classic = Server::start(replies);
@@ -140,7 +140,7 @@ fn explicit_start_rejects_opposite_unavailable_and_unsupported_committed_geometr
 #[test]
 fn explicit_start_waiting_for_navigation_is_refused_and_preserves_uncertain_release() {
     let mut replies = vec![
-        Reply::json(200, &json!({"value":"old-document"})),
+        Reply::native_document("old-document"),
         Reply::json(200, &json!({"value":null})),
         Reply::json(500, &json!({"value":{"error":"timeout","message":"still loading"}})),
         Reply::json(200, &json!({"value":null})),
@@ -171,11 +171,11 @@ fn explicit_start_waiting_for_navigation_is_refused_and_preserves_uncertain_rele
     let commands = classic.recorded();
     assert_eq!(
         commands.len(),
-        7,
+        10,
         "pending page must not be measured as the previous document"
     );
     assert!(
-        commands[4..]
+        commands[7..]
             .iter()
             .all(|r| r.method == "DELETE" && r.path == "/session/test")
     );
@@ -185,14 +185,14 @@ fn explicit_start_waiting_for_navigation_is_refused_and_preserves_uncertain_rele
 
 fn committed_initial_replies(orientation: &str) -> Vec<Reply> {
     vec![
-        Reply::json(200, &json!({"value":"old-document"})),
+        Reply::native_document("old-document"),
         Reply::json(200, &json!({"value":null})),
         Reply::json(200, &json!({"value":null})),
         Reply::json(200, &json!({"value":"https://example.test/ready"})),
         Reply::json(200, &json!({"value":null})),
         Reply::json(200, &json!({"value":"https://example.test/ready"})),
         Reply::json(200, &json!({"value":"Orientation demo"})),
-        Reply::json(200, &json!({"value":"new-document"})),
+        Reply::native_document("new-document"),
         Reply::json(200, &json!({"value":orientation})),
         if orientation == "LANDSCAPE" {
             measured(900, 600, "landscape")
@@ -233,7 +233,7 @@ fn explicit_start_success_publishes_matching_geometry_before_ready_and_does_not_
 #[test]
 fn explicit_failed_navigation_releases_without_probing_the_old_document() {
     let classic = Server::start(vec![
-        Reply::json(200, &json!({"value":"old-document"})),
+        Reply::native_document("old-document"),
         Reply::json(200, &json!({"value":null})),
         Reply::json(
             500,
@@ -258,8 +258,8 @@ fn explicit_failed_navigation_releases_without_probing_the_old_document() {
             ..
         })
     )));
-    assert_eq!(classic.recorded().len(), 5);
-    assert_eq!(classic.recorded()[4].method, "DELETE");
+    assert_eq!(classic.recorded().len(), 8);
+    assert_eq!(classic.recorded()[7].method, "DELETE");
     assert!(classic.recorded().iter().all(|r| !r.path.ends_with("/orientation")));
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
@@ -269,7 +269,7 @@ fn explicit_failed_navigation_releases_without_probing_the_old_document() {
 fn cancellation_during_committed_measurement_releases_and_never_publishes_ready() {
     let (release_tx, release_rx) = mpsc::channel();
     let classic = Server::start(vec![
-        Reply::json(200, &json!({"value":"document"})),
+        Reply::native_document("document"),
         Reply::json(200, &json!({"value":"LANDSCAPE"})),
         measured(900, 600, "landscape").blocked_until(release_rx),
         Reply::json(200, &json!({"value":null})),
@@ -286,7 +286,7 @@ fn cancellation_during_committed_measurement_releases_and_never_publishes_ready(
         (driver, accepted)
     });
     let deadline = Instant::now() + Duration::from_secs(5);
-    while classic.recorded().len() < 3 {
+    while classic.recorded().len() < 6 {
         assert!(Instant::now() < deadline, "measurement must reach the mock transport");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -312,7 +312,7 @@ fn cancellation_during_committed_measurement_releases_and_never_publishes_ready(
 #[test]
 fn default_start_without_observable_geometry_remains_ready_and_unverified() {
     let classic = Server::start(vec![
-        Reply::json(200, &json!({"value":"document"})),
+        Reply::native_document("document"),
         Reply::json(200, &json!({"value":"LANDSCAPE"})),
         Reply::json(
             500,
@@ -492,7 +492,7 @@ fn unsupported_start_releases_at_readiness_and_preserves_unknown_release() {
                 404,
                 &json!({"value":{"error":"unknown command","message":"unsupported"}}),
             ),
-            Reply::json(200, &json!({"value":"document"})),
+            Reply::native_document("document"),
         ];
         replies.extend((0..if confirmed { 1 } else { 3 }).map(|_| {
             Reply::json(
@@ -528,7 +528,7 @@ fn unsupported_start_releases_at_readiness_and_preserves_unknown_release() {
         }
         let seen = classic.recorded();
         assert!(
-            seen[3..]
+            seen[6..]
                 .iter()
                 .all(|r| r.method == "DELETE" && r.path == "/session/test")
         );

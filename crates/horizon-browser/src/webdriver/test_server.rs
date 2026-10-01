@@ -17,6 +17,7 @@ pub(super) struct Reply {
     pub(super) body_delay: Duration,
     pub(super) declared_length: Option<usize>,
     pub(super) release: Option<mpsc::Receiver<()>>,
+    pub(super) following: Vec<Reply>,
 }
 
 impl Reply {
@@ -29,7 +30,17 @@ impl Reply {
             body_delay: Duration::ZERO,
             declared_length: None,
             release: None,
+            following: Vec::new(),
         }
+    }
+
+    /// Two complete native URL/root samples, with every HTTP call recorded.
+    pub(super) fn native_document(root: &str) -> Self {
+        let url = serde_json::json!({"value":"https://example.test/"});
+        let node = serde_json::json!({"value":{"element-6066-11e4-a52e-4f735466cecf":root}});
+        let mut first = Self::json(200, &url);
+        first.following = vec![Self::json(200, &node), Self::json(200, &url), Self::json(200, &node)];
+        first
     }
 
     pub(super) fn blocked_until(mut self, release: mpsc::Receiver<()>) -> Self {
@@ -66,6 +77,10 @@ pub(super) struct Server {
 
 impl Server {
     pub(super) fn start(replies: Vec<Reply>) -> Self {
+        let replies = replies.into_iter().flat_map(|mut reply| {
+            let following = std::mem::take(&mut reply.following);
+            std::iter::once(reply).chain(following)
+        });
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         let seen = Arc::new(Mutex::new(Vec::new()));
