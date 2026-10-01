@@ -99,11 +99,6 @@ impl HorizonHome {
     }
 
     #[must_use]
-    pub fn codex_skill_dir(&self) -> PathBuf {
-        self.codex_integrations_dir().join("horizon-notify")
-    }
-
-    #[must_use]
     pub fn codex_browser_skill_dir(&self) -> PathBuf {
         self.codex_integrations_dir().join("horizon-browser")
     }

@@ -2,19 +2,19 @@
 //!
 //! Coordination is per target skill directory so `CODEX_HOME` / `GROK_HOME`
 //! overrides share a lock even when `HOME` differs across Horizon processes.
-//! Liveness is per skill name so a notify-only host cannot strand a sibling
-//! `horizon-browser` directory leased by another host.
+//! Liveness is per skill name so a host cannot strand a sibling skill
+//! directory leased by another host.
 
 use std::ffi::OsStr;
 use std::fs::{OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub(super) const HORIZON_NOTIFY_SKILL: &str = "horizon-notify";
 pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
 pub(super) const HORIZON_DEVICE_SKILL: &str = "horizon-device";
 pub(super) const HORIZON_SPEECH_SKILL: &str = "horizon-speech";
 // Recognized only for migration cleanup; never installed by this version.
+pub(super) const RETIRED_NOTIFY_SKILL: &str = "horizon-notify";
 pub(super) const RETIRED_OFFLOAD_SKILL: &str = "horizon-offload";
 const LEASES_DIR: &str = ".horizon-leases";
 
@@ -239,7 +239,7 @@ pub(super) fn remove_horizon_skill_dir(path: &Path) {
     let Some(name) = path.file_name() else {
         return;
     };
-    if name != HORIZON_NOTIFY_SKILL
+    if name != RETIRED_NOTIFY_SKILL
         && name != HORIZON_BROWSER_SKILL
         && name != HORIZON_DEVICE_SKILL
         && name != HORIZON_SPEECH_SKILL
