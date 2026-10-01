@@ -95,16 +95,18 @@ impl HorizonApp {
 
     fn render_toolbar_fps_meter(&self, ui: &mut egui::Ui) {
         let stats = self.frame_stats.snapshot();
+        // Classify the number on screen, so "60" never shows in the below-60 color.
+        let shown_fps = stats.fps.round();
         let value = if stats.sample_count == 0 {
             "0".to_string()
         } else {
-            format!("{:.0}", stats.fps)
+            format!("{shown_fps:.0}")
         };
         let accent = if stats.sample_count == 0 {
             theme::BORDER_SUBTLE()
-        } else if stats.fps >= 100.0 {
+        } else if shown_fps >= 100.0 {
             theme::PALETTE_GREEN()
-        } else if stats.fps >= 60.0 {
+        } else if shown_fps >= 60.0 {
             theme::ACCENT()
         } else {
             theme::PALETTE_RED()
@@ -139,11 +141,11 @@ impl HorizonApp {
         );
 
         let tooltip = if stats.sample_count == 0 {
-            "Idle. The meter resumes once Horizon redraws again.".to_string()
+            "Idle. The meter measures while Horizon renders continuously, such as during panning, animation or streaming output.".to_string()
         } else {
             format!(
-                "{:.0} FPS average over {} frames ({:.2} ms/frame)",
-                stats.fps, stats.sample_count, stats.frame_time_ms
+                "{shown_fps:.0} FPS over the last {} frames ({:.2} ms average, {:.1} ms slowest)",
+                stats.sample_count, stats.frame_time_ms, stats.slowest_frame_time_ms
             )
         };
         let _ = response.on_hover_text(tooltip);
