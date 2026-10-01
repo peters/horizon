@@ -53,7 +53,7 @@ pub(crate) struct OrientationInput {
 }
 impl OrientationInput {
     pub(crate) fn timeout_millis(&self) -> u64 {
-        self.timeout_millis.unwrap_or(15_000)
+        self.timeout_millis.unwrap_or(RemoteOrientation::DEFAULT_TIMEOUT_MILLIS)
     }
     pub(crate) fn action(&self) -> Result<BrowserControlAction, String> {
         let action = BrowserControlAction::Orientation {

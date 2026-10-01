@@ -19,6 +19,7 @@ mod chrome;
 mod file_chooser;
 mod ime;
 mod input;
+mod orientation;
 mod render;
 mod review;
 mod select_popup;

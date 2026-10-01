@@ -365,6 +365,15 @@ credential read eventually returns, discovery resumes without restarting
 Horizon. While two reads for an account never return, that account's
 discovery keeps reporting the stall.
 
+## Direct remote orientation
+
+`horizon-browser orientation <PANEL-ID> portrait|landscape` rotates an existing
+remote device through the same `browser_orientation` MCP contract and durable
+plan runner. Use `--timeout-millis <1..60000>` (default 15000) to bound measured
+acknowledgement and `--output <REPORT.json|->` to choose the JSON report location.
+A timeout may follow a device mutation; inspect current state before retrying.
+Create-time orientation is available in the MCP plans below.
+
 ## Remote orientation plans
 
 The plan runner calls the same public MCP contract as interactive agents. A

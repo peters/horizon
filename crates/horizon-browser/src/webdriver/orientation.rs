@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::time::{Duration, Instant};
 
-const SAMPLE_SCRIPT: &str = "return {width:innerWidth,height:innerHeight,visual_width:visualViewport?.width ?? innerWidth,visual_height:visualViewport?.height ?? innerHeight,orientation:screen.orientation?.type ?? (typeof window.orientation === 'number' ? (Math.abs(window.orientation)%180 === 90 ? 'landscape' : 'portrait') : null)};";
+const SAMPLE_SCRIPT: &str = "return {width:innerWidth,height:innerHeight,visual_width:window.visualViewport?.width ?? innerWidth,visual_height:window.visualViewport?.height ?? innerHeight,orientation:screen.orientation?.type ?? (typeof window.orientation === 'number' ? (Math.abs(window.orientation)%180 === 90 ? 'landscape' : 'portrait') : null)};";
 pub(super) const START_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) fn unsupported(error: &HttpError) -> bool {

@@ -329,6 +329,21 @@ the initial expectations:
 
 ## Remote orientation contract
 
+Remote panel chrome offers Portrait and Landscape buttons. The selected button
+represents measured device/page agreement, with Rotating, Unverified and
+Unsupported status and nonfatal errors. User requests share the driver's frame,
+deadline and document verification with agent requests, while retaining User
+audit identity. Teach mode disables rotation; subsequent page input cancels a
+pending acknowledgement. Desktop and cloud-host presentation use the same state.
+
+The direct CLI command is `horizon-browser orientation <PANEL-ID>
+<portrait|landscape> [--timeout-millis <1..60000>] [-o <REPORT.json|->]`. It runs
+`browser_orientation` through the durable MCP plan runner. Create-time orientation
+remains available through `browser_create` in CLI plans. All remote create
+requests use the versioned orientation queue, including configured targets
+without an explicit per-call override; they require a matching current host so
+older hosts cannot silently ignore a target's configured orientation.
+
 Targets optionally normalize `orientation: portrait | landscape`. Create-time
 overrides require a remote target and share the same adapter and credential
 policy across the UI host, cloud worker and MCP/CLI. BrowserStack uses

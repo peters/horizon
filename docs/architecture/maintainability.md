@@ -887,3 +887,13 @@ This service has no UI, CLI or MCP caller yet. Missing or merely prepared clouds
 return a creation-confirmation phase without allocation; the form-independent
 creation adapter and interface wiring remain later M2 steps. Cross-source
 pending requests return Busy and require an explicit retry after reconciliation.
+
+Remote orientation verification lives in `horizon-browser`'s
+`webdriver/session/orientation`, with request-origin and user audit policy in its
+`origin` leaf. The core `browser/orientation` adapter queues user commands; UI
+`browser_widget/orientation` renders measured status and buttons. Direct CLI
+orientation commands generate one durable MCP plan in a separate `orientation`
+leaf rather than expanding the CLI parser with browser-driver logic.
+Cloud worker `browser/orientation` preserves matching queue-refusal acknowledgements.
+Bounded per-request completions prevent latest-only polling from losing superseded
+user requests; the core adapter bounds lost-status waiting and surfaces uncertainty.

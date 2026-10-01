@@ -138,7 +138,9 @@ impl Driver {
     pub(super) fn audit_user_command(&mut self, command: &BrowserCommand) {
         // Stop is recorded synchronously by `BrowserSession::send` because
         // setting its atomic flag can end the loop before the queue drains.
-        if matches!(command, BrowserCommand::Stop) || !self.audit_sampler.should_record(command) {
+        if matches!(command, BrowserCommand::Stop | BrowserCommand::Orientation { .. })
+            || !self.audit_sampler.should_record(command)
+        {
             return;
         }
         let actor = if matches!(command, BrowserCommand::SetViewport { .. }) {
@@ -202,7 +204,7 @@ impl Driver {
         );
     }
 
-    fn record_audit(
+    pub(super) fn record_audit(
         &self,
         action_id: String,
         actor: BrowserAuditActor,

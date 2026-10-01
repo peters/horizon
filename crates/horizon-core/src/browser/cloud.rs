@@ -1,4 +1,5 @@
 //! An SSH presentation connection. Dropping it never stops the worker browser.
+use super::remote::RemoteOrientationView;
 use super::{BrowserCommand, BrowserDrainOutput, BrowserEventWaker, BrowserPanelState, BrowserStatus, FrameSlot};
 use crate::cloud_runtime::ssh::Connection;
 use horizon_browser_protocol::cloud_view::{CloudViewRequest, CloudViewResponse, CloudViewState, MAX_CLOUD_VIEW_BYTES};
@@ -294,6 +295,12 @@ impl BrowserPanelState {
                     .unwrap_or("Awaiting provider confirmation")
             )
         });
+        if state.lost || state.error.is_some() {
+            self.orientation = RemoteOrientationView::default();
+            self.orientation_pending_since = None;
+        } else {
+            self.apply_orientation_view(state.orientation);
+        }
         self.config.backend = state.backend;
         self.title = state.title;
         self.owner = state.owner;

@@ -137,6 +137,19 @@ impl DriverState {
             self.vertical_scrollbar_drag = None;
         }
         match command {
+            BrowserCommand::Orientation { .. } => {
+                let _ = event_tx.send(super::BrowserEvent::OrientationChanged(
+                    crate::remote::RemoteOrientationView {
+                        state: crate::remote::RemoteOrientationState {
+                            support: crate::remote::OrientationSupport::Unsupported,
+                            applied: None,
+                        },
+                        error: Some("orientation_unsupported: local browsers use viewport resize".into()),
+                        ..Default::default()
+                    },
+                ));
+                Ok(false)
+            }
             BrowserCommand::Stop => Ok(true),
             BrowserCommand::Navigate(url) => {
                 self.invalidate_scrollbar_layout(event_tx);

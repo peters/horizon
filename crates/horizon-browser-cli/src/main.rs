@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod orientation;
 mod run_finalization;
 mod run_preparation;
 
@@ -37,12 +38,14 @@ const HELP: &str = r#"horizon-browser — run browser jobs through one MCP contr
 USAGE:
     horizon-browser "<GOAL>" [--backend <auto|chromium|firefox|safari>] [--visible] [--json]
     horizon-browser do "<GOAL>" [OPTIONS]
+    horizon-browser orientation <PANEL-ID> <portrait|landscape> [--timeout-millis <MILLIS>] [-o <REPORT.json|->]
     horizon-browser run <PLAN.json|-> [--output <REPORT.json|->] [--timeout <SECONDS>]
     horizon-browser resume <JOB-ID> [--output <REPORT.json|->] [--timeout <SECONDS>] [--on-uncertain fail|skip]
     horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible]
     horizon-browser mcp --stop [PANEL-ID]
 
 COMMANDS:
+    orientation Rotate a remote device through browser_orientation; reports measured acknowledgement.
     do     Ask an optional local agent to complete a goal through Horizon MCP.
            This is the default when the first argument is a quoted goal.
     run    Execute a fail-fast JSON plan through the existing MCP tools.
@@ -70,6 +73,7 @@ OPTIONS:
 "#;
 
 enum Command {
+    Orientation(orientation::Options),
     Run {
         plan: PathBuf,
         output: Option<PathBuf>,
@@ -109,6 +113,7 @@ async fn main() -> ExitCode {
             println!("horizon-browser {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        Ok(Command::Orientation(options)) => options.run().await,
         Ok(Command::Do(options)) => run_job(&options),
         Ok(Command::Mcp { standalone, options }) => serve_mcp(standalone, options).await,
         Ok(Command::Stop { panel_id }) => stop_standalone(panel_id.as_deref()),
@@ -628,6 +633,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
         Some("-V" | "--version") => no_more(args, Command::Version),
         Some("mcp") => parse_mcp(args),
         Some("do") => parse_do(args),
+        Some("orientation") => orientation::Options::parse(args).map(Command::Orientation),
         Some("run") => parse_run(args),
         Some("resume") => parse_resume(args),
         Some(prompt) if !prompt.starts_with('-') => parse_job(prompt.to_string(), args),

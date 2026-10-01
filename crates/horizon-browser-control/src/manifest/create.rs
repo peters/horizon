@@ -352,11 +352,11 @@ fn enqueue_operation_at(
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
     }
 
-    // Older hosts only poll the ordinary creation queue. A distinct queue
-    // prevents them from silently opening an isolated page for a duplicate.
+    // Older hosts poll only the ordinary queue. Version-gate all remote
+    // creates so configured orientation cannot be silently ignored.
     let request_id = if duplicate_from.is_some() {
         format!("duplicate-{}", new_action_id())
-    } else if orientation.is_some() {
+    } else if orientation.is_some() || target.is_some() {
         format!("oriented-{}", new_action_id())
     } else {
         new_action_id()
@@ -981,9 +981,19 @@ mod tests {
             Duration::from_secs(30),
         )
         .expect("enqueue with target");
-        let request = claim_at(root.path(), &request_id, "horizon:agent-panel", "host-a", 7)
-            .expect("claim")
-            .expect("request");
+        assert!(
+            list_at(root.path()).unwrap().is_empty(),
+            "legacy hosts cannot ignore configured target orientation"
+        );
+        let request = claim_at(
+            &operation_root(root.path(), &request_id),
+            &request_id,
+            "horizon:agent-panel",
+            "host-a",
+            7,
+        )
+        .expect("claim")
+        .expect("request");
         assert_eq!(request.target.as_deref(), Some("ios_phone"));
         let legacy: BrowserCreateRequest = serde_json::from_value(serde_json::json!({
             "request_id": "r1", "actor": "horizon:agent-panel", "visible": true,

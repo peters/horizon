@@ -80,6 +80,25 @@ a pass from mocks or use a different browser controller.
    orientation remains unchanged and displayed page proportions stay correct.
 10. Record screenshots after launch and resize/fit, with final candidate hash.
 
+## UI buttons and direct CLI
+
+- On the remote panel, use Portrait and Landscape buttons for a full round trip.
+  Require Rotating while awaiting evidence, and change the selected button only
+  after measured device/page/frame agreement. Observe a fresh responsive layout,
+  reacquire semantic refs and activate an edge control after each rotation.
+- Ensure controls wrap within narrow panels and remain legible after resize/fit.
+  Hide remote rotation controls on local browsers. Disable controls while starting,
+  stopped, rotating, unsupported, and while Teach mode is active.
+- A failed rotation must show an actionable error without discarding the browser
+  frame or turning a usable panel into a fatal error. Inspect before retrying.
+- Execute `horizon-browser orientation <owned-panel-id> landscape` and restore
+  portrait, including `--timeout-millis` and `--output`. Require MCP-equivalent
+  applied orientation/viewport and durable report evidence. This CLI lane needs an
+  explicitly authorized test executor; the implementing agent continues using
+  only public browser MCP tools for browser interaction.
+- With two cloud viewers, rotate from the second while the first waits; the first must receive superseded status and recover when the active rotation settles. Cover driver queue refusal and lost-status timeout through deterministic tests.
+- Capture the UI button round trip in the final native-viewed PR GIF.
+
 ## Refusals and recovery
 
 - On an endpoint known not to implement orientation, require unsupported

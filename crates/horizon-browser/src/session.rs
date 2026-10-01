@@ -96,6 +96,8 @@ pub enum BrowserEvent {
     Warning(String),
     /// Page-pixel recording could not start, pause, resume, or finalize.
     VideoFailed(String),
+    /// Measured remote orientation and rotation progress.
+    OrientationChanged(crate::remote::RemoteOrientationView),
     /// The driver stopped.
     Stopped {
         code: Option<i32>,

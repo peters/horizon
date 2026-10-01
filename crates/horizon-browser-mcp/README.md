@@ -508,5 +508,5 @@ attempts release; uncertain release retains the allocation hold. A runtime
 timeout or transport failure may follow an applied rotation: inspect before
 retrying. Remote viewports still refuse arbitrary `browser_resize` dimensions
 with `remote_viewport_fixed`. The host and MCP executable must both include
-orientation support; orientation-specific creates use a separate queue so an
+orientation support; all remote creates use a separate versioned queue, including configured orientation without a per-call override so an
 older host cannot silently ignore the override.

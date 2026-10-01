@@ -32,6 +32,7 @@ pub fn show(
     if let Some(identity) = browser.remote_identity_display() {
         remote_identity_header(ui, identity);
     }
+    let orientation_clicked = super::orientation::show(ui, browser, interactive);
     let chrome_row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.set_min_height(CHROME_HEIGHT);
@@ -79,6 +80,7 @@ pub fn show(
         (url_focused, clicked)
     });
     let (url_focused, mut clicked) = chrome_row.inner;
+    clicked |= orientation_clicked;
 
     if let Some(error) = &browser.navigation_error {
         ui.label(RichText::new(error).size(10.5).color(theme::PALETTE_RED()));

@@ -264,3 +264,111 @@ fn polling_retries_missing_or_rejected_pixels_until_a_frame_is_stored() {
         .collect();
     assert_eq!(acknowledgments, [0, 0, 7]);
 }
+
+#[test]
+fn cloud_orientation_progress_and_failures_reach_panel_without_fatal_error() {
+    use crate::browser::remote::{
+        OrientationSupport, RemoteOrientation, RemoteOrientationState, RemoteOrientationView,
+    };
+    let mut panel = BrowserPanelState::inert();
+    for pending in [Some(RemoteOrientation::Landscape), None] {
+        let view = RemoteOrientationView {
+            completed: Vec::new(),
+            action_id: None,
+            state: RemoteOrientationState {
+                support: OrientationSupport::Supported,
+                applied: None,
+            },
+            pending,
+            error: pending.is_none().then(|| "orientation_timeout".into()),
+        };
+        panel.apply_cloud_state(
+            CloudViewState {
+                ready: true,
+                orientation: view.clone(),
+                ..CloudViewState::default()
+            },
+            false,
+        );
+        assert_eq!(panel.orientation, view);
+        assert!(matches!(panel.status, BrowserStatus::Ready));
+    }
+}
+
+#[test]
+fn stale_cloud_poll_cannot_clear_a_queued_rotation_until_matching_acknowledgement() {
+    use crate::browser::remote::{RemoteOrientation, RemoteOrientationView};
+    let mut panel = BrowserPanelState::inert();
+    panel.orientation = RemoteOrientationView {
+        action_id: Some("current".into()),
+        pending: Some(RemoteOrientation::Landscape),
+        ..RemoteOrientationView::default()
+    };
+    panel.apply_cloud_state(
+        CloudViewState {
+            ready: true,
+            ..CloudViewState::default()
+        },
+        false,
+    );
+    assert_eq!(panel.orientation.pending, Some(RemoteOrientation::Landscape));
+    panel.apply_cloud_state(
+        CloudViewState {
+            ready: true,
+            orientation: RemoteOrientationView {
+                action_id: Some("current".into()),
+                ..RemoteOrientationView::default()
+            },
+            ..CloudViewState::default()
+        },
+        false,
+    );
+    assert!(panel.orientation.pending.is_none());
+}
+
+#[test]
+fn another_cloud_viewers_rotation_and_worker_queue_refusal_settle_the_original_request() {
+    use crate::browser::remote::{RemoteOrientation, RemoteOrientationCompletion, RemoteOrientationView};
+    for error in ["orientation_superseded", "orientation_queue_rejected"] {
+        let mut panel = BrowserPanelState::inert();
+        panel.orientation = RemoteOrientationView {
+            action_id: Some("viewer-a".into()),
+            pending: Some(RemoteOrientation::Landscape),
+            ..RemoteOrientationView::default()
+        };
+        panel.apply_cloud_state(
+            CloudViewState {
+                ready: true,
+                orientation: RemoteOrientationView {
+                    action_id: Some("viewer-b".into()),
+                    completed: vec![RemoteOrientationCompletion {
+                        action_id: "viewer-a".into(),
+                        error: Some(error.into()),
+                    }],
+                    ..RemoteOrientationView::default()
+                },
+                ..CloudViewState::default()
+            },
+            false,
+        );
+        assert!(panel.orientation.pending.is_none());
+        assert_eq!(panel.orientation.error.as_deref(), Some(error));
+        let repeat = CloudViewState {
+            ready: true,
+            orientation: RemoteOrientationView {
+                action_id: Some("viewer-b".into()),
+                completed: vec![RemoteOrientationCompletion {
+                    action_id: "viewer-a".into(),
+                    error: Some(error.into()),
+                }],
+                ..RemoteOrientationView::default()
+            },
+            ..CloudViewState::default()
+        };
+        for _ in 0..3 {
+            panel.apply_cloud_state(repeat.clone(), false);
+            assert_eq!(panel.orientation.error.as_deref(), Some(error));
+            assert_eq!(panel.orientation.action_id.as_deref(), Some("viewer-a"));
+        }
+    }
+}

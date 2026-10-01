@@ -65,6 +65,9 @@ struct Driver {
     remote_device: Option<String>,
     remote_orientation: Option<crate::remote::RemoteOrientationState>,
     pending_orientation: Option<orientation::Pending>,
+    orientation_error: Option<String>,
+    orientation_action_id: Option<String>,
+    orientation_completed: crate::remote::RemoteOrientationView,
     remote_android_chromium: bool,
     file_transfer: Option<remote_files::Transfer>,
     session_id: String,
@@ -183,6 +186,10 @@ pub(crate) fn run_webdriver(
         let mut stop = false;
         let batch = command_rx.drain(MAX_COMMAND_BURST);
         for command in batch.commands {
+            if let BrowserCommand::Orientation { action_id, orientation } = command {
+                driver.begin_user_orientation(action_id, orientation, event_tx, stop_requested);
+                continue;
+            }
             driver.audit_user_command(&command);
             if driver.run_command(command, event_tx, true).is_ok_and(|stop| stop) {
                 stop = true;
@@ -265,6 +272,7 @@ impl Driver {
         // published before the (bounded) startup navigation returned. The host
         // resets its loading flag on `Ready`, so a startup navigation that is
         // still running is reported as loading again right after it.
+        self.publish_orientation(event_tx, None);
         let _ = event_tx.send(BrowserEvent::Ready);
         if startup_navigation_pending {
             let _ = event_tx.send(BrowserEvent::Loading(true));
@@ -290,7 +298,9 @@ impl Driver {
         }
         if matches!(request.action, crate::BrowserControlAction::Orientation { .. }) {
             self.begin_orientation(request, stop);
+            self.publish_orientation(events, None);
         } else if self.pending_orientation.is_some() {
+            self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);
             self.complete_agent_action(
                 request,
                 Err(crate::BrowserControlFailure::new(
@@ -372,6 +382,9 @@ impl Driver {
             remote_device,
             remote_orientation,
             pending_orientation: None,
+            orientation_error: None,
+            orientation_action_id: None,
+            orientation_completed: crate::remote::RemoteOrientationView::default(),
             file_transfer,
             remote_android_chromium: remote_click::uses_visual_viewport(config.remote.is_some(), &capabilities),
             session_id,
@@ -443,6 +456,11 @@ impl Driver {
         user: bool,
     ) -> Result<bool, String> {
         if user && is_user_activity(&command) {
+            self.finish_orientation(
+                "orientation_user_active",
+                "human input took over; inspect applied orientation",
+            );
+            self.publish_orientation(events, None);
             self.note_remote_activity();
             self.stamp_user_active();
         }
@@ -476,6 +494,7 @@ impl Driver {
                 }
                 Ok(false)
             }
+            BrowserCommand::Orientation { .. } => Ok(false),
             BrowserCommand::Stop => Ok(true),
         }
     }

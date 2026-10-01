@@ -341,6 +341,9 @@ impl BrowserAuditAction {
                 width: *width,
                 height: *height,
             },
+            BrowserCommand::Orientation { orientation, .. } => Self::Orientation {
+                orientation: *orientation,
+            },
             BrowserCommand::Input(input) => Self::from_input(input),
             BrowserCommand::Video { operation, options } => Self::Video {
                 operation: *operation,

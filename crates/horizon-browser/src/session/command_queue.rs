@@ -433,4 +433,17 @@ mod tests {
         }));
         assert_eq!(frame_slot.metrics().commands_rejected, 1);
     }
+    #[test]
+    fn a_saturated_nondiscardable_queue_refuses_orientation_without_silent_eviction() {
+        let slot = Arc::new(crate::FrameSlot::new());
+        let (sender, receiver) = channel(slot);
+        for _ in 0..COMMAND_CAPACITY {
+            assert!(sender.send(BrowserCommand::Reload));
+        }
+        assert!(!sender.send(BrowserCommand::Orientation {
+            action_id: "rotation".into(),
+            orientation: crate::remote::RemoteOrientation::Landscape
+        }));
+        assert_eq!(receiver.drain(COMMAND_CAPACITY + 1).commands.len(), COMMAND_CAPACITY);
+    }
 }

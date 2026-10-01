@@ -9,6 +9,7 @@ pub enum RemoteOrientation {
 }
 
 impl RemoteOrientation {
+    pub const DEFAULT_TIMEOUT_MILLIS: u64 = 15_000;
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -50,4 +51,32 @@ pub enum OrientationSupport {
 pub struct RemoteOrientationState {
     pub support: OrientationSupport,
     pub applied: Option<RemoteOrientation>,
+}
+
+/// Runtime presentation shared by desktop and cloud hosts.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct RemoteOrientationView {
+    #[serde(default)]
+    pub action_id: Option<String>,
+    #[serde(default)]
+    pub completed: Vec<RemoteOrientationCompletion>,
+    pub state: RemoteOrientationState,
+    pub pending: Option<RemoteOrientation>,
+    pub error: Option<String>,
+}
+
+/// Bounded terminal acknowledgements survive latest-only cloud polling.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct RemoteOrientationCompletion {
+    pub action_id: String,
+    pub error: Option<String>,
+}
+impl RemoteOrientationView {
+    pub fn record_completion(&mut self, completion: RemoteOrientationCompletion) {
+        self.completed.retain(|entry| entry.action_id != completion.action_id);
+        self.completed.push(completion);
+        if self.completed.len() > 64 {
+            self.completed.remove(0);
+        }
+    }
 }

@@ -11,6 +11,11 @@ pub enum BrowserCommand {
         width: u32,
         height: u32,
     },
+    /// Rotate a remote device and await measured acknowledgement.
+    Orientation {
+        action_id: String,
+        orientation: crate::remote::RemoteOrientation,
+    },
     Input(BrowserInput),
     /// Start, pause, resume, inspect, or stop page-pixel `WebM` capture.
     Video {
