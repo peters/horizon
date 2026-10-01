@@ -877,3 +877,6 @@ fn workbench_generation_tracks_session_and_keychain_mutations_without_secret_rea
         );
     }
 }
+
+#[cfg(target_os = "linux")]
+mod native_keyring;

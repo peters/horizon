@@ -28,12 +28,18 @@ pub enum KeyringStoreAvailability {
 /// metadata-only probe its store supports.
 type PresenceProbe = fn(&CredentialStore, &str) -> Result<bool, RemoteCredentialError>;
 
+type StoreOpener = fn() -> Result<Arc<CredentialStore>, RemoteCredentialError>;
+
 /// OS credential store adapter: macOS Keychain, Windows Credential Manager,
 /// Linux Secret Service over D-Bus. Items are addressed by endpoint origin
 /// and slot, so a value bound to one endpoint is invisible to another.
 pub struct KeyringCredentialStore {
     store: Arc<CredentialStore>,
     probe: PresenceProbe,
+    // Secret Service sessions belong to one daemon instance. A restarted
+    // daemon can answer searches but rejects encrypted writes with NoSession.
+    // Reopen for each access; settings writes remain on the worker thread.
+    reopen: Option<StoreOpener>,
 }
 
 impl KeyringCredentialStore {
@@ -46,6 +52,7 @@ impl KeyringCredentialStore {
         platform::open().map(|store| Self {
             store,
             probe: platform::probe,
+            reopen: cfg!(target_os = "linux").then_some(platform::open as StoreOpener),
         })
     }
 
@@ -56,6 +63,7 @@ impl KeyringCredentialStore {
         Self {
             store,
             probe: search_probe,
+            reopen: None,
         }
     }
 
@@ -76,8 +84,13 @@ impl KeyringCredentialStore {
     }
 
     fn entry(&self, locator: &CredentialLocator) -> Result<Entry, RemoteCredentialError> {
-        self.store
-            .build(KEYRING_SERVICE, &Self::user(locator)?, None)
+        let user = Self::user(locator)?;
+        let store = match self.reopen {
+            Some(open) => open()?,
+            None => Arc::clone(&self.store),
+        };
+        store
+            .build(KEYRING_SERVICE, &user, None)
             .map_err(|error| map_error(&error))
     }
 }
