@@ -7,7 +7,7 @@ use horizon_core::{
     live_claude_session_ids,
 };
 
-use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
+use super::util::empty_string_as_none;
 use super::{ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession};
 
 const SESSION_BINDING_ACTIVITY_WINDOW: Duration = Duration::from_secs(10);
@@ -578,7 +578,7 @@ impl HorizonApp {
         self.mark_runtime_dirty();
     }
 
-    pub(super) fn session_rebind_options(&self, panel_id: PanelId) -> Vec<(String, AgentSessionBinding)> {
+    pub(super) fn session_rebind_options(&self, panel_id: PanelId) -> Vec<AgentSessionBinding> {
         let Some(panel) = self.board.panel(panel_id) else {
             return Vec::new();
         };
@@ -605,17 +605,7 @@ impl HorizonApp {
                 Some(session.session_id.as_str()) != current_session_id
                     && !reserved_session_ids.contains(session.session_id.as_str())
             })
-            .take(8)
-            .map(|session| {
-                let short_id = short_session_id(&session.session_id);
-                let label = truncate_session_label(
-                    &session
-                        .label
-                        .clone()
-                        .unwrap_or_else(|| format!("{} session", panel.kind.display_name())),
-                );
-                (format!("{label} · {short_id}"), session.into_binding())
-            })
+            .map(horizon_core::AgentSessionRecord::into_binding)
             .collect()
     }
 

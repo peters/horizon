@@ -132,7 +132,10 @@ impl HorizonApp {
     pub(in super::super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
         // A chord being captured by the settings hotkey binder must not
         // trigger the shortcut it happens to match.
-        if self.host_dialog_open() || super::super::shortcuts::hotkey_capture_active(ctx) {
+        if self.host_dialog_open()
+            || super::super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some())
+            || super::super::shortcuts::hotkey_capture_active(ctx)
+        {
             return;
         }
         let (panel_toggle, window_toggle, exit_fullscreen) = ctx.input(|input| {
@@ -183,6 +186,7 @@ impl HorizonApp {
         visible_workspace: Option<WorkspaceId>,
     ) {
         if self.host_dialog_open()
+            || super::super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some())
             || self.preset_picker_rect(ctx).is_some_and(|rect| {
                 ctx.input(|input| {
                     input

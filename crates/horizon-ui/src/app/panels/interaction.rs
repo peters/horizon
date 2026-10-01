@@ -6,7 +6,8 @@ use crate::terminal_widget::viewport_for_available_space;
 use crate::theme;
 
 use super::{
-    PanelCommand, PanelFocusRequest, PanelFrame, PanelSnapshot, PanelUiOutcome, render_session_rebind_options,
+    PanelCommand, PanelFocusRequest, PanelFrame, PanelSnapshot, PanelUiOutcome, open_session_picker,
+    render_session_picker,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -229,7 +230,11 @@ impl HorizonApp {
             // actually open instead of every frame for every panel.
             let rebind_options = self.session_rebind_options(panel_id);
             if !rebind_options.is_empty() {
-                outcome.session_rebind_and_restart = render_session_rebind_options(ui, &rebind_options).binding;
+                let response = ui.button(format!("Resume a session ({})…", rebind_options.len()));
+                if response.clicked() {
+                    open_session_picker(&response, panel_id, rebind_options);
+                    ui.close();
+                }
                 ui.separator();
             }
             if ui.button("New Workspace").clicked() {
@@ -266,6 +271,7 @@ impl HorizonApp {
                 }
             }
         });
+        outcome.session_rebind_and_restart = render_session_picker(&drag_response.ctx, panel_id);
     }
 
     fn resize_panel_in_environment(
