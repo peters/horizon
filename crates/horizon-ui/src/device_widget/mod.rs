@@ -165,7 +165,12 @@ impl DeviceUiState {
         self.rendered = true;
         if !self.initialized {
             self.initialized = true;
-            if device.connect_on_start {
+            if std::env::var_os("HORIZON_DESK_MODE").is_some() {
+                // A viewer in a window of its own shows the whole desktop, scaled to fit.
+                self.controls.one_to_one = false;
+            }
+            // Desktop-workspace prototype: viewers come up connected, as a window of their own should.
+            if device.connect_on_start || std::env::var_os("HORIZON_DESK_MODE").is_some() {
                 self.reconnect(ui.ctx(), device);
             }
         }

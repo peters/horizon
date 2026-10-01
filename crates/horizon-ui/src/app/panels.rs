@@ -24,6 +24,7 @@ use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE
 
 mod assistant;
 mod interaction;
+mod window;
 pub(super) use interaction::ArrangedPanelDrag;
 
 #[derive(Clone, Copy)]

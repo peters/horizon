@@ -25,30 +25,86 @@ pub(super) fn enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("HORIZON_DESK_MODE").is_some_and(|value| !value.is_empty()))
 }
 
+/// A window as the shell reports it.
+#[derive(Clone, Debug, Default)]
+pub(super) struct DeskWindow {
+    pub app_id: String,
+    /// The desktop workspace it is on, or -1 when it is on all of them.
+    pub workspace: i64,
+    /// Left, top, width and height in monitor pixels.
+    pub rect: [i32; 4],
+}
+
+/// How far a panel window has got on its way to its desktop.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Placement {
+    pub since: Instant,
+    /// The shell has reported the window on the desktop it was sent to; from then on a
+    /// different desktop means the person moved it.
+    pub confirmed: bool,
+}
+
 /// What the shell reports about desktop workspaces.
 #[derive(Clone, Debug, Default)]
 pub(super) struct DeskState {
     pub active: usize,
+    pub windows: Vec<DeskWindow>,
 }
 
 impl DeskState {
     fn from_json(value: &serde_json::Value) -> Self {
+        let windows = value["windows"]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .map(|window| {
+                        let rect = window["rect"].as_array().map_or([0; 4], |numbers| {
+                            let mut out = [0; 4];
+                            for (slot, number) in out.iter_mut().zip(numbers) {
+                                *slot = number.as_i64().and_then(|n| i32::try_from(n).ok()).unwrap_or(0);
+                            }
+                            out
+                        });
+                        DeskWindow {
+                            app_id: window["app_id"].as_str().unwrap_or_default().to_string(),
+                            workspace: window["workspace"].as_i64().unwrap_or(-1),
+                            rect,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             active: value["active"]
                 .as_u64()
                 .and_then(|index| usize::try_from(index).ok())
                 .unwrap_or(0),
+            windows,
         }
     }
 }
 
+/// The window class a panel's native window is given, so the shell can find it.
+pub(super) const PANEL_APP_PREFIX: &str = "horizon-panel-";
+
+pub(super) fn panel_app_id(local_id: &str) -> String {
+    let clean: String = local_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    format!("{PANEL_APP_PREFIX}{clean}")
+}
+
 enum Command_ {
     Ensure(u32),
-    Move(String, u32),
     Place(String, [i32; 4]),
     Stick(String),
     Above(String),
     Switch(u32),
+    Key(bool),
+    MoveClass(String, u32),
+    PlaceClass(String, [i32; 4]),
+    Overview,
 }
 
 pub(super) struct Desk {
@@ -56,6 +112,8 @@ pub(super) struct Desk {
     state: Arc<Mutex<DeskState>>,
     started: Instant,
     last_setup: Option<Instant>,
+    /// When each panel window was first put on its desktop; after a moment the shell owns it.
+    pub placed: std::collections::HashMap<horizon_core::PanelId, Placement>,
 }
 
 impl Desk {
@@ -76,6 +134,7 @@ impl Desk {
             state,
             started: Instant::now(),
             last_setup: None,
+            placed: std::collections::HashMap::new(),
         })
     }
 
@@ -94,9 +153,32 @@ impl Desk {
             .send(Command_::Switch(u32::try_from(workspace).unwrap_or(0)));
     }
 
-    /// Re-applies where every window belongs. Idempotent, so it is repeated for
-    /// the first seconds while windows are still being created.
-    pub(super) fn place(&mut self, workspaces: &[String], bar: [i32; 4], monitor: [i32; 2]) {
+    /// Presses GNOME's own workspace shortcut: Ctrl+Alt+Right when `right`, else Ctrl+Alt+Left.
+    pub(super) fn press_key(&self, right: bool) {
+        let _ = self.commands.send(Command_::Key(right));
+    }
+
+    /// Puts a panel window on a desktop workspace.
+    pub(super) fn move_window(&self, app_id: &str, workspace: usize) {
+        let _ = self.commands.send(Command_::MoveClass(
+            app_id.to_string(),
+            u32::try_from(workspace).unwrap_or(0),
+        ));
+    }
+
+    /// Positions and sizes a panel window (left, top, width, height).
+    pub(super) fn place_window(&self, app_id: &str, rect: [i32; 4]) {
+        let _ = self.commands.send(Command_::PlaceClass(app_id.to_string(), rect));
+    }
+
+    /// Shows or hides GNOME's own overview, with a thumbnail of every workspace.
+    pub(super) fn toggle_overview(&self) {
+        let _ = self.commands.send(Command_::Overview);
+    }
+
+    /// Keeps the bar on every desktop, above the other windows, and as many desktops as workspaces.
+    /// Idempotent, so it is repeated for the first seconds while the window is created.
+    pub(super) fn place_bar(&mut self, workspaces: usize, bar: [i32; 4]) {
         let now = Instant::now();
         let early = self.started.elapsed() < Duration::from_secs(40);
         let due = self.last_setup.is_none_or(|last| {
@@ -111,18 +193,8 @@ impl Desk {
             return;
         }
         self.last_setup = Some(now);
-        let count = u32::try_from(workspaces.len().max(1)).unwrap_or(1);
+        let count = u32::try_from(workspaces.max(1)).unwrap_or(1);
         let _ = self.commands.send(Command_::Ensure(count));
-        for (index, name) in workspaces.iter().enumerate() {
-            let title = format!("{name} · Horizon");
-            let _ = self
-                .commands
-                .send(Command_::Move(title.clone(), u32::try_from(index).unwrap_or(0)));
-            // Below the shell's top bar, filling the rest of the monitor.
-            let _ = self
-                .commands
-                .send(Command_::Place(title, [0, 32, monitor[0], monitor[1] - 32]));
-        }
         let _ = self.commands.send(Command_::Stick(BAR_TITLE.to_string()));
         let _ = self.commands.send(Command_::Above(BAR_TITLE.to_string()));
         let _ = self.commands.send(Command_::Place(BAR_TITLE.to_string(), bar));
@@ -172,7 +244,6 @@ fn read_state() -> Option<DeskState> {
 fn run(command: &Command_) {
     let _ = match command {
         Command_::Ensure(count) => call("EnsureWorkspaces", &[count.to_string()]),
-        Command_::Move(title, workspace) => call("MoveWindow", &[title.clone(), workspace.to_string()]),
         Command_::Place(title, [x, y, w, h]) => call(
             "Place",
             &[
@@ -186,5 +257,21 @@ fn run(command: &Command_) {
         Command_::Stick(title) => call("StickWindow", &[title.clone(), "true".to_string()]),
         Command_::Above(title) => call("KeepAbove", &[title.clone(), "true".to_string()]),
         Command_::Switch(workspace) => call("Switch", &[workspace.to_string()]),
+        Command_::MoveClass(app_id, workspace) => call("MoveClass", &[app_id.clone(), workspace.to_string()]),
+        Command_::PlaceClass(app_id, [x, y, w, h]) => call(
+            "PlaceClass",
+            &[
+                app_id.clone(),
+                x.to_string(),
+                y.to_string(),
+                w.to_string(),
+                h.to_string(),
+            ],
+        ),
+        Command_::Overview => call("ToggleOverview", &[]),
+        Command_::Key(right) => call(
+            "PressWorkspaceKey",
+            &[(if *right { "right" } else { "left" }).to_string()],
+        ),
     };
 }

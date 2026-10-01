@@ -42,16 +42,9 @@ def make_backdrop():
     return Image.fromarray(bg.clip(0, 255).astype(np.uint8))
 BACK = make_backdrop()
 
-AREA = (1632, 1020)
-AX, AY = (W - AREA[0]) // 2, (H - AREA[1]) // 2
-mask = Image.new("L", AREA, 0)
-ImageDraw.Draw(mask).rounded_rectangle((0, 0, AREA[0] - 1, AREA[1] - 1), 22, fill=255)
-shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-ImageDraw.Draw(shadow).rounded_rectangle((AX, AY + 18, AX + AREA[0], AY + AREA[1] + 18), 24, fill=(0, 0, 0, 170))
-shadow = shadow.filter(ImageFilter.GaussianBlur(26))
-BACK_WITH_SHADOW = BACK.convert("RGBA"); BACK_WITH_SHADOW.alpha_composite(shadow); BACK_WITH_SHADOW = BACK_WITH_SHADOW.convert("RGB")
-ring = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-ImageDraw.Draw(ring).rounded_rectangle((AX - 1, AY - 1, AX + AREA[0], AY + AREA[1]), 23, outline=(120, 150, 230, 70), width=2)
+AREA = (1920, 1080)
+AX, AY = 0, 0
+BACK_WITH_SHADOW = BACK
 
 # ---- the Horizon assistant mark, drawn the way the app draws it ------------------------
 def mark(size):
@@ -124,21 +117,27 @@ def outro_frame(t):
     return img
 
 # ---- captions and camera --------------------------------------------------------------
-r = rel
-g, E, SY, N, X, CO = r["go"], r["enter"], r["say"], r["note"], r["expand"], r["collapse"]
+m = plan["marks"]
+g = rel["go"]
 CAPTIONS = [
-    (0.5, g[0] - 0.4, "Every workspace is a real desktop.", None),
-    (g[0], g[3] + 0.6, "One command bar, on every desktop.", "Click a workspace tile to jump there."),
-    (SY - 1.0, E + 0.3, "Just say what you want.", None),
-    (E + 0.9, g[4] - 0.4, "One request. Three agents. Three workspaces.", None),
-    (g[4] + 0.1, g[5] - 0.3, "A browser, an agent and a shell. Side by side.", None),
-    (g[5] + 0.2, g[6] - 0.2, "Watch the minimap, not the noise.", None),
-    (g[6] + 0.3, N - 0.4, "The bar follows you to every workspace.", None),
-    (N - 0.1, X[0] - 0.3, "A recap, not noise: two done, one needs you.", None),
-    (X[0] + 0.1, X[1] - 0.1, "Expand into the whole conversation.", "A  ·  Sheet"),
-    (X[1] + 0.1, X[2] - 0.1, "Expand into the whole conversation.", "B  ·  Split"),
-    (X[2] + 0.1, CO - 0.1, "Expand into the whole conversation.", "C  ·  Stage"),
-    (r["scope_cloud"] - 0.4, r["scope_all"] + 2.2, "Scope it to one workspace, or all of them.", None),
+    (m["start"] + 0.3, m["tour"] - 0.2, "Panels are normal windows on your desktop.", "No canvas. No frame. Just your apps."),
+    (m["tour"] + 0.1, m["native"] - 0.2, "A browser, an agent and a shell, side by side.", None),
+    (m["native"] + 0.1, m["keys"] - 0.2, "Native apps in a VNC viewer panel.", None),
+    (m["keys"] + 0.1, m["overview"] - 0.3, "Ctrl + Alt + arrows work too.", "A real GNOME desktop."),
+    (m["overview"] + 0.2, m["overview_close"] - 0.1, "Twenty real workspaces.", "GNOME's own overview shows every one."),
+    (m["overview_close"] + 0.2, m["voice"] - 0.1, "Twenty workspaces, one small bar.", None),
+    (m["voice"] + 0.1, m["enter"] + 0.3, "Just say what you want.", None),
+    (m["enter"] + 0.9, m["work2"] - 0.4, "One request. Three agents. Three workspaces.", None),
+    (m["work2"] + 0.1, m["work3"] - 0.3, "Each agent works in its own workspace.", None),
+    (m["work3"] + 0.2, m["work1"] - 0.2, "Watch the minimap, not the noise.", None),
+    (m["work1"] + 0.3, rel["note"] - 0.4, "The bar follows you to every workspace.", None),
+    (rel["note"] - 0.1, m["expA"] - 0.3, "A recap, not noise: two done, one needs you.", None),
+    (m["expA"] + 0.1, m["expB"] - 0.1, "Expand into the whole conversation.", "A  ·  Sheet"),
+    (m["expB"] + 0.1, m["expC"] - 0.1, "Expand into the whole conversation.", "B  ·  Split"),
+    (m["expC"] + 0.1, m["collapse"] - 0.1, "Expand into the whole conversation.", "C  ·  Stage"),
+    (m["move"] + 0.2, m["moved"] - 0.2, "Drag a window to another desktop.", "The panel follows."),
+    (m["moved"] + 0.1, m["scope"] - 0.3, "Same panel, new workspace.", None),
+    (m["scope"] - 0.2, m["end"], "Scope it to one workspace, or all of them.", None),
 ]
 caption_cache = {}
 def caption_layer(main, sub):
@@ -168,12 +167,11 @@ def caption_alpha(tc, start, end):
 
 # camera keyframes: (capture time, zoom, centre x, centre y) in desktop pixels
 CAMERA = [
-    (0.0, 1.0, 800, 500), (g[0] - 0.9, 1.0, 800, 500), (g[0] - 0.1, 1.32, 800, 760), (g[3] + 0.9, 1.32, 800, 760),
-    (SY - 0.7, 1.62, 800, 830), (E + 0.6, 1.62, 800, 830), (E + 1.8, 1.0, 800, 500),
-    (g[4] - 0.6, 1.0, 800, 500), (g[4] + 0.5, 1.2, 800, 430), (g[5] - 0.4, 1.2, 800, 430), (g[5] + 0.4, 1.0, 800, 500),
-    (N - 1.2, 1.0, 800, 500), (N - 0.2, 1.55, 800, 700), (X[0] - 0.8, 1.55, 800, 700), (X[0] - 0.1, 1.0, 800, 520),
-    (CO + 0.2, 1.0, 800, 520), (CO + 1.4, 1.42, 800, 790), (r["scope_all"] + 2.0, 1.42, 800, 790),
-    (D - 1.0, 1.0, 800, 500), (D + 5, 1.0, 800, 500),
+    (0.0, 1.0, 960, 540), (m["voice"] - 0.8, 1.0, 960, 540), (m["voice"] + 0.0, 1.5, 960, 900),
+    (m["enter"] + 0.6, 1.5, 960, 900), (m["enter"] + 1.8, 1.0, 960, 540),
+    (rel["note"] - 1.2, 1.0, 960, 540), (rel["note"] - 0.2, 1.45, 960, 860), (m["expA"] - 0.8, 1.45, 960, 860),
+    (m["expA"] - 0.1, 1.0, 960, 540), (m["scope"] - 0.4, 1.0, 960, 540), (m["scope"] + 0.8, 1.45, 960, 900),
+    (m["end"] - 0.6, 1.45, 960, 900), (m["end"] + 0.6, 1.0, 960, 540), (D + 5, 1.0, 960, 540),
 ]
 def camera(tc):
     for i in range(len(CAMERA) - 1):
@@ -187,18 +185,16 @@ def capture_frame(tc, t):
     src = capture_at(tc)
     z, cx, cy = camera(tc)
     z = max(1.0, z * (1 + 0.008 * math.sin(t * 0.7)) + 0.008)
-    bw, bh = 1600 / z, 1000 / z
-    x0 = min(max(cx - bw / 2, 0), 1600 - bw); y0 = min(max(cy - bh / 2, 0), 1000 - bh)
+    bw, bh = 1920 / z, 1080 / z
+    x0 = min(max(cx - bw / 2, 0), 1920 - bw); y0 = min(max(cy - bh / 2, 0), 1080 - bh)
     view = src.resize(AREA, Image.BICUBIC, box=(x0, y0, x0 + bw, y0 + bh))
-    img = BACK_WITH_SHADOW.copy()
-    img.paste(view, (AX, AY), mask)
-    img.paste(ring, (0, 0), ring)
+    img = view.copy()
     for start, end, main, sub in CAPTIONS:
         a = caption_alpha(tc, start, end)
         if a > 0.003:
             layer = caption_layer(main, sub)
             lift = 14 * (1 - ease((tc - start) / 0.4))
-            paste_alpha(img, layer, W / 2, 128 + lift, a)
+            paste_alpha(img, layer, W / 2, 170 + lift, a)
     return img
 
 def frame_at(t):

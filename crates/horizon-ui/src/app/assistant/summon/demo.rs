@@ -19,6 +19,8 @@ pub(in crate::app::assistant) struct Demo {
     envelope: Vec<f32>,
     /// The tile a click just landed on, for the ripple and cursor.
     click: Option<(usize, Instant)>,
+    /// A workspace shortcut just pressed (true for right), for the keycap overlay.
+    key: Option<(bool, Instant)>,
 }
 
 struct Saying {
@@ -36,6 +38,7 @@ impl Demo {
             saying: None,
             envelope: Vec::new(),
             click: None,
+            key: None,
         })
     }
 
@@ -59,6 +62,13 @@ impl Demo {
         let (tile, at) = self.click?;
         let progress = at.elapsed().as_secs_f32() / 0.9;
         (progress < 1.0).then_some((tile, progress))
+    }
+
+    /// The shortcut pressed in the last second, and how far its animation has run (0 to 1).
+    pub(in crate::app::assistant) fn key_progress(&self) -> Option<(bool, f32)> {
+        let (right, at) = self.key?;
+        let progress = at.elapsed().as_secs_f32() / 1.1;
+        (progress < 1.0).then_some((right, progress))
     }
 
     /// Appends the moment a command ran, so a recording can be lined up with its sound.
@@ -164,35 +174,71 @@ impl HorizonApp {
                 };
             }
             "collapse" => self.assistant.summon.expanded = false,
-            "go" => {
-                if let (Some(desk), Some(index)) = (
-                    self.assistant.desk.as_ref(),
-                    argument.and_then(|value| value.parse::<usize>().ok()),
-                ) {
-                    desk.switch(index.saturating_sub(1));
-                }
-                if let (Some(demo), Some(index)) = (
-                    self.assistant.demo.as_mut(),
-                    argument.and_then(|value| value.parse::<usize>().ok()),
-                ) {
-                    demo.click = Some((index.saturating_sub(1), Instant::now()));
+            "overview" => {
+                if let Some(desk) = self.assistant.desk.as_ref() {
+                    desk.toggle_overview();
                 }
             }
-            "scope" => {
-                let wanted = format!(
-                    "{}{}",
-                    argument.unwrap_or_default(),
-                    rest.map_or(String::new(), |rest| format!(" {rest}"))
-                );
-                if wanted == "all" {
-                    self.assistant.scope.set_all();
-                } else if let Some(workspace) = self.board.workspaces.iter().find(|workspace| workspace.name == wanted)
-                {
-                    let local_id = workspace.local_id.clone();
-                    self.assistant.scope.set_only(&local_id);
-                }
-            }
+            "move" => self.demo_move(argument, rest),
+            "key" => self.demo_key(argument),
+            "go" => self.demo_go(argument),
+            "scope" => self.demo_scope(argument, rest),
+            // `mark` only needs to be logged, so a recording can name its scenes.
             _ => {}
+        }
+    }
+    /// `move <desktop number> <panel title>`: as if the window were dragged there.
+    fn demo_move(&self, argument: Option<&str>, title: Option<&str>) {
+        let (Some(number), Some(title)) = (argument.and_then(|value| value.parse::<usize>().ok()), title) else {
+            return;
+        };
+        let app_id = self
+            .board
+            .panels
+            .iter()
+            .find(|panel| panel.display_title().contains(title))
+            .map(|panel| crate::app::desk::panel_app_id(&panel.local_id));
+        if let (Some(desk), Some(app_id)) = (self.assistant.desk.as_ref(), app_id) {
+            desk.move_window(&app_id, number.saturating_sub(1));
+        }
+    }
+
+    /// `key right|left`: GNOME's own workspace shortcut, with a keycap overlay.
+    fn demo_key(&mut self, direction: Option<&str>) {
+        let right = direction != Some("left");
+        if let Some(desk) = self.assistant.desk.as_ref() {
+            desk.press_key(right);
+        }
+        if let Some(demo) = self.assistant.demo.as_mut() {
+            demo.key = Some((right, Instant::now()));
+        }
+    }
+
+    /// `go <number>`: a click on that workspace's tile.
+    fn demo_go(&mut self, argument: Option<&str>) {
+        let Some(index) = argument.and_then(|value| value.parse::<usize>().ok()) else {
+            return;
+        };
+        if let Some(desk) = self.assistant.desk.as_ref() {
+            desk.switch(index.saturating_sub(1));
+        }
+        if let Some(demo) = self.assistant.demo.as_mut() {
+            demo.click = Some((index.saturating_sub(1), Instant::now()));
+        }
+    }
+
+    /// `scope all` or `scope <workspace name>`.
+    fn demo_scope(&mut self, argument: Option<&str>, rest: Option<&str>) {
+        let wanted = format!(
+            "{}{}",
+            argument.unwrap_or_default(),
+            rest.map_or(String::new(), |rest| format!(" {rest}"))
+        );
+        if wanted == "all" {
+            self.assistant.scope.set_all();
+        } else if let Some(workspace) = self.board.workspaces.iter().find(|workspace| workspace.name == wanted) {
+            let local_id = workspace.local_id.clone();
+            self.assistant.scope.set_only(&local_id);
         }
     }
 }

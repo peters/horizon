@@ -8,12 +8,16 @@ t0, t1 = frames[0], frames[-1]
 D = (t1 - t0) / 1000
 at = lambda ms: INTRO + (ms - t0) / 1000
 events = {"go": [], "done": [], "alert": [], "expand": [], "mic": []}
+marks = {}
 rel = {}
 last_done = 0
 for line in open(S + "/tools/demo/cmd.txt.log"):
     ms, rest = line.split(" ", 1)
     ms = int(ms); rest = rest.strip()
-    if rest.startswith("go "): events["go"].append(at(ms)); rel.setdefault("go", []).append((ms - t0) / 1000)
+    if rest.startswith("go ") or rest.startswith("key "): events["go"].append(at(ms)); rel.setdefault("go", []).append((ms - t0) / 1000)
+    elif rest.startswith("mark "): marks[rest.split()[1]] = (ms - t0) / 1000
+    elif rest == "overview": events["expand"].append(at(ms)); rel.setdefault("overview", []).append((ms - t0) / 1000)
+    elif rest.startswith("move "): events["go"].append(at(ms))
     elif rest.startswith("expand "): events["expand"].append(at(ms)); rel.setdefault("expand", []).append((ms - t0) / 1000)
     elif rest.startswith("say "): events["mic"].append(at(ms) - 0.15); rel["say"] = (ms - t0) / 1000
     elif rest == "enter": rel["enter"] = (ms - t0) / 1000
@@ -30,7 +34,7 @@ plan = {
     "events": events, "rel": rel,
     "voice_at": INTRO + rel["say"] + 0.12,
     "intro_swell": 0.2, "intro_hit": 1.5, "outro_hit": INTRO + D - 0.2,
-    "t0": t0,
+    "t0": t0, "marks": marks,
 }
 json.dump(plan, open(S + "/video/plan.json", "w"), indent=1)
 print(json.dumps({k: v for k, v in plan.items() if k != "events"}, indent=1)); print(events)

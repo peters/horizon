@@ -6,11 +6,10 @@
 //! conversation. The layouts are prototypes to compare, switched live.
 
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontId, Frame, Id, Key, Layout, Margin, Order, Rect, RichText, Sense, Shadow,
-    Stroke, StrokeKind, Ui, UiBuilder, ViewportCommand, pos2, vec2,
+    Align, Align2, Color32, CornerRadius, Frame, Id, Key, Layout, Margin, Order, Rect, RichText, Sense, Shadow, Stroke,
+    StrokeKind, Ui, UiBuilder, ViewportCommand, pos2, vec2,
 };
 use horizon_core::browser::manifest::agent_panels::AgentState;
-use horizon_core::{PanelKind, WorkspaceId};
 
 use super::super::icons;
 use super::super::plan;
@@ -18,13 +17,23 @@ use super::{Action, HorizonApp, command_bar, summon_divider};
 use crate::app::desk::DeskState;
 use crate::theme;
 
+mod paint;
+
+use paint::{
+    kind_color, paint_click, paint_keycaps, paint_tile_frame, paint_tile_label, paint_tile_panels, scope_row,
+    section_label,
+};
+
 const MARGIN: f32 = 16.0;
 const MARGIN_PX: i8 = 16;
 const TILE_HEIGHT: f32 = 92.0;
+/// More workspaces than this are drawn as small tiles in two rows.
+const COMPACT_ABOVE: usize = 6;
+const COMPACT_PREVIEW: f32 = 36.0;
 const PROMPT_AND_FOOTER: f32 = 62.0 + 1.0 + 46.0;
 const HINT: f32 = 40.0;
 const ROW: f32 = 34.0;
-const MONITOR: [f32; 2] = [1600.0, 1000.0];
+pub(super) const MONITOR: [f32; 2] = [1920.0, 1080.0];
 
 /// How the bar looks when it is expanded.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -60,20 +69,20 @@ impl ExpandStyle {
 }
 
 /// One panel drawn small inside a workspace tile.
-struct TilePanel {
+pub(super) struct TilePanel {
     /// Left, top, right, bottom as fractions of the tile.
-    at: [f32; 4],
-    color: Color32,
-    state: Option<AgentState>,
+    pub(super) at: [f32; 4],
+    pub(super) color: Color32,
+    pub(super) state: Option<AgentState>,
 }
 
-struct Tile {
-    local_id: String,
-    name: String,
-    panels: Vec<TilePanel>,
-    agents: usize,
-    working: usize,
-    needs_you: usize,
+pub(super) struct Tile {
+    pub(super) local_id: String,
+    pub(super) name: String,
+    pub(super) panels: Vec<TilePanel>,
+    pub(super) agents: usize,
+    pub(super) working: usize,
+    pub(super) needs_you: usize,
 }
 
 enum TileAction {
@@ -91,19 +100,19 @@ impl HorizonApp {
     pub(in crate::app) fn render_desk_root(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.run_demo(&ctx);
-        self.desk_adopt_workspaces();
-        self.render_detached_viewports(&ctx);
+        self.render_panel_windows(&ctx);
         self.ensure_assistant_panel(&ctx);
         self.assistant.summon.open = true;
         self.close_assistant_if_restarting();
 
-        let tiles = self.desk_tiles();
         let desk = self
             .assistant
             .desk
             .as_ref()
             .map(crate::app::desk::Desk::snapshot)
             .unwrap_or_default();
+        self.sync_panel_windows(&desk);
+        let tiles = self.desk_tiles(&desk);
         let expanded = self.assistant.summon.expanded;
         let style = self.assistant.summon.style;
         let steps = self.assistant.plan.len();
@@ -130,40 +139,49 @@ impl HorizonApp {
 
         self.render_scope_popup(&ctx, &tiles);
         self.apply_desk_actions(&ctx, action, tile_action);
-        self.fit_desk_window(&ctx, steps);
+        self.fit_desk_window(&ctx, steps, tiles.len());
         ctx.request_repaint_after(std::time::Duration::from_millis(120));
     }
 
-    /// Every workspace gets a native window of its own.
-    fn desk_adopt_workspaces(&mut self) {
-        let ids: Vec<WorkspaceId> = self.board.workspaces.iter().map(|workspace| workspace.id).collect();
-        for id in ids {
-            self.detach_workspace(id);
-        }
-    }
-
-    fn desk_tiles(&self) -> Vec<Tile> {
+    fn desk_tiles(&self, desk: &DeskState) -> Vec<Tile> {
+        let have_windows = desk
+            .windows
+            .iter()
+            .any(|window| window.app_id.starts_with(crate::app::desk::PANEL_APP_PREFIX));
         self.board
             .workspaces
             .iter()
-            .map(|workspace| {
-                let panels: Vec<_> = workspace
-                    .panels
-                    .iter()
-                    .filter_map(|id| self.board.panel(*id))
-                    .filter(|panel| panel.visible && !panel.is_assistant())
-                    .collect();
-                let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN; 2]);
-                for panel in &panels {
-                    let (position, size) = (panel.layout.position, panel.layout.size);
-                    min = [min[0].min(position[0]), min[1].min(position[1])];
-                    max = [max[0].max(position[0] + size[0]), max[1].max(position[1] + size[1])];
-                }
-                let span = [(max[0] - min[0]).max(1.0), (max[1] - min[1]).max(1.0)];
+            .enumerate()
+            .map(|(index, workspace)| {
+                // What is on this desktop right now, as the shell reports it (with the real
+                // window rectangle); before the windows exist, the layout of the workspace.
+                let shown: Vec<(&horizon_core::Panel, [f32; 4])> = if have_windows {
+                    desk.windows
+                        .iter()
+                        .filter(|window| usize::try_from(window.workspace).is_ok_and(|ws| ws == index))
+                        .filter_map(|window| {
+                            let panel = self
+                                .board
+                                .panels
+                                .iter()
+                                .find(|panel| crate::app::desk::panel_app_id(&panel.local_id) == window.app_id)?;
+                            Some((panel, monitor_fraction(window.rect)))
+                        })
+                        .collect()
+                } else {
+                    layout_fractions(
+                        workspace
+                            .panels
+                            .iter()
+                            .filter_map(|id| self.board.panel(*id))
+                            .filter(|panel| panel.visible && !panel.is_assistant())
+                            .collect(),
+                    )
+                };
                 let (mut agents, mut working, mut needs_you) = (0, 0, 0);
-                let drawn = panels
+                let drawn = shown
                     .iter()
-                    .map(|panel| {
+                    .map(|(panel, at)| {
                         let state = panel
                             .kind
                             .is_agent()
@@ -174,14 +192,8 @@ impl HorizonApp {
                             working += usize::from(state == AgentState::Working);
                             needs_you += usize::from(state == AgentState::NeedsInput);
                         }
-                        let (position, size) = (panel.layout.position, panel.layout.size);
                         TilePanel {
-                            at: [
-                                (position[0] - min[0]) / span[0],
-                                (position[1] - min[1]) / span[1],
-                                (position[0] + size[0] - min[0]) / span[0],
-                                (position[1] + size[1] - min[1]) / span[1],
-                            ],
+                            at: *at,
                             color: kind_color(panel.kind),
                             state,
                         }
@@ -283,7 +295,8 @@ impl HorizonApp {
         let mut right_ui = ui.new_child(UiBuilder::new().max_rect(right));
         section_label(&mut right_ui, "Workspaces");
         right_ui.add_space(6.0);
-        self.minimap_grid(&mut right_ui, tiles, desk, tile_action, 2);
+        let columns = if tiles.len() > COMPACT_ABOVE { 5 } else { 2 };
+        self.minimap_grid(&mut right_ui, tiles, desk, tile_action, columns);
         right_ui.add_space(14.0);
         section_label(&mut right_ui, "Plan");
         right_ui.add_space(4.0);
@@ -314,7 +327,12 @@ impl HorizonApp {
     ) {
         self.desk_header(ui, action);
         ui.add_space(10.0);
-        let columns = tiles.len().clamp(1, 4);
+        // Many workspaces become two rows of small tiles, leaving room for the conversation.
+        let columns = if tiles.len() > COMPACT_ABOVE {
+            tiles.len().div_ceil(2)
+        } else {
+            tiles.len().clamp(1, 4)
+        };
         self.minimap_grid(ui, tiles, desk, tile_action, columns);
         ui.add_space(12.0);
         let total = ui.available_size();
@@ -456,6 +474,10 @@ impl HorizonApp {
 
     fn desk_hint(&self, ui: &mut Ui) {
         ui.add_space(8.0);
+        if let Some((right, progress)) = self.assistant.demo.as_ref().and_then(super::demo::Demo::key_progress) {
+            paint_keycaps(ui, right, progress);
+            return;
+        }
         let hint = self.assistant.command.feedback_text().unwrap_or_else(|| {
             "Up arrow for history     Tab to expand     Esc to collapse     Click a workspace to go there".to_string()
         });
@@ -498,14 +520,14 @@ impl HorizonApp {
 
     /// Sizes the native window for the current layout and asks the shell to put it
     /// at the bottom centre of the monitor.
-    fn fit_desk_window(&mut self, ctx: &egui::Context, plan_steps: usize) {
+    fn fit_desk_window(&mut self, ctx: &egui::Context, plan_steps: usize, tiles: usize) {
         let monitor = ctx
             .input(|input| input.viewport().monitor_size)
             .map_or(MONITOR, |size| [size.x, size.y]);
         let size = if self.assistant.summon.expanded {
             self.assistant.summon.style.size()
         } else {
-            [980.0, collapsed_height(plan_steps)]
+            [980.0, collapsed_height(plan_steps, tiles)]
         };
         let size = [size[0].min(monitor[0] - 32.0), size[1].min(monitor[1] - 80.0)];
         if self.assistant.summon.window_size != Some(size) {
@@ -518,19 +540,10 @@ impl HorizonApp {
         }
         let x = ((monitor[0] - size[0]) / 2.0).round();
         let y = (monitor[1] - size[1] - 26.0).round();
-        let names: Vec<String> = self
-            .board
-            .workspaces
-            .iter()
-            .map(|workspace| workspace.name.clone())
-            .collect();
+        let workspaces = self.board.workspaces.len();
         if let Some(desk) = self.assistant.desk.as_mut() {
             #[allow(clippy::cast_possible_truncation)]
-            desk.place(
-                &names,
-                [x as i32, y as i32, size[0] as i32, size[1] as i32],
-                [monitor[0] as i32, monitor[1] as i32],
-            );
+            desk.place_bar(workspaces, [x as i32, y as i32, size[0] as i32, size[1] as i32]);
         }
     }
 
@@ -541,6 +554,10 @@ impl HorizonApp {
         if tiles.is_empty() {
             return;
         }
+        if tiles.len() > COMPACT_ABOVE {
+            self.minimap_compact(ui, tiles, desk, action);
+            return;
+        }
         let gap = 10.0;
         let count = super::super::num::count(tiles.len());
         let width = ((ui.available_width() - gap * (count - 1.0)) / count).max(80.0);
@@ -548,6 +565,26 @@ impl HorizonApp {
         for (index, tile) in tiles.iter().enumerate() {
             let left = row.left() + super::super::num::count(index) * (width + gap);
             let rect = Rect::from_min_size(pos2(left, row.top()), vec2(width, TILE_HEIGHT + 22.0));
+            self.workspace_tile(ui, rect, index, tile, desk, action);
+        }
+    }
+
+    /// Many workspaces: small tiles in one row, each with its number and state; hover for the name.
+    fn minimap_compact(&self, ui: &mut Ui, tiles: &[Tile], desk: &DeskState, action: &mut Option<TileAction>) {
+        let gap = 6.0;
+        let columns = tiles.len().max(1);
+        let width = (ui.available_width() - gap * (super::super::num::count(columns) - 1.0))
+            / super::super::num::count(columns);
+        let height = COMPACT_PREVIEW + 22.0;
+        let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        for (index, tile) in tiles.iter().enumerate() {
+            let rect = Rect::from_min_size(
+                pos2(
+                    area.left() + super::super::num::count(index) * (width + gap),
+                    area.top(),
+                ),
+                vec2(width, height),
+            );
             self.workspace_tile(ui, rect, index, tile, desk, action);
         }
     }
@@ -565,7 +602,7 @@ impl HorizonApp {
         let columns = columns.max(1);
         let width = (ui.available_width() - gap * (super::super::num::count(columns) - 1.0))
             / super::super::num::count(columns);
-        let height = (width * 0.58).clamp(70.0, 150.0) + 22.0;
+        let height = (width * 0.58).clamp(40.0, 150.0) + 22.0;
         let rows = tiles.len().div_ceil(columns);
         let (area, _) = ui.allocate_exact_size(
             vec2(
@@ -622,15 +659,24 @@ impl HorizonApp {
 
         // The corner dot narrows the assistant to this workspace; the rest of the tile goes there.
         let dot_rect = Rect::from_center_size(preview.right_bottom() - vec2(12.0, 12.0), vec2(18.0, 18.0));
-        let dot = ui.interact(dot_rect, Id::new(("desk_tile_scope", index)), Sense::click());
-        let dot_color = if in_scope { accent } else { theme::BORDER_STRONG() };
-        ui.painter()
-            .circle_stroke(dot_rect.center(), 5.0, Stroke::new(1.3, dot_color));
-        if narrowed {
-            ui.painter().circle_filled(dot_rect.center(), 3.0, accent);
+        // Narrow tiles (many workspaces) leave the scope to the chip's picker.
+        let has_dot = rect.width() >= 90.0;
+        let dot = has_dot.then(|| ui.interact(dot_rect, Id::new(("desk_tile_scope", index)), Sense::click()));
+        if has_dot {
+            let dot_color = if in_scope { accent } else { theme::BORDER_STRONG() };
+            ui.painter()
+                .circle_stroke(dot_rect.center(), 5.0, Stroke::new(1.3, dot_color));
+            if narrowed {
+                ui.painter().circle_filled(dot_rect.center(), 3.0, accent);
+            }
+        } else if narrowed {
+            ui.painter()
+                .circle_filled(preview.right_bottom() - vec2(7.0, 7.0), 2.5, accent);
         }
-        let dot = dot.on_hover_text("Ask the assistant about this workspace only");
-        if dot.clicked() {
+        let dot_clicked = dot
+            .map(|dot| dot.on_hover_text("Ask the assistant about this workspace only"))
+            .is_some_and(|dot| dot.clicked());
+        if dot_clicked {
             *action = Some(TileAction::Scope(tile.local_id.clone()));
         } else if response.clicked() {
             *action = Some(TileAction::Go(index));
@@ -701,210 +747,50 @@ impl HorizonApp {
     }
 }
 
-fn paint_tile_frame(ui: &Ui, preview: Rect, active: bool, hovered: bool) {
-    let accent = theme::ACCENT();
-    let fill = if active {
-        theme::blend(theme::BG(), accent, 0.12)
+/// A window's rectangle as fractions of the monitor below the shell's top bar.
+fn monitor_fraction(rect: [i32; 4]) -> [f32; 4] {
+    let [left, top, width, height] = rect.map(|value| f32::from(i16::try_from(value).unwrap_or(0)));
+    let (w, h) = (MONITOR[0], MONITOR[1] - 32.0);
+    let clamp = |value: f32| value.clamp(0.0, 1.0);
+    [
+        clamp(left / w),
+        clamp((top - 32.0) / h),
+        clamp((left + width) / w),
+        clamp((top + height - 32.0) / h),
+    ]
+}
+
+/// The layout of panels fitted into the tile, for workspaces with no windows yet.
+fn layout_fractions(panels: Vec<&horizon_core::Panel>) -> Vec<(&horizon_core::Panel, [f32; 4])> {
+    let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for panel in &panels {
+        let (position, size) = (panel.layout.position, panel.layout.size);
+        min = [min[0].min(position[0]), min[1].min(position[1])];
+        max = [max[0].max(position[0] + size[0]), max[1].max(position[1] + size[1])];
+    }
+    let span = [(max[0] - min[0]).max(1.0), (max[1] - min[1]).max(1.0)];
+    panels
+        .into_iter()
+        .map(|panel| {
+            let (position, size) = (panel.layout.position, panel.layout.size);
+            let at = [
+                (position[0] - min[0]) / span[0],
+                (position[1] - min[1]) / span[1],
+                (position[0] + size[0] - min[0]) / span[0],
+                (position[1] + size[1] - min[1]) / span[1],
+            ];
+            (panel, at)
+        })
+        .collect()
+}
+
+/// Height of the row (or two rows, with many workspaces) of tiles in the bar.
+fn strip_height(tiles: usize) -> f32 {
+    if tiles > COMPACT_ABOVE {
+        COMPACT_PREVIEW + 22.0
     } else {
-        theme::BG()
-    };
-    ui.painter().rect_filled(preview, CornerRadius::same(10), fill);
-    let stroke = if active {
-        Stroke::new(1.5, accent)
-    } else if hovered {
-        Stroke::new(1.0, theme::BORDER_STRONG())
-    } else {
-        Stroke::new(1.0, theme::BORDER_SUBTLE())
-    };
-    ui.painter()
-        .rect_stroke(preview, CornerRadius::same(10), stroke, StrokeKind::Inside);
-}
-
-/// The panels of a workspace as small windows, with faint lines for their content
-/// and a dot for each agent's state.
-fn paint_tile_panels(ui: &Ui, preview: Rect, tile: &Tile) {
-    let painter = ui.painter();
-    let inner = preview.shrink2(vec2(10.0, 10.0));
-    let now = super::super::num::seconds(ui);
-    for panel in &tile.panels {
-        let mini = Rect::from_min_max(
-            pos2(
-                inner.left() + panel.at[0] * inner.width(),
-                inner.top() + panel.at[1] * inner.height(),
-            ),
-            pos2(
-                inner.left() + panel.at[2] * inner.width(),
-                inner.top() + panel.at[3] * inner.height(),
-            ),
-        )
-        .shrink(1.5);
-        painter.rect_filled(
-            mini,
-            CornerRadius::same(3),
-            theme::blend(theme::PANEL_BG_ALT(), panel.color, 0.2),
-        );
-        painter.rect_stroke(
-            mini,
-            CornerRadius::same(3),
-            Stroke::new(1.0, panel.color.gamma_multiply(0.7)),
-            StrokeKind::Inside,
-        );
-        let strip = Rect::from_min_size(mini.min, vec2(mini.width(), 3.0_f32.min(mini.height())));
-        painter.rect_filled(strip, CornerRadius::same(2), panel.color);
-        let mut y = mini.top() + 9.0;
-        for (line, share) in [0.62, 0.84, 0.48, 0.74, 0.9, 0.55, 0.7, 0.4, 0.8].iter().enumerate() {
-            if y + 3.0 >= mini.bottom() - 3.0 {
-                break;
-            }
-            let width = mini.width() * share - 8.0;
-            painter.rect_filled(
-                Rect::from_min_size(pos2(mini.left() + 5.0, y), vec2(width.max(4.0), 2.0)),
-                CornerRadius::same(1),
-                panel.color.gamma_multiply(0.35 + 0.0 * super::super::num::count(line)),
-            );
-            y += 5.0;
-        }
-        if let Some(state) = panel.state {
-            let (color, pulse) = state_color(state);
-            let radius = if pulse {
-                3.0 + 1.2 * (now * 5.0).sin().abs()
-            } else {
-                3.0
-            };
-            painter.circle_filled(mini.right_top() + vec2(-6.0, 7.0), radius, color);
-        }
+        TILE_HEIGHT + 22.0
     }
-}
-
-/// Under a tile: its number, its name and a summary of what its agents are doing.
-fn paint_tile_label(ui: &Ui, rect: Rect, index: usize, tile: &Tile, active: bool) {
-    let painter = ui.painter();
-    let label_y = rect.bottom() - 11.0;
-    let name_color = if active { theme::FG() } else { theme::FG_SOFT() };
-    let number = painter.text(
-        pos2(rect.left() + 4.0, label_y),
-        Align2::LEFT_CENTER,
-        format!("{}", index + 1),
-        FontId::monospace(11.0),
-        theme::ACCENT(),
-    );
-    painter.text(
-        pos2(number.right() + 7.0, label_y),
-        Align2::LEFT_CENTER,
-        elide(&tile.name, super::super::num::index((rect.width() - 80.0) / 6.5).max(6)),
-        FontId::proportional(12.0),
-        name_color,
-    );
-    let summary = if tile.needs_you > 0 {
-        Some((format!("{} needs you", tile.needs_you), theme::PALETTE_RED()))
-    } else if tile.working > 0 {
-        Some((format!("{} working", tile.working), theme::PALETTE_YELLOW()))
-    } else if tile.agents > 0 {
-        Some(("idle".to_string(), theme::PALETTE_GREEN()))
-    } else {
-        None
-    };
-    if let Some((text, color)) = summary {
-        painter.text(
-            pos2(rect.right() - 4.0, label_y),
-            Align2::RIGHT_CENTER,
-            text,
-            FontId::proportional(10.5),
-            color,
-        );
-    }
-}
-
-/// A scripted click: a ripple spreading from the tile's centre and a cursor settling on it.
-fn paint_click(ui: &Ui, centre: egui::Pos2, progress: f32) {
-    let ease = 1.0 - (1.0 - progress).powi(3);
-    ui.painter().circle_stroke(
-        centre,
-        8.0 + 46.0 * ease,
-        Stroke::new(2.0, theme::ACCENT().gamma_multiply(1.0 - progress)),
-    );
-    let cursor = centre + vec2(10.0, 12.0) * (1.0 - ease) + vec2(4.0, 4.0);
-    let tip = [
-        cursor,
-        cursor + vec2(0.0, 18.0),
-        cursor + vec2(5.0, 14.0),
-        cursor + vec2(11.0, 14.0),
-    ];
-    ui.painter().add(egui::Shape::convex_polygon(
-        tip.to_vec(),
-        Color32::WHITE,
-        Stroke::new(1.0, Color32::BLACK),
-    ));
-    ui.ctx().request_repaint();
-}
-
-fn scope_row(ui: &mut Ui, label: &str, on: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
-    if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(8), theme::ACCENT().gamma_multiply(0.1));
-    }
-    let box_rect = Rect::from_center_size(rect.left_center() + vec2(14.0, 0.0), vec2(14.0, 14.0));
-    ui.painter().rect_stroke(
-        box_rect,
-        CornerRadius::same(4),
-        Stroke::new(1.3, if on { theme::ACCENT() } else { theme::BORDER_STRONG() }),
-        StrokeKind::Inside,
-    );
-    if on {
-        ui.painter()
-            .rect_filled(box_rect.shrink(3.0), CornerRadius::same(2), theme::ACCENT());
-    }
-    ui.painter().text(
-        rect.left_center() + vec2(30.0, 0.0),
-        Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(13.0),
-        if on { theme::FG() } else { theme::FG_SOFT() },
-    );
-    response
-}
-
-fn section_label(ui: &mut Ui, text: &str) {
-    ui.label(
-        RichText::new(text.to_uppercase())
-            .size(10.5)
-            .extra_letter_spacing(0.9)
-            .color(theme::FG_DIM()),
-    );
-}
-
-fn kind_color(kind: PanelKind) -> Color32 {
-    if kind.is_agent() {
-        theme::ACCENT()
-    } else {
-        match kind {
-            PanelKind::Browser => theme::PALETTE_GREEN(),
-            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => theme::PALETTE_YELLOW(),
-            PanelKind::Device => theme::PALETTE_CYAN(),
-            _ => theme::FG_DIM(),
-        }
-    }
-}
-
-/// Colour of an agent's state dot, and whether it pulses.
-fn state_color(state: AgentState) -> (Color32, bool) {
-    match state {
-        AgentState::Working => (theme::PALETTE_YELLOW(), true),
-        AgentState::NeedsInput => (theme::PALETTE_RED(), true),
-        AgentState::Idle => (theme::PALETTE_GREEN(), false),
-        AgentState::Starting => (theme::FG_DIM(), true),
-        AgentState::Exited => (theme::BORDER_STRONG(), false),
-    }
-}
-
-fn elide(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text.to_string();
-    }
-    let mut cut: String = text.chars().take(limit.saturating_sub(1)).collect();
-    cut.push('…');
-    cut
 }
 
 fn plan_height(steps: usize) -> f32 {
@@ -915,6 +801,6 @@ fn plan_height(steps: usize) -> f32 {
     }
 }
 
-fn collapsed_height(steps: usize) -> f32 {
-    MARGIN * 2.0 + TILE_HEIGHT + 22.0 + 10.0 + plan_height(steps) + 6.0 + PROMPT_AND_FOOTER + HINT + 4.0
+fn collapsed_height(steps: usize, tiles: usize) -> f32 {
+    MARGIN * 2.0 + strip_height(tiles) + 10.0 + plan_height(steps) + 6.0 + PROMPT_AND_FOOTER + HINT + 4.0
 }

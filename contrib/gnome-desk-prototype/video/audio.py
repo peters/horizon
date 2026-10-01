@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Music bed, interface sounds and the voice, mixed to one stereo wav."""
-import json, os, sys, wave
+import json, sys, wave
 import numpy as np
 
 S = os.environ["DEMO_DIR"]

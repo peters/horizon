@@ -5,6 +5,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 const IFACE = `
 <node>
@@ -30,6 +31,18 @@ const IFACE = `
       <arg type="b" direction="out" name="found"/>
     </method>
     <method name="Switch"><arg type="u" direction="in" name="workspace"/></method>
+    <method name="MoveClass">
+      <arg type="s" direction="in" name="appId"/><arg type="u" direction="in" name="workspace"/>
+      <arg type="b" direction="out" name="found"/>
+    </method>
+    <method name="PlaceClass">
+      <arg type="s" direction="in" name="appId"/>
+      <arg type="i" direction="in" name="x"/><arg type="i" direction="in" name="y"/>
+      <arg type="i" direction="in" name="w"/><arg type="i" direction="in" name="h"/>
+      <arg type="b" direction="out" name="found"/>
+    </method>
+    <method name="ToggleOverview"/>
+    <method name="PressWorkspaceKey"><arg type="s" direction="in" name="direction"/></method>
     <signal name="Changed"/>
   </interface>
 </node>`;
@@ -38,6 +51,10 @@ function windows() {
     return global.get_window_actors()
         .map(actor => actor.meta_window)
         .filter(win => win.get_window_type() === Meta.WindowType.NORMAL || win.get_window_type() === Meta.WindowType.DIALOG);
+}
+
+function withClass(appId) {
+    return windows().filter(win => win.get_wm_class() === appId);
 }
 
 function matching(title) {
@@ -89,18 +106,29 @@ export default class HorizonDesk extends Extension {
             else if (workspaces[index])
                 workspaces[index].windows.push(entry);
         }
+        const flat = windows().map(win => {
+            const r = win.get_frame_rect();
+            return {
+                app_id: win.get_wm_class() ?? '',
+                title: win.get_title() ?? '',
+                workspace: win.is_on_all_workspaces() ? -1 : (win.get_workspace()?.index() ?? -1),
+                rect: [r.x, r.y, r.width, r.height],
+                focused: win.has_focus(),
+            };
+        });
         return JSON.stringify({
             active: manager.get_active_workspace_index(),
             workspaces,
+            windows: flat,
         });
     }
 
     EnsureWorkspaces(count) {
         const manager = global.workspace_manager;
-        // Static workspaces, so the set the demo shows does not shrink under it.
-        Meta.prefs_set_num_workspaces(count);
+        // Static workspaces first, so GNOME does not cull the empty ones as they are created.
         this._dynamic ??= Gio.Settings.new('org.gnome.mutter');
         this._dynamic.set_boolean('dynamic-workspaces', false);
+        Meta.prefs_set_num_workspaces(count);
         while (manager.get_n_workspaces() < count)
             manager.append_new_workspace(false, global.get_current_time());
     }
@@ -143,6 +171,32 @@ export default class HorizonDesk extends Extension {
             win.move_resize_frame(true, x, y, w, h);
         }
         return found.length > 0;
+    }
+
+    MoveClass(appId, workspace) {
+        const found = withClass(appId);
+        for (const win of found) {
+            win.change_workspace_by_index(workspace, false);
+        }
+        return found.length > 0;
+    }
+
+    PlaceClass(appId, x, y, w, h) {
+        const found = withClass(appId);
+        for (const win of found) {
+            win.unmaximize();
+            win.move_resize_frame(true, x, y, w, h);
+        }
+        return found.length > 0;
+    }
+
+    ToggleOverview() {
+        Main.overview.toggle();
+    }
+
+    // Runs what GNOME runs for Ctrl+Alt+Left and Ctrl+Alt+Right, including its switcher popup.
+    PressWorkspaceKey(direction) {
+        Main.wm._showWorkspaceSwitcher(global.display, null, {get_name: () => `switch-to-workspace-${direction}`});
     }
 
     Switch(workspace) {

@@ -25,6 +25,7 @@ const PROMPT_ROW_HEIGHT: f32 = 62.0;
 
 pub(super) mod demo;
 mod desk_bar;
+mod desk_windows;
 
 pub(in crate::app) use desk_bar::ExpandStyle;
 
