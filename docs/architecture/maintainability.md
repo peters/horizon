@@ -199,6 +199,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   Binding validation and assignment live in
   `runtime_state/binding_bootstrap.rs`; provider-specific session-store parsing
   belongs in focused leaves such as `runtime_state/agent_sessions/codex.rs`.
+  Session activity date formatting lives in `runtime_state/session_display.rs`;
+  the UI's `app/panels/session_rebind.rs` renders the recovery menu and collects
+  resume/copy actions without changing provider bindings.
 - `agent_work/` keeps restart-work evidence separate from conversation binding.
   `command.rs` verifies external executable ownership with a bounded shell probe; functions and aliases keep their ordinary launch.
   `ledger.rs` correlates lifecycle events by prompt; `transcript.rs` reads bounded

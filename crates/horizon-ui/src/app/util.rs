@@ -95,10 +95,6 @@ pub(super) fn editor_panel_size_for_file(path: &std::path::Path) -> [f32; 2] {
     [w, h]
 }
 
-pub(super) fn truncate_session_label(label: &str) -> String {
-    crate::text::truncate_chars(label, 40).into_owned()
-}
-
 pub(super) fn paint_canvas_glow(ui: &mut egui::Ui) {
     let rect = ui.max_rect();
     let painter = ui.painter();
