@@ -138,6 +138,22 @@ impl Driver {
             "orientation_superseded",
             "a newer rotation superseded this request; inspect applied orientation",
         );
+        let preflight = self.guard_orientation(&pending, stopped).and_then(|()| {
+            let identity =
+                self.refresh_classic_document_identity_within(remaining(pending.deadline)?.min(Duration::from_secs(3)));
+            remaining(pending.deadline)?;
+            identity?;
+            // A cached identity change found before mutation establishes the
+            // baseline; a later change must still invalidate this request.
+            pending.generation = self.semantic.generation();
+            self.guard_orientation(&pending, stopped)
+        });
+        if let Err(error) = preflight {
+            if matches!(pending.origin, Origin::User { .. }) {
+                self.complete_orientation(&pending, Err(error.clone()));
+            }
+            return Err(error);
+        }
         self.orientation_error = None;
         self.coordination_dirty = true;
         // A POST may mutate even when its response is lost. Discard stale geometry first.

@@ -49,7 +49,7 @@ impl crate::BrowserCoordination for BlockingPublication {
 fn cancellation_during_publication_prevents_post_for_agent_and_user() {
     for user in [false, true] {
         for teach in [false, true] {
-            let classic = Server::start(Vec::new());
+            let classic = Server::start(vec![baseline()]);
             let (link, worker) = bidi_fixture(false, false);
             let mut driver = fixture_driver(&classic, link);
             let (entered_tx, entered_rx) = mpsc::channel();
@@ -97,7 +97,7 @@ fn cancellation_during_publication_prevents_post_for_agent_and_user() {
                 "browser_unavailable:"
             };
             assert!(
-                classic.recorded().is_empty(),
+                classic.recorded().len() == 1 && classic.recorded()[0].path == "/session/test/execute/sync",
                 "cancelled publication must not dispatch POST"
             );
             assert!(driver.pending_orientation.is_none());
@@ -131,7 +131,10 @@ fn cancellation_during_publication_prevents_post_for_agent_and_user() {
 fn rotation_publishes_pending_and_persists_cleared_state_before_blocking_post() {
     for user in [false, true] {
         let (release, blocked) = mpsc::channel();
-        let classic = Server::start(vec![Reply::json(200, &json!({"value":null})).blocked_until(blocked)]);
+        let classic = Server::start(vec![
+            baseline(),
+            Reply::json(200, &json!({"value":null})).blocked_until(blocked),
+        ]);
         let (link, worker) = bidi_fixture(false, false);
         let mut driver = fixture_driver(&classic, link);
         let owner = Arc::new(Owner(
@@ -161,7 +164,7 @@ fn rotation_publishes_pending_and_persists_cleared_state_before_blocking_post() 
             driver
         });
         let deadline = Instant::now() + Duration::from_secs(3);
-        while classic.recorded().is_empty() {
+        while classic.recorded().len() < 2 {
             assert!(Instant::now() < deadline, "POST must reach the response latch");
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -185,7 +188,7 @@ fn rotation_publishes_pending_and_persists_cleared_state_before_blocking_post() 
         let driver = rotation.join().unwrap();
         assert!(driver.pending_orientation.is_some());
         assert_eq!(driver.orientation_document, DocumentOrientation::NeedsMeasurement);
-        assert_eq!(classic.recorded().len(), 1);
+        assert_eq!(classic.recorded().len(), 2);
         drop(driver);
         assert!(worker.join().unwrap().is_empty());
     }
@@ -193,7 +196,7 @@ fn rotation_publishes_pending_and_persists_cleared_state_before_blocking_post() 
 
 #[test]
 fn publication_consuming_rotation_deadline_never_dispatches_post() {
-    let classic = Server::start(Vec::new());
+    let classic = Server::start(vec![baseline()]);
     let (link, worker) = bidi_fixture(false, false);
     let mut driver = fixture_driver(&classic, link);
     driver.config.coordination = Some(Arc::new(super::navigation::SlowPublication));
@@ -221,7 +224,7 @@ fn publication_consuming_rotation_deadline_never_dispatches_post() {
             .starts_with("orientation_timeout:")
     );
     assert!(
-        classic.recorded().is_empty(),
+        classic.recorded().len() == 1 && classic.recorded()[0].path == "/session/test/execute/sync",
         "no mutation after publication used its deadline"
     );
     let updates: Vec<_> = rx

@@ -144,7 +144,13 @@ per-request completion so another viewer or a later poll can see the outcome.
 ## Verification, input and failure handling
 
 Runtime success requires matching device and page geometry, a fresh frame, the
-same document and current event-loop ownership. A request for the already applied
+same document and current event-loop ownership. Every request first refreshes
+the current document identity within its deadline. A previously cached identity change
+establishes the pre-mutation baseline; an identity change after dispatch still
+refuses the request. Stop and Teach mode are checked again after this bounded
+read, before any mutation.
+
+A request for the already applied
 orientation still requires measured acknowledgement. Human requests retain
 priority while pending; page input, replacement requests, document changes or
 ownership changes can supersede an acknowledgement. The caller must not treat a

@@ -178,6 +178,10 @@ identity and refusal evidence before closing the owned session.
    Complete at least three portrait → landscape → portrait round trips on each
    physical catalog device. Save every returned action id and viewport measurement;
    a later status sample must not stand in for a failed or missing acknowledgement.
+   Exercise the first runtime rotation immediately after startup as well as after
+   scroll, fill and keyboard dismissal. Deterministic tests must distinguish a
+   stale cached identity found before mutation from a document change after
+   dispatch, and stop, Teach mode or timeout during the bounded baseline read.
 2. Rotate portrait to landscape through `browser_orientation`. Require the
    tool's applied orientation and measured viewport to agree. Observe the
    final frame live; compare the page with the Device-panel image.

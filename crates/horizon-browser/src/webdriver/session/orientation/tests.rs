@@ -3,10 +3,15 @@ use super::*;
 use crate::webdriver::test_server::{Reply, Server};
 use serde_json::json;
 
+mod baseline;
 mod navigation;
 mod publication;
 mod recovery;
 mod startup;
+
+fn baseline() -> Reply {
+    Reply::json(200, &json!({"value":"document"}))
+}
 
 fn rotation_request() -> AgentAction {
     AgentAction {
@@ -89,6 +94,7 @@ fn dispatch_is_audited_before_provider_reply_and_refusals_do_not_dispatch() {
     use crate::BrowserAuditStatus;
     use std::sync::Arc;
     let classic = Server::start(vec![
+        baseline(),
         Reply::json(200, &json!({"value":null})).delayed(Duration::from_millis(200)),
     ]);
     let (link, worker) = bidi_fixture(false, false);
@@ -114,7 +120,7 @@ fn dispatch_is_audited_before_provider_reply_and_refusals_do_not_dispatch() {
         driver
     });
     let deadline = Instant::now() + Duration::from_secs(5);
-    while classic.recorded().is_empty() {
+    while classic.recorded().len() < 2 {
         assert!(Instant::now() < deadline, "orientation POST never reached the mock");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -129,7 +135,7 @@ fn dispatch_is_audited_before_provider_reply_and_refusals_do_not_dispatch() {
 fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_actions() {
     use crate::BrowserAuditStatus;
     use std::sync::Arc;
-    let mut replies = vec![Reply::json(200, &json!({"value":null}))];
+    let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
     replies.extend(observation(4, 2));
     replies.push(Reply::json(200, &json!({"value":"document"})));
     let classic = Server::start(replies);
@@ -167,7 +173,7 @@ fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_
     );
     assert_eq!(
         classic.recorded().len(),
-        1,
+        2,
         "refused action must not reach the provider"
     );
     driver.last_user_active_stamp = Instant::now().checked_sub(Duration::from_secs(6));
@@ -192,7 +198,7 @@ fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_
         driver.pending_orientation.as_ref().unwrap().verified.is_some(),
         "GET, page geometry, fresh screenshot and document identity were verified"
     );
-    assert_eq!(classic.recorded().len(), 6);
+    assert_eq!(classic.recorded().len(), 7);
     driver.signal_epoch += 1;
     driver.tick_orientation(&events(), &AtomicBool::new(false));
     assert!(driver.pending_orientation.is_none());
@@ -208,7 +214,9 @@ fn user_rotation_uses_measured_frames_without_agent_ownership_and_rejects_other_
 #[test]
 fn user_supersession_retains_the_previous_request_completion() {
     let classic = Server::start(vec![
+        baseline(),
         Reply::json(200, &json!({"value":null})),
+        baseline(),
         Reply::json(200, &json!({"value":null})),
     ]);
     let (link, worker) = bidi_fixture(false, false);
@@ -242,7 +250,7 @@ fn user_rotation_failure_and_input_takeover_preserve_nonfatal_ui_status() {
     use crate::BrowserAuditStatus;
     use std::sync::Arc;
     for stop_before in [false, true] {
-        let classic = Server::start(vec![Reply::json(200, &json!({"value":null}))]);
+        let classic = Server::start(vec![baseline(), Reply::json(200, &json!({"value":null}))]);
         let (link, worker) = bidi_fixture(false, false);
         let mut driver = fixture_driver(&classic, link);
         let owner = Arc::new(Owner(
@@ -296,7 +304,7 @@ fn user_rotation_failure_and_input_takeover_preserve_nonfatal_ui_status() {
 fn stale_portrait_frames_wait_and_takeover_during_identity_cannot_succeed() {
     use std::sync::Arc;
     for cancel in [false, true] {
-        let mut replies = vec![Reply::json(200, &json!({"value":null}))];
+        let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
         replies.extend(observation(2, 4));
         replies.extend(observation(4, 2));
         replies.push(Reply::json(200, &json!({"value":"document"})).delayed(Duration::from_millis(100)));
@@ -321,13 +329,13 @@ fn stale_portrait_frames_wait_and_takeover_during_identity_cannot_succeed() {
             pending.verified.is_none(),
             "new sequence with portrait pixels is still stale"
         );
-        assert_eq!(classic.recorded().len(), 5);
+        assert_eq!(classic.recorded().len(), 6);
         pending.next_sample = Instant::now();
         driver.scrollbar.refresh_at = Instant::now();
         let signal = stop.clone();
         let takeover = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(5);
-            while classic.recorded().len() < 10 {
+            while classic.recorded().len() < 11 {
                 assert!(Instant::now() < deadline, "identity request never reached the mock");
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -358,7 +366,7 @@ fn stale_portrait_frames_wait_and_takeover_during_identity_cannot_succeed() {
 
 #[test]
 fn a_stalled_screenshot_uses_the_remaining_rotation_deadline() {
-    let mut replies = vec![Reply::json(200, &json!({"value":null}))];
+    let mut replies = vec![baseline(), Reply::json(200, &json!({"value":null}))];
     let mut sample = observation(4, 2);
     sample.pop();
     sample[2].delay = Duration::from_secs(1);
@@ -386,7 +394,7 @@ fn a_stalled_screenshot_uses_the_remaining_rotation_deadline() {
 
 #[test]
 fn rotation_invalidates_refs_and_waits_for_current_ownership() {
-    let classic = Server::start(vec![Reply::json(200, &json!({"value":null}))]);
+    let classic = Server::start(vec![baseline(), Reply::json(200, &json!({"value":null}))]);
     let (link, worker) = bidi_fixture(false, false);
     let mut driver = fixture_driver(&classic, link);
     driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
@@ -454,8 +462,8 @@ fn rotation_invalidates_refs_and_waits_for_current_ownership() {
     );
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
-    assert_eq!(classic.recorded().len(), 1);
-    assert_eq!(classic.recorded()[0].path, "/session/test/orientation");
+    assert_eq!(classic.recorded().len(), 2);
+    assert_eq!(classic.recorded()[1].path, "/session/test/orientation");
 }
 
 #[test]
@@ -560,7 +568,7 @@ fn synchronous_remote_navigation_schedules_fresh_document_measurement() {
 
 #[test]
 fn document_remeasurement_cannot_take_over_pending_runtime_rotation() {
-    let classic = Server::start(vec![Reply::json(200, &json!({"value":null}))]);
+    let classic = Server::start(vec![baseline(), Reply::json(200, &json!({"value":null}))]);
     let (link, worker) = bidi_fixture(false, false);
     let mut driver = fixture_driver(&classic, link);
     driver.owner_seen = Some("agent".into());
@@ -570,7 +578,7 @@ fn document_remeasurement_cannot_take_over_pending_runtime_rotation() {
     driver.refresh_document_orientation(&events());
     assert!(driver.pending_orientation.is_some());
     assert_ne!(driver.orientation_document, DocumentOrientation::Clean);
-    assert_eq!(classic.recorded().len(), 1, "the active request owns measurement");
+    assert_eq!(classic.recorded().len(), 2, "the active request owns measurement");
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
 }
