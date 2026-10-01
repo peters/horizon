@@ -154,23 +154,30 @@ fn acquire_skill_root(
         name.push(".live");
         live_dir.join(name)
     };
-    let live_lock = open_lock_file(&live_path)?;
-    match live_lock.try_lock() {
-        Ok(()) => {}
-        Err(error) => {
-            drop(coord);
-            let _ = std::fs::remove_file(&live_path);
-            return Err(match error {
-                TryLockError::WouldBlock => io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    format!("skill root is already leased: {}", skill_dir.display()),
-                ),
-                TryLockError::Error(error) => error,
-            });
+    // Only installing hosts publish a live marker. A cleanup-only host serves
+    // nothing from this directory, so its marker would make an older host that
+    // exits first keep the retired copy until the cleanup host exits too.
+    let live_lock = if install {
+        let live_lock = open_lock_file(&live_path)?;
+        match live_lock.try_lock() {
+            Ok(()) => Some(live_lock),
+            Err(error) => {
+                drop(coord);
+                let _ = std::fs::remove_file(&live_path);
+                return Err(match error {
+                    TryLockError::WouldBlock => io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        format!("skill root is already leased: {}", skill_dir.display()),
+                    ),
+                    TryLockError::Error(error) => error,
+                });
+            }
         }
-    }
+    } else {
+        None
+    };
     // Cleanup-only roots may belong to an older running host. Keep its files
-    // until the last lease exits, but remove abandoned copies at startup.
+    // until the last installing host exits, but remove abandoned copies at startup.
     if !install && !another_live_host(&live_dir, &live_path)? {
         remove_horizon_skill_dir(&skill_dir);
     }
@@ -180,7 +187,7 @@ fn acquire_skill_root(
         skill_dir,
         install,
         live_path,
-        live_lock: Some(live_lock),
+        live_lock,
     })
 }
 
