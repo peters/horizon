@@ -69,7 +69,12 @@ pub(super) fn start_remote(
         let session_path = format!("/session/{}", allocation.session.id);
         let mut orientation = super::super::orientation::probe(host.transport(), &session_path);
         if let Some(requested) = request.orientation() {
-            let verification = if orientation.support == crate::remote::OrientationSupport::Unsupported {
+            let verification = if stop_requested.load(Ordering::Acquire) {
+                Err(crate::BrowserControlFailure::new(
+                    "browser_unavailable",
+                    "the panel closed before orientation was verified",
+                ))
+            } else if orientation.support == crate::remote::OrientationSupport::Unsupported {
                 Err(crate::BrowserControlFailure::new(
                     "orientation_unsupported",
                     "endpoint cannot verify start orientation",
@@ -81,10 +86,11 @@ pub(super) fn start_remote(
             };
             if let Err(error) = verification {
                 return Err(RemoteStartFailure::OrientationRejected {
-                    code: if error.code == "orientation_unsupported" {
-                        "orientation_unsupported"
-                    } else {
-                        "remote_orientation_mismatch"
+                    code: match error.code.as_str() {
+                        "orientation_unsupported" => "orientation_unsupported",
+                        "remote_orientation_mismatch" => "remote_orientation_mismatch",
+                        "browser_unavailable" => "browser_unavailable",
+                        _ => "orientation_unverified",
                     },
                     released: host.release(&allocation.session.id),
                 });

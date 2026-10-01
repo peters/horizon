@@ -826,6 +826,58 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_during_unsupported_probe_releases_without_reporting_mismatch() {
+        use super::super::test_server::{Reply, Server};
+        use serde_json::json;
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+        let server = Server::start(vec![
+            Reply::json(200, &json!({"value":{"sessionId":"cancelled-start","capabilities":{}}})),
+            Reply::json(
+                404,
+                &json!({"value":{"error":"unknown command","message":"unsupported"}}),
+            )
+            .delayed(Duration::from_millis(100)),
+            Reply::json(200, &json!({"value":null})),
+        ]);
+        let mut request = super::super::remote::tests::request(&server.endpoint(""));
+        request.capabilities["appium:orientation"] = json!("LANDSCAPE");
+        let report = crate::session::RemoteReleaseReport::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let events = crate::session::BrowserEventSender {
+            tx,
+            wake: crate::session::BrowserEventWake::default(),
+            committed_url: crate::session::CommittedUrl::default(),
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let signal = stop.clone();
+        let cancel = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while server.recorded().len() < 2 {
+                assert!(Instant::now() < deadline, "probe never reached the mock");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            signal.store(true, Ordering::Release);
+            server
+        });
+        assert!(start_remote(&request, &events, &report, &stop).is_err());
+        let server = cancel.join().unwrap();
+        assert_eq!(*report.lock().unwrap(), Some(RemoteReleaseOutcome::Released));
+        let seen = server.recorded();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(seen[2].method, "DELETE");
+        assert_eq!(seen[2].path, "/session/cancelled-start");
+        assert!(rx.try_iter().any(|event| matches!(
+            event,
+            crate::session::BrowserEvent::RemoteSession(RemoteSessionEvent::OrientationRejected {
+                code: "browser_unavailable",
+                ..
+            })
+        )));
+    }
+
+    #[test]
     fn only_timeouts_keep_a_bounded_classic_navigation_running() {
         use super::navigation::classic_error_is_page_load_timeout;
         assert!(classic_error_is_page_load_timeout(

@@ -82,7 +82,16 @@ pub(super) fn observe(
             remaining(deadline)?.min(Duration::from_secs(3)),
         )
         .map_err(|error| protocol_failure(&error))?;
-    if device["value"].as_str().and_then(RemoteOrientation::from_driver) != Some(requested) {
+    let applied = device["value"]
+        .as_str()
+        .and_then(RemoteOrientation::from_driver)
+        .ok_or_else(|| {
+            BrowserControlFailure::new(
+                "orientation_unverified",
+                "the endpoint did not return a valid device orientation",
+            )
+        })?;
+    if applied != requested {
         return Ok(None);
     }
     let page = transport
@@ -99,6 +108,12 @@ pub(super) fn observe(
         )
     })?;
     remaining(deadline)?;
+    if !measured.confirms(RemoteOrientation::Portrait) && !measured.confirms(RemoteOrientation::Landscape) {
+        return Err(BrowserControlFailure::new(
+            "orientation_unverified",
+            "the page did not return consistent orientation geometry",
+        ));
+    }
     Ok(measured.confirms(requested).then_some(measured))
 }
 
@@ -146,6 +161,10 @@ fn verify_start_until(
     stopped: impl Fn() -> bool,
     deadline: Instant,
 ) -> Result<(), BrowserControlFailure> {
+    let mut last_failure = BrowserControlFailure::new(
+        "orientation_unverified",
+        "start orientation could not be observed before the deadline",
+    );
     loop {
         if stopped() {
             return Err(BrowserControlFailure::new(
@@ -153,16 +172,27 @@ fn verify_start_until(
                 "the panel closed before orientation was verified",
             ));
         }
-        match observe(transport, session, requested, deadline) {
-            Ok(Some(_)) if !stopped() => return Ok(()),
-            Err(error) if error.code == "orientation_unsupported" => return Err(error),
-            _ => {}
-        }
         if remaining(deadline).is_err() {
+            return Err(last_failure);
+        }
+        let observed = observe(transport, session, requested, deadline);
+        if stopped() {
             return Err(BrowserControlFailure::new(
-                "remote_orientation_mismatch",
-                "the provider did not confirm the requested start orientation and page geometry",
+                "browser_unavailable",
+                "the panel closed before orientation was verified",
             ));
+        }
+        match observed {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) => {
+                last_failure = BrowserControlFailure::new(
+                    "remote_orientation_mismatch",
+                    "the provider did not confirm the requested start orientation and page geometry",
+                );
+            }
+            Err(error) if error.code == "orientation_unsupported" => return Err(error),
+            Err(error) if error.code != "orientation_timeout" => last_failure = error,
+            Err(_) => {}
         }
         std::thread::sleep(Duration::from_millis(100).min(deadline.saturating_duration_since(Instant::now())));
     }

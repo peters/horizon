@@ -100,15 +100,16 @@ fn geometry_and_orientation_disagreement_cannot_pass() {
         json!({"value":{"width":1106,"height":820,"visual_width":400,"visual_height":800,"orientation":"landscape"}}),
     ] {
         let transport = Transport::new(vec![Ok(json!({"value":"LANDSCAPE"})), Ok(measured)]);
-        assert!(
+        assert_eq!(
             observe(
                 &transport,
                 "/session/example",
                 RemoteOrientation::Landscape,
                 Instant::now() + Duration::from_secs(1)
             )
-            .unwrap()
-            .is_none()
+            .unwrap_err()
+            .code,
+            "orientation_unverified"
         );
     }
     let transport = Transport::new(vec![Ok(json!({"value":"PORTRAIT"}))]);
@@ -178,4 +179,46 @@ fn ignored_start_orientation_is_a_mismatch_without_a_runtime_mutation() {
     let calls = transport.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, "GET");
+}
+
+#[test]
+fn start_observation_failures_remain_unverified() {
+    for replies in [
+        vec![Err(HttpError::WebDriver {
+            error: "unknown error".into(),
+            message: "private detail".into(),
+        })],
+        vec![Ok(json!({"value":"invalid"}))],
+        vec![Ok(json!({"value":"LANDSCAPE"})), Ok(json!({"value":null}))],
+        vec![Ok(json!({"value":"LANDSCAPE"})), Ok(page(0, 0, &Value::Null))],
+    ] {
+        let transport = Transport::new(replies);
+        let error = verify_start_until(
+            &transport,
+            "/session/example",
+            RemoteOrientation::Landscape,
+            || false,
+            Instant::now() + Duration::from_millis(20),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "orientation_unverified");
+        assert!(!error.message.contains("private detail"));
+    }
+}
+
+#[test]
+fn cancellation_after_observation_preserves_browser_unavailable() {
+    let transport = Transport::new(vec![
+        Ok(json!({"value":"LANDSCAPE"})),
+        Ok(page(900, 600, &json!("landscape"))),
+    ]);
+    let error = verify_start_until(
+        &transport,
+        "/session/example",
+        RemoteOrientation::Landscape,
+        || !transport.calls.lock().unwrap().is_empty(),
+        Instant::now() + Duration::from_millis(20),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "browser_unavailable");
 }

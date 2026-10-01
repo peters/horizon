@@ -23,20 +23,31 @@ impl Driver {
                 .is_some_and(|at| at.elapsed() < super::coordination::USER_ACTIVE_TTL)
     }
     pub(super) fn begin_orientation(&mut self, request: &AgentAction, stopped: &AtomicBool) {
-        let result = if stopped.load(Ordering::Acquire) {
-            Err(BrowserControlFailure::new(
-                "browser_unavailable",
-                "the browser is stopping",
-            ))
-        } else {
-            self.prepare_orientation(request)
-        };
-        self.audit_agent_action(request, crate::BrowserAuditStatus::Dispatched);
-        if let Err(error) = result {
-            self.complete_agent_action(request, Err(error));
+        let prepared = self.prepare_orientation(request, stopped);
+        match prepared {
+            Ok(pending) => {
+                self.audit_agent_action(request, crate::BrowserAuditStatus::Dispatched);
+                if let Err(error) = self.dispatch_orientation(pending) {
+                    self.complete_agent_action(request, Err(error));
+                }
+            }
+            Err(error) => {
+                self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);
+                self.complete_agent_action(request, Err(error));
+            }
         }
     }
-    fn prepare_orientation(&mut self, request: &AgentAction) -> Result<(), BrowserControlFailure> {
+    fn prepare_orientation(
+        &self,
+        request: &AgentAction,
+        stopped: &AtomicBool,
+    ) -> Result<Pending, BrowserControlFailure> {
+        if stopped.load(Ordering::Acquire) {
+            return Err(BrowserControlFailure::new(
+                "browser_unavailable",
+                "the browser is stopping",
+            ));
+        }
         request
             .action
             .validate()
@@ -63,7 +74,7 @@ impl Driver {
                 "expected orientation action",
             ));
         };
-        let state = self.remote_orientation.as_mut().ok_or_else(|| {
+        let state = self.remote_orientation.as_ref().ok_or_else(|| {
             BrowserControlFailure::new("orientation_unsupported", "local browsers use browser_resize")
         })?;
         if state.support == OrientationSupport::Unsupported {
@@ -82,6 +93,16 @@ impl Driver {
             u64::try_from(crate::navigation::now_millis().saturating_sub(request.requested_at_millis)).unwrap_or(0);
         let deadline = Instant::now() + Duration::from_millis(timeout_millis.saturating_sub(queued));
         remaining(deadline)?;
+        Ok(Pending {
+            request: request.clone(),
+            requested: orientation,
+            deadline,
+            next_sample: Instant::now(),
+            generation: self.semantic.generation(),
+            verified: None,
+        })
+    }
+    fn dispatch_orientation(&mut self, mut pending: Pending) -> Result<(), BrowserControlFailure> {
         self.finish_orientation(
             "orientation_superseded",
             "a newer rotation superseded this request; inspect applied orientation",
@@ -97,8 +118,8 @@ impl Driver {
         let result = set(
             self.host.transport(),
             &format!("/session/{}", self.session_id),
-            orientation,
-            deadline,
+            pending.requested,
+            pending.deadline,
         );
         if let Err(error) = result {
             if error.code == "orientation_unsupported"
@@ -108,14 +129,8 @@ impl Driver {
             }
             return Err(error);
         }
-        self.pending_orientation = Some(Pending {
-            request: request.clone(),
-            requested: orientation,
-            deadline,
-            next_sample: Instant::now(),
-            generation: self.semantic.generation(),
-            verified: None,
-        });
+        pending.generation = self.semantic.generation();
+        self.pending_orientation = Some(pending);
         Ok(())
     }
     pub(super) fn finish_orientation(&mut self, code: &str, message: &str) {
@@ -302,7 +317,10 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct Owner(std::sync::Mutex<Option<String>>);
+    struct Owner(
+        std::sync::Mutex<Option<String>>,
+        std::sync::Mutex<Vec<crate::BrowserAuditStatus>>,
+    );
     impl crate::BrowserCoordination for Owner {
         fn prepare(&self, _: &str, _: Duration) -> bool {
             true
@@ -328,6 +346,50 @@ mod tests {
         fn remove(&self, _: &str, _: Duration) -> bool {
             true
         }
+        fn record_action(&self, _: &str, entry: &crate::BrowserAuditEntry) -> std::io::Result<()> {
+            self.1.lock().unwrap().push(entry.status);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn dispatch_is_audited_before_provider_reply_and_refusals_do_not_dispatch() {
+        use crate::BrowserAuditStatus;
+        use std::sync::Arc;
+        let classic = Server::start(vec![
+            Reply::json(200, &json!({"value":null})).delayed(Duration::from_millis(200)),
+        ]);
+        let (link, worker) = bidi_fixture(false, false);
+        let mut driver = fixture_driver(&classic, link);
+        let owner = Arc::new(Owner(
+            std::sync::Mutex::new(Some("agent".into())),
+            std::sync::Mutex::new(Vec::new()),
+        ));
+        driver.config.coordination = Some(owner.clone());
+        driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
+        let mut invalid = rotation_request();
+        invalid.actor = "other".into();
+        driver.begin_orientation(&invalid, &AtomicBool::new(false));
+        assert_eq!(
+            *owner.1.lock().unwrap(),
+            vec![BrowserAuditStatus::Rejected, BrowserAuditStatus::Failed]
+        );
+        assert!(classic.recorded().is_empty());
+        owner.1.lock().unwrap().clear();
+        let rotation = std::thread::spawn(move || {
+            driver.begin_orientation(&rotation_request(), &AtomicBool::new(false));
+            driver
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while classic.recorded().is_empty() {
+            assert!(Instant::now() < deadline, "orientation POST never reached the mock");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(*owner.1.lock().unwrap(), vec![BrowserAuditStatus::Dispatched]);
+        let driver = rotation.join().unwrap();
+        assert!(driver.pending_orientation.is_some());
+        drop(driver);
+        assert!(worker.join().unwrap().is_empty());
     }
 
     #[test]
@@ -341,10 +403,13 @@ mod tests {
             let classic = Server::start(replies);
             let (link, worker) = bidi_fixture(false, false);
             let mut driver = fixture_driver(&classic, link);
-            let owner = Arc::new(Owner(std::sync::Mutex::new(Some("agent".into()))));
+            let owner = Arc::new(Owner(
+                std::sync::Mutex::new(Some("agent".into())),
+                std::sync::Mutex::new(Vec::new()),
+            ));
             driver.config.coordination = Some(owner.clone());
             driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
-            driver.prepare_orientation(&rotation_request()).unwrap();
+            driver.begin_orientation(&rotation_request(), &AtomicBool::new(false));
             let mut pending = driver.pending_orientation.take().unwrap();
             let stop = Arc::new(AtomicBool::new(false));
             assert_eq!(
@@ -401,7 +466,7 @@ mod tests {
         let (link, worker) = bidi_fixture(false, false);
         let mut driver = fixture_driver(&classic, link);
         driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
-        driver.prepare_orientation(&rotation_request()).unwrap();
+        driver.begin_orientation(&rotation_request(), &AtomicBool::new(false));
         let mut pending = driver.pending_orientation.take().unwrap();
         pending.deadline = Instant::now() + Duration::from_millis(300);
         let started = Instant::now();
@@ -440,7 +505,7 @@ mod tests {
                 },
                 options: Vec::new(),
             });
-        driver.prepare_orientation(&request).unwrap();
+        driver.begin_orientation(&request, &AtomicBool::new(false));
         assert_ne!(driver.semantic.generation(), before);
         assert!(
             driver.panel_slot.native_select_popup().is_none(),
