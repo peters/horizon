@@ -100,3 +100,25 @@ fn threads_round_trip_and_a_corrupt_file_starts_empty() {
     std::fs::write(dir.path().join("assistant/threads.json"), "not json").unwrap();
     assert!(Threads::load(&home).is_empty());
 }
+
+#[test]
+fn untitled_threads_are_dropped_before_titled_ones() {
+    let mut threads = Threads::default();
+    threads.upsert(Thread {
+        title: "Keep".into(),
+        ..thread("titled-old", "work", 0)
+    });
+    for index in 1..=MAX_THREADS {
+        threads.upsert(thread(
+            &format!("empty{index}"),
+            "work",
+            i64::try_from(index).expect("small index"),
+        ));
+    }
+    assert_eq!(threads.threads.len(), MAX_THREADS);
+    assert!(
+        threads.get("titled-old").is_some(),
+        "the oldest thread has a title and survives"
+    );
+    assert!(threads.get("empty1").is_none(), "the oldest untitled thread goes first");
+}

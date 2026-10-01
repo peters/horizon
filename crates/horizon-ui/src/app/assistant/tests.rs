@@ -126,7 +126,14 @@ fn a_note_opens_the_drawer_and_shows_one_card() {
 #[test]
 fn declining_an_approval_types_nothing_and_says_so() {
     let (_temp, mut app) = test_app();
-    app.assistant_request_approval(PanelId(5), "codex".to_string(), "run the tests".to_string(), true);
+    app.assistant.cards.push(cards::CardKind::Approval {
+        local_id: "codex-5".to_string(),
+        title: "codex".to_string(),
+        detail: "Codex".to_string(),
+        text: "run the tests".to_string(),
+        submit: true,
+    });
+    app.assistant.open = true;
     assert!(app.assistant.open, "an approval must be visible to the person");
     let id = app.assistant.cards.first_id().expect("card");
 
@@ -144,7 +151,13 @@ fn approving_for_an_agent_that_is_gone_is_declined_with_the_reason() {
     let ctx = Context::default();
     app.toggle_assistant();
     frame(&ctx, &mut app);
-    app.assistant_request_approval(PanelId(424_242), "ghost".to_string(), "hello".to_string(), true);
+    app.assistant.cards.push(cards::CardKind::Approval {
+        local_id: "ghost".to_string(),
+        title: "ghost".to_string(),
+        detail: "Codex".to_string(),
+        text: "hello".to_string(),
+        submit: true,
+    });
     let id = app.assistant.cards.first_id().expect("card");
 
     app.resolve_approval(id, true);

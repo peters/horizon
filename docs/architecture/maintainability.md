@@ -318,13 +318,15 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     `reach.rs` renders the strip of other agents and their state, and
     `cards.rs` the Activity tray (approval, sent and note cards, built by
     Horizon from host facts) on the shared look in `blocks.rs` and `icons.rs`,
-    and `threads.rs` the thread bar and menu. A thread is a session of the
+    `threads.rs` the thread bar and menu, and `command_bar.rs` the bar docked
+    under the terminal (plain text and forwarded slash commands, plus the few
+    Horizon commands). A thread is a session of the
     hosted agent, recorded from the assistant panel's session binding into
     `horizon-core/src/assistant/threads.rs` (a private JSON store under the
     Horizon home); switching restarts the agent with `PanelResume::Session`
   - `agent_panel_requests`: host side of the `agent_panels` MCP tool. It claims
     requests from the `manifest::agent_panels` queue (built on the generic
-    `manifest::typed_queue`), answers list/send/read from `Board` state in
+    `manifest::typed_queue`), answers list/send/read/approvals/note from `Board` state in
     `horizon-core/src/board/agent_panels.rs`, and presses Enter a short delay
     after a pasted message
   - `settings`: settings editor state and save/apply flows

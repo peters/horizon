@@ -27,6 +27,9 @@ pub struct Queued<Operation> {
     pub host_instance: String,
     pub deadline_at_millis: i64,
     pub operation: Operation,
+    /// A secret the caller proves it holds, for operations only one agent may use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -61,6 +64,7 @@ impl TypedQueue {
         identity: AgentIdentity<'_>,
         operation: Operation,
         timeout: Duration,
+        credential: Option<String>,
     ) -> io::Result<Queued<Operation>> {
         super::agent::validate_actor(identity.actor)?;
         let host = identity.host_instance.filter(|host| super::valid_host_instance(host));
@@ -89,6 +93,7 @@ impl TypedQueue {
             host_instance: host.unwrap_or_default().into(),
             deadline_at_millis: now_millis().saturating_add(i64::try_from(timeout.as_millis()).unwrap_or(i64::MAX)),
             operation,
+            credential,
         };
         write_private_json(&self.path(root, &request.request_id, "request"), &request)?;
         Ok(request)

@@ -93,6 +93,15 @@ impl HorizonApp {
     /// workspaces get their OS window focused, attached canvases pan/zoom so
     /// the panel is visible.
     pub(in crate::app) fn reveal_selected_panel(&mut self, ctx: &egui::Context, panel_id: PanelId) {
+        if self
+            .board
+            .panel(panel_id)
+            .is_some_and(horizon_core::Panel::is_assistant)
+        {
+            // The assistant lives in its drawer, not on the canvas.
+            self.open_assistant();
+            return;
+        }
         match self.board.panel_workspace_id(panel_id) {
             Some(workspace_id) => self.reveal_new_panel(ctx, workspace_id, panel_id),
             None => self.board.focus(panel_id),

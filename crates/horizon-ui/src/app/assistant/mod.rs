@@ -6,6 +6,7 @@
 
 mod blocks;
 mod cards;
+mod command_bar;
 mod drawer;
 mod engine;
 mod icons;
@@ -15,6 +16,7 @@ mod threads;
 use egui::{Context, Id, Pos2, Rect};
 use egui_commonmark::CommonMarkCache;
 use horizon_core::assistant::{ASSISTANT_PANEL_LOCAL_ID, AssistantSettings, Thread, Threads};
+use horizon_core::browser::manifest::agent_panels::AgentPanel;
 use horizon_core::{HorizonHome, PanelId, PanelOptions, PanelResume};
 use zeroize::Zeroizing;
 
@@ -23,6 +25,7 @@ use super::{HorizonApp, TOOLBAR_HEIGHT};
 pub(super) const ASSISTANT_PANEL_ID: &str = "assistant_drawer";
 const DEFAULT_WIDTH: f32 = 460.0;
 const MIN_WIDTH: f32 = 340.0;
+const START_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub(super) struct AssistantDrawer {
     open: bool,
@@ -39,6 +42,7 @@ pub(super) struct AssistantDrawer {
     engine_open: bool,
     engine_anchor: Option<Rect>,
     cards: cards::Cards,
+    command: command_bar::CommandBar,
     md_cache: CommonMarkCache,
     /// Where the assistant keeps its settings, key and threads.
     home: HorizonHome,
@@ -52,6 +56,9 @@ pub(super) struct AssistantDrawer {
     thread_anchor: Option<Rect>,
     key_input: Zeroizing<String>,
     notice: Option<String>,
+    /// Do not try to start the agent again before this, after a failed start.
+    retry_at: Option<std::time::Instant>,
+    reach_cache: Option<(std::time::Instant, Vec<AgentPanel>)>,
 }
 
 impl AssistantDrawer {
@@ -67,6 +74,7 @@ impl AssistantDrawer {
             engine_open: false,
             engine_anchor: None,
             cards: cards::Cards::default(),
+            command: command_bar::CommandBar::default(),
             md_cache: CommonMarkCache::default(),
             home: home.clone(),
             threads: Threads::load(home),
@@ -77,11 +85,34 @@ impl AssistantDrawer {
             thread_anchor: None,
             key_input: Zeroizing::new(String::new()),
             notice: None,
+            retry_at: None,
+            reach_cache: None,
         }
+    }
+
+    /// Forgets everything tied to the previous board: its cards, focus and
+    /// session point at panels that no longer exist.
+    pub(super) fn reset_for_new_board(&mut self) {
+        self.cards.clear();
+        self.command = command_bar::CommandBar::default();
+        self.focused = false;
+        self.previous_focus = None;
+        self.active_session = None;
+        self.resume = None;
+        self.restart_requested = false;
+        self.retry_at = None;
+        self.reach_cache = None;
     }
 }
 
 impl HorizonApp {
+    /// Opens the drawer and gives it the keyboard if it is not already open.
+    pub(in crate::app) fn open_assistant(&mut self) {
+        if !self.assistant.open {
+            self.toggle_assistant();
+        }
+    }
+
     /// Opens the drawer and gives it the keyboard, or closes it.
     pub(super) fn toggle_assistant(&mut self) {
         if self.assistant.open {
@@ -134,9 +165,6 @@ impl HorizonApp {
     }
 
     fn release_assistant_focus(&mut self) {
-        if !self.assistant.focused {
-            return;
-        }
         self.assistant.focused = false;
         if self.board.focused.is_none() {
             self.board.focused = self
@@ -168,7 +196,10 @@ impl HorizonApp {
             .board
             .active_workspace
             .unwrap_or_else(|| self.ensure_workspace_visible(ctx));
-        let resume = self.assistant.resume.take();
+        if self.assistant.retry_at.is_some_and(|at| std::time::Instant::now() < at) {
+            return;
+        }
+        let resume = self.assistant.resume.clone();
         let options = PanelOptions {
             kind: self.assistant.settings.agent,
             name: Some("Assistant".to_string()),
@@ -187,8 +218,13 @@ impl HorizonApp {
             ..PanelOptions::default()
         };
         match self.create_panel_with_options(options, workspace_id) {
-            Ok(_) => self.assistant.notice = None,
+            Ok(_) => {
+                self.assistant.notice = None;
+                self.assistant.resume = None;
+                self.assistant.retry_at = None;
+            }
             Err(error) => {
+                self.assistant.retry_at = Some(std::time::Instant::now() + START_RETRY);
                 tracing::error!("failed to start the assistant: {error}");
                 self.assistant.notice = Some(format!("Could not start the assistant: {error}"));
             }

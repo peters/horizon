@@ -140,3 +140,15 @@ fn asking_before_sending_is_the_default_and_is_not_part_of_the_engine() {
     };
     assert!(!other.same_engine(&AssistantSettings::default()));
 }
+
+#[test]
+fn only_the_launch_token_matches_and_a_missing_one_never_does() {
+    let token = launch_token().to_string();
+    assert!(token_matches(Some(&token)));
+    assert!(!token_matches(None));
+    assert!(!token_matches(Some("")));
+    assert!(!token_matches(Some("horizon-assistant")));
+    assert!(!token_matches(Some(&token[..token.len() - 1])));
+    assert!(!token_matches(Some(&format!("{token}x"))));
+    assert_eq!(launch_token(), token, "the token is fixed for the process");
+}

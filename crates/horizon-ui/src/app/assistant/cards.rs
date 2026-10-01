@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use egui::{Margin, RichText, ScrollArea, Ui};
 use egui_commonmark::CommonMarkViewer;
 use horizon_core::PanelId;
-use horizon_core::browser::manifest::agent_panels::AgentState;
+use horizon_core::browser::manifest::agent_panels::{AgentState, Approval, ApprovalStatus};
 
 use super::{
     HorizonApp,
@@ -24,13 +24,18 @@ const REPLY_AFTER: Duration = Duration::from_secs(3);
 const REPLY_ROWS: usize = 10;
 const REPLY_LINES_SHOWN: usize = 6;
 const SHOWN_CHARS: usize = 400;
+const REPORT_CHARS: usize = 120;
 
 #[derive(Clone)]
 pub(super) enum CardKind {
     /// A message the assistant wants to type, waiting for the person.
     Approval {
-        target: PanelId,
+        /// The agent's stable id, so a board that was replaced meanwhile cannot redirect the message.
+        local_id: String,
         title: String,
+        /// Agent kind and directory, so the target is not identified by a title it controls.
+        detail: String,
+        /// Exactly the text that will be typed.
         text: String,
         submit: bool,
     },
@@ -91,6 +96,38 @@ impl Cards {
         self.items.is_empty()
     }
 
+    pub(super) fn clear(&mut self) {
+        self.items.clear();
+    }
+
+    pub(super) fn pending_approvals(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|card| matches!(card.kind, CardKind::Approval { .. }))
+            .count()
+    }
+
+    /// Each message that needed approval, with what became of it.
+    pub(super) fn report(&self) -> Vec<Approval> {
+        self.items
+            .iter()
+            .filter_map(|card| match &card.kind {
+                CardKind::Approval { title, text, .. } => Some((title, text, ApprovalStatus::Pending, None)),
+                CardKind::Sent { title, text, .. } => Some((title, text, ApprovalStatus::Sent, None)),
+                CardKind::Declined { title, reason } => {
+                    Some((title, reason, ApprovalStatus::Declined, Some(reason.clone())))
+                }
+                CardKind::Note { .. } => None,
+            })
+            .map(|(title, text, status, detail)| Approval {
+                target: title.clone(),
+                message: shorten_to(text, REPORT_CHARS),
+                status,
+                detail,
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub(super) fn first_kind(&self) -> Option<&CardKind> {
         self.items.first().map(|card| &card.kind)
@@ -124,10 +161,14 @@ fn reply_tail(text: &str) -> String {
 }
 
 fn shorten(text: &str) -> String {
-    if text.chars().count() <= SHOWN_CHARS {
+    shorten_to(text, SHOWN_CHARS)
+}
+
+fn shorten_to(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
         return text.to_string();
     }
-    let mut shortened: String = text.chars().take(SHOWN_CHARS).collect();
+    let mut shortened: String = text.chars().take(limit).collect();
     shortened.push_str("...");
     shortened
 }
@@ -145,23 +186,33 @@ impl HorizonApp {
     }
 
     /// Queues a message for the person to approve and makes sure they can see it.
-    pub(in crate::app) fn assistant_request_approval(
-        &mut self,
-        target: PanelId,
-        title: String,
-        text: String,
-        submit: bool,
-    ) {
-        self.assistant.cards.push(CardKind::Approval {
-            target,
-            title,
+    /// Returns false when the target is gone.
+    pub(in crate::app) fn assistant_request_approval(&mut self, target: PanelId, text: String, submit: bool) -> bool {
+        let Some(panel) = self.board.panel(target) else {
+            return false;
+        };
+        let kind = horizon_core::agent_definition(panel.kind).map_or("agent", |agent| agent.display_name);
+        let detail = match &panel.launch_cwd {
+            Some(dir) => format!("{kind} - {}", dir.display()),
+            None => kind.to_string(),
+        };
+        let card = CardKind::Approval {
+            local_id: panel.local_id.clone(),
+            title: panel.display_title().into_owned(),
+            detail,
             text,
             submit,
-        });
+        };
+        self.assistant.cards.push(card);
         self.assistant.open = true;
+        true
     }
 
-    pub(in crate::app) fn assistant_record_sent(&mut self, target: PanelId, title: String, text: String) {
+    pub(in crate::app) fn assistant_record_sent(&mut self, target: PanelId, text: String) {
+        let title = self
+            .board
+            .panel(target)
+            .map_or_else(String::new, |panel| panel.display_title().into_owned());
         self.assistant.cards.push(CardKind::Sent {
             target,
             title,
@@ -169,6 +220,15 @@ impl HorizonApp {
             sent_at: Instant::now(),
             reply: None,
         });
+    }
+
+    pub(in crate::app) fn assistant_pending_approvals(&self) -> usize {
+        self.assistant.cards.pending_approvals()
+    }
+
+    /// What became of the messages that needed approval, for the assistant to read.
+    pub(in crate::app) fn assistant_approvals(&self) -> Vec<Approval> {
+        self.assistant.cards.report()
     }
 
     pub(in crate::app) fn assistant_post_note(&mut self, title: String, markdown: String) {
@@ -217,30 +277,22 @@ impl HorizonApp {
     /// Settles an approval: type the message if the person agreed and the agent can still take it.
     pub(super) fn resolve_approval(&mut self, id: u64, approve: bool) {
         let Some(CardKind::Approval {
-            target,
+            local_id,
             title,
             text,
             submit,
+            ..
         }) = self.assistant.cards.get_mut(id).map(|card| card.kind.clone())
         else {
             return;
         };
-        let outcome = if !approve {
-            Err("You declined this message.".to_string())
-        } else if let Some(assistant) = self.board.assistant_panel() {
-            self.board
-                .check_agent_can_receive(assistant, target)
-                .map_err(|refusal| refusal.message().to_string())
-                .and_then(|()| {
-                    self.send_to_agent(target, &text, submit, Instant::now())
-                        .then_some(())
-                        .ok_or_else(|| "The agent is no longer available.".to_string())
-                })
+        let outcome = if approve {
+            self.deliver_approved(&local_id, &text, submit)
         } else {
-            Err("The assistant is not running.".to_string())
+            Err("You declined this message.".to_string())
         };
         let kind = match outcome {
-            Ok(()) => CardKind::Sent {
+            Ok(target) => CardKind::Sent {
                 target,
                 title,
                 text,
@@ -252,6 +304,35 @@ impl HorizonApp {
         if let Some(card) = self.assistant.cards.get_mut(id) {
             card.kind = kind;
         }
+    }
+
+    /// Finds the approved agent again by its stable id inside the assistant's
+    /// workspace, so a card from another session or workspace cannot type into
+    /// whatever now holds an old panel number, then types the message.
+    fn deliver_approved(&mut self, local_id: &str, text: &str, submit: bool) -> Result<PanelId, String> {
+        let Some(assistant) = self.board.assistant_panel() else {
+            return Err("The assistant is not running.".to_string());
+        };
+        let workspace = self.board.panel(assistant).map(|panel| panel.workspace_id);
+        let target = self
+            .board
+            .panel_id_by_local_id(local_id)
+            .filter(|id| {
+                self.board
+                    .panel(*id)
+                    .is_some_and(|panel| Some(panel.workspace_id) == workspace && !panel.is_assistant())
+            })
+            .ok_or_else(|| "That agent is no longer in the assistant's workspace.".to_string())?;
+        let now = Instant::now();
+        if self.agent_panel_requests.in_flight(target, now) {
+            return Err("A message was just sent to that agent. Try again in a moment.".to_string());
+        }
+        self.board
+            .check_agent_can_receive(assistant, target)
+            .map_err(|refusal| refusal.message().to_string())?;
+        self.send_to_agent(target, text, submit, now)
+            .then_some(target)
+            .ok_or_else(|| "The agent is no longer available.".to_string())
     }
 
     pub(super) fn render_cards_tray(&mut self, ui: &mut Ui) {
@@ -302,6 +383,39 @@ impl HorizonApp {
     }
 }
 
+/// The question to the person: the full text, who gets it, and the two answers.
+fn draw_approval(ui: &mut Ui, id: u64, [title, detail, text]: [&str; 3], submit: bool, actions: &mut Vec<CardAction>) {
+    blocks::card(ui, Tone::Attention, |ui| {
+        let pill = Some(("Needs your OK", theme::PALETTE_YELLOW()));
+        blocks::header(
+            ui,
+            Icon::Send,
+            Tone::Attention,
+            &format!("Send to {title}?"),
+            detail,
+            pill,
+        );
+        ui.add_space(8.0);
+        quoted(ui, text, id);
+        ui.add_space(4.0);
+        let enter = if submit {
+            "Enter will be pressed."
+        } else {
+            "Enter will not be pressed."
+        };
+        ui.label(RichText::new(enter).size(11.5).color(theme::FG_DIM()));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if blocks::primary(ui, "Send").clicked() {
+                actions.push(CardAction::Approve(id));
+            }
+            if blocks::ghost(ui, "Don't send").clicked() {
+                actions.push(CardAction::Decline(id));
+            }
+        });
+    });
+}
+
 fn draw_card(
     ui: &mut Ui,
     card: &Card,
@@ -310,30 +424,13 @@ fn draw_card(
     actions: &mut Vec<CardAction>,
 ) {
     match &card.kind {
-        CardKind::Approval { title, text, .. } => {
-            blocks::card(ui, Tone::Attention, |ui| {
-                let pill = Some(("Needs your OK", theme::PALETTE_YELLOW()));
-                blocks::header(
-                    ui,
-                    Icon::Send,
-                    Tone::Attention,
-                    &format!("Send to {title}?"),
-                    "The assistant wants to type this",
-                    pill,
-                );
-                ui.add_space(8.0);
-                quoted(ui, text);
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if blocks::primary(ui, "Send").clicked() {
-                        actions.push(CardAction::Approve(card.id));
-                    }
-                    if blocks::ghost(ui, "Don't send").clicked() {
-                        actions.push(CardAction::Decline(card.id));
-                    }
-                });
-            });
-        }
+        CardKind::Approval {
+            title,
+            detail,
+            text,
+            submit,
+            ..
+        } => draw_approval(ui, card.id, [title, detail, text], *submit, actions),
         CardKind::Sent {
             target,
             title,
@@ -403,14 +500,23 @@ fn draw_card(
 }
 
 /// The message in a recessed block, so it reads as quoted text.
-fn quoted(ui: &mut Ui, text: &str) {
+///
+/// The whole text is shown, scrolling when long: the person must see everything
+/// that will be typed before approving it.
+fn quoted(ui: &mut Ui, text: &str, id: u64) {
     egui::Frame::new()
         .fill(theme::PANEL_BG())
         .corner_radius(egui::CornerRadius::same(8))
         .inner_margin(Margin::same(8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new(shorten(text)).size(12.5).color(theme::FG_SOFT()));
+            ScrollArea::vertical()
+                .id_salt(("approval_text", id))
+                .max_height(140.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.label(RichText::new(text).size(12.5).color(theme::FG_SOFT()));
+                });
         });
 }
 

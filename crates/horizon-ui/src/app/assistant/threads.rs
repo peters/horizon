@@ -105,6 +105,7 @@ impl HorizonApp {
                 self.assistant.notice = Some(format!("Could not save the assistant settings: {error}"));
             }
         }
+        self.forget_untitled_active_thread();
         if self.assistant.threads.touch(session_id, now_millis()) {
             self.save_threads();
         }
@@ -112,8 +113,25 @@ impl HorizonApp {
         self.restart_assistant();
     }
 
+    /// A thread that never got a first message has nothing worth coming back to.
+    fn forget_untitled_active_thread(&mut self) {
+        let Some(session) = self.assistant.active_session.clone() else {
+            return;
+        };
+        if self
+            .assistant
+            .threads
+            .get(&session)
+            .is_some_and(|thread| thread.title.is_empty())
+            && self.assistant.threads.forget(&session)
+        {
+            self.save_threads();
+        }
+    }
+
     /// Starts a fresh session. The old one stays in the thread list.
     pub(super) fn new_assistant_thread(&mut self) {
+        self.forget_untitled_active_thread();
         self.assistant.resume = None;
         self.assistant.active_session = None;
         self.assistant.thread_menu_open = false;

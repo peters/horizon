@@ -2,8 +2,9 @@ use super::*;
 
 fn approval(text: &str) -> CardKind {
     CardKind::Approval {
-        target: PanelId(1),
+        local_id: "codex-1".into(),
         title: "codex".into(),
+        detail: "Codex - /work".into(),
         text: text.into(),
         submit: true,
     }
@@ -59,4 +60,32 @@ fn reply_tail_keeps_the_last_rows_and_bounds_the_length() {
     let shown = reply_tail(&long);
     assert!(shown.ends_with("..."));
     assert_eq!(shown.chars().count(), SHOWN_CHARS + 3);
+}
+
+#[test]
+fn the_report_tells_the_assistant_what_became_of_each_message() {
+    let mut cards = Cards::default();
+    cards.push(approval("waiting"));
+    cards.push(CardKind::Declined {
+        title: "codex".into(),
+        reason: "You declined this message.".into(),
+    });
+    cards.push(CardKind::Sent {
+        target: PanelId(1),
+        title: "codex".into(),
+        text: "ran".into(),
+        sent_at: Instant::now(),
+        reply: None,
+    });
+    cards.push(note("not an approval"));
+
+    let report = cards.report();
+
+    let statuses: Vec<_> = report.iter().map(|item| item.status).collect();
+    assert_eq!(
+        statuses,
+        [ApprovalStatus::Pending, ApprovalStatus::Declined, ApprovalStatus::Sent]
+    );
+    assert_eq!(report[1].detail.as_deref(), Some("You declined this message."));
+    assert_eq!(cards.pending_approvals(), 1);
 }

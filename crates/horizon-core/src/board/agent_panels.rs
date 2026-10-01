@@ -13,12 +13,14 @@ use super::Board;
 use crate::AgentStatus;
 use crate::agents::agent_definition;
 use crate::browser::manifest::agent_panels::{AgentPanel, AgentState};
-use crate::panel::{Panel, PanelId};
+use crate::panel::{Panel, PanelId, current_unix_millis};
 use crate::workspace::WorkspaceId;
 
 /// How long after its last output an agent still counts as busy. It is longer
 /// than the working indicator's own stale window, so a fresh spinner is never missed.
 const QUIET_BEFORE_SEND: Duration = Duration::from_millis(2500);
+/// Matches the attention detector, which ignores a panel's first ten seconds.
+const SETTLE_AFTER_LAUNCH_MS: i64 = 10_000;
 
 /// Why a message cannot be typed into an agent right now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,24 +92,36 @@ impl Board {
         let Some(terminal) = panel.terminal() else {
             return AgentState::Exited;
         };
-        let needs_input = self
+        // The attention feed can be switched off or dismissed by the person, so
+        // the screen is read directly: a pending approval or question must never
+        // look idle.
+        let asking = self
             .unresolved_attention_for_panel(panel.id)
-            .is_some_and(|item| item.source == "agent" && !item.is_agent_ready_for_input());
+            .is_some_and(|item| item.source == "agent" && !item.is_agent_ready_for_input())
+            || matches!(
+                panel.detect_attention(),
+                Some("Waiting for approval" | "Waiting for input")
+            );
+        // Attention detection is blind for the first seconds after launch, so a
+        // young agent is still starting whatever its screen shows.
+        let settled = current_unix_millis().saturating_sub(panel.launched_at_millis) >= SETTLE_AFTER_LAUNCH_MS;
         classify(Observation {
             exited: terminal.child_exited(),
             // Agent TUIs turn bracketed paste on once their prompt is up.
-            interface_up: terminal.mode().contains(TermMode::BRACKETED_PASTE),
+            interface_up: settled && terminal.mode().contains(TermMode::BRACKETED_PASTE),
             active: panel.agent_status() == AgentStatus::Working || panel.had_recent_output_within(QUIET_BEFORE_SEND),
-            needs_input,
+            needs_input: asking,
         })
     }
 
-    /// The agents in `workspace`, marking the one that asked.
+    /// The agents in `workspace`, marking the one that asked. The assistant is
+    /// the person's own conversation, so other agents never see it.
     #[must_use]
     pub fn agent_panels_in_workspace(&self, workspace: WorkspaceId, caller: PanelId) -> Vec<AgentPanel> {
         self.panels
             .iter()
             .filter(|panel| panel.workspace_id == workspace && panel.kind.is_agent())
+            .filter(|panel| !panel.is_assistant() || panel.id == caller)
             .map(|panel| AgentPanel {
                 panel_id: panel.local_id.clone(),
                 title: panel.display_title().into_owned(),
@@ -155,9 +169,13 @@ impl Board {
     #[must_use]
     pub fn agent_output(&self, panel_id: PanelId, lines: usize) -> Option<(String, bool)> {
         let panel = self.panel(panel_id).filter(|panel| panel.kind.is_agent())?;
-        let (rows, _) = panel.terminal()?.full_text_lines(lines);
-        let truncated = rows.len() >= lines;
-        Some((rows.join("\n"), truncated))
+        let terminal = panel.terminal()?;
+        // Asking for fewer rows than the screen is tall returns its top, so ask
+        // for the screen on top of the lines wanted and keep the newest of them.
+        let (rows, _) = terminal.full_text_lines(lines + usize::from(terminal.rows()));
+        let truncated = rows.len() > lines;
+        let newest = &rows[rows.len().saturating_sub(lines)..];
+        Some((newest.join("\n"), truncated))
     }
 }
 

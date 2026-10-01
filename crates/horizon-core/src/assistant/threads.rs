@@ -114,11 +114,12 @@ impl Threads {
 
     fn trim(&mut self) {
         while self.threads.len() > MAX_THREADS {
+            // A session that never got a title is the cheapest to lose.
             let Some(oldest) = self
                 .threads
                 .iter()
                 .enumerate()
-                .min_by_key(|(_, thread)| thread.updated_at)
+                .min_by_key(|(_, thread)| (!thread.title.is_empty(), thread.updated_at))
                 .map(|(index, _)| index)
             else {
                 break;

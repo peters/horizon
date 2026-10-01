@@ -134,3 +134,20 @@ fn output_is_limited_to_agents() {
     assert!(board.agent_output(ids[1], 10).is_none());
     assert!(board.agent_output(PanelId(777), 10).is_none());
 }
+
+#[test]
+fn other_agents_never_see_the_assistant_but_it_sees_itself_and_them() {
+    let (board, workspace, ids) = board_with(&[
+        (crate::assistant::ASSISTANT_PANEL_LOCAL_ID, PanelKind::Claude),
+        ("codex-one", PanelKind::Codex),
+    ]);
+    let (assistant, codex) = (ids[0], ids[1]);
+
+    let seen_by_codex = board.agent_panels_in_workspace(workspace, codex);
+    let ids_seen_by_codex: Vec<_> = seen_by_codex.iter().map(|panel| panel.panel_id.as_str()).collect();
+    assert_eq!(ids_seen_by_codex, ["codex-one"]);
+
+    let seen_by_assistant = board.agent_panels_in_workspace(workspace, assistant);
+    assert_eq!(seen_by_assistant.len(), 2);
+    assert!(seen_by_assistant.iter().any(|panel| panel.is_caller));
+}

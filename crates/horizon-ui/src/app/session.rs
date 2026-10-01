@@ -166,6 +166,8 @@ impl HorizonApp {
 
     pub(super) fn apply_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
         self.arranged_panel_drag = None;
+        self.assistant.reset_for_new_board();
+        self.agent_panel_requests = super::agent_panel_requests::AgentPanelRequests::default();
         self.window_config = runtime_state.window_or(&self.template_config.window).clone();
         self.detached_workspaces = runtime_state
             .detached_workspaces

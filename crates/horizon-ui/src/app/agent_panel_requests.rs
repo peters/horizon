@@ -5,12 +5,13 @@
 //! Enter follows shortly after as a separate write, so the agent sees a paste
 //! and then a submit rather than a pasted newline.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use egui::{Context, Key, Modifiers};
 use horizon_core::browser::manifest::{
     self,
-    agent_panels::{self, DEFAULT_READ_LINES, Operation, Outcome, Request},
+    agent_panels::{self, DEFAULT_READ_LINES, MAX_PENDING_APPROVALS, Operation, Outcome, Request},
 };
 use horizon_core::{PanelId, WorkspaceId};
 
@@ -20,6 +21,8 @@ use crate::input::{KeyEventContext, KeyIdentity, paste_bytes, translate_key_even
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// Gap between the pasted text and Enter, so a TUI's paste handling has finished.
 const SUBMIT_DELAY: Duration = Duration::from_millis(150);
+/// After a send, the agent counts as busy for this long even before its screen shows work.
+const RECENT_SEND: Duration = Duration::from_secs(3);
 const APPROVAL_MESSAGE: &str =
     "The person has to approve this message in the assistant drawer. Nothing was typed; do not send it again.";
 
@@ -29,9 +32,35 @@ struct PendingSubmit {
 }
 
 #[derive(Default)]
-pub(super) struct AgentPanelRequests {
+pub(in crate::app) struct AgentPanelRequests {
     last_poll: Option<Instant>,
     pending_submits: Vec<PendingSubmit>,
+    /// When each agent last had a message typed into it.
+    recent_sends: HashMap<PanelId, Instant>,
+}
+
+impl AgentPanelRequests {
+    fn note_sent(&mut self, target: PanelId, now: Instant, submit: bool) {
+        self.recent_sends
+            .retain(|_, at| now.duration_since(*at) < RECENT_SEND * 4);
+        self.recent_sends.insert(target, now);
+        if submit {
+            self.pending_submits.push(PendingSubmit {
+                panel_id: target,
+                at: now + SUBMIT_DELAY,
+            });
+        }
+    }
+
+    /// Whether a message to `target` is still being delivered or has only just
+    /// landed, so a second one must wait instead of merging into the same prompt.
+    pub(super) fn in_flight(&self, target: PanelId, now: Instant) -> bool {
+        self.pending_submits.iter().any(|entry| entry.panel_id == target)
+            || self
+                .recent_sends
+                .get(&target)
+                .is_some_and(|at| now.duration_since(*at) < RECENT_SEND)
+    }
 }
 
 impl HorizonApp {
@@ -78,6 +107,13 @@ impl HorizonApp {
                 "The calling agent panel is no longer in this host",
             );
         };
+        // Naming the assistant's panel is not enough: it must also hold this
+        // launch's secret, which only the assistant's own environment carries.
+        let is_assistant = self
+            .board
+            .panel(caller.panel_id)
+            .is_some_and(horizon_core::Panel::is_assistant)
+            && horizon_core::assistant::token_matches(request.credential.as_deref());
         match &request.operation {
             Operation::List => Outcome::Panels {
                 panels: self
@@ -99,38 +135,58 @@ impl HorizonApp {
                     _ => unavailable(),
                 }
             }
+            Operation::Approvals => {
+                if !is_assistant {
+                    return only_the_assistant("read approvals");
+                }
+                Outcome::Approvals {
+                    items: self.assistant_approvals(),
+                }
+            }
             Operation::Note { title, markdown } => {
-                if !self.is_assistant_panel(caller.panel_id) {
+                if !is_assistant {
                     return only_the_assistant("post notes");
                 }
                 self.assistant_post_note(title.trim().to_string(), markdown.clone());
                 Outcome::Noted
             }
             Operation::Send { panel_id, text, submit } => {
-                if !self.is_assistant_panel(caller.panel_id) {
+                if !is_assistant {
                     return only_the_assistant("send messages to other agents");
                 }
                 let Some(target) = self.agent_in_workspace(panel_id, caller.workspace_id) else {
                     return unavailable();
                 };
+                if self.agent_panel_requests.in_flight(target, now) {
+                    return Outcome::failed(
+                        "agent_busy",
+                        "A message was just sent to that agent. Wait until list shows it idle again.",
+                    );
+                }
                 if let Err(refusal) = self.board.check_agent_can_receive(caller.panel_id, target) {
                     return Outcome::failed(refusal.code(), refusal.message());
                 }
-                let title = self
-                    .board
-                    .panel(target)
-                    .map_or_else(String::new, |panel| panel.display_title().into_owned());
+                // The person approves, and the agent receives, exactly this text.
+                let clean = agent_panels::printable(text);
                 if self.assistant_asks_before_send() {
-                    self.assistant_request_approval(target, title, text.clone(), *submit);
+                    if self.assistant_pending_approvals() >= MAX_PENDING_APPROVALS {
+                        return Outcome::failed(
+                            "too_many_pending",
+                            "Several messages are already waiting for the person. Wait for them to answer.",
+                        );
+                    }
+                    if !self.assistant_request_approval(target, clean, *submit) {
+                        return unavailable();
+                    }
                     return Outcome::AwaitingApproval {
                         panel_id: panel_id.clone(),
                         message: APPROVAL_MESSAGE.to_string(),
                     };
                 }
-                if !self.send_to_agent(target, text, *submit, now) {
+                if !self.send_to_agent(target, &clean, *submit, now) {
                     return unavailable();
                 }
-                self.assistant_record_sent(target, title, text.clone());
+                self.assistant_record_sent(target, clean);
                 Outcome::Sent {
                     panel_id: panel_id.clone(),
                     submitted: *submit,
@@ -139,31 +195,21 @@ impl HorizonApp {
         }
     }
 
-    fn is_assistant_panel(&self, panel_id: PanelId) -> bool {
-        self.board
-            .panel(panel_id)
-            .is_some_and(horizon_core::Panel::is_assistant)
-    }
-
     /// Types `text` into the agent and, if asked, presses Enter shortly after.
     pub(super) fn send_to_agent(&mut self, target: PanelId, text: &str, submit: bool, now: Instant) -> bool {
         if !self.type_into_agent(target, text) {
             return false;
         }
-        if submit {
-            self.agent_panel_requests.pending_submits.push(PendingSubmit {
-                panel_id: target,
-                at: now + SUBMIT_DELAY,
-            });
-        }
+        self.agent_panel_requests.note_sent(target, now, submit);
         true
     }
 
+    /// The agents the assistant may talk to: its workspace, never itself.
     fn agent_in_workspace(&self, local_id: &str, workspace: WorkspaceId) -> Option<PanelId> {
         self.board.panel_id_by_local_id(local_id).filter(|id| {
             self.board
                 .panel(*id)
-                .is_some_and(|panel| panel.workspace_id == workspace)
+                .is_some_and(|panel| panel.workspace_id == workspace && !panel.is_assistant())
         })
     }
 
@@ -175,7 +221,7 @@ impl HorizonApp {
         let Some(terminal) = panel.terminal() else {
             return false;
         };
-        let bytes = paste_bytes(&printable(text), terminal.mode(), true);
+        let bytes = paste_bytes(&agent_panels::printable(text), terminal.mode(), true);
         panel.write_input(&bytes);
         true
     }
@@ -214,15 +260,6 @@ fn unavailable() -> Outcome {
         "panel_unavailable",
         "No agent with that panel_id is in this workspace. List the agents first.",
     )
-}
-
-/// Keeps newlines and tabs and drops every other control character, so a message
-/// cannot carry terminal escapes or keystrokes into the target's prompt.
-fn printable(text: &str) -> String {
-    text.replace("\r\n", "\n")
-        .chars()
-        .filter(|ch| *ch == '\n' || *ch == '\t' || !ch.is_control())
-        .collect()
 }
 
 #[cfg(test)]

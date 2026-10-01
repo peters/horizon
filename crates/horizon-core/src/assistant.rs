@@ -20,6 +20,27 @@ use crate::{Error, HorizonHome, PanelKind, Result};
 /// Local id of the one panel the drawer hosts.
 pub const ASSISTANT_PANEL_LOCAL_ID: &str = "horizon-assistant";
 
+/// The secret of this Horizon process's assistant. Only the assistant's own
+/// environment receives it, and the host requires it for `send` and `note`, so
+/// naming the assistant panel is not enough to act as it.
+#[must_use]
+pub fn launch_token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(|| uuid::Uuid::new_v4().simple().to_string())
+}
+
+/// Whether `candidate` is this process's assistant secret, compared in constant time.
+#[must_use]
+pub fn token_matches(candidate: Option<&str>) -> bool {
+    let expected = launch_token().as_bytes();
+    let given = candidate.unwrap_or_default().as_bytes();
+    let mut difference = u8::from(expected.len() != given.len());
+    for (index, byte) in expected.iter().enumerate() {
+        difference |= byte ^ given.get(index).copied().unwrap_or(0);
+    }
+    difference == 0
+}
+
 /// Agents the drawer can host. Every one is a terminal agent, so the drawer
 /// shows its own interface; only some can call Horizon's MCP tools.
 pub const ASSISTANT_AGENTS: [PanelKind; 5] = [

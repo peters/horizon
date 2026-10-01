@@ -19,7 +19,9 @@ tool_timeout_sec = 3660
 [mcp_servers.horizon-browser.env]
 HORIZON_BROWSER_ACTOR = "${HORIZON_BROWSER_ACTOR:-}"
 HORIZON_BROWSER_HOST_INSTANCE = "${HORIZON_BROWSER_HOST_INSTANCE:-}"
+HORIZON_ASSISTANT_TOKEN = "${HORIZON_ASSISTANT_TOKEN:-}"
 "#;
+const ASSISTANT_TOKEN_VARIABLE: &str = "HORIZON_ASSISTANT_TOKEN";
 
 pub(super) fn bind_browser_skill(home: &Path, host_id: &std::ffi::OsStr) -> io::Result<Vec<super::SkillRootLease>> {
     let dir = home.join("skills").join(super::HORIZON_BROWSER_SKILL);
@@ -152,7 +154,9 @@ fn append_registration(original: &str) -> io::Result<Option<String>> {
             ));
         };
         if let Some(existing) = servers.get("horizon-browser") {
-            if equivalent(existing, &expected["mcp_servers"]["horizon-browser"]) {
+            if equivalent(existing, &expected["mcp_servers"]["horizon-browser"])
+                || equivalent(existing, &without_assistant_token(&expected))
+            {
                 return Ok(None);
             }
             return Err(io::Error::new(
@@ -175,6 +179,16 @@ fn append_registration(original: &str) -> io::Result<Option<String>> {
     // Validate the combined document before touching the user's file.
     parse(&updated)?;
     Ok(Some(updated))
+}
+
+/// The registration earlier Horizon versions wrote. It is still ours, but it
+/// does not pass the assistant's secret on, so it is accepted and left alone.
+fn without_assistant_token(expected: &DocumentMut) -> Item {
+    let mut legacy = expected["mcp_servers"]["horizon-browser"].clone();
+    if let Some(env) = legacy.get_mut("env").and_then(Item::as_table_like_mut) {
+        env.remove(ASSISTANT_TOKEN_VARIABLE);
+    }
+    legacy
 }
 
 fn parse(text: &str) -> io::Result<DocumentMut> {

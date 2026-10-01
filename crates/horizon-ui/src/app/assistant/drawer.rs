@@ -1,7 +1,8 @@
-use egui::{Align, CornerRadius, Frame, Layout, Margin, RichText, Sense, Stroke, Ui, UiBuilder, vec2};
+use egui::{Align, CornerRadius, Frame, Layout, Margin, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
 use horizon_core::agent_definition;
 use horizon_core::assistant::{AssistantAuth, AssistantSettings};
 
+use super::command_bar::{BAR_GAP, BAR_HEIGHT};
 use super::{DEFAULT_WIDTH, HorizonApp, MIN_WIDTH, TOOLBAR_HEIGHT};
 use crate::app::util::viewport_local_rect;
 use crate::theme;
@@ -87,12 +88,14 @@ impl HorizonApp {
         self.render_reach_strip(ui);
         self.render_cards_tray(ui);
         let rect = ui.available_rect_before_wrap().shrink2(vec2(10.0, 8.0));
-        let body = ui.new_child(UiBuilder::new().max_rect(rect));
-        let mut body = body;
+        let bar_rect = Rect::from_min_max(pos2(rect.min.x, rect.max.y - BAR_HEIGHT), rect.max);
+        let terminal_rect = Rect::from_min_max(rect.min, pos2(rect.max.x, bar_rect.min.y - BAR_GAP));
+        let mut body = ui.new_child(UiBuilder::new().max_rect(terminal_rect));
         let clicked = self.show_assistant_terminal(&mut body, panel_id);
         if clicked {
             self.focus_assistant();
         }
+        self.render_command_bar(ui, bar_rect);
         if let Some(reason) = self.assistant.notice.as_deref() {
             body.label(RichText::new(reason).size(12.0).color(theme::PALETTE_YELLOW()));
         }
@@ -113,8 +116,10 @@ impl HorizonApp {
                     Some(reason) => {
                         ui.label(RichText::new(reason).size(13.0).color(theme::FG()));
                         ui.add_space(10.0);
-                        if ui.button("Choose engine").clicked() {
+                        let choose = ui.button("Choose engine");
+                        if choose.clicked() {
                             self.assistant.engine_open = true;
+                            self.assistant.engine_anchor = Some(choose.rect);
                             self.assistant.draft = self.assistant.settings;
                         }
                     }

@@ -11,7 +11,7 @@ pub(super) enum Icon {
     Note,
 }
 
-fn paint(painter: &Painter, center: Pos2, size: f32, icon: Icon, color: Color32) {
+pub(super) fn paint(painter: &Painter, center: Pos2, size: f32, icon: Icon, color: Color32) {
     let unit = size / 24.0;
     let origin = center - vec2(12.0, 12.0) * unit;
     let at = |x: f32, y: f32| origin + vec2(x, y) * unit;

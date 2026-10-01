@@ -647,6 +647,10 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: b
     }
     if local_id == crate::assistant::ASSISTANT_PANEL_LOCAL_ID {
         env.extend(assistant_sign_in_env(kind));
+        env.insert(
+            crate::browser::manifest::agent_panels::ASSISTANT_TOKEN_ENV.to_string(),
+            crate::assistant::launch_token().to_string(),
+        );
     }
     if kind == PanelKind::Claude {
         // Keep the conversation in Horizon's terminal history so its scrollbar
@@ -694,7 +698,7 @@ fn horizon_codex_mcp_args() -> Vec<String> {
         "-c".to_string(),
         "mcp_servers.horizon-browser.args=[\"--browser-mcp\"]".to_string(),
         "-c".to_string(),
-        "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\"]"
+        "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\",\"HORIZON_ASSISTANT_TOKEN\"]"
             .to_string(),
         "-c".to_string(),
         "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"".to_string(),
@@ -803,7 +807,7 @@ mod tests {
         assert!(command.contains("mcp_servers.horizon-browser.command="));
         assert!(command.contains("mcp_servers.horizon-browser.args="));
         assert!(command.contains(
-            "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\"]"
+            "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\",\"HORIZON_ASSISTANT_TOKEN\"]"
         ));
         assert!(command.contains("mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\""));
         assert!(command.contains("mcp_servers.horizon-browser.tool_timeout_sec=3660"));

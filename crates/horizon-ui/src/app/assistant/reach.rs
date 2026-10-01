@@ -2,12 +2,35 @@
 //! each is doing. Clicking one brings it into view on the canvas.
 
 use egui::{Color32, CornerRadius, FontId, Margin, Response, RichText, Sense, Stroke, StrokeKind, Ui, vec2};
-use horizon_core::browser::manifest::agent_panels::AgentState;
+use horizon_core::browser::manifest::agent_panels::{AgentPanel, AgentState};
+use horizon_core::{PanelId, WorkspaceId};
 
 use super::HorizonApp;
 use crate::theme;
 
+/// Reading an agent's state locks its terminal, so the strip refreshes a few times a second.
+const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
+
 impl HorizonApp {
+    fn reach_agents(&mut self, ctx: &egui::Context, workspace: WorkspaceId, assistant: PanelId) -> Vec<AgentPanel> {
+        let now = std::time::Instant::now();
+        if let Some((read_at, agents)) = &self.assistant.reach_cache
+            && now.duration_since(*read_at) < REFRESH_EVERY
+        {
+            ctx.request_repaint_after(REFRESH_EVERY);
+            return agents.clone();
+        }
+        let agents: Vec<_> = self
+            .board
+            .agent_panels_in_workspace(workspace, assistant)
+            .into_iter()
+            .filter(|agent| !agent.is_caller)
+            .collect();
+        self.assistant.reach_cache = Some((now, agents.clone()));
+        ctx.request_repaint_after(REFRESH_EVERY);
+        agents
+    }
+
     pub(super) fn render_reach_strip(&mut self, ui: &mut Ui) {
         let Some(assistant) = self.board.assistant_panel() else {
             return;
@@ -15,12 +38,7 @@ impl HorizonApp {
         let Some(workspace) = self.board.panel(assistant).map(|panel| panel.workspace_id) else {
             return;
         };
-        let agents: Vec<_> = self
-            .board
-            .agent_panels_in_workspace(workspace, assistant)
-            .into_iter()
-            .filter(|agent| !agent.is_caller)
-            .collect();
+        let agents = self.reach_agents(ui.ctx(), workspace, assistant);
         if agents.is_empty() {
             return;
         }

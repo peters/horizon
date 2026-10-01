@@ -69,6 +69,7 @@ fn registration_respects_the_providers_config_lock() {
 
 #[test]
 fn registration_accepts_equivalent_settings_after_provider_reserialization() {
+    // Written by a Horizon that did not yet pass the assistant's secret on.
     let normalized = r"[mcp_servers.horizon-browser]
 tool_timeout_sec=3660
 startup_timeout_sec=30
@@ -80,6 +81,19 @@ env={HORIZON_BROWSER_HOST_INSTANCE='${HORIZON_BROWSER_HOST_INSTANCE:-}',HORIZON_
     assert!(append_registration(normalized).expect("equivalent table").is_none());
     let altered = normalized.replace("tool_timeout_sec=3660", "tool_timeout_sec=60");
     assert!(append_registration(&altered).is_err());
+}
+
+#[test]
+fn registration_that_passes_the_assistant_secret_on_is_also_ours() {
+    let current = r"[mcp_servers.horizon-browser]
+tool_timeout_sec=3660
+startup_timeout_sec=30
+args=['--browser-mcp']
+enabled=true
+command='${HORIZON_BROWSER_MCP_EXECUTABLE:-}'
+env={HORIZON_ASSISTANT_TOKEN='${HORIZON_ASSISTANT_TOKEN:-}',HORIZON_BROWSER_HOST_INSTANCE='${HORIZON_BROWSER_HOST_INSTANCE:-}',HORIZON_BROWSER_ACTOR='${HORIZON_BROWSER_ACTOR:-}'}
+";
+    assert!(append_registration(current).expect("current table").is_none());
 }
 
 #[test]

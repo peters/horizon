@@ -55,12 +55,16 @@ pub(super) fn card<R>(ui: &mut Ui, tone: Tone, add_body: impl FnOnce(&mut Ui) ->
 
 /// Icon tile, title and subtitle on the left, an optional status pill on the right.
 pub(super) fn header(ui: &mut Ui, icon: Icon, tone: Tone, title: &str, subtitle: &str, pill: Option<(&str, Color32)>) {
+    // Room the pill needs, so a long title or path is cut short instead of running under it.
+    let pill_room = if pill.is_some() { PILL_ROOM } else { 0.0 };
     ui.horizontal(|ui| {
         icons::tile(ui, icon, tone.accent(), 30.0);
         ui.vertical(|ui| {
-            ui.label(RichText::new(title).size(13.5).strong().color(theme::FG()));
+            ui.set_max_width((ui.available_width() - pill_room).max(80.0));
+            ui.add(egui::Label::new(RichText::new(title).size(13.5).strong().color(theme::FG())).truncate());
             if !subtitle.is_empty() {
-                ui.label(RichText::new(subtitle).size(11.5).color(theme::FG_DIM()));
+                ui.add(egui::Label::new(RichText::new(subtitle).size(11.5).color(theme::FG_DIM())).truncate())
+                    .on_hover_text(subtitle);
             }
         });
         if let Some((text, color)) = pill {
@@ -68,6 +72,8 @@ pub(super) fn header(ui: &mut Ui, icon: Icon, tone: Tone, title: &str, subtitle:
         }
     });
 }
+
+const PILL_ROOM: f32 = 110.0;
 
 /// A pill sized from its measured text, so it never stretches in a right-to-left row.
 fn status_pill(ui: &mut Ui, text: &str, color: Color32) {

@@ -66,7 +66,7 @@ fn malformed_operations_are_refused_before_they_are_queued() {
         },
     ];
     for operation in refused {
-        let error = enqueue_at(root.path(), identity(), operation, Duration::from_secs(5)).unwrap_err();
+        let error = enqueue_at(root.path(), identity(), operation, Duration::from_secs(5), None).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
     assert!(claim_at(root.path(), "host-a").unwrap().is_empty());
@@ -86,7 +86,7 @@ fn notes_need_a_short_title_and_a_bounded_body() {
         note("title", "  "),
         note("title", &"m".repeat(MAX_NOTE_BYTES + 1)),
     ] {
-        let error = enqueue_at(root.path(), identity(), refused, Duration::from_secs(5)).unwrap_err();
+        let error = enqueue_at(root.path(), identity(), refused, Duration::from_secs(5), None).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
     assert!(
@@ -94,7 +94,8 @@ fn notes_need_a_short_title_and_a_bounded_body() {
             root.path(),
             identity(),
             note("Summary", "- **done**"),
-            Duration::from_secs(5)
+            Duration::from_secs(5),
+            None
         )
         .is_ok()
     );
@@ -103,7 +104,7 @@ fn notes_need_a_short_title_and_a_bounded_body() {
 #[test]
 fn queue_is_host_bound_single_claim_and_result_is_identity_bound() {
     let root = tempfile::tempdir().unwrap();
-    let request = enqueue_at(root.path(), identity(), Operation::List, Duration::from_secs(5)).unwrap();
+    let request = enqueue_at(root.path(), identity(), Operation::List, Duration::from_secs(5), None).unwrap();
 
     assert!(claim_at(root.path(), "host-b").unwrap().is_empty());
     assert_eq!(claim_at(root.path(), "host-a").unwrap().len(), 1);
@@ -124,20 +125,20 @@ fn unbound_callers_and_queue_overflow_are_rejected() {
         AgentIdentity::new("outside", Some("host-a")),
         AgentIdentity::new("horizon:agent", None),
     ] {
-        let error = enqueue_at(root.path(), caller, Operation::List, Duration::ZERO).unwrap_err();
+        let error = enqueue_at(root.path(), caller, Operation::List, Duration::ZERO, None).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
     for _ in 0..MAX_PENDING_REQUESTS {
-        enqueue_at(root.path(), identity(), Operation::List, Duration::ZERO).unwrap();
+        enqueue_at(root.path(), identity(), Operation::List, Duration::ZERO, None).unwrap();
     }
-    let error = enqueue_at(root.path(), identity(), Operation::List, Duration::ZERO).unwrap_err();
+    let error = enqueue_at(root.path(), identity(), Operation::List, Duration::ZERO, None).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
 }
 
 #[test]
 fn outcomes_round_trip_through_the_result_file() {
     let root = tempfile::tempdir().unwrap();
-    let request = enqueue_at(root.path(), identity(), Operation::List, Duration::from_secs(5)).unwrap();
+    let request = enqueue_at(root.path(), identity(), Operation::List, Duration::from_secs(5), None).unwrap();
     let panel = AgentPanel {
         panel_id: "p".into(),
         title: "codex".into(),
@@ -158,4 +159,43 @@ fn outcomes_round_trip_through_the_result_file() {
         panic!("expected panels");
     };
     assert_eq!(panels, vec![panel]);
+}
+
+#[test]
+fn printable_keeps_text_newlines_and_tabs_only() {
+    assert_eq!(printable("run /compact\nthen\tstop"), "run /compact\nthen\tstop");
+    assert_eq!(printable("a\r\nb"), "a\nb");
+    assert_eq!(printable("rm\x1b[2Jx\x03y\x07z\r"), "rm[2Jxyz");
+}
+
+#[test]
+fn a_message_of_only_control_characters_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let error = enqueue_at(
+        root.path(),
+        identity(),
+        send("\x1b\x03\r"),
+        Duration::from_secs(5),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn the_credential_travels_with_the_request_and_is_optional() {
+    let root = tempfile::tempdir().unwrap();
+    enqueue_at(
+        root.path(),
+        identity(),
+        Operation::Approvals,
+        Duration::from_secs(5),
+        Some("secret".to_string()),
+    )
+    .unwrap();
+    enqueue_at(root.path(), identity(), Operation::List, Duration::from_secs(5), None).unwrap();
+    let mut claimed = claim_at(root.path(), "host-a").unwrap();
+    claimed.sort_by_key(|request| request.credential.is_none());
+    assert_eq!(claimed[0].credential.as_deref(), Some("secret"));
+    assert_eq!(claimed[1].credential, None);
 }

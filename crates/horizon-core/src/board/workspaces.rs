@@ -46,7 +46,12 @@ impl Board {
     /// Focus the most recently created remaining panel and activate its
     /// workspace; used when the focused panel or selected workspace goes away.
     fn focus_most_recent_panel(&mut self) {
-        self.focused = self.panels.last().map(|panel| panel.id);
+        self.focused = self
+            .panels
+            .iter()
+            .rev()
+            .find(|panel| panel.visible)
+            .map(|panel| panel.id);
         if let Some(focused) = self.focused {
             self.active_workspace = self.panel_workspace_id(focused);
         }
