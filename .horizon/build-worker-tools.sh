@@ -2,7 +2,7 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev libxkbcommon-dev git ca-certificates python3
+apt-get install -y --no-install-recommends build-essential pkg-config nasm libssl-dev libxkbcommon-dev git ca-certificates python3
 readonly helper_revision=545c80755d756ad98f737810f64e0243b616d391
 export CARGO_HOME=/tmp/helper-cargo RUSTUP_TOOLCHAIN=1.98.1 GIT_LFS_SKIP_SMUDGE=1
 git init /tmp/horizon-source
