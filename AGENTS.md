@@ -282,6 +282,12 @@ When cutting a new release, generate concise release notes from the commits sinc
 - For any UI-related change, always create an extensive temporary smoke-test plan under `docs/testing/` that another agent or machine can execute without extra context. Cover baseline behavior, primary flows, edge cases, persistence/migration, and visual regressions.
 - Temporary smoke-test plans are validation artifacts, not permanent docs. Delete them after the UI validation pass is complete unless the user explicitly asks to keep them.
 
+#### Test Environment Pitfalls
+
+- A stray `.git` directory in the system temp directory (for example `/tmp/.git`) makes `only_a_folder_inside_a_checkout_stands_for_a_repository` fail. Run the `horizon-ui` tests with a private `TMPDIR`; the `horizon-browser-routines` private-mode tests need the default temp directory, so run them in a separate invocation without that override.
+- Share one `CARGO_TARGET_DIR` between worktrees so the dependency tree is built once. Clippy lints test code too: casts, more than three `bool` fields or parameters, `Default::default()` where the type is known, `struct_field_names`, `unused_self`, `collapsible_if` (use let chains) and the 100-line function limit all fail CI. Run both clippy tiers, not only `cargo test`, before a commit.
+- When a function is at the line limit, split it by behaviour (one method per operation) instead of squeezing lines or adding an `allow`.
+
 ### Isolated UI Testing Through Horizon Native VNC
 
 - All interactive Horizon UI testing must run on a task-owned isolated desktop viewed live through a **Horizon native VNC Device panel** in the user's current workspace. Always use this panel; do not use noVNC or a browser viewer. Screenshots, recordings, or a viewer on another isolated desktop alone do not satisfy the live-view requirement. Unit tests, headless integration tests and static checks do not need a viewer.
@@ -325,6 +331,22 @@ Multi-machine validation (e.g. macOS/Metal on one box, Linux/CUDA on another) is
 - Prefer repeatable native-window assertions over visual guesswork: sample outer window position before, during, and after drag/resize to confirm the window moves monotonically and does not snap back, alternate between coordinates, or keep replaying a saved restore position
 - Validate the exact branch or commit that will be pushed. If you use a merge-test worktree or disposable checkout for diagnosis, rerun the decisive smoke pass in the final branch/worktree before concluding the PR is fixed
 - Window titles may lag behind state changes or differ across restore paths. When automating detached-window tests, identify the root and detached windows by PID plus non-root window membership rather than by title string alone when possible
+
+#### Driving Agent Terminals in the Fixture
+
+- Exercise paste, submit, state detection and MCP flows with stand-in agents: small scripts named `claude` or `codex` placed earlier on the fixture's `PATH` that enable bracketed paste (`ESC[?2004h`), echo what they read and can call the MCP server. This is deterministic and needs no account or spend. Strip the `ESC[200~` and `ESC[201~` markers in the script, otherwise commands never match. A stand-in does not replace one pass against the real CLI for screen-derived state, Enter after a paste and slash menus.
+- The sandbox gives the fixture its own `/tmp`. Files a stand-in or the application must read have to live under the `--tools` root.
+- `horizon-device act` with a `type` action is unreliable for long text containing quotes, braces or brackets: the text can be dropped entirely. Put such input in a file under the tools root and type its path.
+- Never stop a fixture with `kill $(pgrep -f 'serve.py ...')` from the same command: the pattern matches the calling shell and kills it. Use `ps -eo pid,cmd | awk '/[s]erve.py/{print $1; exit}'`, then `kill -TERM`.
+- A running executable cannot be overwritten (`Text file busy`). Stop the fixture, wait until the application process is gone, then copy the candidate to a new name and record its hash before launching.
+- After a click, wait about a second and take a screenshot before typing. `dispatched` means delivered, not applied, and a click on non-interactive padding drops a text field's focus.
+- Re-run the whole interaction on the final binary after any UI fix. Earlier passes on a previous build prove nothing about the new one.
+
+#### Wayland Desktop Experiments Without the Live Session
+
+- For work on desktop workspaces, window placement or compositor behaviour, run GNOME Shell headless in a private session instead of the developer's. On Ubuntu 26.04 (GNOME Shell 50.1) this worked: under `dbus-run-session`, with a private `HOME`, a short private `XDG_RUNTIME_DIR` and the inherited `WAYLAND_DISPLAY`, `DISPLAY` and `DBUS_SESSION_BUS_ADDRESS` unset, run `gnome-shell --headless --wayland --no-x11 --wayland-display=wayland-<name> --virtual-monitor 1600x1000 --unsafe-mode`. Applications then connect with `WAYLAND_DISPLAY=wayland-<name>`.
+- With `--unsafe-mode`, `org.gnome.Shell.Eval` and `org.gnome.Shell.Screenshot` answer on that private session bus. Read its address from the `/proc/<pid>/environ` of the shell, found with `pgrep -f '^gnome-shell --headless'` (an unanchored pattern also matches the `dbus-run-session` wrapper). Not yet verified: extensions loaded into the private shell, and a VNC bridge (such as gnome-remote-desktop in headless mode) for the native Device panel. Record what is blocked rather than falling back to the live session.
+- Wayland offers applications no way to place their windows on a workspace; only the compositor can. A GNOME Shell extension exposing a small D-Bus interface is the route for window and workspace control on GNOME, and macOS has no public Spaces API.
 
 ### Speech-to-Text Smoke Testing
 
@@ -436,6 +458,15 @@ When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `Micro
 Shell → PTY slave → PTY master → [alacritty EventLoop thread] → Term (VT parse) → channel → main thread → egui
 Keyboard → main thread → EventLoopSender → PTY master → PTY slave → Shell
 ```
+
+### Floating Surfaces and Focus (egui)
+
+- `render_panels` rebuilds `panels_to_close` every frame. A close queued earlier in the frame, for example from a drawer or overlay, is lost: close the panel directly from that code.
+- The canvas hit-tests its panels itself for click focus, panning and scroll routing, so egui layer order alone does not stop a click reaching a panel under a floating surface. Record the surface's rectangle each frame and exclude it in `handle_canvas_pan_in_rect` and in the panel-under-pointer lookup.
+- Panels raise themselves when clicked. Keep a floating surface above them with `Order::Tooltip` and `ctx.move_to_top(layer)` every frame, otherwise it ends up behind the panel that was last clicked.
+- A `TextEdit` loses focus when a click lands on non-interactive padding. Put a click-sensing `ui.interact` backdrop behind the field that calls `request_focus`, or the field looks focused but ignores typing.
+- The canvas panel and a text field must not both own the keyboard. Take `board.focused` when the field gains focus, and give it back when the surface closes.
+- Consume navigation keys (`Tab`, arrows, `Enter`, `Esc`) before the `TextEdit` runs, and remember that text typed in the same frame is not in the buffer yet when the keys are handled.
 
 ### Panel Lifecycle
 
