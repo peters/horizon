@@ -102,7 +102,9 @@ identity or override contradictory device evidence.
 
 ## Rotate through UI, MCP or CLI
 
-Remote panel chrome has **Portrait** and **Landscape** buttons. Selection reflects
+Remote panel chrome has outline device icons for **Portrait** and **Landscape**
+beside the recording controls. Both have named tooltips and accessible button
+labels. Selection reflects
 measured applied orientation, with **Rotating…**, **Verified**, **Unverified** or
 **Unsupported** status. Controls wrap in narrow panels and are disabled during
 startup, shutdown, pending rotation, Teach mode or explicit lack of support.

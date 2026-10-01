@@ -238,7 +238,10 @@ identity and refusal evidence before closing the owned session.
 
 ## UI buttons and direct CLI
 
-- On the remote panel, use Portrait and Landscape buttons for a full round trip.
+- On the remote panel, use the Portrait and Landscape device icons beside the
+  recording controls for a full round trip. Check their named tooltips and
+  accessible labels, selected state and legibility in both themes, including
+  while recording is active.
   Require Rotating while awaiting evidence, and change the selected button only
   after measured device/page/frame agreement. Observe a fresh responsive layout,
   reacquire semantic refs and activate an edge control after each rotation.
