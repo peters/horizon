@@ -498,8 +498,9 @@ A remote panel reports `remote_orientation` when observed and
 probe establishes endpoint support; unsupported commands are distinguished from
 transient failures. Applied `remote_orientation` also requires matching inner and
 visual viewport geometry in the committed document. Pending startup navigation
-stays unverified until commit; missing or contradictory page geometry does not
-make a default session unusable. `capabilities` includes `orientation` when supported.
+stays unverified until commit. Later observed document replacements also clear
+applied orientation and schedule a fresh measurement; missing or contradictory
+page geometry does not make a default session unusable. `capabilities` includes `orientation` when supported.
 `browser_orientation` takes `panel_id`, `orientation` and optional
 `timeout_millis` (1–60000, default 15000). It completes after device, page and
 fresh-frame acknowledgement, returning requested/applied orientation and measured

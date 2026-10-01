@@ -423,6 +423,7 @@ impl Driver {
     /// Reset per-navigation state when the driver starts or observes a
     /// document navigation.
     pub(super) fn begin_navigation(&mut self) {
+        self.invalidate_document_orientation();
         self.panel_slot.file_chooser().invalidate();
         self.coordination_dirty = true;
         self.file_chooser = super::file_chooser::ChooserState::default();
@@ -646,16 +647,15 @@ impl Driver {
         if let Some((until, committed)) = refresh_state {
             if committed {
                 self.classic_refresh = None;
-                if self.initial_orientation_pending {
-                    self.refresh_initial_orientation(false, event_tx);
-                }
+                self.invalidate_document_orientation();
+                self.refresh_document_orientation(event_tx);
                 self.frames.demand();
             } else if Instant::now() >= until {
                 // Classic WebDriver reports no later event, so a navigation
                 // that has not committed by the page-load window is failed
                 // explicitly instead of leaving the panel silently stale.
                 self.classic_refresh = None;
-                self.initial_orientation_pending = false;
+                self.orientation_document = super::orientation::DocumentOrientation::Clean;
                 self.navigation_failed = true;
                 self.frames.interaction_started_at = None;
                 let _ = event_tx.send(BrowserEvent::NavigationFailed(
@@ -719,7 +719,8 @@ mod tests {
             previous_document_identity: driver.classic_document_identity.clone(),
         });
         driver.refresh_pending_at = Some(Instant::now());
-        driver.refresh_initial_orientation(true, &events());
+        driver.invalidate_document_orientation();
+        driver.refresh_document_orientation(&events());
         assert_eq!(driver.remote_orientation.as_ref().unwrap().applied, None);
         assert!(classic.recorded().is_empty(), "do not measure the previous document");
         driver.tick_page_state_refresh(&events());
@@ -727,7 +728,10 @@ mod tests {
             driver.remote_orientation.as_ref().unwrap().applied,
             Some(RemoteOrientation::Portrait)
         );
-        assert!(!driver.initial_orientation_pending);
+        assert_eq!(
+            driver.orientation_document,
+            super::super::orientation::DocumentOrientation::Clean
+        );
         assert!(driver.classic_refresh.is_none());
         assert_eq!(classic.recorded().len(), 5);
         drop(driver);

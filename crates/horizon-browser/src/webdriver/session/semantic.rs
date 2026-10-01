@@ -646,6 +646,7 @@ impl Driver {
             .replace(identity.clone())
             .is_some_and(|previous| previous != identity);
         if changed {
+            self.invalidate_document_orientation();
             self.semantic.invalidate();
             self.advance_generation();
         }

@@ -458,14 +458,173 @@ fn startup_remeasures_committed_page_instead_of_reusing_allocation_geometry() {
         support: OrientationSupport::Supported,
         applied: Some(RemoteOrientation::Landscape),
     });
-    driver.refresh_initial_orientation(false, &events());
+    driver.orientation_document = DocumentOrientation::NeedsPublication;
+    driver.refresh_document_orientation(&events());
     assert_eq!(
         driver.remote_orientation.as_ref().unwrap().support,
         OrientationSupport::Supported
     );
     assert_eq!(driver.remote_orientation.as_ref().unwrap().applied, None);
-    assert!(!driver.initial_orientation_pending);
+    assert_eq!(driver.orientation_document, DocumentOrientation::Clean);
     assert_eq!(classic.recorded().len(), 2);
+    drop(driver);
+    assert!(worker.join().unwrap().is_empty());
+}
+
+#[test]
+fn document_identity_invalidation_defers_measurement_outside_bounded_observation() {
+    let classic = Server::start(vec![
+        Reply::json(200, &json!({"value":"new-document"})),
+        Reply::json(200, &json!({"value":"LANDSCAPE"})),
+        Reply::json(
+            200,
+            &json!({"value":{"width":600,"height":900,"visual_width":600,"visual_height":900,"orientation":"portrait"}}),
+        ),
+    ]);
+    let (link, worker) = bidi_fixture(false, false);
+    let mut driver = fixture_driver(&classic, link);
+    driver.classic_document_identity = Some("old-document".into());
+    driver.remote_orientation = Some(crate::remote::RemoteOrientationState {
+        support: OrientationSupport::Supported,
+        applied: Some(RemoteOrientation::Landscape),
+    });
+    assert!(
+        driver
+            .refresh_classic_document_identity_within(Duration::from_secs(1))
+            .unwrap()
+    );
+    assert_eq!(driver.remote_orientation.as_ref().unwrap().applied, None);
+    assert_ne!(driver.orientation_document, DocumentOrientation::Clean);
+    assert_eq!(
+        classic.recorded().len(),
+        1,
+        "identity checks must not add an orientation roundtrip"
+    );
+    driver.refresh_document_orientation(&events());
+    assert_eq!(driver.remote_orientation.as_ref().unwrap().applied, None);
+    assert_eq!(driver.orientation_document, DocumentOrientation::Clean);
+    assert_eq!(classic.recorded().len(), 3);
+    drop(driver);
+    assert!(worker.join().unwrap().is_empty());
+}
+
+#[test]
+fn synchronous_remote_navigation_schedules_fresh_document_measurement() {
+    let classic = Server::start(vec![
+        Reply::json(200, &json!({"value":null})),
+        Reply::json(200, &json!({"value":"https://example.test/next"})),
+        Reply::json(200, &json!({"value":"https://example.test/next"})),
+        Reply::json(200, &json!({"value":"Next"})),
+        Reply::json(200, &json!({"value":"new-document"})),
+        Reply::json(200, &json!({"value":"PORTRAIT"})),
+        Reply::json(
+            200,
+            &json!({"value":{"width":600,"height":900,"visual_width":600,"visual_height":900,"orientation":"portrait"}}),
+        ),
+    ]);
+    let (link, worker) = bidi_fixture(false, false);
+    let mut driver = fixture_driver(&classic, link);
+    driver.classic_document_identity = Some("old-document".into());
+    driver.remote_orientation = Some(crate::remote::RemoteOrientationState {
+        support: OrientationSupport::Supported,
+        applied: Some(RemoteOrientation::Landscape),
+    });
+    driver.navigate("https://example.test/next", &events()).unwrap();
+    assert_eq!(driver.remote_orientation.as_ref().unwrap().applied, None);
+    assert_ne!(driver.orientation_document, DocumentOrientation::Clean);
+    driver.refresh_document_orientation(&events());
+    assert_eq!(
+        driver.remote_orientation.as_ref().unwrap().applied,
+        Some(RemoteOrientation::Portrait)
+    );
+    assert_eq!(driver.orientation_document, DocumentOrientation::Clean);
+    assert_eq!(classic.recorded().len(), 7);
+    drop(driver);
+    assert!(worker.join().unwrap().is_empty());
+}
+
+#[test]
+fn document_remeasurement_cannot_take_over_pending_runtime_rotation() {
+    let classic = Server::start(vec![Reply::json(200, &json!({"value":null}))]);
+    let (link, worker) = bidi_fixture(false, false);
+    let mut driver = fixture_driver(&classic, link);
+    driver.owner_seen = Some("agent".into());
+    driver.remote_orientation = Some(crate::remote::RemoteOrientationState::default());
+    driver.begin_orientation(&rotation_request(), &AtomicBool::new(false));
+    driver.invalidate_document_orientation();
+    driver.refresh_document_orientation(&events());
+    assert!(driver.pending_orientation.is_some());
+    assert_ne!(driver.orientation_document, DocumentOrientation::Clean);
+    assert_eq!(classic.recorded().len(), 1, "the active request owns measurement");
+    drop(driver);
+    assert!(worker.join().unwrap().is_empty());
+}
+
+#[test]
+fn background_document_measurement_waits_for_bounded_actions_to_settle() {
+    let classic = Server::start(vec![
+        Reply::json(200, &json!({"value":"PORTRAIT"})),
+        Reply::json(
+            200,
+            &json!({"value":{"width":600,"height":900,"visual_width":600,"visual_height":900,"orientation":"portrait"}}),
+        ),
+    ]);
+    let (link, worker) = bidi_fixture(false, false);
+    let mut driver = fixture_driver(&classic, link);
+    driver.remote_orientation = Some(crate::remote::RemoteOrientationState {
+        support: OrientationSupport::Supported,
+        applied: Some(RemoteOrientation::Landscape),
+    });
+    let (tx, event_rx) = std::sync::mpsc::channel();
+    let event_tx = crate::session::BrowserEventSender { tx, ..events() };
+    driver.invalidate_document_orientation();
+    let mut request = rotation_request();
+    request.action = BrowserControlAction::WaitForSelector {
+        selector: "#ready".into(),
+        state: crate::SelectorState::Visible,
+        timeout_millis: Some(1000),
+    };
+    driver.pending_wait = Some(crate::wait::PendingWait::new(
+        request.clone(),
+        "#ready".into(),
+        crate::SelectorState::Visible,
+        Some(1000),
+        Duration::ZERO,
+        driver.semantic.generation(),
+        Instant::now(),
+    ));
+    driver.refresh_document_orientation(&event_tx);
+    assert!(classic.recorded().is_empty());
+    assert_eq!(driver.orientation_document, DocumentOrientation::NeedsMeasurement);
+    assert!(matches!(
+        event_rx.try_recv().unwrap(),
+        crate::session::BrowserEvent::OrientationChanged(view) if view.state.applied.is_none()
+    ));
+    driver.refresh_document_orientation(&event_tx);
+    assert!(event_rx.try_recv().is_err());
+    assert!(classic.recorded().is_empty());
+    assert_eq!(driver.remote_orientation.as_ref().unwrap().applied, None);
+    driver.pending_wait = None;
+    request.action = BrowserControlAction::Navigate {
+        url: "https://example.test/next".into(),
+        wait: crate::NavigationWait::Commit,
+        timeout_millis: Some(1000),
+    };
+    driver.pending_navigation = Some(crate::navigation::PendingNavigation::new(
+        request,
+        "https://example.test/next".into(),
+        crate::NavigationWait::Commit,
+        Duration::from_secs(1),
+        Duration::ZERO,
+        Instant::now(),
+    ));
+    driver.refresh_document_orientation(&events());
+    assert!(classic.recorded().is_empty());
+    assert_ne!(driver.orientation_document, DocumentOrientation::Clean);
+    driver.pending_navigation = None;
+    driver.refresh_document_orientation(&events());
+    assert_eq!(classic.recorded().len(), 2);
+    assert_eq!(driver.orientation_document, DocumentOrientation::Clean);
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
 }

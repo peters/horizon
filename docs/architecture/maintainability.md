@@ -890,8 +890,10 @@ pending requests return Busy and require an explicit retry after reconciliation.
 
 Remote orientation verification lives in `horizon-browser`'s
 `webdriver/session/orientation`, with request-origin and user audit policy in its
-`origin` leaf; `initial` measures the committed startup document or defers
-until a pending navigation commits. The core `browser/orientation` adapter queues user commands; UI
+`origin` leaf; `document` remeasures observed document replacements outside
+bounded semantic and wait calls. The core `browser/orientation` adapter queues
+user commands and preserves unresolved request acknowledgements; its tests live
+in a colocated tree. UI
 `browser_widget/orientation` renders measured status and buttons. Direct CLI
 orientation commands generate one durable MCP plan in a separate `orientation`
 leaf rather than expanding the CLI parser with browser-driver logic.

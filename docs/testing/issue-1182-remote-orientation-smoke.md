@@ -79,6 +79,9 @@ a pass from mocks or use a different browser controller.
    duplicating input or changing navigation.
 8. Navigate to a second synthetic page after rotation. Confirm session
    orientation persists and fresh snapshot/input coordinates remain correct.
+   Cover synchronous and delayed document commits, plus contradictory or missing
+   geometry in deterministic tests: the new document must not inherit Verified
+   from the old document.
 9. Resize/fit the host canvas panel and isolated desktop. Confirm device
    orientation remains unchanged and displayed page proportions stay correct.
 10. Record screenshots after launch and resize/fit, with final candidate hash.
@@ -99,7 +102,7 @@ a pass from mocks or use a different browser controller.
   applied orientation/viewport and durable report evidence. This CLI lane needs an
   explicitly authorized test executor; the implementing agent continues using
   only public browser MCP tools for browser interaction.
-- With two cloud viewers, rotate from the second while the first waits; the first must receive superseded status and recover when the active rotation settles. Cover driver queue refusal and lost-status timeout through deterministic tests.
+- With two cloud viewers, rotate from the second while the first waits; the first must receive superseded status and recover when the active rotation settles. Cover driver queue refusal and lost-status timeout through deterministic tests, including expiry followed by an unrelated idle poll, stale original pending poll, matching acknowledgement and another viewer finishing after ledger eviction.
 - Capture the UI button round trip in the final native-viewed PR GIF.
 
 ## Refusals and recovery

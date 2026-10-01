@@ -358,7 +358,7 @@ pub(in crate::webdriver::session) mod tests {
             remote_device: None,
             remote_orientation: None,
             pending_orientation: None,
-            initial_orientation_pending: false,
+            orientation_document: super::super::orientation::DocumentOrientation::Clean,
             orientation_error: None,
             orientation_action_id: None,
             orientation_completed: crate::remote::RemoteOrientationView::default(),

@@ -304,6 +304,7 @@ fn stale_cloud_poll_cannot_clear_a_queued_rotation_until_matching_acknowledgemen
         pending: Some(RemoteOrientation::Landscape),
         ..RemoteOrientationView::default()
     };
+    panel.orientation_pending_since = Some(std::time::Instant::now());
     panel.apply_cloud_state(
         CloudViewState {
             ready: true,
@@ -336,6 +337,7 @@ fn another_cloud_viewers_rotation_and_worker_queue_refusal_settle_the_original_r
             pending: Some(RemoteOrientation::Landscape),
             ..RemoteOrientationView::default()
         };
+        panel.orientation_pending_since = Some(std::time::Instant::now());
         panel.apply_cloud_state(
             CloudViewState {
                 ready: true,

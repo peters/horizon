@@ -1,7 +1,8 @@
 //! Rotation requests observed from the servicing loop, with current ownership guards.
 use super::super::orientation::{observe, remaining, set};
 use super::Driver;
-mod initial;
+mod document;
+pub(super) use document::DocumentOrientation;
 mod origin;
 use crate::remote::{OrientationSupport, RemoteOrientation};
 use crate::session::BrowserEventSender;
@@ -182,6 +183,7 @@ impl Driver {
                     state.support = OrientationSupport::Supported;
                     state.applied = Some(pending.requested);
                 }
+                self.orientation_document = DocumentOrientation::Clean;
                 self.coordination_dirty = true;
                 self.write_coordination(true);
                 self.complete_orientation(

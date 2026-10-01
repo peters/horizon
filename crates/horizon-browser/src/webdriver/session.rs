@@ -65,7 +65,7 @@ struct Driver {
     remote_device: Option<String>,
     remote_orientation: Option<crate::remote::RemoteOrientationState>,
     pending_orientation: Option<orientation::Pending>,
-    initial_orientation_pending: bool,
+    orientation_document: orientation::DocumentOrientation,
     orientation_error: Option<String>,
     orientation_action_id: Option<String>,
     orientation_completed: crate::remote::RemoteOrientationView,
@@ -239,6 +239,7 @@ pub(crate) fn run_webdriver(
         driver.tick_pending_wait(stop_requested);
         driver.tick_pending_resize(event_tx, stop_requested);
         driver.tick_orientation(event_tx, stop_requested);
+        driver.refresh_document_orientation(event_tx);
         driver.write_coordination(false);
         if driver.finish_if_service_exited(event_tx) {
             return;
@@ -274,7 +275,11 @@ impl Driver {
             .as_deref()
             .filter(|url| !url.is_empty() && *url != "about:blank")
             .is_some_and(|url| self.navigate_initial(url, event_tx));
-        self.refresh_initial_orientation(startup_navigation_pending, event_tx);
+        if startup_navigation_pending {
+            self.invalidate_document_orientation();
+            self.write_coordination(true);
+        }
+        self.refresh_document_orientation(event_tx);
         if stop_requested.load(Ordering::Acquire) {
             return;
         }
@@ -393,7 +398,7 @@ impl Driver {
             remote_device,
             remote_orientation,
             pending_orientation: None,
-            initial_orientation_pending: false,
+            orientation_document: orientation::DocumentOrientation::initial(remote_orientation),
             orientation_error: None,
             orientation_action_id: None,
             orientation_completed: crate::remote::RemoteOrientationView::default(),
