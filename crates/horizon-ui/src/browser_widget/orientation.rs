@@ -7,7 +7,7 @@ use horizon_core::browser::{
 };
 
 pub(super) fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> bool {
-    if !browser.is_remote() {
+    if browser.remote_target().is_none() {
         return false;
     }
     let enabled = interactive

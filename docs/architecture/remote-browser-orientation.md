@@ -95,7 +95,9 @@ Remote panel chrome has **Portrait** and **Landscape** buttons. Selection reflec
 measured applied orientation, with **Rotating…**, **Verified**, **Unverified** or
 **Unsupported** status. Controls wrap in narrow panels and are disabled during
 startup, shutdown, pending rotation, Teach mode or explicit lack of support.
-Local panels do not show them. A failed rotation leaves a nonfatal message and
+Local browsers, including those presented from a cloud worker, do not show them.
+Cloud presentation alone does not make a browser a remote device target.
+A failed rotation leaves a nonfatal message and
 keeps the usable browser frame.
 
 The equivalent public MCP operation is:

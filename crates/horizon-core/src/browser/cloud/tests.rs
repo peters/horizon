@@ -1,4 +1,80 @@
+use super::super::{BackendKind, remote::RemoteOrientation};
 use super::*;
+
+#[test]
+fn orientation_requires_a_provider_target_on_cloud_presentations() {
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--help")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    let child = Arc::new(Mutex::new(child));
+    for backend in [BackendKind::ChromiumCdp, BackendKind::FirefoxBidi] {
+        for target in [None, Some("device-fixture")] {
+            let (tx, rx) = mpsc::sync_channel(1);
+            let mut panel = BrowserPanelState::inert();
+            panel.status = BrowserStatus::Ready;
+            panel.cloud = Some(CloudView {
+                connection: Connection {
+                    host: "127.0.0.1".into(),
+                    port: 1,
+                    identity: "/unused".into(),
+                    known_hosts: "/unused".into(),
+                    host_key_alias: "cloud-fixture".into(),
+                },
+                id: "fixture".into(),
+                initial_url: None,
+                backend,
+                target: target.map(str::to_owned),
+                device: None,
+                process_lost: false,
+                tx,
+                latest: Latest::default(),
+                waker: Waker::default(),
+                stop: Arc::new(AtomicBool::new(false)),
+                child: child.clone(),
+                handoff_sequence: std::sync::atomic::AtomicU64::new(0),
+            });
+            assert!(panel.is_remote(), "cloud presentation uses the remote transport");
+            assert_eq!(panel.remote_target(), target);
+            for orientation in [RemoteOrientation::Portrait, RemoteOrientation::Landscape] {
+                panel.request_orientation(orientation);
+                if target.is_none() {
+                    assert!(
+                        rx.try_recv().is_err(),
+                        "local cloud browser must not queue device rotation"
+                    );
+                    assert!(panel.orientation.pending.is_none());
+                    assert!(panel.orientation.action_id.is_none());
+                    assert!(panel.orientation_pending_since.is_none());
+                    assert!(
+                        panel
+                            .orientation
+                            .error
+                            .as_ref()
+                            .unwrap()
+                            .starts_with("orientation_unsupported:")
+                    );
+                } else {
+                    let BrowserCommand::Orientation {
+                        action_id,
+                        orientation: requested,
+                    } = rx.try_recv().unwrap()
+                    else {
+                        panic!("remote target must queue orientation");
+                    };
+                    assert_eq!(requested, orientation);
+                    assert_eq!(panel.orientation.action_id.as_deref(), Some(action_id.as_str()));
+                    assert_eq!(panel.orientation.pending, Some(orientation));
+                    assert!(panel.orientation_pending_since.is_some());
+                    assert!(panel.orientation.error.is_none());
+                }
+            }
+        }
+    }
+}
 
 #[test]
 fn handback_acknowledgments_allow_repeated_requests_and_retry_after_failure() {

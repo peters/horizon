@@ -217,7 +217,11 @@ identity and refusal evidence before closing the owned session.
   after measured device/page/frame agreement. Observe a fresh responsive layout,
   reacquire semantic refs and activate an edge control after each rotation.
 - Ensure controls wrap within narrow panels and remain legible after resize/fit.
-  Hide remote rotation controls on local browsers. Disable controls while starting,
+  Hide remote rotation controls on local browsers, including cloud-hosted local
+  Chromium/Firefox. Host requests for those browsers must return
+  `orientation_unsupported` without queuing a rotation or entering pending state.
+  Keep rotation available for cloud presentations with an actual provider target.
+  Disable controls while starting,
   stopped, rotating, unsupported, and while Teach mode is active.
 - A failed rotation must show an actionable error without discarding the browser
   frame or turning a usable panel into a fatal error. Inspect before retrying.

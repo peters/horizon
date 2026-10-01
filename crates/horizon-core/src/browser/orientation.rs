@@ -42,7 +42,7 @@ impl BrowserPanelState {
         false
     }
     pub fn request_orientation(&mut self, orientation: RemoteOrientation) {
-        if !self.is_remote() {
+        if self.remote_target().is_none() {
             self.orientation.error = Some("orientation_unsupported: local browsers use viewport resize".into());
             return;
         }
