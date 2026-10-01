@@ -14,10 +14,12 @@ mod concierge;
 mod inbox;
 mod layouts;
 mod lens;
+mod messages;
 mod mission;
 mod scope;
 
 pub(in crate::app::assistant) use layouts::{Channel, Layout3, Pick};
+pub(in crate::app::assistant) use messages::{Store as MessageStore, Trust, View as MessageView};
 
 use egui::{
     Align, Context, CornerRadius, FontId, Frame, Id, Layout, Margin, Rect, RichText, Sense, Stroke, TextEdit, Ui, vec2,

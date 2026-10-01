@@ -313,6 +313,24 @@ impl HorizonApp {
     /// `sheet`, `drawer` and `channel`. Returns whether the command was one of them.
     fn demo_agents(&mut self, command: &str, argument: Option<&str>, rest: Option<&str>, text: &str) -> bool {
         match command {
+            "messaging" => self.assistant.summon.msgs.on = argument != Some("off"),
+            "msg" => self.assistant.summon.msgs.add(text),
+            "knock" => self.assistant.summon.msgs.knock(text),
+            "view" => {
+                self.assistant.summon.msgs.view = match argument {
+                    Some("concierge") | None => super::dock::MessageView::Concierge,
+                    Some(room) => super::dock::MessageView::Room(room.to_string()),
+                };
+            }
+            "mreply" => self.assistant.summon.msgs.reply(text),
+            "trust" => {
+                let level = super::dock::Trust::parse(rest.unwrap_or("known"));
+                self.assistant.summon.msgs.resolve_knock(
+                    argument.unwrap_or_default(),
+                    level,
+                    level != super::dock::Trust::Stranger,
+                );
+            }
             "layout" => {
                 self.assistant.summon.layout = match argument {
                     Some("b") => super::dock::Layout3::Feed,

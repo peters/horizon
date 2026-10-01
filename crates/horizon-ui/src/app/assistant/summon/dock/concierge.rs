@@ -121,6 +121,32 @@ impl HorizonApp {
         let left = pill.left() + 76.0;
         let right = mic.left() - 12.0;
         let Some(top) = asks.first() else {
+            if self.assistant.summon.msgs.on
+                && let Some((from, tag, text)) = self.assistant.summon.msgs.newest_unread()
+            {
+                // Someone wrote: who, where, and what, with a way in.
+                ui.painter().text(
+                    pos2(left, pill.center().y - 9.0),
+                    Align2::LEFT_CENTER,
+                    format!("{from}  {tag}"),
+                    FontId::proportional(11.5),
+                    theme::PALETTE_CYAN(),
+                );
+                ui.painter().text(
+                    pos2(left, pill.center().y + 9.0),
+                    Align2::LEFT_CENTER,
+                    text,
+                    FontId::proportional(13.5),
+                    theme::FG(),
+                );
+                let open = Rect::from_center_size(pos2(right - 40.0, pill.center().y), vec2(76.0, 30.0));
+                if small_button(ui, open, "Open", true).clicked() {
+                    self.assistant.summon.msgs.view = super::messages::View::Concierge;
+                    actions.push(MiniAction::Expand);
+                }
+                ui.ctx().request_repaint();
+                return (None, false);
+            }
             let field = Rect::from_min_max(pos2(left, pill.top() + 8.0), pos2(right, pill.bottom() - 8.0));
             let hint = self.concierge_hint(listening);
             let key = self.paint_pill_field(

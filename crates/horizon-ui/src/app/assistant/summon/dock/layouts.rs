@@ -118,6 +118,8 @@ impl HorizonApp {
                                 ui.new_child(egui::UiBuilder::new().max_rect(rail.shrink2(vec2(14.0, 16.0))));
                             if layout == Layout3::Roster {
                                 self.roster_rail(&mut left);
+                            } else if self.assistant.summon.msgs.on {
+                                self.message_rail(&mut left);
                             } else {
                                 self.thread_rail(&mut left);
                             }
@@ -262,6 +264,17 @@ impl HorizonApp {
         ui.add_space(8.0);
         self.scope_strip(ui);
         ui.add_space(8.0);
+        let in_room =
+            self.assistant.summon.msgs.on && matches!(self.assistant.summon.msgs.view, super::messages::View::Room(_));
+        if in_room {
+            let height = ui.available_height();
+            self.message_room(ui, height);
+            return;
+        }
+        if self.assistant.summon.msgs.on {
+            self.message_inbox(ui);
+            ui.add_space(8.0);
+        }
         if !asks.is_empty() {
             approvals_card(ui, asks, allow_low, answers);
             ui.add_space(8.0);

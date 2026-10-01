@@ -74,6 +74,8 @@ pub(super) struct Summon {
     mini_offset: egui::Vec2,
     /// A size the script asked the sheet to take; zero means back to the default.
     sheet_request: Option<[f32; 2]>,
+    /// The messaging mock: handles, channels, threads and an inbox.
+    msgs: dock::MessageStore,
     /// How the text agent sits beside the voice assistant.
     layout: dock::Layout3,
     /// The share of the width the voice side takes in the split layout.
