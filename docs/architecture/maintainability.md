@@ -891,7 +891,9 @@ pending requests return Busy and require an explicit retry after reconciliation.
 Remote orientation verification lives in `horizon-browser`'s
 `webdriver/session/orientation`, with request-origin and user audit policy in its
 `origin` leaf; `document` remeasures observed document replacements outside
-bounded semantic and wait calls. The core `browser/orientation` adapter queues
+bounded semantic and wait calls. Shared `document_identity` script generation
+uses a Document-owned marker for semantic scans and classic driver observations,
+so clock drift cannot invalidate layout-only changes. The core `browser/orientation` adapter queues
 user commands and preserves unresolved request acknowledgements; its tests live
 in a colocated tree. UI
 `browser_widget/orientation` renders measured status and buttons. Direct CLI

@@ -2,6 +2,7 @@
 
 use serde_json::{Value, json};
 
+use crate::document_identity::document_identity_expression;
 use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
     target_rect_expression, wait_scan_expression,
@@ -189,9 +190,6 @@ fn find_element_id(post: &dyn Fn(&str, &Value) -> Result<Value, String>, selecto
     }
     Ok(element.to_string())
 }
-
-const DOCUMENT_IDENTITY_EXPRESSION: &str =
-    "JSON.stringify([String(location.href), Number(globalThis.performance?.timeOrigin || 0)])";
 
 impl Driver {
     pub(super) fn execute_agent_action(
@@ -626,7 +624,7 @@ impl Driver {
         if !self.tracks_classic_document_identity() {
             return Ok(false);
         }
-        let value = self.evaluate_json_within(DOCUMENT_IDENTITY_EXPRESSION, Some(timeout))?;
+        let value = self.evaluate_json_within(&document_identity_expression(), Some(timeout))?;
         let identity = value
             .as_str()
             .map(str::to_string)

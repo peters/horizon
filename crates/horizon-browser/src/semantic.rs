@@ -269,7 +269,10 @@ pub(crate) fn bounded_control_value(value: Value) -> Result<Value, BrowserContro
 pub(crate) fn scan_expression(selector: Option<&str>, max_nodes: u32) -> String {
     let selector = selector.map_or_else(|| "null".to_string(), json_string);
     let semantic_only = selector == "null";
-    format!("({NODE_SCAN_FUNCTION})({selector}, {max_nodes}, {semantic_only}, false)")
+    format!(
+        "({NODE_SCAN_FUNCTION})({selector}, {max_nodes}, {semantic_only}, false, {})",
+        crate::document_identity::document_identity_expression()
+    )
 }
 
 /// A wait observation: the scan returns at most `max_nodes` results but
@@ -278,8 +281,9 @@ pub(crate) fn scan_expression(selector: Option<&str>, max_nodes: u32) -> String 
 /// the full pass; queries keep the early stop.
 pub(crate) fn wait_scan_expression(selector: &str, max_nodes: u32) -> String {
     format!(
-        "({NODE_SCAN_FUNCTION})({}, {max_nodes}, false, true)",
-        json_string(selector)
+        "({NODE_SCAN_FUNCTION})({}, {max_nodes}, false, true, {})",
+        json_string(selector),
+        crate::document_identity::document_identity_expression()
     )
 }
 
@@ -318,10 +322,7 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, countMatches) {
-    const documentIdentity = JSON.stringify([
-        String(location.href), Number(globalThis.performance?.timeOrigin || 0)
-    ]);
+const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, countMatches, documentIdentity) {
     const roleFor = (element) => {
         const explicit = element.getAttribute('role');
         if (explicit) return explicit.split(/\s+/)[0];
@@ -515,10 +516,10 @@ mod tests {
         let expression = scan_expression(Some("button'); throw new Error('owned"), 10);
 
         assert!(expression.contains("\"button'); throw new Error('owned\""));
-        assert!(expression.ends_with(", 10, false, false)"));
+        assert!(expression.contains(", 10, false, false, (function()"));
         let wait = wait_scan_expression("button'); throw new Error('owned", 10);
         assert!(wait.contains("\"button'); throw new Error('owned\""));
-        assert!(wait.ends_with(", 10, false, true)"));
+        assert!(wait.contains(", 10, false, true, (function()"));
     }
 
     #[test]
@@ -557,9 +558,9 @@ mod tests {
 
     #[test]
     fn only_wait_scans_count_matches_past_the_cap() {
-        assert!(scan_expression(Some("button"), 10).ends_with("(\"button\", 10, false, false)"));
-        assert!(scan_expression(None, 10).ends_with("(null, 10, true, false)"));
-        assert!(wait_scan_expression("button", 20).ends_with("(\"button\", 20, false, true)"));
+        assert!(scan_expression(Some("button"), 10).contains("(\"button\", 10, false, false, (function()"));
+        assert!(scan_expression(None, 10).contains("(null, 10, true, false, (function()"));
+        assert!(wait_scan_expression("button", 20).contains("(\"button\", 20, false, true, (function()"));
         assert!(NODE_SCAN_FUNCTION.contains("if (nodes.length >= maxNodes && !countMatches) break;"));
     }
 

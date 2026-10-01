@@ -182,6 +182,10 @@ identity and refusal evidence before closing the owned session.
    scroll, fill and keyboard dismissal. Deterministic tests must distinguish a
    stale cached identity found before mutation from a document change after
    dispatch, and stop, Teach mode or timeout during the bounded baseline read.
+   Exercise repeated standalone identity reads and semantic scans with drifting
+   browser privacy clocks, rotation, resize, scroll and fill. The same Document
+   must retain its identity; a same-URL reload must change it. Run
+   `node --test scripts/browser-smoke/*.test.cjs` for these script regressions.
 2. Rotate portrait to landscape through `browser_orientation`. Require the
    tool's applied orientation and measured viewport to agree. Observe the
    final frame live; compare the page with the Device-panel image.

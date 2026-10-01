@@ -149,6 +149,9 @@ the current document identity within its deadline. A previously cached identity 
 establishes the pre-mutation baseline; an identity change after dispatch still
 refuses the request. Stop and Teach mode are checked again after this bounded
 read, before any mutation.
+Identity reads and semantic scans share an opaque marker owned by the Document.
+Browser privacy-clock drift and layout changes preserve it; a replacement
+Document or changed URL still invalidates the request.
 
 A request for the already applied
 orientation still requires measured acknowledgement. Human requests retain
