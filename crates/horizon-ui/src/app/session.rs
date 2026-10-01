@@ -613,7 +613,8 @@ impl HorizonApp {
         let Some(panel) = self.board.panel(panel_id) else {
             return false;
         };
-        if panel.kind != binding.kind
+        if horizon_core::saved_session_deletion_pending(binding.kind, &binding.session_id)
+            || panel.kind != binding.kind
             || self.board.panels.iter().any(|candidate| {
                 candidate.id != panel_id
                     && candidate.kind == binding.kind

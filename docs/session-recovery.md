@@ -1,0 +1,11 @@
+# Resume and manage saved conversations
+
+Right-click an agent panel's title and choose **Resume a session**. The menu shows how many conversations are available for that panel's provider and folder. Conversations already attached to Horizon panels are excluded. Browse older entries with Previous and Next; use Copy ID to copy an exact identity, or select a conversation to restart the panel with it.
+
+For Codex and Claude, each entry has a Delete action. **Select sessions** supports selecting conversations across pages, then deleting the selection. **Delete all** removes all conversations currently listed for this provider and folder. The confirmation displays the count and scope before permanently deleting the saved conversations and their subagent history. Project files are retained. Cancel or dismiss the confirmation to keep the conversations.
+
+Deletion runs in the background. Pending conversations cannot be resumed in Horizon. Successfully deleted entries leave the list; failures stay available and are reported under expandable details. The latest deletion result remains available when reopening the picker.
+
+Codex deletion requires a local `codex` executable on PATH with `codex delete --force <UUID>` support (verified with Codex CLI 0.159.3). Horizon delegates removal to that command using the same HOME/CODEX_HOME as catalog discovery. Claude deletion removes the identified transcript and its matching conversation artifact directory under `~/.claude/projects/`; conversations in Claude's live-process registry are protected. Other providers retain resume/copy support and explicitly show deletion as unavailable.
+
+“All” refers to the displayed catalog scope, not other folders, providers or undiscovered history. Provider catalog discovery limits still apply (Claude: 64 recent transcript files; Pi: 128; Grok: 1000). No saved-state format or migration changes are required.

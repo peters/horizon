@@ -5,10 +5,7 @@ use crate::app::{HorizonApp, RenameEditAction, util::clamp_panel_size};
 use crate::terminal_widget::viewport_for_available_space;
 use crate::theme;
 
-use super::{
-    PanelCommand, PanelFocusRequest, PanelFrame, PanelSnapshot, PanelUiOutcome, open_session_picker,
-    render_session_picker,
-};
+use super::{PanelCommand, PanelFocusRequest, PanelFrame, PanelSnapshot, PanelUiOutcome, open_session_picker};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::app) struct ArrangedPanelDrag {
@@ -271,7 +268,7 @@ impl HorizonApp {
                 }
             }
         });
-        outcome.session_rebind_and_restart = render_session_picker(&drag_response.ctx, panel_id);
+        outcome.session_rebind_and_restart = self.render_saved_session_picker(&drag_response.ctx, panel_id);
     }
 
     fn resize_panel_in_environment(

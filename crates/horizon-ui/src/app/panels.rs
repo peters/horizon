@@ -24,13 +24,14 @@ use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE
 
 mod interaction;
 pub(super) use interaction::ArrangedPanelDrag;
+mod session_deletion;
 mod session_rebind;
 #[cfg(test)]
 use session_rebind::SessionRebindRenderOutcome;
+use session_rebind::open_session_picker;
 #[cfg(test)]
 use session_rebind::render_session_rebind_options;
 pub(super) use session_rebind::session_picker_panel;
-use session_rebind::{open_session_picker, render_session_picker};
 
 #[derive(Clone, Copy)]
 pub(in crate::app) struct PanelScreenGeometry {

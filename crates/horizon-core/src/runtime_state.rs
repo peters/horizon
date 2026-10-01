@@ -21,7 +21,11 @@ use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 use models::valid_local_id;
 
-pub use agent_sessions::{AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionRecord};
+pub use agent_sessions::{
+    AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionDeletionFailure, AgentSessionDeletionReport,
+    AgentSessionDeletionReservation, AgentSessionRecord, reserve_saved_session_deletions,
+    saved_session_deletion_pending,
+};
 pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_session_ids};
 pub use models::{
     AgentSessionBinding, AgentSessionKey, BrowserProfileState, DetachedWorkspaceState, PanelState, PanelTemplateRef,

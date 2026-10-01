@@ -912,3 +912,5 @@ snapshot without claiming actions or rewriting legacy handoffs. Final rotation
 confirmation brackets that observation with document checks.
 Bounded per-request completions prevent latest-only polling from losing superseded
 user requests; the core adapter bounds lost-status waiting and surfaces uncertainty.
+
+Saved conversation deletion is implemented in `runtime_state/agent_sessions/deletion.rs`: provider removal, identity validation and process-wide reservation guards remain in core. The session picker collects selection/confirmation actions; `app/panels/session_deletion.rs` manages its background worker, bounded reports and result persistence.

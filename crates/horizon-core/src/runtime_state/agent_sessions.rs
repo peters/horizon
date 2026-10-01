@@ -14,6 +14,11 @@ use crate::util::truncate_chars;
 use super::{AgentSessionBinding, PanelKind, RuntimeState, normalize_cwd};
 
 mod codex;
+mod deletion;
+pub use deletion::{
+    AgentSessionDeletionFailure, AgentSessionDeletionReport, AgentSessionDeletionReservation,
+    reserve_saved_session_deletions, saved_session_deletion_pending,
+};
 mod grok;
 
 #[derive(Clone, Debug, Default)]
@@ -154,6 +159,7 @@ impl AgentSessionCatalog {
             .iter()
             .filter(|session| {
                 session.interactive
+                    && !saved_session_deletion_pending(session.kind, &session.session_id)
                     && session.kind == kind
                     && match (&normalized_cwd, &session.cwd) {
                         (Some(expected), Some(actual)) => expected == actual,
@@ -207,6 +213,9 @@ impl AgentSessionBootstrapCatalog {
     }
 
     pub(super) fn exact_resolution(&self, kind: PanelKind, session_id: &str) -> ExactSessionResolution {
+        if saved_session_deletion_pending(kind, session_id) {
+            return ExactSessionResolution::Unavailable;
+        }
         self.exact_resolutions
             .get(&(kind, session_id.to_string()))
             .cloned()

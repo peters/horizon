@@ -3,6 +3,9 @@ use std::sync::Arc;
 use egui::{Button, FontId, RichText, Vec2, text::LayoutJob, text::TextFormat};
 use horizon_core::{AgentSessionBinding, PanelId};
 
+const PAGE_SIZE: usize = 8;
+
+use super::session_deletion::{SessionDeletionUi, deletion_progress, queue_deletion_request};
 use crate::{text::truncate_chars, theme};
 
 #[derive(Clone)]
@@ -13,11 +16,13 @@ struct SessionPicker {
     options: Arc<[AgentSessionBinding]>,
     anchor: egui::Rect,
     layer: egui::LayerId,
+    deletion: SessionDeletionUi,
 }
 
 pub(super) fn open_session_picker(response: &egui::Response, panel_id: PanelId, options: Vec<AgentSessionBinding>) {
     let id = picker_id(&response.ctx);
     let frame = response.ctx.cumulative_frame_nr();
+    let deletion = SessionDeletionUi::restored(&response.ctx);
     response.ctx.data_mut(|data| {
         data.insert_temp(
             id,
@@ -28,6 +33,7 @@ pub(super) fn open_session_picker(response: &egui::Response, panel_id: PanelId, 
                 options: options.into(),
                 anchor: response.rect,
                 layer: response.layer_id,
+                deletion,
             },
         );
     });
@@ -52,7 +58,7 @@ pub(super) fn render_session_picker(ctx: &egui::Context, panel_id: PanelId) -> O
                 .inner_margin(18.0)
                 .stroke(egui::Stroke::new(1.0, theme::BORDER_STRONG())),
         )
-        .show(|ui| render_options(ui, &state.options, state.focus_first));
+        .show(|ui| render_options_with_deletion(ui, &state.options, state.focus_first, &mut state.deletion));
     state.focus_first = false;
     if open {
         ctx.data_mut(|data| data.insert_temp(id, state));
@@ -60,6 +66,27 @@ pub(super) fn render_session_picker(ctx: &egui::Context, panel_id: PanelId) -> O
         ctx.data_mut(|data| data.remove::<SessionPicker>(id));
     }
     result.and_then(|result| result.inner.binding)
+}
+
+pub(super) fn finish_session_deletion(
+    ctx: &egui::Context,
+    panel_id: PanelId,
+    viewport: egui::ViewportId,
+    options: Vec<AgentSessionBinding>,
+    report: &horizon_core::AgentSessionDeletionReport,
+) {
+    let id = egui::Id::new(("session_recovery_picker", viewport));
+    ctx.data_mut(|data| {
+        if let Some(mut state) = data
+            .get_temp::<SessionPicker>(id)
+            .filter(|state| state.panel_id == panel_id)
+        {
+            state.options = options.into();
+            state.focus_first = true;
+            state.deletion.finish(report);
+            data.insert_temp(id, state);
+        }
+    });
 }
 
 fn picker_id(ctx: &egui::Context) -> egui::Id {
@@ -96,12 +123,21 @@ pub(super) fn render_session_rebind_options(
     render_options(ui, rebind_options, false)
 }
 
+#[cfg(test)]
 fn render_options(
     ui: &mut egui::Ui,
     rebind_options: &[AgentSessionBinding],
     focus_first: bool,
 ) -> SessionRebindRenderOutcome {
-    const PAGE_SIZE: usize = 8;
+    render_options_with_deletion(ui, rebind_options, focus_first, &mut SessionDeletionUi::default())
+}
+
+fn render_options_with_deletion(
+    ui: &mut egui::Ui,
+    rebind_options: &[AgentSessionBinding],
+    focus_first: bool,
+    deletion: &mut SessionDeletionUi,
+) -> SessionRebindRenderOutcome {
     let page_id = ui.make_persistent_id("session_page");
     let reset_id = ui.make_persistent_id("session_page_reset");
     let reset_scroll = focus_first || ui.data(|data| data.get_temp::<bool>(reset_id).unwrap_or_default());
@@ -118,44 +154,43 @@ fn render_options(
     ui.spacing_mut().button_padding = Vec2::new(12.0, 8.0);
     ui.spacing_mut().scroll.floating = false;
     ui.visuals_mut().widgets.inactive.weak_bg_fill = theme::PANEL_BG_ALT();
+    let content_start = ui.cursor().top();
     render_session_header(ui, rebind_options.len());
+    if let Some((done, total)) = deletion_progress(ui.ctx()) {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(format!("Deleting saved conversations… {done}/{total}"));
+        });
+        return outcome;
+    }
+    if deletion.confirming() {
+        if let Some(sessions) = deletion.render_confirmation(ui) {
+            queue_deletion_request(ui.ctx(), sessions);
+        }
+        return outcome;
+    }
+    deletion.render_toolbar(ui, rebind_options);
+    if rebind_options.is_empty() {
+        ui.label("No saved conversations remain in this list.");
+    }
     let mut scroll = egui::ScrollArea::vertical()
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-        .max_height((ui.ctx().content_rect().height() - 180.0).clamp(140.0, 480.0));
+        .max_height(
+            (ui.ctx().content_rect().height() - (ui.cursor().top() - content_start) - 160.0).clamp(100.0, 480.0),
+        );
     if reset_scroll {
         scroll = scroll.vertical_scroll_offset(0.0);
     }
     scroll.show(ui, |ui| {
         for (index, binding) in rebind_options.iter().skip(page * PAGE_SIZE).take(PAGE_SIZE).enumerate() {
-            render_session_row(ui, binding, focus_first && index == 0, &mut outcome);
+            render_session_row(ui, binding, focus_first && index == 0, deletion, &mut outcome);
             if outcome.binding.is_some() {
                 break;
             }
             ui.add_space(8.0);
         }
     });
-    if rebind_options.len() > PAGE_SIZE {
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.add_enabled(page > 0, Button::new("Previous")).clicked() {
-                page -= 1;
-                reset_next = true;
-            }
-            ui.label(format!(
-                "{}–{} of {}",
-                page * PAGE_SIZE + 1,
-                ((page + 1) * PAGE_SIZE).min(rebind_options.len()),
-                rebind_options.len()
-            ));
-            if ui
-                .add_enabled((page + 1) * PAGE_SIZE < rebind_options.len(), Button::new("Next"))
-                .clicked()
-            {
-                page += 1;
-                reset_next = true;
-            }
-        });
-    }
+    reset_next |= render_session_pagination(ui, rebind_options.len(), &mut page);
     ui.data_mut(|data| {
         data.insert_temp(page_id, page);
         data.insert_temp(reset_id, reset_next);
@@ -169,6 +204,34 @@ fn render_options(
             .color(theme::FG_SOFT()),
     );
     outcome
+}
+
+fn render_session_pagination(ui: &mut egui::Ui, count: usize, page: &mut usize) -> bool {
+    let mut changed = false;
+    if count > PAGE_SIZE {
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.add_enabled(*page > 0, Button::new("Previous")).clicked() {
+                *page -= 1;
+                changed = true;
+            }
+            ui.label(format!(
+                "{}–{} of {}",
+                *page * PAGE_SIZE + 1,
+                ((*page + 1) * PAGE_SIZE).min(count),
+                count
+            ));
+            if ui
+                .add_enabled((*page + 1) * PAGE_SIZE < count, Button::new("Next"))
+                .clicked()
+            {
+                *page += 1;
+                changed = true;
+            }
+        });
+    }
+
+    changed
 }
 
 fn render_session_header(ui: &mut egui::Ui, count: usize) {
@@ -208,6 +271,7 @@ fn render_session_row(
     ui: &mut egui::Ui,
     binding: &AgentSessionBinding,
     focus_first: bool,
+    deletion: &mut SessionDeletionUi,
     outcome: &mut SessionRebindRenderOutcome,
 ) {
     let label = binding
@@ -273,19 +337,22 @@ fn render_session_row(
                         "{label}\nSession ID: {}\nClick to resume in this panel.",
                         binding.session_id
                     ));
-                    let copy = ui.add(
-                        Button::new(RichText::new("Copy ID").size(12.0).color(theme::FG()))
-                            .fill(theme::alpha(theme::ACCENT(), 20))
-                            .stroke(egui::Stroke::NONE)
-                            .corner_radius(8.0),
-                    );
-                    focused |= copy.has_focus();
-                    #[cfg(test)]
-                    outcome.copy_rects.push(copy.rect);
-                    if copy.clicked() {
-                        ui.ctx().copy_text(binding.session_id.clone());
-                    }
-                    copy.on_hover_text("Copy the full session ID");
+                    ui.vertical(|ui| {
+                        let copy = ui.add(
+                            Button::new(RichText::new("Copy ID").size(12.0).color(theme::FG()))
+                                .fill(theme::alpha(theme::ACCENT(), 20))
+                                .stroke(egui::Stroke::NONE)
+                                .corner_radius(8.0),
+                        );
+                        focused |= copy.has_focus();
+                        #[cfg(test)]
+                        outcome.copy_rects.push(copy.rect);
+                        if copy.clicked() {
+                            ui.ctx().copy_text(binding.session_id.clone());
+                        }
+                        copy.on_hover_text("Copy the full session ID");
+                        deletion.render_row_controls(ui, binding);
+                    });
                 })
             });
         if focused || card.response.contains_pointer() {
