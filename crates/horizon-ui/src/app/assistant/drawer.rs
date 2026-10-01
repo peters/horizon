@@ -1,0 +1,173 @@
+use egui::{Align, CornerRadius, Frame, Layout, Margin, RichText, Sense, Stroke, Ui, UiBuilder, vec2};
+use horizon_core::agent_definition;
+use horizon_core::assistant::{AssistantAuth, AssistantSettings};
+
+use super::{DEFAULT_WIDTH, HorizonApp, MIN_WIDTH, TOOLBAR_HEIGHT};
+use crate::app::util::viewport_local_rect;
+use crate::theme;
+
+impl HorizonApp {
+    /// Renders the drawer before the canvas so egui reserves its width first.
+    pub(in crate::app) fn render_assistant_drawer(&mut self, ui: &mut Ui) {
+        self.sync_assistant_focus();
+        if !self.assistant_visible() {
+            return;
+        }
+        self.close_assistant_if_restarting();
+        self.ensure_assistant_panel(ui.ctx());
+
+        let viewport_width = viewport_local_rect(ui).width();
+        let default_width = DEFAULT_WIDTH.min(viewport_width * 0.6).max(MIN_WIDTH);
+        egui::Panel::right(super::ASSISTANT_PANEL_ID)
+            .default_size(default_width)
+            .min_size(MIN_WIDTH.min(viewport_width * 0.5))
+            .max_size(viewport_width * 0.6)
+            .frame(
+                Frame::default()
+                    .fill(theme::PANEL_BG())
+                    .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE())),
+            )
+            .show(ui, |ui| {
+                // The toolbar floats above the window's top edge.
+                ui.add_space(TOOLBAR_HEIGHT);
+                self.render_drawer_header(ui);
+                ui.painter().hline(
+                    ui.max_rect().x_range(),
+                    ui.cursor().top(),
+                    Stroke::new(1.0, theme::BORDER_SUBTLE()),
+                );
+                self.render_drawer_body(ui);
+            });
+        self.render_assistant_engine_popup(ui.ctx());
+    }
+
+    fn render_drawer_header(&mut self, ui: &mut Ui) {
+        let settings = self.assistant.settings;
+        let height = 56.0;
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        let mut header = ui.new_child(
+            UiBuilder::new()
+                .max_rect(rect.shrink2(vec2(14.0, 0.0)))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        paint_spark_tile(&mut header);
+        header.vertical(|ui| {
+            ui.add_space(10.0);
+            ui.label(RichText::new("Assistant").size(14.5).strong().color(theme::FG()));
+            ui.label(
+                RichText::new(engine_summary(settings))
+                    .size(11.5)
+                    .color(theme::FG_DIM()),
+            );
+        });
+        header.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if header_button(ui, "Close").clicked() {
+                self.toggle_assistant();
+            }
+            if header_button(ui, "New")
+                .on_hover_text("Start a fresh session")
+                .clicked()
+            {
+                self.restart_assistant();
+            }
+            let engine = header_button(ui, "Engine");
+            if engine.clicked() {
+                self.assistant.engine_open = !self.assistant.engine_open;
+                self.assistant.draft = self.assistant.settings;
+                self.assistant.engine_anchor = Some(engine.rect);
+            }
+        });
+    }
+
+    fn render_drawer_body(&mut self, ui: &mut Ui) {
+        let Some(panel_id) = self.board.assistant_panel() else {
+            self.render_drawer_waiting(ui);
+            return;
+        };
+        let rect = ui.available_rect_before_wrap().shrink2(vec2(10.0, 8.0));
+        let body = ui.new_child(UiBuilder::new().max_rect(rect));
+        let mut body = body;
+        let clicked = self.show_assistant_terminal(&mut body, panel_id);
+        if clicked {
+            self.focus_assistant();
+        }
+        if let Some(reason) = self.assistant.notice.as_deref() {
+            body.label(RichText::new(reason).size(12.0).color(theme::PALETTE_YELLOW()));
+        }
+    }
+
+    /// Shown while there is no agent: the reason it cannot start, or a start in progress.
+    fn render_drawer_waiting(&mut self, ui: &mut Ui) {
+        ui.add_space(24.0);
+        Frame::new()
+            .fill(theme::BG_ELEVATED())
+            .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+            .corner_radius(CornerRadius::same(12))
+            .inner_margin(Margin::same(16))
+            .outer_margin(Margin::symmetric(16, 0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                match self.assistant.notice.clone() {
+                    Some(reason) => {
+                        ui.label(RichText::new(reason).size(13.0).color(theme::FG()));
+                        ui.add_space(10.0);
+                        if ui.button("Choose engine").clicked() {
+                            self.assistant.engine_open = true;
+                            self.assistant.draft = self.assistant.settings;
+                        }
+                    }
+                    None => {
+                        ui.label(
+                            RichText::new("Starting the assistant...")
+                                .size(13.0)
+                                .color(theme::FG_SOFT()),
+                        );
+                    }
+                }
+            });
+    }
+}
+
+fn engine_summary(settings: AssistantSettings) -> String {
+    let name = agent_definition(settings.agent).map_or("Agent", |agent| agent.display_name);
+    let auth = match settings.auth {
+        AssistantAuth::Subscription => "Subscription",
+        AssistantAuth::ApiKey => "API key",
+    };
+    format!("{name}  -  {auth}")
+}
+
+fn header_button(ui: &mut Ui, label: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(label).size(12.0).color(theme::FG_SOFT()))
+            .fill(theme::PANEL_BG_ALT())
+            .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+            .corner_radius(CornerRadius::same(8))
+            .min_size(vec2(0.0, 28.0)),
+    )
+}
+
+/// Four-point sparkle on a tinted tile, the assistant's mark.
+fn paint_spark_tile(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
+    let accent = theme::ACCENT();
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(10), accent.gamma_multiply(0.18));
+    let c = rect.center();
+    let r = 8.0;
+    let points = [
+        (0.0, -r),
+        (1.9, -1.9),
+        (r, 0.0),
+        (1.9, 1.9),
+        (0.0, r),
+        (-1.9, 1.9),
+        (-r, 0.0),
+        (-1.9, -1.9),
+    ]
+    .iter()
+    .map(|(x, y)| c + vec2(*x, *y))
+    .collect();
+    ui.painter()
+        .add(egui::Shape::convex_polygon(points, accent, Stroke::NONE));
+}

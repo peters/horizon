@@ -2,6 +2,7 @@
 
 pub mod agent_work;
 mod agents;
+pub mod assistant;
 mod attention;
 mod board;
 pub mod browser;

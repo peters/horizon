@@ -13,7 +13,7 @@ use horizon_core::{
 
 use super::{
     BrowserCreateHostState, CanvasGridCache, CanvasPanSpaceKeyState, FrameStats, HorizonApp, PanelRenderCaches,
-    StartupChooserState, resolve_shortcuts, settings, speech, util,
+    StartupChooserState, assistant, resolve_shortcuts, settings, speech, util,
 };
 use crate::command_registry::{self, CommandEntry};
 use crate::input;
@@ -178,7 +178,7 @@ impl HorizonApp {
             remote_hosts_last_refresh: None,
             last_session_catalog_refresh: None,
             last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
-            settings: None, remote_browser_credentials: spawn_remote_browser_credentials(config),
+            settings: None, assistant: assistant::AssistantDrawer::new(&horizon_core::HorizonHome::resolve()), remote_browser_credentials: spawn_remote_browser_credentials(config),
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,
             managed_install,

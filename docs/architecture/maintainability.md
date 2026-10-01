@@ -307,6 +307,14 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     preferences (the default workspace) in `remote_hosts/preferences.rs`, and
     host shortcuts saved as presets in `remote_hosts/shortcuts.rs`
   - `sidebar`: sidebar rendering and deferred sidebar actions
+  - `assistant`: the right-hand assistant drawer. `mod.rs` owns drawer state,
+    focus handoff with the canvas and agent lifecycle, `drawer.rs` renders the
+    docked panel, and `engine.rs` the agent and sign-in popup. The agent is an
+    ordinary hidden agent panel marked by `ASSISTANT_PANEL_LOCAL_ID`
+    (`horizon-core/src/assistant.rs` owns its settings and API key file), drawn
+    by `panels/assistant.rs` through the shared terminal widget. It restores
+    hidden, is excluded from the sidebar and palette, and the drawer closes it
+    directly because `render_panels` rebuilds the shared close queue each frame
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows, with startup
     result types in `session/types.rs` and loading/recovery rendering in

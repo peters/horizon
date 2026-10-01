@@ -645,12 +645,28 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: b
             .unwrap_or_default();
         env.insert("HORIZON_BROWSER_MCP_EXECUTABLE".to_string(), command);
     }
+    if local_id == crate::assistant::ASSISTANT_PANEL_LOCAL_ID {
+        env.extend(assistant_sign_in_env(kind));
+    }
     if kind == PanelKind::Claude {
         // Keep the conversation in Horizon's terminal history so its scrollbar
         // and history meter remain usable instead of hiding it in a fullscreen buffer.
         env.insert("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_string(), "1".to_string());
     }
     env
+}
+
+/// API-key environment for the assistant panel when the user chose API-key sign-in.
+fn assistant_sign_in_env(kind: PanelKind) -> HashMap<String, String> {
+    let home = HorizonHome::resolve();
+    let settings = crate::assistant::AssistantSettings::load(&home);
+    if settings.agent != kind {
+        return HashMap::new();
+    }
+    settings.launch_env(&home).unwrap_or_else(|error| {
+        tracing::warn!(%error, "assistant API key unavailable; starting without it");
+        HashMap::new()
+    })
 }
 
 /// Stable private control identity injected into one Horizon agent panel.

@@ -573,6 +573,12 @@ impl Board {
             .find(|panel| panel.local_id == local_id)
             .map(|panel| panel.id)
     }
+
+    /// The panel hosted by the assistant drawer, if it has been started.
+    #[must_use]
+    pub fn assistant_panel(&self) -> Option<PanelId> {
+        self.panel_id_by_local_id(crate::assistant::ASSISTANT_PANEL_LOCAL_ID)
+    }
 }
 
 impl Default for Board {

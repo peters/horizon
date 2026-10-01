@@ -118,6 +118,7 @@ impl HorizonApp {
             .board
             .panels
             .iter()
+            .filter(|panel| !panel.is_assistant())
             .map(|panel| {
                 let attention = if attention_enabled {
                     self.board.unresolved_attention_for_panel(panel.id).cloned()

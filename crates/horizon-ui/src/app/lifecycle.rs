@@ -324,6 +324,7 @@ impl HorizonApp {
         if self.settings.is_some() {
             self.render_settings(ui);
         }
+        self.render_assistant_drawer(ui);
 
         #[cfg(feature = "cloud-workspaces")]
         if self.render_fullscreen_cloud(ui) {
@@ -365,8 +366,13 @@ impl HorizonApp {
         self.render_preset_picker(ui);
         let minimap_height = self.render_minimap(ui, workspace_bounds);
         if self.fixed_overlays_visible() && self.template_config.features.attention_feed {
-            let feed_result =
-                attention_feed::render_attention_feed(ui, &self.board, minimap_height, &self.template_config.overlays);
+            let feed_result = attention_feed::render_attention_feed(
+                ui,
+                &self.board,
+                minimap_height,
+                &self.template_config.overlays,
+                self.assistant_right_inset(ui.ctx()),
+            );
             for attention_id in feed_result.dismissed_ids {
                 let _ = self.board.dismiss_attention(attention_id);
             }

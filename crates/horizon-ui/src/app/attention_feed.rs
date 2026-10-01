@@ -28,6 +28,7 @@ pub fn render_attention_feed(
     board: &Board,
     minimap_height: f32,
     overlays: &OverlaysConfig,
+    right_inset: f32,
 ) -> AttentionFeedResult {
     let now = SystemTime::now();
     let items = visible_attention_items(&board.attention, now);
@@ -49,7 +50,10 @@ pub fn render_attention_feed(
     );
 
     egui::Area::new(Id::new("attention_feed"))
-        .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-FEED_MARGIN, -offset_y))
+        .anchor(
+            egui::Align2::RIGHT_BOTTOM,
+            Vec2::new(-(FEED_MARGIN + right_inset), -offset_y),
+        )
         .order(Order::Foreground)
         .interactable(true)
         .show(ctx, |ui| {

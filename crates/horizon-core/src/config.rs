@@ -128,6 +128,7 @@ pub struct ShortcutsConfig {
     pub toggle_minimap: String,
     pub align_workspaces_horizontally: String,
     pub toggle_settings: String,
+    pub toggle_assistant: String,
     #[serde(alias = "reset_view")]
     pub zoom_reset: String,
     pub zoom_in: String,
@@ -153,6 +154,7 @@ impl Default for ShortcutsConfig {
             toggle_minimap: "Ctrl+Shift+M".to_string(),
             align_workspaces_horizontally: "Ctrl+Shift+A".to_string(),
             toggle_settings: "Ctrl+Shift+Comma".to_string(),
+            toggle_assistant: "Ctrl+Shift+L".to_string(),
             zoom_reset: "Ctrl+0".to_string(),
             zoom_in: "Ctrl+Plus".to_string(),
             zoom_out: "Ctrl+Minus".to_string(),
@@ -187,6 +189,7 @@ impl ShortcutsConfig {
                 &self.align_workspaces_horizontally,
             )?,
             toggle_settings: parse_shortcut("toggle_settings", &self.toggle_settings)?,
+            toggle_assistant: parse_shortcut("toggle_assistant", &self.toggle_assistant)?,
             zoom_reset: parse_shortcut("zoom_reset", &self.zoom_reset)?,
             zoom_in: parse_shortcut("zoom_in", &self.zoom_in)?,
             zoom_out: parse_shortcut("zoom_out", &self.zoom_out)?,
@@ -209,6 +212,7 @@ impl ShortcutsConfig {
             ("toggle_minimap", shortcuts.toggle_minimap),
             ("align_workspaces_horizontally", shortcuts.align_workspaces_horizontally),
             ("toggle_settings", shortcuts.toggle_settings),
+            ("toggle_assistant", shortcuts.toggle_assistant),
             ("zoom_reset", shortcuts.zoom_reset),
             ("zoom_in", shortcuts.zoom_in),
             ("zoom_out", shortcuts.zoom_out),
@@ -771,6 +775,17 @@ mod tests {
             .expect_err("config should reject duplicate shortcuts");
 
         assert!(error.to_string().contains("duplicate shortcut"));
+    }
+
+    #[test]
+    fn assistant_shortcut_defaults_to_ctrl_shift_l_and_cannot_collide() {
+        let config = Config::default();
+        assert_eq!(config.shortcuts.toggle_assistant, "Ctrl+Shift+L");
+        config.shortcuts.resolve().expect("defaults should resolve");
+
+        let error = Config::from_yaml("shortcuts:\n  toggle_assistant: Ctrl+Shift+K\n")
+            .expect_err("config should reject a shortcut already used by the command palette");
+        assert!(error.to_string().contains("toggle_assistant"));
     }
 
     #[test]

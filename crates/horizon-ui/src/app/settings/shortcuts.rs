@@ -24,6 +24,7 @@ enum EditableShortcut {
     ToggleMinimap,
     AlignWorkspaces,
     ToggleSettings,
+    ToggleAssistant,
     ResetZoom,
     ZoomIn,
     ZoomOut,
@@ -35,7 +36,7 @@ enum EditableShortcut {
 }
 
 impl EditableShortcut {
-    const ALL: [Self; 19] = [
+    const ALL: [Self; 20] = [
         Self::CommandPalette,
         Self::NewTerminal,
         Self::FocusWorkspace,
@@ -47,6 +48,7 @@ impl EditableShortcut {
         Self::ToggleMinimap,
         Self::AlignWorkspaces,
         Self::ToggleSettings,
+        Self::ToggleAssistant,
         Self::ResetZoom,
         Self::ZoomIn,
         Self::ZoomOut,
@@ -70,6 +72,7 @@ impl EditableShortcut {
             Self::ToggleMinimap => "Toggle Minimap",
             Self::AlignWorkspaces => "Align Workspaces",
             Self::ToggleSettings => "Toggle Settings",
+            Self::ToggleAssistant => "Toggle Assistant",
             Self::ResetZoom => "Reset Zoom",
             Self::ZoomIn => "Zoom In",
             Self::ZoomOut => "Zoom Out",
@@ -94,6 +97,7 @@ impl EditableShortcut {
             Self::ToggleMinimap => &mut shortcuts.toggle_minimap,
             Self::AlignWorkspaces => &mut shortcuts.align_workspaces_horizontally,
             Self::ToggleSettings => &mut shortcuts.toggle_settings,
+            Self::ToggleAssistant => &mut shortcuts.toggle_assistant,
             Self::ResetZoom => &mut shortcuts.zoom_reset,
             Self::ZoomIn => &mut shortcuts.zoom_in,
             Self::ZoomOut => &mut shortcuts.zoom_out,

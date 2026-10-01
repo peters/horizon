@@ -226,6 +226,7 @@ pub struct AppShortcuts {
     pub toggle_minimap: ShortcutBinding,
     pub align_workspaces_horizontally: ShortcutBinding,
     pub toggle_settings: ShortcutBinding,
+    pub toggle_assistant: ShortcutBinding,
     pub zoom_reset: ShortcutBinding,
     pub zoom_in: ShortcutBinding,
     pub zoom_out: ShortcutBinding,
@@ -251,6 +252,7 @@ impl Default for AppShortcuts {
             toggle_minimap: ShortcutBinding::new(ps, ShortcutKey::Letter('M')),
             align_workspaces_horizontally: ShortcutBinding::new(ps, ShortcutKey::Letter('A')),
             toggle_settings: ShortcutBinding::new(ps, ShortcutKey::Comma),
+            toggle_assistant: ShortcutBinding::new(ps, ShortcutKey::Letter('L')),
             zoom_reset: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Digit(0)),
             zoom_in: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Plus),
             zoom_out: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Minus),
@@ -485,6 +487,10 @@ mod tests {
             ShortcutBinding::new(ps, ShortcutKey::Letter('K'))
         );
         assert_eq!(shortcuts.toggle_hud, ShortcutBinding::new(ps, ShortcutKey::Letter('U')));
+        assert_eq!(
+            shortcuts.toggle_assistant,
+            ShortcutBinding::new(ps, ShortcutKey::Letter('L'))
+        );
         assert_eq!(
             shortcuts.open_remote_hosts,
             ShortcutBinding::new(ps, ShortcutKey::Letter('H'))

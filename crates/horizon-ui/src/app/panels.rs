@@ -22,6 +22,7 @@ use super::util::primary_shortcut_label;
 use super::view::canvas_scene_transform;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
 
+mod assistant;
 mod interaction;
 pub(super) use interaction::ArrangedPanelDrag;
 

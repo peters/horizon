@@ -341,3 +341,42 @@ fn board_snapshot_preserves_the_panel_work_policy() {
     assert!(state.workspaces[0].panels[0].work_resume.enabled);
     board.shutdown_terminal_panels();
 }
+
+#[test]
+fn assistant_panel_is_restored_hidden_and_other_panels_stay_visible() {
+    let assistant = PanelState {
+        local_id: crate::assistant::ASSISTANT_PANEL_LOCAL_ID.to_string(),
+        kind: PanelKind::Claude,
+        ..PanelState::default()
+    };
+    let ordinary = PanelState {
+        local_id: "ordinary".to_string(),
+        kind: PanelKind::Claude,
+        ..PanelState::default()
+    };
+    let browser = crate::browser::BrowserConfig::default();
+
+    assert!(!assistant.to_panel_options(&browser).visible);
+    assert!(ordinary.to_panel_options(&browser).visible);
+}
+
+#[test]
+fn board_finds_the_assistant_panel_by_its_local_id() {
+    let mut board = Board::new();
+    let workspace = board.create_workspace("assistant");
+    assert!(board.assistant_panel().is_none());
+    let id = board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Shell,
+                local_id: Some(crate::assistant::ASSISTANT_PANEL_LOCAL_ID.to_string()),
+                visible: false,
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("panel should start");
+
+    assert_eq!(board.assistant_panel(), Some(id));
+    assert!(board.panel(id).is_some_and(crate::Panel::is_assistant));
+}

@@ -294,6 +294,7 @@ fn validate_speech_binding(
         ("toggle_minimap", shortcuts.toggle_minimap),
         ("align_workspaces_horizontally", shortcuts.align_workspaces_horizontally),
         ("toggle_settings", shortcuts.toggle_settings),
+        ("toggle_assistant", shortcuts.toggle_assistant),
         ("zoom_reset", shortcuts.zoom_reset),
         ("zoom_in", shortcuts.zoom_in),
         ("zoom_out", shortcuts.zoom_out),

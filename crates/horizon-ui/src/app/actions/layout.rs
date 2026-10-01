@@ -54,12 +54,18 @@ impl HorizonApp {
         }
         let settings_panel_rect = self.settings_panel_rect(ctx, viewport);
         let settings_bar_rect = self.settings_bar_rect(ctx, viewport);
+        let assistant_panel_rect = self.assistant_panel_rect(ctx, viewport);
         let sidebar_width = if self.sidebar_visible {
             effective_sidebar_width(viewport.width())
         } else {
             0.0
         };
-        canvas_rect_for_layout(viewport, sidebar_width, settings_panel_rect, settings_bar_rect)
+        canvas_rect_for_layout(
+            viewport,
+            sidebar_width,
+            settings_panel_rect.or(assistant_panel_rect),
+            settings_bar_rect,
+        )
     }
 
     pub(in crate::app) fn fixed_overlays_visible(&self) -> bool {
@@ -119,6 +125,9 @@ impl HorizonApp {
         if let Some(rect) = self.settings_bar_rect(ctx, viewport) {
             zones.push(rect);
         }
+        if let Some(rect) = self.assistant_panel_rect(ctx, viewport) {
+            zones.push(rect);
+        }
 
         let minimap_height = if let Some(rect) = self.minimap_overlay_rect(ctx) {
             zones.push(rect);
@@ -129,8 +138,15 @@ impl HorizonApp {
 
         if self.fixed_overlays_visible()
             && self.template_config.features.attention_feed
-            && let Some(rect) =
-                estimated_outer_rect(viewport, minimap_height, &self.template_config.overlays, &self.board)
+            && let Some(rect) = estimated_outer_rect(
+                Rect::from_min_max(
+                    viewport.min,
+                    Pos2::new(viewport.max.x - self.assistant_right_inset(ctx), viewport.max.y),
+                ),
+                minimap_height,
+                &self.template_config.overlays,
+                &self.board,
+            )
         {
             zones.push(rect);
         }
@@ -156,8 +172,9 @@ impl HorizonApp {
         let overlays = &self.template_config.overlays;
         let size = Vec2::new(overlays.minimap_width.max(120.0), overlays.minimap_height.max(120.0))
             + Vec2::splat(MINIMAP_PAD * 2.0);
+        let right_inset = self.assistant_right_inset(ctx);
         Some(Rect::from_min_size(
-            viewport.max - Vec2::splat(MINIMAP_MARGIN) - size,
+            viewport.max - Vec2::new(MINIMAP_MARGIN + right_inset, MINIMAP_MARGIN) - size,
             size,
         ))
     }
@@ -199,11 +216,11 @@ impl HorizonApp {
 pub(super) fn canvas_rect_for_layout(
     viewport: Rect,
     sidebar_width: f32,
-    settings_panel_rect: Option<Rect>,
+    right_panel_rect: Option<Rect>,
     settings_bar_rect: Option<Rect>,
 ) -> Rect {
     let left = viewport.min.x + sidebar_width;
-    let right = settings_panel_rect.map_or(viewport.max.x, |rect| rect.min.x);
+    let right = right_panel_rect.map_or(viewport.max.x, |rect| rect.min.x);
     let bottom = settings_bar_rect.map_or(viewport.max.y, |rect| rect.min.y);
 
     Rect::from_min_max(

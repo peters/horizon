@@ -132,6 +132,7 @@ impl HorizonApp {
                 }
             }
             CommandId::ToggleSettings => self.toggle_settings(),
+            CommandId::ToggleAssistant => self.toggle_assistant(),
             CommandId::ToggleSearch => {
                 // Focus the toolbar search input (or create it with focus
                 // if it doesn't exist yet).
@@ -164,6 +165,7 @@ impl HorizonApp {
                 CommandId::AlignWorkspacesHorizontally,
             ),
             (self.shortcuts.toggle_settings, CommandId::ToggleSettings),
+            (self.shortcuts.toggle_assistant, CommandId::ToggleAssistant),
             (self.shortcuts.toggle_sidebar, CommandId::ToggleSidebar),
             (self.shortcuts.toggle_hud, CommandId::ToggleHud),
             (self.shortcuts.toggle_minimap, CommandId::ToggleMinimap),
@@ -186,6 +188,10 @@ impl HorizonApp {
             self.toggle_command_palette();
         }
         if let Some(command_id) = triggered_command {
+            if command_id == CommandId::ToggleAssistant {
+                // The chord would otherwise be typed into the focused terminal.
+                self.consume_navigation_key(ctx, self.shortcuts.toggle_assistant);
+            }
             self.execute_command(ctx, &command_id);
         }
     }

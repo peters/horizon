@@ -272,6 +272,12 @@ impl Panel {
         self.remote_workspace.as_ref()
     }
 
+    /// Whether this is the agent hosted by the assistant drawer, which never lives on the canvas.
+    #[must_use]
+    pub fn is_assistant(&self) -> bool {
+        self.local_id == crate::assistant::ASSISTANT_PANEL_LOCAL_ID
+    }
+
     /// Convenience accessor for the terminal content (if this panel holds one).
     #[must_use]
     pub fn terminal(&self) -> Option<&Terminal> {

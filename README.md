@@ -146,6 +146,10 @@ First-class **Grok**, **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, 
 </td>
 <td>
 
+### Assistant Drawer
+
+**Ctrl+Shift+L** opens a drawer on the right edge that hosts one agent (Claude, Codex, Gemini, OpenCode or Grok) with the Horizon MCP tools, so you can ask it to drive Horizon from anywhere on the canvas. The canvas shrinks to make room, closing the drawer leaves the agent running, and it never appears as a panel on the canvas. Pick the agent and how it signs in from the drawer's **Engine** button: **Subscription** uses whatever the CLI is already signed in to, and **API key** passes a key you save (Claude and Codex) to the agent as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. The key is stored in a private file under `~/.horizon/assistant/`, never in the config. **New** starts a fresh session.
+
 ### Live Browser
 Open any site in Chromium, Firefox, or Safari on this machine, or on a BrowserStack browser or phone you name in config. On this machine you and an agent share the page: navigate, inspect, click, fill, capture network traffic, and hand control back and forth. A BrowserStack panel shows the live page and takes the same navigate, click, and fill actions.
 
@@ -312,6 +316,7 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | **Ctrl+Shift+M** | Toggle minimap |
 | **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row in sidebar order |
 | **Ctrl+Shift+,** | Open settings editor |
+| **Ctrl+Shift+L** | Toggle the assistant drawer (an agent docked to the right edge) |
 | **Ctrl+Shift+F** | Focus the terminal search bar |
 | **Ctrl+0** | Reset canvas zoom to 100% |
 | **Ctrl+Plus** | Zoom canvas in |
@@ -368,6 +373,7 @@ shortcuts:
   toggle_minimap: Ctrl+Shift+M
   align_workspaces_horizontally: Ctrl+Shift+A
   toggle_settings: Ctrl+Shift+Comma
+  toggle_assistant: Ctrl+Shift+L
   zoom_reset: Ctrl+0
   zoom_in: Ctrl+Plus
   zoom_out: Ctrl+Minus

@@ -255,7 +255,7 @@ pub(super) fn command_palette_panel_entries(
     board
         .panels
         .iter()
-        .filter(|panel| !detached_workspace_ids.contains(&panel.workspace_id))
+        .filter(|panel| !detached_workspace_ids.contains(&panel.workspace_id) && !panel.is_assistant())
         .map(|panel| {
             let workspace_name = board
                 .workspace(panel.workspace_id)

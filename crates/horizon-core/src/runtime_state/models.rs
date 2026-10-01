@@ -374,7 +374,9 @@ impl PanelState {
             work_resume: self.work_resume.clone(),
             position: self.position,
             size: self.size,
-            visible: self.browser_profile.as_ref().is_none_or(|profile| !profile.hidden),
+            // The assistant lives in the drawer, never on the canvas.
+            visible: self.local_id != crate::assistant::ASSISTANT_PANEL_LOCAL_ID
+                && self.browser_profile.as_ref().is_none_or(|profile| !profile.hidden),
             local_id: Some(self.local_id.clone()),
             remote_workspace: self.remote_workspace.clone(),
             session_binding: self.session_binding.clone(),

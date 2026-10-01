@@ -26,7 +26,10 @@ pub(super) fn render_scoped_minimap(
     let minimap_height = model.outer_size.y;
 
     let response = egui::Area::new(overlay_id)
-        .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-MINIMAP_MARGIN, -MINIMAP_MARGIN))
+        .anchor(
+            egui::Align2::RIGHT_BOTTOM,
+            Vec2::new(-(MINIMAP_MARGIN + app.assistant_right_inset(ctx)), -MINIMAP_MARGIN),
+        )
         .order(Order::Foreground)
         .show(ctx, |ui| {
             let (response, painter) = ui.allocate_painter(model.outer_size, Sense::click_and_drag());
