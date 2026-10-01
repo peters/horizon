@@ -94,7 +94,7 @@ impl Driver {
             ) {
                 return;
             }
-            self.begin_navigation();
+            self.begin_navigation(event_tx);
             let _ = event_tx.send(BrowserEvent::Loading(true));
             return;
         }

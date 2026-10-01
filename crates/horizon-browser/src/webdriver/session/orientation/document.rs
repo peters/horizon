@@ -25,7 +25,7 @@ impl Driver {
         }
     }
 
-    pub(in super::super) fn refresh_document_orientation(&mut self, events: &BrowserEventSender) {
+    pub(in super::super) fn publish_document_orientation_invalidation(&mut self, events: &BrowserEventSender) {
         if self.orientation_document == DocumentOrientation::NeedsPublication {
             if let Some(state) = self.remote_orientation.as_mut() {
                 state.applied = None;
@@ -34,6 +34,10 @@ impl Driver {
             self.write_coordination(true);
             self.orientation_document = DocumentOrientation::NeedsMeasurement;
         }
+    }
+
+    pub(in super::super) fn refresh_document_orientation(&mut self, events: &BrowserEventSender) {
+        self.publish_document_orientation_invalidation(events);
         if self.orientation_document != DocumentOrientation::NeedsMeasurement
             || self.classic_navigation_in_flight()
             || self.pending_orientation.is_some()

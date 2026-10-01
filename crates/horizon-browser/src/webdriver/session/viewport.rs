@@ -493,7 +493,7 @@ pub(in crate::webdriver::session) mod tests {
         assert!(state.pending_resize.is_none());
         assert!(handle.status().pending());
         state.coordination_dirty = false;
-        state.begin_navigation();
+        state.begin_navigation(&events);
         assert!(!handle.status().pending());
         assert!(state.coordination_dirty);
         drop(state);
@@ -563,7 +563,7 @@ pub(in crate::webdriver::session) mod tests {
         state.note_file_chooser(&json!({"context":"first","element":{"sharedId":"next"}}));
         state.tick_file_chooser(&events);
         assert!(handle.status().pending());
-        state.begin_navigation();
+        state.begin_navigation(&events);
         state.tick_file_chooser(&events);
         assert!(!handle.status().pending());
         drop(state);
