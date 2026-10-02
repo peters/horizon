@@ -229,6 +229,23 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assert_no_session_state('prepare')
         self.assertEqual(f.launches(), [])
 
+    def test_prepare_only_proves_the_volume_takes_a_write_before_any_checkout_work(self):
+        f = self.fixture
+        self.release.touch()
+        refusing = self.refuse_flush('*/.horizon-write-probe')
+        refused = self.prepare_only()
+        self.assertEqual(refused.returncode, 74, refused.stderr)
+        self.assertIn('Workspace storage did not accept a write', refused.stderr)
+        self.assertFalse((f.workspace / '.horizon-write-probe').exists(), 'the probe file is removed')
+        self.assertFalse(self.state.exists(), 'nothing of the checkout was started')
+        self.assertEqual(self.source_calls(), [])
+        self.assertEqual(f.launches(), [])
+        refusing.unlink()
+        prepared = self.prepare_only()
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        self.assertFalse((f.workspace / '.horizon-write-probe').exists())
+        self.assertTrue((self.state / 'ready').exists())
+
     def test_a_refused_flush_says_why_and_the_next_attach_resumes(self):
         f = self.fixture
         refusing = self.refuse_flush('*')
@@ -236,7 +253,9 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual(refused.returncode, 74, refused.stderr)
         self.assertIn('Workspace storage did not accept a write', refused.stderr)
         self.assertIn('Disk quota exceeded', refused.stderr)
-        self.assertIn('Attach again', refused.stderr)
+        self.assertIn('Try again', refused.stderr)
+        self.assertRegex(refused.stderr, r'Used on \S*workspace: \S+')
+        self.assertNotIn('Filesystem', refused.stderr, 'df describes shared storage on a network volume, so it is not shown')
         self.assertEqual(f.launches(), [])
         self.assert_no_session_state('one')
         self.assertFalse((self.state / 'failed').exists(), 'a storage refusal is not a failed preparation')
