@@ -113,6 +113,29 @@ sys.exit(23)
         self.launch()
         self.assertEqual(self.claude_config(), first)
 
+    def test_a_key_no_longer_than_the_approval_tail_is_never_copied(self):
+        short = 'synthetic-key'
+        (self.workspace / 'credentials/anthropic-api-key').write_text(short + '\n')
+        self.launch()
+        raw = (self.workspace / 'home/.claude.json').read_text()
+        self.assertNotIn(short, raw)
+        self.assertNotIn('customApiKeyResponses', json.loads(raw))
+
+    def test_a_launch_that_finds_everything_in_place_does_not_rewrite_the_file(self):
+        (self.workspace / 'credentials/anthropic-api-key').write_text('sk-ant-api03-' + 'z' * 40 + '\n')
+        self.launch()
+        config = self.workspace / 'home/.claude.json'
+        before = config.stat()
+        # Claude's own later save must survive the next launch.
+        saved = json.loads(config.read_text())
+        saved['numStartups'] = 3
+        config.write_text(json.dumps(saved))
+        mtime = config.stat().st_mtime_ns
+        self.launch()
+        self.assertEqual(config.stat().st_mtime_ns, mtime, 'nothing to add, so nothing is written')
+        self.assertEqual(self.claude_config()['numStartups'], 3)
+        self.assertGreaterEqual(mtime, before.st_mtime_ns)
+
     def test_a_subscription_worker_approves_no_key(self):
         (self.workspace / 'credentials/anthropic-api-key').unlink()
         self.launch()
