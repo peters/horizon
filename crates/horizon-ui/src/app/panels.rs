@@ -31,7 +31,7 @@ use session_rebind::SessionRebindRenderOutcome;
 use session_rebind::open_session_picker;
 #[cfg(test)]
 use session_rebind::render_session_rebind_options;
-pub(super) use session_rebind::session_picker_panel;
+pub(super) use session_rebind::{focused_session_picker_panel, session_picker_panel};
 
 #[derive(Clone, Copy)]
 pub(in crate::app) struct PanelScreenGeometry {
@@ -402,7 +402,7 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let mut reconnect_requested = false;
-                        let claim_editor_focus = !self.speech_text_surface_active().0;
+                        let claim_editor_focus = !self.speech_text_surface_active(ui.ctx()).0;
                         let interactive = !self.host_dialog_open() && session_picker_panel(ui.ctx()).is_none();
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
@@ -797,7 +797,7 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let mut reconnect_requested = false;
-                        let claim_editor_focus = snapshot.is_focused && !self.speech_text_surface_active().0;
+                        let claim_editor_focus = snapshot.is_focused && !self.speech_text_surface_active(ui.ctx()).0;
                         let board = &mut self.board;
                         let editor_preview_cache = &mut self.panel_render_caches.editor_preview_cache;
                         let terminal_grid_cache = &mut self.panel_render_caches.terminal_grid_cache;

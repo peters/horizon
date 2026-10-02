@@ -14,6 +14,7 @@ pub(super) struct SessionDeletionUi {
     managing: bool,
     selected: Arc<HashSet<String>>,
     confirmation: Option<Arc<[AgentSessionBinding]>>,
+    confirmation_all: bool,
     pub(super) message: Option<String>,
     details: Arc<[String]>,
     cleanup_details: Arc<[String]>,
@@ -107,6 +108,7 @@ impl SessionDeletionUi {
                     )
                     .clicked()
                 {
+                    self.confirmation_all = false;
                     self.confirmation = Some(
                         options
                             .iter()
@@ -116,6 +118,7 @@ impl SessionDeletionUi {
                     );
                 }
             } else if ui.button(format!("Delete all ({})…", options.len())).clicked() {
+                self.confirmation_all = true;
                 self.confirmation = Some(options.to_vec().into());
             }
         });
@@ -140,6 +143,7 @@ impl SessionDeletionUi {
             .small_button(RichText::new("Delete").color(theme::PALETTE_RED()))
             .clicked()
         {
+            self.confirmation_all = false;
             self.confirmation = Some(vec![binding.clone()].into());
         }
     }
@@ -188,13 +192,14 @@ impl SessionDeletionUi {
     pub(super) fn reconcile_options(&mut self, options: &[AgentSessionBinding]) {
         Arc::make_mut(&mut self.selected).retain(|id| options.iter().any(|binding| &binding.session_id == id));
         if self.confirmation.as_ref().is_some_and(|sessions| {
-            sessions.iter().any(|session| {
-                !options.iter().any(|binding| {
-                    binding.kind == session.kind
-                        && binding.session_id == session.session_id
-                        && binding.cwd == session.cwd
+            (self.confirmation_all && sessions.len() != options.len())
+                || sessions.iter().any(|session| {
+                    !options.iter().any(|binding| {
+                        binding.kind == session.kind
+                            && binding.session_id == session.session_id
+                            && binding.cwd == session.cwd
+                    })
                 })
-            })
         }) {
             self.confirmation = None;
         }
@@ -580,6 +585,25 @@ mod tests {
         };
         state.reconcile_options(&[a, changed]);
         assert!(!state.confirming());
+    }
+
+    #[test]
+    fn delete_all_confirmation_cancels_on_scope_growth_but_single_selection_remains_exact() {
+        let a = AgentSessionBinding::new(horizon_core::PanelKind::Claude, "a".into(), None, None, None);
+        let b = AgentSessionBinding::new(horizon_core::PanelKind::Claude, "b".into(), None, None, None);
+        let mut state = SessionDeletionUi {
+            confirmation: Some(vec![a.clone()].into()),
+            confirmation_all: true,
+            ..Default::default()
+        };
+        state.reconcile_options(std::slice::from_ref(&a));
+        assert!(state.confirming());
+        state.reconcile_options(&[a.clone(), b.clone()]);
+        assert!(!state.confirming());
+        state.confirmation_all = false;
+        state.confirmation = Some(vec![a.clone()].into());
+        state.reconcile_options(&[a.clone(), b]);
+        assert_eq!(state.confirmation.as_deref(), Some(std::slice::from_ref(&a)));
     }
 
     #[test]

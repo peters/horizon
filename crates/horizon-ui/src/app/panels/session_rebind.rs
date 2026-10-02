@@ -103,16 +103,31 @@ fn picker_id(ctx: &egui::Context) -> egui::Id {
 }
 
 pub(in crate::app) fn session_picker_panel(ctx: &egui::Context) -> Option<PanelId> {
-    let id = picker_id(ctx);
-    let frame = ctx.cumulative_frame_nr();
-    ctx.data_mut(|data| {
-        let state = data.get_temp::<SessionPicker>(id)?;
-        if frame > state.last_rendered_frame.saturating_add(1) {
-            data.remove::<SessionPicker>(id);
-            return None;
-        }
-        Some(state.panel_id)
-    })
+    session_picker_panel_in_viewport(ctx, ctx.viewport_id())
+}
+
+pub(in crate::app) fn focused_session_picker_panel(ctx: &egui::Context) -> Option<PanelId> {
+    let viewport = ctx
+        .input(|input| {
+            input
+                .raw
+                .viewports
+                .iter()
+                .find_map(|(&id, info)| (id != egui::ViewportId::ROOT && info.focused == Some(true)).then_some(id))
+        })
+        .unwrap_or_else(|| ctx.viewport_id());
+    session_picker_panel_in_viewport(ctx, viewport)
+}
+
+fn session_picker_panel_in_viewport(ctx: &egui::Context, viewport: egui::ViewportId) -> Option<PanelId> {
+    let id = egui::Id::new(("session_recovery_picker", viewport));
+    let state = ctx.data(|data| data.get_temp::<SessionPicker>(id))?;
+    let frame = ctx.cumulative_frame_nr_for(viewport);
+    if frame > state.last_rendered_frame.saturating_add(1) {
+        ctx.data_mut(|data| data.remove::<SessionPicker>(id));
+        return None;
+    }
+    Some(state.panel_id)
 }
 
 #[derive(Default)]

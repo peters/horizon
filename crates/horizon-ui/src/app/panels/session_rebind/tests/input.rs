@@ -1,6 +1,114 @@
 use super::*;
 
 #[test]
+fn speech_press_gate_follows_the_focused_picker_viewport() {
+    let (_temp, app) = crate::app::test_support::test_app();
+    let ctx = Context::default();
+    let detached = egui::ViewportId::from_hash_of("speech-picker");
+    let mut initial = RawInput::default();
+    initial.viewports.insert(
+        detached,
+        egui::ViewportInfo {
+            focused: Some(true),
+            ..Default::default()
+        },
+    );
+    let _ = ctx
+        .run_ui(initial, |_| {
+            assert!(focused_session_picker_panel(&ctx).is_none());
+            assert!(!app.speech_text_surface_active(&ctx).0);
+        })
+        .discard_textures();
+    for viewport in [egui::ViewportId::ROOT, detached] {
+        let mut input = RawInput {
+            viewport_id: viewport,
+            ..Default::default()
+        };
+        input.viewports.insert(viewport, egui::ViewportInfo::default());
+        let _ = ctx
+            .run_ui(input, |ui| {
+                open_session_picker(&ui.button("Resume"), PanelId(1), Vec::new());
+            })
+            .discard_textures();
+        let mut root_input = RawInput::default();
+        root_input.viewports.insert(
+            detached,
+            egui::ViewportInfo {
+                focused: Some(viewport == detached),
+                ..Default::default()
+            },
+        );
+        let _ = ctx
+            .run_ui(root_input, |_| {
+                assert_eq!(focused_session_picker_panel(&ctx), Some(PanelId(1)));
+                assert!(app.speech_text_surface_active(&ctx).0);
+            })
+            .discard_textures();
+    }
+}
+
+#[cfg(feature = "speech")]
+#[test]
+fn picker_blocks_capture_start_and_still_processes_an_engaged_hold_release() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = Context::default();
+    let workspace = app.board.create_workspace("speech picker");
+    let panel = app
+        .board
+        .create_panel(
+            horizon_core::PanelOptions {
+                kind: PanelKind::Editor,
+                ..Default::default()
+            },
+            workspace,
+        )
+        .expect("panel");
+    app.board.focus(panel);
+    let (speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1"]);
+    app.speech = Some(speech);
+    let _ = ctx
+        .run_ui(RawInput::default(), |ui| {
+            open_session_picker(&ui.button("Resume"), panel, Vec::new());
+        })
+        .discard_textures();
+    let input = |pressed| {
+        let mut input = RawInput {
+            events: vec![Event::Key {
+                key: Key::F1,
+                physical_key: Some(Key::F1),
+                pressed,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        input.viewports.get_mut(&egui::ViewportId::ROOT).expect("root").focused = Some(true);
+        input
+    };
+    let _ = ctx
+        .run_ui(input(true), |ui| {
+            app.handle_speech_input(&ctx);
+            open_session_picker(&ui.button("Resume"), panel, Vec::new());
+        })
+        .discard_textures();
+    assert!(!channels.capture_start_requested());
+    assert!(app.speech.as_ref().expect("speech").recording_sink().is_none());
+    app.speech
+        .as_mut()
+        .expect("speech")
+        .start(crate::app::speech::SpeechSink::Panel(panel), 0);
+    app.speech_engaged_profile = Some(0);
+    assert!(channels.capture_start_requested());
+    let _ = ctx
+        .run_ui(input(false), |_| {
+            app.handle_speech_input(&ctx);
+        })
+        .discard_textures();
+    assert!(app.speech.as_ref().expect("speech").recording_sink().is_none());
+    assert!(app.speech_engaged_profile.is_none());
+}
+
+#[test]
 fn picker_releases_input_when_its_owner_stops_rendering() {
     let ctx = Context::default();
     frame(&ctx, Vec::new(), true);
