@@ -208,16 +208,19 @@ impl SessionDeletionUi {
     }
 
     pub(super) fn reconcile_options(&mut self, options: &[AgentSessionBinding]) {
-        Arc::make_mut(&mut self.selected).retain(|id| options.iter().any(|binding| &binding.session_id == id));
+        let eligible_ids: HashSet<_> = options.iter().map(|binding| binding.session_id.as_str()).collect();
+        Arc::make_mut(&mut self.selected).retain(|id| eligible_ids.contains(id.as_str()));
         if self.confirmation.as_ref().is_some_and(|sessions| {
-            (self.confirmation_all && !AgentSessionBinding::same_saved_session_scope(sessions, options))
-                || sessions.iter().any(|session| {
-                    !options.iter().any(|binding| {
-                        binding.kind == session.kind
-                            && binding.session_id == session.session_id
-                            && binding.cwd == session.cwd
-                    })
-                })
+            if self.confirmation_all {
+                return !AgentSessionBinding::same_saved_session_scope(sessions, options);
+            }
+            let eligible_scopes: HashSet<_> = options
+                .iter()
+                .map(|binding| (binding.kind, binding.session_id.as_str(), binding.cwd.as_deref()))
+                .collect();
+            sessions.iter().any(|session| {
+                !eligible_scopes.contains(&(session.kind, session.session_id.as_str(), session.cwd.as_deref()))
+            })
         }) {
             self.confirmation = None;
         }

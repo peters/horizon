@@ -535,15 +535,15 @@ fn wrapped_cards_keep_all_metadata_visible_and_delete_actions_identifiable() {
         );
         assert!(card_text.0.contains_rect(bounds), "metadata must not be clipped");
         assert!(button.height() > 78.0, "wrapped title grows the row");
-        let label = format!("Delete conversation {}", binding.session_id);
-        assert!(
-            output
-                .platform_output
-                .accesskit_update
-                .expect("accessibility update")
-                .nodes
-                .iter()
-                .any(|(_, node)| node.label() == Some(label.as_str()))
-        );
+        let update = output.platform_output.accesskit_update.expect("accessibility update");
+        for action in ["Delete conversation", "Copy conversation ID"] {
+            let label = format!("{action} {}", binding.session_id);
+            assert!(
+                update
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some(label.as_str()))
+            );
+        }
     }
 }

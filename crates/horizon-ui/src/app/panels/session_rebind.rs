@@ -288,18 +288,7 @@ fn render_session_header(ui: &mut egui::Ui, count: usize) {
     ui.add_space(16.0);
 }
 
-fn render_session_row(
-    ui: &mut egui::Ui,
-    binding: &AgentSessionBinding,
-    focus_first: bool,
-    deletion: &mut SessionDeletionUi,
-    outcome: &mut SessionRebindRenderOutcome,
-) {
-    let label = binding
-        .label
-        .as_deref()
-        .filter(|label| !label.trim().is_empty())
-        .unwrap_or_else(|| binding.kind.display_name());
+fn session_row_text(binding: &AgentSessionBinding, label: &str) -> LayoutJob {
     let mut job = LayoutJob::default();
     job.append(
         &truncate_chars(label, 60),
@@ -331,6 +320,22 @@ fn render_session_row(
             ..Default::default()
         },
     );
+    job
+}
+
+fn render_session_row(
+    ui: &mut egui::Ui,
+    binding: &AgentSessionBinding,
+    focus_first: bool,
+    deletion: &mut SessionDeletionUi,
+    outcome: &mut SessionRebindRenderOutcome,
+) {
+    let label = binding
+        .label
+        .as_deref()
+        .filter(|label| !label.trim().is_empty())
+        .unwrap_or_else(|| binding.kind.display_name());
+    let mut job = session_row_text(binding, label);
     ui.push_id((&binding.kind, &binding.session_id), |ui| {
         let mut focused = false;
         let card = egui::Frame::new()
@@ -370,6 +375,13 @@ fn render_session_row(
                                 .stroke(egui::Stroke::NONE)
                                 .corner_radius(8.0),
                         );
+                        copy.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                copy.enabled(),
+                                format!("Copy conversation ID {}", binding.session_id),
+                            )
+                        });
                         focused |= copy.has_focus();
                         #[cfg(test)]
                         outcome.copy_rects.push(copy.rect);
