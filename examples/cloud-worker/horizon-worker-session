@@ -4,6 +4,19 @@
 # Retry:    horizon-worker-session --retry-shared-checkout
 set -euo pipefail
 umask 077
+# Every durability fence goes through here. A failing flush means the workspace storage refused
+# earlier writes, so stop with the reason instead of ending the connection with a bare error.
+# Nothing was launched, and attaching again resumes the interrupted preparation.
+flush() {
+    sync -f "$1" && return 0
+    {
+        echo "Workspace storage did not accept a write while saving $1."
+        df -h /workspace 2>/dev/null | tail -n 1
+        df -i /workspace 2>/dev/null | tail -n 1
+        echo 'No process was started. Attach again; if it fails again, stop and resume the cloud (its workspace volume is kept).'
+    } >&2
+    exit 6
+}
 shared_state=/workspace/shared-checkout-state
 if [ "${1:-}" = --retry-shared-checkout ]; then
     [ "$#" -eq 1 ] || exit 2
@@ -12,7 +25,7 @@ if [ "${1:-}" = --retry-shared-checkout ]; then
     flock 8
     if [ -f "$shared_state/failed" ]; then
         rm "$shared_state/failed"
-        sync -f "$shared_state"
+        flush "$shared_state"
         echo 'Cleared the failed shared checkout preparation; the next attach resumes it without resetting files.'
     else
         echo 'No failed shared checkout preparation is recorded.'
@@ -115,10 +128,10 @@ start_preparation() {
         mkdir "$state"
         printf '%s\n' "$revision" > "$state/revision"
         if [ -f "$session/siblings.json" ]; then cp "$session/siblings.json" "$state/siblings.json"; fi
-        sync -f "$state"
+        flush "$state"
     fi
     : > "$state/prepare.log"
-    export -f prepare present prepare_checkout
+    export -f flush prepare present prepare_checkout
     export shared id root worktree revision state
     # A signal (exit status 129 and above) leaves no failure record, so the next attach
     # resumes. 128 is an ordinary failure, such as a fatal Git error.
@@ -137,9 +150,9 @@ prepare_checkout() {
         read -r -a fields <<< "$entry"
         prepare "/workspace/siblings/${fields[0]}/repository.git" "$root/${fields[1]}" "${fields[2]}" "${fields[0]}"
     done
-    sync -f "$root"
+    flush "$root"
     touch "$state/ready"
-    sync -f "$state/ready"
+    flush "$state/ready"
 }
 # A worktree counts only when it belongs to its own repository; another clone at that path does not.
 present() {
@@ -215,12 +228,12 @@ if [ -n "$operation" ]; then
     session_data
     # Persist the fence before starting: a retry of this operation never starts a second process.
     touch "$fence"
-    sync -f "$fence"
+    flush "$fence"
     printf '%s\n' "$operation" > "$current.new"
-    sync -f "$current.new"
+    flush "$current.new"
     mv "$current.new" "$current"
     # The rename must be durable too, so the fence and the record naming its operation survive together.
-    sync -f "$current"
+    flush "$current"
     rm -f "$session/exit-status"
     launch
     rm -f "$session/preparing"
@@ -284,7 +297,7 @@ if ! running; then
     session_data
     # Persist the launch fence before starting a process; an uncertain launch cannot be replayed.
     touch "$session/launch-requested"
-    sync -f "$session/launch-requested"
+    flush "$session/launch-requested"
     launch
     rm "$session/preparing"
 fi

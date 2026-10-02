@@ -160,6 +160,30 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
 
+    def test_a_refused_flush_says_why_and_the_next_attach_resumes(self):
+        f = self.fixture
+        refusing = f.root / 'sync-fails'
+        refusing.touch()
+        stub = f.tools / 'sync'
+        stub.write_text(f"#!/bin/sh\nif [ -e '{refusing}' ]; then\n"
+                        "  echo \"sync: error syncing '$2': Disk quota exceeded\" >&2; exit 1\nfi\n"
+                        f"exec {shutil.which('sync')} \"$@\"\n")
+        stub.chmod(0o700)
+        refused = self.start('one')
+        self.assertEqual(refused.returncode, 6, refused.stderr)
+        self.assertIn('Workspace storage did not accept a write', refused.stderr)
+        self.assertIn('Disk quota exceeded', refused.stderr)
+        self.assertIn('Attach again', refused.stderr)
+        self.assertEqual(f.launches(), [])
+        self.assert_no_session_state('one')
+        self.assertFalse((self.state / 'failed').exists(), 'a storage refusal is not a failed preparation')
+        refusing.unlink()
+        self.release.touch()
+        resumed = self.start('one')
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertIn('Resuming', resumed.stderr)
+        self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
+
     def test_a_fatal_git_status_128_is_a_recorded_failure(self):
         f = self.fixture
         (f.tools / 'horizon-worker-source').write_text('#!/bin/sh\necho fatal: bad object >&2\nexit 128\n')
