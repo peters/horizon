@@ -15,11 +15,13 @@ const topmost = (x, y) => {
     return node;
 };
 // Hit testing ignores paint: a transparent element still wins the hit.
+const transparency = new Map();
 const paintsNothing = element => {
-    for (let current = element; current; current = parentOf(current)) {
-        if (getComputedStyle(current).opacity === '0') return true;
+    if (!element) return false;
+    if (!transparency.has(element)) {
+        transparency.set(element, getComputedStyle(element).opacity === '0' || paintsNothing(parentOf(element)));
     }
-    return false;
+    return transparency.get(element);
 };
 // Content is clipped out of the gutter, so a hit there is the scrollbar only
 // when it is the container itself; any other painted hit overlays the gutter.
@@ -83,42 +85,47 @@ const visibleSpans = (node, x, top, bottom) => {
     if (start !== null) spans.push([start, bottom]);
     return spans.filter(([first, last]) => last - first >= 1).map(([first, last]) => [first - 0.5, last + 0.5]);
 };
-for (let row = 0; row < grid && nested.length < limit; row++) {
-    for (let column = 0; column < grid && nested.length < limit; column++) {
-        let node = topmost((column + 0.5) * width / grid, (row + 0.5) * height / grid);
-        for (; node && node !== root && nested.length < limit; node = parentOf(node)) {
-            if (seen.has(node)) break;
-            seen.add(node);
-            if (!(node instanceof HTMLElement)) continue;
-            if (node.clientHeight < 32 || node.scrollHeight <= node.clientHeight + 1) continue;
-            const style = getComputedStyle(node);
-            if (!['auto', 'scroll', 'overlay'].includes(style.overflowY)) continue;
-            if (!translatedOnly(style)) continue;
-            const rect = node.getBoundingClientRect();
-            const borderLeft = parseFloat(style.borderLeftWidth) || 0;
-            const borderRight = parseFloat(style.borderRightWidth) || 0;
-            let gutter = node.offsetWidth - node.clientWidth - borderLeft - borderRight;
-            if ((style.scrollbarGutter || '').includes('both-edges')) gutter /= 2;
-            if (!(gutter >= 1)) continue;
-            const trackX = style.direction === 'rtl' ? rect.left + borderLeft : rect.right - borderRight - gutter;
-            const trackY = rect.top + node.clientTop;
-            // Reverse-flow scrollers report 0 at the bottom and negative offsets above it.
-            const reversed = style.display.includes('flex') && style.flexDirection === 'column-reverse';
-            const scrollTop = reversed ? node.scrollHeight - node.clientHeight + node.scrollTop : node.scrollTop;
-            for (const [visibleTop, visibleBottom] of visibleSpans(node, trackX + gutter / 2, trackY, trackY + node.clientHeight)) {
-                nested.push({
-                    track_x: trackX,
-                    track_y: trackY,
-                    track_width: gutter,
-                    track_height: node.clientHeight,
-                    visible_top: visibleTop,
-                    visible_bottom: visibleBottom,
-                    scroll_top: scrollTop,
-                    scroll_height: node.scrollHeight,
-                });
+// A page that breaks the nested scan must not cost the root sample.
+try {
+    for (let row = 0; row < grid && nested.length < limit; row++) {
+        for (let column = 0; column < grid && nested.length < limit; column++) {
+            let node = topmost((column + 0.5) * width / grid, (row + 0.5) * height / grid);
+            for (; node && node !== root && nested.length < limit; node = parentOf(node)) {
+                if (seen.has(node)) break;
+                seen.add(node);
+                if (!(node instanceof HTMLElement)) continue;
+                if (node.clientHeight < 32 || node.scrollHeight <= node.clientHeight + 1) continue;
+                const style = getComputedStyle(node);
+                if (!['auto', 'scroll', 'overlay'].includes(style.overflowY)) continue;
+                if (!translatedOnly(style)) continue;
+                const rect = node.getBoundingClientRect();
+                const borderLeft = parseFloat(style.borderLeftWidth) || 0;
+                const borderRight = parseFloat(style.borderRightWidth) || 0;
+                let gutter = node.offsetWidth - node.clientWidth - borderLeft - borderRight;
+                if ((style.scrollbarGutter || '').includes('both-edges')) gutter /= 2;
+                if (!(gutter >= 1)) continue;
+                const trackX = style.direction === 'rtl' ? rect.left + borderLeft : rect.right - borderRight - gutter;
+                const trackY = rect.top + node.clientTop;
+                // Reverse-flow scrollers report 0 at the bottom and negative offsets above it.
+                const reversed = style.display.includes('flex') && style.flexDirection === 'column-reverse';
+                const scrollTop = reversed ? node.scrollHeight - node.clientHeight + node.scrollTop : node.scrollTop;
+                for (const [visibleTop, visibleBottom] of visibleSpans(node, trackX + gutter / 2, trackY, trackY + node.clientHeight)) {
+                    nested.push({
+                        track_x: trackX,
+                        track_y: trackY,
+                        track_width: gutter,
+                        track_height: node.clientHeight,
+                        visible_top: visibleTop,
+                        visible_bottom: visibleBottom,
+                        scroll_top: scrollTop,
+                        scroll_height: node.scrollHeight,
+                    });
+                }
             }
         }
     }
+} catch (_) {
+    nested.length = 0;
 }
 return {
     scroll_x: window.scrollX, scroll_y: window.scrollY,
