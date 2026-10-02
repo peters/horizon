@@ -81,6 +81,65 @@ fn stdio_negotiates_handshake_protocols_without_leaking_private_endpoints() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn rejected_cast_operations_are_mcp_errors() {
+    use horizon_browser_control::manifest::cast::{CastOutcome, claim_at, complete_at};
+    use std::time::{Duration, Instant};
+
+    let home = tempfile::tempdir().expect("isolated home");
+    let mut process = McpProcess::start_as(home.path(), "horizon:casting-client");
+    process.send(&json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "casting-test", "version": "1"}}
+    }));
+    process.notify(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    let root = home.path().join(".horizon");
+    let host = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let requests = claim_at(&root, "test-host").expect("claim cast request");
+            if let Some(request) = requests.first() {
+                complete_at(&root, request, CastOutcome::failed("Source outside workspace"))
+                    .expect("return host rejection");
+                return;
+            }
+            assert!(Instant::now() < deadline, "no casting request reached the host");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    let rejected = process.send(&json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "cast", "arguments": {"operation": "start",
+            "receiver_id": "synthetic-tv", "source": {"kind": "panel", "id": "foreign"}}}
+    }));
+    host.join().expect("host response");
+    assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+    assert!(rejected.to_string().contains("Source outside workspace"));
+    process.close();
+}
+
+#[test]
+#[cfg(not(target_os = "linux"))]
+fn unsupported_casting_is_an_mcp_error_without_a_host_request() {
+    let home = tempfile::tempdir().expect("isolated home");
+    let mut process = McpProcess::start_as(home.path(), "horizon:casting-client");
+    process.send(&json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "casting-test", "version": "1"}}
+    }));
+    process.notify(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    let rejected = process.send(&json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "cast", "arguments": {"operation": "status"}}
+    }));
+    assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+    assert!(rejected.to_string().contains("Casting is supported on Linux only"));
+    process.close();
+}
+
+#[test]
 fn discovery_tool_catalog_is_valid_for_per_request_protocol_clients() {
     let home = tempfile::tempdir().expect("isolated home");
     let mut process = McpProcess::start(home.path());
@@ -262,7 +321,7 @@ fn assert_orientation_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(29));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(30));
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);
     assert_provider_tools_contract(tools);

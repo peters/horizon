@@ -40,6 +40,7 @@ use crate::paths::{BrowserRuntimePaths, safe_local_id};
 mod agent;
 mod audit;
 mod capture;
+pub mod cast;
 mod close;
 mod cloud_companion;
 mod create;

@@ -1,0 +1,448 @@
+use super::super::HorizonApp;
+use egui::{Context, Id, Order, Rect, ViewportId};
+use horizon_cast::CastStatus;
+use horizon_core::{WorkspaceId, browser::manifest::cast::CastSource};
+use std::time::{Duration, Instant};
+
+const CAPTURE_INTERVAL: Duration = Duration::from_millis(65);
+
+#[derive(Clone, Debug)]
+struct CaptureTicket {
+    pixels_per_point: f32,
+    regions: Vec<(String, Instant, Rect)>,
+}
+
+impl HorizonApp {
+    pub(in crate::app) fn cast_frame(&mut self, ctx: &Context) {
+        self.drain_cast_requests(ctx, None);
+        self.casting.poll();
+        for session in &self.casting.sessions {
+            if session.worker.finished() {
+                continue;
+            }
+            if self.pending_session_switch.is_some()
+                || self.cast_source_rect(session.workspace, &session.source, ctx).is_err()
+            {
+                session.worker.stop();
+                self.casting.notice = Some("Casting stopped because its source is no longer visible".into());
+            }
+        }
+        self.consume_cast_images(ctx);
+        self.render_cast_controls(ctx);
+        let active = self.casting.sessions.iter().any(|session| !session.worker.finished());
+        if active || self.casting.discovery.is_some() || self.casting.paired_refresh.is_some() {
+            ctx.request_repaint_after(CAPTURE_INTERVAL);
+        }
+        if let Some(remaining) = self
+            .casting
+            .last_capture
+            .and_then(|last| CAPTURE_INTERVAL.checked_sub(last.elapsed()))
+        {
+            ctx.request_repaint_after(remaining);
+            return;
+        }
+        let mut regions = Vec::new();
+        for session in &self.casting.sessions {
+            if !matches!(session.worker.status(), CastStatus::Streaming { .. }) {
+                continue;
+            }
+            match self.cast_source_rect(session.workspace, &session.source, ctx) {
+                Ok(rect) if !self.cast_obscured(&session.source, rect, ctx) => {
+                    if !self.cast_geometry_settled(session.workspace, &session.source, ctx) {
+                        continue;
+                    }
+                    regions.push((session.receiver_id.clone(), session.generation, rect));
+                }
+                _ => {
+                    session.worker.stop();
+                    self.casting.notice = Some("Casting stopped because its source was hidden or covered".into());
+                }
+            }
+        }
+        if !regions.is_empty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(CaptureTicket {
+                pixels_per_point: ctx.pixels_per_point(),
+                regions,
+            })));
+            self.casting.last_capture = Some(Instant::now());
+        }
+    }
+    pub(super) fn cast_source_rect(
+        &self,
+        workspace: WorkspaceId,
+        source: &CastSource,
+        ctx: &Context,
+    ) -> Result<Rect, String> {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_prototype.fullscreen.is_some() {
+            return Err("Return to the main canvas before casting".into());
+        }
+        if self.workspace_is_detached(workspace)
+            || self.startup_chooser.is_some()
+            || self.shutdown_progress.is_some()
+            || self.fullscreen_panel.is_some()
+        {
+            return Err("Source must be visible in the main Horizon window".into());
+        }
+        let selected: Vec<_> = match source {
+            CastSource::Panel { id } => self
+                .board
+                .panels
+                .iter()
+                .filter(|panel| panel.workspace_id == workspace && panel.local_id == *id)
+                .map(|panel| panel.id)
+                .collect(),
+            CastSource::Workspace { id } => {
+                if self
+                    .board
+                    .workspace(workspace)
+                    .is_none_or(|value| value.local_id != *id)
+                {
+                    return Err("Source is outside the current workspace".into());
+                }
+                self.board
+                    .panels
+                    .iter()
+                    .filter(|panel| panel.workspace_id == workspace)
+                    .map(|panel| panel.id)
+                    .collect()
+            }
+        };
+        if selected.is_empty() {
+            return Err("Source has no visible panels".into());
+        }
+        let mut bounds = Rect::NOTHING;
+        for id in &selected {
+            bounds = bounds.union(self.cast_visible_panel_rect(*id, ctx)?);
+        }
+        for panel in &self.board.panels {
+            if !selected.contains(&panel.id)
+                && self
+                    .panel_screen_rects
+                    .get(&panel.id)
+                    .is_some_and(|rect| rect.intersects(bounds))
+            {
+                return Err("Another panel overlaps this source; move it before casting".into());
+            }
+        }
+        if matches!(source, CastSource::Workspace { .. })
+            && self
+                .workspace_screen_rects
+                .iter()
+                .any(|(id, rect)| *id != workspace && rect.intersects(bounds))
+        {
+            return Err("Another workspace overlaps this source".into());
+        }
+        if !bounds.is_finite() || bounds.width() < 4.0 || bounds.height() < 4.0 {
+            return Err("Source has no drawable area".into());
+        }
+        Ok(bounds.shrink(1.0))
+    }
+    fn cast_visible_panel_rect(&self, id: horizon_core::PanelId, ctx: &Context) -> Result<Rect, String> {
+        if !self.panel_screen_rects.contains_key(&id) {
+            return Err("Source is not visible".into());
+        }
+        let panel = self
+            .board
+            .panel(id)
+            .filter(|panel| panel.visible)
+            .ok_or("Source is not visible")?;
+        let canvas = self.canvas_rect(ctx);
+        let position = self.arranged_panel_position(
+            id,
+            panel.workspace_id,
+            egui::pos2(panel.layout.position[0], panel.layout.position[1]),
+        );
+        // Hit-test rectangles are clipped. Validate complete render bounds before capture.
+        let rect = Rect::from_min_size(
+            self.canvas_to_screen(canvas, position),
+            self.canvas_size_to_screen(egui::vec2(panel.layout.size[0], panel.layout.size[1])),
+        );
+        if !canvas.contains_rect(rect) {
+            return Err("Fit the entire source into view before casting".into());
+        }
+        Ok(rect)
+    }
+    fn cast_geometry_settled(&self, workspace: WorkspaceId, source: &CastSource, ctx: &Context) -> bool {
+        self.board
+            .panels
+            .iter()
+            .filter(|panel| {
+                panel.workspace_id == workspace
+                    && match source {
+                        CastSource::Panel { id } => panel.local_id == *id,
+                        CastSource::Workspace { .. } => true,
+                    }
+            })
+            .all(|panel| {
+                self.panel_screen_rects.get(&panel.id).is_some_and(|rendered| {
+                    self.cast_visible_panel_rect(panel.id, ctx)
+                        .is_ok_and(|current| current == *rendered)
+                })
+            })
+    }
+    fn cast_obscured(&self, source: &CastSource, rect: Rect, ctx: &Context) -> bool {
+        if self.host_content_dialog_open() || self.pending_session_switch.is_some() {
+            return true;
+        }
+        ctx.memory(|memory| {
+            memory.areas().visible_layer_ids().into_iter().any(|layer| {
+                if layer.order == Order::Background {
+                    return false;
+                }
+                let selected = self.board.panels.iter().filter(|panel| match source {
+                    CastSource::Panel { id } => panel.local_id == *id,
+                    CastSource::Workspace { id } => self
+                        .board
+                        .workspace(panel.workspace_id)
+                        .is_some_and(|value| value.local_id == *id),
+                });
+                if selected.clone().any(|panel| {
+                    layer.id == Id::new(("panel", panel.id.0)) || layer.id == Id::new(("cast_icon", panel.id.0))
+                }) {
+                    return false;
+                }
+                let Some(area) = memory.area_rect(layer.id) else {
+                    return false;
+                };
+                let transform = memory.to_global.get(&layer).copied().unwrap_or_default();
+                (transform * area).intersects(rect)
+            })
+        })
+    }
+    fn consume_cast_images(&mut self, ctx: &Context) {
+        let events = ctx.input(|input| input.events.clone());
+        for event in events {
+            let egui::Event::Screenshot {
+                viewport_id,
+                user_data,
+                image,
+            } = event
+            else {
+                continue;
+            };
+            if viewport_id != ViewportId::ROOT {
+                continue;
+            }
+            let Some(ticket) = user_data
+                .data
+                .as_ref()
+                .and_then(|value| value.downcast_ref::<CaptureTicket>())
+            else {
+                continue;
+            };
+            let (Ok(width), Ok(height)) = (u16::try_from(image.width()), u16::try_from(image.height())) else {
+                continue;
+            };
+            let image_bounds = Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(f32::from(width), f32::from(height)) / ticket.pixels_per_point,
+            );
+            for (receiver_id, generation, rect) in &ticket.regions {
+                let Some(session) = self
+                    .casting
+                    .sessions
+                    .iter()
+                    .find(|session| session.receiver_id == *receiver_id && session.generation == *generation)
+                else {
+                    continue;
+                };
+                if !matches!(session.worker.status(), CastStatus::Streaming { .. }) {
+                    continue;
+                }
+                let Ok(current) = self.cast_source_rect(session.workspace, &session.source, ctx) else {
+                    continue;
+                };
+                if current != *rect
+                    || !self.cast_geometry_settled(session.workspace, &session.source, ctx)
+                    || self.cast_obscured(&session.source, current, ctx)
+                {
+                    continue;
+                }
+                if !image_bounds.contains_rect(*rect) {
+                    session.worker.stop();
+                    continue;
+                }
+                let crop = image.region(rect, Some(ticket.pixels_per_point));
+                if crop.width() == 0 || crop.height() == 0 {
+                    continue;
+                }
+                let (width, height) = super::video_format(session.orientation, session.resolution).dimensions();
+                let dimensions = (usize::from(width), usize::from(height));
+                let _ = session.worker.submit(letterbox(&crop, dimensions));
+            }
+        }
+    }
+}
+fn letterbox(image: &egui::ColorImage, (width, height): (usize, usize)) -> Vec<u8> {
+    let mut rgba = vec![0; width * height * 4];
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        pixel[3] = 255;
+    }
+    let (fit_width, fit_height) = if image.width() * height > image.height() * width {
+        (width, image.height() * width / image.width())
+    } else {
+        (image.width() * height / image.height(), height)
+    };
+    if fit_width == 0 || fit_height == 0 {
+        return rgba;
+    }
+    let left = (width - fit_width) / 2;
+    let top = (height - fit_height) / 2;
+    let source_x: Vec<_> = (0..fit_width).map(|x| x * image.width() / fit_width).collect();
+    let mut previous_source_y = None;
+    for y in 0..fit_height {
+        let source_y = y * image.height() / fit_height;
+        let at = ((y + top) * width + left) * 4;
+        let end = at + fit_width * 4;
+        if previous_source_y == Some(source_y) {
+            rgba.copy_within(at - width * 4..end - width * 4, at);
+        } else {
+            let row = &image.pixels[source_y * image.width()..(source_y + 1) * image.width()];
+            for (pixel, source_x) in rgba[at..end].as_chunks_mut::<4>().0.iter_mut().zip(&source_x) {
+                *pixel = row[*source_x].to_array();
+            }
+            previous_source_y = Some(source_y);
+        }
+    }
+    rgba
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::test_support::{
+        editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup,
+    };
+    use horizon_core::{RuntimeState, StartupDecision};
+
+    #[test]
+    fn letterbox_preserves_aspect_ratio_and_opaque_borders() {
+        let image = egui::ColorImage::filled([4, 2], egui::Color32::RED);
+        let out = letterbox(&image, (4, 4));
+        assert_eq!(&out[..16], &[0, 0, 0, 255].repeat(4));
+        assert_eq!(&out[16..48], &[255, 0, 0, 255].repeat(8));
+        assert_eq!(&out[48..], &[0, 0, 0, 255].repeat(4));
+    }
+    #[test]
+    fn letterbox_matches_nearest_pixels_for_upscaling_downscaling_and_portrait() {
+        let image = egui::ColorImage::new(
+            [3, 2],
+            vec![
+                egui::Color32::RED,
+                egui::Color32::GREEN,
+                egui::Color32::BLUE,
+                egui::Color32::WHITE,
+                egui::Color32::BLACK,
+                egui::Color32::YELLOW,
+            ],
+        );
+        for (width, height) in [(12, 8), (8, 12), (2, 2), (3, 2)] {
+            let actual = letterbox(&image, (width, height));
+            let (fit_width, fit_height) = if image.width() * height > image.height() * width {
+                (width, image.height() * width / image.width())
+            } else {
+                (image.width() * height / image.height(), height)
+            };
+            let left = (width - fit_width) / 2;
+            let top = (height - fit_height) / 2;
+            for y in 0..height {
+                for x in 0..width {
+                    let expected = if x >= left && x < left + fit_width && y >= top && y < top + fit_height {
+                        image[(
+                            (x - left) * image.width() / fit_width,
+                            (y - top) * image.height() / fit_height,
+                        )]
+                            .to_array()
+                    } else {
+                        [0, 0, 0, 255]
+                    };
+                    let at = (y * width + x) * 4;
+                    assert_eq!(&actual[at..at + 4], &expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn layout_changes_wait_for_matching_rendered_geometry() {
+        let state = RuntimeState {
+            workspaces: vec![editor_workspace_state("source", [0.0, 0.0])],
+            ..RuntimeState::default()
+        };
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(state),
+        });
+        run_app_frame_with_input(&ctx, &mut app, raw_input([1600.0, 1000.0], None));
+        let workspace = app.board.workspaces[0].id;
+        let id = app.board.panels[0].id;
+        let source = CastSource::Panel {
+            id: "source-panel".into(),
+        };
+        assert!(app.cast_geometry_settled(workspace, &source, &ctx));
+        for resize in [false, true] {
+            if resize {
+                app.board.panels[0].layout.size[0] += 20.0;
+            } else {
+                app.board.panels[0].layout.position[0] += 20.0;
+            }
+            assert!(app.cast_source_rect(workspace, &source, &ctx).is_ok());
+            assert!(!app.cast_geometry_settled(workspace, &source, &ctx));
+            let rendered = app.cast_visible_panel_rect(id, &ctx).expect("visible source");
+            app.panel_screen_rects.insert(id, rendered);
+            assert!(app.cast_geometry_settled(workspace, &source, &ctx));
+        }
+    }
+
+    #[test]
+    fn source_authority_and_overlay_privacy_are_checked() {
+        let state = RuntimeState {
+            workspaces: vec![
+                editor_workspace_state("first", [0.0, 0.0]),
+                editor_workspace_state("second", [600.0, 0.0]),
+            ],
+            ..RuntimeState::default()
+        };
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(state),
+        });
+        run_app_frame_with_input(&ctx, &mut app, raw_input([1600.0, 1000.0], None));
+        let first = app.board.workspaces[0].id;
+        let source = CastSource::Panel {
+            id: "first-panel".into(),
+        };
+        assert!(
+            app.cast_source_rect(
+                first,
+                &CastSource::Panel {
+                    id: "second-panel".into()
+                },
+                &ctx
+            )
+            .is_err()
+        );
+        let region = Rect::from_min_size(egui::pos2(400.0, 300.0), egui::vec2(200.0, 150.0));
+        let _ = ctx.run_ui(raw_input([1600.0, 1000.0], None), |ui| {
+            egui::Area::new(Id::new("synthetic_overlay"))
+                .order(Order::Foreground)
+                .fixed_pos(region.min)
+                .show(ui.ctx(), |ui| {
+                    ui.allocate_space(region.size());
+                });
+        });
+        assert!(app.cast_obscured(&source, region, &ctx));
+        app.board.panels[0].layout.size[0] = 10_000.0;
+        let id = app.board.panels[0].id;
+        app.panel_screen_rects.insert(id, region);
+        assert!(
+            app.cast_source_rect(first, &source, &ctx)
+                .expect_err("clipped source")
+                .contains("Fit the entire source")
+        );
+        assert!(!app.cast_obscured(
+            &source,
+            Rect::from_min_size(egui::pos2(1200.0, 700.0), egui::vec2(20.0, 20.0)),
+            &ctx
+        ));
+    }
+}

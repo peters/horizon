@@ -120,6 +120,7 @@ impl HorizonApp {
         }: AppBootstrap,
     ) -> Self {
         Self {
+            #[cfg(target_os = "linux")] casting: super::casting::CastState::new(session_store.home().root().join("cast-pairings")),
             board, #[cfg(feature = "cloud-workspaces")] cloud_prototype: super::cloud_panel::CloudPrototype::default(),
             panels_to_close: Vec::new(),
             panels_to_restart: Vec::new(),
@@ -216,8 +217,7 @@ impl HorizonApp {
             config_last_mtime,
             config_last_check: None,
             shutdown_progress: None,
-            pending_session_switch: None,
-            exit_cleanup_complete: false,
+            pending_session_switch: None, exit_cleanup_complete: false,
         }
     }
 }

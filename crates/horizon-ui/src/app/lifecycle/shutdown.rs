@@ -28,6 +28,8 @@ impl HorizonApp {
     /// background threads join terminal event loops and browser drivers.
     #[profiling::function]
     pub(in crate::app) fn begin_shutdown(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.casting.stop_all();
         if self.shutdown_progress.is_some() {
             return;
         }
@@ -56,6 +58,8 @@ impl HorizonApp {
             return;
         };
         let complete = progress.is_complete();
+        #[cfg(target_os = "linux")]
+        let complete = complete && self.casting.finished();
         let timed_out = progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT;
         let mut browser_outcome = if progress.browser_shutdown_is_complete() {
             BrowserShutdownOutcome::Complete

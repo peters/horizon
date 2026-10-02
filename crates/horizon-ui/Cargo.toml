@@ -17,6 +17,7 @@ trace-profiling = ["horizon-core/trace-profiling", "profiling/profile-with-traci
 # by default; add one of the GPU variants below to compile a GPU backend in.
 # Backend selection at runtime stays automatic with CPU fallback either way.
 speech = ["dep:transcribe-cpp", "dep:cpal"]
+cast-nvenc = ["horizon-cast/nvenc"]
 speech-cuda = ["speech", "transcribe-cpp/cuda"]
 speech-vulkan = ["speech", "transcribe-cpp/vulkan"]
 
@@ -64,3 +65,6 @@ rusqlite.workspace = true
 x11rb.workspace = true
 wl-clipboard-rs.workspace = true
 horizon-wayland.workspace = true
+
+horizon-cast.workspace = true
+zeroize.workspace = true

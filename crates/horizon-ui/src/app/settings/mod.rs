@@ -2,6 +2,8 @@ mod bar;
 mod general;
 mod presets;
 mod remote_browsers;
+#[cfg(target_os = "linux")]
+mod remote_devices;
 mod remote_recovery;
 mod remote_usage;
 mod shortcuts;
@@ -32,6 +34,7 @@ enum SettingsTab {
     Shortcuts,
     Presets,
     RemoteBrowsers,
+    RemoteDevices,
     Yaml,
 }
 
@@ -42,15 +45,17 @@ impl SettingsTab {
             Self::Shortcuts => "Shortcuts",
             Self::Presets => "Presets",
             Self::RemoteBrowsers => "Remote browsers",
+            Self::RemoteDevices => "Remote Devices",
             Self::Yaml => "YAML",
         }
     }
 
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::General,
         Self::Shortcuts,
         Self::Presets,
         Self::RemoteBrowsers,
+        Self::RemoteDevices,
         Self::Yaml,
     ];
 }
@@ -71,6 +76,8 @@ pub(super) struct SettingsEditor {
     credential_inputs: remote_browsers::CredentialInputs,
     portable_profile: remote_browsers::PortableProfilePanel,
     provider_usage: remote_usage::UsagePanels,
+    #[cfg(target_os = "linux")]
+    remote_devices: remote_devices::RemoteDevicesPanel,
 }
 
 impl SettingsEditor {
@@ -106,6 +113,8 @@ impl HorizonApp {
                 self.apply_live_preview(&config);
             }
         } else {
+            #[cfg(target_os = "linux")]
+            self.casting.refresh_pairings();
             let content = self.load_or_generate_config_yaml();
             let editing_config = Config::from_yaml(&content).ok();
             self.settings = Some(SettingsEditor {
@@ -117,6 +126,8 @@ impl HorizonApp {
                 credential_inputs: remote_browsers::CredentialInputs::default(),
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
+                #[cfg(target_os = "linux")]
+                remote_devices: remote_devices::RemoteDevicesPanel::default(),
             });
         }
     }
@@ -172,6 +183,22 @@ impl HorizonApp {
         let action = bar::render(ui, &status_text, status_color, is_valid, has_changes);
         self.apply_settings_action(action);
 
+        #[cfg(target_os = "linux")]
+        if let Some(editor) = self.settings.as_mut() {
+            editor.remote_devices.loading = self.casting.pairing_loading();
+            editor.remote_devices.store_error = self.casting.pairing_error().map(str::to_owned);
+            editor.remote_devices.devices = self
+                .casting
+                .paired_devices()
+                .iter()
+                .map(|device| remote_devices::Device {
+                    id: device.id.clone(),
+                    name: device.name.clone(),
+                    available: self.casting.receiver_available(&device.id),
+                    busy: self.casting.receiver_busy(&device.id),
+                })
+                .collect();
+        }
         let config_path = self.config_path.display().to_string();
         if let Some(editor) = self.settings.as_mut() {
             render_settings_panel(
@@ -182,6 +209,45 @@ impl HorizonApp {
                 &mut self.remote_browser_credentials,
                 &mut self.browser_create_host.remote_allocations,
             );
+        }
+        #[cfg(target_os = "linux")]
+        self.apply_remote_device_action(ui.ctx());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn apply_remote_device_action(&mut self, ctx: &egui::Context) {
+        let action = self
+            .settings
+            .as_mut()
+            .and_then(|editor| editor.remote_devices.action.take());
+        let Some(action) = action else {
+            return;
+        };
+        let error = match action {
+            remote_devices::Action::Refresh => {
+                self.casting.refresh_pairings();
+                if let Some(workspace) = self.board.active_workspace {
+                    self.cast_operation(
+                        workspace,
+                        &horizon_core::browser::manifest::cast::CastOperation::Discover,
+                        ctx,
+                    )
+                    .error
+                } else {
+                    None
+                }
+            }
+            remote_devices::Action::Forget(receiver_id) => {
+                self.cast_operation(
+                    self.board.active_workspace.unwrap_or(horizon_core::WorkspaceId(0)),
+                    &horizon_core::browser::manifest::cast::CastOperation::Forget { receiver_id },
+                    ctx,
+                )
+                .error
+            }
+        };
+        if let Some(editor) = self.settings.as_mut() {
+            editor.remote_devices.error = error;
         }
     }
 
@@ -359,6 +425,15 @@ fn render_settings_panel(
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, config_path, &mut editor.buffer, available);
                 }
+                SettingsTab::RemoteDevices => {
+                    #[cfg(target_os = "linux")]
+                    egui::ScrollArea::vertical()
+                        .max_height(available.y)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| editor.remote_devices.render(ui));
+                    #[cfg(not(target_os = "linux"))]
+                    dim_label(ui, "Apple TV casting is currently available on Linux.");
+                }
                 tab => render_gui_tab(ui, tab, editor, model_info_cache, credentials, allocations, available),
             }
         });
@@ -410,7 +485,7 @@ fn render_gui_tab(
                     )
                 }
                 // Yaml is handled before this function is called.
-                SettingsTab::Yaml => return,
+                SettingsTab::Yaml | SettingsTab::RemoteDevices => return,
             };
             if changed && let Ok(yaml) = config.to_yaml() {
                 *buffer = yaml;
@@ -421,8 +496,8 @@ fn render_gui_tab(
 fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
     let old_tab = editor.active_tab;
 
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
         for tab in SettingsTab::ALL {
             let selected = editor.active_tab == tab;
             let (fill, text_color) = if selected {

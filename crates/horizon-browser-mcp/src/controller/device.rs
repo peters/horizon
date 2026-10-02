@@ -23,3 +23,29 @@ impl BrowserController {
         }
     }
 }
+
+impl BrowserController {
+    pub(crate) async fn cast(
+        &self,
+        operation: horizon_browser_control::manifest::cast::CastOperation,
+    ) -> Result<horizon_browser_control::manifest::cast::CastOutcome, String> {
+        use horizon_browser_control::manifest::cast;
+        if !cfg!(target_os = "linux") {
+            return Ok(cast::CastOutcome::failed("Casting is supported on Linux only"));
+        }
+        let request =
+            cast::enqueue(self.identity(), operation, Duration::from_secs(10)).map_err(|error| error.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(result) = cast::take_result(&request).map_err(|error| error.to_string())? {
+                return Ok(result);
+            }
+            if Instant::now() >= deadline {
+                return Ok(cast::CastOutcome::failed(
+                    "Host did not answer. Inspect status before retrying; the operation may have completed.",
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+}

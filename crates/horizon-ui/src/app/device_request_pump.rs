@@ -92,6 +92,10 @@ impl DeviceRequestBridge {
             self.persist_pending
                 .store(installed.app.runtime_is_dirty(), Ordering::Relaxed);
         }
+        #[cfg(target_os = "linux")]
+        installed
+            .app
+            .drain_cast_requests(&installed.ctx, self.root_override.as_deref());
         installed.app.settle_device_reveals_without_frame();
         self.sync_held_reveals(&installed.app);
         changed
@@ -264,10 +268,15 @@ fn next_pump_wait(files_pending: bool, persist_pending: bool, persist_wait: Dura
 
 fn device_requests_pending(root: Option<&Path>) -> std::io::Result<bool> {
     let host = manifest::host_instance();
-    match root {
-        Some(root) => device::has_pending_at(root, host),
-        None => device::has_pending(host),
-    }
+    let device = match root {
+        Some(root) => device::has_pending_at(root, host)?,
+        None => device::has_pending(host)?,
+    };
+    let cast = match root {
+        Some(root) => manifest::cast::has_pending_at(root, host)?,
+        None => manifest::cast::has_pending(host)?,
+    };
+    Ok(device || cast)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

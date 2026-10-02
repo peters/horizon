@@ -133,6 +133,16 @@ impl HorizonApp {
         let canvas_transform = super::view::canvas_scene_transform(canvas_rect, self.canvas_view);
         let canvas_clip_rect = canvas_transform.inverse() * canvas_rect;
         let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones, visible_detached_workspace);
+        #[cfg(target_os = "linux")]
+        let visuals = {
+            let mut visuals = visuals;
+            if self.casting.picker_open() && visible_detached_workspace.is_none() {
+                for workspace in &mut visuals {
+                    workspace.label_hidden = true;
+                }
+            }
+            visuals
+        };
         let workspace_collision_ids = self.workspace_collision_scope(visible_detached_workspace);
 
         self.workspace_screen_rects.clear();
