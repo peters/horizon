@@ -380,6 +380,10 @@ impl HorizonApp {
         if raw.viewport_id != ViewportId::ROOT {
             return;
         }
+        if super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some()) {
+            self.canvas_gesture.discard();
+            return;
+        }
         self.canvas_gesture.completed = None;
         let session_id = self.active_session.as_ref().map(|session| session.session_id.as_str());
         if self.canvas_gesture.session_id.as_deref() != session_id {

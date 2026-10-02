@@ -55,12 +55,14 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
         self.filter_held_navigation_keys(ctx);
-        if !self.host_dialog_open() {
+        let input_blocked = self.host_dialog_open()
+            || super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
+        if !input_blocked {
             self.sync_panel_focus_from_pointer_press(ctx);
         }
         // Releases and asynchronous speech work must continue through dialogs.
         self.handle_speech_input(ctx);
-        if !self.host_dialog_open() {
+        if !input_blocked {
             #[cfg(feature = "cloud-workspaces")]
             self.handle_cloud_fullscreen_exit(ctx);
             self.handle_fullscreen_toggle(ctx);

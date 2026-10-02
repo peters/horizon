@@ -226,7 +226,9 @@ impl HorizonApp {
         // one-shot frame keyboard metadata twice and re-run the stateful
         // speech filter (leaking an orphan hotkey key-up).
         self.filter_held_navigation_keys(ctx);
-        if !self.host_dialog_open() {
+        if !self.host_dialog_open()
+            && super::panels::session_picker_panel(ctx).is_none_or(|panel| self.board.panel(panel).is_none())
+        {
             self.handle_detached_shortcuts(ctx, workspace_id);
         }
         self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
