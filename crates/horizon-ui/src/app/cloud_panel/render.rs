@@ -760,4 +760,29 @@ mod tests {
         assert!(app.board.workspace(shared).is_some(), "cloud 102 keeps its workspace");
         assert!(app.board.workspace(single).is_none());
     }
+
+    #[test]
+    fn removing_an_empty_card_drops_only_its_row_height_cache() {
+        let (temp, mut app) = test_app();
+        let workspace = app.board.create_workspace("Demo");
+        let local = app.board.workspace(workspace).unwrap().local_id.clone();
+        for issue in [11, 12] {
+            app.cloud_prototype.groups.0.push(CloudGroup::new(
+                issue,
+                "Demo".into(),
+                local.clone(),
+                temp.path().into(),
+                [0.0, 0.0],
+            ));
+        }
+        let ctx = egui::Context::default();
+        super::super::production::cards::remember_log_height_cache(&ctx, 11);
+        super::super::production::cards::remember_log_height_cache(&ctx, 12);
+
+        app.cloud_action(Action::Remove(11), &ctx);
+
+        assert!(app.cloud_prototype.groups.0.iter().all(|group| group.issue != 11));
+        assert!(!super::super::production::cards::log_height_cache_present(&ctx, 11));
+        assert!(super::super::production::cards::log_height_cache_present(&ctx, 12));
+    }
 }

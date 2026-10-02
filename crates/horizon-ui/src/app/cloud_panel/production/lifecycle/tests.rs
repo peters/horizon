@@ -348,6 +348,52 @@ fn add_editor(app: &mut HorizonApp, workspace: WorkspaceId) -> PanelId {
 
 #[test]
 #[cfg_attr(windows, ignore = "cloud state stores need Unix directory durability")]
+fn removing_a_cloud_drops_only_its_row_height_cache() {
+    let (_temp, ctx, mut app) = live_cloud_app();
+    let first = app.board.create_workspace("One");
+    let second = app.board.create_workspace("Two");
+    add_unallocated_cloud(&mut app, 1, first);
+    add_unallocated_cloud(&mut app, 2, second);
+    super::super::cards::remember_log_height_cache(&ctx, 1);
+    super::super::cards::remember_log_height_cache(&ctx, 2);
+
+    app.remove_deleted_cloud(1, &ctx);
+
+    assert!(app.cloud_prototype.groups.0.iter().all(|group| group.issue != 1));
+    assert!(!super::super::cards::log_height_cache_present(&ctx, 1));
+    assert!(super::super::cards::log_height_cache_present(&ctx, 2));
+}
+
+#[test]
+fn session_restore_drops_the_row_height_cache_of_a_cloud_that_leaves() {
+    let (temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    let workspace = app.board.create_workspace("kept");
+    let local = app.board.workspace(workspace).unwrap().local_id.clone();
+    let kept = CloudGroup::new(2, "Kept".into(), local.clone(), temp.path().into(), [0.0, 0.0]);
+    app.cloud_prototype.groups.0.push(CloudGroup::new(
+        1,
+        "Dropped".into(),
+        local,
+        temp.path().into(),
+        [0.0, 0.0],
+    ));
+    app.cloud_prototype.groups.0.push(kept.clone());
+    app.board.cloud_groups.0.push(kept);
+    app.cloud_prototype.initialized = false;
+    super::super::cards::remember_log_height_cache(&ctx, 1);
+    super::super::cards::remember_log_height_cache(&ctx, 2);
+
+    app.restore_cloud_state(&ctx);
+
+    assert!(app.cloud_prototype.groups.0.iter().all(|group| group.issue != 1));
+    assert!(app.cloud_prototype.groups.0.iter().any(|group| group.issue == 2));
+    assert!(!super::super::cards::log_height_cache_present(&ctx, 1));
+    assert!(super::super::cards::log_height_cache_present(&ctx, 2));
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "cloud state stores need Unix directory durability")]
 fn removing_the_only_cloud_removes_its_workspace_on_the_next_frame() {
     for survivors in [1, 2] {
         for with_member in [false, true] {

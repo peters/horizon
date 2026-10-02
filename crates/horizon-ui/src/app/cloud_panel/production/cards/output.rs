@@ -121,6 +121,23 @@ pub(in crate::app::cloud_panel) fn forget_log_heights(ctx: &egui::Context, id: u
     });
 }
 
+#[cfg(test)]
+pub(in crate::app::cloud_panel) fn remember_log_height_cache(ctx: &egui::Context, id: u32) {
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            height_cache_id(id),
+            HeightCache {
+                entries: HashMap::from([((320, 1), 16.0)]),
+            },
+        );
+    });
+}
+
+#[cfg(test)]
+pub(in crate::app::cloud_panel) fn log_height_cache_present(ctx: &egui::Context, id: u32) -> bool {
+    ctx.data(|data| data.get_temp::<HeightCache>(height_cache_id(id)).is_some())
+}
+
 enum Item<'a> {
     Step { stage: Stage, attempt: u64, visit: usize },
     Notes,
@@ -191,7 +208,9 @@ fn layout_plan<'a>(
     width: f32,
     viewport: Rect,
 ) -> Plan<'a> {
-    let text_width = (width - LINE_GUTTER).max(1.0).round();
+    // Floor so a cached wrap is never measured wider than the label. Rounding up
+    // can store a line one row short, and the next row then overlaps it.
+    let text_width = (width - LINE_GUTTER).max(1.0).floor();
     let width_key = width_key(text_width);
     let top = viewport.min.y - 48.0;
     let bottom = viewport.max.y + 48.0;
@@ -660,32 +679,5 @@ mod tests {
             lines.iter().all(|line| line != "LOG-LINE-000"),
             "the tail should hide the first line: {lines:?}"
         );
-    }
-
-    #[test]
-    fn closing_a_cloud_drops_only_its_row_height_cache() {
-        let ctx = egui::Context::default();
-        for id in [7, 8] {
-            let mut runtime = Runtime::default();
-            runtime.push_log(format!("LOG-LINE-{id}"));
-            let _ = ctx
-                .run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0))),
-                        ..egui::RawInput::default()
-                    },
-                    |ui| {
-                        ui.set_width(640.0);
-                        show(ui, id, "body", &mut runtime, 280.0, None);
-                    },
-                )
-                .discard_textures();
-        }
-        let cached = |id| ctx.data(|data| data.get_temp::<HeightCache>(height_cache_id(id)).is_some());
-        assert!(cached(7) && cached(8));
-        forget_log_heights(&ctx, 7);
-        assert!(!cached(7));
-        assert!(cached(8), "another cloud keeps its row heights");
-        forget_log_heights(&ctx, 7);
     }
 }

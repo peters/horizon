@@ -22,6 +22,8 @@ mod view;
 pub(super) mod wording;
 pub(super) use drawer::Tab;
 pub(in crate::app::cloud_panel) use output::forget_log_heights;
+#[cfg(test)]
+pub(in crate::app::cloud_panel) use output::{log_height_cache_present, remember_log_height_cache};
 use sizing::profile_details;
 pub(super) use status::{DiagnosisKey, Failure, Status};
 
