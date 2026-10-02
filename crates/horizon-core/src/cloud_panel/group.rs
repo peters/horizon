@@ -47,6 +47,14 @@ impl CloudGroup {
         self.header_chrome_height() + if self.remote.is_some() { CONTENT_GAP } else { 0.0 }
     }
 
+    /// Shows `local_id` again when this cloud next expands, for a member something other than
+    /// collapse hid while the cloud was collapsed.
+    pub fn show_on_expand(&mut self, local_id: &str) {
+        if !self.hidden.iter().any(|hidden| hidden == local_id) {
+            self.hidden.push(local_id.to_owned());
+        }
+    }
+
     /// The painted header: `header_height` without the gap that keeps panels off its edge.
     #[must_use]
     pub fn header_chrome_height(&self) -> f32 {
@@ -138,18 +146,33 @@ impl CloudGroup {
 
     fn set_collapsed_state(&mut self, board: &mut Board, collapsed: bool) {
         self.collapsed = collapsed;
+        // A member off screen only for its cloud's disposal was showing: it expands with the rest,
+        // and it is now hidden by the collapse, which saved state records.
+        let disposal_hidden: Vec<_> = board
+            .panels
+            .iter()
+            .filter(|panel| self.panels.contains(&panel.local_id) && board.is_hidden_for_disposal(panel.id))
+            .map(|panel| panel.id)
+            .collect();
         for panel in &mut board.panels {
             if !self.panels.contains(&panel.local_id) {
                 continue;
             }
-            if collapsed && panel.visible {
-                self.hidden.push(panel.local_id.clone());
+            if collapsed && (panel.visible || disposal_hidden.contains(&panel.id)) {
+                if !self.hidden.contains(&panel.local_id) {
+                    self.hidden.push(panel.local_id.clone());
+                }
                 panel.visible = false;
                 if board.focused == Some(panel.id) {
                     board.focused = None;
                 }
             } else if !collapsed && self.hidden.contains(&panel.local_id) {
                 panel.visible = true;
+            }
+        }
+        if collapsed {
+            for id in disposal_hidden {
+                board.end_disposal_hiding(id, false);
             }
         }
         if !collapsed {
@@ -164,10 +187,17 @@ impl CloudGroup {
     /// an empty band along the header's bottom edge.
     #[must_use]
     pub fn runtime_bounds(&self) -> ([f32; 2], [f32; 2]) {
+        self.runtime_bounds_while(false)
+    }
+
+    /// [`Self::runtime_bounds`], where a cloud being closed shows its disposal in the body
+    /// even though it still holds panels.
+    #[must_use]
+    pub fn runtime_bounds_while(&self, closing: bool) -> ([f32; 2], [f32; 2]) {
         if self.remote.is_some() {
             let top = self.position[1] + self.header_height();
             let left_right = [self.position[0], self.position[0] + self.size[0]];
-            if self.panels.is_empty() && !self.collapsed {
+            if (self.panels.is_empty() || closing) && !self.collapsed {
                 return ([left_right[0], top], [left_right[1], self.position[1] + self.size[1]]);
             }
             return ([left_right[0], top], [left_right[1], top]);

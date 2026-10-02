@@ -432,6 +432,53 @@ mod tests {
     }
 
     #[test]
+    fn collapsing_a_cloud_whose_panel_is_hidden_for_disposal_saves_it_expandable() {
+        let mut board = Board::new();
+        let workspace = board.create_workspace("cloud");
+        let panel = board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Editor,
+                    ..PanelOptions::default()
+                },
+                workspace,
+            )
+            .unwrap();
+        let local = board.workspace(workspace).unwrap().local_id.clone();
+        let mut group = CloudGroup::new(101, "cloud".into(), local, ".".into(), [0.0, 0.0]);
+        group.attach(&mut board, panel);
+        assert!(board.hide_for_disposal(panel));
+
+        group.set_collapsed(&mut board, true);
+        let member = board.panel(panel).unwrap().local_id.clone();
+        assert!(
+            group.hidden.contains(&member),
+            "the collapse owns it now, so it is saved and can expand"
+        );
+        assert!(!board.is_hidden_for_disposal(panel), "the disposal marker has ended");
+        group.set_collapsed(&mut board, false);
+        assert!(board.panel(panel).unwrap().visible, "expanding shows it");
+    }
+
+    #[test]
+    fn a_closing_cloud_gives_its_body_to_the_disposal_even_with_panels() {
+        let mut group = CloudGroup::new(101, "test".into(), "workspace".into(), ".".into(), [0.0, 0.0]);
+        let legacy = serde_json::json!({
+            "deployment_started": true, "id": "cloud", "revision": "a".repeat(40), "profile_name": "dev",
+            "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8},
+        });
+        group.remote = Some(serde_json::from_value(legacy).unwrap());
+        group.panels.push("member".into());
+        let (min, max) = group.runtime_bounds();
+        assert!((max[1] - min[1]).abs() < f32::EPSILON, "its panels own the body");
+        let (min, max) = group.runtime_bounds_while(true);
+        assert!(max[1] - min[1] > 1.0, "its disposal owns the body while it is closed");
+        group.collapsed = true;
+        let (min, max) = group.runtime_bounds_while(true);
+        assert!((max[1] - min[1]).abs() < f32::EPSILON, "a collapsed cloud has no body");
+    }
+
+    #[test]
     fn a_cloud_keeps_its_placement_and_records_without_one_keep_their_encoding() {
         let mut settings = vec!["EU-RO-1".to_owned(), "US-MO-2".to_owned()];
         let mut gpus = vec!["NVIDIA RTX A6000".to_owned()];

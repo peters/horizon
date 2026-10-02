@@ -104,6 +104,9 @@ pub struct Board {
     /// handed out again on Horizon's own authority.
     unreleased_remote_holds: Vec<UnreleasedRemoteHold>,
     retained_empty_workspaces: HashSet<WorkspaceId>,
+    /// Panels kept off screen only while their cloud's disposal is shown. Saved state
+    /// keeps them as they were, so quitting meanwhile never persists them as hidden.
+    hidden_for_disposal: HashSet<PanelId>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
     next_panel_id: u64,
@@ -137,6 +140,7 @@ impl Board {
             pending_clipboard_writes: Vec::new(),
             unreleased_remote_holds: Vec::new(),
             retained_empty_workspaces: HashSet::new(),
+            hidden_for_disposal: HashSet::new(),
             focused: None,
             active_workspace: None,
             next_panel_id: 1,
@@ -520,6 +524,36 @@ impl Board {
 
     pub fn panel_mut(&mut self, id: PanelId) -> Option<&mut Panel> {
         self.panels.iter_mut().find(|panel| panel.id == id)
+    }
+
+    /// Takes a showing panel off screen for its cloud's disposal, and its focus with it.
+    /// Returns whether it was showing. Saved state is unaffected; see [`Self::end_disposal_hiding`].
+    pub fn hide_for_disposal(&mut self, id: PanelId) -> bool {
+        let Some(panel) = self.panel_mut(id).filter(|panel| panel.visible) else {
+            return false;
+        };
+        panel.visible = false;
+        self.hidden_for_disposal.insert(id);
+        if self.focused == Some(id) {
+            self.focused = None;
+        }
+        true
+    }
+
+    /// Ends [`Self::hide_for_disposal`], showing the panel again when `show`.
+    pub fn end_disposal_hiding(&mut self, id: PanelId, show: bool) {
+        if self.hidden_for_disposal.remove(&id)
+            && show
+            && let Some(panel) = self.panel_mut(id)
+        {
+            panel.visible = true;
+        }
+    }
+
+    /// Whether the panel is off screen only for its cloud's disposal.
+    #[must_use]
+    pub fn is_hidden_for_disposal(&self, id: PanelId) -> bool {
+        self.hidden_for_disposal.contains(&id)
     }
 
     #[must_use]

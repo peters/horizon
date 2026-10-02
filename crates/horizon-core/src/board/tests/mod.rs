@@ -6,6 +6,7 @@ mod cloud_collisions;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud_retention;
 mod core;
+mod disposal;
 mod layout;
 mod reordering;
 mod workspace;
