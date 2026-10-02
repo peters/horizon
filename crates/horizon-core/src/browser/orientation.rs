@@ -1,6 +1,12 @@
 //! Host-side queuing of user rotation, shared by local and cloud panels.
 use super::{BrowserCommand, BrowserPanelState, remote::RemoteOrientation};
 impl BrowserPanelState {
+    pub(super) fn reset_orientation_view(&mut self) {
+        self.orientation = super::remote::RemoteOrientationView::default();
+        self.orientation_pending_since = None;
+        self.orientation_queue_rejection = None;
+    }
+
     pub(super) fn apply_orientation_view(&mut self, mut view: super::remote::RemoteOrientationView) {
         let completion = self
             .orientation
@@ -21,6 +27,9 @@ impl BrowserPanelState {
             if let Some(completion) = completion {
                 view.error.clone_from(&completion.error);
                 view.action_id.clone_from(&self.orientation.action_id);
+            }
+            if let Some(error) = &self.orientation_queue_rejection {
+                view.error = Some(error.clone());
             }
             self.orientation = view;
             if terminal || self.orientation.pending.is_none() {
@@ -52,12 +61,15 @@ impl BrowserPanelState {
             action_id: action_id.clone(),
             orientation,
         }) {
+            self.orientation_queue_rejection = None;
             self.orientation.action_id = Some(action_id);
             self.orientation.pending = Some(orientation);
             self.orientation_pending_since = Some(std::time::Instant::now());
             self.orientation.error = None;
         } else {
-            self.orientation.error = Some("Rotation was not queued; the browser driver is unavailable or busy".into());
+            let error = "Rotation was not queued; the browser driver is unavailable or busy".to_string();
+            self.orientation.error = Some(error.clone());
+            self.orientation_queue_rejection = Some(error);
         }
     }
 }

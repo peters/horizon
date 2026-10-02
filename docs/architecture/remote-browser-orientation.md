@@ -208,6 +208,9 @@ not turn that request into a success.
 If a host loses or evicts a pending acknowledgement, expiry clears the previous
 applied orientation and shows Unverified. Stale polls cannot restore it; a
 matching terminal observation must settle the retained request.
+A local UI queue refusal remains visible across cloud polls while measured
+status and older request acknowledgements continue updating. A successfully
+queued retry or session reset clears that refusal.
 The driver publishes unknown applied orientation and pending rotation to the UI
 and clears coordinated status before the blocking POST. Publication consumes
 the same deadline; if it uses the remaining time, no rotation is dispatched.

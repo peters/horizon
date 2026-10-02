@@ -136,6 +136,7 @@ pub struct BrowserPanelState {
     pub remote_status: Option<String>,
     pub orientation: RemoteOrientationView,
     orientation_pending_since: Option<std::time::Instant>,
+    orientation_queue_rejection: Option<String>,
     /// The remote session this panel runs (or ran) at; `None` for a local
     /// browser. Carries the resolved authorization for this process only.
     remote: Option<remote_panel::RemoteLifecycle>,
@@ -207,6 +208,7 @@ impl BrowserPanelState {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -272,6 +274,7 @@ impl BrowserPanelState {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -392,8 +395,7 @@ impl BrowserPanelState {
     }
 
     fn launch_session(&mut self, initial_url: Option<String>) {
-        self.orientation = RemoteOrientationView::default();
-        self.orientation_pending_since = None;
+        self.reset_orientation_view();
         #[cfg(feature = "cloud-workspaces")]
         if self.cloud.is_some() {
             self.relaunch_cloud();
@@ -904,8 +906,7 @@ impl BrowserPanelState {
     }
 
     fn apply_stopped(&mut self, code: Option<i32>, output: &mut BrowserDrainOutput) {
-        self.orientation = RemoteOrientationView::default();
-        self.orientation_pending_since = None;
+        self.reset_orientation_view();
         self.clear_remote_identity();
         if let Some(session) = self.session.take() {
             self.teardown_signal = Some(Box::new((*session).completion_signal()));
@@ -1076,6 +1077,7 @@ mod tests {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1125,6 +1127,7 @@ mod tests {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1168,6 +1171,7 @@ mod tests {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1219,6 +1223,7 @@ mod tests {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1268,6 +1273,7 @@ mod tests {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1351,6 +1357,7 @@ mod tests {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1396,6 +1403,7 @@ mod tests {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1440,6 +1448,7 @@ mod tests {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1487,6 +1496,7 @@ mod tests {
             remote_status: None,
             orientation: RemoteOrientationView::default(),
             orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),

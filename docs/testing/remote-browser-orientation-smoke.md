@@ -299,6 +299,10 @@ identity and refusal evidence before closing the owned session.
   different rotation. Expiry must clear applied orientation and show Unverified;
   stale polls must not restore Verified. Only a matching terminal observation
   may settle the request and publish newly measured orientation.
+- Fill or disconnect the UI presentation queue without contacting a provider.
+  A rejected rotation must retain its refusal across repeated healthy polls
+  while accepting fresh measured state. Preserve any older pending request;
+  a successfully queued retry or stopped/lost/reset session clears the refusal.
 
 ## Interface and persistence parity
 
