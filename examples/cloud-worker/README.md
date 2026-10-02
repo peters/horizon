@@ -368,8 +368,9 @@ started, so an uncertain launch is not replayed.
   already recorded for their own repository and refuses a path that holds another
   repository, without resetting files.
 - **Storage refused a write**, for example `Disk quota exceeded` while a durability
-  fence is saved on the attach path: the attach ends with exit 74 (`EX_IOERR`), the storage and inode
-  usage of `/workspace`, and no process started (a refusal in the detached preparation
+  fence is saved on the attach path: the attach ends with exit 74 (`EX_IOERR`), what `/workspace` holds
+  (`du`, not `df`, which on a network volume describes the shared storage and not the volume's
+  quota), and no process started (a refusal in the detached preparation
   ends the attach the same way). A launch fence that could not be made durable is
   withdrawn, and nothing records a failed preparation, so attaching again resumes; if it
   keeps happening, stop and resume the cloud. The workspace volume is kept. A `ready`
@@ -388,7 +389,7 @@ A deployment can prepare the checkout before any panel exists:
 preparation under the same lock and then ends, with no session bound and no process
 started, so the first panel finds the checkout ready and a storage or source problem
 fails the deployment instead of that panel. Repeating it is a no-op once the checkout is
-ready. A worker advertises it as `horizon-prepare-checkout-contract=1`; older images lack
+ready. It first writes and flushes 64 MiB on `/workspace` and removes it, so a volume that refuses writes fails the deployment step before any checkout work. A worker advertises it as `horizon-prepare-checkout-contract=1`; older images lack
 it and prepare the checkout at their first attach as before.
 
 The worker also gives each allowed agent a short note in its own home (`~/.claude/CLAUDE.md`,

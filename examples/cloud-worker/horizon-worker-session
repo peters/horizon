@@ -14,10 +14,11 @@ storage_status=74
 flush_failed() {
     {
         echo "Workspace storage did not accept a write while saving $1."
-        # Diagnostics only: they must never replace the instruction or the exit status.
-        { df -h /workspace | tail -n 1; } 2>/dev/null || true
-        { df -i /workspace | tail -n 1; } 2>/dev/null || true
-        echo 'No process was started. Attach again; if it fails again, stop and resume the cloud (its workspace volume is kept).'
+        # Diagnostics only: they must never replace the instruction or the exit status. df is left
+        # out on purpose: on a network volume it describes the shared storage, while the provider
+        # enforces a quota on this volume alone, so it would show room where there is none.
+        { printf 'Used on /workspace: %s\n' "$(timeout 20 du -sxh /workspace | cut -f1)"; } 2>/dev/null || true
+        echo 'No process was started. Try again; if it fails again, stop and resume the cloud (its workspace volume is kept).'
     } >&2
     exit "$storage_status"
 }
@@ -269,7 +270,9 @@ fi
 # refusal never binds the session id. The shared checkout is never part of that state.
 staging=
 owner=
+probe=
 roll_back() {
+    if [ -n "$probe" ]; then rm -f "$probe" || true; fi
     if [ -n "$staging" ]; then rm -rf "$staging"; fi
     # Only a directory carrying this attach's own marker was published by it.
     if [ -n "$owner" ] && [ ! -f "$session/launch-requested" ] \
@@ -287,6 +290,15 @@ if "$prepare_only"; then
         echo 'This session id is in use; it is reserved for preparing the checkout.' >&2; exit 5
     fi
     rm -rf "$session"
+    # Prove the volume takes a real write and flush before any checkout work starts, so a volume
+    # that refuses writes fails this step with its reason instead of a panel later.
+    # A fresh file of its own (mktemp never reuses or follows an existing name), removed by the exit
+    # trap whatever ends the run, so an interrupted probe leaves nothing behind.
+    probe="$(mktemp /workspace/.horizon-write-probe.XXXXXX)" || flush_failed /workspace/.horizon-write-probe
+    { dd if=/dev/zero of="$probe" bs=1M count=64 conv=fsync status=none && sync -f "$probe"; } \
+        || flush_failed "$probe"
+    rm -f "$probe"
+    probe=
 fi
 if [ -d "$session" ]; then
     bound || { echo 'Session binding mismatch' >&2; exit 3; }
