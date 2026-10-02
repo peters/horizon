@@ -368,10 +368,11 @@ started, so an uncertain launch is not replayed.
   already recorded for their own repository and refuses a path that holds another
   repository, without resetting files.
 - **Storage refused a write**, for example `Disk quota exceeded` while a durability
-  fence is saved: the attach ends with exit 6, the storage and inode usage of
-  `/workspace`, and no process started. Nothing records a failure, so attaching again
-  resumes the preparation; if it keeps happening, stop and resume the cloud. The
-  workspace volume is kept.
+  fence is saved on the attach path: the attach ends with exit 6, the storage and inode
+  usage of `/workspace`, and no process started. A launch fence that could not be made
+  durable is withdrawn, and nothing records a failed preparation, so attaching again
+  resumes; if it keeps happening, stop and resume the cloud. The workspace volume is
+  kept.
 - **Failed**, for example a source import error: the worker records
   `/workspace/shared-checkout-state/failed`, and every attach is refused with exit 3
   and a pointer to `prepare.log` until the cause is fixed. Then run

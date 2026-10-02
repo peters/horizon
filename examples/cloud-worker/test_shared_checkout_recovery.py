@@ -160,15 +160,20 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
 
-    def test_a_refused_flush_says_why_and_the_next_attach_resumes(self):
-        f = self.fixture
-        refusing = f.root / 'sync-fails'
+    def refuse_flush(self, pattern):
+        """A `sync` that fails with the real mount's message for paths matching `pattern`, until lifted."""
+        refusing = self.fixture.root / 'sync-fails'
         refusing.touch()
-        stub = f.tools / 'sync'
-        stub.write_text(f"#!/bin/sh\nif [ -e '{refusing}' ]; then\n"
-                        "  echo \"sync: error syncing '$2': Disk quota exceeded\" >&2; exit 1\nfi\n"
+        stub = self.fixture.tools / 'sync'
+        stub.write_text(f"#!/bin/sh\nif [ -e '{refusing}' ]; then\n  case \"$2\" in {pattern})\n"
+                        "    echo \"sync: error syncing '$2': Disk quota exceeded\" >&2; exit 1;;\n  esac\nfi\n"
                         f"exec {shutil.which('sync')} \"$@\"\n")
         stub.chmod(0o700)
+        return refusing
+
+    def test_a_refused_flush_says_why_and_the_next_attach_resumes(self):
+        f = self.fixture
+        refusing = self.refuse_flush('*')
         refused = self.start('one')
         self.assertEqual(refused.returncode, 6, refused.stderr)
         self.assertIn('Workspace storage did not accept a write', refused.stderr)
@@ -182,6 +187,35 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         resumed = self.start('one')
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertIn('Resuming', resumed.stderr)
+        self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
+
+    def test_a_refusal_while_the_ready_marker_is_saved_neither_fences_nor_stops_the_attach(self):
+        f = self.fixture
+        self.release.touch()
+        refusing = self.refuse_flush('*/ready')
+        attached = self.start('one')
+        # The marker exists, only its durability was refused: the checkout is complete, and a
+        # lost marker would only make a later attach verify it again.
+        self.assertEqual(attached.returncode, 0, attached.stderr)
+        self.assertIn('Workspace storage did not accept a write', attached.stderr)
+        self.assertFalse((self.state / 'failed').exists(), 'no failed preparation is recorded for storage')
+        self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
+        refusing.unlink()
+
+    def test_a_refused_launch_fence_is_withdrawn_so_the_next_attach_is_not_an_uncertain_launch(self):
+        f = self.fixture
+        self.release.touch()
+        refusing = self.refuse_flush('*/launch-requested')
+        refused = self.start('one')
+        self.assertEqual(refused.returncode, 6, refused.stderr)
+        self.assertIn('launch-requested', refused.stderr)
+        self.assertEqual(f.launches(), [])
+        session = f.workspace / 'sessions' / 'one'
+        self.assertFalse((session / 'launch-requested').exists())
+        refusing.unlink()
+        retried = self.start('one')
+        self.assertEqual(retried.returncode, 0, retried.stderr)
+        self.assertNotIn('launch is uncertain', retried.stderr)
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
 
     def test_a_fatal_git_status_128_is_a_recorded_failure(self):
