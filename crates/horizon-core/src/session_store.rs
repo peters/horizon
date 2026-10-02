@@ -15,6 +15,8 @@ use crate::horizon_home::HorizonHome;
 use crate::runtime_state::RuntimeState;
 use model::{ProfileSnapshot, SessionIndex, SessionMeta, StoredSession};
 
+pub use deletion_notice::SessionDeletionNotice;
+
 pub use model::{
     ResolvedSession, SessionLease, SessionOpenDisposition, SessionSummary, StartupChooser, StartupDecision,
     StartupPromptReason,

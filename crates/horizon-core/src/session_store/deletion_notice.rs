@@ -1,7 +1,29 @@
-use std::io::Write;
+use std::io::{Read, Write};
 
 use super::SessionStore;
 use crate::Result;
+
+/// An immutable recovery receipt whose identity survives persistence retries.
+#[derive(Clone, Debug)]
+pub struct SessionDeletionNotice {
+    id: uuid::Uuid,
+    text: String,
+}
+
+impl SessionDeletionNotice {
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            text: text.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
 
 impl SessionStore {
     fn deletion_notice_dir(&self) -> std::path::PathBuf {
@@ -69,21 +91,42 @@ impl SessionStore {
     }
 
     /// Persist recovery information privately before an application can exit.
+    /// Reuse the same notice on retry to synchronize any uncertain publication.
     ///
     /// # Errors
-    /// Returns an error if the notice cannot be atomically written.
-    pub fn save_session_deletion_notice(&self, notice: &str) -> Result<()> {
+    /// Returns an error if the notice cannot be durably saved or its identity
+    /// already belongs to different contents.
+    pub fn save_session_deletion_notice(&self, notice: &SessionDeletionNotice) -> Result<()> {
         self.save_deletion_notice_with_sync(notice, || self.sync_deletion_notice_directories())
     }
 
-    fn save_deletion_notice_with_sync(&self, notice: &str, sync: impl Fn() -> Result<()>) -> Result<()> {
+    fn save_deletion_notice_with_sync(
+        &self,
+        notice: &SessionDeletionNotice,
+        sync: impl Fn() -> Result<()>,
+    ) -> Result<()> {
         sync()?;
         let parent = self.deletion_notice_dir();
         std::fs::create_dir_all(&parent)?;
         sync()?;
-        let path = parent.join(format!("{}.txt", uuid::Uuid::new_v4()));
+        let path = parent.join(format!("{}.txt", notice.id));
+        match std::fs::File::open(&path) {
+            Ok(mut file) => {
+                let mut existing = String::new();
+                file.read_to_string(&mut existing)?;
+                if existing != notice.text {
+                    return Err(crate::Error::State(
+                        "Recovery receipt identity has different contents".into(),
+                    ));
+                }
+                file.sync_all()?;
+                return sync();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         let mut file = tempfile::NamedTempFile::new_in(&parent)?;
-        file.write_all(notice.as_bytes())?;
+        file.write_all(notice.text.as_bytes())?;
         file.as_file().sync_all()?;
         file.persist_noclobber(&path).map_err(|error| error.error)?;
         sync()
@@ -141,7 +184,7 @@ mod tests {
             root.path().join("config.yaml"),
         );
         store
-            .save_session_deletion_notice("Retained bundle: /synthetic/recovery")
+            .save_session_deletion_notice(&SessionDeletionNotice::new("Retained bundle: /synthetic/recovery"))
             .expect("save");
         let reopened = SessionStore::new(store.home().clone(), store.config_path().into());
         assert_eq!(
@@ -156,7 +199,9 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            store.save_session_deletion_notice("private").expect("save");
+            store
+                .save_session_deletion_notice(&SessionDeletionNotice::new("private"))
+                .expect("save");
             assert_eq!(
                 std::fs::metadata(store.deletion_notices().expect("records")[0].0.clone())
                     .expect("metadata")
@@ -180,11 +225,11 @@ mod tests {
         );
         let second = first.clone();
         first
-            .save_session_deletion_notice("First retained bundle")
+            .save_session_deletion_notice(&SessionDeletionNotice::new("First retained bundle"))
             .expect("first");
         let old = first.saved_session_deletion_notice().expect("old").expect("notice");
         second
-            .save_session_deletion_notice("Second retained bundle")
+            .save_session_deletion_notice(&SessionDeletionNotice::new("Second retained bundle"))
             .expect("second");
         assert!(first.acknowledge_session_deletion_notice(&old).is_err());
         let current = second.saved_session_deletion_notice().expect("read").expect("notices");
@@ -204,7 +249,8 @@ mod tests {
             root.path().join("config.yaml"),
         );
         let calls = std::cell::Cell::new(0);
-        let result = store.save_deletion_notice_with_sync("Retained recovery path", || {
+        let notice = SessionDeletionNotice::new("Retained recovery path");
+        let result = store.save_deletion_notice_with_sync(&notice, || {
             calls.set(calls.get() + 1);
             if calls.get() == 3 {
                 return Err(std::io::Error::other("publication sync failed").into());
@@ -213,6 +259,14 @@ mod tests {
         });
         assert!(result.is_err());
         assert_eq!(calls.get(), 3);
+        assert_eq!(
+            store.saved_session_deletion_notice().expect("read").as_deref(),
+            Some("Retained recovery path")
+        );
+        store
+            .save_session_deletion_notice(&notice)
+            .expect("retry published receipt");
+        assert_eq!(store.deletion_notices().expect("records").len(), 1);
         assert_eq!(
             store.saved_session_deletion_notice().expect("read").as_deref(),
             Some("Retained recovery path")
@@ -228,7 +282,7 @@ mod tests {
             root.path().join("config.yaml"),
         );
         store
-            .save_session_deletion_notice("Reviewed recovery path")
+            .save_session_deletion_notice(&SessionDeletionNotice::new("Reviewed recovery path"))
             .expect("save");
         let calls = std::cell::Cell::new(0);
         let result = store.acknowledge_deletion_notice_with_sync("Reviewed recovery path", || {
@@ -249,6 +303,29 @@ mod tests {
         assert_eq!(calls.get(), 3);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn receipt_identity_is_immutable_and_distinct_equal_text_is_preserved() {
+        let root = tempfile::tempdir().expect("home");
+        let store = SessionStore::new(
+            crate::HorizonHome::from_root(root.path().into()),
+            root.path().join("config.yaml"),
+        );
+        let notice = SessionDeletionNotice::new("Recovery path");
+        store.save_session_deletion_notice(&notice).expect("first");
+        let mut changed = notice.clone();
+        changed.text = "Different recovery path".into();
+        assert!(store.save_session_deletion_notice(&changed).is_err());
+        assert_eq!(
+            store.saved_session_deletion_notice().expect("read").as_deref(),
+            Some("Recovery path")
+        );
+        store
+            .save_session_deletion_notice(&SessionDeletionNotice::new("Recovery path"))
+            .expect("independent record");
+        assert_eq!(store.deletion_notices().expect("records").len(), 2);
+    }
+
     #[cfg(windows)]
     #[test]
     fn unsupported_notice_durability_creates_no_partial_record() {
@@ -257,7 +334,11 @@ mod tests {
             crate::HorizonHome::from_root(root.path().into()),
             root.path().join("config.yaml"),
         );
-        assert!(store.save_session_deletion_notice("keep this recovery path").is_err());
+        assert!(
+            store
+                .save_session_deletion_notice(&SessionDeletionNotice::new("keep this recovery path"))
+                .is_err()
+        );
         assert!(!store.deletion_notice_dir().exists());
     }
 }

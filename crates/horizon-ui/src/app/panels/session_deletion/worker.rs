@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use horizon_core::{AgentSessionBinding, AgentSessionDeletionReport};
+use horizon_core::{AgentSessionBinding, AgentSessionDeletionReport, SessionDeletionNotice};
 
 use super::{DeletionJob, job_id};
 use crate::app::HorizonApp;
@@ -11,7 +11,7 @@ pub(in crate::app) struct SavedSessionDeletionState {
     pub(super) worker: Option<DeletionWorker>,
     notice: Option<String>,
     persisted_notice: Option<String>,
-    unsaved_notices: Vec<String>,
+    unsaved_notices: Vec<SessionDeletionNotice>,
 }
 
 pub(super) struct DeletionWorker {
@@ -44,8 +44,9 @@ impl HorizonApp {
         let details: Vec<_> = state
             .persisted_notice
             .iter()
-            .chain(&state.unsaved_notices)
-            .cloned()
+            .map(String::as_str)
+            .chain(state.unsaved_notices.iter().map(SessionDeletionNotice::text))
+            .map(str::to_owned)
             .chain(error)
             .collect();
         state.notice = (!details.is_empty()).then(|| details.join("\n\n"));
@@ -131,23 +132,24 @@ impl HorizonApp {
     }
 
     fn retain_deletion_notice(&mut self, notice: &str) {
-        self.saved_session_deletion.unsaved_notices.push(notice.to_owned());
-        let pending = self.saved_session_deletion.unsaved_notices.join("\n\n");
-        match self.session_store.save_session_deletion_notice(&pending) {
-            Ok(()) => {
-                self.saved_session_deletion.persisted_notice = Some(
-                    self.saved_session_deletion
-                        .persisted_notice
-                        .as_ref()
-                        .map_or_else(|| pending.clone(), |previous| format!("{previous}\n\n{pending}")),
-                );
-                self.saved_session_deletion.unsaved_notices.clear();
-                self.restore_saved_session_deletion_notice();
+        self.saved_session_deletion
+            .unsaved_notices
+            .push(SessionDeletionNotice::new(notice));
+        while let Some(pending) = self.saved_session_deletion.unsaved_notices.first() {
+            if let Err(error) = self.session_store.save_session_deletion_notice(pending) {
+                self.refresh_deletion_notice(Some(format!(
+                    "Could not save this notice: {error}. Keep these recovery paths before closing."
+                )));
+                return;
             }
-            Err(error) => self.refresh_deletion_notice(Some(format!(
-                "Could not save this notice: {error}. Keep these recovery paths before closing."
-            ))),
+            self.saved_session_deletion.persisted_notice =
+                Some(self.saved_session_deletion.persisted_notice.as_ref().map_or_else(
+                    || pending.text().to_owned(),
+                    |previous| format!("{previous}\n\n{}", pending.text()),
+                ));
+            self.saved_session_deletion.unsaved_notices.remove(0);
         }
+        self.restore_saved_session_deletion_notice();
     }
 
     pub(in crate::app) fn render_saved_session_deletion_notice(&mut self, ctx: &egui::Context) {
@@ -407,5 +409,24 @@ mod tests {
             .expect("saved");
         assert_eq!(saved.matches("/synthetic/first").count(), 1);
         assert_eq!(saved.matches("/synthetic/third").count(), 1);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn retry_of_already_published_pending_notice_does_not_replay_it() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let pending = SessionDeletionNotice::new("First path: /synthetic/first");
+        app.session_store
+            .save_session_deletion_notice(&pending)
+            .expect("published before reported sync error");
+        app.saved_session_deletion.unsaved_notices.push(pending);
+        app.retain_deletion_notice("Second path: /synthetic/second");
+        assert!(app.saved_session_deletion.unsaved_notices.is_empty());
+        let saved = app
+            .session_store
+            .saved_session_deletion_notice()
+            .expect("read")
+            .expect("notices");
+        assert_eq!(saved.matches("/synthetic/first").count(), 1);
+        assert_eq!(saved.matches("/synthetic/second").count(), 1);
     }
 }
