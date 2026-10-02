@@ -31,7 +31,9 @@ impl HorizonApp {
         self.render_cast_controls(ctx);
         let controls_visible = self.cast_controls_visible(ctx);
         for session in &self.casting.sessions {
-            session.worker.set_capture_paused(controls_visible);
+            session.worker.set_capture_paused(
+                controls_visible || !self.cast_geometry_settled(session.workspace, &session.source, ctx),
+            );
         }
         let active = !self.casting.finished();
         if active || self.casting.discovery.is_some() || self.casting.paired_refresh.is_some() {

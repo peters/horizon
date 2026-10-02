@@ -269,14 +269,18 @@ fn next_pump_wait(files_pending: bool, persist_pending: bool, persist_wait: Dura
 fn device_requests_pending(root: Option<&Path>) -> std::io::Result<bool> {
     let host = manifest::host_instance();
     let device = match root {
-        Some(root) => device::has_pending_at(root, host)?,
-        None => device::has_pending(host)?,
+        Some(root) => device::has_pending_at(root, host),
+        None => device::has_pending(host),
     };
     let cast = match root {
-        Some(root) => manifest::cast::has_pending_at(root, host)?,
-        None => manifest::cast::has_pending(host)?,
+        Some(root) => manifest::cast::has_pending_at(root, host),
+        None => manifest::cast::has_pending(host),
     };
-    Ok(device || cast)
+    match (device, cast) {
+        (Ok(true), _) | (_, Ok(true)) => Ok(true),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        _ => Ok(false),
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -357,5 +361,29 @@ mod tests {
         }
         assert!(!bridge.poll_on_ui_thread());
         assert!(!bridge.persist_pending.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn pending_queues_are_independent_of_sibling_storage_failures() {
+        for broken in ["cast-requests", "device-panel-requests"] {
+            let root = tempfile::tempdir().expect("runtime root");
+            std::fs::create_dir_all(root.path().join("runtime")).expect("runtime");
+            std::fs::write(root.path().join("runtime").join(broken), b"not a directory").expect("broken queue");
+            assert!(device_requests_pending(Some(root.path())).is_err());
+            let identity = manifest::AgentIdentity::new("horizon:agent", Some(manifest::host_instance()));
+            if broken == "cast-requests" {
+                device::enqueue_at(root.path(), identity, device::Operation::List, Duration::from_secs(5))
+                    .expect("device request");
+            } else {
+                manifest::cast::enqueue_at(
+                    root.path(),
+                    identity,
+                    manifest::cast::CastOperation::Status,
+                    Duration::from_secs(5),
+                )
+                .expect("cast request");
+            }
+            assert!(device_requests_pending(Some(root.path())).expect("sibling pending"));
+        }
     }
 }

@@ -19,6 +19,7 @@ pub(super) struct CastState {
     pairing_error: Option<String>,
     receivers: Vec<Receiver>,
     discovery: Option<mpsc::Receiver<Result<Vec<Receiver>, String>>>,
+    discovery_error: Option<String>,
     sessions: Vec<Session>,
     retiring: Vec<Session>,
     picker: Option<Picker>,
@@ -107,6 +108,7 @@ impl CastState {
         self.stop_all();
         self.retiring.append(&mut self.sessions);
         self.discovery = None;
+        self.discovery_error = None;
         self.control_menus = None;
         self.receivers.clear();
         self.notice = None;
@@ -139,6 +141,7 @@ impl CastState {
         }
         let (send, receive) = mpsc::channel();
         self.discovery = Some(receive);
+        self.discovery_error = None;
         std::thread::spawn(move || {
             let _ = send.send(horizon_cast::discover().map_err(|error| error.to_string()));
         });
@@ -171,8 +174,14 @@ impl CastState {
         if let Some(result) = self.discovery.as_ref().and_then(|receive| receive.try_recv().ok()) {
             self.discovery = None;
             match result {
-                Ok(receivers) => self.receivers = receivers,
-                Err(error) => self.notice = Some(error),
+                Ok(receivers) => {
+                    self.receivers = receivers;
+                    self.discovery_error = None;
+                }
+                Err(error) => {
+                    self.discovery_error = Some(error.clone());
+                    self.notice = Some(error);
+                }
             }
         }
     }
@@ -243,5 +252,31 @@ mod tests {
         assert!(app.casting.finished());
         assert_eq!(app.casting.retiring[0].worker.status(), CastStatus::Stopped);
         receiver.join().expect("receiver");
+    }
+
+    #[test]
+    fn discovery_failure_is_shared_and_successful_refresh_clears_it() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        for result in [Err("synthetic discovery failure".to_string()), Ok(Vec::new())] {
+            let expected = result.as_ref().err().cloned();
+            let (send, receive) = mpsc::channel();
+            app.casting.discovery = Some(receive);
+            send.send(result).expect("discovery result");
+            let outcome = app.cast_operation(
+                WorkspaceId(1),
+                &horizon_core::browser::manifest::cast::CastOperation::Status,
+                &ctx,
+            );
+            assert_eq!(outcome.error, expected);
+            let stop = app.cast_operation(
+                WorkspaceId(1),
+                &horizon_core::browser::manifest::cast::CastOperation::Stop {
+                    receiver_id: "absent".into(),
+                },
+                &ctx,
+            );
+            assert!(stop.error.is_none(), "unrelated successful stop");
+        }
     }
 }

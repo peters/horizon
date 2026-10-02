@@ -122,7 +122,14 @@ impl HorizonApp {
         })();
         ctx.request_repaint();
         let mut outcome = self.cast_snapshot(workspace, ctx);
-        outcome.error = result.err();
+        outcome.error = result.err().or_else(|| {
+            matches!(
+                operation,
+                CastOperation::Discover | CastOperation::Status | CastOperation::Sources
+            )
+            .then(|| self.casting.discovery_error.clone())
+            .flatten()
+        });
         outcome
     }
     pub(super) fn cast_snapshot(&self, workspace: WorkspaceId, ctx: &egui::Context) -> CastOutcome {
@@ -203,7 +210,7 @@ impl HorizonApp {
             sources,
             sessions,
             discovering: self.casting.discovery.is_some(),
-            error: None,
+            error: self.casting.discovery_error.clone(),
         }
     }
 }

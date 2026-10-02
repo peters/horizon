@@ -45,7 +45,9 @@ Horizon exposes the same operations through its Cast picker and `cast` MCP tool:
 `start` accepts `resolution: "720p" | "1080p" | "4k"` and
 `orientation: "landscape" | "portrait"`; status returns both selections. The CLI
 plan runner uses the same contract. Settings → Remote Devices lists and forgets
-the same persisted pairings, with confirmation and busy protection.
+the same persisted pairings, with confirmation and busy protection. Pairing PINs
+are removed from durable plans and traces; pairing and PIN-variable reuse cannot
+be resumed or replayed.
 `paired` returns remembered TV IDs and names, including offline TVs, without
 keys. `forget` accepts a receiver ID and removes only that pairing; an active
 session must finish first. The private store holds a receiver-specific file
@@ -54,7 +56,9 @@ processes that use the same store. MCP requires a live
 Horizon agent identity and checks the caller's current workspace. The UI captures
 only visible panel/workspace regions in the main window. Hidden, detached,
 clipped, deleted or obscured sources stop; overlapping unrelated content is
-never intentionally transmitted. OS desktop windows are not captured. There is
+never intentionally transmitted. Cast controls and unsettled drag/resize geometry
+freeze the last safe frame until capture can resume. OS desktop windows are not
+captured. There is
 no automatic reconnect or restart of a cast after application relaunch.
 
 Standalone hosts opt into persistence with `CastSession::start_remembered` and
