@@ -1,6 +1,7 @@
 //! Synthetic deploy output for a debug build. Deploy logs live only in memory, so an
 //! isolated viewer has nothing to scroll unless this is asked for. It never runs in a
-//! release build, and it leaves a session alone when that session already has a cloud.
+//! release build, only on an ephemeral session, and it leaves a session alone when
+//! that session already has a cloud.
 use super::Stage;
 use crate::app::HorizonApp;
 use horizon_core::cloud_panel::{CloudConfig, CloudGroup, CloudLaunch};
@@ -19,6 +20,10 @@ pub(super) fn seed(app: &mut HorizonApp) {
 
 fn seed_lines(app: &mut HorizonApp, count: usize) -> bool {
     let count = count.clamp(1, horizon_core::PANEL_SCROLLBACK_LIMIT);
+    // A saved session would persist this cloud, and removal would then refuse it.
+    if app.active_session.as_ref().is_none_or(|session| session.persistent) {
+        return false;
+    }
     // A local card has no deployment yet. Any cloud already on the board is left alone.
     if !app.cloud_prototype.groups.0.is_empty() {
         return false;
@@ -135,5 +140,18 @@ mod tests {
         assert!(app.cloud_prototype.production.runtimes.is_empty());
         assert_eq!(app.cloud_prototype.groups.0.len(), 1);
         assert_eq!(app.cloud_prototype.groups.0[0].title, "Local");
+    }
+
+    #[test]
+    fn a_saved_session_is_left_alone() {
+        let (_temp, mut app) = test_app();
+        let session = app
+            .session_store
+            .create_session_from_runtime(horizon_core::RuntimeState::default())
+            .expect("saved session");
+        app.activate_persistent_session(&session);
+        assert!(!seed_lines(&mut app, 400));
+        assert!(app.cloud_prototype.groups.0.is_empty());
+        assert!(app.board.cloud_groups.0.is_empty());
     }
 }
