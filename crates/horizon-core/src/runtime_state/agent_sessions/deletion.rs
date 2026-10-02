@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -11,6 +12,7 @@ use super::{AgentSessionBinding, AgentSessionCatalog, PanelKind, normalize_cwd};
 use crate::error::{Error, Result};
 
 static PENDING_DELETIONS: LazyLock<Mutex<HashSet<AgentSessionKey>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+static PENDING_DELETION_REVISION: AtomicU64 = AtomicU64::new(0);
 
 pub struct AgentSessionDeletionReservation {
     keys: HashSet<AgentSessionKey>,
@@ -40,6 +42,7 @@ pub fn reserve_saved_session_deletions(sessions: &[AgentSessionBinding]) -> Resu
         return Err(Error::State("A selected conversation is already being deleted".into()));
     }
     pending.extend(keys.iter().cloned());
+    PENDING_DELETION_REVISION.fetch_add(1, Ordering::Release);
     Ok(AgentSessionDeletionReservation { keys })
 }
 
@@ -49,6 +52,7 @@ impl Drop for AgentSessionDeletionReservation {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         pending.retain(|key| !self.keys.contains(key));
+        PENDING_DELETION_REVISION.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -108,6 +112,12 @@ enum DeletionOutcome {
 }
 
 impl AgentSessionCatalog {
+    /// Changes whenever process-wide deletion reservations change.
+    #[must_use]
+    pub fn pending_deletion_revision() -> u64 {
+        PENDING_DELETION_REVISION.load(Ordering::Acquire)
+    }
+
     #[must_use]
     pub fn supports_saved_session_deletion(kind: PanelKind) -> bool {
         matches!(kind, PanelKind::Codex | PanelKind::Claude)

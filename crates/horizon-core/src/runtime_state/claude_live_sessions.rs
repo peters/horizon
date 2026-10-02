@@ -1,7 +1,11 @@
 use std::collections::HashSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+
+const MAX_REGISTRY_ENTRIES: usize = 4096;
+const MAX_REGISTRY_ENTRY_BYTES: u64 = 64 * 1024;
 
 /// Returns session ids currently owned by a running Claude Code process.
 ///
@@ -46,12 +50,44 @@ fn collect_verified_live_session_ids(
         Err(error) => return Err(Error::State(format!("Cannot verify Claude live sessions: {error}"))),
     };
     let mut ids = HashSet::new();
-    for entry in entries {
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_REGISTRY_ENTRIES {
+            return Err(Error::State(
+                "Cannot verify oversized Claude live-session registry".into(),
+            ));
+        }
         let entry = entry?;
         if entry.path().extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
             continue;
         }
-        let contents = std::fs::read_to_string(entry.path())?;
+        let path = entry.path();
+        if !std::fs::symlink_metadata(&path)?.file_type().is_file() {
+            return Err(Error::State(
+                "Cannot verify non-regular Claude live-session entry".into(),
+            ));
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(
+                (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOFOLLOW)
+                    .bits()
+                    .cast_signed(),
+            );
+        }
+        let file = options.open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(Error::State(
+                "Cannot verify non-regular Claude live-session entry".into(),
+            ));
+        }
+        let mut contents = String::new();
+        file.take(MAX_REGISTRY_ENTRY_BYTES + 1).read_to_string(&mut contents)?;
+        if contents.len() as u64 > MAX_REGISTRY_ENTRY_BYTES {
+            return Err(Error::State("Cannot verify oversized Claude live-session entry".into()));
+        }
         if !contents.trim_start().starts_with('{') {
             return Err(Error::State(
                 "Cannot verify non-object Claude live-session entry".into(),
@@ -240,6 +276,42 @@ mod tests {
             collect_verified_live_session_ids(dir.path(), |pid| pid == 101).expect("verified registry"),
             HashSet::from(["live".to_string()])
         );
+    }
+
+    #[test]
+    fn verified_registry_bounds_entry_bytes_and_total_directory_entries() {
+        let dir = tempfile::tempdir().expect("registry");
+        let record = r#"{"pid":101,"sessionId":"live"}"#;
+        let contents = format!(
+            "{record}{}",
+            " ".repeat(usize::try_from(super::MAX_REGISTRY_ENTRY_BYTES).expect("entry limit fits") - record.len())
+        );
+        write_entry(dir.path(), "101.json", &contents);
+        assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_ok());
+        write_entry(dir.path(), "101.json", &(contents + " "));
+        assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_err());
+        std::fs::remove_file(dir.path().join("101.json")).expect("remove oversized entry");
+        for index in 0..super::MAX_REGISTRY_ENTRIES {
+            write_entry(dir.path(), &format!("{index}.txt"), "ignored");
+        }
+        assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_ok());
+        write_entry(dir.path(), "overflow.txt", "ignored");
+        assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verified_registry_rejects_links_and_fifos_without_waiting_for_a_writer() {
+        let dir = tempfile::tempdir().expect("registry");
+        let record = dir.path().join("record.txt");
+        std::fs::write(&record, r#"{"pid":101,"sessionId":"live"}"#).expect("record");
+        let entry = dir.path().join("101.json");
+        std::os::unix::fs::symlink(&record, &entry).expect("linked entry");
+        assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_err());
+        std::fs::remove_file(&entry).expect("remove link");
+        rustix::fs::mkfifoat(rustix::fs::CWD, &entry, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
+            .expect("FIFO entry");
+        assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_err());
     }
 
     #[test]

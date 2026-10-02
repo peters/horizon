@@ -2,6 +2,71 @@ use super::*;
 use crate::test_egui::DiscardTextures;
 
 #[test]
+fn conversation_checkboxes_expose_distinct_full_identity_labels() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let bindings: Vec<_> = (0..2)
+        .map(|index| {
+            AgentSessionBinding::new(
+                horizon_core::PanelKind::Codex,
+                format!("01a0f8a8-d7e2-7810-9e6b-{index:012}"),
+                None,
+                Some("Same title".into()),
+                None,
+            )
+        })
+        .collect();
+    let mut state = SessionDeletionUi {
+        managing: true,
+        ..Default::default()
+    };
+    let output = ctx
+        .run_ui(egui::RawInput::default(), |ui| {
+            for binding in &bindings {
+                ui.push_id(&binding.session_id, |ui| state.render_row_controls(ui, binding));
+            }
+        })
+        .discard_textures();
+    let update = output.platform_output.accesskit_update.expect("accessibility update");
+    for binding in bindings {
+        let label = format!("Select conversation {}", binding.session_id);
+        assert!(
+            update
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some(label.as_str()))
+        );
+    }
+}
+
+#[test]
+fn picker_catalog_cache_tracks_panel_identity_folder_and_membership_without_cloning_options() {
+    let cache = PickerCatalogCache {
+        owner: PanelId(1),
+        kind: horizon_core::PanelKind::Codex,
+        revision: (None, None, 0),
+        panels: vec![PickerPanelScope {
+            id: PanelId(1),
+            session: Some("exact".into()),
+            cwd: Some("/sample/project".into()),
+        }]
+        .into(),
+    };
+    let scope = (PanelId(1), Some("exact"), Some(Path::new("/sample/project")));
+    assert!(cache.matches_panels([scope].into_iter()));
+    for changed in [
+        (PanelId(2), scope.1, scope.2),
+        (scope.0, Some("other"), scope.2),
+        (scope.0, None, scope.2),
+        (scope.0, scope.1, Some(Path::new("/sample/other"))),
+    ] {
+        assert!(!cache.matches_panels([changed].into_iter()));
+    }
+    assert!(!cache.matches_panels([scope, scope].into_iter()));
+    assert!(!cache.matches_panels(std::iter::empty()));
+}
+
+#[test]
 fn batch_start_failure_counts_every_conversation_and_preserves_preflight_failures() {
     let sessions: Vec<_> = (0..10)
         .map(|index| {

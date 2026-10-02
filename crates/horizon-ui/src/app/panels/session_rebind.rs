@@ -38,14 +38,16 @@ pub(super) fn open_session_picker(response: &egui::Response, panel_id: PanelId, 
 pub(super) fn render_session_picker(
     ctx: &egui::Context,
     panel_id: PanelId,
-    options: Vec<AgentSessionBinding>,
+    options: impl Into<Option<Vec<AgentSessionBinding>>>,
 ) -> Option<AgentSessionBinding> {
     let id = picker_id(ctx);
     let mut state = ctx.data(|data| data.get_temp::<SessionPicker>(id))?;
     if state.panel_id != panel_id {
         return None;
     }
-    if state.options.as_ref() != options.as_slice() {
+    if let Some(options) = options.into()
+        && state.options.as_ref() != options.as_slice()
+    {
         let scope_changed = !AgentSessionBinding::same_saved_session_scope(&state.options, &options);
         state.deletion.reconcile_options(&options);
         state.options = options.into();

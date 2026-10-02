@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use egui::{Button, RichText};
 use horizon_core::{AgentSessionBinding, AgentSessionCatalog, AgentSessionDeletionReport, AgentSessionKey, PanelId};
@@ -131,7 +133,16 @@ impl SessionDeletionUi {
         }
         if self.managing {
             let mut selected = self.selected.contains(&binding.session_id);
-            if ui.checkbox(&mut selected, "Select").changed() {
+            let response = ui.checkbox(&mut selected, "Select");
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::Checkbox,
+                    response.enabled(),
+                    selected,
+                    format!("Select conversation {}", binding.session_id),
+                )
+            });
+            if response.changed() {
                 let selections = Arc::make_mut(&mut self.selected);
                 if selected {
                     selections.insert(binding.session_id.clone());
@@ -308,6 +319,34 @@ fn job_id() -> egui::Id {
     egui::Id::new("saved_conversation_deletion_job")
 }
 
+#[derive(Clone)]
+struct PickerCatalogCache {
+    owner: PanelId,
+    kind: horizon_core::PanelKind,
+    revision: (Option<Instant>, Option<Instant>, u64),
+    panels: Arc<[PickerPanelScope]>,
+}
+
+struct PickerPanelScope {
+    id: PanelId,
+    session: Option<String>,
+    cwd: Option<PathBuf>,
+}
+
+impl PickerCatalogCache {
+    fn matches_panels<'a>(
+        &self,
+        mut panels: impl Iterator<Item = (PanelId, Option<&'a str>, Option<&'a Path>)>,
+    ) -> bool {
+        for panel in self.panels.iter() {
+            if panels.next() != Some((panel.id, panel.session.as_deref(), panel.cwd.as_deref())) {
+                return false;
+            }
+        }
+        panels.next().is_none()
+    }
+}
+
 pub(super) fn deletion_progress(ctx: &egui::Context) -> Option<(usize, usize)> {
     let job = ctx.data(|data| data.get_temp::<DeletionJob>(job_id()))?;
     let state = job.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -315,6 +354,64 @@ pub(super) fn deletion_progress(ctx: &egui::Context) -> Option<(usize, usize)> {
 }
 
 impl HorizonApp {
+    fn picker_options_update(&self, ctx: &egui::Context, panel_id: PanelId) -> Option<Vec<AgentSessionBinding>> {
+        let kind = self.board.panel(panel_id)?.kind;
+        let revision = (
+            self.session_catalog_refresh.last_full_refresh,
+            self.session_catalog_refresh.picker_times.get(&kind).copied(),
+            AgentSessionCatalog::pending_deletion_revision(),
+        );
+        let scopes = || {
+            self.board
+                .panels
+                .iter()
+                .filter(|panel| panel.kind == kind)
+                .map(|panel| {
+                    let session = if panel.id == panel_id {
+                        panel
+                            .session_binding
+                            .as_ref()
+                            .map(|binding| binding.session_id.as_str())
+                    } else {
+                        panel.session_id()
+                    };
+                    (panel.id, session, panel.launch_cwd.as_deref())
+                })
+        };
+        let cache_id = egui::Id::new(("saved_session_picker_catalog", ctx.viewport_id()));
+        if ctx
+            .data(|data| data.get_temp::<PickerCatalogCache>(cache_id))
+            .is_some_and(|cache| {
+                cache.owner == panel_id
+                    && cache.kind == kind
+                    && cache.revision == revision
+                    && cache.matches_panels(scopes())
+            })
+        {
+            return None;
+        }
+        let options = self.session_rebind_options(panel_id);
+        let panels = scopes()
+            .map(|(id, session, cwd)| PickerPanelScope {
+                id,
+                session: session.map(str::to_owned),
+                cwd: cwd.map(Path::to_path_buf),
+            })
+            .collect();
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                cache_id,
+                PickerCatalogCache {
+                    owner: panel_id,
+                    kind,
+                    revision,
+                    panels,
+                },
+            )
+        });
+        Some(options)
+    }
+
     pub(super) fn render_saved_session_picker(
         &mut self,
         ctx: &egui::Context,
@@ -326,7 +423,7 @@ impl HorizonApp {
         }
         let kind = self.board.panels.iter().find(|panel| panel.id == panel_id)?.kind;
         self.refresh_session_catalog_for_picker(ctx, kind);
-        let options = self.session_rebind_options(panel_id);
+        let options = self.picker_options_update(ctx, panel_id);
         let binding = super::session_rebind::render_session_picker(ctx, panel_id, options);
         let binding = binding.filter(|chosen| {
             self.session_rebind_options(panel_id).iter().any(|current| {

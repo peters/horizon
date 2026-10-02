@@ -1,6 +1,58 @@
 use super::*;
 
 #[test]
+fn unchanged_picker_repaints_reuse_options_and_relevant_changes_rebuild_them() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    let workspace = app.board.create_workspace("cache regression");
+    let owner = app
+        .board
+        .create_panel(
+            horizon_core::PanelOptions {
+                kind: horizon_core::PanelKind::Editor,
+                ..Default::default()
+            },
+            workspace,
+        )
+        .expect("editor fixture");
+    app.board.panel_mut(owner).expect("panel").kind = horizon_core::PanelKind::Codex;
+    assert!(app.picker_options_update(&ctx, owner).is_some());
+    let before = AgentSessionCatalog::pending_deletion_revision();
+    let update = app.picker_options_update(&ctx, owner);
+    assert!(update.is_none() || before != AgentSessionCatalog::pending_deletion_revision());
+    app.session_catalog_refresh
+        .picker_times
+        .insert(horizon_core::PanelKind::Codex, Instant::now());
+    assert!(app.picker_options_update(&ctx, owner).is_some());
+    app.board.panel_mut(owner).expect("panel").launch_cwd = Some("/sample/new-folder".into());
+    assert!(app.picker_options_update(&ctx, owner).is_some());
+    app.board
+        .panel_mut(owner)
+        .expect("panel")
+        .set_session_binding(Some(AgentSessionBinding::new(
+            horizon_core::PanelKind::Codex,
+            "attached".into(),
+            None,
+            None,
+            None,
+        )));
+    assert!(app.picker_options_update(&ctx, owner).is_some());
+    let binding = AgentSessionBinding::new(
+        horizon_core::PanelKind::Codex,
+        "reserved-cache-regression".into(),
+        None,
+        None,
+        None,
+    );
+    let reservation = horizon_core::reserve_saved_session_deletions(&[binding]).expect("reservation");
+    assert!(app.picker_options_update(&ctx, owner).is_some());
+    drop(reservation);
+    assert!(app.picker_options_update(&ctx, owner).is_some());
+    app.board.panel_mut(owner).expect("panel").kind = horizon_core::PanelKind::Claude;
+    assert!(app.picker_options_update(&ctx, owner).is_some());
+}
+
+#[test]
 fn frame_lifecycle_finishes_deletion_without_renderable_panels() {
     let (_temp, mut app) = crate::app::test_support::test_app();
     let ctx = egui::Context::default();
