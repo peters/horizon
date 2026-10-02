@@ -176,9 +176,11 @@ mod tests {
     use std::sync::{Mutex, mpsc};
 
     fn install_worker(app: &mut HorizonApp, ctx: &egui::Context, panic: bool) -> mpsc::Sender<()> {
+        static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let identity = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let session = AgentSessionBinding::new(
             horizon_core::PanelKind::Claude,
-            format!("shutdown-test-{panic}"),
+            format!("shutdown-test-{identity}"),
             None,
             None,
             None,
@@ -230,6 +232,65 @@ mod tests {
         assert!(
             ctx.data(|data| data.get_temp::<Arc<AgentSessionDeletionReport>>(receipt_id()))
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn completed_worker_notice_blocks_shortcuts_on_the_completion_frame() {
+        use crate::test_egui::DiscardTextures;
+
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        let release = install_worker(&mut app, &ctx, false);
+        let job = ctx.data(|data| data.get_temp::<DeletionJob>(job_id())).expect("job");
+        job.state.lock().expect("state").report.cleanup_warnings.push(
+            horizon_core::AgentSessionDeletionCleanupWarning {
+                session_id: "synthetic".into(),
+                directory: "/synthetic/cleanup".into(),
+                message: "Synthetic cleanup warning".into(),
+            },
+        );
+        release.send(()).expect("release");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app
+            .saved_session_deletion
+            .worker
+            .as_ref()
+            .expect("worker")
+            .handle
+            .is_finished()
+        {
+            assert!(std::time::Instant::now() < deadline, "worker completed");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!app.host_dialog_open());
+        app.shortcuts.fullscreen_window = horizon_core::ShortcutBinding::parse("F11").expect("shortcut");
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::F11,
+                        physical_key: Some(egui::Key::F11),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |_ui| {
+                    app.process_frame_inputs(&ctx);
+                },
+            )
+            .discard_textures();
+        assert!(app.host_dialog_open());
+        assert!(
+            output.viewport_output.values().all(|viewport| {
+                !viewport
+                    .commands
+                    .iter()
+                    .any(|command| matches!(command, egui::ViewportCommand::Fullscreen(_)))
+            }),
+            "completion-frame shortcut must not reach the underlying application"
         );
     }
 
