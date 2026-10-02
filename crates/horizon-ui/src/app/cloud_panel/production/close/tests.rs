@@ -305,7 +305,8 @@ fn expanding_a_collapsed_cloud_while_it_closes_keeps_its_panels_hidden() {
         app.board.panel(panel).unwrap().visible,
         "expanding shows its members again"
     );
-    app.finish_closing_clouds(&ctx);
+    // The frame hides them again right before panels render, after the header action.
+    app.hide_closing_cloud_panels();
     assert!(
         !app.board.panel(panel).unwrap().visible,
         "the disposal takes them back out of sight"

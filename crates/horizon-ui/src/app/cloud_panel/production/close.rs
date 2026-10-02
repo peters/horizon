@@ -160,11 +160,17 @@ impl HorizonApp {
         }
     }
 
-    pub(super) fn finish_closing_clouds(&mut self, ctx: &egui::Context) {
+    /// Keeps every closing cloud's panels out of sight. Also run just before panels render,
+    /// because a header action such as Expand runs between frame preparation and rendering.
+    pub(in crate::app) fn hide_closing_cloud_panels(&mut self) {
         let closing: Vec<_> = self.cloud_prototype.production.close.deleting.iter().copied().collect();
         for id in closing {
             self.hide_closing_panels(id);
         }
+    }
+
+    pub(super) fn finish_closing_clouds(&mut self, ctx: &egui::Context) {
+        self.hide_closing_cloud_panels();
         let finished: Vec<_> = self
             .cloud_prototype
             .production
