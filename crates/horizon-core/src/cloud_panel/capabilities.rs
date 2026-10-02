@@ -2,18 +2,23 @@ use super::CloudGroup;
 use crate::PanelKind;
 
 impl CloudGroup {
-    /// What a freshly deployed cloud opens first: the first coding agent its profile
-    /// allows, otherwise a shell.
+    /// What a freshly deployed cloud opens first: the first of Claude, Codex and Grok that
+    /// its profile allows (a profile lists agents as a set, so there is no order of its own),
+    /// otherwise a shell.
     #[must_use]
     pub fn first_panel_kind(&self) -> PanelKind {
-        self.remote
-            .as_ref()
-            .and_then(|launch| launch.profile.capabilities.agents.first().copied())
-            .map_or(PanelKind::Shell, |agent| match agent {
-                horizon_cloud::Agent::Codex => PanelKind::Codex,
-                horizon_cloud::Agent::Claude => PanelKind::Claude,
-                horizon_cloud::Agent::Grok => PanelKind::Grok,
-            })
+        let Some(launch) = &self.remote else {
+            return PanelKind::Shell;
+        };
+        let capabilities = &launch.profile.capabilities;
+        [
+            ("claude", PanelKind::Claude),
+            ("codex", PanelKind::Codex),
+            ("grok", PanelKind::Grok),
+        ]
+        .into_iter()
+        .find(|(agent, _)| capabilities.agents.iter().any(|allowed| allowed.as_str() == *agent))
+        .map_or(PanelKind::Shell, |(_, kind)| kind)
     }
 
     /// Prototype groups retain their local panel behavior. Managed groups use
@@ -46,7 +51,7 @@ impl CloudGroup {
 mod tests {
     use super::*;
     #[test]
-    fn a_new_cloud_opens_its_first_allowed_agent_or_else_a_shell() {
+    fn a_new_cloud_opens_the_preferred_allowed_agent_or_else_a_shell() {
         let mut group = CloudGroup::new(1, "test".into(), "workspace".into(), ".".into(), [0.0, 0.0]);
         assert_eq!(group.first_panel_kind(), PanelKind::Shell, "no cloud, no agent");
         let mut profile = horizon_cloud::CloudConfig::parse(horizon_cloud::EXAMPLE)
@@ -65,7 +70,9 @@ mod tests {
         for (agents, expected) in [
             ("[]", PanelKind::Shell),
             (r#"["claude"]"#, PanelKind::Claude),
-            (r#"["codex","claude"]"#, PanelKind::Codex),
+            (r#"["codex","claude"]"#, PanelKind::Claude),
+            (r#"["claude","codex"]"#, PanelKind::Claude),
+            (r#"["grok","codex"]"#, PanelKind::Codex),
             (r#"["grok"]"#, PanelKind::Grok),
         ] {
             profile.capabilities = serde_json::from_str(&format!(r#"{{"agents":{agents}}}"#)).unwrap();
