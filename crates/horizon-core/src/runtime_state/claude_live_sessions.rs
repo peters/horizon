@@ -309,8 +309,13 @@ mod tests {
         std::os::unix::fs::symlink(&record, &entry).expect("linked entry");
         assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_err());
         std::fs::remove_file(&entry).expect("remove link");
-        rustix::fs::mkfifoat(rustix::fs::CWD, &entry, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
-            .expect("FIFO entry");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&entry)
+                .status()
+                .expect("create FIFO entry")
+                .success()
+        );
         assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_err());
     }
 

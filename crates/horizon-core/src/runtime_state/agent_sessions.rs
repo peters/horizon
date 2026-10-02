@@ -308,16 +308,16 @@ fn load_claude_sessions_from_dir(projects_dir: &Path) -> Result<Vec<AgentSession
         return Ok(Vec::new());
     }
 
-    let unavailable = deletion::retained_claude_recovery_ids(projects_dir)?;
+    let unavailable = deletion::retained_claude_recovery_exclusions(projects_dir)?;
     let mut session_paths = Vec::new();
-    collect_claude_project_files(projects_dir, &mut session_paths)?;
+    collect_claude_project_files(projects_dir, &unavailable.artifact_directories, &mut session_paths)?;
     session_paths.sort_by_key(|(_, updated_at)| Reverse(*updated_at));
     session_paths.truncate(super::MAX_CLAUDE_SESSION_FILES);
 
     let mut sessions_by_id: HashMap<String, AgentSessionRecord> = HashMap::new();
     for (path, updated_at) in session_paths {
         match load_claude_project_session_summary(&path, updated_at) {
-            Ok(Some(session)) if !unavailable.contains(&session.session_id) => {
+            Ok(Some(session)) if !unavailable.session_ids.contains(&session.session_id) => {
                 match sessions_by_id.get_mut(&session.session_id) {
                     Some(existing) if session.updated_at > existing.updated_at => *existing = session,
                     Some(_) => {}
@@ -338,7 +338,18 @@ fn load_claude_sessions_from_dir(projects_dir: &Path) -> Result<Vec<AgentSession
     Ok(sessions)
 }
 
-fn collect_claude_project_files(dir: &Path, files: &mut Vec<(PathBuf, i64)>) -> Result<()> {
+fn collect_claude_project_files(
+    dir: &Path,
+    excluded_directories: &HashSet<PathBuf>,
+    files: &mut Vec<(PathBuf, i64)>,
+) -> Result<()> {
+    if !excluded_directories.is_empty()
+        && dir
+            .canonicalize()
+            .is_ok_and(|path| excluded_directories.contains(&path))
+    {
+        return Ok(());
+    }
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
@@ -358,7 +369,7 @@ fn collect_claude_project_files(dir: &Path, files: &mut Vec<(PathBuf, i64)>) -> 
             if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("subagents") {
                 continue;
             }
-            collect_claude_project_files(&path, files)?;
+            collect_claude_project_files(&path, excluded_directories, files)?;
         } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("jsonl")
             && let Ok(updated_at) = file_updated_at_millis(&path)
         {

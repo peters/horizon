@@ -91,7 +91,17 @@ fn retained_manifest_prevents_legacy_artifacts_resurrecting_parent_on_reload() {
         .parent()
         .expect("project")
         .join(format!("{}.jsonl", unaffected.session_id));
-    std::fs::write(other, serde_json::json!({"sessionId":unaffected.session_id,"cwd":"/example","type":"user","message":{"content":"keep"}}).to_string()).expect("other");
+    std::fs::write(&other, serde_json::json!({"sessionId":unaffected.session_id,"cwd":"/example","type":"user","message":{"content":"keep"}}).to_string()).expect("other");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_hours(1);
+    std::fs::File::options()
+        .write(true)
+        .open(&other)
+        .expect("other transcript")
+        .set_times(std::fs::FileTimes::new().set_modified(old))
+        .expect("older valid session");
+    for index in 0..super::super::super::super::MAX_CLAUDE_SESSION_FILES {
+        std::fs::write(artifacts.join(format!("legacy-{index}.jsonl")), &payload).expect("recent legacy artifact");
+    }
     let moves = std::cell::Cell::new(0);
     let outcome = stage_claude_deletion(
         &projects,

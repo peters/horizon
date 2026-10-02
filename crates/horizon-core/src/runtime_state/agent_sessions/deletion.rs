@@ -389,12 +389,18 @@ struct ClaudeDeletionManifest {
     artifacts: Option<PathBuf>,
 }
 
-pub(super) fn retained_claude_recovery_ids(projects: &Path) -> Result<HashSet<String>> {
+#[derive(Default)]
+pub(super) struct ClaudeRecoveryExclusions {
+    pub session_ids: HashSet<String>,
+    pub artifact_directories: HashSet<PathBuf>,
+}
+
+pub(super) fn retained_claude_recovery_exclusions(projects: &Path) -> Result<ClaudeRecoveryExclusions> {
     let root = projects.canonicalize()?;
     let Some(parent) = root.parent() else {
-        return Ok(HashSet::new());
+        return Ok(ClaudeRecoveryExclusions::default());
     };
-    let mut unavailable = HashSet::new();
+    let mut unavailable = ClaudeRecoveryExclusions::default();
     for entry in std::fs::read_dir(parent)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() || !entry.file_name().to_string_lossy().starts_with(".horizon-delete-") {
@@ -421,7 +427,14 @@ pub(super) fn retained_claude_recovery_ids(projects: &Path) -> Result<HashSet<St
             && let Some(id) = manifest.transcript.file_stem().and_then(std::ffi::OsStr::to_str)
             && uuid::Uuid::parse_str(id).is_ok()
         {
-            unavailable.insert(id.to_owned());
+            unavailable.session_ids.insert(id.to_owned());
+            if let Some(artifacts) = manifest.artifacts
+                && artifacts == manifest.transcript.with_extension("")
+                && let Ok(artifacts) = artifacts.canonicalize()
+                && artifacts.starts_with(&root)
+            {
+                unavailable.artifact_directories.insert(artifacts);
+            }
         }
     }
     Ok(unavailable)
