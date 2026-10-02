@@ -42,7 +42,7 @@ fn the_header_status_and_every_step_reach_a_screen_reader() {
             line: "$0.320/h · $1.02 run".into(),
             explanation: "Estimated from the worker's rate.".into(),
         };
-        strip::show(ui, header, &failed, &indicators, &spend, false);
+        strip::show(ui, header, &failed, &indicators, &spend, false, None);
         steps::vertical(ui, &runtime, &failed);
     });
     let sentence = labels

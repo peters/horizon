@@ -22,7 +22,7 @@ fn strip_frame(width: f32, status: &status::Status) -> (strip::Strip, Vec<(Strin
                 line: "$0.320/h · $1.02 run · $8.86 total".into(),
                 explanation: String::new(),
             };
-            result = Some(strip::show(ui, header, status, &indicators, &spend, false));
+            result = Some(strip::show(ui, header, status, &indicators, &spend, false, None));
         })
         .discard_textures();
     let texts = output
@@ -58,7 +58,7 @@ fn the_header_strip_fits_the_narrowest_cloud_with_long_errors() {
         std::time::SystemTime::now(),
     );
     for status in [&failed, &ready] {
-        for width in [548.0, 900.0, 1760.0] {
+        for width in [548.0, 1100.0, 1760.0] {
             let (strip, texts, header) = strip_frame(width, status);
             let close_left = header.right() - 42.0;
             assert!(
@@ -84,7 +84,7 @@ fn the_header_strip_fits_the_narrowest_cloud_with_long_errors() {
             assert!(has(status.primary.unwrap().label()), "the main action survives {width}");
             assert_eq!(
                 has("$0.320/h · $1.02 run · $8.86 total"),
-                width >= 900.0,
+                width >= 1100.0,
                 "spend is the first thing a narrow header drops ({width})"
             );
             if has("$0.320/h · $1.02 run · $8.86 total") {
@@ -101,6 +101,7 @@ mod access;
 mod deletion;
 mod frame;
 mod hover;
+mod layout;
 mod overlap;
 mod scrolling;
 

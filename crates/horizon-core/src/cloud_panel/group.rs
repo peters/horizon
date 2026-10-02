@@ -1,7 +1,7 @@
 //! Geometry, membership and reconciliation of one cloud group.
 use super::{
-    CHILD_SIZE, CloudGeometry, CloudGroup, Environment, HEADER, LEGACY_TOOLBAR_CONTROLS_HEIGHT, LEGACY_TOOLBAR_HEIGHT,
-    PAD, RUNTIME_HEIGHT, RUNTIME_WIDTH, STATUS_HEIGHT, resize,
+    CHILD_SIZE, CONTENT_GAP, CloudGeometry, CloudGroup, Environment, HEADER, LEGACY_TOOLBAR_CONTROLS_HEIGHT,
+    LEGACY_TOOLBAR_HEIGHT, PAD, RUNTIME_HEIGHT, RUNTIME_WIDTH, STATUS_HEIGHT, resize,
 };
 use crate::{Board, PanelId, WorkspaceLayout};
 use std::path::PathBuf;
@@ -44,6 +44,12 @@ impl CloudGroup {
     /// Space reserved for identity, and a production cloud's status strip, before session panels.
     #[must_use]
     pub fn header_height(&self) -> f32 {
+        self.header_chrome_height() + if self.remote.is_some() { CONTENT_GAP } else { 0.0 }
+    }
+
+    /// The painted header: `header_height` without the gap that keeps panels off its edge.
+    #[must_use]
+    pub fn header_chrome_height(&self) -> f32 {
         HEADER + if self.remote.is_some() { STATUS_HEIGHT } else { 0.0 }
     }
 
