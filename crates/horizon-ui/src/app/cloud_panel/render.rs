@@ -207,6 +207,7 @@ impl HorizonApp {
                     && self.cloud_prototype.groups.0[index].remote.is_none()
                 {
                     removed_from = Some(self.cloud_prototype.groups.0.remove(index).workspace);
+                    super::production::cards::forget_log_heights(ctx, issue);
                 }
             }
         }

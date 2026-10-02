@@ -363,6 +363,7 @@ impl HorizonApp {
             }
         }
         self.cloud_prototype.production.runtimes.remove(&id);
+        super::cards::forget_log_heights(ctx, id);
         self.save_cloud_prototype();
         self.release_removed_cloud_workspace(&group.workspace, ctx);
     }

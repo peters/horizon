@@ -108,6 +108,19 @@ struct HeightCache {
     entries: HashMap<(u32, u64), f32>,
 }
 
+fn height_cache_id(id: u32) -> egui::Id {
+    egui::Id::new(("cloud-log-heights", id))
+}
+
+/// Drop the wrapped-row height cache for a cloud that has left the board.
+/// egui keeps temp data until the context shuts down, so a closed cloud has to
+/// remove its own cache or a long-running session retains it.
+pub(in crate::app::cloud_panel) fn forget_log_heights(ctx: &egui::Context, id: u32) {
+    ctx.data_mut(|data| {
+        let _ = data.remove_temp::<HeightCache>(height_cache_id(id));
+    });
+}
+
 enum Item<'a> {
     Step { stage: Stage, attempt: u64, visit: usize },
     Notes,
@@ -126,7 +139,7 @@ struct Placed<'a> {
 fn paint_log(ui: &mut egui::Ui, id: u32, runtime: &Runtime, follows: bool, viewport: Rect) {
     let shown = shown(runtime, follows);
     let width = ui.available_width();
-    let cache_id = egui::Id::new(("cloud-log-heights", id));
+    let cache_id = height_cache_id(id);
     let mut cache = ui
         .data_mut(|data| data.remove_temp::<HeightCache>(cache_id))
         .unwrap_or_default();
@@ -647,5 +660,32 @@ mod tests {
             lines.iter().all(|line| line != "LOG-LINE-000"),
             "the tail should hide the first line: {lines:?}"
         );
+    }
+
+    #[test]
+    fn closing_a_cloud_drops_only_its_row_height_cache() {
+        let ctx = egui::Context::default();
+        for id in [7, 8] {
+            let mut runtime = Runtime::default();
+            runtime.push_log(format!("LOG-LINE-{id}"));
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0))),
+                        ..egui::RawInput::default()
+                    },
+                    |ui| {
+                        ui.set_width(640.0);
+                        show(ui, id, "body", &mut runtime, 280.0, None);
+                    },
+                )
+                .discard_textures();
+        }
+        let cached = |id| ctx.data(|data| data.get_temp::<HeightCache>(height_cache_id(id)).is_some());
+        assert!(cached(7) && cached(8));
+        forget_log_heights(&ctx, 7);
+        assert!(!cached(7));
+        assert!(cached(8), "another cloud keeps its row heights");
+        forget_log_heights(&ctx, 7);
     }
 }
