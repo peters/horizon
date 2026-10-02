@@ -275,6 +275,11 @@ impl HorizonApp {
             self.message_inbox(ui);
             ui.add_space(8.0);
         }
+        if self.assistant.summon.ckpt.has() || !self.assistant.summon.ckpt.digest_is_empty() {
+            let press = self.checkpoint_card(ui);
+            self.apply_checkpoint_press(press);
+            ui.add_space(8.0);
+        }
         if !asks.is_empty() {
             approvals_card(ui, asks, allow_low, answers);
             ui.add_space(8.0);

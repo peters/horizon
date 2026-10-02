@@ -71,6 +71,7 @@ impl HorizonApp {
         let listening = self.assistant.demo.as_ref().is_some_and(demo::Demo::is_listening);
         let speaking = self.speaking_now();
         let accent = match asks.first() {
+            _ if self.assistant.summon.ckpt.has() => theme::PALETTE_RED(),
             Some(ask) => ask.risk.color(),
             None if listening || speaking => theme::ACCENT(),
             None => theme::ACCENT().gamma_multiply(0.55),
@@ -120,31 +121,14 @@ impl HorizonApp {
         }
         let left = pill.left() + 76.0;
         let right = mic.left() - 12.0;
+        if self.assistant.summon.ckpt.has() {
+            // A checkpoint comes first: it is what the agents agreed to stop for.
+            let press = self.paint_top_checkpoint(ui, pill, (left, right));
+            self.apply_checkpoint_press(press);
+            return (None, false);
+        }
         let Some(top) = asks.first() else {
-            if self.assistant.summon.msgs.on
-                && let Some((from, tag, text)) = self.assistant.summon.msgs.newest_unread()
-            {
-                // Someone wrote: who, where, and what, with a way in.
-                ui.painter().text(
-                    pos2(left, pill.center().y - 9.0),
-                    Align2::LEFT_CENTER,
-                    format!("{from}  {tag}"),
-                    FontId::proportional(11.5),
-                    theme::PALETTE_CYAN(),
-                );
-                ui.painter().text(
-                    pos2(left, pill.center().y + 9.0),
-                    Align2::LEFT_CENTER,
-                    text,
-                    FontId::proportional(13.5),
-                    theme::FG(),
-                );
-                let open = Rect::from_center_size(pos2(right - 40.0, pill.center().y), vec2(76.0, 30.0));
-                if small_button(ui, open, "Open", true).clicked() {
-                    self.assistant.summon.msgs.view = super::messages::View::Concierge;
-                    actions.push(MiniAction::Expand);
-                }
-                ui.ctx().request_repaint();
+            if self.paint_newest_message(ui, pill, (left, right), actions) {
                 return (None, false);
             }
             let field = Rect::from_min_max(pos2(left, pill.top() + 8.0), pos2(right, pill.bottom() - 8.0));
@@ -161,6 +145,43 @@ impl HorizonApp {
         };
         let allow_low = self.paint_top_ask(ui, pill, (left, right), asks, top, actions);
         (None, allow_low)
+    }
+
+    /// The newest unread message in the pill: who, where, what, and a way in. Returns whether there was one.
+    fn paint_newest_message(
+        &mut self,
+        ui: &mut Ui,
+        pill: Rect,
+        (left, right): (f32, f32),
+        actions: &mut Vec<MiniAction>,
+    ) -> bool {
+        if !self.assistant.summon.msgs.on {
+            return false;
+        }
+        let Some((from, tag, text)) = self.assistant.summon.msgs.newest_unread() else {
+            return false;
+        };
+        ui.painter().text(
+            pos2(left, pill.center().y - 9.0),
+            Align2::LEFT_CENTER,
+            format!("{from}  {tag}"),
+            FontId::proportional(11.5),
+            theme::PALETTE_CYAN(),
+        );
+        ui.painter().text(
+            pos2(left, pill.center().y + 9.0),
+            Align2::LEFT_CENTER,
+            text,
+            FontId::proportional(13.5),
+            theme::FG(),
+        );
+        let open = Rect::from_center_size(pos2(right - 40.0, pill.center().y), vec2(76.0, 30.0));
+        if small_button(ui, open, "Open", true).clicked() {
+            self.assistant.summon.msgs.view = super::messages::View::Concierge;
+            actions.push(MiniAction::Expand);
+        }
+        ui.ctx().request_repaint();
+        true
     }
 
     /// The one question that matters most, answered in place. Returns whether "allow the low-risk ones" was pressed.

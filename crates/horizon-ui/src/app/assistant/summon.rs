@@ -76,6 +76,8 @@ pub(super) struct Summon {
     sheet_request: Option<[f32; 2]>,
     /// The messaging mock: handles, channels, threads and an inbox.
     msgs: dock::MessageStore,
+    /// The checkpoint mock: what agents stop for, and what passed on its own.
+    ckpt: dock::CheckpointStore,
     /// How the text agent sits beside the voice assistant.
     layout: dock::Layout3,
     /// The share of the width the voice side takes in the split layout.

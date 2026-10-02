@@ -375,6 +375,22 @@ impl HorizonApp {
                 self.assistant.summon.sheet_request = Some(size);
             }
             "drawer" => self.assistant.summon.drawer_open = argument != Some("off"),
+            "channel" => {
+                self.assistant.summon.channel = if argument == Some("text") {
+                    super::dock::Channel::Text
+                } else {
+                    super::dock::Channel::Voice
+                };
+            }
+            _ => return self.demo_controls(command, argument, rest, text),
+        }
+        true
+    }
+
+    /// The commands for the mode, the plan and the checkpoints: `plan`, `executor`, `fleet`, `checkpoint`,
+    /// `ckpt`, `standing`, `modes` and `mode`. Returns whether the command was one of them.
+    fn demo_controls(&mut self, command: &str, argument: Option<&str>, rest: Option<&str>, text: &str) -> bool {
+        match command {
             "plan" => match argument {
                 Some("approve") => {
                     if let Some(plan) = self.assistant.feed.turns().last().and_then(|turn| turn.plan.clone()) {
@@ -390,6 +406,20 @@ impl HorizonApp {
                     _ => horizon_core::PanelKind::Claude,
                 });
             }
+            "fleet" => {
+                let n: Vec<u32> = text.split('|').filter_map(|part| part.trim().parse().ok()).collect();
+                self.assistant.summon.ckpt.fleet = match n[..] {
+                    [total, working, parked] => Some(super::dock::Fleet { total, working, parked }),
+                    _ => None,
+                };
+            }
+            "checkpoint" => self.assistant.summon.ckpt.add(text),
+            "ckpt" => match argument {
+                Some("approve") => self.assistant.summon.ckpt.approve(0),
+                Some("hold") => self.assistant.summon.ckpt.hold(0),
+                _ => self.assistant.summon.ckpt.clear(),
+            },
+            "standing" => self.assistant.summon.ckpt.standing_merge = rest != Some("off"),
             "modes" => {
                 self.assistant.summon.modes_open = argument != Some("off");
                 self.assistant.summon.yolo_armed = false;
@@ -402,13 +432,6 @@ impl HorizonApp {
                 {
                     self.press_mode(mode);
                 }
-            }
-            "channel" => {
-                self.assistant.summon.channel = if argument == Some("text") {
-                    super::dock::Channel::Text
-                } else {
-                    super::dock::Channel::Voice
-                };
             }
             _ => return false,
         }

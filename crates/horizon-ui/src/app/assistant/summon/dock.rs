@@ -10,6 +10,7 @@
 
 use std::sync::OnceLock;
 
+mod checkpoints;
 mod concierge;
 mod inbox;
 mod layouts;
@@ -18,6 +19,7 @@ mod messages;
 mod mission;
 mod scope;
 
+pub(in crate::app::assistant) use checkpoints::{Fleet, Store as CheckpointStore};
 pub(in crate::app::assistant) use layouts::{Channel, Layout3, Pick};
 pub(in crate::app::assistant) use messages::{Store as MessageStore, Trust, View as MessageView};
 
@@ -200,7 +202,7 @@ impl HorizonApp {
 
     /// The mark and what is going on on the left, the choice of view and the way out on the right.
     pub(super) fn dock_header(&mut self, ui: &mut Ui, action: &mut Option<Action>) {
-        let (status, color) = self.feed_status();
+        let (status, color) = self.fleet_status().unwrap_or_else(|| self.feed_status());
         ui.horizontal(|ui| {
             let (mark, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
             icons::paint_mark(ui.painter(), mark);
