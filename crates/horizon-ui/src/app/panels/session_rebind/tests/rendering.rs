@@ -1,6 +1,145 @@
 use super::*;
 
 #[test]
+fn modal_blocks_the_tooltip_layer_used_by_root_and_workspace_toolbars() {
+    let ctx = Context::default();
+    let mut activated = false;
+    let mut run = |events, launch| {
+        ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 800.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::Area::new(Id::new("underlying_toolbar"))
+                    .order(egui::Order::Tooltip)
+                    .fixed_pos(Pos2::new(20.0, 20.0))
+                    .show(&ctx, |ui| {
+                        activated |= ui.button("Underlying toolbar").clicked();
+                    });
+                if launch {
+                    open_session_picker(&ui.button("Resume"), PanelId(1), Vec::new());
+                }
+                render_session_picker(&ctx, PanelId(1), Vec::new());
+            },
+        )
+        .discard_textures()
+    };
+    run(Vec::new(), true);
+    let output = run(Vec::new(), false);
+    let at = text_center(&output, "Underlying toolbar").expect("toolbar drawn");
+    for pressed in [true, false] {
+        run(
+            vec![
+                Event::PointerMoved(at),
+                Event::PointerButton {
+                    pos: at,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+            false,
+        );
+    }
+    assert!(!activated, "the dismissing click cannot activate the toolbar");
+    assert!(session_picker_panel(&ctx).is_none());
+}
+
+#[test]
+fn idle_picker_requests_a_provider_refresh_without_recent_panel_output() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = Context::default();
+    let workspace = app.board.create_workspace("recovery");
+    let panel = app
+        .board
+        .create_panel(
+            horizon_core::PanelOptions {
+                kind: PanelKind::Editor,
+                ..Default::default()
+            },
+            workspace,
+        )
+        .expect("idle panel");
+    app.last_session_catalog_refresh = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(3));
+    app.maybe_refresh_session_catalog();
+    assert!(app.session_catalog_refresh.is_none());
+    let _ = ctx
+        .run_ui(RawInput::default(), |ui| {
+            open_session_picker(&ui.button("Resume"), panel, Vec::new());
+            assert!(app.render_saved_session_picker(&ctx, panel).is_none());
+        })
+        .discard_textures();
+    assert!(
+        app.session_catalog_refresh.is_some(),
+        "an open picker refreshes independently of panel output"
+    );
+}
+
+#[test]
+fn outside_click_dismisses_picker_without_closing_the_underlying_panel() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = Context::default();
+    let workspace = app.board.create_workspace("recovery");
+    let panel = app
+        .board
+        .create_panel(
+            horizon_core::PanelOptions {
+                kind: PanelKind::Editor,
+                position: Some([20.0, 100.0]),
+                size: Some([300.0, 200.0]),
+                ..Default::default()
+            },
+            workspace,
+        )
+        .expect("editor panel");
+    let raw = || RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 900.0))),
+        ..Default::default()
+    };
+    for index in 0..3 {
+        let _ = ctx
+            .run_ui(raw(), |ui| {
+                if index == 0 {
+                    open_session_picker(&ui.button("Resume"), panel, Vec::new());
+                }
+                app.render_panels(ui);
+            })
+            .discard_textures();
+    }
+    let geometry = app
+        .visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None)
+        .into_iter()
+        .find(|(id, _)| *id == panel)
+        .expect("panel geometry")
+        .1;
+    let at = crate::app::panels::PanelFrame::new(geometry.screen_rect).close.center();
+    for pressed in [true, false] {
+        let _ = ctx
+            .run_ui(
+                RawInput {
+                    events: vec![
+                        Event::PointerMoved(at),
+                        Event::PointerButton {
+                            pos: at,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                    ..raw()
+                },
+                |ui| app.render_panels(ui),
+            )
+            .discard_textures();
+    }
+    assert!(app.panels_to_close.is_empty());
+    assert!(app.board.panel(panel).is_some());
+    assert!(session_picker_panel(&ctx).is_none(), "only the picker dismisses");
+}
+
+#[test]
 fn panel_rendering_keeps_the_picker_visible_while_its_body_is_suppressed() {
     let (_temp, mut app) = crate::app::test_support::test_app();
     let ctx = Context::default();

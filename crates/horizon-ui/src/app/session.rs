@@ -11,6 +11,7 @@ use super::util::empty_string_as_none;
 use super::{ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession};
 
 const SESSION_BINDING_ACTIVITY_WINDOW: Duration = Duration::from_secs(10);
+const SESSION_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const STARTUP_BOOTSTRAP_FAILURE_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 
 mod loading;
@@ -482,8 +483,6 @@ impl HorizonApp {
     }
 
     pub(super) fn maybe_refresh_session_catalog(&mut self) {
-        const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
-
         if let Some(receiver) = self.session_catalog_refresh.take() {
             match receiver.try_recv() {
                 Ok(Ok(catalog)) => {
@@ -522,9 +521,18 @@ impl HorizonApp {
             return;
         }
 
+        self.request_session_catalog_refresh_if_due();
+    }
+
+    pub(super) fn refresh_session_catalog_for_picker(&mut self, ctx: &egui::Context) {
+        self.request_session_catalog_refresh_if_due();
+        ctx.request_repaint_after(SESSION_CATALOG_REFRESH_INTERVAL);
+    }
+
+    fn request_session_catalog_refresh_if_due(&mut self) {
         let should_refresh = self
             .last_session_catalog_refresh
-            .is_none_or(|last_refresh| last_refresh.elapsed() >= REFRESH_INTERVAL);
+            .is_none_or(|last_refresh| last_refresh.elapsed() >= SESSION_CATALOG_REFRESH_INTERVAL);
 
         if should_refresh && self.session_catalog_refresh.is_none() {
             self.session_catalog_refresh = Some(Self::spawn_session_catalog_refresh());

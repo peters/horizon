@@ -268,7 +268,6 @@ impl HorizonApp {
                 }
             }
         });
-        outcome.session_rebind_and_restart = self.render_saved_session_picker(&drag_response.ctx, panel_id);
     }
 
     fn resize_panel_in_environment(

@@ -325,6 +325,9 @@ impl HorizonApp {
         };
 
         Panel::top(egui::Id::new(("detached_workspace_toolbar", workspace_local_id))).show(ui, |ui| {
+            if super::panels::session_picker_panel(ctx).is_some() {
+                ui.disable();
+            }
             ui.set_height(TOOLBAR_HEIGHT);
             ui.painter()
                 .rect_filled(ui.max_rect(), CornerRadius::ZERO, theme::TITLEBAR_BG());

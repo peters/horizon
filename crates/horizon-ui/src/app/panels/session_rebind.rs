@@ -14,8 +14,6 @@ struct SessionPicker {
     last_rendered_frame: u64,
     focus_first: bool,
     options: Arc<[AgentSessionBinding]>,
-    anchor: egui::Rect,
-    layer: egui::LayerId,
     deletion: SessionDeletionUi,
 }
 
@@ -31,8 +29,6 @@ pub(super) fn open_session_picker(response: &egui::Response, panel_id: PanelId, 
                 last_rendered_frame: frame,
                 focus_first: true,
                 options: options.into(),
-                anchor: response.rect,
-                layer: response.layer_id,
                 deletion,
             },
         );
@@ -55,26 +51,24 @@ pub(super) fn render_session_picker(
         state.focus_first = true;
     }
     state.last_rendered_frame = ctx.cumulative_frame_nr();
-    let mut open = true;
-    let result = egui::Popup::new(id, ctx.clone(), state.anchor, state.layer)
-        .kind(egui::PopupKind::Tooltip)
-        .info(egui::UiStackInfo::new(egui::UiKind::Menu))
-        .open_bool(&mut open)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+    let result = egui::Modal::new(id)
+        .area(egui::Modal::default_area(id).order(egui::Order::Tooltip))
         .frame(
             egui::Frame::popup(&ctx.global_style())
                 .corner_radius(16.0)
                 .inner_margin(18.0)
                 .stroke(egui::Stroke::new(1.0, theme::BORDER_STRONG())),
         )
-        .show(|ui| render_options_with_deletion(ui, &state.options, state.focus_first, &mut state.deletion));
+        .show(ctx, |ui| {
+            render_options_with_deletion(ui, &state.options, state.focus_first, &mut state.deletion)
+        });
     state.focus_first = false;
-    if open {
+    if !result.should_close() && result.inner.binding.is_none() {
         ctx.data_mut(|data| data.insert_temp(id, state));
     } else {
         ctx.data_mut(|data| data.remove::<SessionPicker>(id));
     }
-    result.and_then(|result| result.inner.binding)
+    result.inner.binding
 }
 
 pub(super) fn finish_session_deletion(

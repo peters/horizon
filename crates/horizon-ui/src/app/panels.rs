@@ -607,8 +607,8 @@ impl HorizonApp {
         scope: PanelRenderScope,
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
-        let interactive = !self.canvas_pan_input_claimed && !scope.host_dialog_open;
-        let body_interactive = interactive && session_picker_panel(ctx).is_none();
+        let interactive =
+            !self.canvas_pan_input_claimed && !scope.host_dialog_open && session_picker_panel(ctx).is_none();
         #[cfg(feature = "cloud-workspaces")]
         let browser_canvas_zoom_active = scope.detached || self.cloud_prototype.fullscreen.is_none();
         #[cfg(not(feature = "cloud-workspaces"))]
@@ -826,7 +826,7 @@ impl HorizonApp {
                                 ui,
                                 panel,
                                 claim_editor_focus,
-                                body_interactive,
+                                interactive,
                                 PanelBodyContext {
                                     keyboard_events: &self.terminal_keyboard_events,
                                     browser_events,
@@ -858,6 +858,7 @@ impl HorizonApp {
                         }
                     },
                 );
+                outcome.session_rebind_and_restart = self.render_saved_session_picker(ctx, panel_id);
             });
 
         outcome
