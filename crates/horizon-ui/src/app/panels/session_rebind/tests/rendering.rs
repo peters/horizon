@@ -62,9 +62,10 @@ fn idle_picker_requests_a_provider_refresh_without_recent_panel_output() {
             workspace,
         )
         .expect("idle panel");
-    app.last_session_catalog_refresh = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(3));
+    app.session_catalog_refresh.last_full_refresh =
+        std::time::Instant::now().checked_sub(std::time::Duration::from_secs(3));
     app.maybe_refresh_session_catalog();
-    assert!(app.session_catalog_refresh.is_none());
+    assert!(app.session_catalog_refresh.receiver.is_none());
     let _ = ctx
         .run_ui(RawInput::default(), |ui| {
             open_session_picker(&ui.button("Resume"), panel, Vec::new());
@@ -72,9 +73,10 @@ fn idle_picker_requests_a_provider_refresh_without_recent_panel_output() {
         })
         .discard_textures();
     assert!(
-        app.session_catalog_refresh.is_some(),
+        app.session_catalog_refresh.receiver.is_some(),
         "an open picker refreshes independently of panel output"
     );
+    assert_eq!(app.session_catalog_refresh.provider, Some(PanelKind::Editor));
 }
 
 #[test]
@@ -395,4 +397,35 @@ fn every_viewport_reconciles_deleted_bindings_before_offering_resume() {
         assert_eq!(state.options.as_ref(), std::slice::from_ref(&a));
         assert!(!state.options.iter().any(|binding| binding.session_id == b.session_id));
     }
+}
+
+#[test]
+fn picker_provider_refresh_is_not_throttled_by_another_provider() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = Context::default();
+    app.session_catalog_refresh.last_full_refresh = Some(std::time::Instant::now());
+    app.session_catalog_refresh
+        .picker_times
+        .insert(PanelKind::Codex, std::time::Instant::now());
+    app.refresh_session_catalog_for_picker(&ctx, PanelKind::Claude);
+    assert_eq!(app.session_catalog_refresh.provider, Some(PanelKind::Claude));
+    assert!(app.session_catalog_refresh.receiver.is_some());
+}
+
+#[test]
+fn provider_scan_completion_tracks_only_its_provider() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(Ok(horizon_core::AgentSessionCatalog::default()))
+        .expect("send provider scan");
+    app.session_catalog_refresh.receiver = Some(rx);
+    app.session_catalog_refresh.provider = Some(PanelKind::Claude);
+    app.maybe_refresh_session_catalog();
+    assert!(
+        app.session_catalog_refresh
+            .picker_times
+            .contains_key(&PanelKind::Claude)
+    );
+    assert!(!app.session_catalog_refresh.picker_times.contains_key(&PanelKind::Codex));
+    assert!(app.session_catalog_refresh.provider.is_none());
 }

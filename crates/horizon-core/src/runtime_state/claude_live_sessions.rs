@@ -21,6 +21,49 @@ pub fn live_claude_session_ids() -> HashSet<String> {
     collect_live_session_ids(&home.join(".claude/sessions"), process_is_alive)
 }
 
+/// Deletion must verify every registry entry rather than silently skip failures.
+pub(super) fn verified_live_claude_session_ids(home: &Path) -> crate::Result<HashSet<String>> {
+    collect_verified_live_session_ids(&home.join(".claude/sessions"), process_is_alive)
+}
+
+fn collect_verified_live_session_ids(
+    dir: &Path,
+    process_is_alive: impl Fn(u64) -> bool,
+) -> crate::Result<HashSet<String>> {
+    use crate::Error;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && std::fs::symlink_metadata(dir).is_err() => {
+            return Ok(HashSet::new());
+        }
+        Err(error) => return Err(Error::State(format!("Cannot verify Claude live sessions: {error}"))),
+    };
+    let mut ids = HashSet::new();
+    for entry in entries {
+        let entry = entry?;
+        if entry.path().extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+            continue;
+        }
+        let contents = std::fs::read_to_string(entry.path())?;
+        let value: Value = serde_json::from_str(&contents)
+            .map_err(|error| Error::State(format!("Cannot verify Claude live-session entry: {error}")))?;
+        let session_id = value
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        let pid = value.get("pid").and_then(Value::as_u64).filter(|pid| *pid > 0);
+        let (Some(session_id), Some(pid)) = (session_id, pid) else {
+            return Err(Error::State(
+                "Cannot verify incomplete Claude live-session entry".into(),
+            ));
+        };
+        if process_is_alive(pid) {
+            ids.insert(session_id.to_string());
+        }
+    }
+    Ok(ids)
+}
+
 fn collect_live_session_ids(dir: &Path, process_is_alive: impl Fn(u64) -> bool) -> HashSet<String> {
     let mut session_ids = HashSet::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -94,7 +137,7 @@ fn claude_session_transcript_exists_in(projects_dir: &Path, session_id: &str) ->
 mod tests {
     use std::collections::HashSet;
 
-    use super::{claude_session_transcript_exists_in, collect_live_session_ids};
+    use super::{claude_session_transcript_exists_in, collect_live_session_ids, collect_verified_live_session_ids};
 
     fn write_entry(dir: &std::path::Path, name: &str, contents: &str) {
         std::fs::write(dir.join(name), contents).expect("write registry entry");
@@ -141,6 +184,48 @@ mod tests {
         let ids = collect_live_session_ids(&missing, |_| true);
 
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn verified_registry_distinguishes_missing_from_unreadable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(
+            collect_verified_live_session_ids(&dir.path().join("missing"), |_| true)
+                .expect("missing registry")
+                .is_empty()
+        );
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, "not a directory").expect("blocked registry");
+        assert!(collect_verified_live_session_ids(&blocked, |_| true).is_err());
+        std::fs::create_dir(dir.path().join("101.json")).expect("unreadable entry");
+        assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_err());
+    }
+
+    #[test]
+    fn verified_registry_rejects_malformed_and_incomplete_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for contents in [
+            "not json",
+            r#"{"pid":101}"#,
+            r#"{"sessionId":"live"}"#,
+            r#"{"pid":0,"sessionId":"live"}"#,
+            r#"{"pid":101,"sessionId":""}"#,
+        ] {
+            write_entry(dir.path(), "101.json", contents);
+            assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_err());
+        }
+    }
+
+    #[test]
+    fn verified_registry_protects_live_sessions_and_ignores_stale_processes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_entry(dir.path(), "101.json", r#"{"pid":101,"sessionId":"live"}"#);
+        write_entry(dir.path(), "102.json", r#"{"pid":102,"sessionId":"stale"}"#);
+        write_entry(dir.path(), "ignored.txt", "not a registry entry");
+        assert_eq!(
+            collect_verified_live_session_ids(dir.path(), |pid| pid == 101).expect("verified registry"),
+            HashSet::from(["live".to_string()])
+        );
     }
 
     #[test]

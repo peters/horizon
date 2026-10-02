@@ -592,8 +592,8 @@ fn failed_recovery_save_can_open_the_repaired_state_without_persisting() {
     assert_eq!(app.board.panels.len(), 1);
     assert!(app.board.panels[0].session_binding.is_none());
     assert!(matches!(app.board.panels[0].resume, PanelResume::Fresh));
-    assert!(app.last_session_catalog_refresh.is_none());
-    assert!(app.session_catalog_refresh.is_some());
+    assert!(app.session_catalog_refresh.last_full_refresh.is_none());
+    assert!(app.session_catalog_refresh.receiver.is_some());
 }
 
 #[test]

@@ -324,7 +324,8 @@ impl HorizonApp {
         if super::session_rebind::session_picker_panel(ctx) != Some(panel_id) {
             return None;
         }
-        self.refresh_session_catalog_for_picker(ctx);
+        let kind = self.board.panels.iter().find(|panel| panel.id == panel_id)?.kind;
+        self.refresh_session_catalog_for_picker(ctx, kind);
         let options = self.session_rebind_options(panel_id);
         let binding = super::session_rebind::render_session_picker(ctx, panel_id, options);
         let binding = binding.filter(|chosen| {
@@ -355,8 +356,10 @@ impl HorizonApp {
         self.session_catalog.remove_deleted_sessions(&report);
         drop(job);
         ctx.data_mut(|data| data.insert_temp(receipt_id(), Arc::new(report.clone())));
-        self.session_catalog_refresh = None;
-        self.last_session_catalog_refresh = None;
+        self.session_catalog_refresh.receiver = None;
+        self.session_catalog_refresh.provider = None;
+        self.session_catalog_refresh.picker_times.clear();
+        self.session_catalog_refresh.last_full_refresh = None;
         let options = self.session_rebind_options(owner);
         finish_session_deletion(ctx, owner, viewport, options, &report);
     }

@@ -57,6 +57,30 @@ impl AgentSessionCatalog {
         )
     }
 
+    /// Load only the requested provider, independently of unrelated stores.
+    ///
+    /// # Errors
+    /// Returns an error when the requested provider's store cannot be read.
+    pub fn load_provider(kind: PanelKind) -> Result<Self> {
+        let sessions = match kind {
+            PanelKind::Claude => load_claude_sessions()?,
+            PanelKind::Codex => codex::load_sessions(&HashSet::new(), true)?.sessions,
+            PanelKind::OpenCode => load_opencode_sessions()?,
+            PanelKind::Pi => load_pi_sessions()?,
+            PanelKind::Grok => grok::load_grok_sessions()?,
+            _ => Vec::new(),
+        };
+        Ok(Self::from_provider_sessions(sessions, &codex::CodexSessions::default()))
+    }
+
+    /// Replace a successful provider scan while preserving other catalogs.
+    pub fn replace_provider(&mut self, kind: PanelKind, loaded: Self) {
+        self.sessions.retain(|session| session.kind != kind);
+        self.sessions
+            .extend(loaded.sessions.into_iter().filter(|session| session.kind == kind));
+        self.sessions.sort_by_key(|session| Reverse(session.updated_at));
+    }
+
     /// Load provider catalogs needed to repair, assign, or manually rebind the
     /// panels present at startup.
     ///

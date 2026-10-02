@@ -226,7 +226,7 @@ impl HorizonApp {
             // Compute rebind options lazily — only when the context menu is
             // actually open instead of every frame for every panel.
             let rebind_options = self.session_rebind_options(panel_id);
-            if !rebind_options.is_empty() {
+            if kind.supports_session_binding() {
                 let response = ui.button(format!("Resume a session ({})…", rebind_options.len()));
                 if response.clicked() {
                     open_session_picker(&response, panel_id, rebind_options);

@@ -5,7 +5,8 @@ use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use super::super::{AgentSessionKey, live_claude_session_ids};
+use super::super::AgentSessionKey;
+use super::super::claude_live_sessions::verified_live_claude_session_ids;
 use super::{AgentSessionBinding, AgentSessionCatalog, PanelKind, normalize_cwd};
 use crate::error::{Error, Result};
 
@@ -221,14 +222,18 @@ fn delete_provider_session(session: &AgentSessionBinding) -> Result<DeletionOutc
     match session.kind {
         PanelKind::Codex => delete_codex_session(&session.session_id).map(|()| DeletionOutcome::Removed),
         PanelKind::Claude => {
-            if live_claude_session_ids().contains(&session.session_id) {
-                return Err(Error::State("This conversation is open in Claude Code".into()));
-            }
             let home = std::env::var_os("HOME").ok_or_else(|| Error::State("HOME is unavailable".into()))?;
-            delete_claude_transcript(&Path::new(&home).join(".claude/projects"), session)
+            delete_claude_session(Path::new(&home), session)
         }
         _ => Err(Error::State("Unsupported deletion provider".into())),
     }
+}
+
+fn delete_claude_session(home: &Path, session: &AgentSessionBinding) -> Result<DeletionOutcome> {
+    if verified_live_claude_session_ids(home)?.contains(&session.session_id) {
+        return Err(Error::State("This conversation is open in Claude Code".into()));
+    }
+    delete_claude_transcript(&home.join(".claude/projects"), session)
 }
 
 fn delete_codex_session(session_id: &str) -> Result<()> {
@@ -428,6 +433,31 @@ mod tests {
             None,
             None,
         )
+    }
+
+    #[test]
+    fn invalid_live_registry_aborts_before_touching_transcript_or_artifacts() {
+        let home = tempfile::tempdir().expect("home");
+        let registry = home.path().join(".claude/sessions");
+        let project = home.path().join(".claude/projects/example");
+        std::fs::create_dir_all(&registry).expect("registry");
+        std::fs::create_dir_all(&project).expect("project");
+        let session = binding(801);
+        let transcript = project.join(format!("{}.jsonl", session.session_id));
+        let artifacts = project.join(&session.session_id);
+        std::fs::create_dir_all(artifacts.join("subagents")).expect("artifacts");
+        std::fs::write(&transcript, "original conversation").expect("transcript");
+        std::fs::write(artifacts.join("subagents/agent.jsonl"), "original subagent").expect("subagent");
+        std::fs::write(registry.join("101.json"), "malformed").expect("bad registry");
+        assert!(delete_claude_session(home.path(), &session).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&transcript).expect("preserved transcript"),
+            "original conversation"
+        );
+        assert_eq!(
+            std::fs::read_to_string(artifacts.join("subagents/agent.jsonl")).expect("preserved subagent"),
+            "original subagent"
+        );
     }
 
     #[test]

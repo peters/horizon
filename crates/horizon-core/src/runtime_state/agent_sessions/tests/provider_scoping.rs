@@ -101,3 +101,36 @@ fn bootstrap_deduplicates_equal_session_ids_within_a_provider() {
     assert_eq!(panels[2].stored_session_id(), None);
     assert!(matches!(panels[2].resume, PanelResume::Fresh));
 }
+
+#[test]
+fn provider_refresh_replaces_deleted_records_and_preserves_other_providers() {
+    let record = |kind, id: &str, updated_at| AgentSessionRecord {
+        kind,
+        session_id: id.into(),
+        cwd: None,
+        label: None,
+        updated_at,
+        interactive: true,
+    };
+    let mut catalog = AgentSessionCatalog {
+        sessions: vec![
+            record(PanelKind::Claude, "removed", 10),
+            record(PanelKind::Codex, "keep", 30),
+        ],
+    };
+    catalog.replace_provider(
+        PanelKind::Claude,
+        AgentSessionCatalog {
+            sessions: vec![
+                record(PanelKind::Claude, "new", 20),
+                record(PanelKind::Grok, "unrelated", 40),
+            ],
+        },
+    );
+    assert_eq!(catalog.recent_for(PanelKind::Codex, None)[0].session_id, "keep");
+    assert_eq!(catalog.recent_for(PanelKind::Claude, None)[0].session_id, "new");
+    assert!(catalog.recent_for(PanelKind::Grok, None).is_empty());
+    catalog.replace_provider(PanelKind::Claude, AgentSessionCatalog::default());
+    assert!(catalog.recent_for(PanelKind::Claude, None).is_empty());
+    assert_eq!(catalog.recent_for(PanelKind::Codex, None).len(), 1);
+}
