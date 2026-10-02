@@ -2,6 +2,7 @@
 # Attach:   horizon-worker-session SESSION AGENT REVISION
 # Relaunch: horizon-worker-session --relaunch OPERATION SESSION AGENT REVISION
 # Retry:    horizon-worker-session --retry-shared-checkout
+# Prepare:  horizon-worker-session --shared --prepare-only SESSION AGENT REVISION
 set -euo pipefail
 umask 077
 # A failing flush on the attach path means the workspace storage refused earlier writes, so
@@ -39,8 +40,14 @@ if [ "${1:-}" = --retry-shared-checkout ]; then
     exit 0
 fi
 shared=false
+prepare_only=false
 if [ "${1:-}" = --shared ]; then
     shared=true; shift
+    # Prepares the shared checkout and ends: no session is bound and no process starts. A
+    # deployment runs it once, so the first panel finds the checkout done.
+    if [ "${1:-}" = --prepare-only ]; then
+        prepare_only=true; shift
+    fi
 fi
 operation=
 if [ "${1:-}" = --relaunch ]; then
@@ -272,6 +279,15 @@ trap roll_back EXIT
 mkdir -p /workspace/sessions
 exec 9>"/workspace/sessions/$id.lock"
 flock 9
+if "$prepare_only"; then
+    # The id is reserved for this command, so a real session never holds it. What an interrupted
+    # earlier run left (published state, no launch fence) is dropped; anything else is refused,
+    # so this can never attach to a session or touch one.
+    if running || [ -f "$session/launch-requested" ] || { [ -d "$session" ] && [ ! -f "$session/preparing" ]; }; then
+        echo 'This session id is in use; it is reserved for preparing the checkout.' >&2; exit 5
+    fi
+    rm -rf "$session"
+fi
 if [ -d "$session" ]; then
     bound || { echo 'Session binding mismatch' >&2; exit 3; }
     if ! running; then
@@ -302,6 +318,8 @@ load_layout
 if ! running; then
     if "$shared"; then
         prepare_shared
+        # The session state rolls back on exit, as for any attach that ends before its launch fence.
+        if "$prepare_only"; then exit 0; fi
     else
         if [ "$worktree" != "$root" ]; then mkdir -p "$root"; fi
         prepare /workspace/repository.git "$worktree" "$revision"

@@ -15,7 +15,7 @@ markers = importlib.util.module_from_spec(spec)
 loader.exec_module(markers)
 
 CURRENT = ['horizon-siblings-contract=1', 'horizon-session-env-contract=1', 'horizon-gpu-lock-contract=1',
-           'horizon-shared-checkout-contract=1', 'horizon-session-restart-contract=1',
+           'horizon-shared-checkout-contract=1', 'horizon-prepare-checkout-contract=1', 'horizon-session-restart-contract=1',
            'horizon-idle-report-contract=1', 'horizon-git-auth-contract=2']
 
 
