@@ -1,3 +1,4 @@
+mod deletion_notice;
 mod model;
 #[cfg(test)]
 mod tests;
@@ -13,6 +14,8 @@ use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::runtime_state::RuntimeState;
 use model::{ProfileSnapshot, SessionIndex, SessionMeta, StoredSession};
+
+pub use deletion_notice::SessionDeletionNotice;
 
 pub use model::{
     ResolvedSession, SessionLease, SessionOpenDisposition, SessionSummary, StartupChooser, StartupDecision,

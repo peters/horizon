@@ -7,11 +7,21 @@ use horizon_core::{
     live_claude_session_ids,
 };
 
-use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
+use super::util::empty_string_as_none;
 use super::{ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession};
 
 const SESSION_BINDING_ACTIVITY_WINDOW: Duration = Duration::from_secs(10);
+const SESSION_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const STARTUP_BOOTSTRAP_FAILURE_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+pub(super) struct SessionCatalogRefreshState {
+    pub receiver: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
+    pub providers: HashMap<PanelKind, Receiver<horizon_core::Result<AgentSessionCatalog>>>,
+    pub full_scan_superseded: bool,
+    pub last_full_refresh: Option<Instant>,
+    pub picker_times: HashMap<PanelKind, Instant>,
+}
 
 mod loading;
 mod types;
@@ -270,10 +280,12 @@ impl HorizonApp {
         rx
     }
 
-    fn spawn_session_catalog_refresh() -> Receiver<horizon_core::Result<AgentSessionCatalog>> {
+    fn spawn_session_catalog_refresh(
+        provider: Option<PanelKind>,
+    ) -> Receiver<horizon_core::Result<AgentSessionCatalog>> {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(AgentSessionCatalog::load());
+            let _ = tx.send(provider.map_or_else(AgentSessionCatalog::load, AgentSessionCatalog::load_provider));
         });
         rx
     }
@@ -289,7 +301,7 @@ impl HorizonApp {
         match receiver.try_recv() {
             Ok(StartupBootstrapOutcome::Ready(bootstrap)) => {
                 self.session_catalog = bootstrap.session_catalog;
-                self.last_session_catalog_refresh = Some(Instant::now());
+                self.session_catalog_refresh.last_full_refresh = Some(Instant::now());
                 let runtime_state_changed =
                     self.pending_startup_runtime_state_changed || bootstrap.runtime_state_changed;
                 if runtime_state_changed
@@ -416,9 +428,9 @@ impl HorizonApp {
 
     fn finish_startup_recovery(&mut self, runtime_state: &horizon_core::RuntimeState) {
         self.restore_startup_runtime_state(runtime_state);
-        self.last_session_catalog_refresh = None;
-        if self.session_catalog_refresh.is_none() {
-            self.session_catalog_refresh = Some(Self::spawn_session_catalog_refresh());
+        self.session_catalog_refresh.last_full_refresh = None;
+        if self.session_catalog_refresh.receiver.is_none() {
+            self.session_catalog_refresh.receiver = Some(Self::spawn_session_catalog_refresh(None));
         }
         self.pending_startup_runtime_state = None;
         self.pending_startup_runtime_state_changed = false;
@@ -481,28 +493,18 @@ impl HorizonApp {
         active_session.last_lease_refresh = None;
     }
 
-    pub(super) fn maybe_refresh_session_catalog(&mut self) {
-        const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+    pub(super) fn maybe_refresh_session_catalog(&mut self, ctx: &egui::Context) {
+        self.poll_session_catalog_refreshes();
 
-        if let Some(receiver) = self.session_catalog_refresh.take() {
-            match receiver.try_recv() {
-                Ok(Ok(catalog)) => {
-                    self.session_catalog = catalog;
-                    self.last_session_catalog_refresh = Some(Instant::now());
-                    self.capture_new_agent_bindings();
-                }
-                Ok(Err(error)) => {
-                    tracing::warn!("failed to refresh agent session catalog: {error}");
-                    self.last_session_catalog_refresh = Some(Instant::now());
-                }
-                Err(TryRecvError::Empty) => {
-                    self.session_catalog_refresh = Some(receiver);
-                    return;
-                }
-                Err(TryRecvError::Disconnected) => {
-                    tracing::warn!("session catalog refresh worker disconnected");
-                }
+        let picker_providers: HashSet<_> = super::panels::session_picker_panels(ctx)
+            .into_iter()
+            .filter_map(|panel| self.board.panel(panel).map(|panel| panel.kind))
+            .collect();
+        if !picker_providers.is_empty() {
+            for kind in picker_providers {
+                self.refresh_session_catalog_for_picker(ctx, kind);
             }
+            return;
         }
 
         let has_dynamic_agent = self.board.panels.iter().any(panel_uses_dynamic_binding);
@@ -522,12 +524,91 @@ impl HorizonApp {
             return;
         }
 
-        let should_refresh = self
-            .last_session_catalog_refresh
-            .is_none_or(|last_refresh| last_refresh.elapsed() >= REFRESH_INTERVAL);
+        self.request_session_catalog_refresh_if_due();
+    }
 
-        if should_refresh && self.session_catalog_refresh.is_none() {
-            self.session_catalog_refresh = Some(Self::spawn_session_catalog_refresh());
+    fn poll_session_catalog_refreshes(&mut self) {
+        let mut changed = false;
+        if let Some(receiver) = self.session_catalog_refresh.receiver.take() {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    if !self.session_catalog_refresh.full_scan_superseded {
+                        match result {
+                            Ok(catalog) => {
+                                self.session_catalog = catalog;
+                                changed = true;
+                            }
+                            Err(error) => tracing::warn!("failed to refresh agent session catalog: {error}"),
+                        }
+                        self.session_catalog_refresh.last_full_refresh = Some(Instant::now());
+                    }
+                }
+                Err(TryRecvError::Empty) => self.session_catalog_refresh.receiver = Some(receiver),
+                Err(TryRecvError::Disconnected) => {
+                    self.session_catalog_refresh.last_full_refresh = Some(Instant::now());
+                    tracing::warn!("session catalog refresh worker disconnected");
+                }
+            }
+        }
+        let mut completed = Vec::new();
+        self.session_catalog_refresh
+            .providers
+            .retain(|kind, receiver| match receiver.try_recv() {
+                Ok(result) => {
+                    completed.push((*kind, result));
+                    false
+                }
+                Err(TryRecvError::Empty) => true,
+                Err(TryRecvError::Disconnected) => {
+                    completed.push((
+                        *kind,
+                        Err(horizon_core::Error::State("Provider scan disconnected".into())),
+                    ));
+                    false
+                }
+            });
+        for (kind, result) in completed {
+            self.session_catalog_refresh.picker_times.insert(kind, Instant::now());
+            match result {
+                Ok(catalog) => {
+                    self.session_catalog.replace_provider(kind, catalog);
+                    changed = true;
+                }
+                Err(error) => tracing::warn!(?kind, "failed to refresh provider sessions: {error}"),
+            }
+        }
+        if changed {
+            self.capture_new_agent_bindings();
+        }
+    }
+
+    pub(super) fn refresh_session_catalog_for_picker(&mut self, ctx: &egui::Context, kind: PanelKind) {
+        let should_refresh = self
+            .session_catalog_refresh
+            .picker_times
+            .get(&kind)
+            .is_none_or(|last| last.elapsed() >= SESSION_CATALOG_REFRESH_INTERVAL);
+        if should_refresh && !self.session_catalog_refresh.providers.contains_key(&kind) {
+            self.session_catalog_refresh.full_scan_superseded = true;
+            self.session_catalog_refresh
+                .providers
+                .insert(kind, Self::spawn_session_catalog_refresh(Some(kind)));
+        }
+        ctx.request_repaint_after(SESSION_CATALOG_REFRESH_INTERVAL);
+    }
+
+    fn request_session_catalog_refresh_if_due(&mut self) {
+        let should_refresh = self
+            .session_catalog_refresh
+            .last_full_refresh
+            .is_none_or(|last_refresh| last_refresh.elapsed() >= SESSION_CATALOG_REFRESH_INTERVAL);
+
+        if should_refresh
+            && self.session_catalog_refresh.receiver.is_none()
+            && self.session_catalog_refresh.providers.is_empty()
+        {
+            self.session_catalog_refresh.full_scan_superseded = false;
+            self.session_catalog_refresh.receiver = Some(Self::spawn_session_catalog_refresh(None));
         }
     }
 
@@ -578,7 +659,7 @@ impl HorizonApp {
         self.mark_runtime_dirty();
     }
 
-    pub(super) fn session_rebind_options(&self, panel_id: PanelId) -> Vec<(String, AgentSessionBinding)> {
+    pub(super) fn session_rebind_options(&self, panel_id: PanelId) -> Vec<AgentSessionBinding> {
         let Some(panel) = self.board.panel(panel_id) else {
             return Vec::new();
         };
@@ -605,17 +686,7 @@ impl HorizonApp {
                 Some(session.session_id.as_str()) != current_session_id
                     && !reserved_session_ids.contains(session.session_id.as_str())
             })
-            .take(8)
-            .map(|session| {
-                let short_id = short_session_id(&session.session_id);
-                let label = truncate_session_label(
-                    &session
-                        .label
-                        .clone()
-                        .unwrap_or_else(|| format!("{} session", panel.kind.display_name())),
-                );
-                (format!("{label} · {short_id}"), session.into_binding())
-            })
+            .map(horizon_core::AgentSessionRecord::into_binding)
             .collect()
     }
 
@@ -623,7 +694,8 @@ impl HorizonApp {
         let Some(panel) = self.board.panel(panel_id) else {
             return false;
         };
-        if panel.kind != binding.kind
+        if horizon_core::saved_session_deletion_pending(binding.kind, &binding.session_id)
+            || panel.kind != binding.kind
             || self.board.panels.iter().any(|candidate| {
                 candidate.id != panel_id
                     && candidate.kind == binding.kind

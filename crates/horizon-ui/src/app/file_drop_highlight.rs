@@ -6,7 +6,11 @@ use super::HorizonApp;
 use super::file_drop::FileDropHighlight;
 
 impl HorizonApp {
-    pub(super) fn render_file_drop_highlight(&self, ctx: &Context) {
+    pub(super) fn render_file_drop_highlight(&mut self, ctx: &Context) {
+        if super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some()) {
+            self.clear_file_drop_state(ctx);
+            return;
+        }
         let Some(highlight) = self.file_drop_highlight else {
             return;
         };

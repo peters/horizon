@@ -3,6 +3,7 @@ mod binding_bootstrap;
 mod claude_live_sessions;
 pub(crate) mod cloud_groups;
 mod models;
+mod session_display;
 mod versioning;
 
 use std::collections::HashSet;
@@ -20,7 +21,11 @@ use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 use models::valid_local_id;
 
-pub use agent_sessions::{AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionRecord};
+pub use agent_sessions::{
+    AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionDeletionCleanupWarning, AgentSessionDeletionFailure,
+    AgentSessionDeletionRecovery, AgentSessionDeletionReport, AgentSessionDeletionReservation, AgentSessionRecord,
+    reserve_saved_session_deletions, saved_session_deletion_pending,
+};
 pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_session_ids};
 pub use models::{
     AgentSessionBinding, AgentSessionKey, BrowserProfileState, DetachedWorkspaceState, PanelState, PanelTemplateRef,

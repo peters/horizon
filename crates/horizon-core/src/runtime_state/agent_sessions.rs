@@ -14,6 +14,12 @@ use crate::util::truncate_chars;
 use super::{AgentSessionBinding, PanelKind, RuntimeState, normalize_cwd};
 
 mod codex;
+mod deletion;
+pub use deletion::{
+    AgentSessionDeletionCleanupWarning, AgentSessionDeletionFailure, AgentSessionDeletionRecovery,
+    AgentSessionDeletionReport, AgentSessionDeletionReservation, reserve_saved_session_deletions,
+    saved_session_deletion_pending,
+};
 mod grok;
 
 #[derive(Clone, Debug, Default)]
@@ -49,6 +55,30 @@ impl AgentSessionCatalog {
             load_pi_sessions,
             grok::load_grok_sessions,
         )
+    }
+
+    /// Load only the requested provider, independently of unrelated stores.
+    ///
+    /// # Errors
+    /// Returns an error when the requested provider's store cannot be read.
+    pub fn load_provider(kind: PanelKind) -> Result<Self> {
+        let sessions = match kind {
+            PanelKind::Claude => load_claude_sessions()?,
+            PanelKind::Codex => codex::load_sessions(&HashSet::new(), true)?.sessions,
+            PanelKind::OpenCode => load_opencode_sessions()?,
+            PanelKind::Pi => load_pi_sessions()?,
+            PanelKind::Grok => grok::load_grok_sessions()?,
+            _ => Vec::new(),
+        };
+        Ok(Self::from_provider_sessions(sessions, &codex::CodexSessions::default()))
+    }
+
+    /// Replace a successful provider scan while preserving other catalogs.
+    pub fn replace_provider(&mut self, kind: PanelKind, loaded: Self) {
+        self.sessions.retain(|session| session.kind != kind);
+        self.sessions
+            .extend(loaded.sessions.into_iter().filter(|session| session.kind == kind));
+        self.sessions.sort_by_key(|session| Reverse(session.updated_at));
     }
 
     /// Load provider catalogs needed to repair, assign, or manually rebind the
@@ -154,6 +184,7 @@ impl AgentSessionCatalog {
             .iter()
             .filter(|session| {
                 session.interactive
+                    && !saved_session_deletion_pending(session.kind, &session.session_id)
                     && session.kind == kind
                     && match (&normalized_cwd, &session.cwd) {
                         (Some(expected), Some(actual)) => expected == actual,
@@ -207,6 +238,9 @@ impl AgentSessionBootstrapCatalog {
     }
 
     pub(super) fn exact_resolution(&self, kind: PanelKind, session_id: &str) -> ExactSessionResolution {
+        if saved_session_deletion_pending(kind, session_id) {
+            return ExactSessionResolution::Unavailable;
+        }
         self.exact_resolutions
             .get(&(kind, session_id.to_string()))
             .cloned()
@@ -266,26 +300,33 @@ fn load_claude_sessions() -> Result<Vec<AgentSessionRecord>> {
         return Ok(Vec::new());
     };
     let projects_dir = home.join(".claude/projects");
+    load_claude_sessions_from_dir(&projects_dir)
+}
+
+fn load_claude_sessions_from_dir(projects_dir: &Path) -> Result<Vec<AgentSessionRecord>> {
     if !projects_dir.exists() {
         return Ok(Vec::new());
     }
 
+    let unavailable = deletion::retained_claude_recovery_exclusions(projects_dir)?;
     let mut session_paths = Vec::new();
-    collect_claude_project_files(&projects_dir, &mut session_paths)?;
+    collect_claude_project_files(projects_dir, &unavailable.artifact_directories, &mut session_paths)?;
     session_paths.sort_by_key(|(_, updated_at)| Reverse(*updated_at));
     session_paths.truncate(super::MAX_CLAUDE_SESSION_FILES);
 
     let mut sessions_by_id: HashMap<String, AgentSessionRecord> = HashMap::new();
     for (path, updated_at) in session_paths {
         match load_claude_project_session_summary(&path, updated_at) {
-            Ok(Some(session)) => match sessions_by_id.get_mut(&session.session_id) {
-                Some(existing) if session.updated_at > existing.updated_at => *existing = session,
-                Some(_) => {}
-                None => {
-                    sessions_by_id.insert(session.session_id.clone(), session);
+            Ok(Some(session)) if !unavailable.session_ids.contains(&session.session_id) => {
+                match sessions_by_id.get_mut(&session.session_id) {
+                    Some(existing) if session.updated_at > existing.updated_at => *existing = session,
+                    Some(_) => {}
+                    None => {
+                        sessions_by_id.insert(session.session_id.clone(), session);
+                    }
                 }
-            },
-            Ok(None) => {}
+            }
+            Ok(Some(_) | None) => {}
             Err(error) => {
                 tracing::warn!("failed loading Claude session {}: {error}", path.display());
             }
@@ -297,7 +338,18 @@ fn load_claude_sessions() -> Result<Vec<AgentSessionRecord>> {
     Ok(sessions)
 }
 
-fn collect_claude_project_files(dir: &Path, files: &mut Vec<(PathBuf, i64)>) -> Result<()> {
+fn collect_claude_project_files(
+    dir: &Path,
+    excluded_directories: &HashSet<PathBuf>,
+    files: &mut Vec<(PathBuf, i64)>,
+) -> Result<()> {
+    if !excluded_directories.is_empty()
+        && dir
+            .canonicalize()
+            .is_ok_and(|path| excluded_directories.contains(&path))
+    {
+        return Ok(());
+    }
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
@@ -317,7 +369,7 @@ fn collect_claude_project_files(dir: &Path, files: &mut Vec<(PathBuf, i64)>) -> 
             if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("subagents") {
                 continue;
             }
-            collect_claude_project_files(&path, files)?;
+            collect_claude_project_files(&path, excluded_directories, files)?;
         } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("jsonl")
             && let Ok(updated_at) = file_updated_at_millis(&path)
         {

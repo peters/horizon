@@ -50,15 +50,23 @@ fn mic_frame(ctx: &Context, events: Vec<Event>, enabled: bool, request_focus: bo
 fn rebind_options_frame(
     ctx: &Context,
     events: Vec<Event>,
-    options: &[(String, AgentSessionBinding)],
+    options: &[AgentSessionBinding],
 ) -> super::SessionRebindRenderOutcome {
+    rebind_options_frame_output(ctx, events, options).0
+}
+
+fn rebind_options_frame_output(
+    ctx: &Context,
+    events: Vec<Event>,
+    options: &[AgentSessionBinding],
+) -> (super::SessionRebindRenderOutcome, Vec<egui::OutputCommand>) {
     let input = RawInput {
-        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 320.0))),
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 640.0))),
         events,
         ..RawInput::default()
     };
     let mut outcome = None;
-    let _ = ctx
+    let output = ctx
         .run_ui(input, |ui| {
             outcome = Some(
                 egui::CentralPanel::default()
@@ -67,7 +75,10 @@ fn rebind_options_frame(
             );
         })
         .discard_textures();
-    outcome.expect("rebind options frame ran")
+    (
+        outcome.expect("rebind options frame ran"),
+        output.platform_output.commands,
+    )
 }
 
 fn session_binding(session_id: &str) -> AgentSessionBinding {
@@ -227,10 +238,7 @@ fn disabled_mic_ignores_focused_keyboard_activation() {
 #[test]
 fn clicking_a_rebind_and_restart_row_returns_the_exact_session() {
     let ctx = Context::default();
-    let options = vec![
-        ("First session · 11111111".to_string(), session_binding("session-1")),
-        ("Second session · 22222222".to_string(), session_binding("session-2")),
-    ];
+    let options = vec![session_binding("session-1"), session_binding("session-2")];
     let initial = rebind_options_frame(&ctx, Vec::new(), &options);
     let second_row = initial.option_rects.get(1).expect("second rebind row").center();
 
@@ -260,5 +268,70 @@ fn clicking_a_rebind_and_restart_row_returns_the_exact_session() {
         &options,
     );
 
-    assert_eq!(released.binding, Some(options[1].1.clone()));
+    assert_eq!(released.binding, Some(options[1].clone()));
+}
+
+#[test]
+fn copying_a_session_id_does_not_resume_the_session() {
+    let ctx = Context::default();
+    let options = vec![session_binding("01a0f8a8-d7e2-7810-9e6b-8903152a6187")];
+    let initial = rebind_options_frame(&ctx, Vec::new(), &options);
+    let at = initial.copy_rects[0].center();
+    let pressed = rebind_options_frame(
+        &ctx,
+        vec![
+            Event::PointerMoved(at),
+            Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ],
+        &options,
+    );
+    assert!(pressed.binding.is_none());
+    let (released, commands) = rebind_options_frame_output(
+        &ctx,
+        vec![Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+        &options,
+    );
+    assert!(released.binding.is_none());
+    assert!(
+        commands
+            .iter()
+            .any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text == &options[0].session_id))
+    );
+}
+
+#[test]
+fn long_session_labels_leave_the_copy_action_inside_a_narrow_menu() {
+    let ctx = Context::default();
+    let mut binding = session_binding("01a0f8a8-d7e2-7810-9e6b-8903152a6187");
+    binding.label = Some("W".repeat(100));
+    binding.updated_at = Some(1_790_883_985_973);
+    let mut outcome = None;
+    let _ = ctx
+        .run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 600.0))),
+                ..RawInput::default()
+            },
+            |ui| {
+                outcome = Some(
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| render_session_rebind_options(ui, &[binding.clone()]))
+                        .inner,
+                );
+            },
+        )
+        .discard_textures();
+    let outcome = outcome.expect("narrow menu frame ran");
+    assert!(outcome.copy_rects[0].right() < 320.0, "copy action must stay on screen");
+    assert!(outcome.option_rects[0].right() <= outcome.copy_rects[0].left());
 }

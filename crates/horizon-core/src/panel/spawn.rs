@@ -139,6 +139,16 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             "Remote development has been removed; this saved view is read-only",
         );
     }
+    let deleting_binding = opts
+        .session_binding
+        .as_ref()
+        .is_some_and(|binding| crate::runtime_state::saved_session_deletion_pending(opts.kind, &binding.session_id));
+    let deleting_resume = matches!(&opts.resume, PanelResume::Session { session_id } if crate::runtime_state::saved_session_deletion_pending(opts.kind, session_id));
+    if deleting_binding || deleting_resume {
+        return Err(crate::error::Error::State(
+            "This saved conversation is being deleted".into(),
+        ));
+    }
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
 
     match opts.kind {

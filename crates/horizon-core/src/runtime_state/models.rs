@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -490,6 +491,29 @@ impl AgentSessionKey {
 
 impl AgentSessionBinding {
     #[must_use]
+    pub fn same_saved_session_scope(previous: &[Self], current: &[Self]) -> bool {
+        if previous.len() != current.len() {
+            return false;
+        }
+        let mut counts = HashMap::with_capacity(previous.len());
+        for binding in previous {
+            *counts
+                .entry((binding.kind, &binding.session_id, &binding.cwd))
+                .or_insert(0_usize) += 1;
+        }
+        current.iter().all(|binding| {
+            let Some(count) = counts.get_mut(&(binding.kind, &binding.session_id, &binding.cwd)) else {
+                return false;
+            };
+            if *count == 0 {
+                return false;
+            }
+            *count -= 1;
+            true
+        })
+    }
+
+    #[must_use]
     pub fn new(
         kind: PanelKind,
         session_id: String,
@@ -504,5 +528,42 @@ impl AgentSessionBinding {
             label,
             updated_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_comparison_ignores_order_and_metadata_but_preserves_duplicate_counts() {
+        let previous: Vec<_> = (0..1000)
+            .map(|index| {
+                AgentSessionBinding::new(
+                    PanelKind::Grok,
+                    format!("session-{}", index / 2),
+                    Some("/sample".into()),
+                    None,
+                    None,
+                )
+            })
+            .collect();
+        let mut current = previous.clone();
+        current.reverse();
+        for binding in &mut current {
+            binding.label = Some("new metadata".into());
+            binding.updated_at = Some(123);
+        }
+        assert!(AgentSessionBinding::same_saved_session_scope(&previous, &current));
+        current[0].cwd = None;
+        assert!(!AgentSessionBinding::same_saved_session_scope(&previous, &current));
+        current = previous.clone();
+        current[0] = current[2].clone();
+        assert!(!AgentSessionBinding::same_saved_session_scope(&previous, &current));
+        assert!(!AgentSessionBinding::same_saved_session_scope(
+            &previous,
+            &previous[1..]
+        ));
+        assert!(AgentSessionBinding::same_saved_session_scope(&[], &[]));
     }
 }

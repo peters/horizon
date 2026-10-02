@@ -54,13 +54,18 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
+        self.poll_saved_session_deletion(ctx);
         self.filter_held_navigation_keys(ctx);
-        if !self.host_dialog_open() {
+        let input_blocked = self.host_dialog_open()
+            || super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
+        if input_blocked {
+            self.clear_file_drop_state(ctx);
+        } else {
             self.sync_panel_focus_from_pointer_press(ctx);
         }
         // Releases and asynchronous speech work must continue through dialogs.
         self.handle_speech_input(ctx);
-        if !self.host_dialog_open() {
+        if !input_blocked {
             #[cfg(feature = "cloud-workspaces")]
             self.handle_cloud_fullscreen_exit(ctx);
             self.handle_fullscreen_toggle(ctx);
@@ -74,7 +79,7 @@ impl HorizonApp {
         let device_activity = self.poll_device_panel_requests(ctx);
 
         self.animate_pan(ctx);
-        self.maybe_refresh_session_catalog();
+        self.maybe_refresh_session_catalog(ctx);
         self.poll_remote_hosts_refresh();
         self.poll_ssh_upload_flow();
         self.poll_git_watchers();

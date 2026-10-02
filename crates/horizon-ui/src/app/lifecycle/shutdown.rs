@@ -49,6 +49,9 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(in crate::app) fn poll_shutdown_progress(&mut self) {
+        if !self.finish_saved_session_deletion_for_shutdown() {
+            return;
+        }
         let Some(progress) = &self.shutdown_progress else {
             return;
         };
@@ -93,7 +96,15 @@ impl HorizonApp {
         let total = progress.panel_count();
 
         egui::CentralPanel::default().show(ui, |ui| {
-            if total > 0 {
+            if self.saved_session_deletion_is_running() {
+                loading_spinner::show_with_detail(
+                    ui,
+                    egui::Id::new("shutdown_deletion"),
+                    "Closing Horizon…",
+                    "Finishing saved conversation deletion safely…",
+                );
+                ui.ctx().request_repaint_after(Duration::from_millis(100));
+            } else if total > 0 {
                 loading_spinner::show_with_detail(
                     ui,
                     egui::Id::new("shutdown_spinner"),
@@ -113,6 +124,7 @@ impl HorizonApp {
             return;
         }
 
+        self.wait_for_saved_session_deletion();
         self.exit_cleanup_complete = true;
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();

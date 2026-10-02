@@ -24,6 +24,15 @@ use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE
 
 mod interaction;
 pub(super) use interaction::ArrangedPanelDrag;
+mod session_deletion;
+pub(super) use session_deletion::SavedSessionDeletionState;
+mod session_rebind;
+#[cfg(test)]
+use session_rebind::SessionRebindRenderOutcome;
+use session_rebind::open_session_picker;
+#[cfg(test)]
+use session_rebind::render_session_rebind_options;
+pub(super) use session_rebind::{focused_session_picker_panel, session_picker_panel, session_picker_panels};
 
 #[derive(Clone, Copy)]
 pub(in crate::app) struct PanelScreenGeometry {
@@ -83,34 +92,6 @@ impl PanelUiOutcome {
             self.focus = PanelFocusRequest::Focus;
         }
     }
-}
-
-#[derive(Default)]
-struct SessionRebindRenderOutcome {
-    binding: Option<AgentSessionBinding>,
-    #[cfg(test)]
-    option_rects: Vec<Rect>,
-}
-
-fn render_session_rebind_options(
-    ui: &mut egui::Ui,
-    rebind_options: &[(String, AgentSessionBinding)],
-) -> SessionRebindRenderOutcome {
-    let mut outcome = SessionRebindRenderOutcome::default();
-    ui.set_min_width(280.0);
-    for (label, binding) in rebind_options {
-        let text = format!("Rebind & Restart · {label}");
-        let button = egui::Button::new(egui::RichText::new(text).size(12.0).color(theme::FG_SOFT())).frame(false);
-        let response = ui.add(button);
-        #[cfg(test)]
-        outcome.option_rects.push(response.rect);
-        if response.clicked() {
-            outcome.binding = Some(binding.clone());
-            ui.close();
-            break;
-        }
-    }
-    outcome
 }
 
 struct PanelMicInteraction {
@@ -422,8 +403,8 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let mut reconnect_requested = false;
-                        let claim_editor_focus = !self.speech_text_surface_active().0;
-                        let interactive = !self.host_dialog_open();
+                        let claim_editor_focus = !self.speech_text_surface_active(ui.ctx()).0;
+                        let interactive = !self.host_dialog_open() && session_picker_panel(ui.ctx()).is_none();
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(
@@ -627,7 +608,8 @@ impl HorizonApp {
         scope: PanelRenderScope,
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
-        let interactive = !self.canvas_pan_input_claimed && !scope.host_dialog_open;
+        let interactive =
+            !self.canvas_pan_input_claimed && !scope.host_dialog_open && session_picker_panel(ctx).is_none();
         #[cfg(feature = "cloud-workspaces")]
         let browser_canvas_zoom_active = scope.detached || self.cloud_prototype.fullscreen.is_none();
         #[cfg(not(feature = "cloud-workspaces"))]
@@ -816,7 +798,7 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let mut reconnect_requested = false;
-                        let claim_editor_focus = snapshot.is_focused && !self.speech_text_surface_active().0;
+                        let claim_editor_focus = snapshot.is_focused && !self.speech_text_surface_active(ui.ctx()).0;
                         let board = &mut self.board;
                         let editor_preview_cache = &mut self.panel_render_caches.editor_preview_cache;
                         let terminal_grid_cache = &mut self.panel_render_caches.terminal_grid_cache;
@@ -877,6 +859,7 @@ impl HorizonApp {
                         }
                     },
                 );
+                outcome.session_rebind_and_restart = self.render_saved_session_picker(ctx, panel_id);
             });
 
         outcome

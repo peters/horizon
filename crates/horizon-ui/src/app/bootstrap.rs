@@ -90,6 +90,7 @@ impl HorizonApp {
             action_commands_cache,
         };
         let mut app = Self::initial_state(config, bootstrap);
+        app.restore_saved_session_deletion_notice();
 
         match startup {
             StartupDecision::Open { session, .. } => app.activate_persistent_session(&session),
@@ -169,13 +170,13 @@ impl HorizonApp {
             pending_startup_runtime_state: None,
             pending_startup_runtime_state_changed: false,
             startup_bootstrap_failure: None,
-            session_catalog_refresh: None,
+            session_catalog_refresh: super::session::SessionCatalogRefreshState::default(),
+            saved_session_deletion: super::panels::SavedSessionDeletionState::default(),
             remote_hosts_overlay: None,
             remote_hosts_catalog: RemoteHostCatalog::default(),
             remote_hosts_refresh_rx: None,
             remote_hosts_refresh_in_flight: false,
             remote_hosts_last_refresh: None,
-            last_session_catalog_refresh: None,
             last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
             settings: None, remote_browser_credentials: spawn_remote_browser_credentials(config),
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),

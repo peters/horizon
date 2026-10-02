@@ -5,9 +5,7 @@ use crate::app::{HorizonApp, RenameEditAction, util::clamp_panel_size};
 use crate::terminal_widget::viewport_for_available_space;
 use crate::theme;
 
-use super::{
-    PanelCommand, PanelFocusRequest, PanelFrame, PanelSnapshot, PanelUiOutcome, render_session_rebind_options,
-};
+use super::{PanelCommand, PanelFocusRequest, PanelFrame, PanelSnapshot, PanelUiOutcome, open_session_picker};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::app) struct ArrangedPanelDrag {
@@ -228,8 +226,12 @@ impl HorizonApp {
             // Compute rebind options lazily — only when the context menu is
             // actually open instead of every frame for every panel.
             let rebind_options = self.session_rebind_options(panel_id);
-            if !rebind_options.is_empty() {
-                outcome.session_rebind_and_restart = render_session_rebind_options(ui, &rebind_options).binding;
+            if kind.supports_session_binding() {
+                let response = ui.button(format!("Resume a session ({})…", rebind_options.len()));
+                if response.clicked() {
+                    open_session_picker(&response, panel_id, rebind_options);
+                    ui.close();
+                }
                 ui.separator();
             }
             if ui.button("New Workspace").clicked() {

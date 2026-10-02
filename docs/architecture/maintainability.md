@@ -199,6 +199,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   Binding validation and assignment live in
   `runtime_state/binding_bootstrap.rs`; provider-specific session-store parsing
   belongs in focused leaves such as `runtime_state/agent_sessions/codex.rs`.
+  Session activity date formatting lives in `runtime_state/session_display.rs`;
+  the UI's `app/panels/session_rebind.rs` renders the recovery menu (with focused rendering and input tests in `session_rebind/tests/`) and collects
+  resume/copy actions without changing provider bindings.
 - `agent_work/` keeps restart-work evidence separate from conversation binding.
   `command.rs` verifies external executable ownership with a bounded shell probe; functions and aliases keep their ordinary launch.
   `ledger.rs` correlates lifecycle events by prompt; `transcript.rs` reads bounded
@@ -909,3 +912,7 @@ snapshot without claiming actions or rewriting legacy handoffs. Final rotation
 confirmation brackets that observation with document checks.
 Bounded per-request completions prevent latest-only polling from losing superseded
 user requests; the core adapter bounds lost-status waiting and surfaces uncertainty.
+
+Saved conversation deletion is implemented in `runtime_state/agent_sessions/deletion.rs`: provider removal, identity validation and process-wide reservation guards remain in core. Its identity, batch and staging regressions live in the colocated `deletion/tests/` tree. The modal session picker collects selection/confirmation actions and requests throttled catalog scans while open; its option cache invalidates on scan completion, provider/panel scope changes and process-wide deletion reservation revisions; `app/panels/session_deletion.rs` manages its background worker, bounded reports and result persistence, with presentation and worker regressions in `session_deletion/tests/`.
+
+Saved-conversation deletion worker ownership and recovery-notice presentation live in `app/panels/session_deletion/worker.rs`; profile-scoped immutable notice storage belongs to `session_store/deletion_notice.rs` in core. Shutdown joins destructive workers before process exit.
