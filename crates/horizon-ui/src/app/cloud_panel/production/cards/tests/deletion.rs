@@ -1,4 +1,5 @@
 use super::*;
+use horizon_core::cloud_panel::CloudGroup;
 
 /// Texts drawn by one frame of the runtime actions.
 fn action_texts(ctx: &egui::Context, runtime: &mut super::super::super::Runtime) -> Vec<String> {
@@ -184,14 +185,73 @@ fn a_stop_confirmation_is_the_only_thing_manage_shows_until_answered() {
     );
 }
 
-#[test]
-fn resuming_shows_the_steps_instead_of_manage() {
-    let (_temp, mut app) = crate::app::test_support::test_app();
+fn resumable_cloud(app: &mut crate::app::HorizonApp, with_panel: bool) {
+    let workspace = app.board.create_workspace("Fixture");
+    let mut group = CloudGroup::new(
+        7,
+        "Fixture".into(),
+        app.board.workspace(workspace).unwrap().local_id.clone(),
+        ".".into(),
+        [0.0, 0.0],
+    );
+    group.remote = Some(CloudLaunch {
+        deployment_started: true,
+        id: "fixture".into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile: ready_bound_runtime().state.unwrap().profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
+    });
+    if with_panel {
+        let panel = app
+            .board
+            .create_panel(
+                horizon_core::PanelOptions {
+                    kind: horizon_core::PanelKind::Editor,
+                    position: Some([14.0, 120.0]),
+                    size: Some([120.0, 100.0]),
+                    ..Default::default()
+                },
+                workspace,
+            )
+            .unwrap();
+        group.attach(&mut app.board, panel);
+    }
+    app.cloud_prototype.groups.0.push(group);
     let runtime = super::super::super::Runtime {
         drawer: Some(Tab::Manage),
         ..Default::default()
     };
     app.cloud_prototype.production.runtimes.insert(7, runtime);
-    app.apply_card_action(7, Action::Resume, &egui::Context::default());
+}
+
+#[test]
+fn resuming_shows_the_steps_instead_of_manage() {
+    let ctx = egui::Context::default();
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    resumable_cloud(&mut app, true);
+    app.apply_card_action(7, Action::Resume, &ctx);
+    assert_eq!(
+        app.cloud_prototype.production.runtimes[&7].drawer,
+        Some(Tab::Overview),
+        "with panels the steps open in Overview"
+    );
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    resumable_cloud(&mut app, false);
+    app.apply_card_action(7, Action::Resume, &ctx);
+    assert_eq!(
+        app.cloud_prototype.production.runtimes[&7].drawer, None,
+        "without panels the steps are the body, so the drawer gives way"
+    );
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    resumable_cloud(&mut app, true);
+    app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, true);
+    app.apply_card_action(7, Action::Resume, &ctx);
+    assert!(
+        !app.cloud_prototype.groups.0[0].collapsed,
+        "a collapsed cloud opens to show it"
+    );
     assert_eq!(app.cloud_prototype.production.runtimes[&7].drawer, Some(Tab::Overview));
 }
