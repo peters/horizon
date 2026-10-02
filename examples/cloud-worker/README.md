@@ -368,7 +368,7 @@ started, so an uncertain launch is not replayed.
   already recorded for their own repository and refuses a path that holds another
   repository, without resetting files.
 - **Storage refused a write**, for example `Disk quota exceeded` while a durability
-  fence is saved on the attach path: the attach ends with exit 6, the storage and inode
+  fence is saved on the attach path: the attach ends with exit 74 (`EX_IOERR`), the storage and inode
   usage of `/workspace`, and no process started (a refusal in the detached preparation
   ends the attach the same way). A launch fence that could not be made durable is
   withdrawn, and nothing records a failed preparation, so attaching again resumes; if it

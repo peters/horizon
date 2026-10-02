@@ -7,6 +7,9 @@ umask 077
 # A failing flush on the attach path means the workspace storage refused earlier writes, so
 # stop with the reason instead of ending the connection with a bare error. No process was
 # started, and attaching again resumes the interrupted preparation.
+# EX_IOERR from sysexits.h. A distinctive status, because the detached preparation reports
+# its failure to the attach only through it, and the tools it runs also use small numbers.
+storage_status=74
 flush_failed() {
     {
         echo "Workspace storage did not accept a write while saving $1."
@@ -15,7 +18,7 @@ flush_failed() {
         { df -i /workspace | tail -n 1; } 2>/dev/null || true
         echo 'No process was started. Attach again; if it fails again, stop and resume the cloud (its workspace volume is kept).'
     } >&2
-    exit 6
+    exit "$storage_status"
 }
 flush() {
     sync -f "$1" || flush_failed "$1"
@@ -135,13 +138,13 @@ start_preparation() {
     fi
     : > "$state/prepare.log"
     export -f flush flush_failed prepare present prepare_checkout
-    export shared id root worktree revision state
+    export shared id root worktree revision state storage_status
     # A signal (exit status 129 and above) leaves no failure record, so the next attach
-    # resumes, as does 6, storage refusing a write. 128 is an ordinary failure, such as a fatal Git error.
+    # resumes, as does 74, storage refusing a write. 128 is an ordinary failure, such as a fatal Git error.
     setsid -w bash -c '(set -euo pipefail; prepare_checkout "$@"); status=$?
-        if [ "$status" -ne 0 ] && [ "$status" -ne 6 ] && [ "$status" -le 128 ]; then
+        if [ "$status" -ne 0 ] && [ "$status" -ne "$storage_status" ] && [ "$status" -le 128 ]; then
             touch "$state/failed"
-            sync -f "$state" || { rm -f "$state/failed"; flush_failed "$state"; }
+            sync -f "$state" || { rm -f "$state/failed" || true; flush_failed "$state"; }
         fi
         exit "$status"' horizon-worker-prepare "${siblings[@]}" < /dev/null >> "$state/prepare.log" 2>&1 9>&- &
     local preparer=$!
@@ -150,7 +153,7 @@ start_preparation() {
     # The log already says why; the exit status says it was storage, which nothing else records.
     local status=0
     wait "$preparer" || status=$?
-    if [ "$status" -eq 6 ]; then exit 6; fi
+    if [ "$status" -eq "$storage_status" ]; then exit "$storage_status"; fi
 }
 prepare_checkout() {
     if [ "$worktree" != "$root" ]; then mkdir -p "$root"; fi
@@ -165,7 +168,7 @@ prepare_checkout() {
     # No session may enter a checkout whose ready marker could vanish: a later attach would
     # prepare it again over their edits. Withdraw the marker, so the next attach resumes
     # the preparation while nothing has launched.
-    sync -f "$state/ready" || { rm -f "$state/ready"; flush_failed "$state/ready"; }
+    sync -f "$state/ready" || { rm -f "$state/ready" || true; flush_failed "$state/ready"; }
 }
 # A worktree counts only when it belongs to its own repository; another clone at that path does not.
 present() {
@@ -312,7 +315,7 @@ if ! running; then
     touch "$session/launch-requested"
     # Nothing launched yet: a fence that is not durable is withdrawn, or the next attach would
     # take the session for one whose launch is uncertain.
-    sync -f "$session/launch-requested" || { rm -f "$session/launch-requested"; flush_failed "$session/launch-requested"; }
+    sync -f "$session/launch-requested" || { rm -f "$session/launch-requested" || true; flush_failed "$session/launch-requested"; }
     launch
     rm "$session/preparing"
 fi
