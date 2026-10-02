@@ -4,7 +4,8 @@ use super::super::{LineKind, LogLine, Runtime, Stage};
 use super::status::Failure;
 use super::strip::stage_color;
 use crate::theme;
-use egui::{FontId, RichText, Stroke, Vec2};
+use egui::{Align, FontId, Layout, Rect, RichText, Stroke, UiBuilder, Vec2};
+use std::collections::HashMap;
 
 const TEXT_SIZE: f32 = 13.0;
 /// The pinned root cause keeps this height; a longer cause scrolls inside it, so the
@@ -44,7 +45,7 @@ pub(super) fn show(
             .min_scrolled_height(inner)
             .auto_shrink([false, false])
             .stick_to_bottom(true)
-            .show(ui, |ui| lines(ui, runtime, follows));
+            .show_viewport(ui, |ui, viewport| paint_log(ui, id, runtime, follows, viewport));
         let max_offset = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
         if scroll.state.offset.y + 1.0 < max_offset {
             runtime.unpinned_views |= view_bit(place);
@@ -91,29 +92,185 @@ fn shown(runtime: &Runtime, follows: bool) -> Vec<&LogLine> {
         .collect()
 }
 
-fn lines(ui: &mut egui::Ui, runtime: &Runtime, follows: bool) {
-    ui.spacing_mut().item_spacing.y = 3.0;
+/// Time column, the gap on either side of it, the stage bar, and the gap before the text.
+const LINE_GUTTER: f32 = 38.0 + 8.0 + 2.0 + 8.0;
+/// `stage_heading` leads with 2px and allocates a 16px bar.
+const STEP_HEADING_HEIGHT: f32 = 18.0;
+/// The Notes label is a 12px line under the same 2px lead.
+const NOTE_HEADING_HEIGHT: f32 = 22.0;
+/// The gap the log used between rows (`item_spacing.y`).
+const ROW_GAP: f32 = 3.0;
+
+/// Heights of wrapped rows, moved out of egui memory for the frame and put back.
+/// Cloning the map every frame would copy tens of thousands of entries.
+#[derive(Clone, Default)]
+struct HeightCache {
+    entries: HashMap<(u32, u64), f32>,
+}
+
+enum Item<'a> {
+    Step { stage: Stage, attempt: u64, visit: usize },
+    Notes,
+    Line(&'a LogLine),
+}
+
+struct Placed<'a> {
+    index: usize,
+    y: f32,
+    height: f32,
+    item: Item<'a>,
+}
+
+/// Paint the rows that intersect `viewport`. The log keeps as many lines as a shell
+/// panel, and only the rows in view are laid out.
+fn paint_log(ui: &mut egui::Ui, id: u32, runtime: &Runtime, follows: bool, viewport: Rect) {
     let shown = shown(runtime, follows);
+    let width = ui.available_width();
+    let cache_id = egui::Id::new(("cloud-log-heights", id));
+    let mut cache = ui
+        .data_mut(|data| data.remove_temp::<HeightCache>(cache_id))
+        .unwrap_or_default();
+    if cache.entries.len() > horizon_core::PANEL_SCROLLBACK_LIMIT.saturating_mul(4) {
+        cache.entries.clear();
+    }
+    let plan = layout_plan(ui, &shown, &mut cache, width, viewport);
+    ui.data_mut(|data| {
+        data.insert_temp(cache_id, cache);
+    });
     if shown.is_empty() {
         ui.label(RichText::new("No output yet.").size(TEXT_SIZE).color(theme::FG_DIM()));
         return;
     }
-    // A heading per step of each attempt: a retry of the same step starts its own.
+    ui.set_height(plan.total);
+    if let Some(first) = plan.rows.first() {
+        // Several widgets per row. Skipping by row index keeps a row's ids stable while
+        // the reader scrolls, without colliding with the next row's widgets.
+        ui.skip_ahead_auto_ids(first.index.saturating_mul(8));
+    }
+    let origin_y = ui.max_rect().top();
+    let left = ui.max_rect().left();
+    for placed in &plan.rows {
+        let rect = Rect::from_min_size(egui::pos2(left, origin_y + placed.y), Vec2::new(width, placed.height));
+        ui.scope_builder(
+            UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Min)),
+            |ui| {
+                ui.set_width(width);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                match placed.item {
+                    Item::Step { stage, attempt, visit } => stage_heading(ui, runtime, stage, attempt, visit),
+                    Item::Notes => note_heading(ui),
+                    Item::Line(line) => row(ui, line),
+                }
+            },
+        );
+    }
+}
+
+struct Plan<'a> {
+    total: f32,
+    rows: Vec<Placed<'a>>,
+}
+
+fn layout_plan<'a>(
+    ui: &mut egui::Ui,
+    shown: &'a [&LogLine],
+    cache: &mut HeightCache,
+    width: f32,
+    viewport: Rect,
+) -> Plan<'a> {
+    let text_width = (width - LINE_GUTTER).max(1.0).round();
+    let width_key = width_key(text_width);
+    let top = viewport.min.y - 48.0;
+    let bottom = viewport.max.y + 48.0;
+    let mut y = 0.0;
+    let mut index = 0usize;
+    let mut rows = Vec::new();
+    let mut any = false;
     let mut previous: Option<(Option<Stage>, u64, usize)> = None;
-    // Tools print blank separator lines; they only spread the log out.
-    for line in shown.into_iter().filter(|line| !line.text.trim().is_empty()) {
+    for line in shown.iter().copied().filter(|line| !line.text.trim().is_empty()) {
+        any = true;
         let group = (line.stage, line.attempt, line.visit);
         if previous != Some(group) {
             if let Some(stage) = line.stage {
-                stage_heading(ui, runtime, stage, line.attempt, line.visit);
+                place(
+                    &mut rows,
+                    &mut y,
+                    &mut index,
+                    STEP_HEADING_HEIGHT,
+                    top,
+                    bottom,
+                    Item::Step {
+                        stage,
+                        attempt: line.attempt,
+                        visit: line.visit,
+                    },
+                );
             } else if previous.is_some() {
-                // Notes after a step's lines are not that step's output.
-                note_heading(ui);
+                place(
+                    &mut rows,
+                    &mut y,
+                    &mut index,
+                    NOTE_HEADING_HEIGHT,
+                    top,
+                    bottom,
+                    Item::Notes,
+                );
             }
             previous = Some(group);
         }
-        row(ui, line);
+        let height = line_height(ui, cache, width_key, text_width, line);
+        place(&mut rows, &mut y, &mut index, height, top, bottom, Item::Line(line));
     }
+    let total = if any { (y - ROW_GAP).max(0.0) } else { 0.0 };
+    Plan { total, rows }
+}
+
+fn place<'a>(
+    rows: &mut Vec<Placed<'a>>,
+    y: &mut f32,
+    index: &mut usize,
+    height: f32,
+    top: f32,
+    bottom: f32,
+    item: Item<'a>,
+) {
+    let row_y = *y;
+    if row_y < bottom && row_y + height > top {
+        rows.push(Placed {
+            index: *index,
+            y: row_y,
+            height,
+            item,
+        });
+    }
+    *y += height + ROW_GAP;
+    *index += 1;
+}
+
+fn line_height(ui: &mut egui::Ui, cache: &mut HeightCache, width_key: u32, text_width: f32, line: &LogLine) -> f32 {
+    let key = (width_key, line.text_key);
+    if let Some(height) = cache.entries.get(&key).copied() {
+        return height;
+    }
+    let measured = ui.fonts_mut(|fonts| {
+        fonts
+            .layout(
+                line.text.clone(),
+                FontId::monospace(TEXT_SIZE),
+                egui::Color32::GRAY,
+                text_width,
+            )
+            .size()
+            .y
+    });
+    let height = measured.max(TEXT_SIZE + 3.0).ceil();
+    cache.entries.insert(key, height);
+    height
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn width_key(text_width: f32) -> u32 {
+    text_width.clamp(1.0, 16_384.0).round() as u32
 }
 
 fn note_heading(ui: &mut egui::Ui) {
@@ -404,5 +561,91 @@ mod tests {
         let note = shown.iter().position(|text| text.contains("Idle watch")).unwrap();
         let step = shown.iter().position(|text| text == "session started").unwrap();
         assert!(step < heading && heading < note, "{shown:?}");
+    }
+
+    #[test]
+    fn follow_mode_keeps_a_shell_panels_worth_of_lines() {
+        let mut runtime = Runtime::default();
+        let limit = horizon_core::PANEL_SCROLLBACK_LIMIT;
+        for index in 0..=limit {
+            runtime.push_log(format!("line-{index}"));
+        }
+        assert_eq!(runtime.logs.len(), limit);
+        assert_eq!(runtime.logs.front().map(|line| line.text.as_str()), Some("line-1"));
+        let last = format!("line-{limit}");
+        assert_eq!(runtime.logs.back().map(|line| line.text.as_str()), Some(last.as_str()));
+    }
+
+    #[test]
+    fn a_scrolled_up_log_holds_a_full_history_aside() {
+        let mut runtime = Runtime::default();
+        runtime.push_log("visible".into());
+        runtime.verbose_unpinned = true;
+        let limit = horizon_core::PANEL_SCROLLBACK_LIMIT;
+        for index in 0..=limit {
+            runtime.push_log(format!("burst-{index}"));
+        }
+        assert_eq!(runtime.logs.len(), 1);
+        assert_eq!(runtime.logs.front().map(|line| line.text.as_str()), Some("visible"));
+        assert_eq!(runtime.pending_logs.len(), limit);
+        assert_eq!(
+            runtime.pending_logs.front().map(|line| line.text.as_str()),
+            Some("burst-1")
+        );
+        let last = format!("burst-{limit}");
+        assert_eq!(
+            runtime.pending_logs.back().map(|line| line.text.as_str()),
+            Some(last.as_str())
+        );
+    }
+
+    #[test]
+    fn a_long_log_paints_only_the_visible_tail() {
+        let mut runtime = Runtime::default();
+        for index in 0..400 {
+            runtime.push_log(format!("LOG-LINE-{index:03}"));
+        }
+        let ctx = egui::Context::default();
+        let mut latest = None;
+        for frame in 0..6 {
+            latest = Some(
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0))),
+                        time: Some(f64::from(frame) * 0.05),
+                        ..egui::RawInput::default()
+                    },
+                    |ui| {
+                        ui.set_width(640.0);
+                        show(ui, 7, "body", &mut runtime, 280.0, None);
+                    },
+                )
+                .discard_textures(),
+            );
+        }
+        let output = latest.expect("a frame");
+        let lines: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().starts_with("LOG-LINE-") => {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            lines.len() < 80,
+            "painted {} rows, want only the visible tail",
+            lines.len()
+        );
+        assert!(
+            lines.iter().any(|line| line == "LOG-LINE-399"),
+            "latest line missing: {lines:?}"
+        );
+        assert!(
+            lines.iter().all(|line| line != "LOG-LINE-000"),
+            "the tail should hide the first line: {lines:?}"
+        );
     }
 }

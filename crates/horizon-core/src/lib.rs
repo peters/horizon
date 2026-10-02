@@ -65,7 +65,10 @@ pub use git_watcher::GitWatcher;
 pub use horizon_home::{HorizonHome, browser_mcp_executable};
 pub use local_store::{codex_home_dir, grok_home_dir, user_home_dir};
 pub use managed_install::ManagedInstall;
-pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume, browser_actor};
+pub use panel::{
+    DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
+    browser_actor,
+};
 pub use remote_hosts::{
     RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,
     RemoteHostStatus, discover_remote_hosts, summarize_remote_host_connections,
