@@ -60,12 +60,7 @@ impl HorizonApp {
                     orientation,
                     resolution,
                 } => {
-                    if self
-                        .casting
-                        .sessions
-                        .iter()
-                        .any(|session| session.receiver_id == *receiver_id && !session.worker.finished())
-                    {
+                    if self.casting.receiver_busy(receiver_id) {
                         return Err("This TV already has a casting or pairing session".into());
                     }
                     self.cast_source_rect(workspace, source, ctx)?;

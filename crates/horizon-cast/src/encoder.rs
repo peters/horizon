@@ -1,17 +1,16 @@
 mod backend;
 mod diagnostics;
+mod frames;
 pub(crate) use backend::select;
 pub use backend::{EncoderBackend, EncoderSelection};
+pub(crate) use frames::FrameInput;
 
 use crate::{CastStatus, Error, MirrorSession, Result, VideoFormat, session::lock};
 use std::{
     io::{Read, Write},
     process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
-    sync::{
-        Arc, Mutex,
-        mpsc::{Receiver, RecvTimeoutError},
-    },
+    sync::{Arc, Mutex, mpsc::RecvTimeoutError},
     thread,
     time::{Duration, Instant},
 };
@@ -19,7 +18,7 @@ use std::{
 pub(crate) fn stream(
     mut mirror: MirrorSession,
     format: VideoFormat,
-    frames: &Receiver<Vec<u8>>,
+    mut frames: FrameInput,
     status: &Arc<Mutex<CastStatus>>,
     stop: &Arc<AtomicBool>,
     process: &Arc<Mutex<Option<Child>>>,
@@ -70,10 +69,10 @@ pub(crate) fn stream(
     let mut result = Ok(());
     let mut last_frame = Instant::now();
     while !stop.load(Ordering::Relaxed) && !reader.is_finished() {
-        match frames.recv_timeout(Duration::from_millis(100)) {
+        match frames.next() {
             Ok(frame) => {
                 last_frame = Instant::now();
-                if let Err(error) = input.write_all(&frame) {
+                if let Err(error) = input.write_all(frame) {
                     result = Err(error.into());
                     break;
                 }

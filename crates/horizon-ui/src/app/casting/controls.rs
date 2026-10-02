@@ -27,7 +27,9 @@ impl HorizonApp {
                 self.canvas_rect(ctx).top() + 40.0,
             ))
             .show(ctx, |ui| {
-                render_selection(ui, &mut picker, &snapshot, &mut action);
+                let menu_ids = render_selection(ui, &mut picker, &snapshot, &mut action);
+                self.casting.control_menus =
+                    Some(menu_ids.map(|id| egui::LayerId::new(Order::Foreground, id.with("popup"))));
                 let current = snapshot
                     .sessions
                     .iter()
@@ -37,7 +39,7 @@ impl HorizonApp {
                         "pin_required" => "Waiting for TV code",
                         "connecting" => "Connecting…",
                         "starting" => "Starting…",
-                        "streaming" => "Casting",
+                        "streaming" => "Casting · image frozen while controls are open",
                         "stopping" => "Stopping…",
                         "stopped" => "Stopped",
                         _ => "Could not cast",
@@ -153,7 +155,11 @@ impl HorizonApp {
                             );
                         }
                         paint_cast_icon(ui.painter(), button, color);
-                        response.on_hover_text("Cast panel or workspace")
+                        if active {
+                            response
+                        } else {
+                            response.on_hover_text("Cast panel or workspace")
+                        }
                     });
                 ctx.set_sublayer(
                     egui::LayerId::new(order, Id::new(("panel", id.0))),
@@ -239,7 +245,7 @@ fn render_selection(
     picker: &mut Picker,
     snapshot: &horizon_core::browser::manifest::cast::CastOutcome,
     action: &mut Option<CastOperation>,
-) -> Id {
+) -> [Id; 2] {
     ui.label("Resolution");
     ui.horizontal(|ui| {
         for (resolution, label) in [
@@ -253,7 +259,7 @@ fn render_selection(
     ui.add_space(8.0);
     let parent_layer = ui.layer_id();
     ui.label("Source");
-    egui::ComboBox::from_id_salt("cast_source")
+    let source = egui::ComboBox::from_id_salt("cast_source")
         .selected_text(
             snapshot
                 .sources
@@ -292,7 +298,7 @@ fn render_selection(
         ui.selectable_value(&mut picker.orientation, CastOrientation::Landscape, "Landscape");
         ui.selectable_value(&mut picker.orientation, CastOrientation::Portrait, "Portrait");
     });
-    receiver.response.id
+    [source.response.id, receiver.response.id]
 }
 
 #[cfg(test)]
@@ -375,7 +381,7 @@ mod tests {
                                 egui::Popup::open_id(ui.ctx(), layer.id);
                             }
                             let id = render_selection(ui, &mut picker, &snapshot, &mut None);
-                            popup = Some(egui::LayerId::new(Order::Foreground, id.with("popup")));
+                            popup = Some(egui::LayerId::new(Order::Foreground, id[1].with("popup")));
                         })
                         .expect("window");
                     parent = Some(response.response.layer_id);

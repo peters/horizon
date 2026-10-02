@@ -251,7 +251,7 @@ impl HorizonApp {
     fn begin_session_switch(&mut self, session: &ResolvedSession) {
         #[cfg(target_os = "linux")]
         {
-            self.casting = super::casting::CastState::new(self.casting.pairing_directory.clone());
+            self.casting.reset_for_session_switch();
         }
         let _ = self.auto_save_runtime_state();
         // Panel ids restart from 1 in the next board; a transcript finishing

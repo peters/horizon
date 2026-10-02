@@ -29,6 +29,7 @@ pub struct CastSession {
     stop: Arc<AtomicBool>,
     pin: SyncSender<Zeroizing<String>>,
     frames: SyncSender<Vec<u8>>,
+    capture_paused: Arc<AtomicBool>,
     process: Arc<Mutex<Option<Child>>>,
     worker: Option<JoinHandle<()>>,
     expected_bytes: usize,
@@ -54,6 +55,8 @@ impl CastSession {
         let process = Arc::new(Mutex::new(None));
         let (pin_tx, pin_rx) = mpsc::sync_channel(1);
         let (frames_tx, frames_rx) = mpsc::sync_channel(1);
+        let capture_paused = Arc::new(AtomicBool::new(false));
+        let frames = encoder::FrameInput::new(frames_rx, capture_paused.clone());
         let state = status.clone();
         let cancel = stop.clone();
         let child = process.clone();
@@ -79,7 +82,7 @@ impl CastSession {
                     if cancel.load(Ordering::Relaxed) {
                         return Ok(());
                     }
-                    encoder::stream(mirror, format, &frames_rx, &state, &cancel, &child, backend)
+                    encoder::stream(mirror, format, frames, &state, &cancel, &child, backend)
                 })
             })();
             if let Some(mut process) = lock(&child).take() {
@@ -97,6 +100,7 @@ impl CastSession {
             stop,
             pin: pin_tx,
             frames: frames_tx,
+            capture_paused,
             process,
             worker: Some(worker),
             expected_bytes: usize::from(width) * usize::from(height) * 4,
@@ -135,12 +139,19 @@ impl CastSession {
         *status = CastStatus::Starting;
         Ok(())
     }
+    /// Freeze the last validated frame while host controls cover the capture surface.
+    pub fn set_capture_paused(&self, paused: bool) {
+        self.capture_paused.store(paused, Ordering::Relaxed);
+    }
     /// Submit one fixed-size RGBA frame. A full queue drops the new frame rather than adding latency.
     /// # Errors
     /// Rejects a frame whose dimensions do not match the selected format.
     pub fn submit(&self, rgba: Vec<u8>) -> Result<()> {
         if rgba.len() != self.expected_bytes {
             return Err(Error::Protocol("invalid RGBA frame size"));
+        }
+        if self.capture_paused.load(Ordering::Relaxed) {
+            return Ok(());
         }
         match self.frames.try_send(rgba) {
             Ok(()) | Err(mpsc::TrySendError::Full(_)) => Ok(()),

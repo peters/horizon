@@ -20,7 +20,9 @@ pub(super) struct CastState {
     receivers: Vec<Receiver>,
     discovery: Option<mpsc::Receiver<Result<Vec<Receiver>, String>>>,
     sessions: Vec<Session>,
+    retiring: Vec<Session>,
     picker: Option<Picker>,
+    control_menus: Option<[egui::LayerId; 2]>,
     notice: Option<String>,
     last_capture: Option<Instant>,
 }
@@ -77,6 +79,7 @@ impl CastState {
     pub(super) fn receiver_busy(&self, id: &str) -> bool {
         self.sessions
             .iter()
+            .chain(&self.retiring)
             .any(|session| session.receiver_id == id && !session.worker.finished())
     }
     fn forget_pairing(&mut self, receiver_id: &str) -> Result<(), String> {
@@ -96,12 +99,25 @@ impl CastState {
     }
     pub(super) fn stop_all(&mut self) {
         self.picker = None;
-        for session in &self.sessions {
+        for session in self.sessions.iter().chain(&self.retiring) {
             session.worker.stop();
         }
     }
+    pub(super) fn reset_for_session_switch(&mut self) {
+        self.stop_all();
+        self.retiring.append(&mut self.sessions);
+        self.discovery = None;
+        self.control_menus = None;
+        self.receivers.clear();
+        self.notice = None;
+        self.last_capture = None;
+        self.refresh_pairings();
+    }
     pub(super) fn finished(&self) -> bool {
-        self.sessions.iter().all(|session| session.worker.finished())
+        self.sessions
+            .iter()
+            .chain(&self.retiring)
+            .all(|session| session.worker.finished())
     }
     pub(super) fn stop_and_wait(&mut self, timeout: Duration) -> bool {
         self.stop_all();
@@ -129,9 +145,10 @@ impl CastState {
     }
     fn poll(&mut self) {
         let mut saved = false;
-        for session in &self.sessions {
+        for session in self.sessions.iter().chain(&self.retiring) {
             saved |= session.worker.take_pairing_saved();
         }
+        self.retiring.retain(|session| !session.worker.finished());
         if saved {
             self.refresh_pairings();
         }
@@ -185,7 +202,7 @@ mod tests {
     };
 
     #[test]
-    fn synchronous_exit_stops_a_cast_waiting_for_pairing() {
+    fn session_switch_retains_pairing_worker_until_synchronous_exit() {
         let listener = TcpListener::bind("127.0.0.99:0").expect("synthetic listener");
         let address = listener.local_addr().expect("address");
         let receiver = std::thread::spawn(move || {
@@ -219,9 +236,12 @@ mod tests {
             resolution: CastResolution::default(),
             worker,
         });
+        app.casting.reset_for_session_switch();
+        assert!(app.casting.sessions.is_empty());
+        assert_eq!(app.casting.retiring.len(), 1);
         app.run_exit_cleanup();
         assert!(app.casting.finished());
-        assert_eq!(app.casting.sessions[0].worker.status(), CastStatus::Stopped);
+        assert_eq!(app.casting.retiring[0].worker.status(), CastStatus::Stopped);
         receiver.join().expect("receiver");
     }
 }

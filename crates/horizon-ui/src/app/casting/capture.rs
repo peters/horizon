@@ -1,5 +1,5 @@
 use super::super::HorizonApp;
-use egui::{Context, Id, Order, Rect, ViewportId};
+use egui::{Context, Id, LayerId, Order, Rect, ViewportId};
 use horizon_cast::CastStatus;
 use horizon_core::{WorkspaceId, browser::manifest::cast::CastSource};
 use std::time::{Duration, Instant};
@@ -29,7 +29,11 @@ impl HorizonApp {
         }
         self.consume_cast_images(ctx);
         self.render_cast_controls(ctx);
-        let active = self.casting.sessions.iter().any(|session| !session.worker.finished());
+        let controls_visible = self.cast_controls_visible(ctx);
+        for session in &self.casting.sessions {
+            session.worker.set_capture_paused(controls_visible);
+        }
+        let active = !self.casting.finished();
         if active || self.casting.discovery.is_some() || self.casting.paired_refresh.is_some() {
             ctx.request_repaint_after(CAPTURE_INTERVAL);
         }
@@ -51,7 +55,9 @@ impl HorizonApp {
                     if !self.cast_geometry_settled(session.workspace, &session.source, ctx) {
                         continue;
                     }
-                    regions.push((session.receiver_id.clone(), session.generation, rect));
+                    if !controls_visible {
+                        regions.push((session.receiver_id.clone(), session.generation, rect));
+                    }
                 }
                 _ => {
                     session.worker.stop();
@@ -181,13 +187,29 @@ impl HorizonApp {
                 })
             })
     }
+    fn cast_controls_visible(&self, ctx: &Context) -> bool {
+        self.casting.picker.is_some()
+            || ctx.memory(|memory| {
+                memory
+                    .areas()
+                    .visible_layer_ids()
+                    .into_iter()
+                    .any(|layer| self.is_cast_control_layer(layer))
+            })
+    }
+    fn is_cast_control_layer(&self, layer: LayerId) -> bool {
+        layer == cast_picker_layer() || self.casting.control_menus.is_some_and(|menus| menus.contains(&layer))
+    }
     fn cast_obscured(&self, source: &CastSource, rect: Rect, ctx: &Context) -> bool {
         if self.host_content_dialog_open() || self.pending_session_switch.is_some() {
             return true;
         }
         ctx.memory(|memory| {
             memory.areas().visible_layer_ids().into_iter().any(|layer| {
-                if layer.order == Order::Background {
+                if layer.order == Order::Background
+                    || self.is_cast_control_layer(layer)
+                    || memory.areas().parent_layer(layer) == Some(cast_picker_layer())
+                {
                     return false;
                 }
                 let selected = self.board.panels.iter().filter(|panel| match source {
@@ -211,6 +233,9 @@ impl HorizonApp {
         })
     }
     fn consume_cast_images(&mut self, ctx: &Context) {
+        if self.cast_controls_visible(ctx) {
+            return;
+        }
         let events = ctx.input(|input| input.events.clone());
         for event in events {
             let egui::Event::Screenshot {
@@ -274,6 +299,10 @@ impl HorizonApp {
         }
     }
 }
+fn cast_picker_layer() -> LayerId {
+    LayerId::new(Order::Foreground, Id::new("cast_picker"))
+}
+
 fn letterbox(image: &egui::ColorImage, (width, height): (usize, usize)) -> Vec<u8> {
     let mut rgba = vec![0; width * height * 4];
     for pixel in rgba.as_chunks_mut::<4>().0 {
@@ -314,6 +343,7 @@ mod tests {
     use crate::app::test_support::{
         editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup,
     };
+    use crate::test_egui::DiscardTextures;
     use horizon_core::{RuntimeState, StartupDecision};
 
     #[test]
@@ -391,6 +421,51 @@ mod tests {
             let rendered = app.cast_visible_panel_rect(id, &ctx).expect("visible source");
             app.panel_screen_rects.insert(id, rendered);
             assert!(app.cast_geometry_settled(workspace, &source, &ctx));
+        }
+    }
+
+    #[test]
+    fn cast_controls_freeze_capture_but_other_overlays_remain_private() {
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        let source = CastSource::Panel { id: "synthetic".into() };
+        let region = Rect::from_min_size(egui::pos2(400.0, 300.0), egui::vec2(200.0, 150.0));
+        for other_overlay in [false, true] {
+            let _ = ctx
+                .run_ui(raw_input([1600.0, 1000.0], None), |ui| {
+                    egui::Area::new(cast_picker_layer().id)
+                        .order(Order::Foreground)
+                        .fixed_pos(region.min)
+                        .show(ui.ctx(), |ui| {
+                            ui.allocate_space(region.size());
+                        });
+                    let child = egui::Area::new(Id::new("cast_menu"))
+                        .order(Order::Foreground)
+                        .fixed_pos(region.min)
+                        .show(ui.ctx(), |ui| {
+                            ui.allocate_space(region.size());
+                        });
+                    ui.ctx().set_sublayer(cast_picker_layer(), child.response.layer_id);
+                    app.casting.control_menus = Some([
+                        child.response.layer_id,
+                        LayerId::new(Order::Foreground, Id::new("second_cast_menu")),
+                    ]);
+                    if other_overlay {
+                        egui::Area::new(Id::new("unrelated_overlay"))
+                            .order(Order::Foreground)
+                            .fixed_pos(region.min)
+                            .show(ui.ctx(), |ui| {
+                                ui.allocate_space(region.size());
+                            });
+                    }
+                    assert!(app.cast_controls_visible(ui.ctx()));
+                    assert_eq!(app.cast_obscured(&source, region, ui.ctx()), other_overlay);
+                })
+                .discard_textures();
+            // egui has discarded sublayers but retained prior-frame areas.
+            assert!(app.cast_controls_visible(&ctx));
+            assert_eq!(app.cast_obscured(&source, region, &ctx), other_overlay);
         }
     }
 
