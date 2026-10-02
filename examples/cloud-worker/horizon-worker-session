@@ -139,7 +139,10 @@ start_preparation() {
     # A signal (exit status 129 and above) leaves no failure record, so the next attach
     # resumes, as does 6, storage refusing a write. 128 is an ordinary failure, such as a fatal Git error.
     setsid -w bash -c '(set -euo pipefail; prepare_checkout "$@"); status=$?
-        if [ "$status" -ne 0 ] && [ "$status" -ne 6 ] && [ "$status" -le 128 ]; then touch "$state/failed"; sync -f "$state"; fi
+        if [ "$status" -ne 0 ] && [ "$status" -ne 6 ] && [ "$status" -le 128 ]; then
+            touch "$state/failed"
+            sync -f "$state" || { rm -f "$state/failed"; flush_failed "$state"; }
+        fi
         exit "$status"' horizon-worker-prepare "${siblings[@]}" < /dev/null >> "$state/prepare.log" 2>&1 9>&- &
     local preparer=$!
     exec 8>&-

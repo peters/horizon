@@ -160,13 +160,16 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
 
-    def refuse_flush(self, pattern):
-        """A `sync` that fails with the real mount's message for paths matching `pattern`, until lifted."""
+    def refuse_flush(self, pattern, allow=0):
+        """A `sync` that fails with the real mount's message for paths matching `pattern`, until
+        lifted, after `allow` calls for them have succeeded."""
         refusing = self.fixture.root / 'sync-fails'
         refusing.touch()
+        calls = self.fixture.root / 'sync-calls'
         stub = self.fixture.tools / 'sync'
         stub.write_text(f"#!/bin/sh\nif [ -e '{refusing}' ]; then\n  case \"$2\" in {pattern})\n"
-                        "    echo \"sync: error syncing '$2': Disk quota exceeded\" >&2; exit 1;;\n  esac\nfi\n"
+                        f"    echo x >> '{calls}'\n    if [ \"$(wc -l < '{calls}')\" -gt {allow} ]; then\n"
+                        "      echo \"sync: error syncing '$2': Disk quota exceeded\" >&2; exit 1\n    fi;;\n  esac\nfi\n"
                         f"exec {shutil.which('sync')} \"$@\"\n")
         stub.chmod(0o700)
         return refusing
@@ -220,6 +223,18 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertIn('Resuming', resumed.stderr)
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
+
+    def test_a_refusal_while_recording_a_failed_preparation_still_says_it_was_storage(self):
+        f = self.fixture
+        (f.tools / 'horizon-worker-source').write_text('#!/bin/sh\necho source unavailable >&2\nexit 9\n')
+        # The foreground flush after creating the state directory passes; recording the failure is refused.
+        refusing = self.refuse_flush('*/shared-checkout-state', allow=1)
+        refused = self.start('one')
+        self.assertEqual(refused.returncode, 6, refused.stderr)
+        self.assertIn('Workspace storage did not accept a write', refused.stderr)
+        self.assertFalse((self.state / 'failed').exists(), 'an unconfirmed failure record is withdrawn')
+        self.assertEqual(f.launches(), [])
+        refusing.unlink()
 
     def test_a_refused_launch_fence_is_withdrawn_so_the_next_attach_is_not_an_uncertain_launch(self):
         f = self.fixture
