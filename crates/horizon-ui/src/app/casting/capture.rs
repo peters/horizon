@@ -4,7 +4,7 @@ use horizon_cast::CastStatus;
 use horizon_core::{WorkspaceId, browser::manifest::cast::CastSource};
 use std::time::{Duration, Instant};
 
-const CAPTURE_INTERVAL: Duration = Duration::from_millis(65);
+const CAPTURE_INTERVAL: Duration = Duration::from_millis(67);
 
 #[derive(Clone, Debug)]
 struct CaptureTicket {
