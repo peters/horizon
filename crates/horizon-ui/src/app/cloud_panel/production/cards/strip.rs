@@ -46,7 +46,20 @@ pub(in crate::app::cloud_panel) struct Spend {
 pub(in crate::app::cloud_panel) enum StripAction {
     Primary(Primary),
     ToggleDrawer,
+    Layout(Option<horizon_core::WorkspaceLayout>),
 }
+
+/// The workspace's panel arrangement, offered on the header of a cloud that holds or takes panels.
+pub(in crate::app::cloud_panel) struct LayoutControls {
+    pub selected: Option<horizon_core::WorkspaceLayout>,
+    pub color: Color32,
+}
+
+/// Four buttons and the gaps between them, as the workspace toolbar draws them.
+const LAYOUT_WIDTH: f32 = 208.0;
+const LAYOUT_HEIGHT: f32 = 24.0;
+/// Below this header width the status sentence keeps the row; Manage still has the buttons.
+const LAYOUT_MIN_HEADER: f32 = 700.0;
 
 pub(in crate::app::cloud_panel) struct Strip {
     /// Width from the header's right edge that the title must leave free.
@@ -98,6 +111,7 @@ pub(super) fn show(
     indicators: &Indicators,
     spend: &Spend,
     drawer_open: bool,
+    layout: Option<LayoutControls>,
 ) -> Strip {
     let mut action = None;
     let y = header.top() + CONTROLS_Y;
@@ -144,7 +158,27 @@ pub(super) fn show(
             });
         left = rect.left() - 24.0;
     }
-    status_line(ui, header, status);
+    let mut reserved_row = 0.0;
+    if let Some(mut controls) = layout.filter(|_| header.width() >= LAYOUT_MIN_HEADER) {
+        let row_y = header.bottom() - TRACK_HEIGHT - 15.0;
+        let rect = Rect::from_min_size(
+            pos2(header.right() - 26.0 - LAYOUT_WIDTH, row_y - LAYOUT_HEIGHT / 2.0),
+            vec2(LAYOUT_WIDTH, LAYOUT_HEIGHT),
+        );
+        let changed = ui
+            .scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                |ui| crate::app::workspace::workspace_layout_buttons(ui, &mut controls.selected, controls.color),
+            )
+            .inner;
+        if changed {
+            action = Some(StripAction::Layout(controls.selected));
+        }
+        reserved_row = LAYOUT_WIDTH + 16.0;
+    }
+    status_line(ui, header, status, reserved_row);
     let track = Rect::from_min_max(
         pos2(header.left() + 1.0, header.bottom() - TRACK_HEIGHT),
         pos2(header.right() - 1.0, header.bottom()),
@@ -157,7 +191,7 @@ pub(super) fn show(
     }
 }
 
-fn status_line(ui: &egui::Ui, header: Rect, status: &Status) {
+fn status_line(ui: &egui::Ui, header: Rect, status: &Status, reserved: f32) {
     let painter = ui.painter();
     let y = header.bottom() - TRACK_HEIGHT - 15.0;
     let color = tone_color(status.tone);
@@ -184,7 +218,7 @@ fn status_line(ui: &egui::Ui, header: Rect, status: &Status) {
         (meaning.as_deref().unwrap_or_default(), 13.0, theme::FG_SOFT()),
     ];
     let start = header.left() + 40.0;
-    let end = header.right() - 26.0;
+    let end = header.right() - 26.0 - reserved;
     // Each part is laid out once: its width decides the fit, and it is painted as is
     // unless it must be cut.
     let laid: Vec<_> = parts
@@ -430,7 +464,7 @@ fn items(indicators: &Indicators) -> Vec<Item> {
     if let Some(connected) = indicators.desktop {
         items.push(Item {
             glyph: glyph_desktop,
-            label: String::new(),
+            label: "Desktop".into(),
             active: connected,
             color: None,
             tip: if connected {
@@ -440,69 +474,74 @@ fn items(indicators: &Indicators) -> Vec<Item> {
             },
         });
     }
-    let (label, active, color, tip) = match indicators.sharing {
-        Sharing::Off => (String::new(), false, None, "Local network not shared".to_owned()),
+    items.extend(network_item(indicators.sharing));
+    items.extend(companions_item(indicators.companions));
+    items
+}
+
+/// The local network shows only while it is shared or needs attention.
+fn network_item(sharing: Sharing) -> Option<Item> {
+    let (label, active, color, tip) = match sharing {
+        Sharing::Off => return None,
         Sharing::Paused => (
-            String::new(),
+            "Network".to_owned(),
             false,
             Some(theme::PALETTE_YELLOW()),
             "Local network sharing paused while disconnected".to_owned(),
         ),
         Sharing::Moved => (
-            String::new(),
+            "Network".to_owned(),
             false,
             Some(theme::PALETTE_YELLOW()),
             "Local network sharing stopped: this computer moved to another network. Share it again in Connections"
                 .to_owned(),
         ),
         Sharing::Starting => (
-            String::new(),
+            "Network".to_owned(),
             true,
             None,
             "Connecting the local network bridge".to_owned(),
         ),
         Sharing::Reconnecting => (
-            String::new(),
+            "Network".to_owned(),
             true,
             Some(theme::PALETTE_YELLOW()),
             "Local network bridge reconnecting; see Connections".to_owned(),
         ),
         Sharing::Open(count) => (
-            count.to_string(),
+            format!("Network {count}"),
             true,
             Some(theme::PALETTE_GREEN()),
             format!("Sharing the local network · {count} open"),
         ),
         Sharing::Failed => (
-            String::new(),
+            "Network".to_owned(),
             false,
             Some(theme::PALETTE_RED()),
             "Local network sharing failed; see Connections".to_owned(),
         ),
     };
-    items.push(Item {
+    Some(Item {
         glyph: glyph_network,
         label,
         active,
         color,
         tip,
-    });
-    items.push(Item {
+    })
+}
+
+/// Companion clouds appear only once one is selected.
+fn companions_item(companions: usize) -> Option<Item> {
+    (companions > 0).then(|| Item {
         glyph: glyph_link,
-        label: if indicators.companions == 0 {
-            String::new()
-        } else {
-            indicators.companions.to_string()
-        },
-        active: indicators.companions > 0,
+        label: format!("Companions {companions}"),
+        active: true,
         color: None,
-        tip: match indicators.companions {
-            0 => "No companion clouds selected".into(),
+        tip: match companions {
             1 => "1 companion cloud selected".into(),
             count => format!("{count} companion clouds selected"),
         },
-    });
-    items
+    })
 }
 
 /// An indicator laid out once per frame: measured and painted from the same galley.

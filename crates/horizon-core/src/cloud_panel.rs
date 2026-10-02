@@ -26,6 +26,8 @@ pub const RUNTIME_HEIGHT: f32 = 740.0;
 /// The status strip a production cloud adds under its title: one status line
 /// and the stage track along the header's bottom edge.
 pub const STATUS_HEIGHT: f32 = 34.0;
+/// Room between a production cloud's header and the panels under it.
+pub const CONTENT_GAP: f32 = 10.0;
 /// Space the earlier summary card reserved above the sessions, and what its
 /// disclosed controls added; saved clouds from then are moved up once.
 const LEGACY_TOOLBAR_HEIGHT: f32 = 224.0;
@@ -415,6 +417,19 @@ impl CloudGroups {
 mod tests {
     use super::*;
     use crate::{PanelKind, PanelOptions};
+
+    #[test]
+    fn a_production_cloud_keeps_its_panels_a_gap_below_the_painted_header() {
+        let mut group = CloudGroup::new(101, "test".into(), "workspace".into(), ".".into(), [0.0, 0.0]);
+        assert!((group.header_height() - group.header_chrome_height()).abs() < f32::EPSILON);
+        let legacy = serde_json::json!({
+            "deployment_started": true, "id": "cloud", "revision": "a".repeat(40), "profile_name": "dev",
+            "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8},
+        });
+        group.remote = Some(serde_json::from_value(legacy).unwrap());
+        assert!((group.header_height() - group.header_chrome_height() - CONTENT_GAP).abs() < f32::EPSILON);
+        assert!(group.header_height() > group.header_chrome_height());
+    }
 
     #[test]
     fn a_cloud_keeps_its_placement_and_records_without_one_keep_their_encoding() {

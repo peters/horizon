@@ -6,6 +6,7 @@ use super::status::{self, Occupancy, Primary, Status};
 use super::strip::{self, Indicators, Sharing, Strip, StripAction};
 use super::{Action, body};
 use crate::app::view::canvas_scene_transform;
+use crate::theme;
 use egui::{Id, Order, Pos2, Rect, Vec2};
 use horizon_core::Board;
 use horizon_core::cloud_panel::{CloudGroup, PAD};
@@ -103,6 +104,20 @@ fn subtitle(group: &CloudGroup, runtime: &Runtime) -> String {
     parts.join("  ·  ")
 }
 
+/// A cloud that takes panels, or already holds some, offers their arrangement; a failure
+/// keeps the room for its sentence.
+pub(super) fn layout_controls(
+    group: &CloudGroup,
+    status: &Status,
+    occupancy: Occupancy,
+) -> Option<strip::LayoutControls> {
+    let usable = status.tone == status::Tone::Ready || (occupancy.panels > 0 && status.tone != status::Tone::Failed);
+    usable.then(|| strip::LayoutControls {
+        selected: group.layout,
+        color: theme::workspace_accent(group.issue.saturating_sub(101) as usize),
+    })
+}
+
 impl Production {
     /// The status strip inside a production cloud's header. `header` spans the whole
     /// header, including the status line and track under the title.
@@ -137,7 +152,16 @@ impl Production {
             companions,
         };
         let spend = super::cost::spend(runtime, now);
-        let mut strip = strip::show(ui, header, &status, &indicators, &spend, runtime.drawer.is_some());
+        let layout = layout_controls(group, &status, occupancy);
+        let mut strip = strip::show(
+            ui,
+            header,
+            &status,
+            &indicators,
+            &spend,
+            runtime.drawer.is_some(),
+            layout,
+        );
         strip.subtitle = subtitle(group, runtime);
         status::keep(runtime, status, frame);
         strip
@@ -163,6 +187,14 @@ impl HorizonApp {
             self.cloud_prototype.groups.0[index].set_collapsed(&mut self.board, false);
             self.save_cloud_prototype();
         }
+        if let StripAction::Layout(layout) = action {
+            if let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) {
+                self.cloud_prototype.groups.0[index].set_layout(&mut self.board, layout);
+                self.cloud_prototype.groups.make_room(&mut self.board, index);
+                self.save_cloud_prototype();
+            }
+            return;
+        }
         let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
             return;
         };
@@ -174,6 +206,7 @@ impl HorizonApp {
                     Some(Tab::default())
                 };
             }
+            StripAction::Layout(_) => {}
             StripAction::Primary(Primary::Cancel) => {
                 if let Some(cancel) = &runtime.cancel {
                     cancel.cancel();

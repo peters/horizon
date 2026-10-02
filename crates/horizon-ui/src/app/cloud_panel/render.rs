@@ -110,7 +110,7 @@ impl HorizonApp {
                     ui.ctx().set_transform_layer(ui.layer_id(), transform);
                     ui.set_clip_rect(clip);
                     let (header, _) =
-                        ui.allocate_exact_size(Vec2::new(rect.width(), group.header_height()), Sense::hover());
+                        ui.allocate_exact_size(Vec2::new(rect.width(), group.header_chrome_height()), Sense::hover());
                     paint_header_base(ui, header, accent);
                     let drag_rect =
                         Rect::from_min_max(header.min, Pos2::new(close_rect(header).left(), header.bottom()));
