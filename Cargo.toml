@@ -40,7 +40,7 @@ ring = "0.17.14"
 ed25519-dalek = { version = "3.0.0", features = ["zeroize"] }
 horizon-cloud-protocol = { path = "crates/horizon-cloud-protocol", version = "0.2.7" }
 # Licensed decoder fixes shared by the native viewer and optional resize adapter.
-vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "54b7faf0e58206d009ec681516f6a7e202155be4" }
+vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "773ec2351241c80bbab88ffedae73f1972e0a4c1" }
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
 horizon-browser-control = { path = "crates/horizon-browser-control", version = "0.2.7" }
 horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }

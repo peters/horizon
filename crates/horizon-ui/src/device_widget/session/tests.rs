@@ -303,7 +303,7 @@ fn hidden_viewer_processes_resize_and_disconnect() -> Result<(), ViewError> {
     Ok(())
 }
 
-fn send_extended_size(stream: &mut std::net::TcpStream, width: u16, height: u16) -> Result<(), ViewError> {
+fn extended_size_packet(width: u16, height: u16) -> Vec<u8> {
     let mut packet = vec![0, 0, 0, 1, 0, 0, 0, 0];
     packet.extend(width.to_be_bytes());
     packet.extend(height.to_be_bytes());
@@ -314,7 +314,50 @@ fn send_extended_size(stream: &mut std::net::TcpStream, width: u16, height: u16)
     packet.extend(width.to_be_bytes());
     packet.extend(height.to_be_bytes());
     packet.extend([0; 4]);
-    stream.write_all(&packet)?;
+    packet
+}
+
+fn send_extended_size(stream: &mut std::net::TcpStream, width: u16, height: u16) -> Result<(), ViewError> {
+    stream.write_all(&extended_size_packet(width, height))?;
+    Ok(())
+}
+
+#[test]
+fn wayvnc_layout_then_pixels_in_one_update_keeps_the_viewer_connected() -> Result<(), ViewError> {
+    let (session, mut stream) = connected_session()?;
+    let mut connected = false;
+    for width in [2_u16, 3, 1, 2] {
+        let mut packet = extended_size_packet(width, 2);
+        packet[2..4].copy_from_slice(&2_u16.to_be_bytes());
+        // A Raw pixel follows ExtendedDesktopSize in this same FramebufferUpdate.
+        packet.extend([0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 20, 180, 40, 0]);
+        stream.write_all(&packet)?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let updates = session.take_updates(ViewportId::ROOT);
+            if let Some(status) = updates.status {
+                assert!(
+                    !matches!(status, Status::Disconnected(_)),
+                    "mixed update disconnected the viewer"
+                );
+                connected |= matches!(status, Status::Connected);
+            }
+            if let Some(image) = updates.image
+                && image.size == [usize::from(width), 2]
+                && image.pixels[0] == egui::Color32::from_rgb(20, 180, 40)
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "mixed update pixels never arrived");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(connected);
+        assert_eq!(
+            session.take_server_details().desktop_size,
+            Some([usize::from(width), 2])
+        );
+        refresh_until(&mut stream, [3, 1, 0, 0, 0, 0, 0, width.to_be_bytes()[1], 0, 2])?;
+    }
     Ok(())
 }
 
