@@ -1,6 +1,7 @@
 //! Modern authenticated Apple TV transport. Capture and UI belong to the host.
 #![forbid(unsafe_code)]
 
+mod cancellation;
 mod connection;
 mod credentials;
 mod crypto;

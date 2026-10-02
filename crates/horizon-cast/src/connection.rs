@@ -1,9 +1,10 @@
-use crate::{Error, Result, crypto};
+use crate::{Error, Result, cancellation::Cancellation, crypto};
 use ring::aead;
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -11,6 +12,7 @@ const MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct Transport {
     socket: TcpStream,
+    cancellation: Option<Arc<Cancellation>>,
     security: Option<Security>,
     pending: Vec<u8>,
     offset: usize,
@@ -31,12 +33,22 @@ pub(crate) struct Response {
 }
 impl Transport {
     pub(crate) fn connect(address: SocketAddr) -> Result<Self> {
+        Self::connect_cancellable(address, None)
+    }
+    pub(crate) fn connect_cancellable(address: SocketAddr, cancellation: Option<Arc<Cancellation>>) -> Result<Self> {
+        if let Some(cancel) = &cancellation {
+            cancel.check()?;
+        }
         let socket = TcpStream::connect_timeout(&address, Duration::from_secs(5))?;
         socket.set_read_timeout(Some(Duration::from_secs(5)))?;
         socket.set_write_timeout(Some(Duration::from_secs(5)))?;
         socket.set_nodelay(true)?;
+        if let Some(cancel) = &cancellation {
+            cancel.register(&socket)?;
+        }
         Ok(Self {
             socket,
+            cancellation,
             security: None,
             pending: Vec::new(),
             offset: 0,
@@ -45,6 +57,13 @@ impl Transport {
             read_deadline: None,
             message_timeout: MESSAGE_TIMEOUT,
         })
+    }
+    pub(crate) fn complete_setup(&mut self) -> Result<()> {
+        if let Some(cancel) = &self.cancellation {
+            cancel.release()?;
+        }
+        self.cancellation = None;
+        Ok(())
     }
     pub(crate) fn local_ip(&self) -> Result<String> {
         Ok(self.socket.local_addr()?.ip().to_string())
@@ -80,6 +99,9 @@ impl Transport {
         Ok(())
     }
     pub(crate) fn request(&mut self, method: &str, path: &str, headers: &str, body: &[u8]) -> Result<Response> {
+        if let Some(cancel) = &self.cancellation {
+            cancel.check()?;
+        }
         self.sequence = self
             .sequence
             .checked_add(1)
@@ -255,6 +277,14 @@ impl Transport {
     }
 }
 
+impl Drop for Transport {
+    fn drop(&mut self) {
+        if let Some(cancel) = &self.cancellation {
+            cancel.clear();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +331,48 @@ mod tests {
         }
         bytes
     }
+    #[test]
+    fn cancellation_handoff_preserves_established_teardown() {
+        use std::sync::atomic::AtomicBool;
+        for established in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+            let cancel = Arc::new(Cancellation::new(Arc::new(AtomicBool::new(false))));
+            let mut transport =
+                Transport::connect_cancellable(listener.local_addr().expect("address"), Some(cancel.clone()))
+                    .expect("connect");
+            let (mut receiver, _) = listener.accept().expect("accept");
+            receiver
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .expect("timeout");
+            if established {
+                transport.complete_setup().expect("release setup handle");
+            }
+            cancel.stop();
+            if established {
+                let server = thread::spawn(move || {
+                    let mut request = Vec::new();
+                    let mut byte = [0];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        receiver.read_exact(&mut byte).expect("teardown request");
+                        request.push(byte[0]);
+                    }
+                    assert!(request.starts_with(b"TEARDOWN /stream RTSP/1.0"));
+                    receiver
+                        .write_all(b"RTSP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n")
+                        .expect("teardown reply");
+                });
+                transport
+                    .request("TEARDOWN", "/stream", "", &[])
+                    .expect("established teardown survives cancellation");
+                server.join().expect("server");
+            } else {
+                assert!(transport.complete_setup().is_err());
+                assert!(transport.request("POST", "/pair-verify", "", &[]).is_err());
+                assert_eq!(receiver.read(&mut [0]).expect("closed setup socket"), 0);
+            }
+        }
+    }
+
     #[test]
     fn reads_fragmented_encrypted_messages_across_frames() {
         let mut plain = b"HTTP/1.1 200 OK\r\nContent-Length: 2050\r\n\r\n".to_vec();

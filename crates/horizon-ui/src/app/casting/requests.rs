@@ -92,7 +92,7 @@ impl HorizonApp {
                         orientation: *orientation,
                         resolution: *resolution,
                         worker,
-                        scaling,
+                        scaling: Some(scaling),
                         failure_notified: false,
                     });
                     self.casting.notice = None;
@@ -114,9 +114,10 @@ impl HorizonApp {
                     if let Some(session) = self
                         .casting
                         .sessions
-                        .iter()
+                        .iter_mut()
                         .find(|session| session.receiver_id == *receiver_id && session.workspace == workspace)
                     {
+                        session.scaling = None;
                         session.worker.stop();
                     }
                 }

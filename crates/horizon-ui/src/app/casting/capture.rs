@@ -251,7 +251,7 @@ impl HorizonApp {
             return;
         }
         for session in &self.casting.sessions {
-            if let Some(frame) = session.scaling.take()
+            if let Some(frame) = session.scaling.as_ref().and_then(super::scaling::Scaler::take)
                 && matches!(session.worker.status(), CastStatus::Streaming { .. })
                 && self
                     .cast_source_rect(session.workspace, &session.source, ctx)
@@ -314,7 +314,9 @@ impl HorizonApp {
                     session.worker.stop();
                     continue;
                 }
-                session.scaling.submit(image.clone(), *rect, ticket.pixels_per_point);
+                if let Some(scaling) = &session.scaling {
+                    scaling.submit(image.clone(), *rect, ticket.pixels_per_point);
+                }
             }
         }
     }

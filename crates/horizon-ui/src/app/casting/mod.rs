@@ -38,7 +38,7 @@ struct Session {
     orientation: CastOrientation,
     resolution: CastResolution,
     worker: CastSession,
-    scaling: scaling::Scaler,
+    scaling: Option<scaling::Scaler>,
     failure_notified: bool,
 }
 struct Picker {
@@ -105,7 +105,8 @@ impl CastState {
     }
     pub(super) fn stop_all(&mut self) {
         self.picker = None;
-        for session in self.sessions.iter().chain(&self.retiring) {
+        for session in self.sessions.iter_mut().chain(&mut self.retiring) {
+            session.scaling = None;
             session.worker.stop();
         }
     }
@@ -158,6 +159,10 @@ impl CastState {
     }
     fn poll(&mut self) {
         for session in &mut self.sessions {
+            if session.worker.finished() {
+                session.scaling = None;
+                session.worker.reap();
+            }
             if !session.failure_notified
                 && let horizon_cast::CastStatus::Failed(error) = session.worker.status()
             {
@@ -263,7 +268,7 @@ mod tests {
             orientation: CastOrientation::Landscape,
             resolution: CastResolution::default(),
             worker,
-            scaling: scaling::Scaler::new((1280, 720)).expect("scaler"),
+            scaling: Some(scaling::Scaler::new((1280, 720)).expect("scaler")),
             failure_notified: false,
         });
         app.casting.reset_for_session_switch();
@@ -272,6 +277,56 @@ mod tests {
         app.run_exit_cleanup();
         assert!(app.casting.finished());
         assert_eq!(app.casting.retiring[0].worker.status(), CastStatus::Stopped);
+        receiver.join().expect("receiver");
+    }
+
+    #[test]
+    fn completed_session_releases_scaler_and_preserves_failure_status() {
+        let listener = TcpListener::bind("127.0.0.98:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let receiver = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            socket.set_read_timeout(Some(Duration::from_secs(2))).expect("timeout");
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).expect("request");
+                request.push(byte[0]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                .expect("reject");
+        });
+        let worker = CastSession::start(address, horizon_cast::VideoFormat::default()).expect("worker");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.finished() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        app.casting.sessions.push(Session {
+            generation: Instant::now(),
+            receiver_id: "synthetic".into(),
+            workspace: WorkspaceId(1),
+            source: CastSource::Panel { id: "synthetic".into() },
+            orientation: CastOrientation::Landscape,
+            resolution: CastResolution::default(),
+            worker,
+            scaling: Some(scaling::Scaler::new((8, 8)).expect("scaler")),
+            failure_notified: false,
+        });
+        app.casting.poll();
+        assert!(app.casting.sessions[0].scaling.is_none());
+        assert!(!app.casting.receiver_busy("synthetic"));
+        let status = app.cast_snapshot(WorkspaceId(1), &egui::Context::default());
+        assert_eq!(status.sessions[0].state, "failed");
+        assert!(
+            status.sessions[0]
+                .error
+                .as_ref()
+                .is_some_and(|error| error.contains("403"))
+        );
+        assert!(app.casting.notification.is_some());
         receiver.join().expect("receiver");
     }
 

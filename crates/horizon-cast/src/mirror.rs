@@ -218,17 +218,20 @@ impl PairedReceiver {
             Ok::<_, Error>(video)
         })();
         match connect {
-            Ok(video) => Ok(MirrorSession {
-                packets: VideoPackets::new(&self.shared, stream, format.dimensions())?,
-                receiver: self,
-                video,
-                events,
+            Ok(video) => {
+                self.transport.complete_setup()?;
+                Ok(MirrorSession {
+                    packets: VideoPackets::new(&self.shared, stream, format.dimensions())?,
+                    receiver: self,
+                    video,
+                    events,
 
-                clock,
-                feedback_at: Instant::now(),
-                active: true,
-                configured: false,
-            }),
+                    clock,
+                    feedback_at: Instant::now(),
+                    active: true,
+                    configured: false,
+                })
+            }
             Err(error) => Err(error),
         }
     }

@@ -1,4 +1,7 @@
-use crate::{EncoderSelection, Error, PairedReceiver, Pairing, PairingStore, Result, VideoFormat, encoder};
+use crate::{
+    EncoderSelection, Error, PairedReceiver, Pairing, PairingStore, Result, VideoFormat, cancellation::Cancellation,
+    encoder,
+};
 use std::{
     net::SocketAddr,
     process::Child,
@@ -26,7 +29,7 @@ pub enum CastStatus {
 /// Bounded background pairing/encoder/transport worker for one receiver.
 pub struct CastSession {
     status: Arc<Mutex<CastStatus>>,
-    stop: Arc<AtomicBool>,
+    cancellation: Arc<Cancellation>,
     pin: SyncSender<Zeroizing<String>>,
     frames: SyncSender<Vec<u8>>,
     capture_paused: Arc<AtomicBool>,
@@ -52,6 +55,8 @@ impl CastSession {
     fn start_worker(address: SocketAddr, format: VideoFormat, store: Option<PairingStore>) -> Result<Self> {
         let status = Arc::new(Mutex::new(CastStatus::Connecting));
         let stop = Arc::new(AtomicBool::new(false));
+        let cancellation = Arc::new(Cancellation::new(stop.clone()));
+        let authentication = cancellation.clone();
         let process = Arc::new(Mutex::new(None));
         let (pin_tx, pin_rx) = mpsc::sync_channel(1);
         let (frames_tx, frames_rx) = mpsc::sync_channel(1);
@@ -68,7 +73,7 @@ impl CastSession {
             let result = (|| {
                 // Keep the cross-process receiver lease through authentication, video and teardown.
                 let _reservation = store.as_ref().map(PairingStore::reserve).transpose()?;
-                authenticate(address, &pin_rx, &state, &cancel, store.as_ref(), &saved).and_then(|receiver| {
+                authenticate(address, &pin_rx, &state, &authentication, store.as_ref(), &saved).and_then(|receiver| {
                     if cancel.load(Ordering::Relaxed) {
                         return Ok(());
                     }
@@ -97,7 +102,7 @@ impl CastSession {
         let (width, height) = format.dimensions();
         Ok(Self {
             status,
-            stop,
+            cancellation,
             pin: pin_tx,
             frames: frames_tx,
             capture_paused,
@@ -160,7 +165,7 @@ impl CastSession {
     }
     /// Request cancellation without blocking the UI. The receiver remains reserved until the worker ends.
     pub fn stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.cancellation.stop();
         {
             let mut status = lock(&self.status);
             if !matches!(*status, CastStatus::Stopped | CastStatus::Failed(_)) {
@@ -169,6 +174,14 @@ impl CastSession {
         }
         if let Some(child) = lock(&self.process).as_mut() {
             let _ = child.kill();
+        }
+    }
+    /// Release a completed worker handle without losing its final status.
+    pub fn reap(&mut self) {
+        if self.finished()
+            && let Some(worker) = self.worker.take()
+        {
+            let _ = worker.join();
         }
     }
     #[must_use]
@@ -193,20 +206,18 @@ fn authenticate(
     address: SocketAddr,
     pins: &Receiver<Zeroizing<String>>,
     status: &Arc<Mutex<CastStatus>>,
-    stop: &Arc<AtomicBool>,
+    cancellation: &Arc<Cancellation>,
     store: Option<&PairingStore>,
     saved: &AtomicBool,
 ) -> Result<PairedReceiver> {
     if let Some(credentials) = store.map(PairingStore::load).transpose()?.flatten() {
-        return PairedReceiver::connect(address, credentials);
+        return PairedReceiver::connect_cancellable(address, credentials, Some(cancellation.clone()));
     }
-    let pairing = Pairing::begin(address)?;
+    let pairing = Pairing::begin_cancellable(address, Some(cancellation.clone()))?;
     *lock(status) = CastStatus::PinRequired;
     let deadline = Instant::now() + Duration::from_secs(180);
     let pin = loop {
-        if stop.load(Ordering::Relaxed) {
-            return Err(Error::Protocol("pairing cancelled"));
-        }
+        cancellation.check()?;
         if Instant::now() >= deadline {
             return Err(Error::Protocol("pairing code expired; start again"));
         }
@@ -217,9 +228,13 @@ fn authenticate(
         }
     };
     let receiver = pairing.finish(pin)?;
+    cancellation.check()?;
     if let Some(store) = store {
         store.save(&receiver.credentials)?;
         saved.store(true, Ordering::Relaxed);
     }
     Ok(receiver)
 }
+
+#[cfg(test)]
+mod tests;

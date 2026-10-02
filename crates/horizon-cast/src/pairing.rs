@@ -1,5 +1,6 @@
 use crate::{
     Error, PairingCredentials, Result,
+    cancellation::Cancellation,
     connection::Transport,
     crypto, srp,
     tlv::{self, Message},
@@ -11,7 +12,7 @@ use ring::{
 };
 use std::{
     net::{IpAddr, SocketAddr},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 use zeroize::Zeroizing;
 
@@ -44,11 +45,14 @@ impl Pairing {
     /// # Errors
     /// Returns transport, receiver rejection or key-generation errors.
     pub fn begin(address: SocketAddr) -> Result<Self> {
+        Self::begin_cancellable(address, None)
+    }
+    pub(crate) fn begin_cancellable(address: SocketAddr, cancellation: Option<Arc<Cancellation>>) -> Result<Self> {
         let reservation = Reservation::acquire(address.ip())?;
         let credentials = PairingCredentials::new()?;
         let mut pairing = Self {
             reservation,
-            transport: Transport::connect(address)?,
+            transport: Transport::connect_cancellable(address, cancellation)?,
             identity: credentials.client_id.clone(),
             signing: credentials.signing()?,
             credentials,
@@ -183,11 +187,18 @@ impl PairedReceiver {
     /// # Errors
     /// Returns an error if the TV revoked the pairing, changed identity or is unavailable.
     pub fn connect(address: SocketAddr, credentials: PairingCredentials) -> Result<Self> {
+        Self::connect_cancellable(address, credentials, None)
+    }
+    pub(crate) fn connect_cancellable(
+        address: SocketAddr,
+        credentials: PairingCredentials,
+        cancellation: Option<Arc<Cancellation>>,
+    ) -> Result<Self> {
         let reservation = Reservation::acquire(address.ip())?;
         let receiver_id = credentials.receiver_id.clone();
         let receiver_key = credentials.receiver_key.clone();
         Pairing {
-            transport: Transport::connect(address)?,
+            transport: Transport::connect_cancellable(address, cancellation)?,
             identity: credentials.client_id.clone(),
             signing: credentials.signing()?,
             credentials,
@@ -231,6 +242,88 @@ impl Drop for Reservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancellation_interrupts_control_setup_before_video_and_releases_receiver() {
+        use std::{
+            io::{BufRead, Read, Write},
+            net::TcpListener,
+            sync::{atomic::AtomicBool, mpsc},
+            time::{Duration, Instant},
+        };
+        let listener = TcpListener::bind("127.0.0.96:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let cancel = Arc::new(Cancellation::new(Arc::new(AtomicBool::new(false))));
+        let mut credentials = PairingCredentials::new().expect("identity");
+        credentials.receiver_id = b"synthetic".to_vec();
+        credentials.receiver_key = vec![3; 32];
+        let receiver = PairedReceiver {
+            transport: Transport::connect_cancellable(address, Some(cancel.clone())).expect("transport"),
+            shared: Zeroizing::new(vec![9; 32]),
+            address,
+            identity: credentials.client_id.clone(),
+            credentials,
+            _reservation: Reservation::acquire(address.ip()).expect("reservation"),
+        };
+        let (send, blocked) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().expect("accept");
+            socket.set_read_timeout(Some(Duration::from_secs(2))).expect("timeout");
+            let mut socket = std::io::BufReader::new(socket);
+            let mut first = String::new();
+            socket.read_line(&mut first).expect("info");
+            assert!(first.starts_with("GET /info "));
+            loop {
+                let mut line = String::new();
+                socket.read_line(&mut line).expect("header");
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut info = plist::Dictionary::new();
+            info.insert("model".into(), "AppleTV14,1".into());
+            info.insert("features".into(), (1u64 << 41).into());
+            let mut body = Vec::new();
+            plist::Value::Dictionary(info)
+                .to_writer_binary(&mut body)
+                .expect("info body");
+            write!(
+                socket.get_mut(),
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .expect("response");
+            socket.get_mut().write_all(&body).expect("info bytes");
+            first.clear();
+            socket.read_line(&mut first).expect("setup");
+            assert!(first.starts_with("SETUP /stream "));
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                socket.read_line(&mut line).expect("header");
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.strip_prefix("Content-Length: ") {
+                    length = value.trim().parse().expect("length");
+                }
+            }
+            socket.read_exact(&mut vec![0; length]).expect("setup body");
+            send.send(()).expect("blocked setup");
+            assert_eq!(socket.read(&mut [0]).expect("cancel closes setup"), 0);
+        });
+        let worker = std::thread::spawn(move || receiver.mirror(crate::VideoFormat::default()));
+        blocked.recv_timeout(Duration::from_secs(2)).expect("setup blocked");
+        let started = Instant::now();
+        cancel.stop();
+        while !worker.is_finished() {
+            assert!(started.elapsed() < Duration::from_secs(1));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(worker.join().expect("worker").is_err());
+        assert!(Reservation::acquire(address.ip()).is_ok());
+        server.join().expect("server");
+    }
+
     #[test]
     fn receiver_reservations_are_independent_and_released() {
         let first = "192.0.2.1".parse().expect("fixture");
