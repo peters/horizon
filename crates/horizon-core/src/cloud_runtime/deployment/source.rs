@@ -160,11 +160,43 @@ pub(super) fn pack(state: &Deployment, pack_root: &Path, runner: &Runner<'_>) ->
     })
 }
 
+/// What a transfer asks of the worker, in the order it asks. [`Connection`] runs each over SSH;
+/// the seam lets a test check the order and which steps run.
+pub(super) trait Remote {
+    fn transfer(&self, pack: &Path, revision: &str, runner: &Runner<'_>) -> Result<()>;
+    fn transfer_material(&self, archive: &Path, runner: &Runner<'_>) -> Result<()>;
+    fn transfer_sibling(&self, alias: &str, pack: &Path, revision: &str, runner: &Runner<'_>) -> Result<()>;
+    fn transfer_sibling_material(&self, alias: &str, archive: &Path, runner: &Runner<'_>) -> Result<()>;
+    fn record_siblings(&self, manifest: &str, runner: &Runner<'_>) -> Result<()>;
+    fn prepare_checkout(&self, revision: &str, runner: &Runner<'_>) -> Result<()>;
+}
+
+impl Remote for Connection {
+    fn transfer(&self, pack: &Path, revision: &str, runner: &Runner<'_>) -> Result<()> {
+        Connection::transfer(self, pack, revision, runner)
+    }
+    fn transfer_material(&self, archive: &Path, runner: &Runner<'_>) -> Result<()> {
+        Connection::transfer_material(self, archive, runner)
+    }
+    fn transfer_sibling(&self, alias: &str, pack: &Path, revision: &str, runner: &Runner<'_>) -> Result<()> {
+        Connection::transfer_sibling(self, alias, pack, revision, runner)
+    }
+    fn transfer_sibling_material(&self, alias: &str, archive: &Path, runner: &Runner<'_>) -> Result<()> {
+        Connection::transfer_sibling_material(self, alias, archive, runner)
+    }
+    fn record_siblings(&self, manifest: &str, runner: &Runner<'_>) -> Result<()> {
+        Connection::record_siblings(self, manifest, runner)
+    }
+    fn prepare_checkout(&self, revision: &str, runner: &Runner<'_>) -> Result<()> {
+        Connection::prepare_checkout(self, revision, runner)
+    }
+}
+
 /// Imports the primary and then each sibling into its own repository, and records the
 /// siblings last, so no session sees a manifest naming source the worker lacks. Every
 /// import replays for the same revision, so an interrupted transfer is repeated whole.
 pub(super) fn transfer(
-    connection: &Connection,
+    connection: &dyn Remote,
     store: &Store,
     state: &mut Deployment,
     packed: Packed,
@@ -187,6 +219,11 @@ pub(super) fn transfer(
         }
         if let Some(manifest) = &packed.manifest {
             connection.record_siblings(manifest, runner)?;
+        }
+        // The one checkout is made here, once; panels only attach to it, and agents add their own
+        // worktrees. An image that cannot do this prepares it at its first attach, as before.
+        if contract.prepare_checkout {
+            connection.prepare_checkout(&state.revision, runner)?;
         }
     }
     Ok(())
@@ -428,5 +465,93 @@ mod tests {
             note(contract(false, false)),
             Some(format!("{prefix}full submodule history and every LFS object"))
         );
+    }
+
+    /// Records the worker steps a transfer asks for.
+    struct Recorder(std::cell::RefCell<Vec<String>>);
+
+    impl Remote for Recorder {
+        fn transfer(&self, _: &Path, revision: &str, _: &Runner<'_>) -> Result<()> {
+            self.0.borrow_mut().push(format!("import {revision}"));
+            Ok(())
+        }
+        fn transfer_material(&self, _: &Path, _: &Runner<'_>) -> Result<()> {
+            self.0.borrow_mut().push("dependencies".into());
+            Ok(())
+        }
+        fn transfer_sibling(&self, alias: &str, _: &Path, _: &str, _: &Runner<'_>) -> Result<()> {
+            self.0.borrow_mut().push(format!("sibling {alias}"));
+            Ok(())
+        }
+        fn transfer_sibling_material(&self, alias: &str, _: &Path, _: &Runner<'_>) -> Result<()> {
+            self.0.borrow_mut().push(format!("sibling dependencies {alias}"));
+            Ok(())
+        }
+        fn record_siblings(&self, _: &str, _: &Runner<'_>) -> Result<()> {
+            self.0.borrow_mut().push("manifest".into());
+            Ok(())
+        }
+        fn prepare_checkout(&self, revision: &str, _: &Runner<'_>) -> Result<()> {
+            self.0.borrow_mut().push(format!("checkout {revision}"));
+            Ok(())
+        }
+    }
+
+    fn transfer_steps(source_ready: bool, prepare_checkout: bool) -> Vec<String> {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::lock(&temp.path().join("cloud")).unwrap();
+        let revision = "a".repeat(40);
+        let mut state: Deployment = serde_json::from_value(serde_json::json!({
+            "version": 1, "cloud_id": "fixture", "repository": "/synthetic", "revision": revision,
+            "profile": {"provider": "runpod", "image": "registry.example/worker", "cpu": 4, "memory_gb": 8},
+            "stage": "Provision", "operation": {"state": "prepared"}, "spec": null, "worker": null,
+            "sessions": [], "source_ready": source_ready,
+        }))
+        .unwrap();
+        let cancel = Cancellation::default();
+        let emit = |_: Event| {};
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &emit,
+            secrets: Vec::new(),
+        };
+        let packed = Packed {
+            pack: temp.path().join("source.pack"),
+            auxiliary: None,
+            siblings: Vec::new(),
+            manifest: Some("{}".into()),
+        };
+        let contract = WorkerContract {
+            prepare_checkout,
+            ..WorkerContract::default()
+        };
+        let remote = Recorder(std::cell::RefCell::new(Vec::new()));
+        transfer(&remote, &store, &mut state, packed, &contract, &runner, &emit).unwrap();
+        remote.0.into_inner()
+    }
+
+    #[test]
+    fn the_checkout_is_prepared_once_after_the_import_and_the_manifest() {
+        let revision = "a".repeat(40);
+        assert_eq!(
+            transfer_steps(false, true),
+            [
+                format!("import {revision}"),
+                "manifest".into(),
+                format!("checkout {revision}")
+            ],
+            "a new import prepares the checkout last, once"
+        );
+    }
+
+    #[test]
+    fn an_image_without_the_marker_and_a_worker_with_its_source_skip_the_checkout() {
+        let revision = "a".repeat(40);
+        assert_eq!(
+            transfer_steps(false, false),
+            [format!("import {revision}"), "manifest".into()],
+            "an older image prepares it at the first attach, as before"
+        );
+        assert!(transfer_steps(true, true).is_empty(), "a reconnect repeats nothing");
     }
 }

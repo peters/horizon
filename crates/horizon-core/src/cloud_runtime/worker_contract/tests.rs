@@ -33,6 +33,24 @@ fn session_restart_is_reported_only_by_its_exact_marker_and_never_required() {
 }
 
 #[test]
+fn checkout_preparation_is_reported_only_by_its_exact_marker() {
+    let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
+    assert!(
+        !WorkerContract::reported(current).prepare_checkout,
+        "older images prepare at first attach"
+    );
+    assert!(WorkerContract::reported(&format!("{current}{PREPARE_CHECKOUT_MARKER}\n")).prepare_checkout);
+    for incidental in [
+        "prefix-horizon-prepare-checkout-contract=1",
+        "horizon-prepare-checkout-contract=1-suffix",
+        "horizon-prepare-checkout-contract=2",
+        " horizon-prepare-checkout-contract=1",
+    ] {
+        assert!(!WorkerContract::reported(&format!("{current}{incidental}\n")).prepare_checkout);
+    }
+}
+
+#[test]
 fn source_packaging_features_are_reported_only_by_their_exact_markers() {
     let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
     let features = |output: &str| {

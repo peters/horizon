@@ -13,6 +13,7 @@ pub(crate) const AWAITING_SERVICES: &str = "Waiting for SSH and worker services"
 pub(crate) const UPLOADING_SOURCE: &str = "Uploading source";
 pub(crate) const IMPORTING_OBJECTS: &str = "Git object import";
 pub(crate) const IMPORTING_DEPENDENCIES: &str = "Source dependency import";
+pub(crate) const PREPARING_CHECKOUT: &str = "Checkout preparation";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,7 +64,9 @@ impl Phase {
             Self::WorkerStart => "Container boot and waiting for the provider to publish the SSH endpoint",
             Self::Readiness => "Checking SSH and the worker's services until they were ready",
             Self::SourceUpload => "Uploading the committed source and Git LFS files to the worker",
-            Self::SourceImport => "Importing Git objects and Git LFS files on the worker",
+            Self::SourceImport => {
+                "Importing Git objects and Git LFS files on the worker; images that support it also prepare the checkout here"
+            }
             Self::Sessions => "Configuring credentials and restoring agent sessions",
         }
     }
@@ -189,7 +192,7 @@ impl Recorder {
                     None
                 }
                 UPLOADING_SOURCE => Some(Phase::SourceUpload),
-                IMPORTING_OBJECTS | IMPORTING_DEPENDENCIES => Some(Phase::SourceImport),
+                IMPORTING_OBJECTS | IMPORTING_DEPENDENCIES | PREPARING_CHECKOUT => Some(Phase::SourceImport),
                 _ => None,
             },
             _ => None,

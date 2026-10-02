@@ -44,6 +44,30 @@ fn fresh_deployment() -> Recorder {
 }
 
 #[test]
+fn the_checkout_preparation_counts_as_source_import() {
+    let recorder = Recorder::default();
+    stage(&recorder, Stage::Validate, 0);
+    stage(&recorder, Stage::Worktrees, 10);
+    activity(&recorder, UPLOADING_SOURCE, 10);
+    activity(&recorder, IMPORTING_OBJECTS, 20);
+    // A sibling uploads last, so an unrecognised checkout event would leave that upload running.
+    activity(&recorder, UPLOADING_SOURCE, 30);
+    activity(&recorder, PREPARING_CHECKOUT, 40);
+    stage(&recorder, Stage::Sessions, 100);
+    let timeline = recorder.finish(false, None, at(110), None);
+    assert_eq!(
+        millis(&timeline, Phase::SourceUpload),
+        2_000,
+        "1 s to 2 s and 3 s to 4 s"
+    );
+    assert_eq!(
+        millis(&timeline, Phase::SourceImport),
+        7_000,
+        "the import (2 s to 3 s) and the checkout (4 s to 10 s)"
+    );
+}
+
+#[test]
 fn the_container_start_separates_the_image_download_from_boot_and_publication() {
     let timeline = fresh_deployment().finish(false, Some(at(1698)), at(2567), None);
     assert_eq!(timeline.label(Phase::ProviderStart), "Image download");

@@ -10,6 +10,7 @@ const LAST_SELF_STOP_MARKER: &str = "horizon-last-self-stop=";
 const SELF_STOP_MARKER: &str = "horizon-self-stop-contract=1";
 const PINNED_SUBMODULES_MARKER: &str = "horizon-source-shallow-contract=1";
 const LFS_SELECTION_MARKER: &str = "horizon-source-lfs-selection-contract=1";
+const PREPARE_CHECKOUT_MARKER: &str = "horizon-prepare-checkout-contract=1";
 /// A reason longer than this was not written by `horizon-worker-stop`.
 const SELF_STOP_REASON_LIMIT: usize = 200;
 
@@ -65,6 +66,9 @@ pub struct WorkerContract {
     /// The source importer keeps LFS paths a selection leaves out as pointers. Older
     /// images need every LFS object.
     pub lfs_selection: bool,
+    /// `horizon-worker-session --shared --prepare-only` can prepare the shared checkout during
+    /// the deployment. Older images prepare it when the first panel attaches.
+    pub prepare_checkout: bool,
 }
 
 impl WorkerContract {
@@ -85,6 +89,7 @@ impl WorkerContract {
             self_stop_reported: reports(output, SELF_STOP_MARKER),
             pinned_submodules: reports(output, PINNED_SUBMODULES_MARKER),
             lfs_selection: reports(output, LFS_SELECTION_MARKER),
+            prepare_checkout: reports(output, PREPARE_CHECKOUT_MARKER),
         }
     }
 }

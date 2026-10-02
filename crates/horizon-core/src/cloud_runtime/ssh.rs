@@ -126,6 +126,19 @@ impl Connection {
         Ok(())
     }
     /// # Errors
+    /// Prepares the one shared checkout on the worker, once, before any panel exists, so the
+    /// first panel finds it ready and a storage or source problem fails the deployment. A
+    /// failure recorded by an earlier attempt is cleared first, as the person asked to retry;
+    /// no files are reset. Repeating it once the checkout is ready changes nothing.
+    pub fn prepare_checkout(&self, revision: &str, runner: &Runner<'_>) -> Result<()> {
+        runner.run(
+            super::timeline::PREPARING_CHECKOUT,
+            &mut self.command(&prepare_checkout_command(revision)?),
+            Duration::from_mins(30),
+        )?;
+        Ok(())
+    }
+    /// # Errors
     /// Uploads only verified source dependencies, then imports them on the worker.
     pub fn transfer_material(&self, archive: &Path, runner: &Runner<'_>) -> Result<()> {
         self.upload(archive, "horizon-source.tar", runner)?;
@@ -286,6 +299,15 @@ fn manifest_command(manifest: &str) -> Result<String> {
         "horizon-worker-siblings set <<'HORIZON_SIBLINGS'\n{manifest}\nHORIZON_SIBLINGS"
     ))
 }
+/// The worker command that prepares the shared checkout without binding a session.
+fn prepare_checkout_command(revision: &str) -> Result<String> {
+    if !valid_revision(revision) {
+        return Err(Error::Invalid("Invalid committed revision"));
+    }
+    Ok(format!(
+        "horizon-worker-session --retry-shared-checkout && horizon-worker-session --shared --prepare-only prepare-checkout shell {revision}"
+    ))
+}
 fn valid_revision(value: &str) -> bool {
     super::repository::is_commit_id(value)
 }
@@ -295,6 +317,24 @@ mod tests {
     use super::*;
     use horizon_cloud::{Cancellation, Capabilities};
     use std::{net::TcpListener, sync::mpsc, thread, time::Instant};
+
+    #[test]
+    fn the_checkout_is_prepared_by_one_worker_command_for_a_valid_revision_only() {
+        let revision = "a".repeat(40);
+        let command = prepare_checkout_command(&revision).unwrap();
+        // A failure recorded by an earlier attempt is cleared first, then the checkout is prepared
+        // with no session bound.
+        assert_eq!(
+            command,
+            format!(
+                "horizon-worker-session --retry-shared-checkout && \
+                 horizon-worker-session --shared --prepare-only prepare-checkout shell {revision}"
+            )
+        );
+        for invalid in ["", "main", "a; rm -rf /", &"A".repeat(40), &"a".repeat(41)] {
+            assert!(prepare_checkout_command(invalid).is_err(), "{invalid:?} is refused");
+        }
+    }
 
     #[test]
     fn shared_attachment_refuses_old_images_and_legacy_attachment_keeps_its_protocol() {
