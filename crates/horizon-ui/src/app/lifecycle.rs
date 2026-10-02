@@ -99,6 +99,15 @@ impl HorizonApp {
     /// changes into the app's runtime dirty state.
     pub(super) fn drain_panel_output(&mut self) -> bool {
         let panel_output = self.board.process_output();
+        if panel_output.activity.terminal {
+            // Output can arrive while a panel is culled. Invalidate now, before
+            // the next quiet poll clears its one-frame activity flag.
+            for panel in &self.board.panels {
+                if panel.had_recent_output() {
+                    self.panel_render_caches.terminal_grid_cache.remove(&panel.id);
+                }
+            }
+        }
         if panel_output.cwd_changed || panel_output.persisted_state_changed {
             self.mark_runtime_dirty();
         }
@@ -671,3 +680,8 @@ mod tests {
         assert!(app.speech_held_bindings[0].release_deadline.is_none());
     }
 }
+
+// The fixture uses a Unix shell and PTY.
+#[cfg(all(test, unix))]
+#[path = "lifecycle/terminal_cache_tests.rs"]
+mod terminal_cache_tests;
