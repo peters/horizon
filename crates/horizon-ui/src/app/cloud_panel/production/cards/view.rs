@@ -233,6 +233,12 @@ impl HorizonApp {
     }
 
     pub(super) fn apply_card_action(&mut self, id: u32, action: Action, ctx: &egui::Context) {
+        if action == Action::Resume
+            && let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id)
+        {
+            // Resuming is watched, not managed: show the steps instead of the Manage tab.
+            runtime.drawer = Some(Tab::Overview);
+        }
         match action {
             Action::Deploy => self.start_production_deployment(id, ctx),
             Action::Desktop => self.cloud_add_panel(ctx, id, horizon_core::PanelKind::Device, None),

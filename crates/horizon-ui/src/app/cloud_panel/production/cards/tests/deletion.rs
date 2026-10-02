@@ -160,3 +160,38 @@ fn deletion_that_fails_before_its_first_step_keeps_its_steps() {
     assert_eq!(status.track.current, Some(0));
     assert!(status.track.failed);
 }
+
+#[test]
+fn a_stop_confirmation_is_the_only_thing_manage_shows_until_answered() {
+    let ctx = egui::Context::default();
+    let mut runtime = ready_bound_runtime();
+    let idle = action_texts(&ctx, &mut runtime);
+    assert!(idle.iter().any(|text| text == "Stop worker…"));
+    assert!(!confirming_stop(&runtime));
+
+    runtime.confirmation = Confirmation::Stop;
+    assert!(confirming_stop(&runtime));
+    let asking = action_texts(&ctx, &mut runtime);
+    for shown in ["Stop this worker?", "Stop worker", "Keep running"] {
+        assert!(has(&asking, shown), "{shown} is asked: {asking:?}");
+    }
+    for hidden in ["Reconnect cloud", "Delete cloud resources", "Rebuild image"] {
+        assert!(!has(&asking, hidden), "{hidden} waits for the answer: {asking:?}");
+    }
+    assert!(
+        !asking.iter().any(|text| text == "Stop worker…"),
+        "the question replaces the button"
+    );
+}
+
+#[test]
+fn resuming_shows_the_steps_instead_of_manage() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let runtime = super::super::super::Runtime {
+        drawer: Some(Tab::Manage),
+        ..Default::default()
+    };
+    app.cloud_prototype.production.runtimes.insert(7, runtime);
+    app.apply_card_action(7, Action::Resume, &egui::Context::default());
+    assert_eq!(app.cloud_prototype.production.runtimes[&7].drawer, Some(Tab::Overview));
+}

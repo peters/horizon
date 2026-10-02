@@ -119,6 +119,9 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     if let Some(next) = rebuild::pending_notice(ui, runtime) {
         return Some(next);
     }
+    if confirming_stop(runtime) {
+        return stop_confirmation_card(ui, runtime);
+    }
     // Steps and progress are in the header, body and Overview; Manage keeps the actions,
     // what went wrong and what the last rebuild reported.
     rebuild::notes(ui, runtime);
@@ -271,21 +274,44 @@ fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Acti
     if desktop_button(ui, runtime) {
         action = Some(Action::Desktop);
     }
-    let stoppable = !rebuild::blocks_stop(runtime);
-    if stoppable && runtime.confirmation == Confirmation::Stop {
-        ui.label(wording::stop_confirmation(runtime));
-        let stop = ui.add(danger_button("Stop worker"));
-        reveal_confirmation(runtime, &stop);
-        if stop.clicked() {
-            action = Some(Action::Stop);
-        }
-        if ui.add(action_button("Keep running")).clicked() {
-            runtime.confirmation = Confirmation::None;
-        }
-    } else if stoppable && ui.add(danger_button("Stop worker…")).clicked() {
+    if !rebuild::blocks_stop(runtime) && ui.add(danger_button("Stop worker…")).clicked() {
         runtime.confirmation = Confirmation::Stop;
     }
     rebuild::offer(ui, runtime).or(action)
+}
+
+/// A stop asked for, from the header or from Manage, is the only thing Manage shows
+/// until it is confirmed or dismissed.
+pub(super) fn confirming_stop(runtime: &super::Runtime) -> bool {
+    runtime.confirmation == Confirmation::Stop && runtime.stage == Some(Stage::Ready) && !rebuild::blocks_stop(runtime)
+}
+
+fn stop_confirmation_card(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
+    runtime.reveal_confirmation = false;
+    let mut action = None;
+    egui::Frame::new()
+        .fill(theme::alpha(theme::PALETTE_RED(), 18))
+        .stroke(egui::Stroke::new(1.0, theme::alpha(theme::PALETTE_RED(), 110)))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(16, 14))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                RichText::new(wording::stop_confirmation(runtime))
+                    .size(14.0)
+                    .color(theme::FG()),
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.add(danger_button("Stop worker")).clicked() {
+                    action = Some(Action::Stop);
+                }
+                if ui.add(action_button("Keep running")).clicked() {
+                    runtime.confirmation = Confirmation::None;
+                }
+            });
+        });
+    action
 }
 
 fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Action> {

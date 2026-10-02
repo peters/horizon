@@ -388,6 +388,10 @@ fn connections(ui: &mut egui::Ui, runtime: &mut Runtime, context: &mut Context<'
 }
 
 fn manage(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'_>, response: &mut Response) {
+    if super::confirming_stop(runtime) {
+        response.action = runtime_actions(ui, id, runtime).or(response.action.take());
+        return;
+    }
     ui.label(RichText::new("Workspace").size(12.0).color(theme::FG_DIM()));
     ui.horizontal_wrapped(|ui| {
         let mut selected = context.group.layout;
