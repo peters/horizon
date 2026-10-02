@@ -64,7 +64,9 @@ impl Phase {
             Self::WorkerStart => "Container boot and waiting for the provider to publish the SSH endpoint",
             Self::Readiness => "Checking SSH and the worker's services until they were ready",
             Self::SourceUpload => "Uploading the committed source and Git LFS files to the worker",
-            Self::SourceImport => "Importing Git objects and Git LFS files on the worker, then preparing the checkout",
+            Self::SourceImport => {
+                "Importing Git objects and Git LFS files on the worker; images that support it also prepare the checkout here"
+            }
             Self::Sessions => "Configuring credentials and restoring agent sessions",
         }
     }
