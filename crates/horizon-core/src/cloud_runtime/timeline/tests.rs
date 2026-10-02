@@ -44,6 +44,25 @@ fn fresh_deployment() -> Recorder {
 }
 
 #[test]
+fn the_checkout_preparation_counts_as_source_import() {
+    let recorder = Recorder::default();
+    stage(&recorder, Stage::Validate, 0);
+    stage(&recorder, Stage::Worktrees, 10);
+    activity(&recorder, UPLOADING_SOURCE, 10);
+    activity(&recorder, IMPORTING_OBJECTS, 20);
+    // Checkout preparation follows the import and the manifest, before the sessions step.
+    activity(&recorder, PREPARING_CHECKOUT, 40);
+    stage(&recorder, Stage::Sessions, 100);
+    let timeline = recorder.finish(false, None, at(110), None);
+    assert_eq!(millis(&timeline, Phase::SourceUpload), 1_000);
+    assert_eq!(
+        millis(&timeline, Phase::SourceImport),
+        8_000,
+        "the import and the checkout are one phase: 2 s to 10 s"
+    );
+}
+
+#[test]
 fn the_container_start_separates_the_image_download_from_boot_and_publication() {
     let timeline = fresh_deployment().finish(false, Some(at(1698)), at(2567), None);
     assert_eq!(timeline.label(Phase::ProviderStart), "Image download");
