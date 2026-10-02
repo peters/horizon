@@ -160,6 +160,14 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
 
+    def sentinel_df(self):
+        """A df that records being run: the storage message must never call it."""
+        record = self.fixture.root / 'df-was-run'
+        stub = self.fixture.tools / 'df'
+        stub.write_text(f"#!/bin/sh\necho ran >> '{record}'\necho Filesystem\n")
+        stub.chmod(0o700)
+        return record
+
     def refuse_flush(self, pattern, allow=0):
         """A `sync` that fails with the real mount's message for paths matching `pattern`, until
         lifted, after `allow` calls for them have succeeded."""
@@ -232,30 +240,50 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
     def test_prepare_only_proves_the_volume_takes_a_write_before_any_checkout_work(self):
         f = self.fixture
         self.release.touch()
-        refusing = self.refuse_flush('*/.horizon-write-probe')
+        # Neither an existing file of the old fixed name nor a link there may be touched.
+        victim = f.root / 'victim'
+        victim.write_text('keep me')
+        (f.workspace / '.horizon-write-probe').symlink_to(victim)
+        refusing = self.refuse_flush('*/.horizon-write-probe.*')
         refused = self.prepare_only()
         self.assertEqual(refused.returncode, 74, refused.stderr)
         self.assertIn('Workspace storage did not accept a write', refused.stderr)
-        self.assertFalse((f.workspace / '.horizon-write-probe').exists(), 'the probe file is removed')
+        self.assertEqual(victim.read_text(), 'keep me')
+        self.assertEqual([p.name for p in f.workspace.glob('.horizon-write-probe.*')], [], 'no probe file is left')
         self.assertFalse(self.state.exists(), 'nothing of the checkout was started')
         self.assertEqual(self.source_calls(), [])
         self.assertEqual(f.launches(), [])
         refusing.unlink()
         prepared = self.prepare_only()
         self.assertEqual(prepared.returncode, 0, prepared.stderr)
-        self.assertFalse((f.workspace / '.horizon-write-probe').exists())
+        self.assertEqual([p.name for p in f.workspace.glob('.horizon-write-probe.*')], [])
         self.assertTrue((self.state / 'ready').exists())
+
+    def test_an_interrupted_probe_leaves_no_file_behind(self):
+        f = self.fixture
+        self.release.touch()
+        # sync never returns, as when a flush hangs on a stalled volume; the run is then terminated.
+        stub = f.tools / 'sync'
+        stub.write_text('#!/bin/sh\nsleep 30\n')
+        stub.chmod(0o700)
+        running = subprocess.Popen(['bash', str(f.script), '--shared', '--prepare-only', 'prepare', 'shell', f.revision],
+                                   env=f.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        wait_for(lambda: list(f.workspace.glob('.horizon-write-probe.*')))
+        running.terminate()
+        running.communicate(timeout=BOUND)
+        self.assertEqual([p.name for p in f.workspace.glob('.horizon-write-probe.*')], [], 'the exit trap removed it')
 
     def test_a_refused_flush_says_why_and_the_next_attach_resumes(self):
         f = self.fixture
+        df_run = self.sentinel_df()
         refusing = self.refuse_flush('*')
         refused = self.start('one')
         self.assertEqual(refused.returncode, 74, refused.stderr)
+        self.assertFalse(df_run.exists(), 'df describes shared storage on a network volume, so it is not run')
         self.assertIn('Workspace storage did not accept a write', refused.stderr)
         self.assertIn('Disk quota exceeded', refused.stderr)
         self.assertIn('Try again', refused.stderr)
         self.assertRegex(refused.stderr, r'Used on \S*workspace: \S+')
-        self.assertNotIn('Filesystem', refused.stderr, 'df describes shared storage on a network volume, so it is not shown')
         self.assertEqual(f.launches(), [])
         self.assert_no_session_state('one')
         self.assertFalse((self.state / 'failed').exists(), 'a storage refusal is not a failed preparation')

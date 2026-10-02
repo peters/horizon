@@ -270,7 +270,9 @@ fi
 # refusal never binds the session id. The shared checkout is never part of that state.
 staging=
 owner=
+probe=
 roll_back() {
+    if [ -n "$probe" ]; then rm -f "$probe" || true; fi
     if [ -n "$staging" ]; then rm -rf "$staging"; fi
     # Only a directory carrying this attach's own marker was published by it.
     if [ -n "$owner" ] && [ ! -f "$session/launch-requested" ] \
@@ -290,10 +292,13 @@ if "$prepare_only"; then
     rm -rf "$session"
     # Prove the volume takes a real write and flush before any checkout work starts, so a volume
     # that refuses writes fails this step with its reason instead of a panel later.
-    probe=/workspace/.horizon-write-probe
+    # A fresh file of its own (mktemp never reuses or follows an existing name), removed by the exit
+    # trap whatever ends the run, so an interrupted probe leaves nothing behind.
+    probe="$(mktemp /workspace/.horizon-write-probe.XXXXXX)"
     { dd if=/dev/zero of="$probe" bs=1M count=64 conv=fsync status=none && sync -f "$probe"; } \
-        || { rm -f "$probe" || true; flush_failed "$probe"; }
-    rm -f "$probe" || true
+        || flush_failed "$probe"
+    rm -f "$probe"
+    probe=
 fi
 if [ -d "$session" ]; then
     bound || { echo 'Session binding mismatch' >&2; exit 3; }
