@@ -87,6 +87,7 @@ impl HorizonApp {
                 Event::You(text) => self.assistant.feed.you(&text, false),
                 Event::Said(text) => self.assistant.feed.said(&text),
                 Event::Did(text) => self.assistant.feed.did(text),
+                Event::Plan(text) => self.assistant.feed.plan(&text),
             }
         }
     }

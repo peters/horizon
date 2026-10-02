@@ -28,6 +28,8 @@ pub(super) enum Event {
     Said(String),
     /// Something the agent did, in a few words.
     Did(String),
+    /// A plan the agent proposes and waits on: its first line is the title, the rest are the steps.
+    Plan(String),
 }
 
 /// One transcript being followed.
@@ -200,6 +202,11 @@ fn claude(value: &Value) -> Vec<Event> {
                     .iter()
                     .filter_map(|block| match block["type"].as_str() {
                         Some("text") => block["text"].as_str().and_then(agent_text),
+                        Some("tool_use") if block["name"] == "ExitPlanMode" => block["input"]["plan"]
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|plan| !plan.is_empty())
+                            .map(|plan| Event::Plan(plan.to_string())),
                         Some("tool_use") => tool_label(block["name"].as_str().unwrap_or_default(), &block["input"]),
                         _ => None,
                     })

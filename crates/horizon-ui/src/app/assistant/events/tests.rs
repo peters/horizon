@@ -22,6 +22,19 @@ fn claude_text_and_tools_become_events() {
 }
 
 #[test]
+fn claude_plan_proposal_becomes_a_plan_event() {
+    let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"ExitPlanMode","input":{"plan":"Make cleanup safe\n1. Add a lock\n2. Add a stress test"}}]}}"#;
+    assert_eq!(
+        parse_line(PanelKind::Claude, line),
+        vec![Event::Plan(
+            "Make cleanup safe\n1. Add a lock\n2. Add a stress test".to_string()
+        )]
+    );
+    let empty = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"ExitPlanMode","input":{"plan":"  "}}]}}"#;
+    assert!(parse_line(PanelKind::Claude, empty).is_empty());
+}
+
+#[test]
 fn claude_person_text_is_kept_but_injected_context_and_tool_results_are_not() {
     let typed = r#"{"type":"user","message":{"content":"fix the tests"}}"#;
     let block = r#"{"type":"user","message":{"content":[{"type":"text","text":"and the docs"}]}}"#;

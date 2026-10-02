@@ -375,6 +375,34 @@ impl HorizonApp {
                 self.assistant.summon.sheet_request = Some(size);
             }
             "drawer" => self.assistant.summon.drawer_open = argument != Some("off"),
+            "plan" => match argument {
+                Some("approve") => {
+                    if let Some(plan) = self.assistant.feed.turns().last().and_then(|turn| turn.plan.clone()) {
+                        self.approve_plan(&plan);
+                    }
+                }
+                _ => self.revise_plan(),
+            },
+            "executor" => {
+                self.assistant.summon.plan_executor = Some(match argument {
+                    Some("codex") => horizon_core::PanelKind::Codex,
+                    Some("grok") => horizon_core::PanelKind::Grok,
+                    _ => horizon_core::PanelKind::Claude,
+                });
+            }
+            "modes" => {
+                self.assistant.summon.modes_open = argument != Some("off");
+                self.assistant.summon.yolo_armed = false;
+            }
+            "mode" => {
+                use horizon_core::assistant::AgentMode;
+                if let Some(mode) = AgentMode::ALL
+                    .into_iter()
+                    .find(|mode| argument.is_some_and(|name| mode.label().replace(' ', "-").eq_ignore_ascii_case(name)))
+                {
+                    self.press_mode(mode);
+                }
+            }
             "channel" => {
                 self.assistant.summon.channel = if argument == Some("text") {
                     super::dock::Channel::Text

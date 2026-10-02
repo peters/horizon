@@ -84,6 +84,14 @@ pub(super) struct Summon {
     rail_open: bool,
     /// The terminal drawer of the feed layout.
     drawer_open: bool,
+    /// The modes the text agent can be put in are shown in its row.
+    modes_open: bool,
+    /// YOLO was pressed once; a second press confirms it.
+    yolo_armed: bool,
+    /// The agent that carries out an approved plan, when it is not the one that made it.
+    plan_executor: Option<horizon_core::PanelKind>,
+    /// A message for the text agent once it is running again: the approved plan.
+    pending_send: Option<(String, std::time::Instant)>,
     drawer: f32,
     /// Where the composer sends, in the feed layout.
     channel: dock::Channel,

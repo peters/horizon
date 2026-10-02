@@ -19,7 +19,7 @@ use horizon_core::browser::manifest::agent_panels::AgentState;
 
 use super::super::desk_bar::paint::elide;
 use super::super::{Action, HorizonApp};
-use super::concierge::{approvals_card, mode_chip, static_chip};
+use super::concierge::{approvals_card, mode_chip};
 use super::inbox::Ask;
 use crate::theme;
 
@@ -299,7 +299,11 @@ impl HorizonApp {
                 0.0
             };
         let body = (ui.available_height() - below - 8.0).max(90.0);
-        self.conversation(ui, body, false);
+        // Whatever the conversation draws stays inside its own space, so it never runs over the prompt.
+        let (space, _) = ui.allocate_exact_size(vec2(ui.available_width(), body), Sense::hover());
+        let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(space));
+        inner.set_clip_rect(space.intersect(ui.clip_rect()));
+        self.conversation(&mut inner, body, false);
         ui.add_space(6.0);
         self.channel_row(ui);
         ui.add_space(4.0);
@@ -478,14 +482,71 @@ impl HorizonApp {
                 }
             }
             ui.add_space(6.0);
-            static_chip(ui, &format!("May do  {}", self.assistant.settings.mode.label()));
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(format!("Looking at  {}", self.scope_label()))
-                    .size(11.5)
-                    .color(theme::FG_DIM()),
+            let open = self.assistant.summon.modes_open;
+            let label = format!(
+                "May do  {}  {}",
+                self.assistant.settings.mode.label(),
+                if open { "\u{25b4}" } else { "\u{25be}" }
             );
+            if mode_chip(ui, &label, open).clicked() {
+                self.assistant.summon.modes_open = !open;
+                self.assistant.summon.yolo_armed = false;
+            }
+            ui.add_space(4.0);
+            if open {
+                self.mode_choices(ui);
+            } else {
+                ui.label(
+                    RichText::new(format!("Looking at  {}", self.scope_label()))
+                        .size(11.5)
+                        .color(theme::FG_DIM()),
+                );
+            }
         });
+    }
+
+    /// How much the text agent may do on its own. A mode the engine has no flags for is dimmed; YOLO takes
+    /// a second press.
+    fn mode_choices(&mut self, ui: &mut Ui) {
+        let kind = self.assistant.settings.agent;
+        let current = self.assistant.settings.mode;
+        for mode in horizon_core::assistant::AgentMode::ALL {
+            let supported = mode.supported_by(kind);
+            let armed = mode.removes_checks() && self.assistant.summon.yolo_armed;
+            let text = if armed {
+                "Confirm YOLO".to_string()
+            } else {
+                mode.label().to_string()
+            };
+            let response = ui
+                .add_enabled_ui(supported, |ui| mode_chip(ui, &text, mode == current || armed))
+                .inner
+                .on_hover_text(if supported {
+                    mode.description()
+                } else {
+                    "Not available for this agent"
+                });
+            if response.clicked() {
+                self.press_mode(mode);
+            }
+        }
+    }
+
+    /// A press on a mode: YOLO asks for a second press before it takes effect.
+    pub(in crate::app::assistant) fn press_mode(&mut self, mode: horizon_core::assistant::AgentMode) {
+        if mode.removes_checks() && !self.assistant.summon.yolo_armed {
+            self.assistant.summon.yolo_armed = true;
+        } else {
+            self.set_agent_mode(mode);
+        }
+    }
+
+    /// Restarts the text agent in `mode`.
+    pub(in crate::app::assistant) fn set_agent_mode(&mut self, mode: horizon_core::assistant::AgentMode) {
+        self.assistant.draft.mode = mode;
+        self.assistant.summon.modes_open = false;
+        self.assistant.summon.yolo_armed = false;
+        self.apply_assistant_engine();
     }
 
     /// An agent's real terminal, in a rounded frame, `height` tall. `None` is the text agent.

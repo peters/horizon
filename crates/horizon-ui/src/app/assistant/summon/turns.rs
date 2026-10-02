@@ -4,6 +4,8 @@
 //! card puts the outcome first, as a title and a short body, and keeps the steps one click away. The
 //! raw terminal stays one click away too.
 
+use std::time::{Duration, Instant};
+
 use egui::{Align, CornerRadius, Frame, Id, Layout, Margin, RichText, Stroke, Ui};
 use egui_commonmark::CommonMarkViewer;
 use horizon_core::browser::manifest::agent_panels::AgentState;
@@ -83,7 +85,86 @@ pub(super) fn step_counts(steps: &[String]) -> String {
         .join(", ")
 }
 
+/// What a press on a turn's card asked for.
+enum Press {
+    Terminal,
+    /// Carry out this plan.
+    Approve(String),
+    /// Ask the agent to change its plan.
+    Revise,
+}
+
+/// The title of a plan (its first line) and its steps (the lines after it, without their numbers).
+fn plan_parts(plan: &str) -> (String, Vec<String>) {
+    let mut lines = plan.lines().map(str::trim).filter(|line| !line.is_empty());
+    let title = lines
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches('#')
+        .trim()
+        .to_string();
+    let steps = lines
+        .map(|line| {
+            line.trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | ')' | '-' | '*' | ' '))
+                .to_string()
+        })
+        .collect();
+    (title, steps)
+}
+
+/// A plan as one line, to hand to the agent that carries it out.
+fn plan_message(plan: &str) -> String {
+    let (title, steps) = plan_parts(plan);
+    let numbered: Vec<String> = steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| format!("{}. {step}", index + 1))
+        .collect();
+    format!("Carry out this plan, {title}: {}", numbered.join(" "))
+}
+
 impl HorizonApp {
+    /// Approves a plan: the chosen agent restarts in Auto-edit and is handed the plan.
+    pub(super) fn approve_plan(&mut self, plan: &str) {
+        let executor = self
+            .assistant
+            .summon
+            .plan_executor
+            .unwrap_or(self.assistant.settings.agent);
+        self.assistant.draft.agent = executor;
+        self.assistant.draft.mode = if horizon_core::assistant::AgentMode::AutoEdit.supported_by(executor) {
+            horizon_core::assistant::AgentMode::AutoEdit
+        } else {
+            horizon_core::assistant::AgentMode::Ask
+        };
+        self.apply_assistant_engine();
+        // A restarted agent needs a moment before it takes a message.
+        let wait = if self.assistant.restart_requested {
+            Duration::from_secs(3)
+        } else {
+            Duration::ZERO
+        };
+        self.assistant.summon.pending_send = Some((plan_message(plan), Instant::now() + wait));
+        self.assistant.summon.plan_executor = None;
+    }
+
+    /// Sends the approved plan once the agent is running and ready for it.
+    pub(super) fn flush_pending_send(&mut self) {
+        let Some((text, at)) = self.assistant.summon.pending_send.take() else {
+            return;
+        };
+        if Instant::now() < at || self.assistant.restart_requested {
+            self.assistant.summon.pending_send = Some((text, at));
+            return;
+        }
+        match self.board.assistant_panel() {
+            Some(id) => {
+                self.send_to_agent(id, &text, true, Instant::now());
+            }
+            None => self.assistant.summon.pending_send = Some((text, at)),
+        }
+    }
+
     /// Whether the assistant or one of its agents is working right now.
     pub(super) fn assistant_busy(&self) -> bool {
         let assistant_working = self
@@ -102,22 +183,32 @@ impl HorizonApp {
         let turns = self.assistant.feed.turns();
         let busy = self.assistant_busy();
         let last = turns.len().saturating_sub(1);
-        let mut terminal = false;
+        let mut press = None;
         for (index, turn) in turns.iter().enumerate() {
             let working = busy && index == last;
-            if self.turn_card(ui, index, turn, working) {
-                terminal = true;
+            if let Some(pressed) = self.turn_card(ui, index, turn, working, index == last) {
+                press = Some(pressed);
             }
             ui.add_space(10.0);
         }
-        if terminal {
-            self.assistant.summon.raw = true;
+        match press {
+            Some(Press::Terminal) => self.assistant.summon.raw = true,
+            Some(Press::Approve(plan)) => self.approve_plan(&plan),
+            Some(Press::Revise) => self.revise_plan(),
+            None => {}
         }
     }
 
-    /// Returns true when the card's Terminal button was pressed.
-    fn turn_card(&mut self, ui: &mut Ui, index: usize, turn: &Turn, working: bool) -> bool {
-        let mut terminal = false;
+    /// Revise: the prompt starts a request to change the plan, in the text agent's channel.
+    pub(super) fn revise_plan(&mut self) {
+        self.assistant.summon.text = "Change the plan: ".to_string();
+        self.assistant.summon.channel = super::dock::Channel::Text;
+        self.assistant.summon.focus_requested = true;
+    }
+
+    /// What was pressed on the card, if anything. `latest` is the newest turn: only its plan can be approved.
+    fn turn_card(&mut self, ui: &mut Ui, index: usize, turn: &Turn, working: bool, latest: bool) -> Option<Press> {
+        let mut pressed = None;
         let steps_id = Id::new(("turn_steps", index));
         let mut open = ui
             .memory(|memory| memory.data.get_temp::<bool>(steps_id))
@@ -149,7 +240,11 @@ impl HorizonApp {
                     });
                     ui.add_space(8.0);
                 }
-                if let Some(reply) = turn.replies.last() {
+                if let Some(plan) = &turn.plan {
+                    if let Some(choice) = self.plan_section(ui, plan, latest && !working) {
+                        pressed = Some(choice);
+                    }
+                } else if let Some(reply) = turn.replies.last() {
                     let (title, body) = split_reply(reply);
                     ui.horizontal_top(|ui| {
                         let (dot, _) = ui.allocate_exact_size(egui::vec2(14.0, 22.0), egui::Sense::hover());
@@ -190,7 +285,7 @@ impl HorizonApp {
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if blocks::ghost(ui, "Terminal").clicked() {
-                                terminal = true;
+                                pressed = Some(Press::Terminal);
                             }
                             if blocks::ghost(ui, if open { "Hide steps" } else { "Steps" }).clicked() {
                                 open = !open;
@@ -211,13 +306,90 @@ impl HorizonApp {
                 }
             });
         ui.memory_mut(|memory| memory.data.insert_temp(steps_id, open));
-        terminal
+        pressed
+    }
+
+    /// A plan as a card: the title, numbered steps and, while it can still be acted on, who carries it out
+    /// with Approve and Revise.
+    fn plan_section(&mut self, ui: &mut Ui, plan: &str, actionable: bool) -> Option<Press> {
+        let (title, steps) = plan_parts(plan);
+        let mut pressed = None;
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("PLAN")
+                    .size(10.0)
+                    .extra_letter_spacing(0.9)
+                    .color(theme::ACCENT()),
+            );
+            let planner =
+                horizon_core::agent_definition(self.assistant.settings.agent).map_or("Agent", |a| a.display_name);
+            ui.label(RichText::new(format!("by {planner}")).size(11.0).color(theme::FG_DIM()));
+        });
+        ui.add_space(2.0);
+        ui.label(RichText::new(title).size(15.5).strong().color(theme::FG()));
+        ui.add_space(6.0);
+        for (index, step) in steps.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let (dot, _) = ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::hover());
+                ui.painter()
+                    .circle_filled(dot.center(), 9.0, theme::ACCENT().gamma_multiply(0.22));
+                ui.painter().text(
+                    dot.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{}", index + 1),
+                    egui::FontId::proportional(11.0),
+                    theme::FG(),
+                );
+                ui.label(RichText::new(elide(step, 96)).size(12.5).color(theme::FG_SOFT()));
+            });
+        }
+        if actionable {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Run with").size(11.5).color(theme::FG_DIM()));
+                let chosen = self
+                    .assistant
+                    .summon
+                    .plan_executor
+                    .unwrap_or(self.assistant.settings.agent);
+                for kind in [
+                    horizon_core::PanelKind::Claude,
+                    horizon_core::PanelKind::Codex,
+                    horizon_core::PanelKind::Grok,
+                ] {
+                    let name = horizon_core::agent_definition(kind).map_or("Agent", |a| a.display_name);
+                    if ui.selectable_label(chosen == kind, name).clicked() {
+                        self.assistant.summon.plan_executor = Some(kind);
+                    }
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if blocks::primary(ui, "Approve and run").clicked() {
+                        pressed = Some(Press::Approve(plan.to_string()));
+                    }
+                    if blocks::ghost(ui, "Revise").clicked() {
+                        pressed = Some(Press::Revise);
+                    }
+                });
+            });
+        }
+        pressed
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{split_reply, step_counts};
+    use super::{plan_message, plan_parts, split_reply, step_counts};
+
+    #[test]
+    fn a_plan_has_a_title_and_numbered_steps() {
+        let (title, steps) = plan_parts("# Make cleanup safe\n1. Add a lock\n2) Add a stress test\n- Run the suite");
+        assert_eq!(title, "Make cleanup safe");
+        assert_eq!(steps, ["Add a lock", "Add a stress test", "Run the suite"]);
+        assert_eq!(
+            plan_message("Make cleanup safe\n1. Add a lock\n2. Test it"),
+            "Carry out this plan, Make cleanup safe: 1. Add a lock 2. Test it"
+        );
+    }
 
     #[test]
     fn a_reply_splits_into_a_title_and_a_body() {

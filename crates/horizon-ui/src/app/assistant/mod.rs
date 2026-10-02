@@ -245,6 +245,12 @@ impl HorizonApp {
             name_is_custom: Some(true),
             local_id: Some(ASSISTANT_PANEL_LOCAL_ID.to_string()),
             visible: false,
+            args: self
+                .assistant
+                .settings
+                .mode
+                .args(self.assistant.settings.agent)
+                .unwrap_or_default(),
             resume: resume
                 .as_ref()
                 .map_or(PanelResume::Fresh, |thread| PanelResume::Session {

@@ -498,15 +498,6 @@ pub(super) fn mode_chip(ui: &mut Ui, text: &str, selected: bool) -> egui::Respon
     ui.add(button)
 }
 
-pub(super) fn static_chip(ui: &mut Ui, text: &str) {
-    let button = egui::Button::new(RichText::new(text).size(12.0).color(theme::FG_SOFT()))
-        .fill(theme::PANEL_BG())
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
-        .corner_radius(CornerRadius::same(99))
-        .min_size(vec2(0.0, 26.0));
-    let _ = ui.add(button);
-}
-
 fn thread_row(ui: &mut Ui, title: &str, when: &str, active: bool) {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
     if active || response.hovered() {

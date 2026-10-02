@@ -30,6 +30,8 @@ pub(in crate::app::assistant) enum Entry {
     Said(String),
     /// Something the assistant did with its tools.
     Did(String),
+    /// A plan the agent proposes.
+    Plan(String),
 }
 
 #[derive(Default)]
@@ -62,6 +64,13 @@ impl Feed {
         }
     }
 
+    pub(in crate::app::assistant) fn plan(&mut self, text: &str) {
+        let text = text.trim();
+        if !text.is_empty() {
+            self.push(Entry::Plan(text.to_string()));
+        }
+    }
+
     pub(in crate::app::assistant) fn did(&mut self, text: impl Into<String>) {
         let text = text.into();
         if matches!(self.entries.last(), Some(Entry::Did(last)) if *last == text) {
@@ -90,6 +99,8 @@ pub(in crate::app::assistant) struct Turn {
     pub(in crate::app::assistant) voice: bool,
     pub(in crate::app::assistant) steps: Vec<String>,
     pub(in crate::app::assistant) replies: Vec<String>,
+    /// The newest plan the agent proposed in this turn.
+    pub(in crate::app::assistant) plan: Option<String>,
 }
 
 impl Feed {
@@ -112,6 +123,7 @@ impl Feed {
                 match entry {
                     Entry::Said(text) => turn.replies.push(text.clone()),
                     Entry::Did(text) => turn.steps.push(text.clone()),
+                    Entry::Plan(text) => turn.plan = Some(text.clone()),
                     Entry::You { .. } => {}
                 }
             }
@@ -304,7 +316,7 @@ impl HorizonApp {
             draw_pills(ui, &mut pills);
             match entry {
                 Entry::You { text, voice } => you_bubble(ui, text, *voice, max),
-                Entry::Said(text) => said_bubble(ui, text, max),
+                Entry::Said(text) | Entry::Plan(text) => said_bubble(ui, text, max),
                 Entry::Did(_) => {}
             }
             ui.add_space(8.0);

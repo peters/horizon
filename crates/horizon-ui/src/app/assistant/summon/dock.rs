@@ -71,6 +71,7 @@ impl HorizonApp {
         // A change of engine closes the running agent; the next line starts the new one.
         self.close_assistant_if_restarting();
         self.ensure_assistant_panel(ctx);
+        self.flush_pending_send();
         self.follow_assistant_transcript();
         if let Some(index) = self.assistant.summon.pending_workspace.take()
             && let Some(id) = self.board.workspaces.get(index).map(|workspace| workspace.id)
