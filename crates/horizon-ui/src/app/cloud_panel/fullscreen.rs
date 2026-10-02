@@ -128,6 +128,9 @@ impl HorizonApp {
         self.render_canvas(ui);
         self.render_cloud_frames(ui.ctx());
         self.handle_canvas_double_click(ui);
+        // As on the canvas: a header action just ran, and none of a closing cloud's members
+        // may render over its disposal.
+        self.hide_closing_cloud_panels();
         self.render_panels(ui);
         self.render_cloud_resize_handles(ui.ctx());
         self.render_cloud_ownership(ui.ctx());
