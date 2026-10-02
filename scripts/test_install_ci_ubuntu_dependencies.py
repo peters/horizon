@@ -187,7 +187,11 @@ class WorkflowTests(unittest.TestCase):
                 commands = re.findall(r"run: " + re.escape(prefix) + r"([^\n]+)", jobs[name])
                 self.assertEqual([shlex.split(command) for command in commands], [packages])
                 if name == "rust-test":
-                    self.assertIn("- if: matrix.os == 'ubuntu-latest'\n        run: " + prefix, jobs[name])
+                    self.assertIn(
+                        "- if: matrix.os == 'ubuntu-latest' && matrix.shard == 'speech'\n"
+                        "        run: " + prefix,
+                        jobs[name],
+                    )
                 else:
                     self.assertIn("runs-on: ubuntu-latest", jobs[name])
         self.assertIn(

@@ -23,8 +23,10 @@ env:
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 # Cache policy: every rust-cache step below sets
-# `save-if: github.ref == 'refs/heads/main'`. Pull-request runs restore from
-# main's entry but never write their own. A per-branch copy of each build
+# `save-if: github.ref == 'refs/heads/main'`. The platform test shards also
+# require `matrix.shard == 'speech'`, so the three jobs share one entry.
+# Pull-request runs restore from main's entry but never write their own.
+# A per-branch copy of each build
 # cache pushed the repository past GitHub's 10 GB budget, and the resulting
 # eviction of the main entries left cold jobs to time out.
 # Keys keep the default lock-aware suffix (do not set
@@ -81,6 +83,8 @@ jobs:
         run: python3 scripts/check-browser-client-dependencies.py
       - name: Verify CI change detection
         run: python3 -B scripts/test_detect_ci_build_inputs.py -v
+      - name: Verify platform test shards
+        run: python3 -B scripts/test_ci_cargo_test_shard.py -v
       # One diff answers both gated lanes: Snap packaging and the release
       # Artifacts matrix. This job already checks out full history, so the
       # Artifacts gate costs nothing here instead of a second runner and a
@@ -228,11 +232,14 @@ jobs:
           }
 
   rust-test:
-    name: Tests (${{ matrix.name }})
+    name: Tests (${{ matrix.name }} ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     # Headroom for a cold cache. A lock bump, toolchain bump, or eviction
     # rebuilds the vendored speech C++ tree, and a job that times out skips
     # the cache save, so the next run starts cold again.
+    # ui, libs, and speech run together. They restore one cache entry per OS;
+    # the key still includes this job id. Only the speech shard saves, and a
+    # miss on main rebuilds the whole workspace there before the speech feature.
     timeout-minutes: 35
     strategy:
     # A failing OS releases the other runner instead of holding it to the
@@ -244,9 +251,27 @@ jobs:
           - os: ubuntu-latest
             name: Linux x64
             cache_key: linux-test
+            shard: ui
+          - os: ubuntu-latest
+            name: Linux x64
+            cache_key: linux-test
+            shard: libs
+          - os: ubuntu-latest
+            name: Linux x64
+            cache_key: linux-test
+            shard: speech
           - os: macos-latest
             name: macOS arm64
             cache_key: macos-test
+            shard: ui
+          - os: macos-latest
+            name: macOS arm64
+            cache_key: macos-test
+            shard: libs
+          - os: macos-latest
+            name: macOS arm64
+            cache_key: macos-test
+            shard: speech
     steps:
       - uses: actions/checkout@v7
         with:
@@ -255,7 +280,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'speech' }}
       - name: Report rust-cache status
         shell: bash
         run: |
@@ -270,25 +295,21 @@ jobs:
       - name: Install video assembler
         shell: bash
         run: bash scripts/install-ci-video-build-tools.sh
-      - run: cargo test --locked --workspace
-      # `speech` is declared by horizon-ui alone, so every other crate builds
-      # identically with and without it and a second `--workspace` pass only
-      # re-ran their suites (about a minute per OS). The feature pass runs the
-      # crate that owns the gated code - capture, resampler, shortcut matchers
-      # and the engine state machine - and links the native audio backend
-      # (ALSA / CoreAudio) on each OS in the matrix; the no-mic and real-model
-      # paths stay env-gated off. horizon-core's speech config and GGUF reader
-      # are not feature-gated and run in the workspace pass above.
-      - if: matrix.os == 'ubuntu-latest'
+      # Speech links ALSA. The other shards do not build that feature.
+      - if: matrix.os == 'ubuntu-latest' && matrix.shard == 'speech'
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
-      - run: cargo test --locked -p horizon-ui --features speech
+      - name: Test shard
+        shell: bash
+        env:
+          HORIZON_CI_SHARD: ${{ matrix.shard }}
+          HORIZON_CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: bash scripts/ci-cargo-test-shard.sh
       # The worker image scripts need util-linux flock and bash 4, so the
-      # suite runs on Linux only. The workspace pass above already built the
-      # helper's dependencies, which keeps this off a separate cache entry.
-      # A skipped test fails the step: the helper-gated contract tests and
-      # the git-lfs hydration tests skip silently when a prerequisite is gone.
+      # suite runs on the Linux libs shard only. That shard already built the
+      # helper. A skipped test fails the step: the helper-gated contract tests
+      # and the git-lfs hydration tests skip silently when a prerequisite is gone.
       - name: Cloud worker scripts
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && matrix.shard == 'libs'
         shell: bash
         run: |
           cargo build --locked -p horizon-cloud-worker
@@ -299,16 +320,23 @@ jobs:
             exit 1
           fi
 
-  # Kept out of the rust-test matrix because its speech step only builds (see
-  # below). The job id and cache key predate the test run; renaming either
-  # would start the cache cold.
+  # Kept as its own job id so the rust-cache key stays `windows-smoke`.
+  # Renaming the job id or `windows-test-build` starts that cache cold.
+  # Speech is build-only here; a ui or libs failure must not cancel that check.
   windows-smoke:
-    name: Tests (Windows x64)
+    name: Tests (Windows x64 ${{ matrix.shard }})
     runs-on: windows-latest
     # Headroom for a cold cache: a cacheless run passed 15 minutes while
     # still compiling the vendored speech C++ tree, and a timed-out job
     # skips the cache save, so the next run starts cold again.
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: ui
+          - shard: libs
+          - shard: speech
     steps:
       - uses: actions/checkout@v7
         with:
@@ -320,7 +348,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: windows-test-build
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'speech' }}
       - name: Report rust-cache status
         shell: bash
         run: |
@@ -332,15 +360,14 @@ jobs:
       - name: Install video assembler
         shell: bash
         run: bash scripts/install-ci-video-build-tools.sh
-      - run: cargo test --locked --workspace
-      # The speech feature is advertised on Windows too (WASAPI capture via
-      # cpal); build it so a Windows-only break cannot pass CI. Only the build
-      # is checked: the speech tests have not been enabled on Windows yet.
-      # horizon-ui owns the feature, so the rest of the workspace is already
-      # built by the pass above. `!cancelled()` keeps a test failure from
-      # hiding a speech build break.
-      - if: ${{ !cancelled() }}
-        run: cargo test --locked -p horizon-ui --features speech --no-run
+      # WASAPI capture is advertised on Windows. The speech shard builds it
+      # and does not run the speech tests; those stay off on Windows.
+      - name: Test shard
+        shell: bash
+        env:
+          HORIZON_CI_SHARD: ${{ matrix.shard }}
+          HORIZON_CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: bash scripts/ci-cargo-test-shard.sh
 
 
   snap-build:
