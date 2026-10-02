@@ -46,19 +46,47 @@ impl SessionStore {
         }))
     }
 
+    fn sync_deletion_notice_directories(&self) -> Result<()> {
+        if !cfg!(unix) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Durable recovery notices require Unix directory synchronization",
+            )
+            .into());
+        }
+        let directory = self.deletion_notice_dir();
+        for ancestor in directory.ancestors() {
+            match std::fs::File::open(ancestor) {
+                Ok(directory) => directory.sync_all()?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            if Some(ancestor) == self.home.root().parent() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// Persist recovery information privately before an application can exit.
     ///
     /// # Errors
     /// Returns an error if the notice cannot be atomically written.
     pub fn save_session_deletion_notice(&self, notice: &str) -> Result<()> {
+        self.save_deletion_notice_with_sync(notice, || self.sync_deletion_notice_directories())
+    }
+
+    fn save_deletion_notice_with_sync(&self, notice: &str, sync: impl Fn() -> Result<()>) -> Result<()> {
+        sync()?;
         let parent = self.deletion_notice_dir();
         std::fs::create_dir_all(&parent)?;
+        sync()?;
         let path = parent.join(format!("{}.txt", uuid::Uuid::new_v4()));
-        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        let mut file = tempfile::NamedTempFile::new_in(&parent)?;
         file.write_all(notice.as_bytes())?;
         file.as_file().sync_all()?;
-        file.persist_noclobber(path).map_err(|error| error.error)?;
-        Ok(())
+        file.persist_noclobber(&path).map_err(|error| error.error)?;
+        sync()
     }
 
     /// Acknowledge exactly the notice the person reviewed.
@@ -66,9 +94,13 @@ impl SessionStore {
     /// # Errors
     /// Returns an error if another notice replaced it or removal fails.
     pub fn acknowledge_session_deletion_notice(&self, expected: &str) -> Result<()> {
+        self.acknowledge_deletion_notice_with_sync(expected, || self.sync_deletion_notice_directories())
+    }
+
+    fn acknowledge_deletion_notice_with_sync(&self, expected: &str, sync: impl Fn() -> Result<()>) -> Result<()> {
         let notices = self.deletion_notices()?;
         if notices.is_empty() {
-            return Ok(());
+            return sync();
         }
         let current = notices
             .iter()
@@ -80,6 +112,7 @@ impl SessionStore {
                 "Deletion recovery information changed; reopen the notice".into(),
             ));
         }
+        sync()?;
         // Records are immutable with unique names. New concurrent notices are
         // outside this snapshot and cannot be removed by this acknowledgement.
         for (path, _) in notices {
@@ -89,7 +122,7 @@ impl SessionStore {
                 Err(error) => return Err(error.into()),
             }
         }
-        Ok(())
+        sync()
     }
 }
 
@@ -97,6 +130,10 @@ impl SessionStore {
 mod tests {
     use super::*;
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Durable notices require Unix directory synchronization; unsupported Windows preservation is tested separately"
+    )]
     fn recovery_notice_survives_reopen_until_matching_acknowledgement() {
         let root = tempfile::tempdir().expect("home");
         let store = SessionStore::new(
@@ -131,6 +168,10 @@ mod tests {
         }
     }
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Durable notices require Unix directory synchronization; unsupported Windows preservation is tested separately"
+    )]
     fn independent_instances_preserve_each_others_unacknowledged_notices() {
         let root = tempfile::tempdir().expect("home");
         let first = SessionStore::new(
@@ -153,5 +194,70 @@ mod tests {
             .acknowledge_session_deletion_notice(&current)
             .expect("acknowledge both");
         assert!(first.saved_session_deletion_notice().expect("read").is_none());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn failed_publication_sync_retains_the_recovery_record() {
+        let root = tempfile::tempdir().expect("home");
+        let store = SessionStore::new(
+            crate::HorizonHome::from_root(root.path().into()),
+            root.path().join("config.yaml"),
+        );
+        let calls = std::cell::Cell::new(0);
+        let result = store.save_deletion_notice_with_sync("Retained recovery path", || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 3 {
+                return Err(std::io::Error::other("publication sync failed").into());
+            }
+            store.sync_deletion_notice_directories()
+        });
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 3);
+        assert_eq!(
+            store.saved_session_deletion_notice().expect("read").as_deref(),
+            Some("Retained recovery path")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_acknowledgement_sync_is_retried_after_unlink() {
+        let root = tempfile::tempdir().expect("home");
+        let store = SessionStore::new(
+            crate::HorizonHome::from_root(root.path().into()),
+            root.path().join("config.yaml"),
+        );
+        store
+            .save_session_deletion_notice("Reviewed recovery path")
+            .expect("save");
+        let calls = std::cell::Cell::new(0);
+        let result = store.acknowledge_deletion_notice_with_sync("Reviewed recovery path", || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 {
+                return Err(std::io::Error::other("acknowledgement sync failed").into());
+            }
+            store.sync_deletion_notice_directories()
+        });
+        assert!(result.is_err());
+        assert!(store.saved_session_deletion_notice().expect("read").is_none());
+        store
+            .acknowledge_deletion_notice_with_sync("Reviewed recovery path", || {
+                calls.set(calls.get() + 1);
+                store.sync_deletion_notice_directories()
+            })
+            .expect("retry synchronization");
+        assert_eq!(calls.get(), 3);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unsupported_notice_durability_creates_no_partial_record() {
+        let root = tempfile::tempdir().expect("home");
+        let store = SessionStore::new(
+            crate::HorizonHome::from_root(root.path().into()),
+            root.path().join("config.yaml"),
+        );
+        assert!(store.save_session_deletion_notice("keep this recovery path").is_err());
+        assert!(!store.deletion_notice_dir().exists());
     }
 }

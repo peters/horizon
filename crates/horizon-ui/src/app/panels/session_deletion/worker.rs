@@ -170,9 +170,10 @@ impl HorizonApp {
             if let Some(expected) = &self.saved_session_deletion.persisted_notice
                 && let Err(error) = self.session_store.acknowledge_session_deletion_notice(expected)
             {
-                self.saved_session_deletion.notice =
-                    Some(format!("Could not acknowledge recovery information: {error}"));
-                self.restore_saved_session_deletion_notice();
+                if matches!(error, horizon_core::Error::State(_)) {
+                    self.restore_saved_session_deletion_notice();
+                }
+                self.refresh_deletion_notice(Some(format!("Could not acknowledge recovery information: {error}")));
                 return;
             }
             self.saved_session_deletion.unsaved_notices.clear();
@@ -321,11 +322,12 @@ mod tests {
         sender.join().expect("sender");
         assert!(!app.saved_session_deletion_is_running());
         assert!(app.saved_session_deletion.has_notice());
-        assert!(
+        assert_eq!(
             app.session_store
                 .saved_session_deletion_notice()
-                .expect("persisted notice")
-                .is_some()
+                .expect("notice")
+                .is_some(),
+            cfg!(unix)
         );
         let report = ctx
             .data(|data| data.get_temp::<Arc<AgentSessionDeletionReport>>(receipt_id()))
@@ -338,6 +340,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Durable notice persistence requires Unix; unsaved Windows notice behavior remains covered by panic cleanup"
+    )]
     fn recovery_paths_restore_as_a_blocking_notice_after_restart() {
         let (_temp, mut app) = crate::app::test_support::test_app();
         let report = AgentSessionDeletionReport {
@@ -363,6 +369,10 @@ mod tests {
         assert!(!app.finish_saved_session_deletion_for_shutdown());
     }
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Durable notice persistence requires Unix; unsaved Windows notice behavior remains covered by panic cleanup"
+    )]
     fn transient_write_failure_preserves_unsaved_paths_on_later_success() {
         let (_temp, mut app) = crate::app::test_support::test_app();
         let blocked = app.session_store.home().root().join("runtime/session-deletion");
