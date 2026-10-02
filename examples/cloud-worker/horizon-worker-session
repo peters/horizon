@@ -147,7 +147,7 @@ start_preparation() {
     # The log already says why; the exit status says it was storage, which nothing else records.
     local status=0
     wait "$preparer" || status=$?
-    if [ "$status" -eq 6 ] && [ ! -f "$state/ready" ]; then exit 6; fi
+    if [ "$status" -eq 6 ]; then exit 6; fi
 }
 prepare_checkout() {
     if [ "$worktree" != "$root" ]; then mkdir -p "$root"; fi
@@ -159,9 +159,10 @@ prepare_checkout() {
     done
     flush "$root"
     touch "$state/ready"
-    # The checkout is complete and the marker exists: only its durability was refused, which a
-    # later attach would repair by checking the checkout again. Not a reason to stop this one.
-    sync -f "$state/ready" || echo "Workspace storage did not confirm the ready marker $state/ready. The checkout is complete; a later attach checks it again." >&2
+    # No session may enter a checkout whose ready marker could vanish: a later attach would
+    # prepare it again over their edits. Withdraw the marker, so the next attach resumes
+    # the preparation while nothing has launched.
+    sync -f "$state/ready" || { rm -f "$state/ready"; flush_failed "$state/ready"; }
 }
 # A worktree counts only when it belongs to its own repository; another clone at that path does not.
 present() {

@@ -372,8 +372,9 @@ started, so an uncertain launch is not replayed.
   usage of `/workspace`, and no process started (a refusal in the detached preparation
   ends the attach the same way). A launch fence that could not be made durable is
   withdrawn, and nothing records a failed preparation, so attaching again resumes; if it
-  keeps happening, stop and resume the cloud. The workspace volume is kept. A refusal
-  only to confirm the finished `ready` marker is reported and does not stop the attach.
+  keeps happening, stop and resume the cloud. The workspace volume is kept. A `ready`
+  marker that cannot be made durable is withdrawn the same way, so no session enters a
+  checkout that a later attach would prepare again.
 - **Failed**, for example a source import error: the worker records
   `/workspace/shared-checkout-state/failed`, and every attach is refused with exit 3
   and a pointer to `prepare.log` until the cause is fixed. Then run
