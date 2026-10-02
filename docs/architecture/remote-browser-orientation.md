@@ -205,6 +205,9 @@ failure settles, the driver schedules a read-only device/page measurement so
 panel status can recover the actual applied orientation without repeating the
 mutation. The original request keeps its failure result; recovered status does
 not turn that request into a success.
+If a host loses or evicts a pending acknowledgement, expiry clears the previous
+applied orientation and shows Unverified. Stale polls cannot restore it; a
+matching terminal observation must settle the retained request.
 The driver publishes unknown applied orientation and pending rotation to the UI
 and clears coordinated status before the blocking POST. Publication consumes
 the same deadline; if it uses the remaining time, no rotation is dispatched.
@@ -236,6 +239,9 @@ Creation lifecycle records preserve the effective starting orientation from the
 resolved launch plan, including configuration and per-create overrides. The
 same value appears in queued, dispatched, completed and failed records, even
 if configuration or device orientation changes while startup is pending.
+Cloud workers retain typed startup-failure state until result publication and
+request retirement both succeed, then schedule cleanup. A partial filesystem
+failure must not discard the failure code or release guidance on retry.
 
 ## Maintenance boundaries
 

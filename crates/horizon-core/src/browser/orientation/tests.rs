@@ -38,11 +38,17 @@ fn runtime_failure_preserves_ready_panel_and_queue_rejection_is_not_pending() {
 #[test]
 fn lost_or_evicted_acknowledgement_cannot_leave_controls_pending_forever() {
     let mut panel = BrowserPanelState::inert();
+    panel.orientation.state = RemoteOrientationState {
+        support: OrientationSupport::Supported,
+        applied: Some(RemoteOrientation::Portrait),
+    };
     panel.orientation.action_id = Some("request-a".into());
     panel.orientation.pending = Some(RemoteOrientation::Landscape);
     panel.orientation_pending_since = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(30));
     assert!(panel.expire_orientation_pending());
     assert!(panel.orientation.pending.is_none());
+    assert_eq!(panel.orientation.state.support, OrientationSupport::Supported);
+    assert!(panel.orientation.state.applied.is_none());
     assert!(
         panel
             .orientation
@@ -58,26 +64,45 @@ fn lost_or_evicted_acknowledgement_cannot_leave_controls_pending_forever() {
     panel.apply_orientation_view(RemoteOrientationView {
         action_id: Some("request-a".into()),
         pending: Some(RemoteOrientation::Landscape),
+        state: RemoteOrientationState {
+            support: OrientationSupport::Supported,
+            applied: Some(RemoteOrientation::Portrait),
+        },
         ..RemoteOrientationView::default()
     });
     assert!(
         panel.orientation.pending.is_none(),
         "stale pending polls cannot resurrect a lost acknowledgement"
     );
+    assert!(
+        panel.orientation.state.applied.is_none(),
+        "stale measurement cannot restore Verified status"
+    );
+    assert!(!panel.expire_orientation_pending(), "expiry is published once");
 }
 
 #[test]
 fn matching_terminal_acknowledgement_settles_an_expired_request() {
     let mut panel = BrowserPanelState::inert();
+    panel.orientation.state = RemoteOrientationState {
+        support: OrientationSupport::Supported,
+        applied: Some(RemoteOrientation::Portrait),
+    };
     panel.orientation.action_id = Some("request-a".into());
     panel.orientation.pending = Some(RemoteOrientation::Landscape);
     panel.orientation_pending_since = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(30));
     assert!(panel.expire_orientation_pending());
+    assert!(panel.orientation.state.applied.is_none());
     panel.apply_orientation_view(RemoteOrientationView {
         action_id: Some("unrelated".into()),
+        state: RemoteOrientationState {
+            support: OrientationSupport::Supported,
+            applied: Some(RemoteOrientation::Portrait),
+        },
         ..RemoteOrientationView::default()
     });
     assert!(panel.orientation_pending_since.is_some());
+    assert!(panel.orientation.state.applied.is_none());
     panel.apply_orientation_view(RemoteOrientationView {
         action_id: Some("request-a".into()),
         state: RemoteOrientationState {

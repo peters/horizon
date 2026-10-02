@@ -36,6 +36,7 @@ impl BrowserPanelState {
     pub(super) fn expire_orientation_pending(&mut self) -> bool {
         if self.orientation.pending.is_some() && self.orientation_ack_expired() {
             self.orientation.pending = None;
+            self.orientation.state.applied = None;
             self.orientation.error = Some("orientation_status_unavailable: acknowledgement was lost; the device may rotate, inspect before retrying".into());
             return true;
         }

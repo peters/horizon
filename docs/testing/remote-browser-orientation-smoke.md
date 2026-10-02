@@ -295,6 +295,10 @@ identity and refusal evidence before closing the owned session.
   clear pending state, publish the terminal error and retain failed audit evidence.
 - Unsupported, transient and malformed GET replies must remain distinct;
   do not advertise success from dimensions alone when device evidence differs.
+- Seed a verified orientation, then lose or evict the acknowledgement for a
+  different rotation. Expiry must clear applied orientation and show Unverified;
+  stale polls must not restore Verified. Only a matching terminal observation
+  may settle the request and publish newly measured orientation.
 
 ## Interface and persistence parity
 
@@ -304,12 +308,18 @@ identity and refusal evidence before closing the owned session.
 - Cover the desktop host and cloud worker create override through focused
   tests. If live cloud qualification is required but unavailable, report it
   explicitly; never provision a cloud implicitly.
+- Force cloud orientation-failure publication errors before writing the result
+  and after writing it but before retiring the request. Retry the same typed
+  failure and release guidance; retain request/error state until completion
+  succeeds, then schedule cleanup once.
 - Load a config predating orientation, export/import a normalized target and
   round-trip optional portrait/landscape values.
 - Restart only the task-owned isolated candidate. Restored remote sessions
   must retain the documented stopped/reconnect behavior and avoid implicit
   allocation. Verify the selected target config round-trips.
 - Inspect safe panel/list/audit status for both configured and catalog targets.
+  Require queued, dispatched and terminal creation records to preserve the
+  resolved configured/per-create orientation, independent of later changes.
   No credential values, endpoint URLs or provider session ids may be exposed.
 
 ## Evidence and cleanup

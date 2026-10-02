@@ -75,8 +75,12 @@ fn pending_requests(host: &mut Host) {
             .and_then(|browser| browser.start_orientation_failure.as_ref())
         {
             let result = orientation_create_failure(request, code, released);
-            host.pending_cleanup.insert(id);
-            return manifest::complete_create_request(&result).is_err();
+            return complete_orientation_failure(
+                &mut host.pending_cleanup,
+                id,
+                &result,
+                manifest::complete_create_request,
+            );
         }
         if let Some(message) = pending_failure(
             request,
@@ -126,6 +130,21 @@ fn pending_requests(host: &mut Host) {
         };
         result.is_none_or(|result| manifest::complete_create_request(&result).is_err())
     });
+}
+
+fn complete_orientation_failure(
+    cleanup: &mut std::collections::BTreeSet<String>,
+    id: String,
+    result: &BrowserCreateResult,
+    complete: impl FnOnce(&BrowserCreateResult) -> std::io::Result<()>,
+) -> bool {
+    // Cleanup removes the browser's typed startup failure, so keep both it and
+    // the claimed request until publishing the result and retiring the request succeed.
+    if complete(result).is_err() {
+        return true;
+    }
+    cleanup.insert(id);
+    false
 }
 
 fn orientation_create_failure(
@@ -248,6 +267,54 @@ fn host_controls(host: &mut Host) {
 mod tests {
     use super::*;
     use horizon_browser_protocol::cloud_view::CloudViewState;
+
+    #[test]
+    fn orientation_failure_retries_the_same_outcome_before_cleanup_can_remove_its_state() {
+        use horizon_browser::RemoteReleaseOutcome;
+        let request = manifest::BrowserCreateRequest::for_tests("cloud-agent");
+        for released in [
+            RemoteReleaseOutcome::Released,
+            RemoteReleaseOutcome::ReleaseUnknown {
+                attempts: 3,
+                reason: "private detail".into(),
+            },
+        ] {
+            let expected = orientation_create_failure(&request, "remote_orientation_mismatch", &released);
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("result.json");
+            let mut cleanup = std::collections::BTreeSet::new();
+            let mut pending = vec![request.clone()];
+            let mut attempted = Vec::new();
+            for attempt in 0..4 {
+                pending.retain(|request| {
+                    assert_eq!(request.request_id, expected.request_id);
+                    complete_orientation_failure(&mut cleanup, "tablet".into(), &expected, |result| {
+                        attempted.push(result.clone());
+                        if attempt == 0 {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                "result not writable",
+                            ));
+                        }
+                        std::fs::write(&path, serde_json::to_vec(result)?)?;
+                        if attempt < 3 {
+                            return Err(std::io::Error::other("request retirement failed after result write"));
+                        }
+                        Ok(())
+                    })
+                });
+                assert_eq!(pending.len(), usize::from(attempt < 3));
+                assert_eq!(cleanup.contains("tablet"), attempt == 3);
+                if attempt > 0 {
+                    let persisted: BrowserCreateResult =
+                        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                    assert_eq!(persisted, expected);
+                }
+            }
+            assert_eq!(attempted, vec![expected; 4]);
+            assert_eq!(cleanup.len(), 1);
+        }
+    }
 
     #[test]
     fn orientation_create_failure_preserves_code_and_only_warns_for_unconfirmed_release() {
