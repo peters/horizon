@@ -7,6 +7,7 @@ mod creation;
 mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
+mod first_panel;
 mod idle;
 mod launch;
 mod lifecycle;
@@ -206,6 +207,11 @@ pub(super) struct Runtime {
     confirmation: Confirmation,
     state_unavailable: bool,
     needs_attach: bool,
+    /// A freshly deployed cloud that has not yet opened its first panel.
+    first_panel_due: bool,
+    /// The first Ready of this runtime has been looked at; later ones (a resize, a rebuild) are not
+    /// a new deployment.
+    first_panel_considered: bool,
     pending_browser_attachments: std::collections::HashSet<String>,
     pending_member_attachments: std::collections::HashSet<String>,
     pending_session_attachments: std::collections::HashSet<String>,
@@ -428,12 +434,21 @@ impl Runtime {
         }
     }
 
+    /// Sessions, members or browsers are still being attached.
+    fn attaching(&self) -> bool {
+        self.needs_attach
+            || !self.pending_browser_attachments.is_empty()
+            || !self.pending_session_attachments.is_empty()
+            || !self.pending_member_attachments.is_empty()
+    }
+
     fn needs_repaint(&self) -> bool {
         self.remote_release.is_some()
             || self.resize.busy()
             || self.recovery_receiver.is_some()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
             || self.needs_attach
+            || self.first_panel_due
             || self.needs_desktop
             || !self.pending_browser_attachments.is_empty()
             || !self.pending_session_attachments.is_empty()
@@ -512,6 +527,7 @@ impl HorizonApp {
                         runtime.progress.stage(Stage::Ready, at);
                         runtime.browsers = None;
                         runtime.needs_attach = true;
+                        runtime.note_ready_for_first_panel(&state);
                         runtime.state = Some(*state);
                         runtime.stage = Some(Stage::Ready);
                         runtime.error = None;
@@ -534,6 +550,7 @@ impl HorizonApp {
         self.remove_closed_cloud_browsers(removed);
         self.sync_resized_profiles();
         self.sync_cloud_presentations();
+        self.start_first_cloud_panels(ctx);
         self.cloud_prototype.groups.reconcile(&mut self.board);
         self.sync_board_cloud_groups();
         self.prepare_cloud_companions(ctx);
