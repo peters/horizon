@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, Rect, Sense, StrokeKind, Ui, pos2, vec2};
-use horizon_core::browser::{BrowserPanelState, BrowserStatus, PageScrollState};
+use horizon_core::browser::{BrowserPanelState, BrowserStatus, NestedScrollbar, PageScrollState};
 
 use crate::browser_widget::BrowserUiState;
 
@@ -122,7 +122,9 @@ pub fn show_body(
     let scale = (body_rect.width() / frame_size[0]).min(body_rect.height() / frame_size[1]);
     let rect = Rect::from_center_size(body_rect.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
     paint_browser_frame(ui, rect, texture);
-    paint_page_scrollbar(ui, rect, browser.frame_slot.page_scroll_state());
+    let page_scroll = browser.frame_slot.page_scroll_state();
+    paint_page_scrollbar(ui, rect, page_scroll);
+    paint_nested_scrollbars(ui, rect, page_scroll, &browser.frame_slot.nested_scrollbars());
     let popup = browser.frame_slot.native_select_popup();
     if popup.is_none() {
         state.select_popup_dismissed = false;
@@ -164,13 +166,55 @@ fn paint_page_scrollbar(ui: &Ui, image_rect: Rect, state: Option<PageScrollState
     let Some((track, thumb)) = state.and_then(|state| vertical_scrollbar_geometry(image_rect, state)) else {
         return;
     };
-    ui.painter().rect_filled(
+    paint_scrollbar(&ui.painter_at(image_rect), track, thumb);
+}
+
+fn paint_nested_scrollbars(ui: &Ui, image_rect: Rect, page: Option<PageScrollState>, bars: &[NestedScrollbar]) {
+    let Some(page) = page.filter(|page| !bars.is_empty() && page.is_valid()) else {
+        return;
+    };
+    let painter = ui.painter_at(image_rect);
+    for bar in bars {
+        if let Some((track, thumb, visible)) = nested_scrollbar_geometry(image_rect, page, *bar) {
+            paint_scrollbar(&painter.with_clip_rect(visible), track, thumb);
+        }
+    }
+}
+
+fn paint_scrollbar(painter: &egui::Painter, track: Rect, thumb: Rect) {
+    painter.rect_filled(
         track,
         CornerRadius::ZERO,
         crate::theme::alpha(crate::theme::PANEL_BG_ALT(), 230),
     );
-    ui.painter()
-        .rect_filled(thumb.shrink(2.0), CornerRadius::same(4), crate::theme::ACCENT());
+    painter.rect_filled(thumb.shrink(2.0), CornerRadius::same(4), crate::theme::ACCENT());
+}
+
+/// Map a nested container's CSS-pixel track, thumb and visible span onto the
+/// letterboxed frame.
+fn nested_scrollbar_geometry(
+    image_rect: Rect,
+    page: PageScrollState,
+    bar: NestedScrollbar,
+) -> Option<(Rect, Rect, Rect)> {
+    let (thumb_y, thumb_height) = bar.thumb()?;
+    let scale = vec2(
+        image_rect.width() / page.viewport_width,
+        image_rect.height() / page.viewport_height,
+    );
+    let track = Rect::from_min_size(
+        image_rect.min + vec2(bar.track_x * scale.x, bar.track_y * scale.y),
+        vec2(bar.track_width * scale.x, bar.track_height * scale.y),
+    );
+    let thumb = Rect::from_min_size(
+        pos2(track.left(), track.top() + thumb_y * scale.y),
+        vec2(track.width(), thumb_height * scale.y),
+    );
+    let visible = Rect::from_x_y_ranges(
+        track.x_range(),
+        image_rect.top() + bar.visible_top * scale.y..=image_rect.top() + bar.visible_bottom * scale.y,
+    );
+    Some((track, thumb, visible))
 }
 
 fn vertical_scrollbar_geometry(image_rect: Rect, state: PageScrollState) -> Option<(Rect, Rect)> {
@@ -244,9 +288,9 @@ fn placeholder(
 #[cfg(test)]
 mod tests {
     use egui::{Rect, pos2};
-    use horizon_core::browser::PageScrollState;
+    use horizon_core::browser::{NestedScrollbar, PageScrollState};
 
-    use super::vertical_scrollbar_geometry;
+    use super::{nested_scrollbar_geometry, vertical_scrollbar_geometry};
 
     fn scroll_state(scroll_y: f32) -> PageScrollState {
         PageScrollState {
@@ -275,5 +319,44 @@ mod tests {
         assert!((top_thumb.top() - image.top()).abs() < f32::EPSILON);
         assert!(middle_thumb.top() > top_thumb.top());
         assert!((top_thumb.height() - 123.2).abs() < 0.1);
+    }
+
+    #[test]
+    fn nested_scrollbar_maps_its_css_gutter_onto_a_scaled_frame() {
+        let image = Rect::from_min_max(pos2(100.0, 50.0), pos2(100.0 + 582.0, 50.0 + 304.0));
+        let bar = NestedScrollbar {
+            track_x: 1_152.0,
+            track_y: 56.0,
+            track_width: 12.0,
+            track_height: 552.0,
+            visible_top: 100.0,
+            visible_bottom: 608.0,
+            scroll_top: 0.0,
+            scroll_height: 5_520.0,
+        };
+        let Some((track, thumb, visible)) = nested_scrollbar_geometry(image, scroll_state(0.0), bar) else {
+            panic!("scrollable container should have overlay geometry");
+        };
+        assert!((track.left() - 676.0).abs() < 0.01);
+        assert!((track.top() - 78.0).abs() < 0.01);
+        assert!((track.width() - 6.0).abs() < 0.01);
+        assert!((track.height() - 276.0).abs() < 0.01);
+        assert!((thumb.top() - track.top()).abs() < 0.01);
+        assert!((thumb.height() - 27.6).abs() < 0.01);
+        assert!((visible.top() - 100.0).abs() < 0.01);
+        assert!((visible.bottom() - track.bottom()).abs() < 0.01);
+        assert!((visible.left() - track.left()).abs() < 0.01);
+
+        let Some((_, bottom, _)) = nested_scrollbar_geometry(
+            image,
+            scroll_state(0.0),
+            NestedScrollbar {
+                scroll_top: 4_968.0,
+                ..bar
+            },
+        ) else {
+            panic!("scrolled container should keep overlay geometry");
+        };
+        assert!((bottom.bottom() - track.bottom()).abs() < 0.01);
     }
 }

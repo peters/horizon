@@ -15,6 +15,7 @@ use base64::Engine;
 use zune_jpeg::JpegDecoder;
 
 use crate::native_select::NativeSelectPopup;
+use crate::page_scroll::NestedScrollbar;
 
 const MAX_RETIRED_FRAMES: usize = 2;
 
@@ -127,6 +128,7 @@ impl FrameData {
 pub struct FrameSlotInner {
     data: Option<Arc<FrameData>>,
     page_scroll_state: Option<PageScrollState>,
+    nested_scrollbars: Arc<[NestedScrollbar]>,
     native_select_popup: Option<Arc<NativeSelectPopup>>,
     /// Reused base64 decode target for both screencast and screenshot frames.
     encoded_buffer: Vec<u8>,
@@ -407,6 +409,7 @@ impl FrameSlot {
             retain_frame_buffer(&mut inner, data);
         }
         inner.page_scroll_state = None;
+        inner.nested_scrollbars = Arc::default();
         inner.native_select_popup = None;
     }
 
@@ -445,9 +448,31 @@ impl FrameSlot {
         true
     }
 
+    /// Clears the root geometry and every nested indicator sampled with it.
     pub(crate) fn clear_page_scroll_state(&self) -> bool {
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.page_scroll_state.take().is_some()
+        let had_nested = !std::mem::take(&mut inner.nested_scrollbars).is_empty();
+        inner.page_scroll_state.take().is_some() || had_nested
+    }
+
+    /// Nested scroll-container indicators the host paints over blank gutters.
+    #[must_use]
+    pub fn nested_scrollbars(&self) -> Arc<[NestedScrollbar]> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .nested_scrollbars
+            .clone()
+    }
+
+    pub(crate) fn publish_nested_scrollbars(&self, bars: impl IntoIterator<Item = NestedScrollbar>) -> bool {
+        let next: Vec<NestedScrollbar> = bars.into_iter().filter(|bar| bar.is_valid()).collect();
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *inner.nested_scrollbars == *next {
+            return false;
+        }
+        inner.nested_scrollbars = next.into();
+        true
     }
 
     /// Open native `<select>` popup the host should paint and operate.
@@ -795,6 +820,40 @@ mod tests {
         slot.clear();
         assert!(slot.page_scroll_state().is_none());
         assert!(slot.native_select_popup().is_none());
+    }
+
+    #[test]
+    fn nested_scrollbars_publish_valid_changes_and_clear_with_the_page_state() {
+        let slot = FrameSlot::new();
+        let bar = NestedScrollbar {
+            track_x: 772.0,
+            track_y: 56.0,
+            track_width: 12.0,
+            track_height: 800.0,
+            visible_top: 56.0,
+            visible_bottom: 856.0,
+            scroll_top: 0.0,
+            scroll_height: 8_000.0,
+        };
+        let unscrollable = NestedScrollbar {
+            scroll_height: 400.0,
+            ..bar
+        };
+
+        assert!(slot.publish_nested_scrollbars([bar, unscrollable]));
+        assert_eq!(&*slot.nested_scrollbars(), &[bar]);
+        assert!(!slot.publish_nested_scrollbars([bar]));
+        assert!(slot.publish_nested_scrollbars([NestedScrollbar {
+            scroll_top: 40.0,
+            ..bar
+        }]));
+        assert!(slot.clear_page_scroll_state());
+        assert!(slot.nested_scrollbars().is_empty());
+        assert!(!slot.clear_page_scroll_state());
+
+        assert!(slot.publish_nested_scrollbars([bar]));
+        slot.clear();
+        assert!(slot.nested_scrollbars().is_empty());
     }
 
     #[test]
