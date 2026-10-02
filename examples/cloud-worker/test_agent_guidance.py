@@ -54,6 +54,17 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertIsNone(self.guide('codex', 'AGENTS.md'))
         self.assertIsNotNone(self.guide('claude', 'CLAUDE.md'))
 
+    def test_an_agent_removed_from_the_profile_loses_the_block_and_keeps_its_notes(self):
+        self.configure(['claude', 'codex'])
+        notes = self.root / 'workspace/home/.claude/CLAUDE.md'
+        notes.write_text('# Mine\n\n' + notes.read_text())
+        self.configure(['codex'])
+        self.assertEqual(notes.read_text(), '# Mine\n')
+        self.assertIn('horizon-cloud-worker:begin', self.guide('codex', 'AGENTS.md'))
+        self.configure([])
+        self.assertIsNone(self.guide('codex', 'AGENTS.md'), 'a file that held only our block is removed')
+        self.assertEqual(notes.read_text(), '# Mine\n')
+
     def test_reconfiguring_replaces_the_block_and_keeps_the_agents_own_notes(self):
         notes = self.root / 'workspace/home/.claude/CLAUDE.md'
         notes.parent.mkdir(parents=True)
