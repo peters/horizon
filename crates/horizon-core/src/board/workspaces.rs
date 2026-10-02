@@ -298,6 +298,7 @@ impl Board {
     /// once it stops observing.
     #[must_use]
     pub fn close_panel_returning_teardown(&mut self, id: PanelId) -> Option<crate::browser::BrowserShutdownSignal> {
+        self.hidden_for_disposal.remove(&id);
         let removed_panel = self
             .panels
             .iter()

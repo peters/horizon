@@ -28,3 +28,16 @@ fn a_panel_hidden_for_disposal_loses_its_focus_and_returns_only_if_asked() {
     );
     assert!(!board.is_hidden_for_disposal(panel));
 }
+
+#[test]
+fn closing_a_panel_clears_its_disposal_marker() {
+    let mut board = Board::new();
+    let workspace = board.create_workspace("cloud");
+    let panel = board.create_panel(editor_panel_options(), workspace).unwrap();
+    assert!(board.hide_for_disposal(panel));
+    board.close_panel(panel);
+    assert!(
+        !board.is_hidden_for_disposal(panel),
+        "a closed panel leaves nothing behind, however it was closed"
+    );
+}
