@@ -37,7 +37,7 @@ fn offscreen_output_invalidates_terminal_cache_before_a_quiet_poll() {
                 command: Some("/bin/sh".into()),
                 args: vec![
                     "-c".into(),
-                    r"stty -echo; read -r line; printf 'OFFSCREEN-UPDATE'; read -r line".into(),
+                    r"stty -echo; printf 'READY'; read -r line; printf 'OFFSCREEN-UPDATE'; read -r line".into(),
                 ],
                 cwd: Some(temp.path().to_path_buf()),
                 transcript_root: Some(temp.path().join("transcripts")),
@@ -48,6 +48,23 @@ fn offscreen_output_invalidates_terminal_cache_before_a_quiet_poll() {
             workspace,
         )
         .expect("synthetic terminal");
+    // Wait until terminal setup is finished before sending input or retaining a grid.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        app.drain_panel_output();
+        let panel = app.board.panel(panel_id).expect("panel");
+        if panel.had_recent_output()
+            && panel
+                .terminal()
+                .expect("terminal")
+                .last_lines_text(20)
+                .contains("READY")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "synthetic terminal must finish setup");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     app.panel_render_caches
         .terminal_grid_cache
         .insert(panel_id, TerminalGridCache::default());
