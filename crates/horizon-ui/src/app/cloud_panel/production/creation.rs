@@ -508,6 +508,28 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
             .size(12.0)
             .color(theme::FG_SOFT()),
     );
+    let mut local =
+        form.launch.configuration == horizon_core::cloud_runtime::repository::launch::Configuration::LocalImageOnly;
+    if ui.checkbox(&mut local, "Use local image-only settings").changed() {
+        form.launch.configuration = if local {
+            horizon_core::cloud_runtime::repository::launch::Configuration::LocalImageOnly
+        } else {
+            horizon_core::cloud_runtime::repository::launch::Configuration::Committed
+        };
+        form.selected_profile.clear();
+        form.size = None;
+        form.placement = Placement::default();
+        form.provider = None;
+        form.launch.siblings = siblings::State::default();
+        changed = true;
+    }
+    if local {
+        ui.label(
+            RichText::new("Reads the working copy of .horizon/cloud.yml. Only profiles without build are offered; settings are saved locally for this cloud.")
+                .size(12.0)
+                .color(theme::FG_SOFT()),
+        );
+    }
     let load = ui
         .add(
             Button::new(RichText::new("Read .horizon/cloud.yml").size(13.0))
