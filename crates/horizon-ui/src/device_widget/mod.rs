@@ -42,6 +42,8 @@ pub(crate) struct DeviceUiState {
     status: Status,
     server: DeviceServerDetails,
     desktop: Option<[usize; 2]>,
+    /// What is shown is one flat colour: nothing is open on the desktop yet.
+    empty_desktop: bool,
     controls: controls::Controls,
     /// A person's choice for this session only; never persisted, never set by agents.
     interact: bool,
@@ -207,6 +209,9 @@ impl DeviceUiState {
                 let scale = (available.x / size.x).min(available.y / size.y);
                 visible_image(ui, texture, size * scale, interact)
             };
+            if self.empty_desktop && image_visible && matches!(self.status, Status::Connected) {
+                paint_empty_hint(ui, response.rect);
+            }
             self.image.displayed = image_visible && self.image.received && matches!(self.status, Status::Connected);
             if self.image.displayed {
                 self.image.last_displayed = Some(std::time::Instant::now());
@@ -301,6 +306,7 @@ impl DeviceUiState {
     }
 
     fn upload_displayed(&mut self, ctx: &Context, image: ColorImage) -> bool {
+        self.empty_desktop = frame::looks_empty(&image);
         let limit = ctx.input(|input| input.max_texture_side);
         if image.size.iter().any(|side| *side == 0 || *side > limit) {
             if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
@@ -345,6 +351,7 @@ impl DeviceUiState {
         self.initialized = true;
         self.connection_generation = self.connection_generation.saturating_add(1);
         self.image = ImageDisplay::default();
+        self.empty_desktop = false;
         self.server = DeviceServerDetails::default();
         self.input = InputState::default();
         self.captured = false;
@@ -365,6 +372,27 @@ impl DeviceUiState {
             Err(error) => self.status = Status::Disconnected(error.to_string()),
         }
     }
+}
+
+const EMPTY_DESKTOP_HINT: &str = "Nothing is open on this desktop yet. Programs you start on it appear here.";
+
+/// A blank picture reads as a broken connection, so the picture says what it is. Painted over it,
+/// so nothing around the image moves.
+fn paint_empty_hint(ui: &Ui, image: egui::Rect) {
+    let galley = ui.painter().layout(
+        EMPTY_DESKTOP_HINT.to_owned(),
+        egui::FontId::proportional(14.0),
+        egui::Color32::from_gray(210),
+        (image.width() * 0.8).max(60.0),
+    );
+    let backing = egui::Rect::from_center_size(image.center(), galley.size() + egui::vec2(24.0, 14.0));
+    ui.painter()
+        .rect_filled(backing, 8.0, egui::Color32::from_black_alpha(170));
+    ui.painter().galley(
+        backing.center() - galley.size() * 0.5,
+        galley,
+        egui::Color32::from_gray(210),
+    );
 }
 
 fn visible_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2, interact: bool) -> (bool, egui::Response) {

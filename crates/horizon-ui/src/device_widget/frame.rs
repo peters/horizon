@@ -105,6 +105,29 @@ impl Framebuffer {
     }
 }
 
+/// Whether a picture is one flat colour apart from a stray pointer or a clock: a desktop with
+/// nothing open on it. It samples a fixed grid, so the cost does not grow with the desktop.
+pub(super) fn looks_empty(image: &ColorImage) -> bool {
+    const GRID: usize = 64;
+    // A pointer or a small clock may differ; a window or a wallpaper would differ a lot more.
+    const OTHER_PER_HUNDRED: usize = 2;
+    let [width, height] = image.size;
+    if width == 0 || height == 0 || image.pixels.len() != width * height {
+        return false;
+    }
+    let (columns, rows) = (width.min(GRID), height.min(GRID));
+    let background = image.pixels[0];
+    let mut other = 0;
+    for row in 0..rows {
+        for column in 0..columns {
+            if image.pixels[(row * height / rows) * width + column * width / columns] != background {
+                other += 1;
+            }
+        }
+    }
+    other * 100 <= columns * rows * OTHER_PER_HUNDRED
+}
+
 /// Crop and scale a full desktop image for local view controls.
 pub(super) fn present_image(
     source: &ColorImage,
