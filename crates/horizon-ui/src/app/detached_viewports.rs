@@ -244,7 +244,9 @@ impl HorizonApp {
         self.render_panels_for_workspace(ctx, workspace_id);
         let session_picker_open = session_picker_open
             || super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
-        if !session_picker_open {
+        if session_picker_open {
+            self.clear_file_drop_state(ctx);
+        } else {
             self.render_file_drop_highlight(ctx);
         }
         self.render_workspace_minimap(

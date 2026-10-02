@@ -492,7 +492,7 @@ impl HorizonApp {
         active_session.last_lease_refresh = None;
     }
 
-    pub(super) fn maybe_refresh_session_catalog(&mut self) {
+    pub(super) fn maybe_refresh_session_catalog(&mut self, ctx: &egui::Context) {
         if let Some(receiver) = self.session_catalog_refresh.receiver.take() {
             match receiver.try_recv() {
                 Ok(Ok(catalog)) => {
@@ -522,6 +522,17 @@ impl HorizonApp {
                     tracing::warn!("session catalog refresh worker disconnected");
                 }
             }
+        }
+
+        let picker_providers: HashSet<_> = super::panels::session_picker_panels(ctx)
+            .into_iter()
+            .filter_map(|panel| self.board.panel(panel).map(|panel| panel.kind))
+            .collect();
+        if !picker_providers.is_empty() {
+            for kind in picker_providers {
+                self.refresh_session_catalog_for_picker(ctx, kind);
+            }
+            return;
         }
 
         let has_dynamic_agent = self.board.panels.iter().any(panel_uses_dynamic_binding);

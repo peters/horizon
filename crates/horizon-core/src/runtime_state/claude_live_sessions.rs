@@ -77,7 +77,7 @@ fn collect_verified_live_session_ids(
                     .cast_signed(),
             );
         }
-        let file = options.open(path)?;
+        let file = options.open(&path)?;
         if !file.metadata()?.is_file() {
             return Err(Error::State(
                 "Cannot verify non-regular Claude live-session entry".into(),
@@ -95,13 +95,15 @@ fn collect_verified_live_session_ids(
         }
         let record: VerifiedLiveSession = serde_json::from_str(&contents)
             .map_err(|error| Error::State(format!("Cannot verify Claude live-session entry: {error}")))?;
-        if record.session_id.is_empty() || record.pid == 0 {
+        let session_id = uuid::Uuid::parse_str(&record.session_id)
+            .map_err(|_| Error::State("Cannot verify invalid Claude live-session ID".into()))?;
+        if record.pid == 0 || path.file_stem().and_then(std::ffi::OsStr::to_str) != Some(&record.pid.to_string()) {
             return Err(Error::State(
                 "Cannot verify incomplete Claude live-session entry".into(),
             ));
         }
         if process_is_alive(record.pid) {
-            ids.insert(record.session_id);
+            ids.insert(session_id.to_string());
         }
     }
     Ok(ids)
@@ -269,19 +271,54 @@ mod tests {
     #[test]
     fn verified_registry_protects_live_sessions_and_ignores_stale_processes() {
         let dir = tempfile::tempdir().expect("tempdir");
-        write_entry(dir.path(), "101.json", r#"{"pid":101,"sessionId":"live"}"#);
-        write_entry(dir.path(), "102.json", r#"{"pid":102,"sessionId":"stale"}"#);
+        write_entry(
+            dir.path(),
+            "101.json",
+            r#"{"pid":101,"sessionId":"00000000-0000-0000-0000-000000000101"}"#,
+        );
+        write_entry(
+            dir.path(),
+            "102.json",
+            r#"{"pid":102,"sessionId":"00000000-0000-0000-0000-000000000102"}"#,
+        );
         write_entry(dir.path(), "ignored.txt", "not a registry entry");
         assert_eq!(
             collect_verified_live_session_ids(dir.path(), |pid| pid == 101).expect("verified registry"),
-            HashSet::from(["live".to_string()])
+            HashSet::from(["00000000-0000-0000-0000-000000000101".to_string()])
+        );
+    }
+
+    #[test]
+    fn verified_registry_rejects_inconsistent_pids_and_normalizes_uuid_spelling() {
+        let dir = tempfile::tempdir().expect("registry");
+        for (name, pid, id) in [
+            ("101.json", 102, "00000000-0000-0000-0000-000000000101"),
+            ("not-a-pid.json", 101, "00000000-0000-0000-0000-000000000101"),
+            ("101.json", 101, "not-a-uuid"),
+        ] {
+            write_entry(
+                dir.path(),
+                name,
+                &serde_json::json!({"pid":pid,"sessionId":id}).to_string(),
+            );
+            assert!(collect_verified_live_session_ids(dir.path(), |_| false).is_err());
+            std::fs::remove_file(dir.path().join(name)).expect("remove invalid entry");
+        }
+        write_entry(
+            dir.path(),
+            "101.json",
+            r#"{"pid":101,"sessionId":"0000000000000000000000000000ABCD"}"#,
+        );
+        assert_eq!(
+            collect_verified_live_session_ids(dir.path(), |_| true).expect("normalized ID"),
+            HashSet::from(["00000000-0000-0000-0000-00000000abcd".to_string()])
         );
     }
 
     #[test]
     fn verified_registry_bounds_entry_bytes_and_total_directory_entries() {
         let dir = tempfile::tempdir().expect("registry");
-        let record = r#"{"pid":101,"sessionId":"live"}"#;
+        let record = r#"{"pid":101,"sessionId":"00000000-0000-0000-0000-000000000101"}"#;
         let contents = format!(
             "{record}{}",
             " ".repeat(usize::try_from(super::MAX_REGISTRY_ENTRY_BYTES).expect("entry limit fits") - record.len())
@@ -304,7 +341,11 @@ mod tests {
     fn verified_registry_rejects_links_and_fifos_without_waiting_for_a_writer() {
         let dir = tempfile::tempdir().expect("registry");
         let record = dir.path().join("record.txt");
-        std::fs::write(&record, r#"{"pid":101,"sessionId":"live"}"#).expect("record");
+        std::fs::write(
+            &record,
+            r#"{"pid":101,"sessionId":"00000000-0000-0000-0000-000000000101"}"#,
+        )
+        .expect("record");
         let entry = dir.path().join("101.json");
         std::os::unix::fs::symlink(&record, &entry).expect("linked entry");
         assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_err());

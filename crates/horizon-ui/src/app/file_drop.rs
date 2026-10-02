@@ -53,6 +53,11 @@ pub(super) enum FileDropHighlight {
 }
 
 impl HorizonApp {
+    pub(super) fn clear_file_drop_state(&mut self, ctx: &Context) {
+        self.file_drop_highlight = None;
+        self.file_hover_positions.remove(&ctx.viewport_id());
+    }
+
     pub(super) fn handle_root_file_drop(&mut self, ctx: &Context) {
         let workspace_id = self.board.active_workspace;
         let fullscreen_panel = self

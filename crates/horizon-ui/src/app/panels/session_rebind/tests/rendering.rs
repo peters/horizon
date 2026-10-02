@@ -64,7 +64,7 @@ fn idle_picker_requests_a_provider_refresh_without_recent_panel_output() {
         .expect("idle panel");
     app.session_catalog_refresh.last_full_refresh =
         std::time::Instant::now().checked_sub(std::time::Duration::from_secs(3));
-    app.maybe_refresh_session_catalog();
+    app.maybe_refresh_session_catalog(&Context::default());
     assert!(app.session_catalog_refresh.receiver.is_none());
     let _ = ctx
         .run_ui(RawInput::default(), |ui| {
@@ -485,7 +485,7 @@ fn provider_scan_completion_tracks_only_its_provider() {
         .expect("send provider scan");
     app.session_catalog_refresh.receiver = Some(rx);
     app.session_catalog_refresh.provider = Some(PanelKind::Claude);
-    app.maybe_refresh_session_catalog();
+    app.maybe_refresh_session_catalog(&Context::default());
     assert!(
         app.session_catalog_refresh
             .picker_times
@@ -545,5 +545,75 @@ fn wrapped_cards_keep_all_metadata_visible_and_delete_actions_identifiable() {
                     .any(|(_, node)| node.label() == Some(label.as_str()))
             );
         }
+    }
+}
+
+#[test]
+fn open_picker_prioritizes_provider_refresh_after_full_scan_failure() {
+    for viewport in [
+        egui::ViewportId::ROOT,
+        egui::ViewportId::from_hash_of("detached-refresh"),
+    ] {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let ctx = Context::default();
+        let workspace = app.board.create_workspace("refresh");
+        let panel = app
+            .board
+            .create_panel(
+                horizon_core::PanelOptions {
+                    kind: PanelKind::Editor,
+                    ..Default::default()
+                },
+                workspace,
+            )
+            .expect("panel");
+        app.board.panel_mut(panel).expect("panel").kind = PanelKind::Claude;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.session_catalog_refresh.receiver = Some(rx);
+        let mut raw = RawInput {
+            viewport_id: viewport,
+            ..Default::default()
+        };
+        raw.viewports.insert(viewport, egui::ViewportInfo::default());
+        let _ = ctx
+            .run_ui(raw, |ui| {
+                open_session_picker(&ui.button("Resume"), panel, Vec::new());
+                app.maybe_refresh_session_catalog(&ctx);
+                assert!(app.session_catalog_refresh.receiver.is_some());
+                assert!(
+                    app.session_catalog_refresh.provider.is_none(),
+                    "in-flight full scan is retained"
+                );
+            })
+            .discard_textures();
+        tx.send(Err(horizon_core::Error::State("unrelated store failed".into())))
+            .expect("full refresh failure");
+        let mut root_input = RawInput::default();
+        root_input.viewports.insert(viewport, egui::ViewportInfo::default());
+        let _ = ctx
+            .run_ui(root_input, |_| {
+                app.maybe_refresh_session_catalog(&ctx);
+                assert_eq!(app.session_catalog_refresh.provider, Some(PanelKind::Claude));
+                assert!(app.session_catalog_refresh.receiver.is_some());
+                app.session_catalog_refresh.receiver = None;
+                app.session_catalog_refresh.provider = None;
+                app.session_catalog_refresh
+                    .picker_times
+                    .insert(PanelKind::Claude, std::time::Instant::now());
+                app.session_catalog_refresh.last_full_refresh = None;
+                app.maybe_refresh_session_catalog(&ctx);
+                assert!(
+                    app.session_catalog_refresh.receiver.is_none(),
+                    "fresh picker suppresses new full scans"
+                );
+                ctx.data_mut(|data| data.remove::<SessionPicker>(Id::new(("session_recovery_picker", viewport))));
+                app.maybe_refresh_session_catalog(&ctx);
+                assert!(
+                    app.session_catalog_refresh.receiver.is_some(),
+                    "closing the picker restores full refresh"
+                );
+                assert!(app.session_catalog_refresh.provider.is_none());
+            })
+            .discard_textures();
     }
 }

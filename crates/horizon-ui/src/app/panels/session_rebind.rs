@@ -103,6 +103,14 @@ pub(in crate::app) fn session_picker_panel(ctx: &egui::Context) -> Option<PanelI
     session_picker_panel_in_viewport(ctx, ctx.viewport_id())
 }
 
+pub(in crate::app) fn session_picker_panels(ctx: &egui::Context) -> Vec<PanelId> {
+    let viewports = ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
+    viewports
+        .into_iter()
+        .filter_map(|viewport| session_picker_panel_in_viewport(ctx, viewport))
+        .collect()
+}
+
 pub(in crate::app) fn focused_session_picker_panel(ctx: &egui::Context) -> Option<PanelId> {
     let viewport = ctx
         .input(|input| {

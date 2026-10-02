@@ -304,3 +304,40 @@ fn picker_clicks_do_not_focus_underlying_panels() {
         .discard_textures();
     assert_eq!(app.board.focused, Some(other));
 }
+
+#[test]
+fn root_picker_clears_stale_drop_state_on_opening_and_blocked_frames() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = Context::default();
+    let workspace = app.board.create_workspace("drop isolation");
+    let panel = app
+        .board
+        .create_panel(
+            horizon_core::PanelOptions {
+                kind: PanelKind::Editor,
+                ..Default::default()
+            },
+            workspace,
+        )
+        .expect("panel");
+    let detached = egui::ViewportId::from_hash_of("other-drop");
+    for opening in [true, false] {
+        app.file_drop_highlight = Some(crate::app::file_drop::FileDropHighlight::Panel(panel));
+        app.file_hover_positions
+            .insert(egui::ViewportId::ROOT, Pos2::new(10.0, 20.0));
+        app.file_hover_positions.insert(detached, Pos2::new(30.0, 40.0));
+        let _ = ctx
+            .run_ui(RawInput::default(), |ui| {
+                if opening {
+                    open_session_picker(&ui.button("Resume"), panel, Vec::new());
+                    app.render_file_drop_highlight(&ctx);
+                } else {
+                    app.process_frame_inputs(&ctx);
+                }
+            })
+            .discard_textures();
+        assert!(app.file_drop_highlight.is_none());
+        assert!(!app.file_hover_positions.contains_key(&egui::ViewportId::ROOT));
+        assert!(app.file_hover_positions.contains_key(&detached));
+    }
+}

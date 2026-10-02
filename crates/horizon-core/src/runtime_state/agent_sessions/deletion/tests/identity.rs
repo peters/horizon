@@ -1,5 +1,9 @@
 use super::*;
 
+fn delete_claude_transcript(projects: &Path, session: &AgentSessionBinding) -> Result<DeletionOutcome> {
+    delete_claude_transcript_with(projects, session, || Ok(()))
+}
+
 #[test]
 fn invalid_live_registry_aborts_before_touching_transcript_or_artifacts() {
     let home = tempfile::tempdir().expect("home");
@@ -225,5 +229,44 @@ fn oversized_record_preserves_history_and_boundary_record_deletes() {
             assert!(!path.exists());
             assert!(!artifacts.exists());
         }
+    }
+}
+
+#[test]
+fn registry_changes_after_validation_preserve_transcript_and_artifacts() {
+    for malformed in [false, true] {
+        let home = tempfile::tempdir().expect("home");
+        let session = binding(808);
+        let projects = home.path().join(".claude/projects");
+        let registry = home.path().join(".claude/sessions");
+        let project = projects.join("example");
+        let artifacts = project.join(&session.session_id);
+        std::fs::create_dir_all(&artifacts).expect("artifacts");
+        std::fs::create_dir_all(&registry).expect("registry");
+        let path = project.join(format!("{}.jsonl", session.session_id));
+        let contents = serde_json::json!({"sessionId":session.session_id,"cwd":"/example"}).to_string();
+        std::fs::write(&path, &contents).expect("transcript");
+        std::fs::write(artifacts.join("child.jsonl"), "saved child").expect("child");
+        verify_claude_session_inactive(home.path(), &session).expect("initially inactive");
+        let result = delete_claude_transcript_with(&projects, &session, || {
+            let pid = std::process::id();
+            let entry = if malformed {
+                "invalid".into()
+            } else {
+                serde_json::json!({"pid":pid,"sessionId":session.session_id}).to_string()
+            };
+            std::fs::write(registry.join(format!("{pid}.json")), entry)?;
+            verify_claude_session_inactive(home.path(), &session)
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(path).expect("transcript retained"), contents);
+        assert_eq!(
+            std::fs::read_to_string(artifacts.join("child.jsonl")).expect("child retained"),
+            "saved child"
+        );
+        assert_eq!(
+            std::fs::read_dir(home.path().join(".claude")).expect("store").count(),
+            2
+        );
     }
 }

@@ -57,7 +57,9 @@ impl HorizonApp {
         self.filter_held_navigation_keys(ctx);
         let input_blocked = self.host_dialog_open()
             || super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
-        if !input_blocked {
+        if input_blocked {
+            self.clear_file_drop_state(ctx);
+        } else {
             self.sync_panel_focus_from_pointer_press(ctx);
         }
         // Releases and asynchronous speech work must continue through dialogs.
@@ -76,7 +78,7 @@ impl HorizonApp {
 
         self.animate_pan(ctx);
         self.poll_saved_session_deletion(ctx);
-        self.maybe_refresh_session_catalog();
+        self.maybe_refresh_session_catalog(ctx);
         self.poll_remote_hosts_refresh();
         self.poll_ssh_upload_flow();
         self.poll_git_watchers();

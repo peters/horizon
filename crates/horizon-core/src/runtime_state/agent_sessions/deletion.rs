@@ -242,10 +242,19 @@ fn delete_provider_session(session: &AgentSessionBinding) -> Result<DeletionOutc
 }
 
 fn delete_claude_session(home: &Path, session: &AgentSessionBinding) -> Result<DeletionOutcome> {
-    if verified_live_claude_session_ids(home)?.contains(&session.session_id) {
+    verify_claude_session_inactive(home, session)?;
+    delete_claude_transcript_with(&home.join(".claude/projects"), session, || {
+        verify_claude_session_inactive(home, session)
+    })
+}
+
+fn verify_claude_session_inactive(home: &Path, session: &AgentSessionBinding) -> Result<()> {
+    let id = uuid::Uuid::parse_str(&session.session_id)
+        .map_err(|_| Error::State("Invalid Claude conversation ID".into()))?;
+    if verified_live_claude_session_ids(home)?.contains(&id.to_string()) {
         return Err(Error::State("This conversation is open in Claude Code".into()));
     }
-    delete_claude_transcript(&home.join(".claude/projects"), session)
+    Ok(())
 }
 
 fn delete_codex_session(session_id: &str) -> Result<()> {
@@ -287,7 +296,11 @@ fn delete_codex_session(session_id: &str) -> Result<()> {
     }
 }
 
-fn delete_claude_transcript(projects: &Path, session: &AgentSessionBinding) -> Result<DeletionOutcome> {
+fn delete_claude_transcript_with(
+    projects: &Path,
+    session: &AgentSessionBinding,
+    verify_inactive: impl FnOnce() -> Result<()>,
+) -> Result<DeletionOutcome> {
     if uuid::Uuid::parse_str(&session.session_id).is_err() {
         return Err(Error::State("Invalid Claude conversation ID".into()));
     }
@@ -330,6 +343,7 @@ fn delete_claude_transcript(projects: &Path, session: &AgentSessionBinding) -> R
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
+    verify_inactive()?;
     stage_claude_deletion(
         &root,
         path,

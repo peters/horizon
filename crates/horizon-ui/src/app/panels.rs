@@ -31,7 +31,7 @@ use session_rebind::SessionRebindRenderOutcome;
 use session_rebind::open_session_picker;
 #[cfg(test)]
 use session_rebind::render_session_rebind_options;
-pub(super) use session_rebind::{focused_session_picker_panel, session_picker_panel};
+pub(super) use session_rebind::{focused_session_picker_panel, session_picker_panel, session_picker_panels};
 
 #[derive(Clone, Copy)]
 pub(in crate::app) struct PanelScreenGeometry {
