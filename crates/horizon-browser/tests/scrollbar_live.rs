@@ -25,10 +25,11 @@ div{height:60px}
 #footer{position:fixed;left:0;right:0;top:560px;height:40px;background:#333}
 #rotated{position:absolute;left:0;top:200px;width:200px;height:150px;overflow:auto;transform:rotate(180deg)}
 #toolbar{position:fixed;left:0;right:0;top:300px;height:30px;background:#555}
+#ghost{position:fixed;right:0;width:40px;top:480px;height:40px;opacity:0}
 #zoomed{position:absolute;left:250px;top:200px;width:100px;height:60px;overflow:auto;zoom:2}
 #reverse{position:absolute;left:0;top:400px;width:150px;height:100px;overflow:auto;display:flex;flex-direction:column-reverse}
 #reverse div{flex:none;height:20px}
-</style><header></header><main id="list"><section id="footer"></section><section id="toolbar"></section></main>
+</style><header></header><main id="list"><section id="footer"></section><section id="toolbar"></section><section id="ghost"></section></main>
 <section id="rotated"></section><section id="zoomed"></section><section id="reverse"></section>
 <script>
 const list = document.getElementById('list');
@@ -75,7 +76,11 @@ fn firefox_publishes_and_drags_a_nested_scrollbar() {
     let bars = frame_slot.nested_scrollbars();
     let mut runs: Vec<_> = bars.iter().filter(|bar| main(bar)).collect();
     runs.sort_by(|left, right| left.visible_top.total_cmp(&right.visible_top));
-    assert_eq!(runs.len(), 2, "a fixed toolbar across the gutter splits it: {bars:?}");
+    assert_eq!(
+        runs.len(),
+        2,
+        "a fixed toolbar splits the gutter and a transparent one does not: {bars:?}"
+    );
     for run in &runs {
         assert!(run.track_width >= 1.0);
         assert!((run.track_y - 56.0).abs() < 1.0, "{run:?}");

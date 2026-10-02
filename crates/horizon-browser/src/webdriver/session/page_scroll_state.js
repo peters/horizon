@@ -14,9 +14,26 @@ const topmost = (x, y) => {
     }
     return node;
 };
+// Hit testing ignores paint: a transparent element still wins the hit.
+const paintsNothing = element => {
+    for (let current = element; current; current = parentOf(current)) {
+        if (getComputedStyle(current).opacity === '0') return true;
+    }
+    return false;
+};
 // Content is clipped out of the gutter, so a hit there is the scrollbar only
-// when it is the container itself; any descendant hit overlays the gutter.
-const owns = (node, x, y) => topmost(x, y) === node;
+// when it is the container itself; any other painted hit overlays the gutter.
+// Overlays with `pointer-events: none` are invisible to every hit-test API.
+const owns = (node, x, y) => {
+    const hit = topmost(x, y);
+    if (hit === node) return true;
+    if (!hit || !paintsNothing(hit)) return false;
+    for (const element of node.getRootNode().elementsFromPoint(x, y)) {
+        if (element === node) return true;
+        if (!paintsNothing(element)) return false;
+    }
+    return false;
+};
 // Client metrics map onto the viewport only through translation: rotation,
 // scale and CSS zoom all change the box without changing those metrics.
 const translatedOnly = style => {
