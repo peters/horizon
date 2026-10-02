@@ -2,6 +2,20 @@ use super::CloudGroup;
 use crate::PanelKind;
 
 impl CloudGroup {
+    /// What a freshly deployed cloud opens first: the first coding agent its profile
+    /// allows, otherwise a shell.
+    #[must_use]
+    pub fn first_panel_kind(&self) -> PanelKind {
+        self.remote
+            .as_ref()
+            .and_then(|launch| launch.profile.capabilities.agents.first().copied())
+            .map_or(PanelKind::Shell, |agent| match agent {
+                horizon_cloud::Agent::Codex => PanelKind::Codex,
+                horizon_cloud::Agent::Claude => PanelKind::Claude,
+                horizon_cloud::Agent::Grok => PanelKind::Grok,
+            })
+    }
+
     /// Prototype groups retain their local panel behavior. Managed groups use
     /// the immutable capability selection saved with their launch intent.
     #[must_use]
@@ -31,6 +45,35 @@ impl CloudGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_new_cloud_opens_its_first_allowed_agent_or_else_a_shell() {
+        let mut group = CloudGroup::new(1, "test".into(), "workspace".into(), ".".into(), [0.0, 0.0]);
+        assert_eq!(group.first_panel_kind(), PanelKind::Shell, "no cloud, no agent");
+        let mut profile = horizon_cloud::CloudConfig::parse(horizon_cloud::EXAMPLE)
+            .unwrap()
+            .profiles
+            .remove("development")
+            .unwrap();
+        group.remote = Some(super::super::CloudLaunch {
+            deployment_started: false,
+            id: "test".into(),
+            revision: "a".repeat(40),
+            profile_name: "test".into(),
+            profile: profile.clone(),
+            placement: crate::cloud_panel::Placement::default(),
+        });
+        for (agents, expected) in [
+            ("[]", PanelKind::Shell),
+            (r#"["claude"]"#, PanelKind::Claude),
+            (r#"["codex","claude"]"#, PanelKind::Codex),
+            (r#"["grok"]"#, PanelKind::Grok),
+        ] {
+            profile.capabilities = serde_json::from_str(&format!(r#"{{"agents":{agents}}}"#)).unwrap();
+            group.remote.as_mut().unwrap().profile = profile.clone();
+            assert_eq!(group.first_panel_kind(), expected, "agents {agents}");
+        }
+    }
+
     #[test]
     fn minimal_profile_rejects_optional_panels_and_allows_shell() {
         let mut group = CloudGroup::new(1, "test".into(), "workspace".into(), ".".into(), [0.0, 0.0]);
