@@ -332,12 +332,12 @@ impl RuntimeState {
                                     session_id: browser.shared_profile_id().map(str::to_string),
                                     root: browser.profile_root_for_persistence().map(Path::to_path_buf),
                                     backend: Some(browser.backend()),
-                                    hidden: !panel.visible,
+                                    hidden: !panel.visible && !board.is_hidden_for_disposal(panel.id),
                                     remote_target: browser.remote_target().map(str::to_string),
                                 })
                                 .or_else(|| {
                                     panel.disconnected_browser_profile.clone().map(|mut profile| {
-                                        profile.hidden = !panel.visible;
+                                        profile.hidden = !panel.visible && !board.is_hidden_for_disposal(panel.id);
                                         profile
                                     })
                                 }),

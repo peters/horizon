@@ -432,6 +432,24 @@ mod tests {
     }
 
     #[test]
+    fn a_closing_cloud_gives_its_body_to_the_disposal_even_with_panels() {
+        let mut group = CloudGroup::new(101, "test".into(), "workspace".into(), ".".into(), [0.0, 0.0]);
+        let legacy = serde_json::json!({
+            "deployment_started": true, "id": "cloud", "revision": "a".repeat(40), "profile_name": "dev",
+            "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8},
+        });
+        group.remote = Some(serde_json::from_value(legacy).unwrap());
+        group.panels.push("member".into());
+        let (min, max) = group.runtime_bounds();
+        assert!((max[1] - min[1]).abs() < f32::EPSILON, "its panels own the body");
+        let (min, max) = group.runtime_bounds_while(true);
+        assert!(max[1] - min[1] > 1.0, "its disposal owns the body while it is closed");
+        group.collapsed = true;
+        let (min, max) = group.runtime_bounds_while(true);
+        assert!((max[1] - min[1]).abs() < f32::EPSILON, "a collapsed cloud has no body");
+    }
+
+    #[test]
     fn a_cloud_keeps_its_placement_and_records_without_one_keep_their_encoding() {
         let mut settings = vec!["EU-RO-1".to_owned(), "US-MO-2".to_owned()];
         let mut gpus = vec!["NVIDIA RTX A6000".to_owned()];
