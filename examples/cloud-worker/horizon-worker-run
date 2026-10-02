@@ -49,6 +49,74 @@ if [ "$agent" = claude ]; then
         export ANTHROPIC_WORKSPACE_ID
         export ANTHROPIC_CUSTOM_HEADERS="anthropic-workspace-id: $ANTHROPIC_WORKSPACE_ID"
     fi
+    # A worker is a disposable container, so its person has already chosen to run Claude Code
+    # here: skip the first-run dialogs (theme, the API key, trusting the folder) rather than
+    # leave every new panel asking them. Failing to seed only brings the dialogs back.
+    python3 - <<'PY' || true
+import fcntl, json, os
+home = os.environ['HOME']
+path = home + '/.claude.json'
+key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
+# Claude keeps approvals by the last 20 characters. A key no longer than that would be copied
+# whole, so it is not approved here and Claude asks about it as usual.
+tail = key[-20:] if len(key) > 20 else ''
+
+
+def current():
+    try:
+        with open(path, 'rb') as saved:
+            return saved.read()
+    except FileNotFoundError:
+        return b''
+
+
+def seeded(raw):
+    try:
+        config = json.loads(raw)
+    except ValueError:
+        config = {}
+    if not isinstance(config, dict):
+        config = {}
+    config['hasCompletedOnboarding'] = True
+    config.setdefault('theme', 'dark')
+    projects = config.get('projects')
+    if not isinstance(projects, dict):
+        projects = config['projects'] = {}
+    # Trust covers the folders below it: the checkout, the worktrees agents add, siblings.
+    entry = projects.get('/workspace')
+    if not isinstance(entry, dict):
+        entry = projects['/workspace'] = {}
+    entry['hasTrustDialogAccepted'] = True
+    entry['hasCompletedProjectOnboarding'] = True
+    if tail:
+        answers = config.get('customApiKeyResponses')
+        if not isinstance(answers, dict):
+            answers = config['customApiKeyResponses'] = {}
+        answers['approved'] = list(dict.fromkeys([*answers.get('approved', []), tail]))
+        answers['rejected'] = [other for other in answers.get('rejected', []) if other != tail]
+    return config
+
+
+with open(path + '.horizon-lock', 'a') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    # Claude saves this file without taking the lock, so write only when something is missing,
+    # and start over if it changed while the update was prepared.
+    for _ in range(5):
+        raw = current()
+        try:
+            unchanged = json.loads(raw) == seeded(raw)
+        except ValueError:
+            unchanged = False
+        if unchanged:
+            break
+        pending = path + '.horizon-new'
+        descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, 'w') as out:
+            json.dump(seeded(raw), out)
+        if current() == raw:
+            os.replace(pending, path)
+            break
+PY
     # The first launch assigns an id. Resume only after Claude has written that
     # session's transcript; an id with no transcript must be started again.
     session_file="/workspace/sessions/$id/agent-session"

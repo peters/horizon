@@ -82,6 +82,77 @@ sys.exit(23)
         self.assertEqual(child['path'], self.env['PATH'])
         self.assertIsNone(child['toolkit'])
 
+    def claude_config(self):
+        return json.loads((self.workspace / 'home/.claude.json').read_text())
+
+    def test_claude_starts_without_first_run_dialogs(self):
+        key = 'sk-ant-api03-' + 'x' * 30 + 'ABCDEFGHIJKLMNOPQRST'
+        (self.workspace / 'credentials/anthropic-api-key').write_text(key + '\n')
+        self.launch()
+        config = self.claude_config()
+        self.assertTrue(config['hasCompletedOnboarding'])
+        self.assertEqual(config['theme'], 'dark')
+        self.assertEqual(config['customApiKeyResponses'], {'approved': [key[-20:]], 'rejected': []})
+        self.assertEqual(config['projects'][str(self.workspace)],
+                         {'hasTrustDialogAccepted': True, 'hasCompletedProjectOnboarding': True})
+        self.assertEqual((self.workspace / 'home/.claude.json').stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(key, (self.workspace / 'home/.claude.json').read_text(), 'only the key tail is kept')
+
+    def test_seeding_keeps_what_claude_saved_and_is_repeatable(self):
+        key = 'sk-ant-api03-' + 'y' * 40
+        (self.workspace / 'credentials/anthropic-api-key').write_text(key + '\n')
+        saved = {'theme': 'light', 'numStartups': 7, 'projects': {'/elsewhere': {'allowedTools': ['Bash']}},
+                 'customApiKeyResponses': {'approved': ['older'], 'rejected': [key[-20:]]}}
+        (self.workspace / 'home/.claude.json').write_text(json.dumps(saved))
+        self.launch()
+        first = self.claude_config()
+        self.assertEqual(first['theme'], 'light', 'a theme the person chose stays')
+        self.assertEqual(first['numStartups'], 7)
+        self.assertEqual(first['projects']['/elsewhere'], {'allowedTools': ['Bash']})
+        self.assertEqual(first['customApiKeyResponses'], {'approved': ['older', key[-20:]], 'rejected': []})
+        self.launch()
+        self.assertEqual(self.claude_config(), first)
+
+    def test_a_key_no_longer_than_the_approval_tail_is_never_copied(self):
+        short = 'synthetic-key'
+        (self.workspace / 'credentials/anthropic-api-key').write_text(short + '\n')
+        self.launch()
+        raw = (self.workspace / 'home/.claude.json').read_text()
+        self.assertNotIn(short, raw)
+        self.assertNotIn('customApiKeyResponses', json.loads(raw))
+
+    def test_a_launch_that_finds_everything_in_place_does_not_rewrite_the_file(self):
+        (self.workspace / 'credentials/anthropic-api-key').write_text('sk-ant-api03-' + 'z' * 40 + '\n')
+        self.launch()
+        config = self.workspace / 'home/.claude.json'
+        before = config.stat()
+        # Claude's own later save must survive the next launch.
+        saved = json.loads(config.read_text())
+        saved['numStartups'] = 3
+        config.write_text(json.dumps(saved))
+        mtime = config.stat().st_mtime_ns
+        self.launch()
+        self.assertEqual(config.stat().st_mtime_ns, mtime, 'nothing to add, so nothing is written')
+        self.assertEqual(self.claude_config()['numStartups'], 3)
+        self.assertGreaterEqual(mtime, before.st_mtime_ns)
+
+    def test_a_subscription_worker_approves_no_key(self):
+        (self.workspace / 'credentials/anthropic-api-key').unlink()
+        self.launch()
+        config = self.claude_config()
+        self.assertTrue(config['hasCompletedOnboarding'])
+        self.assertNotIn('customApiKeyResponses', config)
+
+    def test_a_config_claude_cannot_read_is_replaced_not_fatal(self):
+        (self.workspace / 'home/.claude.json').write_text('{ not json')
+        child = self.launch()
+        self.assertEqual(child['args'][0], '--session-id', 'the agent still starts')
+        self.assertTrue(self.claude_config()['hasCompletedOnboarding'])
+
+    def test_other_agents_leave_the_claude_config_alone(self):
+        self.launch('grok')
+        self.assertFalse((self.workspace / 'home/.claude.json').exists())
+
     def test_inherited_environment_cannot_enable_background_updates(self):
         self.assertEqual(self.launch(DISABLE_AUTOUPDATER='0')['env']['DISABLE_AUTOUPDATER'], '1')
 
