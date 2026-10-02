@@ -23,8 +23,8 @@ use models::valid_local_id;
 
 pub use agent_sessions::{
     AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionDeletionCleanupWarning, AgentSessionDeletionFailure,
-    AgentSessionDeletionReport, AgentSessionDeletionReservation, AgentSessionRecord, reserve_saved_session_deletions,
-    saved_session_deletion_pending,
+    AgentSessionDeletionRecovery, AgentSessionDeletionReport, AgentSessionDeletionReservation, AgentSessionRecord,
+    reserve_saved_session_deletions, saved_session_deletion_pending,
 };
 pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_session_ids};
 pub use models::{

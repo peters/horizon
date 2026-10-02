@@ -72,10 +72,10 @@ pub use remote_hosts::{
 };
 pub use runtime_state::{
     AgentSessionBinding, AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionDeletionCleanupWarning,
-    AgentSessionDeletionFailure, AgentSessionDeletionReport, AgentSessionDeletionReservation, AgentSessionKey,
-    AgentSessionRecord, BrowserProfileState, DetachedWorkspaceState, PanelState, PanelTemplateRef,
-    RemoteWorkspaceReference, RuntimeState, WorkspaceState, WorkspaceTemplateRef, live_claude_session_ids,
-    new_local_id, reserve_saved_session_deletions, saved_session_deletion_pending,
+    AgentSessionDeletionFailure, AgentSessionDeletionRecovery, AgentSessionDeletionReport,
+    AgentSessionDeletionReservation, AgentSessionKey, AgentSessionRecord, BrowserProfileState, DetachedWorkspaceState,
+    PanelState, PanelTemplateRef, RemoteWorkspaceReference, RuntimeState, WorkspaceState, WorkspaceTemplateRef,
+    live_claude_session_ids, new_local_id, reserve_saved_session_deletions, saved_session_deletion_pending,
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
 pub use session_store::{

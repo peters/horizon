@@ -16,8 +16,9 @@ use super::{AgentSessionBinding, PanelKind, RuntimeState, normalize_cwd};
 mod codex;
 mod deletion;
 pub use deletion::{
-    AgentSessionDeletionCleanupWarning, AgentSessionDeletionFailure, AgentSessionDeletionReport,
-    AgentSessionDeletionReservation, reserve_saved_session_deletions, saved_session_deletion_pending,
+    AgentSessionDeletionCleanupWarning, AgentSessionDeletionFailure, AgentSessionDeletionRecovery,
+    AgentSessionDeletionReport, AgentSessionDeletionReservation, reserve_saved_session_deletions,
+    saved_session_deletion_pending,
 };
 mod grok;
 
@@ -275,26 +276,33 @@ fn load_claude_sessions() -> Result<Vec<AgentSessionRecord>> {
         return Ok(Vec::new());
     };
     let projects_dir = home.join(".claude/projects");
+    load_claude_sessions_from_dir(&projects_dir)
+}
+
+fn load_claude_sessions_from_dir(projects_dir: &Path) -> Result<Vec<AgentSessionRecord>> {
     if !projects_dir.exists() {
         return Ok(Vec::new());
     }
 
+    let unavailable = deletion::retained_claude_recovery_ids(projects_dir)?;
     let mut session_paths = Vec::new();
-    collect_claude_project_files(&projects_dir, &mut session_paths)?;
+    collect_claude_project_files(projects_dir, &mut session_paths)?;
     session_paths.sort_by_key(|(_, updated_at)| Reverse(*updated_at));
     session_paths.truncate(super::MAX_CLAUDE_SESSION_FILES);
 
     let mut sessions_by_id: HashMap<String, AgentSessionRecord> = HashMap::new();
     for (path, updated_at) in session_paths {
         match load_claude_project_session_summary(&path, updated_at) {
-            Ok(Some(session)) => match sessions_by_id.get_mut(&session.session_id) {
-                Some(existing) if session.updated_at > existing.updated_at => *existing = session,
-                Some(_) => {}
-                None => {
-                    sessions_by_id.insert(session.session_id.clone(), session);
+            Ok(Some(session)) if !unavailable.contains(&session.session_id) => {
+                match sessions_by_id.get_mut(&session.session_id) {
+                    Some(existing) if session.updated_at > existing.updated_at => *existing = session,
+                    Some(_) => {}
+                    None => {
+                        sessions_by_id.insert(session.session_id.clone(), session);
+                    }
                 }
-            },
-            Ok(None) => {}
+            }
+            Ok(Some(_) | None) => {}
             Err(error) => {
                 tracing::warn!("failed loading Claude session {}: {error}", path.display());
             }

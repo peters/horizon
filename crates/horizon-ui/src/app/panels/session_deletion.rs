@@ -17,6 +17,7 @@ pub(super) struct SessionDeletionUi {
     pub(super) message: Option<String>,
     details: Arc<[String]>,
     cleanup_details: Arc<[String]>,
+    recovery_details: Arc<[String]>,
 }
 
 impl SessionDeletionUi {
@@ -56,6 +57,18 @@ impl SessionDeletionUi {
                         .max_height(96.0)
                         .show(ui, |ui| {
                             for detail in self.cleanup_details.iter() {
+                                ui.label(detail);
+                            }
+                        });
+                });
+            }
+            if !self.recovery_details.is_empty() {
+                ui.collapsing("Saved history needs recovery", |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("deletion_recovery")
+                        .max_height(96.0)
+                        .show(ui, |ui| {
+                            for detail in self.recovery_details.iter() {
                                 ui.label(detail);
                             }
                         });
@@ -172,6 +185,21 @@ impl SessionDeletionUi {
         request
     }
 
+    pub(super) fn reconcile_options(&mut self, options: &[AgentSessionBinding]) {
+        Arc::make_mut(&mut self.selected).retain(|id| options.iter().any(|binding| &binding.session_id == id));
+        if self.confirmation.as_ref().is_some_and(|sessions| {
+            sessions.iter().any(|session| {
+                !options.iter().any(|binding| {
+                    binding.kind == session.kind
+                        && binding.session_id == session.session_id
+                        && binding.cwd == session.cwd
+                })
+            })
+        }) {
+            self.confirmation = None;
+        }
+    }
+
     pub(super) fn confirming(&self) -> bool {
         self.confirmation.is_some()
     }
@@ -189,6 +217,28 @@ impl SessionDeletionUi {
         {
             let _ = write!(message, " {} awaiting file cleanup.", report.cleanup_warnings.len());
         }
+        if !report.recoveries.is_empty()
+            && let Some(message) = &mut self.message
+        {
+            let _ = write!(
+                message,
+                " Recovery needed for {} conversation{}.",
+                report.recoveries.len(),
+                if report.recoveries.len() == 1 { "" } else { "s" }
+            );
+        }
+        self.recovery_details = report
+            .recoveries
+            .iter()
+            .map(|recovery| {
+                format!(
+                    "{}: {} — {}",
+                    recovery.session_id,
+                    recovery.directory.display(),
+                    recovery.message
+                )
+            })
+            .collect();
         self.cleanup_details = report
             .cleanup_warnings
             .iter()
@@ -266,7 +316,16 @@ impl HorizonApp {
         panel_id: PanelId,
     ) -> Option<AgentSessionBinding> {
         self.poll_saved_session_deletion(ctx);
-        let binding = super::session_rebind::render_session_picker(ctx, panel_id);
+        if super::session_rebind::session_picker_panel(ctx) != Some(panel_id) {
+            return None;
+        }
+        let options = self.session_rebind_options(panel_id);
+        let binding = super::session_rebind::render_session_picker(ctx, panel_id, options);
+        let binding = binding.filter(|chosen| {
+            self.session_rebind_options(panel_id).iter().any(|current| {
+                current.kind == chosen.kind && current.session_id == chosen.session_id && current.cwd == chosen.cwd
+            })
+        });
         if let Some(sessions) = take_deletion_request(ctx) {
             self.start_saved_session_deletion(ctx, panel_id, sessions);
         }
@@ -287,9 +346,9 @@ impl HorizonApp {
         ctx.data_mut(|data| data.remove::<DeletionJob>(job_id()));
         let owner = job.owner;
         let viewport = job.viewport;
+        self.session_catalog.remove_deleted_sessions(&report);
         drop(job);
         ctx.data_mut(|data| data.insert_temp(receipt_id(), Arc::new(report.clone())));
-        self.session_catalog.remove_deleted_sessions(&report);
         self.session_catalog_refresh = None;
         self.last_session_catalog_refresh = None;
         let options = self.session_rebind_options(owner);
@@ -366,6 +425,7 @@ impl HorizonApp {
                     progress.report.deleted.extend(report.deleted);
                     progress.report.failures.extend(report.failures);
                     progress.report.cleanup_warnings.extend(report.cleanup_warnings);
+                    progress.report.recoveries.extend(report.recoveries);
                     drop(progress);
                     repaint.request_repaint();
                 }
@@ -465,6 +525,61 @@ mod tests {
             ui.finish(&report);
             assert_eq!(ui.message.as_deref(), Some("Deleted 0 conversations. 11 failed."));
         }
+    }
+
+    #[test]
+    fn recovery_receipt_does_not_claim_success_or_resumable_failure() {
+        let ctx = egui::Context::default();
+        let report = AgentSessionDeletionReport {
+            recoveries: vec![horizon_core::AgentSessionDeletionRecovery {
+                key: AgentSessionKey::new(horizon_core::PanelKind::Claude, "synthetic-id"),
+                session_id: "synthetic-id".into(),
+                directory: "/sample/recovery".into(),
+                message: "Restore transcript first".into(),
+            }],
+            ..Default::default()
+        };
+        ctx.data_mut(|data| data.insert_temp(receipt_id(), Arc::new(report)));
+        let restored = SessionDeletionUi::restored(&ctx);
+        assert_eq!(
+            restored.message.as_deref(),
+            Some("Deleted 0 conversations. 0 failed. Recovery needed for 1 conversation.")
+        );
+        assert!(restored.details.is_empty());
+        assert!(restored.recovery_details[0].contains("/sample/recovery"));
+    }
+
+    #[test]
+    fn scope_changes_cancel_confirmation_without_silently_reducing_it() {
+        let a = AgentSessionBinding::new(
+            horizon_core::PanelKind::Claude,
+            "a".into(),
+            Some("/sample/a".into()),
+            None,
+            None,
+        );
+        let b = AgentSessionBinding::new(
+            horizon_core::PanelKind::Claude,
+            "b".into(),
+            Some("/sample/b".into()),
+            None,
+            None,
+        );
+        let mut state = SessionDeletionUi {
+            selected: Arc::new(HashSet::from(["a".into(), "b".into()])),
+            confirmation: Some(vec![a.clone(), b.clone()].into()),
+            ..Default::default()
+        };
+        state.reconcile_options(std::slice::from_ref(&a));
+        assert!(!state.confirming());
+        assert_eq!(state.selected.as_ref(), &HashSet::from(["a".into()]));
+        state.confirmation = Some(vec![b.clone()].into());
+        let changed = AgentSessionBinding {
+            cwd: Some("/sample/changed".into()),
+            ..b
+        };
+        state.reconcile_options(&[a, changed]);
+        assert!(!state.confirming());
     }
 
     #[test]
