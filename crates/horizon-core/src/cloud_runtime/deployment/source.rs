@@ -188,6 +188,11 @@ pub(super) fn transfer(
         if let Some(manifest) = &packed.manifest {
             connection.record_siblings(manifest, runner)?;
         }
+        // The one checkout is made here, once; panels only attach to it, and agents add their own
+        // worktrees. An image that cannot do this prepares it at its first attach, as before.
+        if contract.prepare_checkout {
+            connection.prepare_checkout(&state.revision, runner)?;
+        }
     }
     Ok(())
 }
