@@ -48,16 +48,16 @@ pub(super) fn write_private_json(path: &Path, value: &impl Serialize) -> std::io
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let encoded = serde_json::to_vec(value).map_err(std::io::Error::other)?;
+    let encoded = zeroize::Zeroizing::new(serde_json::to_vec(value).map_err(std::io::Error::other)?);
     crate::atomic_file::replace(path, &encoded)
 }
 
 pub(super) fn read_json<T: DeserializeOwned>(path: &Path) -> std::io::Result<Option<T>> {
-    let encoded = match crate::atomic_file::read(path) {
+    let encoded = zeroize::Zeroizing::new(match crate::atomic_file::read(path) {
         Ok(encoded) => encoded,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
-    };
+    });
     serde_json::from_slice(&encoded)
         .map(Some)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))

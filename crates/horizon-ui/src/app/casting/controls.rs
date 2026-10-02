@@ -74,6 +74,7 @@ impl HorizonApp {
                     && let Some(receiver) = &picker.receiver
                 {
                     picker.pin = zeroize::Zeroizing::new(String::new());
+                    close_after = snapshot.paired_receivers.iter().any(|paired| &paired.id == receiver);
                     action = Some(CastOperation::Start {
                         receiver_id: receiver.clone(),
                         source: picker.source.clone(),
@@ -132,19 +133,26 @@ impl HorizonApp {
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cast panel or workspace")
                         });
-                        let stroke = Stroke::new(
-                            1.5,
-                            if response.hovered() {
-                                ui.visuals().strong_text_color()
-                            } else {
-                                ui.visuals().text_color()
-                            },
-                        );
-                        let screen = Rect::from_min_max(button.min + Vec2::splat(2.0), button.max - Vec2::splat(2.0));
-                        ui.painter().rect_stroke(screen, 2.0, stroke, egui::StrokeKind::Inside);
-                        let center = screen.center_bottom();
-                        ui.painter()
-                            .line_segment([center + egui::vec2(-4.0, 3.0), center + egui::vec2(4.0, 3.0)], stroke);
+                        let active = self
+                            .casting
+                            .sessions
+                            .iter()
+                            .any(|session| session.workspace == workspace && !session.worker.finished());
+                        let color = if active {
+                            ui.visuals().selection.stroke.color
+                        } else if response.hovered() {
+                            ui.visuals().strong_text_color()
+                        } else {
+                            ui.visuals().weak_text_color()
+                        };
+                        if response.hovered() || active {
+                            ui.painter().rect_filled(
+                                button.expand(3.0 * scale),
+                                5.0 * scale,
+                                color.gamma_multiply(if active { 0.14 } else { 0.08 }),
+                            );
+                        }
+                        paint_cast_icon(ui.painter(), button, color);
                         response.on_hover_text("Cast panel or workspace")
                     });
                 ctx.set_sublayer(
@@ -178,6 +186,39 @@ impl HorizonApp {
             }
         }
     }
+}
+
+fn paint_cast_icon(painter: &egui::Painter, rect: Rect, color: egui::Color32) {
+    let scale = rect.width() / 20.0;
+    let point = |x, y| rect.min + egui::vec2(x, y) * scale;
+    let stroke = Stroke::new(1.5 * scale, color);
+    // Keep the display open around the signal so the glyph remains readable at header size.
+    painter.add(egui::Shape::line(
+        vec![
+            point(3.0, 8.0),
+            point(3.0, 4.5),
+            point(3.4, 3.4),
+            point(4.5, 3.0),
+            point(16.5, 3.0),
+            point(17.6, 3.4),
+            point(18.0, 4.5),
+            point(18.0, 14.5),
+            point(17.6, 15.6),
+            point(16.5, 16.0),
+            point(12.0, 16.0),
+        ],
+        stroke,
+    ));
+    for radius in [4.0, 7.0] {
+        let arc = (0_u8..=12)
+            .map(|step| {
+                let angle = std::f32::consts::FRAC_PI_2 * f32::from(step) / 12.0;
+                point(3.0 + radius * angle.sin(), 17.0 - radius * angle.cos())
+            })
+            .collect();
+        painter.add(egui::Shape::line(arc, stroke));
+    }
+    painter.circle_filled(point(3.0, 17.0), 1.1 * scale, color);
 }
 
 fn render_encoder_status(ui: &mut egui::Ui, session: &horizon_core::browser::manifest::cast::CastSessionInfo) {

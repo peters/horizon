@@ -120,6 +120,36 @@ fn rejected_cast_operations_are_mcp_errors() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn cast_pair_timeout_removes_the_pin_without_later_queue_activity() {
+    let home = tempfile::tempdir().expect("isolated home");
+    let mut process = McpProcess::start_as(home.path(), "horizon:casting-client");
+    process.send(&json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "casting-test", "version": "1"}}
+    }));
+    process.notify(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    let response = process.send(&json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "cast", "arguments": {"operation": "pair",
+            "receiver_id": "synthetic-tv", "pin": "1234"}}
+    }));
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    assert!(response.to_string().contains("Host did not answer"));
+    let queue = home.path().join(".horizon/runtime/cast-requests");
+    assert!(queue.is_dir(), "request was actually enqueued");
+    assert!(!std::fs::read_dir(queue).expect("queue").any(|entry| {
+        entry
+            .expect("entry")
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".request.json")
+    }));
+    process.close();
+}
+
+#[test]
 #[cfg(not(target_os = "linux"))]
 fn unsupported_casting_is_an_mcp_error_without_a_host_request() {
     let home = tempfile::tempdir().expect("isolated home");

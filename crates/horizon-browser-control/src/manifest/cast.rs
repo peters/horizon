@@ -199,6 +199,41 @@ pub fn enqueue_at(
     Ok(request)
 }
 
+/// Remove an unclaimed request belonging to the exact caller, including its PIN.
+/// Claimed operations may already have run; cancellation does not roll them back.
+///
+/// # Errors
+/// Returns coordination I/O errors or a mismatched request identity.
+pub fn cancel(request: &Request) -> io::Result<()> {
+    cancel_at(BrowserRuntimePaths::resolve().root(), request)
+}
+
+/// Same as [`cancel`], against an explicit runtime root.
+///
+/// # Errors
+/// Returns coordination I/O errors or a mismatched request identity.
+pub fn cancel_at(root: &Path, request: &Request) -> io::Result<()> {
+    let dir = directory(root);
+    if !dir.exists() {
+        return Ok(());
+    }
+    let _lock = ManifestLock::acquire(&queue_lock_path(&dir))?;
+    let file = path(root, &request.request_id, "request");
+    let Some(pending) = read_json::<Request>(&file)? else {
+        return Ok(());
+    };
+    if pending.request_id != request.request_id
+        || pending.actor != request.actor
+        || pending.host_instance != request.host_instance
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Casting request identity mismatch",
+        ));
+    }
+    std::fs::remove_file(file)
+}
+
 /// Whether this host has a request waiting. Does not claim or remove it.
 ///
 /// # Errors
@@ -336,6 +371,38 @@ mod tests {
         assert!(take_result_at(root.path(), &outsider).is_err());
         assert!(take_result_at(root.path(), &request).expect("own result").is_some());
     }
+    #[test]
+    fn cancellation_removes_only_the_callers_unclaimed_pin() {
+        let root = tempfile::tempdir().expect("root");
+        let host = uuid::Uuid::new_v4().to_string();
+        let identity = AgentIdentity::new("horizon:synthetic-agent", Some(&host));
+        let request = enqueue_at(
+            root.path(),
+            identity,
+            CastOperation::Pair {
+                receiver_id: "synthetic".into(),
+                pin: "1234".into(),
+            },
+            Duration::from_secs(10),
+        )
+        .expect("enqueue");
+        let other =
+            enqueue_at(root.path(), identity, CastOperation::Status, Duration::from_secs(10)).expect("other request");
+        let mut outsider = request.clone();
+        outsider.actor = "horizon:other-agent".into();
+        assert_eq!(
+            cancel_at(root.path(), &outsider).expect_err("wrong actor").kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(path(root.path(), &request.request_id, "request").exists());
+        cancel_at(root.path(), &request).expect("cancel own request");
+        cancel_at(root.path(), &request).expect("idempotent cancellation");
+        assert!(!path(root.path(), &request.request_id, "request").exists());
+        let claimed = claim_at(root.path(), &host).expect("claim other");
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].request_id, other.request_id);
+    }
+
     #[test]
     fn start_resolution_has_an_explicit_default_and_rejects_unknown_values() {
         let start =

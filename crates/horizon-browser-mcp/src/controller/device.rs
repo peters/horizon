@@ -35,17 +35,30 @@ impl BrowserController {
         }
         let request =
             cast::enqueue(self.identity(), operation, Duration::from_secs(10)).map_err(|error| error.to_string())?;
+        let pending = PendingCastRequest(request);
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            if let Some(result) = cast::take_result(&request).map_err(|error| error.to_string())? {
+            if let Some(result) = cast::take_result(&pending.0).map_err(|error| error.to_string())? {
                 return Ok(result);
             }
             if Instant::now() >= deadline {
+                cast::cancel(&pending.0).map_err(|error| error.to_string())?;
                 return Ok(cast::CastOutcome::failed(
                     "Host did not answer. Inspect status before retrying; the operation may have completed.",
                 ));
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+}
+
+struct PendingCastRequest(horizon_browser_control::manifest::cast::Request);
+
+impl Drop for PendingCastRequest {
+    fn drop(&mut self) {
+        // Async cancellation and result-read failures must also remove unclaimed PINs.
+        if let Err(error) = horizon_browser_control::manifest::cast::cancel(&self.0) {
+            tracing::warn!(%error, "could not remove pending casting request");
         }
     }
 }
