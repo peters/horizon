@@ -1,3 +1,4 @@
+mod clipboard;
 mod content;
 mod events;
 mod lifecycle;
@@ -27,6 +28,8 @@ use alacritty_terminal::vte::ansi::Rgb;
 
 use crate::error::{Error, Result};
 
+use self::clipboard::PendingClipboard;
+pub use self::clipboard::{ClipboardTarget, ClipboardWrite};
 use self::replay::{ReplayRestoreState, drain_replay_events};
 #[cfg(test)]
 use self::resize::{queue_debounced_pty_resize, should_debounce_pty_resize};
@@ -192,8 +195,7 @@ pub struct Terminal {
     cell_height: u16,
     scrollback_limit: usize,
     title: RuntimeTitle,
-    clipboard_contents: String,
-    selection_contents: String,
+    pending_clipboard: PendingClipboard,
     pending_pty_resize: Option<std::time::Instant>,
     pty_resized: bool,
     child_exited: bool,
@@ -210,9 +212,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::current_cwd_for_pid;
     use super::{
-        HorizonOscTitle, RuntimeTitle, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
-        TerminalSshTrust, default_terminal_rgb, find_file_path_at_column, find_url_at_column,
-        queue_debounced_pty_resize, replay_terminal_bytes, should_debounce_pty_resize,
+        ClipboardTarget, ClipboardWrite, HorizonOscTitle, RuntimeTitle, Terminal, TerminalDimensions,
+        TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust, default_terminal_rgb, find_file_path_at_column,
+        find_url_at_column, queue_debounced_pty_resize, replay_terminal_bytes, should_debounce_pty_resize,
     };
     use alacritty_terminal::event::Event;
     use alacritty_terminal::grid::Dimensions;
@@ -492,6 +494,19 @@ mod tests {
     }
 
     #[test]
+    fn selection_over_blank_cells_yields_no_text_to_copy() {
+        let mut terminal = spawn_test_terminal();
+
+        replay_terminal_bytes(&terminal.term, b"abc");
+        terminal.start_selection(SelectionType::Simple, 5, 0, Side::Left);
+        terminal.update_selection(5, 12, Side::Right);
+
+        assert!(terminal.has_selection());
+        assert_eq!(terminal.selection_to_string(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
     fn horizon_title_replaces_ordinary_terminal_title() {
         let mut terminal = spawn_test_terminal();
 
@@ -535,6 +550,53 @@ mod tests {
         assert!(should_debounce_pty_resize(true, TermMode::empty()));
         assert!(!should_debounce_pty_resize(true, TermMode::ALT_SCREEN));
         assert!(!should_debounce_pty_resize(false, TermMode::empty()));
+    }
+
+    #[test]
+    fn osc52_copy_requests_queue_per_target_for_the_host() {
+        let mut terminal = spawn_test_terminal();
+        replay_terminal_bytes(&terminal.term, b"\x1b]52;c;SGVsbG8=\x07\x1b]52;p;V29ybGQ=\x07");
+        terminal.process_events();
+
+        assert_eq!(
+            terminal.take_clipboard_writes(),
+            vec![
+                ClipboardWrite {
+                    target: ClipboardTarget::Clipboard,
+                    text: "Hello".to_string()
+                },
+                ClipboardWrite {
+                    target: ClipboardTarget::Selection,
+                    text: "World".to_string()
+                },
+            ]
+        );
+        assert!(terminal.take_clipboard_writes().is_empty());
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn restoring_a_transcript_does_not_replay_old_osc52_copies() {
+        let (program, args) = exiting_command();
+        let mut terminal = Terminal::spawn(TerminalSpawnOptions {
+            program,
+            args,
+            cwd: None,
+            rows: 24,
+            cols: 80,
+            cell_width: 8,
+            cell_height: 16,
+            scrollback_limit: 256,
+            window_id: 42,
+            replay_bytes: b"\x1b]52;c;SGVsbG8=\x07".to_vec(),
+            env: HashMap::new(),
+            kitty_keyboard: true,
+        })
+        .expect("terminal should spawn");
+        terminal.process_events();
+
+        assert!(terminal.take_clipboard_writes().is_empty());
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
     #[test]

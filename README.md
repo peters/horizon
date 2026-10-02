@@ -337,12 +337,15 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | **Double-click** a panel header | Rename the panel in place |
 | **Click** in a mouse-reporting TUI | Deliver the click to the app (Grok, vim, less, …) |
 | **Shift+Click/drag** | Select terminal text while the app has mouse reporting |
+| **Middle-click** a terminal (Linux) | Paste the primary selection |
 | **Click** an OSC 8 hyperlink | Open the link in the default handler |
 | **Ctrl+Click** | Open URL, file path, or hyperlink under cursor |
 | **Ctrl+double-click** canvas | Open the preset picker (creates a workspace and its first panel) |
 | **Ctrl+double-click** inside a workspace | Open the preset picker to add a panel |
 
 <sub>On macOS, substitute Cmd for Ctrl. Copy and paste use the standard Cmd+C / Cmd+V bindings, and on Windows you can also use Ctrl+Insert / Shift+Insert. The SSH reconnect shortcut is contextual and is disabled if another global shortcut overlaps with Ctrl+Shift+R.</sub>
+
+<sub>Programs in a terminal can copy with the OSC 52 escape sequence: Horizon writes it to the system clipboard (`c`) or, on Linux, the primary selection (`p`). On Linux, selecting text fills the primary selection. Under Wayland it reaches other apps through the compositor's data-control protocol (for example wlroots and KDE) or through XWayland; where neither exists, use Ctrl+Shift+C and Ctrl+Shift+V.</sub>
 
 ---
 

@@ -32,8 +32,11 @@ impl Terminal {
     }
 
     /// Extract the currently selected text, if any.
+    ///
+    /// A selection that covers no text (a drag over blank cells) yields `None`,
+    /// so copying it cannot overwrite the clipboard with an empty string.
     #[must_use]
     pub fn selection_to_string(&self) -> Option<String> {
-        self.term.lock().selection_to_string()
+        self.term.lock().selection_to_string().filter(|text| !text.is_empty())
     }
 }

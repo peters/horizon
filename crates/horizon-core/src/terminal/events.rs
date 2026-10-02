@@ -1,4 +1,4 @@
-use super::{ColorLookup, Event, HorizonOscTitle, Rgb, TermMode, Terminal, term};
+use super::{ClipboardWrite, ColorLookup, Event, HorizonOscTitle, Rgb, TermMode, Terminal};
 
 impl Terminal {
     /// Drain pending PTY events. Returns `true` if any events were processed.
@@ -60,21 +60,20 @@ impl Terminal {
         }
     }
 
+    /// Drain OSC 52 copy requests programs in this terminal made since the
+    /// last call. The host decides whether to honor them.
+    pub fn take_clipboard_writes(&mut self) -> Vec<ClipboardWrite> {
+        self.pending_clipboard.take()
+    }
+
     pub(crate) fn handle_event(&mut self, event: Event) {
         match event {
             Event::Title(title) => self.title.apply_incoming(&title),
             Event::ResetTitle => self.title.reset(),
-            Event::ClipboardStore(clipboard, contents) => match clipboard {
-                term::ClipboardType::Clipboard => self.clipboard_contents = contents,
-                term::ClipboardType::Selection => self.selection_contents = contents,
-            },
-            Event::ClipboardLoad(clipboard, formatter) => {
-                let contents = match clipboard {
-                    term::ClipboardType::Clipboard => self.clipboard_contents.as_str(),
-                    term::ClipboardType::Selection => self.selection_contents.as_str(),
-                };
-                self.write_protocol(formatter(contents).as_bytes());
-            }
+            Event::ClipboardStore(clipboard, contents) => self.pending_clipboard.store(clipboard, contents),
+            // OSC 52 reads are denied by the emulator config, and a program
+            // running in the terminal must not read the system clipboard.
+            Event::ClipboardLoad(_, formatter) => self.write_protocol(formatter("").as_bytes()),
             Event::ColorRequest(index, formatter) => {
                 let color = self.color_for_request(index);
                 self.write_protocol(formatter(color).as_bytes());

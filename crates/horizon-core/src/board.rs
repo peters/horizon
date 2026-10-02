@@ -461,6 +461,17 @@ impl Board {
         output
     }
 
+    /// Collect OSC 52 copy requests that terminal panels made while draining
+    /// output. Call it after frames with terminal activity: only a panel that
+    /// produced output can have a new request.
+    pub fn take_terminal_clipboard_writes(&mut self) -> Vec<crate::terminal::ClipboardWrite> {
+        self.panels
+            .iter_mut()
+            .filter_map(Panel::terminal_mut)
+            .flat_map(crate::Terminal::take_clipboard_writes)
+            .collect()
+    }
+
     /// Whether a browser removed from the board still has process or profile
     /// cleanup in flight. The UI must keep polling output even when no panels
     /// remain so completion can be observed and retired state released.

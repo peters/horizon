@@ -131,7 +131,9 @@ socket2 = "0.6.5"
 git2 = { version = "0.21", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 regex = "1.13.1"
-arboard = "3.6.1"
+# `wayland-data-control` lets PRIMARY reach Wayland compositors without XWayland;
+# arboard falls back to its X11 backend where the protocol is not offered.
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 atspi = { version = "0.30.0", default-features = false, features = ["connection", "proxies", "tokio", "zbus"] }
 tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
 axuielement = { version = "0.10.0", default-features = false, features = ["async"] }

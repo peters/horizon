@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use egui::Context;
-use horizon_core::{Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
+use horizon_core::{ClipboardTarget, Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
 use crate::theme;
@@ -69,6 +69,9 @@ impl HorizonApp {
             self.poll_primary_selection_paste();
         }
         let had_panel_output = self.drain_panel_output();
+        if had_panel_output {
+            self.forward_terminal_clipboard_writes(ctx);
+        }
         let browser_create_activity = self.poll_browser_create_requests() | self.poll_cloud_offers(ctx);
         let device_activity = self.poll_device_panel_requests(ctx);
 
@@ -103,6 +106,17 @@ impl HorizonApp {
             self.mark_runtime_dirty();
         }
         panel_output.activity.terminal || panel_output.activity.browser
+    }
+
+    /// Hand OSC 52 copy requests from terminal panels to the system, so TUIs
+    /// that have no `wl-copy`/`xclip`/`pbcopy` to call still reach it.
+    fn forward_terminal_clipboard_writes(&mut self, ctx: &Context) {
+        for write in self.board.take_terminal_clipboard_writes() {
+            match write.target {
+                ClipboardTarget::Clipboard => ctx.copy_text(write.text),
+                ClipboardTarget::Selection => self.primary_selection.copy(&write.text),
+            }
+        }
     }
 
     fn poll_primary_selection_paste(&mut self) {

@@ -1,7 +1,7 @@
 use super::{
-    Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Msg, Ordering, PtyOptions, ReplayRestoreState,
-    Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust,
-    WindowSize, drain_replay_events, mpsc, replay_terminal_bytes, term, tty,
+    Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Msg, Ordering, PendingClipboard, PtyOptions,
+    ReplayRestoreState, Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
+    TerminalSshTrust, WindowSize, drain_replay_events, mpsc, replay_terminal_bytes, term, tty,
 };
 
 impl Terminal {
@@ -85,8 +85,7 @@ impl Terminal {
             cell_height,
             scrollback_limit,
             title: replay_restore.title,
-            clipboard_contents: String::new(),
-            selection_contents: String::new(),
+            pending_clipboard: PendingClipboard::default(),
             pending_pty_resize: None,
             pty_resized: false,
             child_exited: false,
