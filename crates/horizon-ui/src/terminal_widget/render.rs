@@ -53,6 +53,8 @@ impl GridCacheKey {
 pub(crate) struct TerminalGridCache {
     key: Option<GridCacheKey>,
     shapes: Vec<Shape>,
+    #[cfg(test)]
+    pub(super) rebuilds: usize,
 }
 
 impl TerminalGridCache {
@@ -81,6 +83,10 @@ pub(super) fn render_grid(
             return;
         }
 
+        #[cfg(test)]
+        {
+            grid_cache.rebuilds += 1;
+        }
         let shapes = build_grid_shapes(ui, rect, content, metrics);
         if has_selection {
             // Copy/cut clear the model selection outside this render pass, and
@@ -101,6 +107,7 @@ pub(super) fn render_grid(
     painter.extend(build_grid_shapes(ui, rect, content, metrics));
 }
 
+#[profiling::function]
 fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) -> Vec<Shape> {
     // Text runs can legitimately span cells whose background changes later in the line.
     // Keep backgrounds in a separate layer so those later fills never paint over glyphs.
