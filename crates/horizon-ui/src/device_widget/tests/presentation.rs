@@ -70,6 +70,14 @@ fn a_flat_picture_is_an_empty_desktop_and_anything_drawn_on_it_is_not() {
         }
     }
     assert!(frame::looks_empty(&with_pointer));
+    // Not even at the very corner the background colour was once read from.
+    let mut at_the_corner = flat([1920, 1080]);
+    for y in 0..14 {
+        for x in 0..14 {
+            at_the_corner.pixels[y * 1920 + x] = egui::Color32::WHITE;
+        }
+    }
+    assert!(frame::looks_empty(&at_the_corner));
 
     // A window, a panel or a wallpaper is.
     let mut with_window = flat([1920, 1080]);
@@ -105,4 +113,28 @@ fn a_connected_empty_desktop_says_so_and_a_busy_one_does_not() {
         !painted_texts(&ctx, &mut state).iter().any(|text| text == EMPTY_HINT),
         "a lost connection is shown as that, not as an empty desktop"
     );
+}
+
+#[test]
+fn the_hint_stays_inside_the_part_of_the_picture_that_is_on_screen() {
+    let ctx = egui::Context::default();
+    let room = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(300.0, 200.0));
+    let output = ctx
+        .run_ui(egui::RawInput::default(), |ui| {
+            // A desktop far larger than the room it has, scrolled to its top-left, as in 1:1 mode.
+            let image = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(4000.0, 3000.0));
+            ui.set_clip_rect(room);
+            paint_empty_hint(ui, image);
+        })
+        .discard_textures();
+    let (text, clip) = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some((text.visual_bounding_rect(), shape.clip_rect)),
+            _ => None,
+        })
+        .expect("the hint is painted");
+    assert_eq!(clip, room, "it cannot paint over what is around the picture");
+    assert!(room.contains(text.center()), "and it is where the picture can be seen");
 }

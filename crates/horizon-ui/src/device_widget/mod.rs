@@ -376,23 +376,25 @@ impl DeviceUiState {
 
 const EMPTY_DESKTOP_HINT: &str = "Nothing is open on this desktop yet. Programs you start on it appear here.";
 
-/// A blank picture reads as a broken connection, so the picture says what it is. Painted over it,
-/// so nothing around the image moves.
+/// A blank picture reads as a broken connection, so the picture says what it is. Painted over
+/// the part of it that is on screen and clipped to it, so nothing around the image moves or is
+/// covered, and a large desktop scrolled in 1:1 mode still shows it.
 fn paint_empty_hint(ui: &Ui, image: egui::Rect) {
-    let galley = ui.painter().layout(
+    let visible = image.intersect(ui.clip_rect());
+    if !visible.is_positive() {
+        return;
+    }
+    let painter = ui.painter().with_clip_rect(visible);
+    let color = egui::Color32::from_gray(210);
+    let galley = painter.layout(
         EMPTY_DESKTOP_HINT.to_owned(),
         egui::FontId::proportional(14.0),
-        egui::Color32::from_gray(210),
-        (image.width() * 0.8).max(60.0),
+        color,
+        (visible.width() - 32.0).max(40.0),
     );
-    let backing = egui::Rect::from_center_size(image.center(), galley.size() + egui::vec2(24.0, 14.0));
-    ui.painter()
-        .rect_filled(backing, 8.0, egui::Color32::from_black_alpha(170));
-    ui.painter().galley(
-        backing.center() - galley.size() * 0.5,
-        galley,
-        egui::Color32::from_gray(210),
-    );
+    let backing = egui::Rect::from_center_size(visible.center(), galley.size() + egui::vec2(24.0, 14.0));
+    painter.rect_filled(backing, 8.0, egui::Color32::from_black_alpha(170));
+    painter.galley(backing.center() - galley.size() * 0.5, galley, color);
 }
 
 fn visible_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2, interact: bool) -> (bool, egui::Response) {

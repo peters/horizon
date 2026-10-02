@@ -116,15 +116,21 @@ pub(super) fn looks_empty(image: &ColorImage) -> bool {
         return false;
     }
     let (columns, rows) = (width.min(GRID), height.min(GRID));
-    let background = image.pixels[0];
-    let mut other = 0;
-    for row in 0..rows {
-        for column in 0..columns {
-            if image.pixels[(row * height / rows) * width + column * width / columns] != background {
-                other += 1;
-            }
+    let samples = || {
+        (0..rows).flat_map(move |row| {
+            (0..columns).map(move |column| image.pixels[(row * height / rows) * width + column * width / columns])
+        })
+    };
+    // The background is the colour most samples share (a majority vote in fixed memory), not
+    // whatever sits in a corner, where a pointer or a clock may be.
+    let (mut background, mut votes) = (image.pixels[0], 0_usize);
+    for pixel in samples() {
+        if votes == 0 {
+            background = pixel;
         }
+        votes = if pixel == background { votes + 1 } else { votes - 1 };
     }
+    let other = samples().filter(|pixel| *pixel != background).count();
     other * 100 <= columns * rows * OTHER_PER_HUNDRED
 }
 
