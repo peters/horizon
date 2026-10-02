@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex};
@@ -297,6 +297,7 @@ fn delete_claude_transcript(projects: &Path, session: &AgentSessionBinding) -> R
                 "Refusing to delete a linked or non-file transcript".into(),
             ));
         }
+        validate_claude_transcript_identity(&path, &session.session_id)?;
         let record = super::load_claude_project_session_summary(&path, 0)?;
         if !record.is_some_and(|record| {
             record.session_id == session.session_id
@@ -324,6 +325,52 @@ fn delete_claude_transcript(projects: &Path, session: &AgentSessionBinding) -> R
         |from, to| std::fs::rename(from, to),
         |path| std::fs::remove_dir_all(path),
     )
+}
+
+#[derive(serde::Deserialize)]
+struct ClaudeTranscriptIdentity {
+    #[serde(rename = "sessionId", default, deserialize_with = "deserialize_present_session_id")]
+    session_id: Option<String>,
+}
+
+fn deserialize_present_session_id<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    <String as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+fn validate_claude_transcript_identity(path: &Path, expected_id: &str) -> Result<()> {
+    let mut reader = BufReader::new(std::fs::File::open(path)?);
+    let mut line = String::new();
+    let mut identity_found = false;
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        if !line.trim_start().starts_with('{') {
+            return Err(Error::State(
+                "Cannot verify identity of malformed Claude transcript".into(),
+            ));
+        }
+        let identity: ClaudeTranscriptIdentity = serde_json::from_str(&line)
+            .map_err(|_| Error::State("Cannot verify identity of malformed Claude transcript".into()))?;
+        if let Some(id) = identity.session_id {
+            if id.is_empty() || id != expected_id {
+                return Err(Error::State(
+                    "Claude transcript has an invalid or conflicting session ID".into(),
+                ));
+            }
+            identity_found = true;
+        }
+    }
+    if !identity_found {
+        return Err(Error::State("Claude transcript has no embedded session ID".into()));
+    }
+    Ok(())
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -516,6 +563,74 @@ mod tests {
         assert!(!path.exists());
         assert!(!children.exists());
         assert!(unrelated.exists());
+    }
+
+    #[test]
+    fn ambiguous_transcript_identities_preserve_all_saved_history() {
+        let session = binding(802);
+        let valid = serde_json::json!({"sessionId":session.session_id,"cwd":"/example","type":"user"}).to_string();
+        let conflicting =
+            serde_json::json!({"sessionId":binding(803).session_id,"cwd":"/example","type":"user"}).to_string();
+        let filler = serde_json::json!({"type":"progress","content":"x".repeat(2048)}).to_string() + "\n";
+        for contents in [
+            serde_json::json!({"cwd":"/example","type":"user"}).to_string(),
+            format!("{conflicting}\n{valid}\n"),
+            format!(
+                "{valid}\n{}{conflicting}\n{}{valid}\n",
+                filler.repeat(50),
+                filler.repeat(50)
+            ),
+            format!("{valid}\n{{\"sessionId\":\"\"}}\n"),
+            format!("{valid}\n{{\"sessionId\":null}}\n"),
+            format!("{valid}\n{{\"sessionId\":42}}\n"),
+            format!(
+                "{{\"sessionId\":\"{}\",\"sessionId\":\"{}\",\"cwd\":\"/example\"}}\n",
+                binding(803).session_id,
+                session.session_id
+            ),
+            format!(
+                "{{\"sessionId\":\"\",\"sessionId\":\"{}\",\"cwd\":\"/example\"}}\n",
+                session.session_id
+            ),
+            format!(
+                "{{\"sessionId\":42,\"sessionId\":\"{}\",\"cwd\":\"/example\"}}\n",
+                session.session_id
+            ),
+            format!("{valid}\n[\"{}\"]\n", session.session_id),
+            format!("{valid}\nmalformed\n"),
+        ] {
+            let temp = tempfile::tempdir().expect("private store");
+            let project = temp.path().join("projects/example");
+            let artifacts = project.join(&session.session_id).join("subagents");
+            std::fs::create_dir_all(&artifacts).expect("artifacts");
+            let path = project.join(format!("{}.jsonl", session.session_id));
+            std::fs::write(&path, &contents).expect("transcript");
+            std::fs::write(artifacts.join("agent.jsonl"), "saved child history").expect("subagent");
+            let discovered = super::super::load_claude_project_session_summary(&path, 0)
+                .expect("discovery")
+                .expect("record");
+            assert_eq!(discovered.session_id, session.session_id);
+            assert!(delete_claude_transcript(&temp.path().join("projects"), &session).is_err());
+            assert_eq!(std::fs::read_to_string(&path).expect("retained transcript"), contents);
+            assert_eq!(
+                std::fs::read_to_string(artifacts.join("agent.jsonl")).expect("retained child"),
+                "saved child history"
+            );
+            assert_eq!(std::fs::read_dir(temp.path()).expect("store").count(), 1);
+        }
+    }
+
+    #[test]
+    fn repeated_matching_identity_and_metadata_records_allow_deletion() {
+        let temp = tempfile::tempdir().expect("private store");
+        let project = temp.path().join("example");
+        std::fs::create_dir(&project).expect("project");
+        let session = binding(804);
+        let path = project.join(format!("{}.jsonl", session.session_id));
+        let record = serde_json::json!({"sessionId":session.session_id,"cwd":"/example","type":"user"}).to_string();
+        std::fs::write(&path, format!("{record}\n{{\"type\":\"progress\"}}\n\n{record}\n")).expect("transcript");
+        delete_claude_transcript(temp.path(), &session).expect("unambiguous deletion");
+        assert!(!path.exists());
     }
 
     #[test]
