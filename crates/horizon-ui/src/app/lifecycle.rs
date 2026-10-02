@@ -373,6 +373,10 @@ impl HorizonApp {
         if !self.host_dialog_open() {
             self.handle_canvas_double_click(ui);
         }
+        // A header action just ran (Expand shows a closing cloud's members again): none of them
+        // may render over the disposal, not even for one frame.
+        #[cfg(feature = "cloud-workspaces")]
+        self.hide_closing_cloud_panels();
         self.render_panels(ui);
         #[cfg(feature = "cloud-workspaces")]
         self.render_cloud_resize_handles(ui.ctx());

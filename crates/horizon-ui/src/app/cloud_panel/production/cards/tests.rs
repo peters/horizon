@@ -98,6 +98,7 @@ fn the_header_strip_fits_the_narrowest_cloud_with_long_errors() {
 }
 
 mod access;
+mod closing;
 mod deletion;
 mod frame;
 mod hover;

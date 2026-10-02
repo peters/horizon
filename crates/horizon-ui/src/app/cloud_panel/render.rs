@@ -39,7 +39,7 @@ impl HorizonApp {
             {
                 return false;
             }
-            let (min, max) = group.runtime_bounds();
+            let (min, max) = group.runtime_bounds_while(self.cloud_prototype.production.closing(group.issue));
             let drawer = if fixture_mode {
                 None
             } else {

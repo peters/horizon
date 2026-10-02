@@ -49,9 +49,10 @@ pub(super) fn sharing(ctx: &egui::Context, runtime: &Runtime) -> Sharing {
     }
 }
 
-/// Whether the body shows the steps and output: a production cloud without panels.
-pub(super) fn body_visible(group: &CloudGroup) -> bool {
-    group.remote.is_some() && group.panels.is_empty() && !group.collapsed
+/// Whether the body shows the steps and output: a production cloud without panels, or
+/// one being closed, whose panels end with it and give way to its disposal.
+pub(super) fn body_visible(group: &CloudGroup, closing: bool) -> bool {
+    group.remote.is_some() && (group.panels.is_empty() || closing) && !group.collapsed
 }
 
 /// The body under the header strip, inside the frame's padding.
@@ -243,7 +244,8 @@ impl HorizonApp {
             self.cloud_prototype.groups.0[index].set_collapsed(&mut self.board, false);
             self.save_cloud_prototype();
         }
-        let steps_in_body = body_visible(&self.cloud_prototype.groups.0[index]);
+        let closing = self.cloud_prototype.production.closing(id);
+        let steps_in_body = body_visible(&self.cloud_prototype.groups.0[index], closing);
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
             runtime.drawer = (!steps_in_body).then_some(Tab::Overview);
         }
@@ -286,7 +288,8 @@ impl HorizonApp {
     /// The drawer's canvas rectangle when it is open, for input routing.
     pub(in crate::app) fn cloud_drawer_rect(&self, group: &CloudGroup) -> Option<Rect> {
         let runtime = self.cloud_prototype.production.runtimes.get(&group.issue)?;
-        let tab = Tab::resolve(runtime.drawer?, body_visible(group));
+        let closing = self.cloud_prototype.production.close.closing(group.issue);
+        let tab = Tab::resolve(runtime.drawer?, body_visible(group, closing));
         (!group.collapsed).then(|| {
             let rect = drawer::placement(group);
             Rect::from_min_size(rect.min, Vec2::new(rect.width(), tab.height().min(rect.height())))
@@ -324,7 +327,7 @@ impl HorizonApp {
             if group.collapsed {
                 runtime.drawer = None;
             }
-            let body = body_visible(group);
+            let body = body_visible(group, production.close.closing(group.issue));
             // Nothing is scanned or laid out for a cloud whose body and drawer are both
             // hidden or off screen; its header already has its status.
             let on_screen = |rect: Rect| rect.intersects(layer.clip);
