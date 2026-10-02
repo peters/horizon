@@ -19,7 +19,8 @@ pub(super) fn seed(app: &mut HorizonApp) {
 
 fn seed_lines(app: &mut HorizonApp, count: usize) -> bool {
     let count = count.clamp(1, horizon_core::PANEL_SCROLLBACK_LIMIT);
-    if app.cloud_prototype.groups.0.iter().any(|group| group.remote.is_some()) {
+    // A local card has no deployment yet. Any cloud already on the board is left alone.
+    if !app.cloud_prototype.groups.0.is_empty() {
         return false;
     }
     let Some(launch) = preview_launch() else {
@@ -118,5 +119,21 @@ mod tests {
         assert!(!seed_lines(&mut app, 400));
         assert!(!app.cloud_prototype.production.runtimes.contains_key(&PREVIEW_ISSUE));
         assert_eq!(app.cloud_prototype.groups.0[0].title, "Kept");
+    }
+
+    #[test]
+    fn an_empty_local_cloud_is_left_alone() {
+        let (_temp, mut app) = test_app();
+        app.cloud_prototype.groups.0.push(CloudGroup::new(
+            7,
+            "Local".into(),
+            "workspace".into(),
+            "/local".into(),
+            [0.0, 0.0],
+        ));
+        assert!(!seed_lines(&mut app, 400));
+        assert!(app.cloud_prototype.production.runtimes.is_empty());
+        assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+        assert_eq!(app.cloud_prototype.groups.0[0].title, "Local");
     }
 }
