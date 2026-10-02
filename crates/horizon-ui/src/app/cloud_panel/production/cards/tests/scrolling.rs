@@ -230,7 +230,8 @@ fn scrolled_up_output_keeps_its_first_line_while_more_lines_arrive() {
     assert!(label_pos(&latest, "LOG-LINE-000").is_some());
     {
         let runtime = app.cloud_prototype.production.runtimes.get_mut(&901).unwrap();
-        // More than the 150-line follow cap, so a trim of the visible log would drop the first line.
+        // A burst while the reader is scrolled up waits aside. Trimming the
+        // visible log here would drop its first line.
         for line in 0..100 {
             runtime.push_log(format!("BURST-{line}"));
         }

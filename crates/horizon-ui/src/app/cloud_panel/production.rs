@@ -12,6 +12,8 @@ mod idle;
 mod launch;
 mod lifecycle;
 mod local_network;
+#[cfg(debug_assertions)]
+mod log_preview;
 mod machine_size;
 mod offer_publication;
 mod offers;
@@ -113,6 +115,8 @@ pub(super) struct LogLine {
     pub visit: usize,
     /// A note outside any operation (`Runtime::push_note`): shown, never diagnosed.
     pub note: bool,
+    /// [`text_key`] of `text`, so a long deploy log can reuse row heights.
+    text_key: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +139,7 @@ impl LogLine {
         } else {
             LineKind::Plain
         };
+        let text_key = text_key(&text);
         Self {
             text,
             stage,
@@ -143,8 +148,22 @@ impl LogLine {
             attempt: 0,
             visit: 0,
             note: false,
+            text_key,
         }
     }
+}
+
+/// FNV-1a of a log line. The output view reuses a wrapped row's height by this key
+/// instead of hashing the text again on every frame.
+fn text_key(text: &str) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
 }
 
 /// Whether `previous` is an earlier update of `line`'s layer in the same step of the same
@@ -234,7 +253,8 @@ pub(super) struct Runtime {
     watch: local_network::Watch,
 }
 impl Runtime {
-    const FOLLOW_LOG_LINES: usize = 150;
+    /// Lines kept while the view follows the end. Same depth as a shell or agent panel.
+    const FOLLOW_LOG_LINES: usize = horizon_core::PANEL_SCROLLBACK_LIMIT;
 
     fn observe(&mut self, event: &Event) {
         self.observe_rebuild(event);
@@ -242,10 +262,12 @@ impl Runtime {
             self.sharing.ready_again();
         }
     }
-    const PENDING_LOG_LINES: usize = 4_000;
+    /// Lines held aside while the reader is scrolled up. They join the visible
+    /// history when follow resumes, which then keeps [`Self::FOLLOW_LOG_LINES`].
+    const PENDING_LOG_LINES: usize = horizon_core::PANEL_SCROLLBACK_LIMIT;
 
-    /// Follow mode keeps a short tail. While the reader is scrolled up, new
-    /// lines wait aside so the lines on screen are neither dropped nor shifted.
+    /// While the reader is scrolled up, new lines wait aside so the lines on
+    /// screen are neither dropped nor shifted.
     fn push_log(&mut self, text: String) {
         let mut line = LogLine::new(text, self.stage, self.progress.elapsed());
         line.attempt = self.progress.attempt();
@@ -613,6 +635,23 @@ impl HorizonApp {
     fn restore_cloud_state(&mut self, ctx: &egui::Context) {
         let session = self.active_session.as_ref().map(|s| s.session_id.clone());
         if !self.cloud_prototype.initialized || self.cloud_prototype.production.session_id != session {
+            // Clouds that do not survive this restore never paint again, so their
+            // row-height caches would otherwise stay in egui temp data.
+            let kept: Vec<u32> = self.board.cloud_groups.0.iter().map(|group| group.issue).collect();
+            let mut dropped: Vec<u32> = self
+                .cloud_prototype
+                .groups
+                .0
+                .iter()
+                .map(|group| group.issue)
+                .chain(self.cloud_prototype.production.runtimes.keys().copied())
+                .filter(|id| !kept.contains(id))
+                .collect();
+            dropped.sort_unstable();
+            dropped.dedup();
+            for id in dropped {
+                cards::forget_log_heights(ctx, id);
+            }
             self.cloud_prototype.initialized = true;
             self.cloud_prototype.production.pending_creation = None;
             self.cloud_prototype.production.close = close::State::default();
@@ -670,6 +709,9 @@ impl HorizonApp {
             for id in reconnect {
                 self.start_production_deployment(id, ctx);
             }
+            // A debug build can show a synthetic deploy log. Release builds omit it.
+            #[cfg(debug_assertions)]
+            log_preview::seed(self);
         }
     }
     /// Reconnects each resumed worker. The reconnect that finishes a resume is still that

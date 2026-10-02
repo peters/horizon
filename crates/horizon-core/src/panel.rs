@@ -33,8 +33,10 @@ const DEFAULT_CELL_WIDTH: u16 = 8;
 const DEFAULT_CELL_HEIGHT: u16 = 17;
 
 pub const DEFAULT_PANEL_SIZE: [f32; 2] = [520.0, 340.0];
-const DEFAULT_PANEL_SCROLLBACK_LIMIT: usize = 24_000;
-const AGENT_PANEL_SCROLLBACK_LIMIT: usize = 24_000;
+/// Lines of terminal scrollback kept for a shell, SSH, command, or agent panel.
+pub const PANEL_SCROLLBACK_LIMIT: usize = 24_000;
+const DEFAULT_PANEL_SCROLLBACK_LIMIT: usize = PANEL_SCROLLBACK_LIMIT;
+const AGENT_PANEL_SCROLLBACK_LIMIT: usize = PANEL_SCROLLBACK_LIMIT;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PanelId(pub u64);
