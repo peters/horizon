@@ -1,4 +1,5 @@
 mod backend;
+mod diagnostics;
 pub(crate) use backend::select;
 pub use backend::{EncoderBackend, EncoderSelection};
 
@@ -46,8 +47,9 @@ pub(crate) fn stream(
         .args(["-g", "30", "-bf", "0", "-flush_packets", "1", "-f", "h264", "pipe:1"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()?;
+    let diagnostics = child.stderr.take().map(diagnostics::drain);
     let mut input = child.stdin.take().ok_or(Error::Protocol("encoder input unavailable"))?;
     let output = child
         .stdout
@@ -92,7 +94,15 @@ pub(crate) fn stream(
     let transport = reader
         .join()
         .map_err(|_| Error::Backend("video worker stopped unexpectedly".into()))?;
-    result.and(transport)
+    let result = result.and(transport);
+    if result.is_err()
+        && let Some(reason) = diagnostics
+            .and_then(|diagnostics| diagnostics.recv_timeout(Duration::from_millis(200)).ok())
+            .flatten()
+    {
+        return Err(Error::Backend(reason.into()));
+    }
+    result
 }
 
 fn consume(

@@ -5,7 +5,10 @@ mod requests;
 use horizon_cast::{CastSession, PairedDevice, PairingStore, Receiver};
 use horizon_core::WorkspaceId;
 use horizon_core::browser::manifest::cast::{CastOrientation, CastResolution, CastSource};
-use std::{sync::mpsc, time::Instant};
+use std::{
+    sync::mpsc,
+    time::{Duration, Instant},
+};
 
 #[derive(Default)]
 pub(super) struct CastState {
@@ -100,6 +103,17 @@ impl CastState {
     pub(super) fn finished(&self) -> bool {
         self.sessions.iter().all(|session| session.worker.finished())
     }
+    pub(super) fn stop_and_wait(&mut self, timeout: Duration) -> bool {
+        self.stop_all();
+        let started = Instant::now();
+        while !self.finished() {
+            let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
+                return false;
+            };
+            std::thread::sleep(remaining.min(Duration::from_millis(10)));
+        }
+        true
+    }
     pub(super) fn picker_open(&self) -> bool {
         self.picker.is_some()
     }
@@ -158,5 +172,56 @@ fn video_format(orientation: CastOrientation, resolution: CastResolution) -> hor
             CastResolution::FullHd1080 => horizon_cast::Resolution::FullHd1080,
             CastResolution::Uhd4k => horizon_cast::Resolution::Uhd4k,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_cast::CastStatus;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+    };
+
+    #[test]
+    fn synchronous_exit_stops_a_cast_waiting_for_pairing() {
+        let listener = TcpListener::bind("127.0.0.99:0").expect("synthetic listener");
+        let address = listener.local_addr().expect("address");
+        let receiver = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            socket.set_read_timeout(Some(Duration::from_secs(3))).expect("timeout");
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).expect("pair request");
+                request.push(byte[0]);
+            }
+            assert!(request.starts_with(b"POST /pair-pin-start "));
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nCSeq: 1\r\nContent-Length: 0\r\n\r\n")
+                .expect("reply");
+            assert_eq!(socket.read(&mut byte).expect("connection closed"), 0);
+        });
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let worker = CastSession::start(address, horizon_cast::VideoFormat::default()).expect("cast");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while worker.status() != CastStatus::PinRequired {
+            assert!(Instant::now() < deadline, "pairing prompt: {:?}", worker.status());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        app.casting.sessions.push(Session {
+            generation: Instant::now(),
+            receiver_id: "synthetic".into(),
+            workspace: WorkspaceId(1),
+            source: CastSource::Panel { id: "synthetic".into() },
+            orientation: CastOrientation::Landscape,
+            resolution: CastResolution::default(),
+            worker,
+        });
+        app.run_exit_cleanup();
+        assert!(app.casting.finished());
+        assert_eq!(app.casting.sessions[0].worker.status(), CastStatus::Stopped);
+        receiver.join().expect("receiver");
     }
 }

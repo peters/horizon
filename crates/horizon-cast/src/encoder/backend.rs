@@ -149,6 +149,7 @@ fn probe(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
 
     #[test]

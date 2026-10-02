@@ -128,6 +128,11 @@ impl HorizonApp {
             return;
         }
 
+        #[cfg(target_os = "linux")]
+        if !self.casting.stop_and_wait(MAX_SHUTDOWN_WAIT) {
+            tracing::warn!("timed out waiting for casting teardown during exit cleanup");
+        }
+
         self.wait_for_saved_session_deletion();
         self.exit_cleanup_complete = true;
         let _ = self.drain_panel_output();
