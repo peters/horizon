@@ -127,10 +127,7 @@ impl SessionDeletionUi {
         ui.add_space(10.0);
         if let Some(session) = sessions.first() {
             ui.label(format!("Provider: {}", session.kind.display_name()));
-            ui.label(format!(
-                "Folder: {}",
-                session.cwd.as_deref().unwrap_or("All folders in this list")
-            ));
+            render_deletion_folders(ui, &sessions);
         }
         ui.label("This permanently removes the selected conversations and their saved subagent history. Project files are kept. This cannot be undone.");
         if sessions.len() == 1 {
@@ -177,6 +174,26 @@ impl SessionDeletionUi {
     }
 }
 
+fn render_deletion_folders(ui: &mut egui::Ui, sessions: &[AgentSessionBinding]) {
+    let folders: std::collections::BTreeSet<_> = sessions.iter().filter_map(|session| session.cwd.as_deref()).collect();
+    let unknown = sessions.iter().any(|session| session.cwd.is_none());
+    if folders.len() == 1 && !unknown {
+        if let Some(folder) = folders.first() {
+            ui.label(format!("Folder: {folder}"));
+        }
+        return;
+    }
+    ui.label(format!("Folders: {} recorded folders", folders.len()));
+    egui::ScrollArea::vertical().max_height(96.0).show(ui, |ui| {
+        for folder in folders {
+            ui.label(folder);
+        }
+        if unknown {
+            ui.label("Conversations with no recorded folder are also included.");
+        }
+    });
+}
+
 #[derive(Clone)]
 struct DeletionJob {
     owner: PanelId,
@@ -221,7 +238,7 @@ impl HorizonApp {
         binding
     }
 
-    pub(super) fn poll_saved_session_deletion(&mut self, ctx: &egui::Context) {
+    pub(in crate::app) fn poll_saved_session_deletion(&mut self, ctx: &egui::Context) {
         let Some(job) = ctx.data(|data| data.get_temp::<DeletionJob>(job_id())) else {
             return;
         };
@@ -547,5 +564,108 @@ mod tests {
         }
         assert!(!state.confirming());
         assert!(take_deletion_request(&ctx).is_none());
+    }
+
+    #[test]
+    fn frame_lifecycle_finishes_deletion_without_renderable_panels() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        assert!(app.board.panels.is_empty());
+        let binding = AgentSessionBinding::new(
+            horizon_core::PanelKind::Codex,
+            "01a0f8a8-d7e2-7810-9e6b-999999999999".into(),
+            None,
+            None,
+            None,
+        );
+        let key = AgentSessionKey::new(binding.kind, &binding.session_id);
+        let reservation =
+            horizon_core::reserve_saved_session_deletions(std::slice::from_ref(&binding)).expect("reserve");
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                job_id(),
+                DeletionJob {
+                    owner: PanelId(42),
+                    viewport: egui::ViewportId::ROOT,
+                    reservation: Arc::new(reservation),
+                    state: Arc::new(Mutex::new(DeletionProgress {
+                        finished: true,
+                        done: 1,
+                        total: 1,
+                        report: AgentSessionDeletionReport {
+                            deleted: vec![key.clone()],
+                            ..Default::default()
+                        },
+                    })),
+                },
+            )
+        });
+        assert!(horizon_core::saved_session_deletion_pending(
+            binding.kind,
+            &binding.session_id
+        ));
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |_| {
+                app.process_frame_inputs(&ctx);
+            })
+            .discard_textures();
+        assert!(deletion_progress(&ctx).is_none());
+        assert!(!horizon_core::saved_session_deletion_pending(
+            binding.kind,
+            &binding.session_id
+        ));
+        let report = ctx
+            .data(|data| data.get_temp::<Arc<AgentSessionDeletionReport>>(receipt_id()))
+            .expect("receipt");
+        assert_eq!(report.deleted, vec![key]);
+        assert!(app.board.panels.is_empty());
+    }
+
+    #[test]
+    fn bulk_confirmation_names_every_folder_and_unknown_scope() {
+        let ctx = egui::Context::default();
+        let mut sessions: Vec<_> = [Some("/sample/a"), Some("/sample/b"), None]
+            .into_iter()
+            .enumerate()
+            .map(|(i, cwd)| {
+                AgentSessionBinding::new(
+                    horizon_core::PanelKind::Codex,
+                    format!("synthetic-{i}"),
+                    cwd.map(str::to_owned),
+                    None,
+                    None,
+                )
+            })
+            .collect();
+        let a = sessions[0].cwd.clone().expect("folder a");
+        let b = sessions[1].cwd.clone().expect("folder b");
+        let mut state = SessionDeletionUi {
+            confirmation: Some(std::mem::take(&mut sessions).into()),
+            ..Default::default()
+        };
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 700.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(state.render_confirmation(ui).is_none());
+                },
+            )
+            .discard_textures();
+        let text: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(text.contains(&"Folders: 2 recorded folders"));
+        assert!(text.contains(&a.as_str()));
+        assert!(text.contains(&b.as_str()));
+        assert!(text.contains(&"Conversations with no recorded folder are also included."));
+        assert!(!text.iter().any(|text| text.starts_with("Folder: ")));
     }
 }
