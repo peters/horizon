@@ -14,9 +14,15 @@ const topmost = (x, y) => {
     }
     return node;
 };
-const owns = (node, x, y) => {
-    const hit = topmost(x, y);
-    return hit !== null && (hit === node || node.contains(hit));
+// Content is clipped out of the gutter, so a hit there is the scrollbar only
+// when it is the container itself; any descendant hit overlays the gutter.
+const owns = (node, x, y) => topmost(x, y) === node;
+// Client metrics map onto the viewport only through translation.
+const translatedOnly = style => {
+    if ((style.rotate || 'none') !== 'none' || (style.scale || 'none') !== 'none') return false;
+    if (style.transform === 'none') return true;
+    const matrix = new DOMMatrixReadOnly(style.transform);
+    return matrix.is2D && matrix.a === 1 && matrix.b === 0 && matrix.c === 0 && matrix.d === 1;
 };
 // Bisect between an occluded and a visible probe to the nearest pixel.
 const boundary = (node, x, hidden, shown) => {
@@ -36,10 +42,13 @@ const firstVisible = (node, x, from, to, step) => {
         if (reached) return null;
     }
 };
-// Vertical span of the gutter that ancestors, the viewport and overlays leave visible.
+// Vertical span of the gutter that ancestors, the viewport and overlays leave
+// visible, or null when an ancestor rotates or scales the container.
 const visibleSpan = (node, x, top, bottom) => {
     for (let clip = parentOf(node); clip && clip !== root; clip = parentOf(clip)) {
-        if (getComputedStyle(clip).overflowY === 'visible') continue;
+        const style = getComputedStyle(clip);
+        if (!translatedOnly(style)) return null;
+        if (style.overflowY === 'visible') continue;
         const box = clip.getBoundingClientRect();
         top = Math.max(top, box.top + clip.clientTop);
         bottom = Math.min(bottom, box.top + clip.clientTop + clip.clientHeight);
@@ -63,9 +72,8 @@ for (let row = 0; row < grid && nested.length < limit; row++) {
             if (node.clientHeight < 32 || node.scrollHeight <= node.clientHeight + 1) continue;
             const style = getComputedStyle(node);
             if (!['auto', 'scroll', 'overlay'].includes(style.overflowY)) continue;
+            if (!translatedOnly(style)) continue;
             const rect = node.getBoundingClientRect();
-            // Transformed boxes do not map client metrics onto the viewport.
-            if (Math.abs(rect.width - node.offsetWidth) > 1 || Math.abs(rect.height - node.offsetHeight) > 1) continue;
             const borderLeft = parseFloat(style.borderLeftWidth) || 0;
             const borderRight = parseFloat(style.borderRightWidth) || 0;
             let gutter = node.offsetWidth - node.clientWidth - borderLeft - borderRight;

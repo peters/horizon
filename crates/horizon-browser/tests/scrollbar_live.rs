@@ -1,6 +1,7 @@
 //! Live checks that nested scroll containers stay usable in browser panels:
 //! Chromium drags its native scrollbar, and Firefox publishes the host
-//! indicator its screenshots omit while its native gutter still drags.
+//! indicator its screenshots omit (clipped by overlays, skipped when rotated)
+//! while its native gutter still drags.
 //! Ignored in CI; run with `cargo test -p horizon-browser --test scrollbar_live -- --ignored`.
 
 #![cfg(unix)]
@@ -19,10 +20,14 @@ use horizon_browser::{
 const FIXTURE: &str = r#"<!doctype html><title>scroll live</title>
 <style>html,body{height:100%;margin:0;overflow:hidden}
 header{height:56px}main{position:absolute;top:56px;bottom:0;left:0;right:0;overflow:auto}
-div{height:60px}</style><header></header><main id="list"></main>
+div{height:60px}
+#footer{position:fixed;left:0;right:0;top:560px;height:40px;background:#333}
+#rotated{position:absolute;left:0;top:200px;width:200px;height:150px;overflow:auto;transform:rotate(180deg)}
+</style><header></header><main id="list"><section id="footer"></section></main><section id="rotated"></section>
 <script>
 const list = document.getElementById('list');
 for (let i = 0; i < 120; i++) list.appendChild(document.createElement('div')).textContent = 'Item ' + i;
+for (let i = 0; i < 20; i++) document.getElementById('rotated').appendChild(document.createElement('div')).textContent = 'Rotated ' + i;
 const header = document.querySelector('header');
 list.addEventListener('scroll', () => { header.style.background = list.scrollTop > 1000 ? '#00ff00' : ''; });
 </script>"#;
@@ -63,7 +68,13 @@ fn firefox_publishes_and_drags_a_nested_scrollbar() {
     assert!((bar.track_y - 56.0).abs() < 1.0, "{bar:?}");
     assert!((bar.track_height - 544.0).abs() < 1.0, "{bar:?}");
     assert!((bar.visible_top - bar.track_y).abs() < 1.0, "{bar:?}");
-    assert!((bar.visible_bottom - 600.0).abs() < 1.0, "{bar:?}");
+    // A fixed descendant covers the bottom of the gutter.
+    assert!((bar.visible_bottom - 560.0).abs() < 1.5, "{bar:?}");
+    assert_eq!(
+        frame_slot.nested_scrollbars().len(),
+        1,
+        "a rotated container must not be published"
+    );
     assert!(bar.scroll_top.abs() < f32::EPSILON);
 
     let Some((thumb_top, thumb_height)) = bar.thumb() else {
