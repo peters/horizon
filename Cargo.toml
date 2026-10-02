@@ -95,6 +95,9 @@ egui_commonmark = { version = "0.25.0", default-features = false, features = ["p
 winit = "0.30.13"
 # XInput 2.4 supplies Linux trackpad pinch events missing from winit 0.30.
 x11rb = { version = "0.14.0", features = ["xinput"] }
+# PRIMARY selection over the Wayland data-control protocols, used before the X11 path
+# arboard provides (arboard picks its Wayland backend by environment and never retries X11).
+wl-clipboard-rs = "0.9.4"
 # The pinch bridge adopts winit's `wl_display`, which needs libwayland itself:
 # the pure-Rust backend cannot adopt a foreign display. `dlopen` matches winit.
 wayland-client = { version = "0.31.15", features = ["system", "dlopen"] }
@@ -131,9 +134,7 @@ socket2 = "0.6.5"
 git2 = { version = "0.21", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 regex = "1.13.1"
-# `wayland-data-control` lets PRIMARY reach Wayland compositors without XWayland;
-# arboard falls back to its X11 backend where the protocol is not offered.
-arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+arboard = "3.6.1"
 atspi = { version = "0.30.0", default-features = false, features = ["connection", "proxies", "tokio", "zbus"] }
 tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
 axuielement = { version = "0.10.0", default-features = false, features = ["async"] }

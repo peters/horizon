@@ -1,4 +1,3 @@
-mod clipboard;
 mod content;
 mod events;
 mod lifecycle;
@@ -28,8 +27,8 @@ use alacritty_terminal::vte::ansi::Rgb;
 
 use crate::error::{Error, Result};
 
-use self::clipboard::PendingClipboard;
-pub use self::clipboard::{ClipboardTarget, ClipboardWrite};
+use self::events::PendingClipboard;
+pub use self::events::{ClipboardTarget, ClipboardWrite};
 use self::replay::{ReplayRestoreState, drain_replay_events};
 #[cfg(test)]
 use self::resize::{queue_debounced_pty_resize, should_debounce_pty_resize};

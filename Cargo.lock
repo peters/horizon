@@ -220,7 +220,6 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "windows-sys 0.59.0",
- "wl-clipboard-rs",
  "x11rb 0.13.2",
 ]
 
@@ -2536,6 +2535,7 @@ dependencies = [
  "vnc-rs",
  "wgpu",
  "winit",
+ "wl-clipboard-rs",
  "x11rb 0.14.0",
  "zeroize",
 ]

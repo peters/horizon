@@ -170,3 +170,34 @@ fn begin_async_shutdown_completes_for_shell_and_command_panels() {
 
     assert!(progress.is_complete());
 }
+
+#[test]
+fn terminal_clipboard_copies_are_collected_without_new_output() {
+    use alacritty_terminal::event::Event;
+    use alacritty_terminal::term::ClipboardType;
+
+    use crate::terminal::{ClipboardTarget, ClipboardWrite};
+
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("frontend");
+    let panel_id = board
+        .create_panel(shell_panel_options(), workspace_id)
+        .expect("panel should spawn");
+    board
+        .panel_mut(panel_id)
+        .and_then(Panel::terminal_mut)
+        .expect("terminal panel")
+        .handle_event(Event::ClipboardStore(ClipboardType::Clipboard, "copied".to_string()));
+
+    board.process_output();
+
+    assert_eq!(
+        board.take_terminal_clipboard_writes(),
+        vec![ClipboardWrite {
+            target: ClipboardTarget::Clipboard,
+            text: "copied".to_string()
+        }]
+    );
+    board.process_output();
+    assert!(board.take_terminal_clipboard_writes().is_empty());
+}

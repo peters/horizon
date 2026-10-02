@@ -128,6 +128,13 @@ fn run_owner_worker(rx: Receiver<OwnerCommand>) {
 
 #[cfg(target_os = "linux")]
 fn set_primary_text(clipboard: &mut Option<Clipboard>, text: &str) {
+    if wayland::in_session() {
+        match wayland::copy(text) {
+            Ok(()) => return,
+            Err(error) => tracing::debug!("wayland primary selection write unavailable, using X11: {error}"),
+        }
+    }
+
     let Some(primary_clipboard) = ensure_clipboard(clipboard, "set") else {
         return;
     };
@@ -144,6 +151,13 @@ fn set_primary_text(clipboard: &mut Option<Clipboard>, text: &str) {
 
 #[cfg(target_os = "linux")]
 fn read_primary_text() -> Result<Option<String>, arboard::Error> {
+    if wayland::in_session() {
+        match wayland::read() {
+            Ok(text) => return Ok(text),
+            Err(error) => tracing::debug!("wayland primary selection read unavailable, using X11: {error}"),
+        }
+    }
+
     let mut clipboard = Clipboard::new()?;
     let text = clipboard.get().clipboard(LinuxClipboardKind::Primary).text()?;
 
@@ -163,4 +177,64 @@ fn ensure_clipboard<'a>(clipboard: &'a mut Option<Clipboard>, operation: &str) -
     }
 
     clipboard.as_mut()
+}
+
+/// PRIMARY over the Wayland data-control protocols. arboard picks its own
+/// Wayland backend from the environment alone and never retries X11 when the
+/// compositor lacks primary-selection support, so each operation tries this
+/// first and the X11 path covers every failure, as it did before.
+#[cfg(target_os = "linux")]
+mod wayland {
+    use std::io::{self, Read as _};
+
+    use wl_clipboard_rs::copy::{ClipboardType as CopyKind, MimeType as CopyMime, Options, Source};
+    use wl_clipboard_rs::paste::{ClipboardType as PasteKind, MimeType as PasteMime, Seat, get_contents};
+    use wl_clipboard_rs::utils::{PrimarySelectionCheckError, is_primary_selection_supported};
+    use wl_clipboard_rs::{copy, paste};
+
+    #[derive(Debug, thiserror::Error)]
+    pub(super) enum Error {
+        #[error("the compositor offers no primary selection through data-control")]
+        Unsupported,
+        #[error(transparent)]
+        Check(#[from] PrimarySelectionCheckError),
+        #[error(transparent)]
+        Copy(#[from] copy::Error),
+        #[error(transparent)]
+        Paste(#[from] paste::Error),
+        #[error(transparent)]
+        Read(#[from] io::Error),
+    }
+
+    pub(super) fn in_session() -> bool {
+        std::env::var_os("WAYLAND_DISPLAY").is_some()
+    }
+
+    fn ensure_supported() -> Result<(), Error> {
+        if is_primary_selection_supported()? {
+            Ok(())
+        } else {
+            Err(Error::Unsupported)
+        }
+    }
+
+    pub(super) fn copy(text: &str) -> Result<(), Error> {
+        ensure_supported()?;
+        let mut options = Options::new();
+        options.clipboard(CopyKind::Primary);
+        options.copy(Source::Bytes(text.as_bytes().into()), CopyMime::Text)?;
+        Ok(())
+    }
+
+    pub(super) fn read() -> Result<Option<String>, Error> {
+        ensure_supported()?;
+        let mut pipe = match get_contents(PasteKind::Primary, Seat::Unspecified, PasteMime::Text) {
+            Ok((pipe, _)) => pipe,
+            Err(paste::Error::ClipboardEmpty | paste::Error::NoMimeType) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let mut text = String::new();
+        pipe.read_to_string(&mut text)?;
+        Ok((!text.is_empty()).then_some(text))
+    }
 }
