@@ -115,6 +115,19 @@ fn delete_all_confirmation_cancels_on_scope_growth_but_single_selection_remains_
 }
 
 #[test]
+fn delete_all_confirmation_detects_new_identity_replacing_a_duplicate() {
+    let a = AgentSessionBinding::new(horizon_core::PanelKind::Claude, "a".into(), None, None, None);
+    let b = AgentSessionBinding::new(horizon_core::PanelKind::Claude, "b".into(), None, None, None);
+    let mut state = SessionDeletionUi {
+        confirmation: Some(vec![a.clone(), a.clone()].into()),
+        confirmation_all: true,
+        ..Default::default()
+    };
+    state.reconcile_options(&[a, b]);
+    assert!(!state.confirming());
+}
+
+#[test]
 fn cleanup_warning_is_retained_separately_from_failed_deletions() {
     let ctx = egui::Context::default();
     let report = AgentSessionDeletionReport {

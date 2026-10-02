@@ -284,6 +284,71 @@ fn keyboard_copy_keeps_the_picker_open() {
 }
 
 #[test]
+fn metadata_refresh_preserves_pagination_but_identity_scope_changes_reset_it() {
+    let ctx = Context::default();
+    let mut options: Vec<_> = (1..=16)
+        .map(|index| {
+            AgentSessionBinding::new(
+                PanelKind::Codex,
+                format!("session-{index}"),
+                Some("/example".into()),
+                Some(format!("Conversation {index}")),
+                None,
+            )
+        })
+        .collect();
+    options[0] = options[1].clone();
+    let run = |options: &[AgentSessionBinding], events, launch| {
+        ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 900.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                if launch {
+                    open_session_picker(&ui.button("Resume"), PanelId(1), options.to_vec());
+                }
+                assert!(render_session_picker(&ctx, PanelId(1), options.to_vec()).is_none());
+            },
+        )
+        .discard_textures()
+    };
+    run(&options, Vec::new(), true);
+    let output = run(&options, Vec::new(), false);
+    let next = text_center(&output, "Next").expect("next page");
+    for pressed in [true, false] {
+        run(
+            &options,
+            vec![
+                Event::PointerMoved(next),
+                Event::PointerButton {
+                    pos: next,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+            false,
+        );
+    }
+    assert!(text_center(&run(&options, Vec::new(), false), "9–16 of 16").is_some());
+    for binding in &mut options {
+        binding.updated_at = Some(42);
+        binding.label = Some("Updated synthetic title".into());
+    }
+    options.swap(0, 1);
+    run(&options, Vec::new(), false);
+    let updated = run(&options, Vec::new(), false);
+    assert!(text_center(&updated, "9–16 of 16").is_some());
+    assert!(updated.shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.job.text.starts_with("Updated synthetic title\n"))
+    }));
+    options[0].session_id = "newly-added-session".into();
+    assert!(text_center(&run(&options, Vec::new(), false), "1–8 of 16").is_some());
+}
+
+#[test]
 fn recovery_picker_outlives_parent_menu_and_copy_keeps_it_open() {
     let ctx = Context::default();
     frame(&ctx, Vec::new(), true);

@@ -46,9 +46,10 @@ pub(super) fn render_session_picker(
         return None;
     }
     if state.options.as_ref() != options.as_slice() {
+        let scope_changed = !AgentSessionBinding::same_saved_session_scope(&state.options, &options);
         state.deletion.reconcile_options(&options);
         state.options = options.into();
-        state.focus_first = true;
+        state.focus_first |= scope_changed;
     }
     state.last_rendered_frame = ctx.cumulative_frame_nr();
     let result = egui::Modal::new(id)

@@ -192,7 +192,7 @@ impl SessionDeletionUi {
     pub(super) fn reconcile_options(&mut self, options: &[AgentSessionBinding]) {
         Arc::make_mut(&mut self.selected).retain(|id| options.iter().any(|binding| &binding.session_id == id));
         if self.confirmation.as_ref().is_some_and(|sessions| {
-            (self.confirmation_all && sessions.len() != options.len())
+            (self.confirmation_all && !AgentSessionBinding::same_saved_session_scope(sessions, options))
                 || sessions.iter().any(|session| {
                     !options.iter().any(|binding| {
                         binding.kind == session.kind

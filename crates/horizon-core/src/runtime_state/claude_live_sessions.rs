@@ -26,6 +26,13 @@ pub(super) fn verified_live_claude_session_ids(home: &Path) -> crate::Result<Has
     collect_verified_live_session_ids(&home.join(".claude/sessions"), process_is_alive)
 }
 
+#[derive(serde::Deserialize)]
+struct VerifiedLiveSession {
+    pid: u64,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+}
+
 fn collect_verified_live_session_ids(
     dir: &Path,
     process_is_alive: impl Fn(u64) -> bool,
@@ -45,20 +52,20 @@ fn collect_verified_live_session_ids(
             continue;
         }
         let contents = std::fs::read_to_string(entry.path())?;
-        let value: Value = serde_json::from_str(&contents)
+        if !contents.trim_start().starts_with('{') {
+            return Err(Error::State(
+                "Cannot verify non-object Claude live-session entry".into(),
+            ));
+        }
+        let record: VerifiedLiveSession = serde_json::from_str(&contents)
             .map_err(|error| Error::State(format!("Cannot verify Claude live-session entry: {error}")))?;
-        let session_id = value
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty());
-        let pid = value.get("pid").and_then(Value::as_u64).filter(|pid| *pid > 0);
-        let (Some(session_id), Some(pid)) = (session_id, pid) else {
+        if record.session_id.is_empty() || record.pid == 0 {
             return Err(Error::State(
                 "Cannot verify incomplete Claude live-session entry".into(),
             ));
-        };
-        if process_is_alive(pid) {
-            ids.insert(session_id.to_string());
+        }
+        if process_is_alive(record.pid) {
+            ids.insert(record.session_id);
         }
     }
     Ok(ids)
@@ -210,6 +217,13 @@ mod tests {
             r#"{"sessionId":"live"}"#,
             r#"{"pid":0,"sessionId":"live"}"#,
             r#"{"pid":101,"sessionId":""}"#,
+            r#"{"pid":101,"pid":102,"sessionId":"live"}"#,
+            r#"{"pid":102,"pid":101,"sessionId":"live"}"#,
+            r#"{"pid":101,"sessionId":"live","sessionId":"stale"}"#,
+            r#"{"pid":101,"sessionId":null}"#,
+            r#"{"pid":-1,"sessionId":"live"}"#,
+            r#"{"pid":1.5,"sessionId":"live"}"#,
+            r#"[101,"live"]"#,
         ] {
             write_entry(dir.path(), "101.json", contents);
             assert!(collect_verified_live_session_ids(dir.path(), |_| true).is_err());

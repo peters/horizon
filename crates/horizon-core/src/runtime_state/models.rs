@@ -490,6 +490,20 @@ impl AgentSessionKey {
 
 impl AgentSessionBinding {
     #[must_use]
+    pub fn same_saved_session_scope(previous: &[Self], current: &[Self]) -> bool {
+        let contains = |scope: &[Self], binding: &Self| {
+            scope.iter().any(|candidate| {
+                candidate.kind == binding.kind
+                    && candidate.session_id == binding.session_id
+                    && candidate.cwd == binding.cwd
+            })
+        };
+        previous.len() == current.len()
+            && previous.iter().all(|binding| contains(current, binding))
+            && current.iter().all(|binding| contains(previous, binding))
+    }
+
+    #[must_use]
     pub fn new(
         kind: PanelKind,
         session_id: String,
