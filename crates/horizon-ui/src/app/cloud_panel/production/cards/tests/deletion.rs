@@ -255,3 +255,52 @@ fn resuming_shows_the_steps_instead_of_manage() {
     );
     assert_eq!(app.cloud_prototype.production.runtimes[&7].drawer, Some(Tab::Overview));
 }
+
+#[test]
+fn a_pending_stop_replaces_the_whole_manage_drawer() {
+    use super::scrolling::{frame, label_pos, verbose_card};
+    let (_temp, ctx, mut app) = verbose_card();
+    let ready = ready_bound_runtime();
+    {
+        let runtime = app.cloud_prototype.production.runtimes.entry(901).or_default();
+        runtime.stage = ready.stage;
+        runtime.state = ready.state;
+        runtime.drawer = Some(Tab::Manage);
+    }
+    let mut output = frame(&ctx, &mut app, 0.0, Pos2::ZERO, 0.0);
+    for step in 1..4 {
+        output = frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
+    }
+    for shown in ["Workspace", "Full screen", "Stop worker…"] {
+        assert!(
+            label_pos(&output, shown).is_some(),
+            "{shown} is in the usual Manage tab"
+        );
+    }
+
+    app.cloud_prototype
+        .production
+        .runtimes
+        .entry(901)
+        .or_default()
+        .confirmation = Confirmation::Stop;
+    for step in 4..8 {
+        output = frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
+    }
+    for shown in ["Stop worker", "Keep running"] {
+        assert!(label_pos(&output, shown).is_some(), "{shown} is asked");
+    }
+    for hidden in [
+        "Workspace",
+        "Default",
+        "Full screen",
+        "Cloud",
+        "Stop worker…",
+        "Reconnect cloud",
+    ] {
+        assert!(
+            label_pos(&output, hidden).is_none(),
+            "{hidden} waits behind the question in the real Manage drawer"
+        );
+    }
+}
