@@ -215,3 +215,184 @@ fn failed_deletion_retains_cloud_and_error_for_retry() {
     );
     assert!(app.cloud_prototype.production.close.deleting.is_empty());
 }
+
+fn add_member(app: &mut HorizonApp) -> horizon_core::PanelId {
+    let workspace = app.board.workspaces.last().unwrap().id;
+    let panel = app
+        .board
+        .create_panel(
+            horizon_core::PanelOptions {
+                kind: horizon_core::PanelKind::Editor,
+                position: Some([14.0, 120.0]),
+                size: Some([120.0, 100.0]),
+                ..Default::default()
+            },
+            workspace,
+        )
+        .unwrap();
+    app.cloud_prototype.groups.0[0].attach(&mut app.board, panel);
+    panel
+}
+
+#[test]
+fn a_closing_cloud_hides_its_panels_and_shows_them_again_if_its_deletion_fails() {
+    let (temp, mut app) = test_app();
+    add_cloud(&mut app, temp.path(), Some(deployment()));
+    let panel = add_member(&mut app);
+    let already_hidden = add_member(&mut app);
+    app.board.panel_mut(already_hidden).unwrap().visible = false;
+    assert!(app.board.panel(panel).unwrap().visible);
+
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
+    runtime.receiver = Some(receiver);
+    runtime.stage = Some(Stage::DeleteWorker);
+    app.cloud_prototype.production.close.deleting.insert(101);
+    let ctx = egui::Context::default();
+    app.finish_closing_clouds(&ctx);
+    assert!(app.cloud_prototype.production.close.closing(101));
+    assert!(
+        !app.board.panel(panel).unwrap().visible,
+        "the panels end with the cloud and give way to its disposal"
+    );
+    assert!(
+        app.board.is_hidden_for_disposal(panel),
+        "saved state keeps them as they were while the disposal is shown"
+    );
+
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
+    runtime.receiver = None;
+    runtime.error = Some("Storage cleanup failed".into());
+    app.finish_closing_clouds(&ctx);
+    assert!(!app.cloud_prototype.production.close.closing(101));
+    assert!(
+        app.board.panel(panel).unwrap().visible,
+        "a deletion that could not finish leaves the cloud as it was"
+    );
+    assert!(!app.board.is_hidden_for_disposal(panel));
+    assert!(
+        !app.board.panel(already_hidden).unwrap().visible,
+        "a panel that was hidden before stays hidden"
+    );
+}
+
+/// A cloud with one panel whose deletion is running; keep the sender alive for as long as it runs.
+fn closing_cloud_with_panel(
+    app: &mut HorizonApp,
+    root: &std::path::Path,
+) -> (horizon_core::PanelId, std::sync::mpsc::Sender<super::super::Event>) {
+    add_cloud(app, root, Some(deployment()));
+    let panel = add_member(app);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
+    runtime.receiver = Some(receiver);
+    runtime.stage = Some(Stage::DeleteWorker);
+    app.cloud_prototype.production.close.deleting.insert(101);
+    (panel, sender)
+}
+
+#[test]
+fn expanding_a_collapsed_cloud_while_it_closes_keeps_its_panels_hidden() {
+    let (temp, mut app) = test_app();
+    let (panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
+    app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, true);
+    let ctx = egui::Context::default();
+    app.finish_closing_clouds(&ctx);
+    assert!(!app.board.panel(panel).unwrap().visible);
+
+    app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, false);
+    assert!(
+        app.board.panel(panel).unwrap().visible,
+        "expanding shows its members again"
+    );
+    app.finish_closing_clouds(&ctx);
+    assert!(
+        !app.board.panel(panel).unwrap().visible,
+        "the disposal takes them back out of sight"
+    );
+
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
+    runtime.receiver = None;
+    runtime.error = Some("Storage cleanup failed".into());
+    app.finish_closing_clouds(&ctx);
+    assert!(
+        app.board.panel(panel).unwrap().visible,
+        "a failed deletion returns them"
+    );
+}
+
+#[test]
+fn a_cloud_collapsed_during_a_failed_close_shows_its_panels_when_it_expands() {
+    let (temp, mut app) = test_app();
+    let (panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
+    let ctx = egui::Context::default();
+    app.finish_closing_clouds(&ctx);
+    assert!(!app.board.panel(panel).unwrap().visible);
+    app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, true);
+
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
+    runtime.receiver = None;
+    runtime.error = Some("Storage cleanup failed".into());
+    app.finish_closing_clouds(&ctx);
+    assert!(!app.board.panel(panel).unwrap().visible, "still collapsed");
+    app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, false);
+    assert!(
+        app.board.panel(panel).unwrap().visible,
+        "expanding must not leave the panel stranded"
+    );
+}
+
+#[test]
+#[cfg(unix)] // Durable cloud records require Unix directory durability.
+fn a_declined_removal_returns_the_panels_of_the_cloud() {
+    let (temp, mut app) = test_app();
+    Store::lock(&temp.path().join("fixture"))
+        .unwrap()
+        .save(&deployment())
+        .unwrap();
+    let (panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
+    let ctx = egui::Context::default();
+    app.finish_closing_clouds(&ctx);
+    assert!(!app.board.panel(panel).unwrap().visible);
+
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
+    runtime.receiver = None;
+    runtime.stage = Some(Stage::Deleted);
+    app.finish_closing_clouds(&ctx);
+    assert_eq!(
+        app.cloud_prototype.groups.0.len(),
+        1,
+        "the bound worker keeps the cloud"
+    );
+    assert!(app.board.panel(panel).unwrap().visible, "and its panels stay usable");
+    assert!(!app.board.is_hidden_for_disposal(panel));
+}
+
+#[test]
+#[cfg(unix)] // Durable cloud records require Unix directory durability.
+fn a_finished_close_leaves_no_disposal_marker_behind() {
+    let (temp, mut app) = test_app();
+    let mut deleted = deployment();
+    deleted.stage = Stage::Deleted;
+    deleted.operation = CreateState::Terminated {
+        worker_id: "worker".into(),
+    };
+    Store::lock(&temp.path().join("fixture"))
+        .unwrap()
+        .save(&deleted)
+        .unwrap();
+    let (panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
+    let ctx = egui::Context::default();
+    app.finish_closing_clouds(&ctx);
+    assert!(app.board.is_hidden_for_disposal(panel));
+
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
+    runtime.receiver = None;
+    runtime.stage = Some(Stage::Deleted);
+    app.finish_closing_clouds(&ctx);
+    assert!(app.cloud_prototype.groups.0.is_empty(), "the cloud closed");
+    assert!(
+        !app.board.is_hidden_for_disposal(panel),
+        "a closed cloud's panels leave nothing behind"
+    );
+}

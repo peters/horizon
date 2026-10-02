@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{HorizonApp, Runtime, Stage, cards::wording, lifecycle::Action};
 
@@ -6,6 +6,22 @@ use super::{HorizonApp, Runtime, Stage, cards::wording, lifecycle::Action};
 pub(super) struct State {
     confirming: Option<u32>,
     deleting: BTreeSet<u32>,
+    /// Per closing cloud, the panels that were showing when its disposal took over.
+    hidden: BTreeMap<u32, Vec<String>>,
+}
+
+impl State {
+    /// A confirmed close is deleting this cloud's resources.
+    pub(in crate::app::cloud_panel) fn closing(&self, id: u32) -> bool {
+        self.deleting.contains(&id)
+    }
+}
+
+impl super::Production {
+    /// A confirmed close is deleting this cloud's resources.
+    pub(in crate::app::cloud_panel) fn closing(&self, id: u32) -> bool {
+        self.close.closing(id)
+    }
 }
 
 impl HorizonApp {
@@ -94,7 +110,53 @@ impl HorizonApp {
         }
     }
 
+    /// The panels of a cloud being closed end with it: whichever are showing stay out of
+    /// sight while its disposal is shown, and only those return if the deletion could not
+    /// finish. Every frame, because expanding a collapsed cloud shows its members again.
+    /// What is saved is unaffected, so quitting meanwhile restores the cloud as it was.
+    fn hide_closing_panels(&mut self, id: u32) {
+        let Some(group) = self.cloud_prototype.groups.0.iter().find(|group| group.issue == id) else {
+            return;
+        };
+        let members = group.panels.clone();
+        for local in members {
+            let Some(panel) = self.board.panel_id_by_local_id(&local) else {
+                continue;
+            };
+            if !self.board.hide_for_disposal(panel) {
+                continue;
+            }
+            let hidden = self.cloud_prototype.production.close.hidden.entry(id).or_default();
+            if !hidden.contains(&local) {
+                hidden.push(local);
+            }
+        }
+    }
+
+    /// Shows the panels the disposal hid. A collapsed cloud shows them when it expands.
+    fn restore_closing_panels(&mut self, id: u32) {
+        let Some(hidden) = self.cloud_prototype.production.close.hidden.remove(&id) else {
+            return;
+        };
+        let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
+            return;
+        };
+        let collapsed = self.cloud_prototype.groups.0[index].collapsed;
+        for local in hidden {
+            if let Some(panel) = self.board.panel_id_by_local_id(&local) {
+                self.board.end_disposal_hiding(panel, !collapsed);
+            }
+            if collapsed {
+                self.cloud_prototype.groups.0[index].show_on_expand(&local);
+            }
+        }
+    }
+
     pub(super) fn finish_closing_clouds(&mut self, ctx: &egui::Context) {
+        let closing: Vec<_> = self.cloud_prototype.production.close.deleting.iter().copied().collect();
+        for id in closing {
+            self.hide_closing_panels(id);
+        }
         let finished: Vec<_> = self
             .cloud_prototype
             .production
@@ -120,7 +182,14 @@ impl HorizonApp {
                 .is_some_and(|runtime| runtime.stage == Some(Stage::Deleted))
             {
                 // The saved record is checked again by removal; a stale UI snapshot cannot discard resources.
+                // Returned first, while the panels still exist and drop their disposal marker:
+                // removal then closes them, or declines while the record still holds resources
+                // and leaves the cloud, with its panels, as it was.
+                self.restore_closing_panels(id);
                 self.remove_deleted_cloud(id, ctx);
+            } else {
+                // The deletion stopped short: the cloud stays, with its failure in the header.
+                self.restore_closing_panels(id);
             }
         }
     }

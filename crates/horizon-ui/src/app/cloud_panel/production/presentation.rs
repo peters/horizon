@@ -243,7 +243,8 @@ impl HorizonApp {
     pub(super) fn sync_cloud_presentations(&mut self) {
         for index in 0..self.cloud_prototype.groups.0.len() {
             let group = &self.cloud_prototype.groups.0[index];
-            if group.remote.is_none() {
+            // A cloud being closed restores and shows nothing: its panels end with it.
+            if group.remote.is_none() || self.cloud_prototype.production.closing(group.issue) {
                 continue;
             }
             let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&group.issue) else {

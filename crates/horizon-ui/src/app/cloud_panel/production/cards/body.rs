@@ -24,6 +24,7 @@ pub(super) fn show(
     ui.set_min_size(size);
     ui.set_max_size(size);
     let starting = runtime.first_panel_due;
+    let deleting = super::deleting(runtime);
     let hint_height = 26.0;
     if size.x >= SIDE_BY_SIDE {
         ui.horizontal_top(|ui| {
@@ -37,7 +38,7 @@ pub(super) fn show(
                 .inner;
             ui.vertical(|ui| {
                 output_column(ui, id, runtime, status, size.y - hint_height);
-                hint(ui, status, starting);
+                hint(ui, status, starting, deleting);
             });
             action
         })
@@ -47,7 +48,7 @@ pub(super) fn show(
         let action = steps_card(ui, id, launch, runtime, status, steps_height);
         ui.add_space(GAP);
         output_column(ui, id, runtime, status, size.y - steps_height - GAP - hint_height);
-        hint(ui, status, starting);
+        hint(ui, status, starting, deleting);
         action
     }
 }
@@ -187,8 +188,11 @@ fn output_column(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, status: &Sta
 }
 
 /// What the empty body waits for, in the cloud's own terms.
-fn hint_text(status: &Status, starting: bool) -> &'static str {
+fn hint_text(status: &Status, starting: bool, deleting: bool) -> &'static str {
     use super::status::{Primary, Tone};
+    if deleting {
+        return "Closing this cloud. Its worker and storage are being deleted, and the card closes once they are gone.";
+    }
     match (status.tone, status.primary) {
         (Tone::Ready, _) if starting => "Starting your first panel…",
         (Tone::Ready, _) => "No panels open. Ctrl-double-click inside this cloud to add an agent, browser or terminal.",
@@ -200,15 +204,15 @@ fn hint_text(status: &Status, starting: bool) -> &'static str {
     }
 }
 
-fn hint(ui: &mut egui::Ui, status: &Status, starting: bool) {
+fn hint(ui: &mut egui::Ui, status: &Status, starting: bool, deleting: bool) {
     let ready = status.tone == super::status::Tone::Ready;
     ui.vertical_centered(|ui| {
         ui.add_space(6.0);
-        ui.label(RichText::new(hint_text(status, starting)).size(13.0).color(if ready {
-            theme::FG_SOFT()
-        } else {
-            theme::FG_DIM()
-        }));
+        ui.label(
+            RichText::new(hint_text(status, starting, deleting))
+                .size(13.0)
+                .color(if ready { theme::FG_SOFT() } else { theme::FG_DIM() }),
+        );
     });
 }
 
