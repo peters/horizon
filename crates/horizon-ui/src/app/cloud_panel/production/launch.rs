@@ -1,7 +1,11 @@
 //! Capture launch context and prepare the repository while the user enters a title.
 use super::{HorizonApp, cloud_runtime};
 use egui::Context;
-use horizon_core::{WorkspaceId, cloud_panel::Placement, cloud_runtime::repository::launch::Prepared};
+use horizon_core::{
+    WorkspaceId,
+    cloud_panel::Placement,
+    cloud_runtime::repository::launch::{Configuration, Prepared},
+};
 use std::{
     path::Path,
     sync::mpsc::{Receiver, TryRecvError, channel},
@@ -19,6 +23,7 @@ pub(super) struct State {
     receiver: Option<Receiver<cloud_runtime::Result<Loaded>>>,
     cancel: cloud_runtime::Cancellation,
     pub revision: Option<String>,
+    pub configuration: Configuration,
     pub submitted: bool,
     pub watch: Option<cloud_runtime::prices::watch::Selection>,
     /// The hourly compute price shown when the watch started.
@@ -99,6 +104,7 @@ impl HorizonApp {
             .unwrap_or_else(|| horizon_core::HorizonHome::resolve().root().join("cloud"));
         let repository = form.repository.clone();
         let revision = form.revision.clone();
+        let configuration = form.launch.configuration;
         let cancel = form.launch.cancel.clone();
         let (sender, receiver) = channel();
         form.launch.receiver = Some(receiver);
@@ -110,7 +116,13 @@ impl HorizonApp {
                 emit: &|_| {},
                 secrets: Vec::new(),
             };
-            let result = cloud_runtime::repository::launch::prepare(&repository, &revision, &runner).map(|prepared| {
+            let result = cloud_runtime::repository::launch::prepare_with_configuration(
+                &repository,
+                &revision,
+                configuration,
+                &runner,
+            )
+            .map(|prepared| {
                 let ready_profiles =
                     cloud_runtime::repository::launch::ready_profiles(&root, &prepared.config, &cancel);
                 Loaded {
@@ -171,6 +183,11 @@ impl HorizonApp {
                 }
                 Err(error) => {
                     form.launch.submitted = false;
+                    form.selected_profile.clear();
+                    form.size = None;
+                    form.placement = Placement::default();
+                    form.provider = None;
+                    form.launch.siblings = super::creation::siblings::State::default();
                     self.cloud_prototype.error = Some(error.to_string());
                 }
             }

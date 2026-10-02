@@ -204,7 +204,26 @@ commit the setup. Return to New cloud and choose **Read .horizon/cloud.yml**.
 Changing the repository or encountering invalid YAML clears previously loaded
 profiles, so a stale profile cannot be deployed accidentally.
 
-Commit `.horizon/cloud.yml` using the [example](../crates/horizon-cloud/examples/cloud.yml).
+For the default launch path, commit `.horizon/cloud.yml` using the
+[example](../crates/horizon-cloud/examples/cloud.yml).
+
+To test an existing worker image without committing the test settings, open
+**More options** and select **Use local image-only settings**. Horizon reads the
+working copy of `.horizon/cloud.yml`, including untracked files, and offers only
+profiles with no `build` section. Set the local default to an image-only profile;
+a build default is refused instead of selecting another CPU or GPU profile.
+Set `image` to a registry-accessible tag or
+digest, resource minimums, GPU requirement and explicit capabilities. The image
+still passes the worker contract check before allocation and is pinned by its
+resolved registry digest. Use **Read .horizon/cloud.yml** after editing settings.
+
+Local mode captures the selected profile in this cloud's machine-local state;
+later file edits do not change that cloud or its reconnect settings. The selected
+**Committed base revision** independently controls the application source.
+Local mode cannot change source packaging or declare companion repositories;
+those remain committed-source features. Credentials always stay in machine-local
+bindings. Closing the dialog resets the next launch to committed configuration.
+
 Image-only profiles omit `build`. Repository Dockerfiles build from the selected
 committed tree, honor `.dockerignore`, and reuse local BuildKit layers. Dirty and
 untracked files are excluded. Selected Git LFS objects and recursively pinned

@@ -3,6 +3,15 @@ use super::{Error, PathBuf, Runner, resolve_with_runner};
 use horizon_cloud::CloudConfig;
 use std::{path::Path, process::Command, time::Duration};
 
+mod local;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Configuration {
+    #[default]
+    Committed,
+    LocalImageOnly,
+}
+
 pub struct Prepared {
     pub repository: PathBuf,
     pub revision: String,
@@ -12,6 +21,17 @@ pub struct Prepared {
 /// # Errors
 /// Distinguishes a missing checkout/configuration from an invalid profile or revision.
 pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::Result<Prepared> {
+    prepare_with_configuration(directory, revision, Configuration::Committed, runner)
+}
+
+/// # Errors
+/// Local settings offer existing worker images only; source stays pinned to `revision`.
+pub fn prepare_with_configuration(
+    directory: &str,
+    revision: &str,
+    configuration: Configuration,
+    runner: &Runner<'_>,
+) -> super::Result<Prepared> {
     if directory.trim().is_empty() {
         return Err(Error::Invalid("Choose the workspace repository in Advanced"));
     }
@@ -26,9 +46,12 @@ pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::R
     )?;
     let repository = Path::new(root.trim_end_matches(['\r', '\n'])).canonicalize()?;
     let revision = resolve_with_runner(&repository, if revision.is_empty() { "HEAD" } else { revision }, runner)?;
-    let config = committed_config(&repository, &revision, runner)?.ok_or(Error::Invalid(
-        "The selected commit has no readable .horizon/cloud.yml. Commit the cloud configuration or choose another revision in Advanced.",
-    ))?;
+    let config = match configuration {
+        Configuration::Committed => committed_config(&repository, &revision, runner)?.ok_or(Error::Invalid(
+            "The selected commit has no readable .horizon/cloud.yml. Commit the cloud configuration, choose another revision, or use local image-only settings in More options.",
+        ))?,
+        Configuration::LocalImageOnly => local::read(&repository, runner)?,
+    };
     let config = creatable(config)?;
     Ok(Prepared {
         repository,
@@ -185,9 +208,9 @@ fn ssh_ready_with_cancel(path: &Path, cancel: &super::super::Cancellation) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    const CONFIG: &str = "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n";
+    pub(super) const CONFIG: &str = "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n";
 
-    fn git(path: &Path, args: &[&str]) {
+    pub(super) fn git(path: &Path, args: &[&str]) {
         assert!(
             Command::new("git")
                 .arg("-C")
@@ -199,7 +222,7 @@ mod tests {
                 .success()
         );
     }
-    fn repository(path: &Path) {
+    pub(super) fn repository(path: &Path) {
         git(path, &["init", "--quiet"]);
         std::fs::create_dir_all(path.join(".horizon")).unwrap();
         std::fs::write(path.join(".horizon/cloud.yml"), CONFIG).unwrap();
@@ -217,7 +240,7 @@ mod tests {
             ],
         );
     }
-    fn read(path: &Path) -> super::super::Result<Prepared> {
+    pub(super) fn read(path: &Path) -> super::super::Result<Prepared> {
         read_revision(path, "HEAD")
     }
     fn read_revision(path: &Path, revision: &str) -> super::super::Result<Prepared> {

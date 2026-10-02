@@ -4,6 +4,7 @@ use egui::{Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, epaint::Shape};
 use horizon_core::{RuntimeState, StartupDecision};
 use std::time::{Duration, Instant};
 
+mod local_profiles;
 mod profiles;
 mod reopening;
 mod repository_picker;
