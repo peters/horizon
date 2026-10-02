@@ -6077,7 +6077,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vnc-rs"
 version = "0.5.3"
-source = "git+https://github.com/peters/vnc-rs.git?rev=54b7faf0e58206d009ec681516f6a7e202155be4#54b7faf0e58206d009ec681516f6a7e202155be4"
+source = "git+https://github.com/peters/vnc-rs.git?rev=773ec2351241c80bbab88ffedae73f1972e0a4c1#773ec2351241c80bbab88ffedae73f1972e0a4c1"
 dependencies = [
  "async_io_stream",
  "flate2",
