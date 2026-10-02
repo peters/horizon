@@ -32,6 +32,7 @@ impl BrowserInputCdpExt for BrowserInput {
                     "type": "mouseMoved",
                     "x": x,
                     "y": y,
+                    "button": held_button_name(buttons),
                     "buttons": buttons,
                     "modifiers": modifier_bits(modifiers),
                 }),
@@ -142,6 +143,20 @@ const fn button_name(button: BrowserButton) -> &'static str {
         BrowserButton::Left => "left",
         BrowserButton::Middle => "middle",
         BrowserButton::Right => "right",
+    }
+}
+
+/// Chromium only drags native scrollbars, sliders and selections when a
+/// move names its held button; `buttons` alone reads as a hover.
+const fn held_button_name(buttons: u32) -> &'static str {
+    if buttons & 1 != 0 {
+        "left"
+    } else if buttons & 2 != 0 {
+        "right"
+    } else if buttons & 4 != 0 {
+        "middle"
+    } else {
+        "none"
     }
 }
 
@@ -518,7 +533,28 @@ mod tests {
         }
         .cdp();
         assert_eq!(moved["type"], "mouseMoved");
+        assert_eq!(moved["button"], "left");
         assert_eq!(moved["modifiers"], 8);
+    }
+
+    #[test]
+    fn mouse_move_names_the_held_button() {
+        let moved = |buttons| {
+            BrowserInput::MouseMove {
+                x: 1.0,
+                y: 2.0,
+                buttons,
+                modifiers: BrowserModifiers::none(),
+            }
+            .cdp()
+            .1
+        };
+        assert_eq!(moved(0)["button"], "none");
+        assert_eq!(moved(1)["button"], "left");
+        assert_eq!(moved(2)["button"], "right");
+        assert_eq!(moved(4)["button"], "middle");
+        assert_eq!(moved(1 | 4)["button"], "left");
+        assert_eq!(moved(2 | 4)["button"], "right");
     }
 
     #[test]

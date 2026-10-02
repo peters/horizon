@@ -618,24 +618,26 @@ impl Driver {
         }
         self.capture_teach_input(&input);
         let probe_input = input.clone();
-        let (result, demand_frame) = if self.firefox_bidi() {
+        // A held-button move drags a native scrollbar, slider or selection;
+        // keep frames flowing even after the press's active window lapses.
+        let demand_frame = activity || matches!(input, crate::BrowserInput::MouseMove { buttons, .. } if buttons != 0);
+        let result = if self.firefox_bidi() {
             let mut payload = self.actions.payload(input);
             payload["context"] = json!(self.context_id);
-            (
-                self.call_bidi("input.performActions", &payload, event_tx).map(|_| ()),
-                activity,
-            )
+            self.call_bidi("input.performActions", &payload, event_tx).map(|_| ())
         } else if self.safari.is_some() {
             return self.queue_safari_input(input);
         } else {
             let payload = self.actions.payload(input);
-            (self.classic_post("actions", &payload).map(|_| ()), activity)
+            self.classic_post("actions", &payload).map(|_| ())
         };
         if let Err(error) = &result {
             tracing::warn!("WebDriver input failed: {error}");
         }
         if demand_frame && !self.retain_frame_during_navigation {
-            self.scrollbar.refresh_at = Instant::now();
+            if activity {
+                self.scrollbar.refresh_at = Instant::now();
+            }
             self.frames.demand();
         }
         if result.is_ok() {

@@ -20,6 +20,68 @@ pub struct VerticalScrollbarOverlay {
     pub thumb_height: f32,
 }
 
+/// Vertical scrollbar of a nested scroll container, in viewport CSS pixels.
+///
+/// `WebDriver` screenshots leave the reserved native gutter blank while the
+/// browser still operates it, so the host paints this indicator over the
+/// gutter and lets pointer input reach the page unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct NestedScrollbar {
+    pub track_x: f32,
+    pub track_y: f32,
+    pub track_width: f32,
+    pub track_height: f32,
+    /// Viewport span of the track that clipping ancestors and overlays leave
+    /// visible; the indicator must not paint outside it.
+    pub visible_top: f32,
+    pub visible_bottom: f32,
+    pub scroll_top: f32,
+    pub scroll_height: f32,
+}
+
+impl NestedScrollbar {
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        [
+            self.track_x,
+            self.track_y,
+            self.track_width,
+            self.track_height,
+            self.visible_top,
+            self.visible_bottom,
+            self.scroll_top,
+            self.scroll_height,
+        ]
+        .into_iter()
+        .all(f32::is_finite)
+            && self.track_width > 0.0
+            && self.track_height > 0.0
+            && self.visible_bottom > self.visible_top
+            && self.scroll_height > self.track_height + f32::EPSILON
+    }
+
+    /// Thumb `(offset from track top, height)`, or `None` when not scrollable.
+    #[must_use]
+    pub fn thumb(self) -> Option<(f32, f32)> {
+        self.is_valid()
+            .then(|| vertical_thumb(self.track_height, self.scroll_height, self.scroll_top))
+    }
+}
+
+/// Thumb `(offset, height)` for a track as tall as the visible client area.
+fn vertical_thumb(client_height: f32, content_height: f32, scroll: f32) -> (f32, f32) {
+    let max_scroll = content_height - client_height;
+    let visible_fraction = (client_height / content_height).clamp(0.0, 1.0);
+    let natural_thumb = client_height * visible_fraction;
+    let thumb_height = if client_height >= MIN_THUMB_HEIGHT {
+        natural_thumb.clamp(MIN_THUMB_HEIGHT, client_height)
+    } else {
+        client_height
+    };
+    let progress = (scroll / max_scroll).clamp(0.0, 1.0);
+    ((client_height - thumb_height) * progress, thumb_height)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum VerticalScrollbarPress {
     Track(f64),
@@ -52,19 +114,11 @@ impl PageScrollState {
             return None;
         }
         let track_width = self.vertical_track_width();
-        let max_scroll = self.content_height - self.client_height;
-        let visible_fraction = (self.client_height / self.content_height).clamp(0.0, 1.0);
-        let natural_thumb = self.client_height * visible_fraction;
-        let thumb_height = if self.client_height >= MIN_THUMB_HEIGHT {
-            natural_thumb.clamp(MIN_THUMB_HEIGHT, self.client_height)
-        } else {
-            self.client_height
-        };
-        let progress = (self.scroll_y / max_scroll).clamp(0.0, 1.0);
+        let (thumb_y, thumb_height) = vertical_thumb(self.client_height, self.content_height, self.scroll_y);
         Some(VerticalScrollbarOverlay {
             track_x: (self.viewport_width - track_width).max(0.0),
             track_width,
-            thumb_y: (self.client_height - thumb_height) * progress,
+            thumb_y,
             thumb_height,
         })
     }
@@ -168,7 +222,7 @@ fn finite_f32(value: f64) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{VerticalScrollbarPress, json_f32};
+    use super::{NestedScrollbar, VerticalScrollbarPress, json_f32};
     use crate::frames::PageScrollState;
 
     fn classic() -> PageScrollState {
@@ -272,5 +326,66 @@ mod tests {
         state.content_width = state.client_width - 0.25;
         assert!(state.is_valid());
         assert!(state.vertical_overlay().is_some());
+    }
+
+    #[test]
+    fn nested_scrollbar_thumb_tracks_the_container_scroll_offset() {
+        let bar = NestedScrollbar {
+            track_x: 772.0,
+            track_y: 56.0,
+            track_width: 12.0,
+            track_height: 800.0,
+            visible_top: 56.0,
+            visible_bottom: 856.0,
+            scroll_top: 0.0,
+            scroll_height: 8_000.0,
+        };
+        let Some((top, height)) = bar.thumb() else {
+            panic!("scrollable container should have a thumb");
+        };
+        assert!(top.abs() < f32::EPSILON);
+        assert!((height - 80.0).abs() < f32::EPSILON);
+
+        let Some((bottom, _)) = NestedScrollbar {
+            scroll_top: 7_200.0,
+            ..bar
+        }
+        .thumb() else {
+            panic!("scrolled container should keep its thumb");
+        };
+        assert!((bottom - 720.0).abs() < f32::EPSILON);
+
+        assert!(
+            NestedScrollbar {
+                scroll_height: 800.0,
+                ..bar
+            }
+            .thumb()
+            .is_none()
+        );
+        assert!(
+            NestedScrollbar {
+                track_width: 0.0,
+                ..bar
+            }
+            .thumb()
+            .is_none()
+        );
+        assert!(
+            NestedScrollbar {
+                scroll_top: f32::NAN,
+                ..bar
+            }
+            .thumb()
+            .is_none()
+        );
+        assert!(
+            NestedScrollbar {
+                visible_bottom: 56.0,
+                ..bar
+            }
+            .thumb()
+            .is_none()
+        );
     }
 }

@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::PageScrollState;
 use crate::frames::FrameSlot;
 use crate::session::{BrowserEventSender, publish_frame};
+use crate::{NestedScrollbar, PageScrollState};
 
 use super::{Driver, webdriver_value};
 
@@ -17,7 +17,28 @@ pub(super) const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 pub(super) const ACTIVE_WINDOW: Duration = Duration::from_millis(900);
 pub(super) const STATIC_CONFIRMATIONS: u8 = 3;
 pub(super) const SCROLL_STATE_INTERVAL: Duration = Duration::from_millis(100);
-pub(super) const PAGE_SCROLL_STATE_SCRIPT: &str = "const root = document.scrollingElement || document.documentElement; return { scroll_x: window.scrollX, scroll_y: window.scrollY, viewport_width: window.innerWidth, viewport_height: window.innerHeight, client_width: document.documentElement.clientWidth, client_height: document.documentElement.clientHeight, content_width: root.scrollWidth, content_height: root.scrollHeight };";
+pub(super) const PAGE_SCROLL_STATE_SCRIPT: &str = include_str!("page_scroll_state.js");
+
+#[derive(serde::Deserialize)]
+struct ScrollSample {
+    #[serde(flatten)]
+    page: PageScrollState,
+    #[serde(default, deserialize_with = "valid_nested_scrollbars")]
+    nested: Vec<NestedScrollbar>,
+}
+
+/// One malformed container must not discard the root page sample.
+fn valid_nested_scrollbars<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<NestedScrollbar>, D::Error> {
+    let value = <Value as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|bar| <NestedScrollbar as serde::Deserialize>::deserialize(bar).ok())
+        .collect())
+}
 
 pub(super) struct AdaptiveFrames {
     pub(super) next_capture: Option<Instant>,
@@ -204,11 +225,12 @@ impl Driver {
         let Some(value) = webdriver_value(&response).cloned() else {
             return self.scrollbar.clear_sampled(frame_slot);
         };
-        let Ok(state) = serde_json::from_value::<PageScrollState>(value) else {
+        let Ok(sample) = serde_json::from_value::<ScrollSample>(value) else {
             return self.scrollbar.clear_sampled(frame_slot);
         };
-        self.scrollbar.sample(state);
-        frame_slot.publish_page_scroll_state(state)
+        self.scrollbar.sample(sample.page);
+        let page_changed = frame_slot.publish_page_scroll_state(sample.page);
+        frame_slot.publish_nested_scrollbars(sample.nested) || page_changed
     }
 }
 
@@ -219,4 +241,35 @@ pub(super) fn capture_is_current(
     current_context: Option<&str>,
 ) -> bool {
     capture_generation == current_generation && capture_context == current_context
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ScrollSample;
+
+    #[test]
+    fn malformed_nested_entries_keep_the_page_sample() {
+        let bar = json!({
+            "track_x": 772, "track_y": 56, "track_width": 12, "track_height": 544,
+            "visible_top": 56, "visible_bottom": 600, "scroll_top": 0, "scroll_height": 7_000,
+        });
+        let sample: ScrollSample = serde_json::from_value(json!({
+            "scroll_x": 0, "scroll_y": 0, "viewport_width": 784, "viewport_height": 600,
+            "client_width": 784, "client_height": 600, "content_width": 784, "content_height": 600,
+            "nested": [bar, {"track_x": null}],
+        }))
+        .unwrap_or_else(|error| panic!("sample should parse: {error}"));
+        assert!(sample.page.is_valid());
+        assert_eq!(sample.nested.len(), 1);
+        assert!((sample.nested[0].track_height - 544.0).abs() < f32::EPSILON);
+
+        let legacy: ScrollSample = serde_json::from_value(json!({
+            "scroll_x": 0, "scroll_y": 0, "viewport_width": 784, "viewport_height": 600,
+            "client_width": 784, "client_height": 600, "content_width": 784, "content_height": 600,
+        }))
+        .unwrap_or_else(|error| panic!("a sample without nested bars should parse: {error}"));
+        assert!(legacy.nested.is_empty());
+    }
 }
