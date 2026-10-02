@@ -307,7 +307,7 @@ fn delete_claude_transcript(projects: &Path, session: &AgentSessionBinding) -> R
                 "Refusing to delete a linked or non-file transcript".into(),
             ));
         }
-        validate_claude_transcript_identity(&path, &session.session_id)?;
+        validate_claude_transcript_identity(&path, session)?;
         let record = super::load_claude_project_session_summary(&path, 0)?;
         if !record.is_some_and(|record| {
             record.session_id == session.session_id
@@ -339,17 +339,24 @@ fn delete_claude_transcript(projects: &Path, session: &AgentSessionBinding) -> R
 
 #[derive(serde::Deserialize)]
 struct ClaudeTranscriptIdentity {
-    #[serde(rename = "sessionId", default, deserialize_with = "deserialize_present_session_id")]
+    #[serde(
+        rename = "sessionId",
+        default,
+        deserialize_with = "deserialize_present_identity_field"
+    )]
     session_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present_identity_field")]
+    cwd: Option<String>,
 }
 
-fn deserialize_present_session_id<'de, D: serde::Deserializer<'de>>(
+fn deserialize_present_identity_field<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<String>, D::Error> {
     <String as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
-fn validate_claude_transcript_identity(path: &Path, expected_id: &str) -> Result<()> {
+fn validate_claude_transcript_identity(path: &Path, session: &AgentSessionBinding) -> Result<()> {
+    let expected_cwd = normalize_cwd(session.cwd.as_deref());
     let mut reader = BufReader::new(std::fs::File::open(path)?);
     let mut line = String::new();
     let mut identity_found = false;
@@ -368,8 +375,13 @@ fn validate_claude_transcript_identity(path: &Path, expected_id: &str) -> Result
         }
         let identity: ClaudeTranscriptIdentity = serde_json::from_str(&line)
             .map_err(|_| Error::State("Cannot verify identity of malformed Claude transcript".into()))?;
+        if let Some(cwd) = identity.cwd
+            && normalize_cwd(Some(&cwd)) != expected_cwd
+        {
+            return Err(Error::State("Claude transcript has a conflicting folder".into()));
+        }
         if let Some(id) = identity.session_id {
-            if id.is_empty() || id != expected_id {
+            if id.is_empty() || id != session.session_id {
                 return Err(Error::State(
                     "Claude transcript has an invalid or conflicting session ID".into(),
                 ));

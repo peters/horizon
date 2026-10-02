@@ -101,6 +101,45 @@ fn ambiguous_transcript_identities_preserve_all_saved_history() {
 }
 
 #[test]
+fn conflicting_or_invalid_folder_metadata_preserves_complete_history() {
+    let session = binding(805);
+    let valid = serde_json::json!({"sessionId":session.session_id,"cwd":"/example","type":"user"}).to_string();
+    let filler = serde_json::json!({"type":"progress","content":"x".repeat(2048)}).to_string() + "\n";
+    for folder_record in [
+        r#"{"cwd":"/different"}"#,
+        r#"{"cwd":""}"#,
+        r#"{"cwd":null}"#,
+        r#"{"cwd":42}"#,
+        r#"{"cwd":"/different","cwd":"/example"}"#,
+    ] {
+        let temp = tempfile::tempdir().expect("private store");
+        let projects = temp.path().join("projects");
+        let project = projects.join("example");
+        let artifacts = project.join(&session.session_id).join("subagents");
+        std::fs::create_dir_all(&artifacts).expect("artifacts");
+        let path = project.join(format!("{}.jsonl", session.session_id));
+        let contents = format!(
+            "{valid}\n{}{folder_record}\n{}{valid}\n",
+            filler.repeat(50),
+            filler.repeat(50)
+        );
+        std::fs::write(&path, &contents).expect("transcript");
+        std::fs::write(artifacts.join("agent.jsonl"), "saved child history").expect("subagent");
+        let discovered = load_claude_project_session_summary(&path, 0)
+            .expect("discovery")
+            .expect("record");
+        assert_eq!(discovered.cwd.as_deref(), Some("/example"));
+        assert!(delete_claude_transcript(&projects, &session).is_err());
+        assert_eq!(std::fs::read_to_string(&path).expect("retained transcript"), contents);
+        assert_eq!(
+            std::fs::read_to_string(artifacts.join("agent.jsonl")).expect("retained child"),
+            "saved child history"
+        );
+        assert_eq!(std::fs::read_dir(temp.path()).expect("store").count(), 1);
+    }
+}
+
+#[test]
 fn repeated_matching_identity_and_metadata_records_allow_deletion() {
     let temp = tempfile::tempdir().expect("private store");
     let project = temp.path().join("example");
