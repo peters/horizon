@@ -151,6 +151,11 @@ pub struct NavigationOutcome {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserControlValue {
+    Orientation {
+        requested: crate::remote::RemoteOrientation,
+        applied: crate::remote::RemoteOrientation,
+        viewport: [u32; 2],
+    },
     /// Browser-measured CSS content size. `requested: None` means host sizing.
     Viewport {
         requested: Option<[u32; 2]>,

@@ -36,6 +36,21 @@ pub fn configured_remote_request(
     })
 }
 
+/// Apply a per-session orientation override through the same provider mapping.
+pub fn override_orientation(request: &mut RemoteSessionRequest, orientation: Option<crate::remote::RemoteOrientation>) {
+    let Some(orientation) = orientation else {
+        return;
+    };
+    match request.adapter {
+        RemoteAdapterKind::Browserstack => {
+            request.capabilities[BROWSERSTACK_OPTIONS_KEY]["deviceOrientation"] = orientation.as_str().into();
+        }
+        RemoteAdapterKind::Webdriver => {
+            request.capabilities["appium:orientation"] = orientation.webdriver_value().into();
+        }
+    }
+}
+
 /// Where the driver finds the allocated device's identity for this adapter:
 /// the hosted grid's own session record, or the capabilities a standard
 /// endpoint echoes.
@@ -81,6 +96,12 @@ fn capabilities_for(
     let device = &target.device;
     match adapter {
         RemoteAdapterKind::Webdriver => {
+            if let Some(orientation) = target.orientation {
+                capabilities.insert(
+                    "appium:orientation".into(),
+                    Value::String(orientation.webdriver_value().into()),
+                );
+            }
             if let Some(model) = &device.model {
                 capabilities.insert("appium:deviceName".into(), Value::String(model.clone()));
             }
@@ -102,6 +123,9 @@ fn capabilities_for(
                 });
             }
             if let Value::Object(options) = options {
+                if let Some(orientation) = target.orientation {
+                    options.insert("deviceOrientation".into(), Value::String(orientation.as_str().into()));
+                }
                 if let Some(model) = &device.model {
                     options.insert("deviceName".into(), Value::String(model.clone()));
                 }
@@ -115,4 +139,77 @@ fn capabilities_for(
         }
     }
     Ok(Value::Object(capabilities))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::remote::RemoteOrientation;
+    use serde_json::json;
+    #[test]
+    fn normalized_orientation_and_overrides_use_the_selected_adapter() {
+        let mut target: RemoteTargetProfile =
+            serde_json::from_value(json!({"provider":"grid","browser_name":"Safari","platform_name":"iOS"})).unwrap();
+        for (adapter, key, path, expected) in [
+            (RemoteAdapterKind::Webdriver, "appium:orientation", "", "LANDSCAPE"),
+            (
+                RemoteAdapterKind::Browserstack,
+                "bstack:options",
+                "deviceOrientation",
+                "landscape",
+            ),
+        ] {
+            let provider: RemoteProviderProfile =
+                serde_json::from_value(json!({"adapter":adapter,"endpoint":"https://grid.example.test"})).unwrap();
+            let mut request =
+                configured_remote_request(&provider, &target, "tablet", None, "synthetic".into()).unwrap();
+            assert_eq!(request.orientation(), None);
+            override_orientation(&mut request, Some(RemoteOrientation::Portrait));
+            assert_eq!(request.orientation(), Some(RemoteOrientation::Portrait));
+            target.orientation = Some(RemoteOrientation::Landscape);
+            let request = configured_remote_request(&provider, &target, "tablet", None, "synthetic".into()).unwrap();
+            let value = if path.is_empty() {
+                &request.capabilities[key]
+            } else {
+                &request.capabilities[key][path]
+            };
+            assert_eq!(value, expected);
+            assert_eq!(request.orientation(), Some(RemoteOrientation::Landscape));
+            target.orientation = None;
+        }
+    }
+
+    #[test]
+    fn resolved_startup_orientation_survives_later_target_and_request_changes() {
+        for adapter in [RemoteAdapterKind::Webdriver, RemoteAdapterKind::Browserstack] {
+            let provider: RemoteProviderProfile =
+                serde_json::from_value(json!({"adapter":adapter,"endpoint":"https://grid.example.test"})).unwrap();
+            for configured in [
+                None,
+                Some(RemoteOrientation::Portrait),
+                Some(RemoteOrientation::Landscape),
+            ] {
+                for requested in [
+                    None,
+                    Some(RemoteOrientation::Portrait),
+                    Some(RemoteOrientation::Landscape),
+                ] {
+                    let mut target: RemoteTargetProfile = serde_json::from_value(json!({
+                        "provider":"grid","browser_name":"Safari","platform_name":"iOS","orientation":configured,
+                    }))
+                    .unwrap();
+                    let mut request =
+                        configured_remote_request(&provider, &target, "tablet", None, "synthetic".into()).unwrap();
+                    override_orientation(&mut request, requested);
+                    let startup_orientation = request.orientation();
+                    assert_eq!(startup_orientation, requested.or(configured));
+                    target.orientation = Some(RemoteOrientation::Landscape);
+                    override_orientation(&mut request, Some(RemoteOrientation::Portrait));
+                    assert_eq!(startup_orientation, requested.or(configured));
+                    assert_eq!(request.orientation(), Some(RemoteOrientation::Portrait));
+                    assert_eq!(target.orientation, Some(RemoteOrientation::Landscape));
+                }
+            }
+        }
+    }
 }

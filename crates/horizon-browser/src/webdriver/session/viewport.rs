@@ -214,7 +214,7 @@ impl Driver {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::webdriver::session) mod tests {
     use std::collections::VecDeque;
     use std::net::TcpListener;
     use std::sync::{Arc, atomic::AtomicBool, mpsc};
@@ -258,7 +258,10 @@ mod tests {
         json!({"method":format!("browsingContext.{method}"),"params":{"context":context,"parent":parent}})
     }
 
-    fn bidi_fixture(refuse: bool, chooser: bool) -> (JsonWsLink, std::thread::JoinHandle<Vec<Value>>) {
+    pub(in crate::webdriver::session) fn bidi_fixture(
+        refuse: bool,
+        chooser: bool,
+    ) -> (JsonWsLink, std::thread::JoinHandle<Vec<Value>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("ws://{}/", listener.local_addr().unwrap());
         let worker = std::thread::spawn(move || {
@@ -301,7 +304,7 @@ mod tests {
         (JsonWsLink::connect(&url).unwrap(), worker)
     }
 
-    fn fixture_driver(classic: &Server, link: JsonWsLink) -> Driver {
+    pub(in crate::webdriver::session) fn fixture_driver(classic: &Server, link: JsonWsLink) -> Driver {
         // Use the existing loopback classic transport adapter without launching
         // a process. The real Firefox resize and event paths run below; remote
         // capability admission is intentionally not part of this fixture.
@@ -343,7 +346,6 @@ mod tests {
         let frame_slot = &config.frame_slot;
         let host = DriverHost::Remote(RemoteHost::connect(&request).unwrap());
         let remote_release = Arc::default();
-        let remote_device = None;
         let session_id = "test".into();
         let bidi = Some(link);
         let automation_ws = String::new();
@@ -353,7 +355,13 @@ mod tests {
             config: config.clone(),
             host,
             remote_release,
-            remote_device,
+            remote_device: None,
+            remote_orientation: None,
+            pending_orientation: None,
+            orientation_document: super::super::orientation::DocumentOrientation::Clean,
+            orientation_error: None,
+            orientation_action_id: None,
+            orientation_completed: crate::remote::RemoteOrientationView::default(),
             remote_android_chromium: false,
             file_transfer: None,
             session_id,
@@ -402,7 +410,7 @@ mod tests {
         }
     }
 
-    fn events() -> BrowserEventSender {
+    pub(in crate::webdriver::session) fn events() -> BrowserEventSender {
         let (tx, _) = mpsc::channel();
         BrowserEventSender {
             tx,
@@ -485,7 +493,7 @@ mod tests {
         assert!(state.pending_resize.is_none());
         assert!(handle.status().pending());
         state.coordination_dirty = false;
-        state.begin_navigation();
+        state.begin_navigation(&events);
         assert!(!handle.status().pending());
         assert!(state.coordination_dirty);
         drop(state);
@@ -555,7 +563,7 @@ mod tests {
         state.note_file_chooser(&json!({"context":"first","element":{"sharedId":"next"}}));
         state.tick_file_chooser(&events);
         assert!(handle.status().pending());
-        state.begin_navigation();
+        state.begin_navigation(&events);
         state.tick_file_chooser(&events);
         assert!(!handle.status().pending());
         drop(state);

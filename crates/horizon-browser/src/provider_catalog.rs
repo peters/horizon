@@ -187,6 +187,7 @@ pub fn target_profile(device: &CatalogDevice) -> RemoteTargetProfile {
             model: device.device.clone(),
             os_version: Some(device.os_version.clone()),
         },
+        orientation: None,
         capability_extensions: BTreeMap::new(),
     }
 }

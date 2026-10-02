@@ -43,7 +43,9 @@ mod websocket;
 use std::path::{Path, PathBuf};
 
 pub use audit::{BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus, new_action_id};
-pub use coordination::{BrowserCoordination, CoordinationSignals, CoordinationState, HandoffRequest};
+pub use coordination::{
+    BrowserCoordination, CoordinationOwnership, CoordinationSignals, CoordinationState, HandoffRequest,
+};
 pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
 pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState, TeachObservation};

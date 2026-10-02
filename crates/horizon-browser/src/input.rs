@@ -17,7 +17,8 @@ pub(crate) fn is_user_activity(command: &BrowserCommand) -> bool {
         | BrowserCommand::NativeSelectChoose { .. }
         | BrowserCommand::NativeSelectDismiss => true,
         BrowserCommand::Input(input) => is_activity(input),
-        BrowserCommand::SetViewport { .. }
+        BrowserCommand::Orientation { .. }
+        | BrowserCommand::SetViewport { .. }
         | BrowserCommand::HandoffDone
         | BrowserCommand::Stop
         | BrowserCommand::Video { .. } => false,

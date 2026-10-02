@@ -6,6 +6,7 @@
 
 #[doc(hidden)]
 pub mod manifest;
+mod orientation;
 mod remote_identity;
 pub use remote_identity::RemoteIdentityDisplay;
 mod remote_panel;
@@ -23,8 +24,10 @@ mod shared_session;
 pub mod teach;
 
 pub use horizon_browser::remote;
+pub use horizon_browser::remote_config;
 pub use horizon_browser::{cdp, frames, input, process, session};
 pub use horizon_browser_protocol::cloud_view::{CloudViewResponse, CloudViewState};
+use remote::RemoteOrientationView;
 pub use remote_session::{RemoteRequestError, browser_family, build_remote_session_request};
 pub use teach::{ReviewRow, TeachMode};
 
@@ -131,6 +134,9 @@ pub struct BrowserPanelState {
     pub video_error: Option<String>,
     /// Latest remote-session lifecycle note (allocation, expiry, release), value-free.
     pub remote_status: Option<String>,
+    pub orientation: RemoteOrientationView,
+    orientation_pending_since: Option<std::time::Instant>,
+    orientation_queue_rejection: Option<String>,
     /// The remote session this panel runs (or ran) at; `None` for a local
     /// browser. Carries the resolved authorization for this process only.
     remote: Option<remote_panel::RemoteLifecycle>,
@@ -200,6 +206,9 @@ impl BrowserPanelState {
             navigation_error: None,
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -263,6 +272,9 @@ impl BrowserPanelState {
             navigation_error: None,
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -383,6 +395,7 @@ impl BrowserPanelState {
     }
 
     fn launch_session(&mut self, initial_url: Option<String>) {
+        self.reset_orientation_view();
         #[cfg(feature = "cloud-workspaces")]
         if self.cloud.is_some() {
             self.relaunch_cloud();
@@ -686,9 +699,12 @@ impl BrowserPanelState {
     /// Drain driver events into panel state, separating visible activity from
     /// URL changes that must dirty the persisted runtime state.
     pub fn drain_events(&mut self) -> BrowserDrainOutput {
+        let orientation_expired = self.expire_orientation_pending();
         #[cfg(feature = "cloud-workspaces")]
         if self.cloud.is_some() {
-            return self.drain_cloud();
+            let mut output = self.drain_cloud();
+            output.had_output |= orientation_expired;
+            return output;
         }
         let relaunched = self.continue_pending_relaunch();
         let config_changed = std::mem::take(&mut self.persisted_config_changed);
@@ -698,7 +714,7 @@ impl BrowserPanelState {
             .map(|session| session.event_rx.try_iter().collect::<Vec<_>>())
             .unwrap_or_default();
         let mut output = BrowserDrainOutput {
-            had_output: relaunched || config_changed,
+            had_output: relaunched || config_changed || orientation_expired,
             config_changed,
             ..BrowserDrainOutput::default()
         };
@@ -826,6 +842,10 @@ impl BrowserPanelState {
                 self.status = BrowserStatus::Error { message };
                 output.had_output = true;
             }
+            BrowserEvent::OrientationChanged(view) => {
+                self.apply_orientation_view(view);
+                output.had_output = true;
+            }
             BrowserEvent::VideoFailed(message) => {
                 self.video_error = Some(message);
                 output.had_output = true;
@@ -886,6 +906,7 @@ impl BrowserPanelState {
     }
 
     fn apply_stopped(&mut self, code: Option<i32>, output: &mut BrowserDrainOutput) {
+        self.reset_orientation_view();
         self.clear_remote_identity();
         if let Some(session) = self.session.take() {
             self.teardown_signal = Some(Box::new((*session).completion_signal()));
@@ -1054,6 +1075,9 @@ mod tests {
             navigation_error: None,
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1101,6 +1125,9 @@ mod tests {
             navigation_error: None,
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1142,6 +1169,9 @@ mod tests {
             navigation_error: None,
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1191,6 +1221,9 @@ mod tests {
             navigation_error: None,
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1238,6 +1271,9 @@ mod tests {
             navigation_error: None,
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1319,6 +1355,9 @@ mod tests {
             navigation_error: None,
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1362,6 +1401,9 @@ mod tests {
             navigation_error: Some("stale error".to_string()),
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1404,6 +1446,9 @@ mod tests {
             navigation_error: None,
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
@@ -1449,6 +1494,9 @@ mod tests {
             navigation_error: None,
             video_error: None,
             remote_status: None,
+            orientation: RemoteOrientationView::default(),
+            orientation_pending_since: None,
+            orientation_queue_rejection: None,
             remote: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),

@@ -33,6 +33,8 @@ pub struct CloudViewState {
     pub remote_target: Option<String>,
     #[serde(default)]
     pub remote_device: Option<String>,
+    #[serde(default)]
+    pub orientation: crate::remote::RemoteOrientationView,
     pub title: String,
     pub url: String,
     pub owner: Option<String>,

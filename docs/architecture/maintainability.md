@@ -887,3 +887,25 @@ This service has no UI, CLI or MCP caller yet. Missing or merely prepared clouds
 return a creation-confirmation phase without allocation; the form-independent
 creation adapter and interface wiring remain later M2 steps. Cross-source
 pending requests return Busy and require an explicit retry after reconciliation.
+
+Remote orientation verification lives in `horizon-browser`'s
+`webdriver/session/orientation`, with request-origin and user audit policy in its
+`origin` leaf; `document` remeasures observed document replacements outside
+bounded semantic and wait calls. The separate `webdriver/session/document`
+leaf brackets classic semantic scans with native URL reads and retained-root
+staleness validation under one deadline, independent of page-owned tokens and
+privacy clocks. It refuses unverified reads and documents the live-Node reuse
+limits of classic WebDriver. The core
+`browser/orientation` adapter queues
+user commands and preserves unresolved request acknowledgements; its tests live
+in a colocated tree. UI
+`browser_widget/orientation` renders measured status and buttons. Direct CLI
+orientation commands generate one durable MCP plan in a separate `orientation`
+leaf rather than expanding the CLI parser with browser-driver logic.
+Cloud worker `browser/orientation` preserves matching queue-refusal acknowledgements and merges bounded completion history with reserved capacity for both driver and refusal sources.
+`BrowserCoordination::observe_ownership` supplies a non-consuming ownership
+observation; `horizon-browser-control::manifest/ownership` reads the owned host
+snapshot without claiming actions or rewriting legacy handoffs. Final rotation
+confirmation brackets that observation with document checks.
+Bounded per-request completions prevent latest-only polling from losing superseded
+user requests; the core adapter bounds lost-status waiting and surfaces uncertainty.

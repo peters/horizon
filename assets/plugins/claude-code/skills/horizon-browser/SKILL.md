@@ -183,6 +183,26 @@ every retained record, call with `from_start: true` and reuse `next_event_id`
 as `after_event_id` until `has_more` is false. Treat `cursor_lost`,
 `malformed_records`, and `older_records_dropped` as explicit loss.
 
+
+For remote devices, set `orientation: portrait` or `orientation: landscape` on
+a configured target, or supply `orientation` with `target` in `browser_create`
+for a session-only override. Configured and catalog targets use the same option.
+An explicit configured or per-call orientation requires matching measured geometry
+on the first committed document before readiness. A pending, failed or unmeasurable
+first page is rejected with a typed orientation error and exact-session release
+attempt; default creates without an explicit orientation keep the pending contract
+above. See `docs/architecture/remote-browser-orientation.md` for the feature contract.
+Check `orientation_support` (`supported`, `unsupported`, or `unverified`) and
+`remote_orientation`, then call `browser_orientation` with `panel_id` and
+`orientation` to rotate a supported session. The tool waits for the device and
+measured page geometry and returns requested/applied orientation and CSS viewport
+dimensions. Reacquire refs after rotation. An unsupported endpoint returns
+`orientation_unsupported`; an ignored start request returns
+`remote_orientation_mismatch` after Horizon attempts release. Inspect uncertain
+release before creating again, and inspect the page before retrying a runtime
+timeout because the device may already have rotated. Remote resize remains
+`remote_viewport_fixed`; orientation does not emulate arbitrary dimensions.
+
 For responsive layouts, inspect the panel's `resize` capability, then call
 `browser_resize` with `panel_id`, `width` and `height` (320-8000 CSS pixels per
 axis). Chromium and local Firefox support this; Safari returns

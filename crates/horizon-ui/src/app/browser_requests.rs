@@ -54,6 +54,9 @@ struct PendingBrowserCreate {
     panel_id: PanelId,
     panel_local_id: String,
     backend: BackendKind,
+    /// Resolved once from the launch plan; later configuration or device state
+    /// must not change the orientation recorded for this creation.
+    startup_orientation: Option<horizon_core::browser::remote::RemoteOrientation>,
     /// When the host claimed the request, for the reported startup latency.
     started_at: Instant,
     /// When the backend first reported `Ready`, which starts the bounded
@@ -290,6 +293,7 @@ impl HorizonApp {
             || request.backend.unwrap_or(self.template_config.browser.backend),
             |plan| plan.backend,
         );
+        let startup_orientation = remote.as_ref().and_then(|plan| plan.request.orientation());
         if remote.is_none() {
             if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
                 complete_failure(&request, "unsupported_platform", reason);
@@ -341,7 +345,9 @@ impl HorizonApp {
             return;
         };
         for status in [BrowserCreateAuditStatus::Queued, BrowserCreateAuditStatus::Dispatched] {
-            if let Err(error) = manifest::record_create_status(&panel_local_id, &request, backend, status) {
+            if let Err(error) =
+                manifest::record_create_status(&panel_local_id, &request, backend, startup_orientation, status)
+            {
                 tracing::error!(request_id = %request.request_id, %error, "could not audit requested browser creation");
                 self.close_panel(panel_id);
                 complete_failure(
@@ -357,6 +363,7 @@ impl HorizonApp {
             panel_id,
             panel_local_id,
             backend,
+            startup_orientation,
             started_at,
             ready_since: None,
             user_navigations_at_start: 0,
@@ -521,6 +528,7 @@ impl HorizonApp {
             panel_id: probe.panel_id,
             panel_local_id: probe.panel_local_id,
             backend: BackendKind::default(),
+            startup_orientation: None,
             started_at: Instant::now(),
             ready_since: None,
             user_navigations_at_start: 0,
@@ -770,6 +778,7 @@ fn finish_ready_browser_create(board: &Board, pending: &mut PendingBrowserCreate
         &pending.panel_local_id,
         &pending.request,
         pending.backend,
+        pending.startup_orientation,
         BrowserCreateAuditStatus::Completed,
     ) {
         tracing::error!(request_id = %pending.request.request_id, %error, "could not complete browser creation audit");
@@ -850,6 +859,7 @@ fn record_and_complete_failure(pending: &PendingBrowserCreate, code: &str, messa
         &pending.panel_local_id,
         &pending.request,
         pending.backend,
+        pending.startup_orientation,
         BrowserCreateAuditStatus::Failed,
     ) {
         tracing::warn!(request_id = %pending.request.request_id, %error, "could not append failed browser creation audit");

@@ -111,7 +111,6 @@ impl SemanticState {
         if let Some(error) = response.error {
             return Err(error);
         }
-        let document_identity = response.document_identity;
         let summary = response.summary;
         let nodes = response
             .nodes
@@ -131,7 +130,6 @@ impl SemanticState {
             generation: self.generation,
             nodes,
             summary,
-            document_identity,
         })
     }
 
@@ -181,8 +179,6 @@ impl SemanticState {
 struct NodeScanResponse {
     #[serde(default)]
     nodes: Vec<ScannedNode>,
-    #[serde(default, rename = "documentIdentity")]
-    document_identity: Option<String>,
     #[serde(default)]
     summary: Option<ScanSummary>,
     #[serde(default)]
@@ -191,13 +187,12 @@ struct NodeScanResponse {
 
 /// A scan parsed without registering references: the page generation, the
 /// returned nodes (with empty references), the selector-wide match summary
-/// when the scan had a selector, and the script-observed document identity.
+/// when the scan had a selector.
 #[derive(Debug, Default)]
 pub(crate) struct PeekedScan {
     pub(crate) generation: u64,
     pub(crate) nodes: Vec<BrowserNode>,
     pub(crate) summary: Option<ScanSummary>,
-    pub(crate) document_identity: Option<String>,
 }
 
 /// Match and visibility counts over every element a selector scan matched,
@@ -319,9 +314,6 @@ fn json_string(value: &str) -> String {
 }
 
 const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, countMatches) {
-    const documentIdentity = JSON.stringify([
-        String(location.href), Number(globalThis.performance?.timeOrigin || 0)
-    ]);
     const roleFor = (element) => {
         const explicit = element.getAttribute('role');
         if (explicit) return explicit.split(/\s+/)[0];
@@ -386,7 +378,7 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, co
         candidates = document.querySelectorAll(selector === null ? '*' : selector);
     } catch (error) {
         return {
-            nodes: [], documentIdentity,
+            nodes: [],
             error: { code: 'invalid_selector', message: compact(error?.message || error) }
         };
     }
@@ -428,8 +420,8 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, co
         });
     }
     return countMatches
-        ? { nodes, documentIdentity, summary: { matched, visible: visibleMatches } }
-        : { nodes, documentIdentity };
+        ? { nodes, summary: { matched, visible: visibleMatches } }
+        : { nodes };
 }";
 
 const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
@@ -515,10 +507,10 @@ mod tests {
         let expression = scan_expression(Some("button'); throw new Error('owned"), 10);
 
         assert!(expression.contains("\"button'); throw new Error('owned\""));
-        assert!(expression.ends_with(", 10, false, false)"));
+        assert!(expression.contains(", 10, false, false)"));
         let wait = wait_scan_expression("button'); throw new Error('owned", 10);
         assert!(wait.contains("\"button'); throw new Error('owned\""));
-        assert!(wait.ends_with(", 10, false, true)"));
+        assert!(wait.contains(", 10, false, true)"));
     }
 
     #[test]
@@ -538,28 +530,23 @@ mod tests {
     }
 
     #[test]
-    fn wait_peeks_preserve_the_script_observed_document_identity() {
+    fn page_owned_identity_is_not_an_authoritative_scan_value() {
         let state = SemanticState::default();
         let peeked = state
             .peek_nodes(&serde_json::json!({
-                "nodes": [],
-                "documentIdentity": "[\"https://example.test/\",1234]"
+                "nodes": [], "documentIdentity": "copied-page-token"
             }))
             .unwrap_or_default();
-
         assert!(peeked.nodes.is_empty());
-        assert_eq!(
-            peeked.document_identity.as_deref(),
-            Some("[\"https://example.test/\",1234]")
-        );
-        assert!(scan_expression(None, 10).contains("documentIdentity"));
+        assert!(!scan_expression(None, 10).contains("documentIdentity"));
+        assert!(!wait_scan_expression("button", 10).contains("Symbol"));
     }
 
     #[test]
     fn only_wait_scans_count_matches_past_the_cap() {
-        assert!(scan_expression(Some("button"), 10).ends_with("(\"button\", 10, false, false)"));
-        assert!(scan_expression(None, 10).ends_with("(null, 10, true, false)"));
-        assert!(wait_scan_expression("button", 20).ends_with("(\"button\", 20, false, true)"));
+        assert!(scan_expression(Some("button"), 10).contains("(\"button\", 10, false, false)"));
+        assert!(scan_expression(None, 10).contains("(null, 10, true, false)"));
+        assert!(wait_scan_expression("button", 20).contains("(\"button\", 20, false, true)"));
         assert!(NODE_SCAN_FUNCTION.contains("if (nodes.length >= maxNodes && !countMatches) break;"));
     }
 

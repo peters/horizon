@@ -32,8 +32,11 @@ pub fn show(
     if let Some(identity) = browser.remote_identity_display() {
         remote_identity_header(ui, identity);
     }
-    let chrome_row = ui.horizontal(|ui| {
+    let chrome_row = ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
+        if browser.is_remote() {
+            ui.spacing_mut().button_padding = vec2(4.0, 4.0);
+        }
         ui.set_min_height(CHROME_HEIGHT);
         // Reserve the chip's width up front so the URL bar's expanding
         // width cannot starve it (a trailing `right_to_left` scope gets
@@ -50,6 +53,7 @@ pub fn show(
         clicked |= nav_button(ui, "→", "Forward", browser, BrowserCommand::Forward, interactive);
         clicked |= nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
         clicked |= video_controls(ui, browser, interactive);
+        clicked |= super::orientation::controls(ui, browser, interactive);
         clicked |= backend_picker(ui, panel_id, browser, interactive);
         // Measure after the nav buttons so the cap fits the real remainder.
         // The owner name is an unrestricted external string: cap the chip to
@@ -79,6 +83,7 @@ pub fn show(
         (url_focused, clicked)
     });
     let (url_focused, mut clicked) = chrome_row.inner;
+    super::orientation::status(ui, browser);
 
     if let Some(error) = &browser.navigation_error {
         ui.label(RichText::new(error).size(10.5).color(theme::PALETTE_RED()));
@@ -369,6 +374,7 @@ fn url_bar(
             .id(id)
             .hint_text("Enter address")
             .desired_width(max_width)
+            .min_size(vec2(if browser.is_remote() { URL_MIN_WIDTH } else { 0.0 }, 0.0))
             .font(egui::FontId::monospace(11.5)),
     );
     // Focusing selects the stable canonical URL without rewriting it. Page

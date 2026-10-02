@@ -294,10 +294,7 @@ impl BrowserController {
 
     pub(crate) async fn create(
         &self,
-        url: Option<String>,
-        backend: Option<BackendKind>,
-        target: Option<String>,
-        visible: bool,
+        parameters: manifest::RemoteCreateParameters,
         allow_additional: bool,
         timeout_millis: Option<u64>,
     ) -> Result<CreateReceipt, ControlError> {
@@ -309,15 +306,9 @@ impl BrowserController {
             return Err(ControlError::AdditionalPanelRequiresOptIn { panel_id });
         }
         let timeout_millis = bounded_create_timeout(timeout_millis);
-        let action_id = manifest::enqueue_create(
-            self.identity(),
-            url,
-            backend,
-            target,
-            visible,
-            Duration::from_millis(timeout_millis),
-        )
-        .map_err(|source| ControlError::internal_io("could not queue browser panel creation", source))?;
+        let action_id =
+            manifest::enqueue_create_oriented(self.identity(), parameters, Duration::from_millis(timeout_millis))
+                .map_err(|source| ControlError::internal_io("could not queue browser panel creation", source))?;
         self.wait_for_create(action_id, timeout_millis).await
     }
 

@@ -42,6 +42,8 @@ pub struct BrowserCreateRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<horizon_browser::remote::RemoteOrientation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duplicate_from: Option<String>,
     #[serde(default = "default_visible")]
     pub visible: bool,
@@ -63,6 +65,7 @@ impl BrowserCreateRequest {
             url: None,
             backend: None,
             target: None,
+            orientation: None,
             duplicate_from: None,
             visible: true,
             requested_at_millis: 0,
@@ -228,6 +231,7 @@ fn enqueue_at(
             url,
             backend,
             target,
+            orientation: None,
             visible,
             duplicate_from: None,
         },
@@ -235,10 +239,42 @@ fn enqueue_at(
     )
 }
 
+/// Queue a remote session with an optional orientation override.
+/// # Errors
+/// Same admission and validation failures as [`enqueue_create`].
+pub fn enqueue_create_oriented(
+    identity: AgentIdentity<'_>,
+    parameters: RemoteCreateParameters,
+    timeout: Duration,
+) -> std::io::Result<String> {
+    enqueue_operation_at(
+        BrowserRuntimePaths::resolve().root(),
+        identity,
+        CreateParameters {
+            url: parameters.url,
+            backend: parameters.backend,
+            target: parameters.target,
+            orientation: parameters.orientation,
+            visible: parameters.visible,
+            duplicate_from: None,
+        },
+        timeout,
+    )
+}
+
+pub struct RemoteCreateParameters {
+    pub url: Option<String>,
+    pub backend: Option<BackendKind>,
+    pub target: Option<String>,
+    pub orientation: Option<horizon_browser::remote::RemoteOrientation>,
+    pub visible: bool,
+}
+
 struct CreateParameters {
     url: Option<String>,
     backend: Option<BackendKind>,
     target: Option<String>,
+    orientation: Option<horizon_browser::remote::RemoteOrientation>,
     visible: bool,
     duplicate_from: Option<String>,
 }
@@ -260,6 +296,7 @@ pub fn enqueue_duplicate(
             url: None,
             backend: None,
             target: None,
+            orientation: None,
             visible,
             duplicate_from: Some(panel_id.to_string()),
         },
@@ -277,12 +314,19 @@ fn enqueue_operation_at(
         url,
         backend,
         target,
+        orientation,
         visible,
         duplicate_from,
     } = parameters;
     let actor = identity.actor;
     super::agent::validate_actor(actor)?;
     validate_target(target.as_deref(), backend)?;
+    if orientation.is_some() && target.is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "orientation requires a remote target",
+        ));
+    }
     if !actor_is_workspace_scoped(actor) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
@@ -308,10 +352,12 @@ fn enqueue_operation_at(
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
     }
 
-    // Older hosts only poll the ordinary creation queue. A distinct queue
-    // prevents them from silently opening an isolated page for a duplicate.
+    // Older hosts poll only the ordinary queue. Version-gate all remote
+    // creates so configured orientation cannot be silently ignored.
     let request_id = if duplicate_from.is_some() {
         format!("duplicate-{}", new_action_id())
+    } else if orientation.is_some() || target.is_some() {
+        format!("oriented-{}", new_action_id())
     } else {
         new_action_id()
     };
@@ -337,6 +383,7 @@ fn enqueue_operation_at(
         url,
         backend,
         target,
+        orientation,
         duplicate_from,
         visible,
         requested_at_millis,
@@ -355,6 +402,7 @@ pub fn list_create_requests() -> std::io::Result<Vec<BrowserCreateRequest>> {
     let paths = BrowserRuntimePaths::resolve();
     let mut requests = list_at(paths.root())?;
     requests.extend(list_at(&paths.root().join("shared-pages"))?);
+    requests.extend(list_at(&paths.root().join("oriented-sessions"))?);
     requests.sort_by_key(|request| request.requested_at_millis);
     Ok(requests)
 }
@@ -520,6 +568,8 @@ fn take_at(root: &Path, request_id: &str, actor: &str) -> std::io::Result<Option
 }
 
 /// Append one creation lifecycle state to the new panel's audit journal.
+/// `effective_orientation` is the host's frozen launch-plan value, including
+/// configured orientation and any per-create override.
 ///
 /// # Errors
 /// Returns an error for an invalid actor or audit filesystem failure.
@@ -527,29 +577,48 @@ pub fn record_create_status(
     panel_local_id: &str,
     request: &BrowserCreateRequest,
     backend: BackendKind,
+    effective_orientation: Option<horizon_browser::remote::RemoteOrientation>,
     status: BrowserCreateAuditStatus,
 ) -> std::io::Result<()> {
     super::agent::validate_actor(&request.actor)?;
     super::audit::append(
-        &BrowserAuditEntry::new(
-            request.request_id.clone(),
-            BrowserAuditActor::Agent {
-                name: request.actor.clone(),
-            },
-            match status {
-                BrowserCreateAuditStatus::Queued => horizon_browser::BrowserAuditStatus::Queued,
-                BrowserCreateAuditStatus::Dispatched => horizon_browser::BrowserAuditStatus::Dispatched,
-                BrowserCreateAuditStatus::Completed => horizon_browser::BrowserAuditStatus::Completed,
-                BrowserCreateAuditStatus::Failed => horizon_browser::BrowserAuditStatus::Failed,
-            },
-            match request.target.as_deref() {
-                Some(target) => {
-                    BrowserAuditAction::remote_session_created(backend, request.url.as_deref(), request.visible, target)
-                }
-                None => BrowserAuditAction::session_created(backend, request.url.as_deref(), request.visible),
-            },
-        ),
+        &create_audit_entry(request, backend, effective_orientation, status),
         panel_local_id,
+    )
+}
+
+fn create_audit_entry(
+    request: &BrowserCreateRequest,
+    backend: BackendKind,
+    effective_orientation: Option<horizon_browser::remote::RemoteOrientation>,
+    status: BrowserCreateAuditStatus,
+) -> BrowserAuditEntry {
+    BrowserAuditEntry::new(
+        request.request_id.clone(),
+        BrowserAuditActor::Agent {
+            name: request.actor.clone(),
+        },
+        match status {
+            BrowserCreateAuditStatus::Queued => horizon_browser::BrowserAuditStatus::Queued,
+            BrowserCreateAuditStatus::Dispatched => horizon_browser::BrowserAuditStatus::Dispatched,
+            BrowserCreateAuditStatus::Completed => horizon_browser::BrowserAuditStatus::Completed,
+            BrowserCreateAuditStatus::Failed => horizon_browser::BrowserAuditStatus::Failed,
+        },
+        match request.target.as_deref() {
+            Some(target) => {
+                let mut action = BrowserAuditAction::remote_session_created(
+                    backend,
+                    request.url.as_deref(),
+                    request.visible,
+                    target,
+                );
+                if let BrowserAuditAction::SessionCreated { orientation, .. } = &mut action {
+                    *orientation = effective_orientation;
+                }
+                action
+            }
+            None => BrowserAuditAction::session_created(backend, request.url.as_deref(), request.visible),
+        },
     )
 }
 
@@ -560,6 +629,8 @@ fn create_directory(root: &Path) -> PathBuf {
 fn operation_root(root: &Path, request_id: &str) -> PathBuf {
     if request_id.starts_with("duplicate-") {
         root.join("shared-pages")
+    } else if request_id.starts_with("oriented-") {
+        root.join("oriented-sessions")
     } else {
         root.to_path_buf()
     }
@@ -579,6 +650,75 @@ const fn default_visible() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn creation_lifecycle_records_the_resolved_orientation_without_changing_caller_intent() {
+        use super::{BrowserCreateAuditStatus, BrowserCreateRequest, create_audit_entry};
+        use horizon_browser::remote::RemoteOrientation::{Landscape, Portrait};
+        use horizon_browser::{BackendKind, BrowserAuditAction, BrowserAuditStatus};
+
+        for effective in [None, Some(Portrait), Some(Landscape)] {
+            for caller_override in [None, Some(Portrait), Some(Landscape)] {
+                let mut request = BrowserCreateRequest::for_tests("fixture");
+                request.target = Some("configured-tablet".into());
+                request.orientation = caller_override;
+                let snapshot = request.clone();
+                for (status, expected_status) in [
+                    (BrowserCreateAuditStatus::Queued, BrowserAuditStatus::Queued),
+                    (BrowserCreateAuditStatus::Dispatched, BrowserAuditStatus::Dispatched),
+                    (BrowserCreateAuditStatus::Completed, BrowserAuditStatus::Completed),
+                    (BrowserCreateAuditStatus::Failed, BrowserAuditStatus::Failed),
+                ] {
+                    let entry = create_audit_entry(&request, BackendKind::SafariWebDriver, effective, status);
+                    assert_eq!(entry.status, expected_status);
+                    let BrowserAuditAction::SessionCreated { orientation, .. } = entry.action else {
+                        panic!("creation did not produce a session audit");
+                    };
+                    assert_eq!(orientation, effective);
+                    assert_eq!(request, snapshot);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn orientation_is_queued_only_with_a_remote_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = super::AgentIdentity::new("horizon:agent", Some("host"));
+        let parameters = |target| super::CreateParameters {
+            url: None,
+            backend: None,
+            target,
+            orientation: Some(horizon_browser::remote::RemoteOrientation::Landscape),
+            visible: true,
+            duplicate_from: None,
+        };
+        assert!(
+            super::enqueue_operation_at(
+                temp.path(),
+                identity,
+                parameters(None),
+                std::time::Duration::from_secs(30)
+            )
+            .is_err()
+        );
+        assert!(super::list_at(temp.path()).unwrap().is_empty());
+        let id = super::enqueue_operation_at(
+            temp.path(),
+            identity,
+            parameters(Some("tablet".into())),
+            std::time::Duration::from_secs(30),
+        )
+        .unwrap();
+        assert!(
+            super::list_at(temp.path()).unwrap().is_empty(),
+            "legacy hosts cannot silently ignore orientation"
+        );
+        assert_eq!(
+            super::list_at(&super::operation_root(temp.path(), &id)).unwrap()[0].orientation,
+            Some(horizon_browser::remote::RemoteOrientation::Landscape)
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -595,6 +735,7 @@ mod tests {
                 url: None,
                 backend: None,
                 target: None,
+                orientation: None,
                 visible: true,
                 duplicate_from: Some("source".into()),
             },
@@ -882,9 +1023,19 @@ mod tests {
             Duration::from_secs(30),
         )
         .expect("enqueue with target");
-        let request = claim_at(root.path(), &request_id, "horizon:agent-panel", "host-a", 7)
-            .expect("claim")
-            .expect("request");
+        assert!(
+            list_at(root.path()).unwrap().is_empty(),
+            "legacy hosts cannot ignore configured target orientation"
+        );
+        let request = claim_at(
+            &operation_root(root.path(), &request_id),
+            &request_id,
+            "horizon:agent-panel",
+            "host-a",
+            7,
+        )
+        .expect("claim")
+        .expect("request");
         assert_eq!(request.target.as_deref(), Some("ios_phone"));
         let legacy: BrowserCreateRequest = serde_json::from_value(serde_json::json!({
             "request_id": "r1", "actor": "horizon:agent-panel", "visible": true,

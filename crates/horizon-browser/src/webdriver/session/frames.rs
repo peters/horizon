@@ -97,28 +97,35 @@ impl AdaptiveFrames {
 
 impl Driver {
     pub(super) fn capture_frame(&mut self, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
+        self.capture_frame_until(frame_slot, event_tx, None);
+    }
+
+    pub(super) fn capture_frame_until(
+        &mut self,
+        frame_slot: &FrameSlot,
+        event_tx: &BrowserEventSender,
+        deadline: Option<Instant>,
+    ) {
         frame_slot.record_capture_request();
         let generation = self.generation;
         let context_id = self.context_id.clone();
-        let result = if self.firefox_bidi() {
-            self.classic_get("screenshot")
-                .and_then(|response| {
-                    webdriver_value(&response)
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .ok_or_else(|| "WebDriver screenshot response had no data".to_string())
-                })
-                .map(|data| (data, false))
-        } else {
-            self.classic_get("screenshot")
-                .and_then(|response| {
-                    webdriver_value(&response)
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .ok_or_else(|| "WebDriver screenshot response had no data".to_string())
-                })
-                .map(|data| (data, false))
+        let response = match deadline {
+            Some(deadline) => match super::super::orientation::remaining(deadline) {
+                Ok(timeout) => self
+                    .host
+                    .transport()
+                    .get_with_read_timeout(&self.session_path("screenshot"), timeout.min(Duration::from_secs(3)))
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error.message),
+            },
+            None => self.classic_get("screenshot"),
         };
+        let result = response.and_then(|response| {
+            webdriver_value(&response)
+                .and_then(Value::as_str)
+                .map(|data| (data.to_string(), false))
+                .ok_or_else(|| "WebDriver screenshot response had no data".to_string())
+        });
         let (encoded, jpeg) = match result {
             Ok(frame) => {
                 frame_slot.record_capture_completion();
@@ -159,7 +166,11 @@ impl Driver {
         } else {
             frame_slot.record_unchanged_frame();
         }
-        if self.refresh_page_scroll_state(frame_slot) {
+        let refreshed = match deadline {
+            Some(deadline) => self.refresh_page_scroll_state_until(frame_slot, Some(deadline)),
+            None => self.refresh_page_scroll_state(frame_slot),
+        };
+        if refreshed {
             // A page can scroll over visually identical pixels. Wake the host
             // even when the screenshot hash did not change so a scrollbar
             // overlay still follows the browser's authoritative position.
@@ -168,15 +179,26 @@ impl Driver {
     }
 
     pub(super) fn refresh_page_scroll_state(&mut self, frame_slot: &FrameSlot) -> bool {
+        self.refresh_page_scroll_state_until(frame_slot, None)
+    }
+
+    fn refresh_page_scroll_state_until(&mut self, frame_slot: &FrameSlot, deadline: Option<Instant>) -> bool {
         let now = Instant::now();
         if now < self.scrollbar.refresh_at {
             return false;
         }
         self.scrollbar.refresh_at = now + SCROLL_STATE_INTERVAL;
-        let Ok(response) = self.classic_post(
-            "execute/sync",
-            &json!({ "script": PAGE_SCROLL_STATE_SCRIPT, "args": [] }),
-        ) else {
+        let body = json!({ "script": PAGE_SCROLL_STATE_SCRIPT, "args": [] });
+        let response = match deadline {
+            Some(deadline) => match super::super::orientation::remaining(deadline) {
+                Ok(timeout) => {
+                    self.classic_navigation_post_within("execute/sync", &body, timeout.min(Duration::from_secs(3)))
+                }
+                Err(error) => Err(error.message),
+            },
+            None => self.classic_post("execute/sync", &body),
+        };
+        let Ok(response) = response else {
             return self.scrollbar.clear_sampled(frame_slot);
         };
         let Some(value) = webdriver_value(&response).cloned() else {

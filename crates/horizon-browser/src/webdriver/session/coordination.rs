@@ -15,7 +15,7 @@ use super::Driver;
 const WRITE_INTERVAL: Duration = Duration::from_millis(200);
 const SIGNAL_INTERVAL: Duration = Duration::from_millis(250);
 const USER_ACTIVE_STAMP_INTERVAL: Duration = Duration::from_secs(1);
-const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
+pub(super) const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
 
 impl Driver {
     pub(super) fn initialize_coordination(&mut self) {
@@ -61,6 +61,29 @@ impl Driver {
         self.last_signal_check = Instant::now().checked_sub(SIGNAL_INTERVAL).unwrap_or_else(Instant::now);
     }
 
+    pub(super) fn observe_coordination_ownership(&mut self, event_tx: &BrowserEventSender) -> std::io::Result<()> {
+        let Some(coordination) = &self.config.coordination else {
+            return Ok(());
+        };
+        let ownership = coordination.observe_ownership(&self.config.panel_local_id)?;
+        self.apply_ownership(ownership.owner, ownership.handoff, event_tx);
+        Ok(())
+    }
+
+    fn apply_ownership(
+        &mut self,
+        owner: Option<String>,
+        handoff: Option<HandoffRequest>,
+        event_tx: &BrowserEventSender,
+    ) {
+        publish_owner_change(&mut self.owner_seen, owner, event_tx);
+        self.challenge_loop.observe_handoff_change(
+            self.handoff_seen.as_deref(),
+            handoff.as_ref().map(|request| request.request_id.as_str()),
+        );
+        publish_handoff_change(&mut self.handoff_seen, handoff, event_tx);
+    }
+
     pub(super) fn tick_coordination(&mut self, event_tx: &BrowserEventSender) -> Vec<AgentAction> {
         if self.last_signal_check.elapsed() < SIGNAL_INTERVAL {
             return Vec::new();
@@ -78,12 +101,7 @@ impl Driver {
             }
         };
         self.signal_epoch = self.signal_epoch.wrapping_add(1);
-        publish_owner_change(&mut self.owner_seen, signals.owner, event_tx);
-        self.challenge_loop.observe_handoff_change(
-            self.handoff_seen.as_deref(),
-            signals.handoff.as_ref().map(|handoff| handoff.request_id.as_str()),
-        );
-        publish_handoff_change(&mut self.handoff_seen, signals.handoff, event_tx);
+        self.apply_ownership(signals.owner, signals.handoff, event_tx);
         signals.actions
     }
 
@@ -138,7 +156,9 @@ impl Driver {
     pub(super) fn audit_user_command(&mut self, command: &BrowserCommand) {
         // Stop is recorded synchronously by `BrowserSession::send` because
         // setting its atomic flag can end the loop before the queue drains.
-        if matches!(command, BrowserCommand::Stop) || !self.audit_sampler.should_record(command) {
+        if matches!(command, BrowserCommand::Stop | BrowserCommand::Orientation { .. })
+            || !self.audit_sampler.should_record(command)
+        {
             return;
         }
         let actor = if matches!(command, BrowserCommand::SetViewport { .. }) {
@@ -202,7 +222,7 @@ impl Driver {
         );
     }
 
-    fn record_audit(
+    pub(super) fn record_audit(
         &self,
         action_id: String,
         actor: BrowserAuditActor,
@@ -251,6 +271,7 @@ impl Driver {
             title: self.title.clone(),
             remote_target: self.config.remote.as_ref().map(|request| request.label.clone()),
             remote_device: self.remote_device.clone(),
+            remote_orientation: self.remote_orientation,
             remote_file_upload: self.file_transfer.is_some(),
             file_chooser: self.config.frame_slot.file_chooser().status(),
         }

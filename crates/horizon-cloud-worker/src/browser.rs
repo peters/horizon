@@ -1,3 +1,4 @@
+mod orientation;
 use base64::Engine;
 use horizon_browser::{
     BackendKind, BrowserConfig, BrowserEvent, BrowserSession, BrowserSessionConfig, FrameSlot, VideoCaptureHandle,
@@ -17,6 +18,8 @@ use std::{
 pub struct HostedBrowser {
     pub session: BrowserSession,
     pub state: CloudViewState,
+    orientation_rejections: horizon_browser_protocol::remote::RemoteOrientationView,
+    pub start_orientation_failure: Option<horizon_browser::RemoteStartFailure>,
 }
 pub struct Host {
     pub capabilities: horizon_cloud::Capabilities,
@@ -69,6 +72,20 @@ impl Host {
         target: Option<&str>,
         actor: &str,
     ) -> io::Result<()> {
+        self.open_oriented(id, url, backend, target, actor, None)
+    }
+    pub fn open_oriented(
+        &mut self,
+        id: &str,
+        url: Option<String>,
+        backend: Option<BackendKind>,
+        target: Option<&str>,
+        actor: &str,
+        orientation: Option<horizon_browser::remote::RemoteOrientation>,
+    ) -> io::Result<()> {
+        if orientation.is_some() && target.is_none() {
+            return Err(io::Error::other("orientation requires a remote target"));
+        }
         if !valid_identity(id) {
             return Err(io::Error::other("Invalid browser identity"));
         }
@@ -85,9 +102,12 @@ impl Host {
                 "Remote credentials were revoked; reconnect only after restoring the local grant",
             ));
         }
-        let remote = target
+        let mut remote = target
             .map(|name| super::remote::request(&self.capabilities, name, &self.catalog.cache))
             .transpose()?;
+        if let Some(remote) = &mut remote {
+            horizon_browser::remote_config::override_orientation(remote, orientation);
+        }
         let backend = match &remote {
             Some(remote) => remote.browser,
             None => selected_backend(&self.capabilities, backend)?,
@@ -135,6 +155,8 @@ impl Host {
             id.into(),
             HostedBrowser {
                 session,
+                start_orientation_failure: None,
+                orientation_rejections: horizon_browser_protocol::remote::RemoteOrientationView::default(),
                 state: CloudViewState {
                     id: id.into(),
                     backend,
@@ -154,6 +176,17 @@ impl Host {
                         identity,
                         ..
                     }) => browser.state.remote_device = Some(identity.summary()),
+                    BrowserEvent::RemoteSession(horizon_browser::RemoteSessionEvent::OrientationRejected {
+                        code,
+                        released,
+                        ..
+                    }) => {
+                        browser.start_orientation_failure =
+                            Some(horizon_browser::RemoteStartFailure::OrientationRejected { code, released });
+                    }
+                    BrowserEvent::OrientationChanged(view) => {
+                        browser.state.orientation = orientation::merge(view, &browser.orientation_rejections);
+                    }
                     BrowserEvent::Ready => browser.state.ready = true,
                     BrowserEvent::Title(title) => browser.state.title = title,
                     BrowserEvent::UrlChanged(url) => browser.state.url = url,
@@ -173,6 +206,7 @@ impl Host {
                     }
                     BrowserEvent::OwnerChanged(owner) => browser.state.owner = owner,
                     BrowserEvent::Stopped { .. } => {
+                        browser.state.orientation = horizon_browser_protocol::remote::RemoteOrientationView::default();
                         browser.state.lost = true;
                         browser.state.ready = false;
                     }
@@ -212,11 +246,16 @@ impl Host {
                         ..CloudViewResponse::default()
                     };
                 }
-                if let Some(browser) = self.browsers.get(&id) {
+                if let Some(browser) = self.browsers.get_mut(&id) {
                     for command in commands {
                         // Closing a client presentation must not terminate the worker browser.
                         if !matches!(command, horizon_browser::BrowserCommand::Stop) {
-                            let _ = browser.session.send(command);
+                            orientation::forward(
+                                &mut browser.state.orientation,
+                                &mut browser.orientation_rejections,
+                                command,
+                                |command| browser.session.send(command),
+                            );
                         }
                     }
                 }

@@ -519,6 +519,7 @@ fn import_adds_new_definitions_and_keeps_local_bindings() {
                 model: Some("Google Pixel 9".into()),
                 os_version: None,
             },
+            orientation: None,
             capability_extensions: BTreeMap::new(),
         },
     );
@@ -798,4 +799,34 @@ fn provider_managed_capacity_ignores_legacy_session_limit_but_keeps_timeouts() {
             ..
         })
     ));
+}
+
+#[test]
+fn orientation_round_trips_and_rejects_conflicting_extensions() {
+    let mut config = sample();
+    assert_eq!(config.targets["ios_phone"].orientation, None);
+    config.targets.get_mut("ios_phone").unwrap().orientation = Some(RemoteOrientation::Landscape);
+    let decoded: RemoteBrowserConfig = serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+    assert_eq!(
+        decoded.targets["ios_phone"].orientation,
+        Some(RemoteOrientation::Landscape)
+    );
+    for extension in [
+        serde_json::json!({"orientation":"PORTRAIT"}),
+        serde_json::json!({"nested":[{"deviceOrientation":"portrait"}]}),
+    ] {
+        config
+            .targets
+            .get_mut("ios_phone")
+            .unwrap()
+            .capability_extensions
+            .insert("vendor:options".into(), extension);
+        assert!(matches!(
+            config.validate_definition(),
+            Err(RemoteConfigError::InvalidCapabilityExtension {
+                problem: ExtensionProblem::ConflictsWithNormalizedField,
+                ..
+            })
+        ));
+    }
 }

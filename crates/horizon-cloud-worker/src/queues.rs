@@ -39,12 +39,13 @@ fn create_requests(host: &mut Host) {
             }
             let id = format!("browser-{}", request.request_id);
             match start_before_deadline(&request, manifest::now_millis(), || {
-                host.open(
+                host.open_oriented(
                     &id,
                     request.url.clone(),
                     request.backend,
                     request.target.as_deref(),
                     &request.actor,
+                    request.orientation,
                 )
             }) {
                 Ok(()) => {
@@ -68,6 +69,19 @@ fn create_requests(host: &mut Host) {
 fn pending_requests(host: &mut Host) {
     host.pending.retain(|request| {
         let id = format!("browser-{}", request.request_id);
+        if let Some(horizon_browser::RemoteStartFailure::OrientationRejected { code, released }) = host
+            .browsers
+            .get(&id)
+            .and_then(|browser| browser.start_orientation_failure.as_ref())
+        {
+            let result = orientation_create_failure(request, code, released);
+            return complete_orientation_failure(
+                &mut host.pending_cleanup,
+                id,
+                &result,
+                manifest::complete_create_request,
+            );
+        }
         if let Some(message) = pending_failure(
             request,
             host.browsers.get(&id).map(|browser| &browser.state),
@@ -116,6 +130,41 @@ fn pending_requests(host: &mut Host) {
         };
         result.is_none_or(|result| manifest::complete_create_request(&result).is_err())
     });
+}
+
+fn complete_orientation_failure(
+    cleanup: &mut std::collections::BTreeSet<String>,
+    id: String,
+    result: &BrowserCreateResult,
+    complete: impl FnOnce(&BrowserCreateResult) -> std::io::Result<()>,
+) -> bool {
+    // Cleanup removes the browser's typed startup failure, so keep both it and
+    // the claimed request until publishing the result and retiring the request succeed.
+    if complete(result).is_err() {
+        return true;
+    }
+    cleanup.insert(id);
+    false
+}
+
+fn orientation_create_failure(
+    request: &manifest::BrowserCreateRequest,
+    code: &str,
+    released: &horizon_browser::RemoteReleaseOutcome,
+) -> BrowserCreateResult {
+    use horizon_browser::RemoteReleaseOutcome;
+    let message = match released {
+        RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone => {
+            "start orientation could not be verified; the provider confirmed session release"
+        }
+        RemoteReleaseOutcome::NeverAllocated => {
+            "start orientation could not be verified; no remote session was allocated"
+        }
+        RemoteReleaseOutcome::ReleaseUnknown { .. } | RemoteReleaseOutcome::Failed { .. } => {
+            "start orientation could not be verified; release is unconfirmed and capacity remains held, reconcile the retained allocation before creating again"
+        }
+    };
+    BrowserCreateResult::failed(request, code, message)
 }
 
 fn start_before_deadline(
@@ -218,6 +267,104 @@ fn host_controls(host: &mut Host) {
 mod tests {
     use super::*;
     use horizon_browser_protocol::cloud_view::CloudViewState;
+
+    #[test]
+    fn orientation_failure_retries_the_same_outcome_before_cleanup_can_remove_its_state() {
+        use horizon_browser::RemoteReleaseOutcome;
+        let request = manifest::BrowserCreateRequest::for_tests("cloud-agent");
+        for released in [
+            RemoteReleaseOutcome::Released,
+            RemoteReleaseOutcome::ReleaseUnknown {
+                attempts: 3,
+                reason: "private detail".into(),
+            },
+        ] {
+            let expected = orientation_create_failure(&request, "remote_orientation_mismatch", &released);
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("result.json");
+            let mut cleanup = std::collections::BTreeSet::new();
+            let mut pending = vec![request.clone()];
+            let mut attempted = Vec::new();
+            for attempt in 0..4 {
+                pending.retain(|request| {
+                    assert_eq!(request.request_id, expected.request_id);
+                    complete_orientation_failure(&mut cleanup, "tablet".into(), &expected, |result| {
+                        attempted.push(result.clone());
+                        if attempt == 0 {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                "result not writable",
+                            ));
+                        }
+                        std::fs::write(&path, serde_json::to_vec(result)?)?;
+                        if attempt < 3 {
+                            return Err(std::io::Error::other("request retirement failed after result write"));
+                        }
+                        Ok(())
+                    })
+                });
+                assert_eq!(pending.len(), usize::from(attempt < 3));
+                assert_eq!(cleanup.contains("tablet"), attempt == 3);
+                if attempt > 0 {
+                    let persisted: BrowserCreateResult =
+                        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                    assert_eq!(persisted, expected);
+                }
+            }
+            assert_eq!(attempted, vec![expected; 4]);
+            assert_eq!(cleanup.len(), 1);
+        }
+    }
+
+    #[test]
+    fn orientation_create_failure_preserves_code_and_only_warns_for_unconfirmed_release() {
+        use horizon_browser::RemoteReleaseOutcome;
+        use manifest::BrowserCreateOutcome;
+        let request = manifest::BrowserCreateRequest::for_tests("cloud-agent");
+        for (released, held) in [
+            (RemoteReleaseOutcome::Released, false),
+            (RemoteReleaseOutcome::AlreadyGone, false),
+            (RemoteReleaseOutcome::NeverAllocated, false),
+            (
+                RemoteReleaseOutcome::ReleaseUnknown {
+                    attempts: 3,
+                    reason: "private provider detail".into(),
+                },
+                true,
+            ),
+            (
+                RemoteReleaseOutcome::Failed {
+                    error: "private provider error".into(),
+                    message: "private provider detail".into(),
+                },
+                true,
+            ),
+        ] {
+            for code in [
+                "orientation_unsupported",
+                "orientation_unverified",
+                "browser_unavailable",
+                "remote_orientation_mismatch",
+            ] {
+                let result = orientation_create_failure(&request, code, &released);
+                let BrowserCreateOutcome::Failed { code: actual, message } = result.outcome else {
+                    panic!("failed startup reported ready")
+                };
+                assert_eq!(actual, code);
+                assert_eq!(result.request_id, request.request_id);
+                assert_eq!(result.actor, request.actor);
+                assert_eq!(message.contains("reconcile"), held);
+                assert_eq!(message.contains("capacity remains held"), held);
+                assert!(!message.contains("private provider"));
+                if matches!(
+                    released,
+                    RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone
+                ) {
+                    assert!(message.contains("confirmed session release"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn expired_create_never_invokes_the_allocator() {

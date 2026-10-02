@@ -17,6 +17,7 @@ use super::host::DriverHost;
 
 mod bidi;
 mod coordination;
+mod document;
 mod file_chooser;
 mod frames;
 pub(super) mod handshake;
@@ -24,6 +25,7 @@ mod http_auth;
 pub(crate) mod native_select;
 mod navigation;
 mod network;
+mod orientation;
 mod remote_click;
 mod remote_files;
 mod safari;
@@ -62,6 +64,12 @@ struct Driver {
     /// The allocated remote device as the provider's evidence describes
     /// it, for coordination; `None` for a local browser.
     remote_device: Option<String>,
+    remote_orientation: Option<crate::remote::RemoteOrientationState>,
+    pending_orientation: Option<orientation::Pending>,
+    orientation_document: orientation::DocumentOrientation,
+    orientation_error: Option<String>,
+    orientation_action_id: Option<String>,
+    orientation_completed: crate::remote::RemoteOrientationView,
     remote_android_chromium: bool,
     file_transfer: Option<remote_files::Transfer>,
     session_id: String,
@@ -174,12 +182,19 @@ pub(crate) fn run_webdriver(
             return;
         }
     };
-    driver.prepare_ready(config, frame_slot, event_tx);
+    if !driver.prepare_ready(config, frame_slot, event_tx, stop_requested) {
+        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+        return;
+    }
 
     'session: while !stop_requested.load(Ordering::Acquire) {
         let mut stop = false;
         let batch = command_rx.drain(MAX_COMMAND_BURST);
         for command in batch.commands {
+            if let BrowserCommand::Orientation { action_id, orientation } = command {
+                driver.begin_user_orientation(action_id, orientation, event_tx, stop_requested);
+                continue;
+            }
             driver.audit_user_command(&command);
             if driver.run_command(command, event_tx, true).is_ok_and(|stop| stop) {
                 stop = true;
@@ -219,7 +234,7 @@ pub(crate) fn run_webdriver(
         if let Some(message) = driver.challenge_loop.take_rejection() {
             let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
         }
-        if driver.frames.due(Instant::now()) {
+        if driver.pending_orientation.is_none() && driver.frames.due(Instant::now()) {
             driver.capture_frame(frame_slot, event_tx);
         }
         driver.tick_classic_timeout_restore();
@@ -227,12 +242,15 @@ pub(crate) fn run_webdriver(
         driver.tick_pending_navigation();
         driver.tick_pending_wait(stop_requested);
         driver.tick_pending_resize(event_tx, stop_requested);
+        driver.tick_orientation(event_tx, stop_requested);
+        driver.refresh_document_orientation(event_tx);
         driver.write_coordination(false);
         if driver.finish_if_service_exited(event_tx) {
             return;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+    driver.finish_orientation("browser_unavailable", "browser stopped; orientation may have changed");
     driver.finish_pending_resize("browser_unavailable", "browser session stopped");
     driver.settle_pending_wait_for_shutdown(Instant::now());
     driver.close(event_tx);
@@ -240,12 +258,23 @@ pub(crate) fn run_webdriver(
 }
 
 impl Driver {
-    fn prepare_ready(&mut self, config: &BrowserSessionConfig, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
+    fn prepare_ready(
+        &mut self,
+        config: &BrowserSessionConfig,
+        frame_slot: &FrameSlot,
+        event_tx: &BrowserEventSender,
+        stop_requested: &AtomicBool,
+    ) -> bool {
+        self.invalidate_document_orientation();
+        if stop_requested.load(Ordering::Acquire) {
+            return !self.reject_explicit_start_orientation(false, true, event_tx);
+        }
         self.enable_file_chooser(event_tx);
         if self.firefox_bidi() {
             self.set_viewport(config.width, config.height, event_tx);
         }
         self.initialize_coordination();
+        self.publish_orientation(event_tx, None);
         self.initialize_classic_document_identity();
         let capabilities = self.active_capabilities();
         frame_slot.publish_backend_capabilities(capabilities);
@@ -255,15 +284,38 @@ impl Driver {
             .as_deref()
             .filter(|url| !url.is_empty() && *url != "about:blank")
             .is_some_and(|url| self.navigate_initial(url, event_tx));
+        if startup_navigation_pending {
+            self.invalidate_document_orientation();
+            self.write_coordination(true);
+        }
+        let stopped = stop_requested.load(Ordering::Acquire);
+        if (startup_navigation_pending || self.navigation_failed || stopped)
+            && self.reject_explicit_start_orientation(startup_navigation_pending, stopped, event_tx)
+        {
+            return false;
+        }
+        if stopped {
+            return true;
+        }
+        self.refresh_document_orientation(event_tx);
+        let stopped = stop_requested.load(Ordering::Acquire);
+        if self.reject_explicit_start_orientation(startup_navigation_pending, stopped, event_tx) {
+            return false;
+        }
+        if stopped {
+            return true;
+        }
         // `Ready` means the servicing loop below is about to run: commands and
         // agent actions are only usable from here on, so it must not be
         // published before the (bounded) startup navigation returned. The host
         // resets its loading flag on `Ready`, so a startup navigation that is
         // still running is reported as loading again right after it.
+        self.publish_orientation(event_tx, None);
         let _ = event_tx.send(BrowserEvent::Ready);
         if startup_navigation_pending {
             let _ = event_tx.send(BrowserEvent::Loading(true));
         }
+        true
     }
 
     fn service_browser_request(
@@ -283,7 +335,19 @@ impl Driver {
             );
             return;
         }
-        if matches!(request.action, crate::BrowserControlAction::Resize { .. }) {
+        if matches!(request.action, crate::BrowserControlAction::Orientation { .. }) {
+            self.begin_orientation(request, events, stop);
+            self.publish_orientation(events, None);
+        } else if self.pending_orientation.is_some() {
+            self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);
+            self.complete_agent_action(
+                request,
+                Err(crate::BrowserControlFailure::new(
+                    "orientation_pending",
+                    "wait for orientation acknowledgement before another page action",
+                )),
+            );
+        } else if matches!(request.action, crate::BrowserControlAction::Resize { .. }) {
             self.begin_resize(request);
         } else {
             self.service_agent_request(request, events, stop);
@@ -294,6 +358,7 @@ impl Driver {
         if !self.stop_for_service_exit(events) {
             return false;
         }
+        self.finish_orientation("browser_unavailable", "browser stopped; orientation may have changed");
         self.finish_pending_resize("browser_unavailable", "browser session stopped");
         true
     }
@@ -307,32 +372,34 @@ impl Driver {
         remote_release: crate::session::RemoteReleaseReport,
         group: Option<&super::SharedFirefoxSession>,
     ) -> Result<Self, String> {
-        let (mut host, session, remote_device, file_transfer) = if let Some(request) = &config.remote {
-            let (host, session, device) = start_remote(request, event_tx, &remote_release, stop_requested)?;
-            let transfer = remote_files::Transfer::for_provider(
-                request.adapter,
-                device
-                    .os_name
-                    .as_deref()
-                    .or_else(|| session.capabilities["platformName"].as_str()),
-            );
-            (host, session, Some(device.summary()), transfer)
-        } else {
-            let (host, session) = if let Some(group) = group {
-                let mut shared_config = config.clone();
-                group.profile_id().clone_into(&mut shared_config.panel_local_id);
-                group.acquire(
-                    &shared_config.browser,
-                    shared_config.frame_slot.file_chooser().has_consumer(),
-                    process_control,
-                    stop_requested,
-                    |control| start_local(&shared_config, control, stop_requested),
-                )?
+        let (mut host, session, remote_device, file_transfer, remote_orientation) =
+            if let Some(request) = &config.remote {
+                let (host, session, device, orientation) =
+                    start_remote(request, event_tx, &remote_release, stop_requested)?;
+                let transfer = remote_files::Transfer::for_provider(
+                    request.adapter,
+                    device
+                        .os_name
+                        .as_deref()
+                        .or_else(|| session.capabilities["platformName"].as_str()),
+                );
+                (host, session, Some(device.summary()), transfer, Some(orientation))
             } else {
-                start_local(config, process_control, stop_requested)?
+                let (host, session) = if let Some(group) = group {
+                    let mut shared_config = config.clone();
+                    group.profile_id().clone_into(&mut shared_config.panel_local_id);
+                    group.acquire(
+                        &shared_config.browser,
+                        shared_config.frame_slot.file_chooser().has_consumer(),
+                        process_control,
+                        stop_requested,
+                        |control| start_local(&shared_config, control, stop_requested),
+                    )?
+                } else {
+                    start_local(config, process_control, stop_requested)?
+                };
+                (host, session, None, None, None)
             };
-            (host, session, None, None)
-        };
         let NewSession {
             id: session_id,
             capabilities,
@@ -352,6 +419,12 @@ impl Driver {
             host,
             remote_release,
             remote_device,
+            remote_orientation,
+            pending_orientation: None,
+            orientation_document: orientation::DocumentOrientation::initial(remote_orientation),
+            orientation_error: None,
+            orientation_action_id: None,
+            orientation_completed: crate::remote::RemoteOrientationView::default(),
             file_transfer,
             remote_android_chromium: remote_click::uses_visual_viewport(config.remote.is_some(), &capabilities),
             session_id,
@@ -423,6 +496,11 @@ impl Driver {
         user: bool,
     ) -> Result<bool, String> {
         if user && is_user_activity(&command) {
+            self.finish_orientation(
+                "orientation_user_active",
+                "human input took over; inspect applied orientation",
+            );
+            self.publish_orientation(events, None);
             self.note_remote_activity();
             self.stamp_user_active();
         }
@@ -456,6 +534,7 @@ impl Driver {
                 }
                 Ok(false)
             }
+            BrowserCommand::Orientation { .. } => Ok(false),
             BrowserCommand::Stop => Ok(true),
         }
     }
@@ -745,6 +824,58 @@ mod tests {
                 "an unreleased allocation is reported as unknown, never as failed"
             );
         }
+    }
+
+    #[test]
+    fn cancellation_during_unsupported_probe_releases_without_reporting_mismatch() {
+        use super::super::test_server::{Reply, Server};
+        use serde_json::json;
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+        let server = Server::start(vec![
+            Reply::json(200, &json!({"value":{"sessionId":"cancelled-start","capabilities":{}}})),
+            Reply::json(
+                404,
+                &json!({"value":{"error":"unknown command","message":"unsupported"}}),
+            )
+            .delayed(Duration::from_millis(100)),
+            Reply::json(200, &json!({"value":null})),
+        ]);
+        let mut request = super::super::remote::tests::request(&server.endpoint(""));
+        request.capabilities["appium:orientation"] = json!("LANDSCAPE");
+        let report = crate::session::RemoteReleaseReport::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let events = crate::session::BrowserEventSender {
+            tx,
+            wake: crate::session::BrowserEventWake::default(),
+            committed_url: crate::session::CommittedUrl::default(),
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let signal = stop.clone();
+        let cancel = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while server.recorded().len() < 2 {
+                assert!(Instant::now() < deadline, "probe never reached the mock");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            signal.store(true, Ordering::Release);
+            server
+        });
+        assert!(start_remote(&request, &events, &report, &stop).is_err());
+        let server = cancel.join().unwrap();
+        assert_eq!(*report.lock().unwrap(), Some(RemoteReleaseOutcome::Released));
+        let seen = server.recorded();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(seen[2].method, "DELETE");
+        assert_eq!(seen[2].path, "/session/cancelled-start");
+        assert!(rx.try_iter().any(|event| matches!(
+            event,
+            crate::session::BrowserEvent::RemoteSession(RemoteSessionEvent::OrientationRejected {
+                code: "browser_unavailable",
+                ..
+            })
+        )));
     }
 
     #[test]

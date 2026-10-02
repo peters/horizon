@@ -43,6 +43,7 @@ pub(super) fn start_remote(
         DriverHost,
         NewSession,
         super::super::remote::identity::RemoteDeviceIdentity,
+        crate::remote::RemoteOrientationState,
     ),
     String,
 > {
@@ -65,10 +66,18 @@ pub(super) fn start_remote(
     *remote_release.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     let allocated = RemoteHost::connect(request).and_then(|mut host| {
         let allocation = host.allocate(request)?;
-        Ok((host, allocation))
+        let session_path = format!("/session/{}", allocation.session.id);
+        let orientation = super::super::orientation::probe_support(host.transport(), &session_path);
+        if request.orientation().is_some() && stop_requested.load(Ordering::Acquire) {
+            return Err(RemoteStartFailure::OrientationRejected {
+                code: "browser_unavailable",
+                released: host.release(&allocation.session.id),
+            });
+        }
+        Ok((host, allocation, orientation))
     });
     match allocated {
-        Ok((host, allocation)) => {
+        Ok((host, allocation, orientation)) => {
             let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Allocated {
                 label: label.clone(),
                 session_digest: session_digest(&allocation.session.id),
@@ -77,7 +86,12 @@ pub(super) fn start_remote(
                 label,
                 identity: allocation.device.clone(),
             }));
-            Ok((DriverHost::Remote(host), allocation.session, allocation.device))
+            Ok((
+                DriverHost::Remote(host),
+                allocation.session,
+                allocation.device,
+                orientation,
+            ))
         }
         Err(failure) => {
             // Every failure ends the lifecycle with a terminal, value-free
@@ -122,6 +136,14 @@ pub(super) fn start_failure_outcome(
                 label,
                 reason: failure.to_string(),
                 refusal: AllocationRefusal::Other,
+            },
+        ),
+        RemoteStartFailure::OrientationRejected { code, released } => (
+            Some(released.clone()),
+            RemoteSessionEvent::OrientationRejected {
+                label,
+                code,
+                released: released.clone(),
             },
         ),
         RemoteStartFailure::IdentityRejected { reason, released } => (

@@ -137,11 +137,25 @@ impl Driver {
             self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
             return expired;
         }
+        self.begin_navigation(event_tx);
+        // Publishing cleared orientation can wait on the host's coordination
+        // lock. Do not mutate the page after that consumes the action's bound.
+        let now = Instant::now();
+        if let Some(expired) = pending.tick(now) {
+            self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
+            self.retain_frame_during_navigation = false;
+            self.frames.demand();
+            return expired.map(|mut value| {
+                if let crate::BrowserControlValue::Navigation { navigation } = &mut value {
+                    navigation.loading = false;
+                }
+                value
+            });
+        }
         let remaining_millis = u64::try_from(pending.remaining(now).as_millis())
             .unwrap_or(u64::MAX)
             .max(1);
         let read_timeout = Duration::from_millis(remaining_millis.saturating_add(CLASSIC_BOUND_READ_MARGIN_MILLIS));
-        self.begin_navigation();
         let _ = event_tx.send(BrowserEvent::Loading(true));
         let result = self.classic_navigation_post_within("url", &json!({ "url": &url }), read_timeout);
         let now = Instant::now();
@@ -209,7 +223,7 @@ impl Driver {
     /// routed to `handle_bidi_navigate_response` by id.
     fn dispatch_bidi_navigate(&mut self, url: &str, event_tx: &BrowserEventSender) -> Result<(), String> {
         let url = normalize_navigation_target(url);
-        self.begin_navigation();
+        self.begin_navigation(event_tx);
         let _ = event_tx.send(BrowserEvent::Loading(true));
         let context = self.context_id.clone();
         let sent = self
@@ -373,7 +387,7 @@ impl Driver {
             let _ = event_tx.send(BrowserEvent::Loading(false));
             return false;
         }
-        self.begin_navigation();
+        self.begin_navigation(event_tx);
         let _ = event_tx.send(BrowserEvent::Loading(true));
         let started = Instant::now();
         let result = self
@@ -422,7 +436,8 @@ impl Driver {
 
     /// Reset per-navigation state when the driver starts or observes a
     /// document navigation.
-    pub(super) fn begin_navigation(&mut self) {
+    pub(super) fn begin_navigation(&mut self, events: &BrowserEventSender) {
+        self.invalidate_document_orientation();
         self.panel_slot.file_chooser().invalidate();
         self.coordination_dirty = true;
         self.file_chooser = super::file_chooser::ChooserState::default();
@@ -441,6 +456,7 @@ impl Driver {
         let _ = self.panel_slot.clear_native_select_popup();
         self.native_select = super::native_select::NativeSelectState::default();
         self.frames.suspend_for_navigation();
+        self.publish_document_orientation_invalidation(events);
     }
 
     pub(super) fn navigate(&mut self, url: &str, event_tx: &BrowserEventSender) -> Result<(), String> {
@@ -448,7 +464,7 @@ impl Driver {
         // A non-agent navigation takes the page over: a pending agent
         // navigation can no longer claim the outcome.
         self.supersede_pending_navigation(Instant::now());
-        self.begin_navigation();
+        self.begin_navigation(event_tx);
         let _ = event_tx.send(BrowserEvent::Loading(true));
         let result = if self.firefox_bidi() {
             self.call_bidi(
@@ -490,7 +506,7 @@ impl Driver {
 
     pub(super) fn reload(&mut self, event_tx: &BrowserEventSender) -> Result<(), String> {
         self.supersede_pending_navigation(Instant::now());
-        self.begin_navigation();
+        self.begin_navigation(event_tx);
         let result = if self.firefox_bidi() {
             self.call_bidi(
                 "browsingContext.reload",
@@ -506,7 +522,7 @@ impl Driver {
 
     pub(super) fn traverse(&mut self, delta: i64, event_tx: &BrowserEventSender) -> Result<(), String> {
         self.supersede_pending_navigation(Instant::now());
-        self.begin_navigation();
+        self.begin_navigation(event_tx);
         // Firefox's BiDi traversal can return without a completion event, so
         // use its blocking classic endpoint and suppress the matching late
         // navigationStarted event that would otherwise cancel this capture.
@@ -583,7 +599,7 @@ impl Driver {
             .map_err(|error| error.to_string())
     }
 
-    fn classic_get_within(&self, suffix: &str, read_timeout: Duration) -> Result<serde_json::Value, String> {
+    pub(super) fn classic_get_within(&self, suffix: &str, read_timeout: Duration) -> Result<serde_json::Value, String> {
         self.host
             .transport()
             .get_with_read_timeout(&self.session_path(suffix), read_timeout)
@@ -610,7 +626,7 @@ impl Driver {
             self.observe_navigation_signal(crate::navigation::NavigationSignal::Title(&title));
         }
         let _ = event_tx.send(BrowserEvent::Loading(false));
-        let _ = self.refresh_classic_document_identity_within(Duration::from_secs(1));
+        let _ = self.refresh_classic_document_identity_within(super::document::OBSERVATION_BUDGET);
     }
 
     /// Restore the session page-load timeout a bounded classic navigation
@@ -646,12 +662,15 @@ impl Driver {
         if let Some((until, committed)) = refresh_state {
             if committed {
                 self.classic_refresh = None;
+                self.invalidate_document_orientation();
+                self.refresh_document_orientation(event_tx);
                 self.frames.demand();
             } else if Instant::now() >= until {
                 // Classic WebDriver reports no later event, so a navigation
                 // that has not committed by the page-load window is failed
                 // explicitly instead of leaving the panel silently stale.
                 self.classic_refresh = None;
+                self.orientation_document = super::orientation::DocumentOrientation::Clean;
                 self.navigation_failed = true;
                 self.frames.interaction_started_at = None;
                 let _ = event_tx.send(BrowserEvent::NavigationFailed(
@@ -682,6 +701,57 @@ pub(super) fn classic_error_is_page_load_timeout(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::ClassicNavigationRefresh;
+
+    #[test]
+    fn pending_startup_defers_orientation_until_document_commit() {
+        use super::super::viewport::tests::{bidi_fixture, events, fixture_driver};
+        use crate::remote::{OrientationSupport, RemoteOrientation, RemoteOrientationState};
+        use crate::webdriver::test_server::{Reply, Server};
+        use serde_json::json;
+        use std::time::{Duration, Instant};
+
+        let classic = Server::start(vec![
+            Reply::json(200, &json!({"value":"https://example.test/ready"})),
+            Reply::json(200, &json!({"value":"Ready"})),
+            Reply::native_document("committed-document"),
+            Reply::json(200, &json!({"value":"PORTRAIT"})),
+            Reply::json(
+                200,
+                &json!({"value":{"width":600,"height":900,"visual_width":600,"visual_height":900,"orientation":"portrait"}}),
+            ),
+        ]);
+        let (link, worker) = bidi_fixture(false, false);
+        let mut driver = fixture_driver(&classic, link);
+        driver.remote_orientation = Some(RemoteOrientationState {
+            support: OrientationSupport::Supported,
+            applied: Some(RemoteOrientation::Landscape),
+        });
+        driver.url = "about:blank".into();
+        driver.classic_document_identity = Some("allocation-document".into());
+        driver.classic_refresh = Some(ClassicNavigationRefresh {
+            until: Instant::now() + Duration::from_secs(10),
+            previous_url: driver.url.clone(),
+            previous_document_identity: driver.classic_document_identity.clone(),
+        });
+        driver.refresh_pending_at = Some(Instant::now());
+        driver.invalidate_document_orientation();
+        driver.refresh_document_orientation(&events());
+        assert_eq!(driver.remote_orientation.as_ref().unwrap().applied, None);
+        assert!(classic.recorded().is_empty(), "do not measure the previous document");
+        driver.tick_page_state_refresh(&events());
+        assert_eq!(
+            driver.remote_orientation.as_ref().unwrap().applied,
+            Some(RemoteOrientation::Portrait)
+        );
+        assert_eq!(
+            driver.orientation_document,
+            super::super::orientation::DocumentOrientation::Clean
+        );
+        assert!(driver.classic_refresh.is_none());
+        assert_eq!(classic.recorded().len(), 8);
+        drop(driver);
+        assert!(worker.join().unwrap().is_empty());
+    }
 
     #[test]
     fn refresh_detects_document_replacement_without_misreading_origin_slashes() {

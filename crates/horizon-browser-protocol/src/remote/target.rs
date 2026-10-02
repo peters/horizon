@@ -37,6 +37,8 @@ pub struct RemoteTargetProfile {
     pub platform_name: String,
     #[serde(default)]
     pub device: DeviceRequirement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<super::RemoteOrientation>,
     /// Namespaced provider capabilities (`vendor:name`). Standard capabilities,
     /// normalized target fields and credentials are rejected here.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -55,6 +57,8 @@ const NORMALIZED_NAMES: &[&str] = &[
     "os_version",
     "realmobile",
     "device",
+    "orientation",
+    "deviceorientation",
 ];
 
 /// Exact capability names (lowercased, separators removed) that identify a

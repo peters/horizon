@@ -364,3 +364,35 @@ including superseded ones, and starts at most four per minute. When a stuck
 credential read eventually returns, discovery resumes without restarting
 Horizon. While two reads for an account never return, that account's
 discovery keeps reporting the stall.
+
+## Direct remote orientation
+
+`horizon-browser orientation <PANEL-ID> portrait|landscape` rotates an existing
+remote device through the same `browser_orientation` MCP contract and durable
+plan runner. Use `--timeout-millis <1..60000>` (default 15000) to bound measured
+acknowledgement and `--output <REPORT.json|->` to choose the JSON report location.
+A timeout may follow a device mutation; inspect current state before retrying.
+Create-time orientation is available in the MCP plans below.
+
+## Remote orientation plans
+
+The plan runner calls the same public MCP contract as interactive agents. A
+configured or catalog tablet can start in landscape and return to portrait:
+
+```json
+{
+  "version": 1,
+  "steps": [
+    {"id": "tablet", "tool": "browser_create", "arguments": {"target": "tablet", "orientation": "landscape"}},
+    {"id": "portrait", "tool": "browser_orientation", "arguments": {"panel_id": {"$ref": "tablet#/panel/panel_id"}, "orientation": "portrait"}},
+    {"id": "release", "tool": "browser_close", "arguments": {"panel_id": {"$ref": "tablet#/panel/panel_id"}}}
+  ]
+}
+```
+
+Use an existing configured target or an exact catalog reference returned by
+`browser_provider_devices`. Inspect `orientation_support` before rotating an
+existing session. Timeouts can follow an applied rotation; inspect rather than
+blindly replaying a failed mutation. Unsupported endpoints return
+`orientation_unsupported`, and physical viewports remain non-resizable. Both
+the MCP server and hosting application must include the orientation capability.

@@ -67,6 +67,17 @@ pub struct RemoteSessionRequest {
     pub evidence: DeviceEvidenceSource,
 }
 
+impl RemoteSessionRequest {
+    #[must_use]
+    pub fn orientation(&self) -> Option<crate::remote::RemoteOrientation> {
+        let value = match self.adapter {
+            crate::remote::RemoteAdapterKind::Browserstack => &self.capabilities["bstack:options"]["deviceOrientation"],
+            crate::remote::RemoteAdapterKind::Webdriver => &self.capabilities["appium:orientation"],
+        };
+        value.as_str().and_then(crate::remote::RemoteOrientation::from_driver)
+    }
+}
+
 impl fmt::Debug for RemoteSessionRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -100,6 +111,10 @@ pub enum RemoteStartFailure {
     Unenforceable { released: RemoteReleaseOutcome },
     /// The session was allocated but the provider's evidence did not satisfy
     /// the target's device requirement, so it was released at once.
+    OrientationRejected {
+        code: &'static str,
+        released: RemoteReleaseOutcome,
+    },
     IdentityRejected {
         reason: String,
         released: RemoteReleaseOutcome,
@@ -120,6 +135,10 @@ impl fmt::Display for RemoteStartFailure {
             Self::Unenforceable { released } => write!(
                 formatter,
                 "remote session released at once because its lifetime watchdog could not start ({released})"
+            ),
+            Self::OrientationRejected { code, released } => write!(
+                formatter,
+                "remote start orientation rejected ({code}); session {released}"
             ),
             Self::IdentityRejected { reason, released } => write!(
                 formatter,
@@ -272,6 +291,11 @@ pub enum RemoteSessionEvent {
     /// The provider's evidence did not satisfy the target's device
     /// requirement, so the session was released at once. Terminal; the
     /// slot is free only when `released` says so.
+    OrientationRejected {
+        label: String,
+        code: &'static str,
+        released: RemoteReleaseOutcome,
+    },
     DeviceRejected {
         label: String,
         reason: String,
@@ -535,4 +559,4 @@ fn clone_header(header: &RemoteAuthorizationHeader) -> Result<RemoteAuthorizatio
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::webdriver) mod tests;

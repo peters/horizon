@@ -327,6 +327,21 @@ the initial expectations:
 - `live_view`: adaptive screenshot polling with bounded rate, payload and
   memory, repainting on frame or state change. Richer streaming is optional.
 
+## Remote orientation contract
+
+Configured and catalog targets can select portrait/landscape at create time and
+rotate through remote panel buttons, public MCP or the direct CLI command.
+Explicit starts require matching geometry on the first committed document before
+readiness; a pending, failed or unmeasurable first page is rejected with an exact
+release attempt. Runtime acknowledgement checks device/page/frame agreement,
+document identity and ownership. Physical viewport resize remains fixed.
+
+The [orientation feature document](remote-browser-orientation.md) defines provider
+mapping, optional defaults, safe support/status, startup and runtime failures,
+interface examples and module boundaries. The permanent
+[test procedure](../testing/remote-browser-orientation-smoke.md) covers BrowserStack
+physical devices, UI/MCP/CLI parity, regressions for future changes and cleanup.
+
 ## Coordinates and screenshots
 
 CSS pixels come from `visualViewport` and the element rect, never from

@@ -16,6 +16,8 @@ pub(super) struct Reply {
     /// Pause between the header block and the body, to stall a body read.
     pub(super) body_delay: Duration,
     pub(super) declared_length: Option<usize>,
+    pub(super) release: Option<mpsc::Receiver<()>>,
+    pub(super) following: Vec<Reply>,
 }
 
 impl Reply {
@@ -27,7 +29,52 @@ impl Reply {
             delay: Duration::ZERO,
             body_delay: Duration::ZERO,
             declared_length: None,
+            release: None,
+            following: Vec::new(),
         }
+    }
+
+    /// Establish a new provider-issued root and verify native staleness.
+    pub(super) fn native_document(root: &str) -> Self {
+        let url = serde_json::json!({"value":"https://example.test/"});
+        let mut first = Self::json(200, &url);
+        first.following = vec![
+            Self::json(
+                200,
+                &serde_json::json!({"value":{"element-6066-11e4-a52e-4f735466cecf":root}}),
+            ),
+            Self::json(200, &serde_json::json!({"value":"html"})),
+            Self::json(200, &url),
+        ];
+        first
+    }
+
+    /// Validate a retained reference without requiring a stable new alias.
+    pub(super) fn same_document() -> Self {
+        let url = serde_json::json!({"value":"https://example.test/"});
+        let mut first = Self::json(200, &url);
+        first.following = vec![
+            Self::json(200, &serde_json::json!({"value":"html"})),
+            Self::json(200, &url),
+        ];
+        first
+    }
+
+    pub(super) fn replaced_document(root: &str) -> Self {
+        let mut first = Self::native_document(root);
+        first.following.insert(
+            0,
+            Self::json(
+                404,
+                &serde_json::json!({"value":{"error":"stale element reference","message":"old document"}}),
+            ),
+        );
+        first
+    }
+
+    pub(super) fn blocked_until(mut self, release: mpsc::Receiver<()>) -> Self {
+        self.release = Some(release);
+        self
     }
 
     pub(super) fn delayed(mut self, delay: Duration) -> Self {
@@ -59,6 +106,10 @@ pub(super) struct Server {
 
 impl Server {
     pub(super) fn start(replies: Vec<Reply>) -> Self {
+        let replies = replies.into_iter().flat_map(|mut reply| {
+            let following = std::mem::take(&mut reply.following);
+            std::iter::once(reply).chain(following)
+        });
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -71,6 +122,9 @@ impl Server {
                     return;
                 };
                 recorder.lock().expect("lock").push(parse_request(&request, head_end));
+                if let Some(release) = reply.release {
+                    let _ = release.recv_timeout(Duration::from_secs(5));
+                }
                 thread::sleep(reply.delay);
                 let length = reply.declared_length.unwrap_or(reply.body.len());
                 let mut response = format!(

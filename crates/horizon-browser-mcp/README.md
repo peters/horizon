@@ -482,3 +482,35 @@ requests expire before dispatch after 10 seconds; the MCP wait is bounded to 15
 seconds. On `host_timeout`, list before retrying a mutation because it may have
 completed without a delivered result. Hosts predating this API return that
 bounded timeout and require a normal application upgrade to gain the capability.
+
+## Remote device orientation
+
+`browser_create` accepts optional `orientation: "portrait" | "landscape"`
+only with a remote `target`. This overrides that target's configured orientation
+for one session, including catalog targets. Configured targets use the normalized
+`orientation` field, rather than `capability_extensions`; migrate any nested
+`deviceOrientation` or `orientation` extension into this field. Omission keeps
+the provider default. BrowserStack maps the field to
+`bstack:options.deviceOrientation`, and generic Appium to `appium:orientation`.
+
+A remote panel reports `remote_orientation` when observed and
+`orientation_support: supported | unsupported | unverified`. A successful GET
+probe establishes endpoint support; unsupported commands are distinguished from
+transient failures. Applied `remote_orientation` also requires matching inner and
+visual viewport geometry in the committed document. Pending startup navigation
+stays unverified until commit. Later observed document replacements also clear
+applied orientation and schedule a fresh measurement; missing or contradictory
+page geometry does not make a default session unusable. `capabilities` includes `orientation` when supported.
+`browser_orientation` takes `panel_id`, `orientation` and optional
+`timeout_millis` (1–60000, default 15000). It completes after device, page and
+fresh-frame acknowledgement, returning requested/applied orientation and measured
+CSS viewport dimensions. Get fresh refs after completion. Local browsers and
+unsupported remote endpoints return `orientation_unsupported`.
+
+A start mismatch returns `remote_orientation_mismatch` before readiness and
+attempts release; uncertain release retains the allocation hold. A runtime
+timeout or transport failure may follow an applied rotation: inspect before
+retrying. Remote viewports still refuse arbitrary `browser_resize` dimensions
+with `remote_viewport_fixed`. The host and MCP executable must both include
+orientation support; all remote creates use a separate versioned queue, including configured orientation without a per-call override so an
+older host cannot silently ignore the override.

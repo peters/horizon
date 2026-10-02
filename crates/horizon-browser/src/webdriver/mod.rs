@@ -1,6 +1,7 @@
 mod actions;
 mod host;
 mod http;
+mod orientation;
 mod remote;
 mod remote_http;
 mod service;

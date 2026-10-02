@@ -618,6 +618,15 @@ Use one primary per view. Buttons are never wider than their content plus the
 12 x 6 padding unless a `min_size` gives them a consistent rhythm (toolbar 30
 high; creation dialog 120 x 40). Icon-only buttons need a tooltip.
 
+Remote browser orientation uses two 26 px device-outline buttons immediately
+after the recording controls, with a 6 px radius matching those media controls.
+The portrait icon is 10 x 16 px; landscape is 16 x 10 px. A short inset home
+indicator reinforces the orientation. Selected styling uses egui's existing
+accent selection; disabled controls use egui's disabled scope. Tooltips and
+accessible button names identify Portrait and Landscape. Status remains in words
+below the toolbar, and the toolbar wraps to preserve the address field on narrow
+panels.
+
 ### Segmented control / tabs
 
 The settings tab bar is the segmented pattern: a row with 4 px gaps of buttons

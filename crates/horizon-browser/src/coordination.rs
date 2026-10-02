@@ -23,6 +23,7 @@ pub struct CoordinationState {
     pub remote_device: Option<String>,
     /// Whether this remote session supports transferring host files.
     pub remote_file_upload: bool,
+    pub remote_orientation: Option<crate::remote::RemoteOrientationState>,
     pub file_chooser: crate::FileChooserStatus,
 }
 
@@ -39,6 +40,12 @@ pub struct CoordinationSignals {
     /// Validated, atomically claimed external actions. A host must not
     /// return the same request twice unless it intentionally wants a retry.
     pub actions: Vec<crate::AgentAction>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CoordinationOwnership {
+    pub owner: Option<String>,
+    pub handoff: Option<HandoffRequest>,
 }
 
 /// Optional product-owned coordination boundary for live browser sessions.
@@ -58,6 +65,17 @@ pub trait BrowserCoordination: Debug + Send + Sync + 'static {
     /// # Errors
     /// Returns an I/O error when host-owned signals cannot be read.
     fn signals(&self, panel_local_id: &str) -> std::io::Result<CoordinationSignals>;
+    /// Observe ownership without claiming actions or changing host-owned state.
+    /// Rotation acknowledgement requires this non-consuming observation.
+    ///
+    /// # Errors
+    /// Returns an error when current ownership cannot be observed.
+    fn observe_ownership(&self, _panel_local_id: &str) -> std::io::Result<CoordinationOwnership> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "non-consuming ownership observation is unavailable",
+        ))
+    }
     /// # Errors
     /// Returns an I/O error when the exact handoff cannot be updated.
     fn acknowledge_handoff(&self, panel_local_id: &str, request_id: &str) -> std::io::Result<bool>;

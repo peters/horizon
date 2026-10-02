@@ -1,4 +1,4 @@
-use std::io::{BufRead as _, BufReader, Write as _};
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -6,7 +6,8 @@ use horizon_browser_control::manifest::provider_usage::{ProviderUsageSummary, Us
 use horizon_browser_control::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
-const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 3;
+// Process startup and manifest persistence must leave time for the blocking action.
+const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 6;
 const STDIN_EXECUTION_TIMEOUT: Duration = Duration::from_secs(1);
 const DEADLINE_ROUNDING_SLACK_MILLIS: u128 = 1;
 
@@ -803,11 +804,12 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
         "method": "tools/list",
         "params": {}
     }));
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(28));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(29));
     assert!(tools.to_string().contains("cloud_companion_ensure_ready"));
     assert!(tools.to_string().contains("browser_network_watch"));
     assert!(tools.to_string().contains("browser_http_auth"));
     assert!(tools.to_string().contains("browser_resize"));
+    assert!(tools.to_string().contains("browser_orientation"));
     assert!(tools.to_string().contains("browser_close"));
     assert!(!tools.to_string().contains("browser_ws"));
     process.close();
@@ -964,7 +966,11 @@ fn run_deadline_after_action(
     }
     let mut child = command.spawn().expect("spawn deadline browser job");
     wait_for_manifest_action(&mut child, manifest_path);
-    wait_for_exit(&mut child, "deadline browser job");
+    wait_for_exit_with_timeout(
+        &mut child,
+        "deadline browser job",
+        Duration::from_secs(DEADLINE_TEST_TIMEOUT_SECONDS + 2),
+    );
     child.wait_with_output().expect("collect deadline browser job")
 }
 
@@ -1007,10 +1013,15 @@ fn wait_for_manifest_action(child: &mut Child, manifest_path: &std::path::Path) 
         {
             return;
         }
-        assert!(
-            child.try_wait().expect("poll browser job").is_none(),
-            "browser job exited before queueing its blocking action"
-        );
+        if let Some(status) = child.try_wait().expect("poll browser job") {
+            let mut stderr = String::new();
+            if let Some(stream) = child.stderr.as_mut() {
+                stream
+                    .read_to_string(&mut stderr)
+                    .expect("read exited browser job error");
+            }
+            panic!("browser job exited before queueing its blocking action ({status}): {stderr}");
+        }
         if Instant::now() >= deadline {
             child.kill().expect("kill stalled task-owned browser job");
             child.wait().expect("reap stalled task-owned browser job");
@@ -1057,7 +1068,11 @@ fn send_interrupt(pid: u32) {
 }
 
 fn wait_for_exit(child: &mut Child, description: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    wait_for_exit_with_timeout(child, description, Duration::from_secs(5));
+}
+
+fn wait_for_exit_with_timeout(child: &mut Child, description: &str, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
     loop {
         if child.try_wait().expect("poll task-owned browser job").is_some() {
             return;
@@ -1255,4 +1270,92 @@ fn cli_plan_discovers_provider_devices_without_a_browser_or_configured_target() 
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["steps"][0]["result"]["catalog"]["total"], 75);
     assert_eq!(report["steps"][0]["result"]["capacity_reserved"], false);
+}
+
+#[test]
+fn direct_orientation_executes_one_mcp_action_and_reports_measured_acknowledgement() {
+    use horizon_browser::{
+        AgentActionResult, BrowserControlAction, BrowserControlFailure, BrowserControlValue,
+        remote::{OrientationSupport, RemoteOrientation, RemoteOrientationState},
+    };
+    for succeeds in [true, false] {
+        let root = tempfile::tempdir().expect("isolated CLI home");
+        let panel_id = "orientation-panel";
+        let manifest_path = manifest::manifest_path_for_root(&root.path().join(".horizon"), panel_id);
+        manifest::write_at(
+            &manifest_path,
+            &BrowserManifest {
+                panel_local_id: panel_id.into(),
+                remote_target: Some("synthetic-tablet".into()),
+                remote_orientation: Some(RemoteOrientationState {
+                    support: OrientationSupport::Supported,
+                    applied: Some(RemoteOrientation::Portrait),
+                }),
+                ..BrowserManifest::default()
+            },
+        )
+        .expect("mock panel");
+        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+            .args(["orientation", panel_id, "landscape", "--timeout-millis", "5000"])
+            .env("HOME", root.path())
+            .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+            .env("RUST_LOG", "off")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("direct CLI");
+        wait_for_manifest_action(&mut child, &manifest_path);
+        let queued: BrowserManifest = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(queued.actions.len(), 1);
+        let action = &queued.actions[0];
+        assert!(matches!(
+            action.action,
+            BrowserControlAction::Orientation {
+                orientation: RemoteOrientation::Landscape,
+                timeout_millis: 5000
+            }
+        ));
+        let result = if succeeds {
+            AgentActionResult::completed(
+                action.action_id.clone(),
+                BrowserControlValue::Orientation {
+                    requested: RemoteOrientation::Landscape,
+                    applied: RemoteOrientation::Landscape,
+                    viewport: [900, 600],
+                },
+            )
+        } else {
+            AgentActionResult::failed(
+                action.action_id.clone(),
+                BrowserControlFailure::new("orientation_unsupported", "mock endpoint lacks rotation"),
+            )
+        };
+        let result_path =
+            manifest::action_result_path_for_root(&root.path().join(".horizon"), panel_id, &action.action_id);
+        std::fs::create_dir_all(result_path.parent().unwrap()).unwrap();
+        std::fs::write(&result_path, serde_json::to_vec(&result).unwrap()).unwrap();
+        wait_for_exit(&mut child, "direct orientation");
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(
+            output.status.success(),
+            succeeds,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["ok"], succeeds);
+        assert_eq!(report["steps"].as_array().unwrap().len(), 1);
+        assert_eq!(report["steps"][0]["tool"], "browser_orientation");
+        if succeeds {
+            assert_eq!(report["steps"][0]["result"]["applied"], "landscape");
+            assert_eq!(report["steps"][0]["result"]["viewport"], json!([900, 600]));
+        }
+        let durable_plan: Value = serde_json::from_slice(
+            &std::fs::read(std::path::Path::new(report["job_dir"].as_str().unwrap()).join("plan.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(durable_plan["steps"].as_array().unwrap().len(), 1);
+        assert_eq!(durable_plan["steps"][0]["tool"], "browser_orientation");
+    }
 }

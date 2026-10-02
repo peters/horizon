@@ -294,6 +294,11 @@ impl BrowserPanelState {
                     .unwrap_or("Awaiting provider confirmation")
             )
         });
+        if state.lost || state.error.is_some() {
+            self.reset_orientation_view();
+        } else {
+            self.apply_orientation_view(state.orientation);
+        }
         self.config.backend = state.backend;
         self.title = state.title;
         self.owner = state.owner;

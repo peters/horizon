@@ -45,6 +45,7 @@ fn local() -> RemoteBrowserConfig {
             browser_name: "safari".to_string(),
             platform_name: "iOS".to_string(),
             device: DeviceRequirement::default(),
+            orientation: None,
             capability_extensions: BTreeMap::new(),
         },
     );

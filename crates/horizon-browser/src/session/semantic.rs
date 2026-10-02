@@ -62,6 +62,10 @@ impl DriverState {
             };
         }
         let result = match &request.action {
+            BrowserControlAction::Orientation { .. } => Err(BrowserControlFailure::new(
+                "orientation_unsupported",
+                "local browsers use browser_resize instead of device orientation",
+            )),
             BrowserControlAction::Resize { .. } => Err(BrowserControlFailure::new(
                 "invalid_action_state",
                 "resize is observed from the driver loop",

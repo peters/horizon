@@ -190,9 +190,6 @@ fn find_element_id(post: &dyn Fn(&str, &Value) -> Result<Value, String>, selecto
     Ok(element.to_string())
 }
 
-const DOCUMENT_IDENTITY_EXPRESSION: &str =
-    "JSON.stringify([String(location.href), Number(globalThis.performance?.timeOrigin || 0)])";
-
 impl Driver {
     pub(super) fn execute_agent_action(
         &mut self,
@@ -222,6 +219,10 @@ impl Driver {
                 .map_err(|error| BrowserControlFailure::new(failure_code, error));
         }
         match &request.action {
+            BrowserControlAction::Orientation { .. } => Err(BrowserControlFailure::new(
+                "invalid_action_state",
+                "orientation is observed from the driver loop",
+            )),
             BrowserControlAction::Resize { .. } => Err(BrowserControlFailure::new(
                 "invalid_action_state",
                 "resize is observed from the driver loop",
@@ -263,7 +264,7 @@ impl Driver {
     }
 
     fn semantic_snapshot(&mut self, max_nodes: u32) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.evaluate_json(&scan_expression(None, max_nodes))?;
+        let value = self.guarded_semantic_scan(&scan_expression(None, max_nodes), None)?;
         let (generation, revision, nodes) = self.semantic.register_nodes(value)?;
         Ok(BrowserControlValue::Snapshot {
             snapshot: BrowserSnapshot {
@@ -281,7 +282,7 @@ impl Driver {
         selector: &str,
         max_results: u32,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.evaluate_json(&scan_expression(Some(selector), max_results))?;
+        let value = self.guarded_semantic_scan(&scan_expression(Some(selector), max_results), None)?;
         self.register_query(value)
     }
 
@@ -301,9 +302,8 @@ impl Driver {
         ),
         BrowserControlFailure,
     > {
-        let value = self.evaluate_json_within(&wait_scan_expression(selector, max_results), Some(timeout))?;
+        let value = self.guarded_semantic_scan(&wait_scan_expression(selector, max_results), Some(timeout))?;
         let peeked = self.semantic.peek_nodes(&value)?;
-        self.record_classic_document_identity(peeked.document_identity);
         Ok((self.semantic.generation(), peeked.nodes, peeked.summary, value))
     }
 
@@ -600,52 +600,6 @@ impl Driver {
             .cloned()
             .ok_or_else(|| BrowserControlFailure::new("invalid_result", "WebDriver returned no script value"))?;
         bounded_control_value(value)
-    }
-
-    /// Classic `WebDriver` has no navigation event stream, so a session that
-    /// runs on it alone tracks the document identity by script: Safari
-    /// locally, and every remote session whatever browser it drives.
-    fn tracks_classic_document_identity(&self) -> bool {
-        self.config.browser.backend == BackendKind::SafariWebDriver || self.host.is_remote()
-    }
-
-    pub(super) fn initialize_classic_document_identity(&mut self) {
-        if self.tracks_classic_document_identity() {
-            let _ = self.refresh_classic_document_identity_within(std::time::Duration::from_secs(1));
-        }
-    }
-
-    pub(super) fn refresh_classic_document_identity_within(
-        &mut self,
-        timeout: std::time::Duration,
-    ) -> Result<bool, BrowserControlFailure> {
-        if !self.tracks_classic_document_identity() {
-            return Ok(false);
-        }
-        let value = self.evaluate_json_within(DOCUMENT_IDENTITY_EXPRESSION, Some(timeout))?;
-        let identity = value
-            .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| BrowserControlFailure::new("invalid_result", "WebDriver returned no document identity"))?;
-        Ok(self.record_classic_document_identity(Some(identity)))
-    }
-
-    fn record_classic_document_identity(&mut self, identity: Option<String>) -> bool {
-        if !self.tracks_classic_document_identity() {
-            return false;
-        }
-        let Some(identity) = identity else {
-            return false;
-        };
-        let changed = self
-            .classic_document_identity
-            .replace(identity.clone())
-            .is_some_and(|previous| previous != identity);
-        if changed {
-            self.semantic.invalidate();
-            self.advance_generation();
-        }
-        changed
     }
 }
 
