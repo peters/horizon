@@ -680,4 +680,88 @@ mod tests {
             "the tail should hide the first line: {lines:?}"
         );
     }
+
+    #[test]
+    fn wrapped_rows_do_not_overlap_and_scrolling_reaches_both_ends() {
+        let mut runtime = Runtime::default();
+        for index in 0..6 {
+            runtime.push_log(format!("WRAP-{index:03} {}", "word ".repeat(6)));
+        }
+        let ctx = egui::Context::default();
+        let mut paint = |events: Vec<egui::Event>, time: f64| {
+            let output = ctx
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 500.0))),
+                        events,
+                        time: Some(time),
+                        ..egui::RawInput::default()
+                    },
+                    |ui| {
+                        ui.set_width(200.0);
+                        show(ui, 9, "body", &mut runtime, 140.0, None);
+                    },
+                )
+                .discard_textures();
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().contains("WRAP-") => {
+                        Some((text.galley.text().to_owned(), text.visual_bounding_rect()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let assert_separated = |rows: &[(String, egui::Rect)]| {
+            let mut rows = rows.to_vec();
+            rows.sort_by(|left, right| left.1.min.y.total_cmp(&right.1.min.y));
+            assert!(rows.len() >= 2, "adjacent wrapped rows were not both painted: {rows:?}");
+            assert!(
+                rows.iter().any(|(_, rect)| rect.height() > TEXT_SIZE * 1.8),
+                "a row should wrap onto more than one line: {rows:?}"
+            );
+            for pair in rows.windows(2) {
+                assert!(
+                    pair[0].1.max.y <= pair[1].1.min.y + 0.5,
+                    "wrapped rows overlap: {pair:?}"
+                );
+            }
+        };
+
+        let mut tail = Vec::new();
+        for frame in 0..6 {
+            tail = paint(Vec::new(), f64::from(frame) * 0.05);
+        }
+        assert_separated(&tail);
+        assert!(tail.iter().any(|(text, _)| text.contains("WRAP-005")), "{tail:?}");
+        assert!(tail.iter().all(|(text, _)| !text.contains("WRAP-000")), "{tail:?}");
+        let hover = tail
+            .iter()
+            .find(|(_, rect)| rect.min.y > 20.0)
+            .map_or(egui::pos2(100.0, 60.0), |(_, rect)| rect.center());
+
+        let mut top = Vec::new();
+        for frame in 0..24 {
+            top = paint(
+                vec![
+                    egui::Event::PointerMoved(hover),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, 400.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                1.0 + f64::from(frame) * 0.05,
+            );
+            if top.iter().any(|(text, _)| text.contains("WRAP-000")) {
+                break;
+            }
+        }
+        assert_separated(&top);
+        assert!(top.iter().any(|(text, _)| text.contains("WRAP-000")), "{top:?}");
+        assert!(top.iter().all(|(text, _)| !text.contains("WRAP-005")), "{top:?}");
+    }
 }
