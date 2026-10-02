@@ -24,6 +24,7 @@ fn request(socket: &mut TcpStream) -> String {
 
 #[test]
 fn stop_interrupts_submitted_pin_and_saved_verification_without_extra_exchanges() {
+    let _serial = lock(&crate::pairing::TEST_RECEIVER);
     for remembered in [false, true] {
         let home = tempfile::tempdir().expect("home");
         let store = PairingStore::new(home.path().join("pairings"), "synthetic".into(), "Synthetic TV".into());
@@ -33,7 +34,7 @@ fn stop_interrupts_submitted_pin_and_saved_verification_without_extra_exchanges(
             credentials.receiver_key = vec![3; 32];
             store.save(&credentials).expect("saved fixture");
         }
-        let listener = TcpListener::bind("127.0.0.97:0").expect("listener");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let address = listener.local_addr().expect("address");
         let (send, receive) = mpsc::channel();
         let server = thread::spawn(move || {

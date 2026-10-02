@@ -247,7 +247,13 @@ impl HorizonApp {
         })
     }
     fn consume_cast_images(&mut self, ctx: &Context) {
-        if self.cast_controls_visible(ctx) {
+        if self.cast_controls_visible(ctx)
+            || !self
+                .casting
+                .sessions
+                .iter()
+                .any(|session| matches!(session.worker.status(), CastStatus::Streaming { .. }))
+        {
             return;
         }
         for session in &self.casting.sessions {

@@ -1,4 +1,8 @@
-use crate::{Error, Result, cancellation::Cancellation, crypto};
+use crate::{
+    Error, Result,
+    cancellation::{Cancellation, Registration},
+    crypto,
+};
 use ring::aead;
 use std::{
     collections::BTreeMap,
@@ -12,7 +16,7 @@ const MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct Transport {
     socket: TcpStream,
-    cancellation: Option<Arc<Cancellation>>,
+    cancellation: Option<Registration>,
     security: Option<Security>,
     pending: Vec<u8>,
     offset: usize,
@@ -32,20 +36,19 @@ pub(crate) struct Response {
     pub(crate) body: Vec<u8>,
 }
 impl Transport {
+    #[cfg(test)]
     pub(crate) fn connect(address: SocketAddr) -> Result<Self> {
         Self::connect_cancellable(address, None)
     }
     pub(crate) fn connect_cancellable(address: SocketAddr, cancellation: Option<Arc<Cancellation>>) -> Result<Self> {
-        if let Some(cancel) = &cancellation {
-            cancel.check()?;
-        }
-        let socket = TcpStream::connect_timeout(&address, Duration::from_secs(5))?;
+        let socket = match &cancellation {
+            Some(cancel) => cancel.connect(address)?,
+            None => TcpStream::connect_timeout(&address, Duration::from_secs(5))?,
+        };
         socket.set_read_timeout(Some(Duration::from_secs(5)))?;
         socket.set_write_timeout(Some(Duration::from_secs(5)))?;
         socket.set_nodelay(true)?;
-        if let Some(cancel) = &cancellation {
-            cancel.register(&socket)?;
-        }
+        let cancellation = cancellation.map(|cancel| cancel.register(&socket)).transpose()?;
         Ok(Self {
             socket,
             cancellation,
@@ -58,9 +61,14 @@ impl Transport {
             message_timeout: MESSAGE_TIMEOUT,
         })
     }
+    pub(crate) fn cancellation(&self) -> Option<Arc<Cancellation>> {
+        self.cancellation
+            .as_ref()
+            .map(|registration| registration.cancellation().clone())
+    }
     pub(crate) fn complete_setup(&mut self) -> Result<()> {
         if let Some(cancel) = &self.cancellation {
-            cancel.release()?;
+            cancel.cancellation().release()?;
         }
         self.cancellation = None;
         Ok(())
@@ -100,7 +108,7 @@ impl Transport {
     }
     pub(crate) fn request(&mut self, method: &str, path: &str, headers: &str, body: &[u8]) -> Result<Response> {
         if let Some(cancel) = &self.cancellation {
-            cancel.check()?;
+            cancel.cancellation().check()?;
         }
         self.sequence = self
             .sequence
@@ -274,14 +282,6 @@ impl Transport {
             return Err(Error::Status(status));
         }
         Ok(response)
-    }
-}
-
-impl Drop for Transport {
-    fn drop(&mut self) {
-        if let Some(cancel) = &self.cancellation {
-            cancel.clear();
-        }
     }
 }
 

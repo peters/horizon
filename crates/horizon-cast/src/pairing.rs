@@ -218,6 +218,8 @@ impl PairedReceiver {
 }
 
 static RECEIVERS: Mutex<Vec<IpAddr>> = Mutex::new(Vec::new());
+#[cfg(test)]
+pub(crate) static TEST_RECEIVER: Mutex<()> = Mutex::new(());
 struct Reservation(IpAddr);
 impl Reservation {
     fn acquire(address: IpAddr) -> Result<Self> {
@@ -250,7 +252,8 @@ mod tests {
             sync::{atomic::AtomicBool, mpsc},
             time::{Duration, Instant},
         };
-        let listener = TcpListener::bind("127.0.0.96:0").expect("listener");
+        let _serial = crate::session::lock(&TEST_RECEIVER);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let address = listener.local_addr().expect("address");
         let cancel = Arc::new(Cancellation::new(Arc::new(AtomicBool::new(false))));
         let mut credentials = PairingCredentials::new().expect("identity");

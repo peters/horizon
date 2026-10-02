@@ -96,7 +96,6 @@ impl HorizonApp {
                         failure_notified: false,
                     });
                     self.casting.notice = None;
-                    self.casting.notification = None;
                 }
                 CastOperation::Pair { receiver_id, pin } => {
                     let session = self

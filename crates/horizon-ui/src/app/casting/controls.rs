@@ -71,8 +71,9 @@ impl HorizonApp {
                     }
                 }
                 let busy = current.is_some_and(|session| !matches!(session.state.as_str(), "stopped" | "failed"));
+                let start_ready = picker.receiver.is_some() && !busy && !self.casting.pairing_loading();
                 if ui
-                    .add_enabled(picker.receiver.is_some() && !busy, egui::Button::new("Start casting"))
+                    .add_enabled(start_ready, egui::Button::new("Start casting"))
                     .clicked()
                     && let Some(receiver) = &picker.receiver
                 {

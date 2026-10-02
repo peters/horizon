@@ -157,7 +157,10 @@ impl PairedReceiver {
         };
         clock.anchor(&response.headers)?;
         let event_port = port(setup, "eventPort")?;
-        let mut event_transport = Transport::connect(std::net::SocketAddr::new(self.address.ip(), event_port))?;
+        let mut event_transport = Transport::connect_cancellable(
+            std::net::SocketAddr::new(self.address.ip(), event_port),
+            self.transport.cancellation(),
+        )?;
         event_transport.encrypt(&self.shared, true)?;
         event_transport.wait_for_events()?;
         let events = event_transport.shutdown_handle()?;
@@ -211,7 +214,12 @@ impl PairedReceiver {
                 .find(|v| integer(v, "type").ok() == Some(110))
                 .ok_or(Error::Protocol("video stream missing"))?;
             let endpoint = std::net::SocketAddr::new(self.address.ip(), port(stream, "dataPort")?);
-            let video = TcpStream::connect_timeout(&endpoint, Duration::from_secs(5))?;
+            let cancellation = self.transport.cancellation();
+            let video = match &cancellation {
+                Some(cancel) => cancel.connect(endpoint)?,
+                None => TcpStream::connect_timeout(&endpoint, Duration::from_secs(5))?,
+            };
+            let _registration = cancellation.map(|cancel| cancel.register(&video)).transpose()?;
             video.set_nodelay(true)?;
             video.set_write_timeout(Some(Duration::from_secs(2)))?;
             self.transport.request("RECORD", "/stream", "", &[])?;
