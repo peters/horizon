@@ -279,6 +279,15 @@ trap roll_back EXIT
 mkdir -p /workspace/sessions
 exec 9>"/workspace/sessions/$id.lock"
 flock 9
+if "$prepare_only"; then
+    # The id is reserved for this command, so a real session never holds it. What an interrupted
+    # earlier run left (published state, no launch fence) is dropped; anything else is refused,
+    # so this can never attach to a session or touch one.
+    if running || [ -f "$session/launch-requested" ] || { [ -d "$session" ] && [ ! -f "$session/preparing" ]; }; then
+        echo 'This session id is in use; it is reserved for preparing the checkout.' >&2; exit 5
+    fi
+    rm -rf "$session"
+fi
 if [ -d "$session" ]; then
     bound || { echo 'Session binding mismatch' >&2; exit 3; }
     if ! running; then

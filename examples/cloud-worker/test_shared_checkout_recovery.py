@@ -196,6 +196,30 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.source_calls()), 1, 'the checkout was prepared once, not by the panel')
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
 
+    def test_prepare_only_drops_what_an_interrupted_run_left_behind(self):
+        f = self.fixture
+        self.release.touch()
+        stale = f.workspace / 'sessions' / 'prepare'
+        stale.mkdir(parents=True)
+        (stale / 'preparing').touch()
+        (stale / 'attach-owner').write_text('.preparing-gone\n')
+        prepared = self.prepare_only()
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        self.assertFalse(stale.exists(), 'a retry leaves no stale preparation state')
+        self.assertEqual(f.launches(), [])
+
+    def test_prepare_only_refuses_an_id_a_session_already_uses_and_never_attaches(self):
+        f = self.fixture
+        self.release.touch()
+        session = f.workspace / 'sessions' / 'prepare'
+        session.mkdir(parents=True)
+        (session / 'launch-requested').touch()
+        refused = self.prepare_only()
+        self.assertEqual(refused.returncode, 5, refused.stderr)
+        self.assertIn('reserved for preparing the checkout', refused.stderr)
+        self.assertTrue(session.exists(), 'a session that is in use is left untouched')
+        self.assertEqual(f.launches(), [])
+
     def test_prepare_only_reports_a_failed_preparation_like_an_attach(self):
         f = self.fixture
         (f.tools / 'horizon-worker-source').write_text('#!/bin/sh\necho source unavailable >&2\nexit 9\n')
