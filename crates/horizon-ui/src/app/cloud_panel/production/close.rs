@@ -17,6 +17,14 @@ impl State {
     }
 }
 
+#[cfg(test)]
+impl State {
+    /// Starts a close the way a confirmed dialog does, for rendering tests.
+    pub(in crate::app::cloud_panel::production) fn start_closing(&mut self, id: u32) {
+        self.deleting.insert(id);
+    }
+}
+
 impl super::Production {
     /// A confirmed close is deleting this cloud's resources.
     pub(in crate::app::cloud_panel) fn closing(&self, id: u32) -> bool {
