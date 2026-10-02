@@ -232,6 +232,10 @@ contracts. Unknown allocation/release outcomes must be reconciled using their
 returned safe reference through `browser_remote_allocations`; do not blindly
 create again. Audit preserves user/agent identity and redacts credentials and
 raw provider session identity.
+Creation lifecycle records preserve the effective starting orientation from the
+resolved launch plan, including configuration and per-create overrides. The
+same value appears in queued, dispatched, completed and failed records, even
+if configuration or device orientation changes while startup is pending.
 
 ## Maintenance boundaries
 

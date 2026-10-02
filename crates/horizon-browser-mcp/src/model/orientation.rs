@@ -89,7 +89,11 @@ impl OrientationOutput {
         else {
             return Err("browser returned an unexpected orientation result".into());
         };
-        if requested != applied || viewport.contains(&0) {
+        let axes_match = match applied {
+            RemoteOrientation::Portrait => viewport[0] < viewport[1],
+            RemoteOrientation::Landscape => viewport[0] > viewport[1],
+        };
+        if requested != applied || viewport.contains(&0) || !axes_match {
             return Err("browser returned an inconsistent orientation result".into());
         }
         Ok(Self {
@@ -106,6 +110,30 @@ impl OrientationOutput {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn results_require_measured_axes_matching_the_requested_orientation() {
+        for requested in [RemoteOrientation::Portrait, RemoteOrientation::Landscape] {
+            for applied in [RemoteOrientation::Portrait, RemoteOrientation::Landscape] {
+                for viewport in [[0, 0], [0, 800], [800, 0], [800, 800], [600, 800], [800, 600]] {
+                    let value = BrowserControlValue::Orientation {
+                        requested,
+                        applied,
+                        viewport,
+                    };
+                    let output = OrientationOutput::from_result("p".into(), "a".into(), &value);
+                    let valid = requested == applied
+                        && match requested {
+                            RemoteOrientation::Portrait => viewport == [600, 800],
+                            RemoteOrientation::Landscape => viewport == [800, 600],
+                        };
+                    assert_eq!(output.is_ok(), valid, "{value:?}");
+                    if let Ok(output) = output {
+                        assert_eq!(output.viewport, viewport);
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn invalid_requests_and_unmeasured_results_are_refused() {
         for orientation in ["portrait", "landscape"] {

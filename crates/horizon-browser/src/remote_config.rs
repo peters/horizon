@@ -178,4 +178,38 @@ mod tests {
             target.orientation = None;
         }
     }
+
+    #[test]
+    fn resolved_startup_orientation_survives_later_target_and_request_changes() {
+        for adapter in [RemoteAdapterKind::Webdriver, RemoteAdapterKind::Browserstack] {
+            let provider: RemoteProviderProfile =
+                serde_json::from_value(json!({"adapter":adapter,"endpoint":"https://grid.example.test"})).unwrap();
+            for configured in [
+                None,
+                Some(RemoteOrientation::Portrait),
+                Some(RemoteOrientation::Landscape),
+            ] {
+                for requested in [
+                    None,
+                    Some(RemoteOrientation::Portrait),
+                    Some(RemoteOrientation::Landscape),
+                ] {
+                    let mut target: RemoteTargetProfile = serde_json::from_value(json!({
+                        "provider":"grid","browser_name":"Safari","platform_name":"iOS","orientation":configured,
+                    }))
+                    .unwrap();
+                    let mut request =
+                        configured_remote_request(&provider, &target, "tablet", None, "synthetic".into()).unwrap();
+                    override_orientation(&mut request, requested);
+                    let startup_orientation = request.orientation();
+                    assert_eq!(startup_orientation, requested.or(configured));
+                    target.orientation = Some(RemoteOrientation::Landscape);
+                    override_orientation(&mut request, Some(RemoteOrientation::Portrait));
+                    assert_eq!(startup_orientation, requested.or(configured));
+                    assert_eq!(request.orientation(), Some(RemoteOrientation::Portrait));
+                    assert_eq!(target.orientation, Some(RemoteOrientation::Landscape));
+                }
+            }
+        }
+    }
 }

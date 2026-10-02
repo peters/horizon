@@ -568,6 +568,8 @@ fn take_at(root: &Path, request_id: &str, actor: &str) -> std::io::Result<Option
 }
 
 /// Append one creation lifecycle state to the new panel's audit journal.
+/// `effective_orientation` is the host's frozen launch-plan value, including
+/// configured orientation and any per-create override.
 ///
 /// # Errors
 /// Returns an error for an invalid actor or audit filesystem failure.
@@ -575,38 +577,48 @@ pub fn record_create_status(
     panel_local_id: &str,
     request: &BrowserCreateRequest,
     backend: BackendKind,
+    effective_orientation: Option<horizon_browser::remote::RemoteOrientation>,
     status: BrowserCreateAuditStatus,
 ) -> std::io::Result<()> {
     super::agent::validate_actor(&request.actor)?;
     super::audit::append(
-        &BrowserAuditEntry::new(
-            request.request_id.clone(),
-            BrowserAuditActor::Agent {
-                name: request.actor.clone(),
-            },
-            match status {
-                BrowserCreateAuditStatus::Queued => horizon_browser::BrowserAuditStatus::Queued,
-                BrowserCreateAuditStatus::Dispatched => horizon_browser::BrowserAuditStatus::Dispatched,
-                BrowserCreateAuditStatus::Completed => horizon_browser::BrowserAuditStatus::Completed,
-                BrowserCreateAuditStatus::Failed => horizon_browser::BrowserAuditStatus::Failed,
-            },
-            match request.target.as_deref() {
-                Some(target) => {
-                    let mut action = BrowserAuditAction::remote_session_created(
-                        backend,
-                        request.url.as_deref(),
-                        request.visible,
-                        target,
-                    );
-                    if let BrowserAuditAction::SessionCreated { orientation, .. } = &mut action {
-                        *orientation = request.orientation;
-                    }
-                    action
-                }
-                None => BrowserAuditAction::session_created(backend, request.url.as_deref(), request.visible),
-            },
-        ),
+        &create_audit_entry(request, backend, effective_orientation, status),
         panel_local_id,
+    )
+}
+
+fn create_audit_entry(
+    request: &BrowserCreateRequest,
+    backend: BackendKind,
+    effective_orientation: Option<horizon_browser::remote::RemoteOrientation>,
+    status: BrowserCreateAuditStatus,
+) -> BrowserAuditEntry {
+    BrowserAuditEntry::new(
+        request.request_id.clone(),
+        BrowserAuditActor::Agent {
+            name: request.actor.clone(),
+        },
+        match status {
+            BrowserCreateAuditStatus::Queued => horizon_browser::BrowserAuditStatus::Queued,
+            BrowserCreateAuditStatus::Dispatched => horizon_browser::BrowserAuditStatus::Dispatched,
+            BrowserCreateAuditStatus::Completed => horizon_browser::BrowserAuditStatus::Completed,
+            BrowserCreateAuditStatus::Failed => horizon_browser::BrowserAuditStatus::Failed,
+        },
+        match request.target.as_deref() {
+            Some(target) => {
+                let mut action = BrowserAuditAction::remote_session_created(
+                    backend,
+                    request.url.as_deref(),
+                    request.visible,
+                    target,
+                );
+                if let BrowserAuditAction::SessionCreated { orientation, .. } = &mut action {
+                    *orientation = effective_orientation;
+                }
+                action
+            }
+            None => BrowserAuditAction::session_created(backend, request.url.as_deref(), request.visible),
+        },
     )
 }
 
@@ -638,6 +650,36 @@ const fn default_visible() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn creation_lifecycle_records_the_resolved_orientation_without_changing_caller_intent() {
+        use super::{BrowserCreateAuditStatus, BrowserCreateRequest, create_audit_entry};
+        use horizon_browser::remote::RemoteOrientation::{Landscape, Portrait};
+        use horizon_browser::{BackendKind, BrowserAuditAction, BrowserAuditStatus};
+
+        for effective in [None, Some(Portrait), Some(Landscape)] {
+            for caller_override in [None, Some(Portrait), Some(Landscape)] {
+                let mut request = BrowserCreateRequest::for_tests("fixture");
+                request.target = Some("configured-tablet".into());
+                request.orientation = caller_override;
+                let snapshot = request.clone();
+                for (status, expected_status) in [
+                    (BrowserCreateAuditStatus::Queued, BrowserAuditStatus::Queued),
+                    (BrowserCreateAuditStatus::Dispatched, BrowserAuditStatus::Dispatched),
+                    (BrowserCreateAuditStatus::Completed, BrowserAuditStatus::Completed),
+                    (BrowserCreateAuditStatus::Failed, BrowserAuditStatus::Failed),
+                ] {
+                    let entry = create_audit_entry(&request, BackendKind::SafariWebDriver, effective, status);
+                    assert_eq!(entry.status, expected_status);
+                    let BrowserAuditAction::SessionCreated { orientation, .. } = entry.action else {
+                        panic!("creation did not produce a session audit");
+                    };
+                    assert_eq!(orientation, effective);
+                    assert_eq!(request, snapshot);
+                }
+            }
+        }
+    }
+
     #[test]
     fn orientation_is_queued_only_with_a_remote_target() {
         let temp = tempfile::tempdir().unwrap();
