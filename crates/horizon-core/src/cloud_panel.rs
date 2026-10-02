@@ -432,6 +432,35 @@ mod tests {
     }
 
     #[test]
+    fn collapsing_a_cloud_whose_panel_is_hidden_for_disposal_saves_it_expandable() {
+        let mut board = Board::new();
+        let workspace = board.create_workspace("cloud");
+        let panel = board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Editor,
+                    ..PanelOptions::default()
+                },
+                workspace,
+            )
+            .unwrap();
+        let local = board.workspace(workspace).unwrap().local_id.clone();
+        let mut group = CloudGroup::new(101, "cloud".into(), local, ".".into(), [0.0, 0.0]);
+        group.attach(&mut board, panel);
+        assert!(board.hide_for_disposal(panel));
+
+        group.set_collapsed(&mut board, true);
+        let member = board.panel(panel).unwrap().local_id.clone();
+        assert!(
+            group.hidden.contains(&member),
+            "the collapse owns it now, so it is saved and can expand"
+        );
+        assert!(!board.is_hidden_for_disposal(panel), "the disposal marker has ended");
+        group.set_collapsed(&mut board, false);
+        assert!(board.panel(panel).unwrap().visible, "expanding shows it");
+    }
+
+    #[test]
     fn a_closing_cloud_gives_its_body_to_the_disposal_even_with_panels() {
         let mut group = CloudGroup::new(101, "test".into(), "workspace".into(), ".".into(), [0.0, 0.0]);
         let legacy = serde_json::json!({

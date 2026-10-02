@@ -146,18 +146,33 @@ impl CloudGroup {
 
     fn set_collapsed_state(&mut self, board: &mut Board, collapsed: bool) {
         self.collapsed = collapsed;
+        // A member off screen only for its cloud's disposal was showing: it expands with the rest,
+        // and it is now hidden by the collapse, which saved state records.
+        let disposal_hidden: Vec<_> = board
+            .panels
+            .iter()
+            .filter(|panel| self.panels.contains(&panel.local_id) && board.is_hidden_for_disposal(panel.id))
+            .map(|panel| panel.id)
+            .collect();
         for panel in &mut board.panels {
             if !self.panels.contains(&panel.local_id) {
                 continue;
             }
-            if collapsed && panel.visible {
-                self.hidden.push(panel.local_id.clone());
+            if collapsed && (panel.visible || disposal_hidden.contains(&panel.id)) {
+                if !self.hidden.contains(&panel.local_id) {
+                    self.hidden.push(panel.local_id.clone());
+                }
                 panel.visible = false;
                 if board.focused == Some(panel.id) {
                     board.focused = None;
                 }
             } else if !collapsed && self.hidden.contains(&panel.local_id) {
                 panel.visible = true;
+            }
+        }
+        if collapsed {
+            for id in disposal_hidden {
+                board.end_disposal_hiding(id, false);
             }
         }
         if !collapsed {
