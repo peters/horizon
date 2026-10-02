@@ -185,6 +185,56 @@ fn a_stop_confirmation_is_the_only_thing_manage_shows_until_answered() {
     );
 }
 
+#[test]
+fn answering_the_stop_question_ends_it_so_a_failed_stop_shows_its_error() {
+    use egui::{Event, PointerButton, RawInput};
+    let ctx = egui::Context::default();
+    let mut runtime = ready_bound_runtime();
+    runtime.confirmation = Confirmation::Stop;
+    let mut frame = |events: Vec<Event>| {
+        let mut asked = None;
+        let output = ctx
+            .run_ui(
+                RawInput {
+                    events,
+                    ..RawInput::default()
+                },
+                |ui| asked = runtime_actions(ui, 1, &mut runtime),
+            )
+            .discard_textures();
+        let stop = output.shapes.iter().find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Stop worker" => {
+                Some(text.visual_bounding_rect().center())
+            }
+            _ => None,
+        });
+        (asked, stop)
+    };
+    let (_, stop) = frame(Vec::new());
+    let stop = stop.expect("the question offers Stop worker");
+    let press = |pressed| Event::PointerButton {
+        pos: stop,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let _ = frame(vec![Event::PointerMoved(stop)]);
+    let _ = frame(vec![press(true)]);
+    let (asked, _) = frame(vec![press(false)]);
+    assert_eq!(asked, Some(Action::Stop), "the click asks for the stop");
+    assert!(
+        runtime.confirmation == Confirmation::None,
+        "an answered question is over"
+    );
+    runtime.error = Some("Could not load cloud settings".into());
+    let after = action_texts(&ctx, &mut runtime);
+    assert!(
+        has(&after, "Could not load cloud settings"),
+        "the failure is shown: {after:?}"
+    );
+    assert!(after.iter().any(|text| text == "Stop worker…"), "Manage is back");
+}
+
 fn resumable_cloud(app: &mut crate::app::HorizonApp, with_panel: bool) {
     let workspace = app.board.create_workspace("Fixture");
     let mut group = CloudGroup::new(

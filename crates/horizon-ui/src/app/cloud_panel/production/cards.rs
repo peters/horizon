@@ -304,6 +304,8 @@ fn stop_confirmation_card(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Op
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if ui.add(danger_button("Stop worker")).clicked() {
+                    // Answered: a preflight that fails must show its error in Manage, not keep asking.
+                    runtime.confirmation = Confirmation::None;
                     action = Some(Action::Stop);
                 }
                 if ui.add(action_button("Keep running")).clicked() {
