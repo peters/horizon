@@ -160,6 +160,98 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
 
+    def refuse_flush(self, pattern, allow=0):
+        """A `sync` that fails with the real mount's message for paths matching `pattern`, until
+        lifted, after `allow` calls for them have succeeded."""
+        refusing = self.fixture.root / 'sync-fails'
+        refusing.touch()
+        calls = self.fixture.root / 'sync-calls'
+        stub = self.fixture.tools / 'sync'
+        stub.write_text(f"#!/bin/sh\nif [ -e '{refusing}' ]; then\n  case \"$2\" in {pattern})\n"
+                        f"    echo x >> '{calls}'\n    if [ \"$(wc -l < '{calls}')\" -gt {allow} ]; then\n"
+                        "      echo \"sync: error syncing '$2': Disk quota exceeded\" >&2; exit 1\n    fi;;\n  esac\nfi\n"
+                        f"exec {shutil.which('sync')} \"$@\"\n")
+        stub.chmod(0o700)
+        return refusing
+
+    def test_a_refused_flush_says_why_and_the_next_attach_resumes(self):
+        f = self.fixture
+        refusing = self.refuse_flush('*')
+        refused = self.start('one')
+        self.assertEqual(refused.returncode, 74, refused.stderr)
+        self.assertIn('Workspace storage did not accept a write', refused.stderr)
+        self.assertIn('Disk quota exceeded', refused.stderr)
+        self.assertIn('Attach again', refused.stderr)
+        self.assertEqual(f.launches(), [])
+        self.assert_no_session_state('one')
+        self.assertFalse((self.state / 'failed').exists(), 'a storage refusal is not a failed preparation')
+        refusing.unlink()
+        self.release.touch()
+        resumed = self.start('one')
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertIn('Resuming', resumed.stderr)
+        self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
+
+    def test_an_undurable_ready_marker_is_withdrawn_before_any_session_can_enter(self):
+        f = self.fixture
+        self.release.touch()
+        refusing = self.refuse_flush('*/ready')
+        refused = self.start('one')
+        self.assertEqual(refused.returncode, 74, refused.stderr)
+        self.assertIn('Workspace storage did not accept a write', refused.stderr)
+        self.assertFalse((self.state / 'ready').exists(), 'a marker that may vanish must not admit a session')
+        self.assertFalse((self.state / 'failed').exists())
+        self.assertEqual(f.launches(), [])
+        refusing.unlink()
+        resumed = self.start('one')
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertIn('Resuming', resumed.stderr)
+        self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
+
+    def test_a_refusal_in_the_detached_preparation_ends_the_attach_with_the_storage_status(self):
+        f = self.fixture
+        self.release.touch()
+        refusing = self.refuse_flush('*/checkout')
+        refused = self.start('one')
+        self.assertEqual(refused.returncode, 74, refused.stderr)
+        self.assertIn('Workspace storage did not accept a write', refused.stderr)
+        self.assertFalse((self.state / 'ready').exists())
+        self.assertFalse((self.state / 'failed').exists(), 'attaching again must resume, not need a retry command')
+        self.assertEqual(f.launches(), [])
+        refusing.unlink()
+        resumed = self.start('one')
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertIn('Resuming', resumed.stderr)
+        self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
+
+    def test_a_refusal_while_recording_a_failed_preparation_still_says_it_was_storage(self):
+        f = self.fixture
+        (f.tools / 'horizon-worker-source').write_text('#!/bin/sh\necho source unavailable >&2\nexit 9\n')
+        # The foreground flush after creating the state directory passes; recording the failure is refused.
+        refusing = self.refuse_flush('*/shared-checkout-state', allow=1)
+        refused = self.start('one')
+        self.assertEqual(refused.returncode, 74, refused.stderr)
+        self.assertIn('Workspace storage did not accept a write', refused.stderr)
+        self.assertFalse((self.state / 'failed').exists(), 'an unconfirmed failure record is withdrawn')
+        self.assertEqual(f.launches(), [])
+        refusing.unlink()
+
+    def test_a_refused_launch_fence_is_withdrawn_so_the_next_attach_is_not_an_uncertain_launch(self):
+        f = self.fixture
+        self.release.touch()
+        refusing = self.refuse_flush('*/launch-requested')
+        refused = self.start('one')
+        self.assertEqual(refused.returncode, 74, refused.stderr)
+        self.assertIn('launch-requested', refused.stderr)
+        self.assertEqual(f.launches(), [])
+        session = f.workspace / 'sessions' / 'one'
+        self.assertFalse((session / 'launch-requested').exists())
+        refusing.unlink()
+        retried = self.start('one')
+        self.assertEqual(retried.returncode, 0, retried.stderr)
+        self.assertNotIn('launch is uncertain', retried.stderr)
+        self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
+
     def test_a_fatal_git_status_128_is_a_recorded_failure(self):
         f = self.fixture
         (f.tools / 'horizon-worker-source').write_text('#!/bin/sh\necho fatal: bad object >&2\nexit 128\n')

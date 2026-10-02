@@ -367,6 +367,14 @@ started, so an uncertain launch is not replayed.
   attach resumes the preparation under the same lock. It completes worktrees
   already recorded for their own repository and refuses a path that holds another
   repository, without resetting files.
+- **Storage refused a write**, for example `Disk quota exceeded` while a durability
+  fence is saved on the attach path: the attach ends with exit 74 (`EX_IOERR`), the storage and inode
+  usage of `/workspace`, and no process started (a refusal in the detached preparation
+  ends the attach the same way). A launch fence that could not be made durable is
+  withdrawn, and nothing records a failed preparation, so attaching again resumes; if it
+  keeps happening, stop and resume the cloud. The workspace volume is kept. A `ready`
+  marker that cannot be made durable is withdrawn the same way, so no session enters a
+  checkout that a later attach would prepare again.
 - **Failed**, for example a source import error: the worker records
   `/workspace/shared-checkout-state/failed`, and every attach is refused with exit 3
   and a pointer to `prepare.log` until the cause is fixed. Then run
