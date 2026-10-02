@@ -1,4 +1,5 @@
 use super::*;
+use horizon_core::cloud_panel::CloudGroup;
 
 /// Texts drawn by one frame of the runtime actions.
 fn action_texts(ctx: &egui::Context, runtime: &mut super::super::super::Runtime) -> Vec<String> {
@@ -159,4 +160,197 @@ fn deletion_that_fails_before_its_first_step_keeps_its_steps() {
     );
     assert_eq!(status.track.current, Some(0));
     assert!(status.track.failed);
+}
+
+#[test]
+fn a_stop_confirmation_is_the_only_thing_manage_shows_until_answered() {
+    let ctx = egui::Context::default();
+    let mut runtime = ready_bound_runtime();
+    let idle = action_texts(&ctx, &mut runtime);
+    assert!(idle.iter().any(|text| text == "Stop worker…"));
+    assert!(!confirming_stop(&runtime));
+
+    runtime.confirmation = Confirmation::Stop;
+    assert!(confirming_stop(&runtime));
+    let asking = action_texts(&ctx, &mut runtime);
+    for shown in ["Stop this worker?", "Stop worker", "Keep running"] {
+        assert!(has(&asking, shown), "{shown} is asked: {asking:?}");
+    }
+    for hidden in ["Reconnect cloud", "Delete cloud resources", "Rebuild image"] {
+        assert!(!has(&asking, hidden), "{hidden} waits for the answer: {asking:?}");
+    }
+    assert!(
+        !asking.iter().any(|text| text == "Stop worker…"),
+        "the question replaces the button"
+    );
+}
+
+#[test]
+fn answering_the_stop_question_ends_it_so_a_failed_stop_shows_its_error() {
+    use egui::{Event, PointerButton, RawInput};
+    let ctx = egui::Context::default();
+    let mut runtime = ready_bound_runtime();
+    runtime.confirmation = Confirmation::Stop;
+    let mut frame = |events: Vec<Event>| {
+        let mut asked = None;
+        let output = ctx
+            .run_ui(
+                RawInput {
+                    events,
+                    ..RawInput::default()
+                },
+                |ui| asked = runtime_actions(ui, 1, &mut runtime),
+            )
+            .discard_textures();
+        let stop = output.shapes.iter().find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Stop worker" => {
+                Some(text.visual_bounding_rect().center())
+            }
+            _ => None,
+        });
+        (asked, stop)
+    };
+    let (_, stop) = frame(Vec::new());
+    let stop = stop.expect("the question offers Stop worker");
+    let press = |pressed| Event::PointerButton {
+        pos: stop,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let _ = frame(vec![Event::PointerMoved(stop)]);
+    let _ = frame(vec![press(true)]);
+    let (asked, _) = frame(vec![press(false)]);
+    assert_eq!(asked, Some(Action::Stop), "the click asks for the stop");
+    assert!(
+        runtime.confirmation == Confirmation::None,
+        "an answered question is over"
+    );
+    runtime.error = Some("Could not load cloud settings".into());
+    let after = action_texts(&ctx, &mut runtime);
+    assert!(
+        has(&after, "Could not load cloud settings"),
+        "the failure is shown: {after:?}"
+    );
+    assert!(after.iter().any(|text| text == "Stop worker…"), "Manage is back");
+}
+
+fn resumable_cloud(app: &mut crate::app::HorizonApp, with_panel: bool) {
+    let workspace = app.board.create_workspace("Fixture");
+    let mut group = CloudGroup::new(
+        7,
+        "Fixture".into(),
+        app.board.workspace(workspace).unwrap().local_id.clone(),
+        ".".into(),
+        [0.0, 0.0],
+    );
+    group.remote = Some(CloudLaunch {
+        deployment_started: true,
+        id: "fixture".into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile: ready_bound_runtime().state.unwrap().profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
+    });
+    if with_panel {
+        let panel = app
+            .board
+            .create_panel(
+                horizon_core::PanelOptions {
+                    kind: horizon_core::PanelKind::Editor,
+                    position: Some([14.0, 120.0]),
+                    size: Some([120.0, 100.0]),
+                    ..Default::default()
+                },
+                workspace,
+            )
+            .unwrap();
+        group.attach(&mut app.board, panel);
+    }
+    app.cloud_prototype.groups.0.push(group);
+    let runtime = super::super::super::Runtime {
+        drawer: Some(Tab::Manage),
+        ..Default::default()
+    };
+    app.cloud_prototype.production.runtimes.insert(7, runtime);
+}
+
+#[test]
+fn resuming_shows_the_steps_instead_of_manage() {
+    let ctx = egui::Context::default();
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    resumable_cloud(&mut app, true);
+    app.apply_card_action(7, Action::Resume, &ctx);
+    assert_eq!(
+        app.cloud_prototype.production.runtimes[&7].drawer,
+        Some(Tab::Overview),
+        "with panels the steps open in Overview"
+    );
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    resumable_cloud(&mut app, false);
+    app.apply_card_action(7, Action::Resume, &ctx);
+    assert_eq!(
+        app.cloud_prototype.production.runtimes[&7].drawer, None,
+        "without panels the steps are the body, so the drawer gives way"
+    );
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    resumable_cloud(&mut app, true);
+    app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, true);
+    app.apply_card_action(7, Action::Resume, &ctx);
+    assert!(
+        !app.cloud_prototype.groups.0[0].collapsed,
+        "a collapsed cloud opens to show it"
+    );
+    assert_eq!(app.cloud_prototype.production.runtimes[&7].drawer, Some(Tab::Overview));
+}
+
+#[test]
+fn a_pending_stop_replaces_the_whole_manage_drawer() {
+    use super::scrolling::{frame, label_pos, verbose_card};
+    let (_temp, ctx, mut app) = verbose_card();
+    let ready = ready_bound_runtime();
+    {
+        let runtime = app.cloud_prototype.production.runtimes.entry(901).or_default();
+        runtime.stage = ready.stage;
+        runtime.state = ready.state;
+        runtime.drawer = Some(Tab::Manage);
+    }
+    let mut output = frame(&ctx, &mut app, 0.0, Pos2::ZERO, 0.0);
+    for step in 1..4 {
+        output = frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
+    }
+    for shown in ["Workspace", "Full screen", "Stop worker…"] {
+        assert!(
+            label_pos(&output, shown).is_some(),
+            "{shown} is in the usual Manage tab"
+        );
+    }
+
+    app.cloud_prototype
+        .production
+        .runtimes
+        .entry(901)
+        .or_default()
+        .confirmation = Confirmation::Stop;
+    for step in 4..8 {
+        output = frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
+    }
+    for shown in ["Stop worker", "Keep running"] {
+        assert!(label_pos(&output, shown).is_some(), "{shown} is asked");
+    }
+    for hidden in [
+        "Workspace",
+        "Default",
+        "Full screen",
+        "Cloud",
+        "Stop worker…",
+        "Reconnect cloud",
+    ] {
+        assert!(
+            label_pos(&output, hidden).is_none(),
+            "{hidden} waits behind the question in the real Manage drawer"
+        );
+    }
 }

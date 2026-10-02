@@ -232,7 +232,27 @@ impl HorizonApp {
         }
     }
 
+    /// Resuming is watched, not managed: the steps are in view instead of the Manage tab.
+    /// A cloud without panels shows them as its body; one with panels shows them in Overview,
+    /// and a collapsed one opens first so either is visible.
+    fn show_steps_for_resume(&mut self, id: u32) {
+        let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
+            return;
+        };
+        if self.cloud_prototype.groups.0[index].collapsed {
+            self.cloud_prototype.groups.0[index].set_collapsed(&mut self.board, false);
+            self.save_cloud_prototype();
+        }
+        let steps_in_body = body_visible(&self.cloud_prototype.groups.0[index]);
+        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+            runtime.drawer = (!steps_in_body).then_some(Tab::Overview);
+        }
+    }
+
     pub(super) fn apply_card_action(&mut self, id: u32, action: Action, ctx: &egui::Context) {
+        if action == Action::Resume {
+            self.show_steps_for_resume(id);
+        }
         match action {
             Action::Deploy => self.start_production_deployment(id, ctx),
             Action::Desktop => self.cloud_add_panel(ctx, id, horizon_core::PanelKind::Device, None),

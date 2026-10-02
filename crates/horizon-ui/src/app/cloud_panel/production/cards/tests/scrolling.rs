@@ -3,11 +3,11 @@ use crate::app::test_support::test_app_with_startup;
 use egui::{Context, Event, Modifiers, MouseWheelUnit, RawInput, TouchPhase};
 use horizon_core::{CanvasViewState, RuntimeState, StartupDecision, cloud_panel::CloudGroup};
 
-fn frame(ctx: &Context, app: &mut HorizonApp, time: f64, position: Pos2, delta: f32) -> egui::FullOutput {
+pub(super) fn frame(ctx: &Context, app: &mut HorizonApp, time: f64, position: Pos2, delta: f32) -> egui::FullOutput {
     phased_frame(ctx, app, time, position, delta, TouchPhase::Move)
 }
 
-fn phased_frame(
+pub(super) fn phased_frame(
     ctx: &Context,
     app: &mut HorizonApp,
     time: f64,
@@ -61,7 +61,7 @@ fn the_empty_cloud_body_stays_put_without_panning_at_scaled_zoom() {
     }
 }
 
-fn label_pos(output: &egui::FullOutput, label: &str) -> Option<Pos2> {
+pub(super) fn label_pos(output: &egui::FullOutput, label: &str) -> Option<Pos2> {
     label_center(output, label).and_then(|(center, clip)| clip.contains(center).then_some(center))
 }
 
@@ -104,7 +104,7 @@ fn moving_a_scroll_contact_between_cloud_bodies_does_not_move_either_cloud() {
     assert_eq!(app.canvas_view.pan_offset.map(f32::to_bits), pan.map(f32::to_bits));
 }
 
-fn verbose_card() -> (tempfile::TempDir, Context, HorizonApp) {
+pub(super) fn verbose_card() -> (tempfile::TempDir, Context, HorizonApp) {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
