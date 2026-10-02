@@ -259,6 +259,18 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual([p.name for p in f.workspace.glob('.horizon-write-probe.*')], [])
         self.assertTrue((self.state / 'ready').exists())
 
+    def test_a_volume_that_refuses_even_the_probe_file_gets_the_storage_message(self):
+        f = self.fixture
+        self.release.touch()
+        stub = f.tools / 'mktemp'
+        stub.write_text('#!/bin/sh\necho "mktemp: failed to create file via template: Disk quota exceeded" >&2\nexit 1\n')
+        stub.chmod(0o700)
+        refused = self.prepare_only()
+        self.assertEqual(refused.returncode, 74, refused.stderr)
+        self.assertIn('Workspace storage did not accept a write', refused.stderr)
+        self.assertIn('Disk quota exceeded', refused.stderr)
+        self.assertFalse(self.state.exists())
+
     def test_an_interrupted_probe_leaves_no_file_behind(self):
         f = self.fixture
         self.release.touch()

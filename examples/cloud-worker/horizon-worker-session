@@ -294,7 +294,7 @@ if "$prepare_only"; then
     # that refuses writes fails this step with its reason instead of a panel later.
     # A fresh file of its own (mktemp never reuses or follows an existing name), removed by the exit
     # trap whatever ends the run, so an interrupted probe leaves nothing behind.
-    probe="$(mktemp /workspace/.horizon-write-probe.XXXXXX)"
+    probe="$(mktemp /workspace/.horizon-write-probe.XXXXXX)" || flush_failed /workspace/.horizon-write-probe
     { dd if=/dev/zero of="$probe" bs=1M count=64 conv=fsync status=none && sync -f "$probe"; } \
         || flush_failed "$probe"
     rm -f "$probe"
