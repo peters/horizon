@@ -54,3 +54,33 @@ for agent in ['codex', 'grok']:
     pending.write_text(result.stdout)
     pending.chmod(0o600)
     pending.replace(config)
+
+# One checkout serves every panel: tell agents where it is and that extra worktrees are theirs to make.
+GUIDE_BEGIN = '<!-- horizon-cloud-worker:begin -->'
+GUIDE_END = '<!-- horizon-cloud-worker:end -->'
+GUIDE = """## Horizon cloud worker
+
+This repository is checked out once, at /workspace/checkout, when the cloud is deployed. Work there and
+do not clone it again. For another branch or an isolated task, create a worktree from that checkout
+yourself, for example `git -C /workspace/checkout worktree add /workspace/worktrees/<name> -b <branch>`,
+and remove it with `git worktree remove` when you are done. Other panels share the same checkout, so
+leave changes you did not make alone."""
+
+
+def write_guide(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = path.read_text() if path.exists() else ''
+    if GUIDE_BEGIN in original and GUIDE_END in original:
+        before, rest = original.split(GUIDE_BEGIN, 1)
+        original = before.rstrip('\n') + '\n' + rest.split(GUIDE_END, 1)[1].lstrip('\n')
+    kept = original.strip('\n')
+    text = (kept + '\n\n' if kept else '') + GUIDE_BEGIN + '\n' + GUIDE + '\n' + GUIDE_END + '\n'
+    pending = path.with_name(path.name + '.new')
+    pending.write_text(text)
+    pending.chmod(0o600)
+    pending.replace(path)
+
+
+for agent, name in (('claude', 'CLAUDE.md'), ('codex', 'AGENTS.md')):
+    if agent in capabilities.get('agents', []):
+        write_guide(home / ('.' + agent) / name)

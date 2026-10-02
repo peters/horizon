@@ -383,6 +383,20 @@ started, so an uncertain launch is not replayed.
   and attach again. The command clears the record while holding the checkout lock,
   so it never races a running preparation, and it resets no files.
 
+A deployment can prepare the checkout before any panel exists:
+`horizon-worker-session --shared --prepare-only SESSION AGENT REVISION` runs the same
+preparation under the same lock and then ends, with no session bound and no process
+started, so the first panel finds the checkout ready and a storage or source problem
+fails the deployment instead of that panel. Repeating it is a no-op once the checkout is
+ready. A worker advertises it as `horizon-prepare-checkout-contract=1`; older images lack
+it and prepare the checkout at their first attach as before.
+
+The worker also gives each allowed agent a short note in its own home (`~/.claude/CLAUDE.md`,
+`~/.codex/AGENTS.md`), between `horizon-cloud-worker` markers that a later configure replaces
+and that leave the agent's own notes alone: the repository is checked out once at
+`/workspace/checkout`, and extra branches or isolated tasks get a worktree the agent creates
+itself with `git worktree add` under `/workspace/worktrees/`.
+
 The worker advertises `horizon-shared-checkout-contract=1`. Rebuild an older worker
 image before adding these panels. Previously recorded sessions retain their own
 paths and branches; reconnect does not migrate or reset them. Per-session process

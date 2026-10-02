@@ -174,6 +174,37 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         stub.chmod(0o700)
         return refusing
 
+    def prepare_only(self):
+        return subprocess.run(['bash', str(self.fixture.script), '--shared', '--prepare-only', 'prepare', 'shell',
+                               self.fixture.revision], env=self.fixture.env, capture_output=True, text=True,
+                              timeout=BOUND)
+
+    def test_prepare_only_prepares_the_checkout_once_and_binds_no_session(self):
+        f = self.fixture
+        self.release.touch()
+        prepared = self.prepare_only()
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        self.assertTrue((self.state / 'ready').exists())
+        self.assertEqual(f.git('-C', self.checkout, 'rev-parse', 'HEAD'), f.revision)
+        self.assertEqual(f.launches(), [], 'no process starts')
+        self.assert_no_session_state('prepare')
+        self.assertFalse((f.workspace / 'sessions' / 'prepare').exists())
+        again = self.prepare_only()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        first_panel = self.start('one')
+        self.assertEqual(first_panel.returncode, 0, first_panel.stderr)
+        self.assertEqual(len(self.source_calls()), 1, 'the checkout was prepared once, not by the panel')
+        self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
+
+    def test_prepare_only_reports_a_failed_preparation_like_an_attach(self):
+        f = self.fixture
+        (f.tools / 'horizon-worker-source').write_text('#!/bin/sh\necho source unavailable >&2\nexit 9\n')
+        failed = self.prepare_only()
+        self.assertEqual(failed.returncode, 3)
+        self.assertIn('source unavailable', failed.stderr)
+        self.assert_no_session_state('prepare')
+        self.assertEqual(f.launches(), [])
+
     def test_a_refused_flush_says_why_and_the_next_attach_resumes(self):
         f = self.fixture
         refusing = self.refuse_flush('*')
