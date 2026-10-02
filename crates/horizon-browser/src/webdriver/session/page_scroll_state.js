@@ -35,38 +35,36 @@ const boundary = (node, x, hidden, shown) => {
     }
     return shown;
 };
-// First visible probe walking from `from` toward `to` in `step`s, refined to a pixel.
-const firstVisible = (node, x, from, to, step) => {
-    if (owns(node, x, from)) return from;
-    for (let hidden = from; ; hidden += step) {
-        const reached = step > 0 ? hidden + step >= to : hidden + step <= to;
-        const probe = reached ? to : hidden + step;
-        if (owns(node, x, probe)) return boundary(node, x, hidden, probe);
-        if (reached) return null;
-    }
-};
-// Vertical span of the gutter that ancestors, the viewport and overlays leave
-// visible, or null when an ancestor or the root rotates, scales or zooms it.
-const visibleSpan = (node, x, top, bottom) => {
+// Vertical runs of the gutter that ancestors, the viewport and overlays leave
+// visible; none when an ancestor or the root rotates, scales or zooms it.
+const visibleSpans = (node, x, top, bottom) => {
     for (let clip = parentOf(node); clip && clip !== root; clip = parentOf(clip)) {
         const style = getComputedStyle(clip);
-        if (!translatedOnly(style)) return null;
+        if (!translatedOnly(style)) return [];
         if (style.overflowY === 'visible') continue;
         const box = clip.getBoundingClientRect();
         top = Math.max(top, box.top + clip.clientTop);
         bottom = Math.min(bottom, box.top + clip.clientTop + clip.clientHeight);
     }
     for (const outer of new Set([root, document.documentElement])) {
-        if (!translatedOnly(getComputedStyle(outer))) return null;
+        if (!translatedOnly(getComputedStyle(outer))) return [];
     }
-    top = Math.max(top, 0);
-    bottom = Math.min(bottom, height);
-    if (bottom - top < 2) return null;
-    const step = (bottom - top) / 8;
-    const first = firstVisible(node, x, top + 0.5, bottom - 0.5, step);
-    if (first === null) return null;
-    const last = firstVisible(node, x, bottom - 0.5, first, -step);
-    return last === null || last - first < 1 ? null : [first - 0.5, last + 0.5];
+    top = Math.max(top, 0) + 0.5;
+    bottom = Math.min(bottom, height) - 0.5;
+    if (bottom - top < 1) return [];
+    const probes = 16, step = (bottom - top) / probes, spans = [];
+    let start = null;
+    for (let index = 0; index <= probes; index++) {
+        const y = top + index * step;
+        const shown = owns(node, x, y);
+        if (shown && start === null) start = index === 0 ? y : boundary(node, x, y - step, y);
+        if (!shown && start !== null) {
+            spans.push([start, boundary(node, x, y, y - step)]);
+            start = null;
+        }
+    }
+    if (start !== null) spans.push([start, bottom]);
+    return spans.filter(([first, last]) => last - first >= 1).map(([first, last]) => [first - 0.5, last + 0.5]);
 };
 for (let row = 0; row < grid && nested.length < limit; row++) {
     for (let column = 0; column < grid && nested.length < limit; column++) {
@@ -87,18 +85,21 @@ for (let row = 0; row < grid && nested.length < limit; row++) {
             if (!(gutter >= 1)) continue;
             const trackX = style.direction === 'rtl' ? rect.left + borderLeft : rect.right - borderRight - gutter;
             const trackY = rect.top + node.clientTop;
-            const span = visibleSpan(node, trackX + gutter / 2, trackY, trackY + node.clientHeight);
-            if (!span) continue;
-            nested.push({
-                track_x: trackX,
-                track_y: trackY,
-                track_width: gutter,
-                track_height: node.clientHeight,
-                visible_top: span[0],
-                visible_bottom: span[1],
-                scroll_top: node.scrollTop,
-                scroll_height: node.scrollHeight,
-            });
+            // Reverse-flow scrollers report 0 at the bottom and negative offsets above it.
+            const reversed = style.display.includes('flex') && style.flexDirection === 'column-reverse';
+            const scrollTop = reversed ? node.scrollHeight - node.clientHeight + node.scrollTop : node.scrollTop;
+            for (const [visibleTop, visibleBottom] of visibleSpans(node, trackX + gutter / 2, trackY, trackY + node.clientHeight)) {
+                nested.push({
+                    track_x: trackX,
+                    track_y: trackY,
+                    track_width: gutter,
+                    track_height: node.clientHeight,
+                    visible_top: visibleTop,
+                    visible_bottom: visibleBottom,
+                    scroll_top: scrollTop,
+                    scroll_height: node.scrollHeight,
+                });
+            }
         }
     }
 }

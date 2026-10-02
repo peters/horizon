@@ -1,7 +1,8 @@
 //! Live checks that nested scroll containers stay usable in browser panels:
 //! Chromium drags its native scrollbar, and Firefox publishes the host
-//! indicator its screenshots omit (clipped by overlays, skipped when rotated
-//! or zoomed) while its native gutter still drags.
+//! indicator its screenshots omit (split around overlays, normalized for
+//! reverse flow, skipped when rotated or zoomed) while its native gutter still
+//! drags.
 //! Ignored in CI; run with `cargo test -p horizon-browser --test scrollbar_live -- --ignored`.
 
 #![cfg(unix)]
@@ -23,13 +24,16 @@ header{height:56px}main{position:absolute;top:56px;bottom:0;left:0;right:0;overf
 div{height:60px}
 #footer{position:fixed;left:0;right:0;top:560px;height:40px;background:#333}
 #rotated{position:absolute;left:0;top:200px;width:200px;height:150px;overflow:auto;transform:rotate(180deg)}
-#zoomed{position:absolute;left:0;top:200px;width:100px;height:60px;overflow:auto;zoom:2}
-</style><header></header><main id="list"><section id="footer"></section></main>
-<section id="rotated"></section><section id="zoomed"></section>
+#toolbar{position:fixed;left:0;right:0;top:300px;height:30px;background:#555}
+#zoomed{position:absolute;left:250px;top:200px;width:100px;height:60px;overflow:auto;zoom:2}
+#reverse{position:absolute;left:0;top:400px;width:150px;height:100px;overflow:auto;display:flex;flex-direction:column-reverse}
+#reverse div{flex:none;height:20px}
+</style><header></header><main id="list"><section id="footer"></section><section id="toolbar"></section></main>
+<section id="rotated"></section><section id="zoomed"></section><section id="reverse"></section>
 <script>
 const list = document.getElementById('list');
 for (let i = 0; i < 120; i++) list.appendChild(document.createElement('div')).textContent = 'Item ' + i;
-for (const id of ['rotated', 'zoomed']) {
+for (const id of ['rotated', 'zoomed', 'reverse']) {
     for (let i = 0; i < 20; i++) document.getElementById(id).appendChild(document.createElement('div')).textContent = id + ' ' + i;
 }
 const header = document.querySelector('header');
@@ -66,20 +70,38 @@ fn chromium_drags_a_nested_native_scrollbar() {
 fn firefox_publishes_and_drags_a_nested_scrollbar() {
     let (session, frame_slot, _profiles) = start(BackendKind::FirefoxBidi);
     wait_until_loaded(&session, &frame_slot);
-    let bar = wait_for_bar(&session, &frame_slot, |_| true).expect("nested scrollbar should be published");
-    assert!(bar.track_width >= 1.0);
-    assert!((bar.track_x + bar.track_width - 800.0).abs() < 1.0, "{bar:?}");
-    assert!((bar.track_y - 56.0).abs() < 1.0, "{bar:?}");
-    assert!((bar.track_height - 544.0).abs() < 1.0, "{bar:?}");
-    assert!((bar.visible_top - bar.track_y).abs() < 1.0, "{bar:?}");
+    let main = |bar: &NestedScrollbar| (bar.track_x + bar.track_width - 800.0).abs() < 1.0;
+    let bar = wait_for_bar(&session, &frame_slot, main).expect("nested scrollbar should be published");
+    let bars = frame_slot.nested_scrollbars();
+    let mut runs: Vec<_> = bars.iter().filter(|bar| main(bar)).collect();
+    runs.sort_by(|left, right| left.visible_top.total_cmp(&right.visible_top));
+    assert_eq!(runs.len(), 2, "a fixed toolbar across the gutter splits it: {bars:?}");
+    for run in &runs {
+        assert!(run.track_width >= 1.0);
+        assert!((run.track_y - 56.0).abs() < 1.0, "{run:?}");
+        assert!((run.track_height - 544.0).abs() < 1.0, "{run:?}");
+        assert!(run.scroll_top.abs() < f32::EPSILON);
+    }
+    assert!((runs[0].visible_top - 56.0).abs() < 1.0, "{runs:?}");
+    assert!((runs[0].visible_bottom - 300.0).abs() < 1.5, "{runs:?}");
+    assert!((runs[1].visible_top - 330.0).abs() < 1.5, "{runs:?}");
     // A fixed descendant covers the bottom of the gutter.
-    assert!((bar.visible_bottom - 560.0).abs() < 1.5, "{bar:?}");
-    assert_eq!(
-        frame_slot.nested_scrollbars().len(),
-        1,
-        "rotated and zoomed containers must not be published"
+    assert!((runs[1].visible_bottom - 560.0).abs() < 1.5, "{runs:?}");
+
+    let reverse: Vec<_> = bars
+        .iter()
+        .filter(|bar| (bar.track_x + bar.track_width - 150.0).abs() < 1.0)
+        .collect();
+    assert_eq!(reverse.len(), 1, "{bars:?}");
+    assert!(
+        (reverse[0].scroll_top - (reverse[0].scroll_height - reverse[0].track_height)).abs() < 1.0,
+        "a column-reverse scroller starts at its bottom: {reverse:?}"
     );
-    assert!(bar.scroll_top.abs() < f32::EPSILON);
+    assert_eq!(
+        bars.len(),
+        3,
+        "rotated and zoomed containers must not be published: {bars:?}"
+    );
 
     let Some((thumb_top, thumb_height)) = bar.thumb() else {
         panic!("published bar should be scrollable");
@@ -87,7 +109,7 @@ fn firefox_publishes_and_drags_a_nested_scrollbar() {
     let x = f64::from(bar.track_x + bar.track_width / 2.0);
     let y = f64::from(bar.track_y + thumb_top + thumb_height / 2.0);
     drag(&session, x, y, y + 300.0);
-    let scrolled = wait_for_bar(&session, &frame_slot, |bar| bar.scroll_top > 1_000.0);
+    let scrolled = wait_for_bar(&session, &frame_slot, |bar| main(bar) && bar.scroll_top > 1_000.0);
     assert!(
         scrolled.is_some(),
         "dragging the gutter should scroll and refresh the indicator"

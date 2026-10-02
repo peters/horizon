@@ -187,7 +187,12 @@ fn paint_scrollbar(painter: &egui::Painter, track: Rect, thumb: Rect) {
         CornerRadius::ZERO,
         crate::theme::alpha(crate::theme::PANEL_BG_ALT(), 230),
     );
-    painter.rect_filled(thumb.shrink(2.0), CornerRadius::same(4), crate::theme::ACCENT());
+    painter.rect_filled(thumb_fill(thumb), CornerRadius::same(4), crate::theme::ACCENT());
+}
+
+/// Inset the thumb inside its track without collapsing it in narrow gutters.
+fn thumb_fill(thumb: Rect) -> Rect {
+    thumb.shrink2(vec2((thumb.width() / 4.0).min(2.0), (thumb.height() / 4.0).min(2.0)))
 }
 
 /// Map a nested container's CSS-pixel track, thumb and visible span onto the
@@ -290,7 +295,7 @@ mod tests {
     use egui::{Rect, pos2};
     use horizon_core::browser::{NestedScrollbar, PageScrollState};
 
-    use super::{nested_scrollbar_geometry, vertical_scrollbar_geometry};
+    use super::{nested_scrollbar_geometry, thumb_fill, vertical_scrollbar_geometry};
 
     fn scroll_state(scroll_y: f32) -> PageScrollState {
         PageScrollState {
@@ -358,5 +363,16 @@ mod tests {
             panic!("scrolled container should keep overlay geometry");
         };
         assert!((bottom.bottom() - track.bottom()).abs() < 0.01);
+    }
+
+    #[test]
+    fn thumb_fill_keeps_a_visible_thumb_in_narrow_gutters() {
+        let wide = thumb_fill(Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(12.0, 80.0)));
+        assert!((wide.width() - 8.0).abs() < 0.01);
+        assert!((wide.height() - 76.0).abs() < 0.01);
+
+        let narrow = thumb_fill(Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(3.0, 6.0)));
+        assert!((narrow.width() - 1.5).abs() < 0.01);
+        assert!((narrow.height() - 3.0).abs() < 0.01);
     }
 }
