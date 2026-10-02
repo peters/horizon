@@ -49,6 +49,47 @@ if [ "$agent" = claude ]; then
         export ANTHROPIC_WORKSPACE_ID
         export ANTHROPIC_CUSTOM_HEADERS="anthropic-workspace-id: $ANTHROPIC_WORKSPACE_ID"
     fi
+    # A worker is a disposable container, so its person has already chosen to run Claude Code
+    # here: skip the first-run dialogs (theme, the API key, trusting the folder) rather than
+    # leave every new panel asking them. Failing to seed only brings the dialogs back.
+    python3 - <<'PY' || true
+import fcntl, json, os
+home = os.environ['HOME']
+path = home + '/.claude.json'
+with open(path + '.horizon-lock', 'a') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        with open(path) as saved:
+            config = json.load(saved)
+    except (FileNotFoundError, ValueError):
+        config = {}
+    if not isinstance(config, dict):
+        config = {}
+    config['hasCompletedOnboarding'] = True
+    config.setdefault('theme', 'dark')
+    projects = config.get('projects')
+    if not isinstance(projects, dict):
+        projects = config['projects'] = {}
+    # Trust covers the folders below it: the checkout, the worktrees agents add, siblings.
+    entry = projects.get('/workspace')
+    if not isinstance(entry, dict):
+        entry = projects['/workspace'] = {}
+    entry['hasTrustDialogAccepted'] = True
+    entry['hasCompletedProjectOnboarding'] = True
+    key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
+    if key:
+        answers = config.get('customApiKeyResponses')
+        if not isinstance(answers, dict):
+            answers = config['customApiKeyResponses'] = {}
+        tail = key[-20:]
+        answers['approved'] = list(dict.fromkeys([*answers.get('approved', []), tail]))
+        answers['rejected'] = [other for other in answers.get('rejected', []) if other != tail]
+    pending = path + '.horizon-new'
+    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, 'w') as out:
+        json.dump(config, out)
+    os.replace(pending, path)
+PY
     # The first launch assigns an id. Resume only after Claude has written that
     # session's transcript; an id with no transcript must be started again.
     session_file="/workspace/sessions/$id/agent-session"

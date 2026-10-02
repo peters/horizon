@@ -434,6 +434,17 @@ the [GPU lock](#gpu-lock) for GPU builds, or point a repository's build output a
 `HORIZON_SESSION_DIR`. Legacy sessions keep their build output in their own worktree
 under `/workspace/agents/SESSION`.
 
+## Claude Code first-run dialogs
+
+A worker is a disposable container whose person has already chosen to run Claude Code in
+it, so a new Claude session does not stop at the first-run dialogs. Before it launches,
+`horizon-worker-run` records in `~/.claude.json` (under the worker's `HOME`) that onboarding
+is complete, a theme (`dark`, unless one is already saved), trust for `/workspace` (which
+covers the checkout, the worktrees an agent adds below it and sibling checkouts), and, when
+an Anthropic API key is bound, approval of that key by its last 20 characters, never the
+whole key. Existing entries are kept, the update is atomic and locked, and a failure to
+write it only brings the dialogs back. Subscription workers keep Claude's own sign-in.
+
 ## Session environment from image layers
 
 Sessions start over SSH, so they do not inherit a recipe's `ENV` instructions: a toolkit
