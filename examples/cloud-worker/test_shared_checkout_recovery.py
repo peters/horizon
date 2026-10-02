@@ -197,10 +197,27 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         # The marker exists, only its durability was refused: the checkout is complete, and a
         # lost marker would only make a later attach verify it again.
         self.assertEqual(attached.returncode, 0, attached.stderr)
-        self.assertIn('Workspace storage did not accept a write', attached.stderr)
+        self.assertIn('Workspace storage did not confirm the ready marker', attached.stderr)
+        self.assertNotIn('Attach again', attached.stderr, 'the attach is not stopped, so it must not say it was')
         self.assertFalse((self.state / 'failed').exists(), 'no failed preparation is recorded for storage')
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
         refusing.unlink()
+
+    def test_a_refusal_in_the_detached_preparation_ends_the_attach_with_the_storage_status(self):
+        f = self.fixture
+        self.release.touch()
+        refusing = self.refuse_flush('*/checkout')
+        refused = self.start('one')
+        self.assertEqual(refused.returncode, 6, refused.stderr)
+        self.assertIn('Workspace storage did not accept a write', refused.stderr)
+        self.assertFalse((self.state / 'ready').exists())
+        self.assertFalse((self.state / 'failed').exists(), 'attaching again must resume, not need a retry command')
+        self.assertEqual(f.launches(), [])
+        refusing.unlink()
+        resumed = self.start('one')
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertIn('Resuming', resumed.stderr)
+        self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
 
     def test_a_refused_launch_fence_is_withdrawn_so_the_next_attach_is_not_an_uncertain_launch(self):
         f = self.fixture
