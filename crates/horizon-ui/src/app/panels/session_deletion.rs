@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use egui::{Button, RichText};
@@ -15,6 +16,7 @@ pub(super) struct SessionDeletionUi {
     confirmation: Option<Arc<[AgentSessionBinding]>>,
     pub(super) message: Option<String>,
     details: Arc<[String]>,
+    cleanup_details: Arc<[String]>,
 }
 
 impl SessionDeletionUi {
@@ -30,7 +32,11 @@ impl SessionDeletionUi {
             ui.label(RichText::new(message).size(12.0).color(theme::FG_SOFT()));
             if !self.details.is_empty() {
                 ui.collapsing(
-                    format!("{} conversations could not be deleted", self.details.len()),
+                    format!(
+                        "Could not delete {} conversation{}",
+                        self.details.len(),
+                        if self.details.len() == 1 { "" } else { "s" }
+                    ),
                     |ui| {
                         egui::ScrollArea::vertical()
                             .id_salt("deletion_failures")
@@ -42,6 +48,18 @@ impl SessionDeletionUi {
                             });
                     },
                 );
+            }
+            if !self.cleanup_details.is_empty() {
+                ui.collapsing("Files awaiting cleanup", |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("deletion_cleanup")
+                        .max_height(96.0)
+                        .show(ui, |ui| {
+                            for detail in self.cleanup_details.iter() {
+                                ui.label(detail);
+                            }
+                        });
+                });
             }
             ui.add_space(6.0);
         }
@@ -166,6 +184,23 @@ impl SessionDeletionUi {
             if report.deleted.len() == 1 { "" } else { "s" },
             report.failures.len()
         ));
+        if !report.cleanup_warnings.is_empty()
+            && let Some(message) = &mut self.message
+        {
+            let _ = write!(message, " {} awaiting file cleanup.", report.cleanup_warnings.len());
+        }
+        self.cleanup_details = report
+            .cleanup_warnings
+            .iter()
+            .map(|warning| {
+                format!(
+                    "{}: {} — {}",
+                    warning.session_id,
+                    warning.directory.display(),
+                    warning.message
+                )
+            })
+            .collect();
         self.details = report
             .failures
             .iter()
@@ -330,6 +365,7 @@ impl HorizonApp {
                     progress.done += 1;
                     progress.report.deleted.extend(report.deleted);
                     progress.report.failures.extend(report.failures);
+                    progress.report.cleanup_warnings.extend(report.cleanup_warnings);
                     drop(progress);
                     repaint.request_repaint();
                 }
@@ -429,6 +465,30 @@ mod tests {
             ui.finish(&report);
             assert_eq!(ui.message.as_deref(), Some("Deleted 0 conversations. 11 failed."));
         }
+    }
+
+    #[test]
+    fn cleanup_warning_is_retained_separately_from_failed_deletions() {
+        let ctx = egui::Context::default();
+        let report = AgentSessionDeletionReport {
+            deleted: vec![AgentSessionKey::new(horizon_core::PanelKind::Claude, "synthetic-id")],
+            cleanup_warnings: vec![horizon_core::AgentSessionDeletionCleanupWarning {
+                session_id: "synthetic-id".into(),
+                directory: "/sample/recovery-bundle".into(),
+                message: "Synthetic cleanup error".into(),
+            }],
+            ..Default::default()
+        };
+        ctx.data_mut(|data| data.insert_temp(receipt_id(), Arc::new(report)));
+        let restored = SessionDeletionUi::restored(&ctx);
+        assert_eq!(
+            restored.message.as_deref(),
+            Some("Deleted 1 conversation. 0 failed. 1 awaiting file cleanup.")
+        );
+        assert!(restored.details.is_empty());
+        assert_eq!(restored.cleanup_details.len(), 1);
+        assert!(restored.cleanup_details[0].contains("/sample/recovery-bundle"));
+        assert!(restored.cleanup_details[0].contains("Synthetic cleanup error"));
     }
 
     #[test]

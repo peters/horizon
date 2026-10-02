@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -75,12 +75,25 @@ impl AgentSessionDeletionReservation {
 pub struct AgentSessionDeletionReport {
     pub deleted: Vec<AgentSessionKey>,
     pub failures: Vec<AgentSessionDeletionFailure>,
+    pub cleanup_warnings: Vec<AgentSessionDeletionCleanupWarning>,
 }
 
 #[derive(Clone, Debug)]
 pub struct AgentSessionDeletionFailure {
     pub session_id: String,
     pub message: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentSessionDeletionCleanupWarning {
+    pub session_id: String,
+    pub directory: PathBuf,
+    pub message: String,
+}
+
+enum DeletionOutcome {
+    Removed,
+    CleanupPending { directory: PathBuf, message: String },
 }
 
 impl AgentSessionCatalog {
@@ -124,7 +137,7 @@ impl AgentSessionCatalog {
         &self,
         sessions: &[AgentSessionBinding],
         protected: &HashSet<AgentSessionKey>,
-        delete: impl Fn(&AgentSessionBinding) -> Result<()>,
+        delete: impl Fn(&AgentSessionBinding) -> Result<DeletionOutcome>,
     ) -> AgentSessionDeletionReport {
         let mut report = AgentSessionDeletionReport::default();
         let mut seen = HashSet::new();
@@ -137,7 +150,16 @@ impl AgentSessionCatalog {
                 .validate_deletion(session, protected)
                 .and_then(|()| delete(session));
             match result {
-                Ok(()) => report.deleted.push(key),
+                Ok(outcome) => {
+                    report.deleted.push(key);
+                    if let DeletionOutcome::CleanupPending { directory, message } = outcome {
+                        report.cleanup_warnings.push(AgentSessionDeletionCleanupWarning {
+                            session_id: session.session_id.clone(),
+                            directory,
+                            message,
+                        });
+                    }
+                }
                 Err(error) => report.failures.push(AgentSessionDeletionFailure {
                     session_id: session.session_id.clone(),
                     message: error.to_string(),
@@ -173,9 +195,9 @@ impl AgentSessionCatalog {
     }
 }
 
-fn delete_provider_session(session: &AgentSessionBinding) -> Result<()> {
+fn delete_provider_session(session: &AgentSessionBinding) -> Result<DeletionOutcome> {
     match session.kind {
-        PanelKind::Codex => delete_codex_session(&session.session_id),
+        PanelKind::Codex => delete_codex_session(&session.session_id).map(|()| DeletionOutcome::Removed),
         PanelKind::Claude => {
             if live_claude_session_ids().contains(&session.session_id) {
                 return Err(Error::State("This conversation is open in Claude Code".into()));
@@ -226,7 +248,7 @@ fn delete_codex_session(session_id: &str) -> Result<()> {
     }
 }
 
-fn delete_claude_transcript(projects: &Path, session: &AgentSessionBinding) -> Result<()> {
+fn delete_claude_transcript(projects: &Path, session: &AgentSessionBinding) -> Result<DeletionOutcome> {
     if uuid::Uuid::parse_str(&session.session_id).is_err() {
         return Err(Error::State("Invalid Claude conversation ID".into()));
     }
@@ -262,14 +284,67 @@ fn delete_claude_transcript(projects: &Path, session: &AgentSessionBinding) -> R
     }
     let path = &matches[0];
     let children = path.with_extension("");
-    match std::fs::symlink_metadata(&children) {
-        Ok(metadata) if metadata.file_type().is_dir() => std::fs::remove_dir_all(children)?,
+    let artifacts = match std::fs::symlink_metadata(&children) {
+        Ok(metadata) if metadata.file_type().is_dir() => Some(children.as_path()),
         Ok(_) => return Err(Error::State("Refusing to delete linked conversation artifacts".into())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
+    };
+    stage_claude_deletion(
+        &root,
+        path,
+        artifacts,
+        |from, to| std::fs::rename(from, to),
+        |path| std::fs::remove_dir_all(path),
+    )
+}
+
+fn stage_claude_deletion(
+    projects: &Path,
+    transcript: &Path,
+    artifacts: Option<&Path>,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    purge: impl Fn(&Path) -> std::io::Result<()>,
+) -> Result<DeletionOutcome> {
+    let parent = projects
+        .parent()
+        .ok_or_else(|| Error::State("Claude storage has no staging parent".into()))?;
+    // Discovery recursively scans projects, so retained bundles must live outside it.
+    let staging = tempfile::Builder::new().prefix(".horizon-delete-").tempdir_in(parent)?;
+    let manifest = serde_json::to_vec(&serde_json::json!({
+        "transcript": transcript,
+        "artifacts": artifacts,
+    }))
+    .map_err(std::io::Error::other)?;
+    std::fs::write(staging.path().join("original-paths.json"), manifest)?;
+    // A retained bundle must never be purged by a temporary-directory destructor.
+    let directory = staging.keep();
+    let saved_transcript = directory.join("transcript.deleted");
+    if let Err(error) = rename(transcript, &saved_transcript) {
+        let _ = std::fs::remove_dir_all(&directory);
+        return Err(error.into());
     }
-    std::fs::remove_file(path)?;
-    Ok(())
+    if let Some(artifacts) = artifacts
+        && let Err(error) = rename(artifacts, &directory.join("artifacts"))
+    {
+        if let Err(rollback) = rename(&saved_transcript, transcript) {
+            return Err(Error::State(format!(
+                "Conversation staging failed: {error}; restoring the transcript failed: {rollback}. Saved transcript retained at {} (original paths recorded in original-paths.json)",
+                directory.display()
+            )));
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+        return Err(error.into());
+    }
+    // Both artifacts are now outside discovery. A purge error is cleanup pending,
+    // never a failed deletion that would advertise partially removed history.
+    match purge(&directory) {
+        Ok(()) => Ok(DeletionOutcome::Removed),
+        Err(error) => Ok(DeletionOutcome::CleanupPending {
+            directory,
+            message: error.to_string(),
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -310,7 +385,7 @@ mod tests {
             if session.session_id == c.session_id {
                 Err(Error::State("synthetic provider failure".into()))
             } else {
-                Ok(())
+                Ok(DeletionOutcome::Removed)
             }
         });
         assert_eq!(report.deleted.len(), 1);
@@ -409,6 +484,150 @@ mod tests {
         drop(guard);
         assert!(!saved_session_deletion_pending(session.kind, &session.session_id));
         assert_eq!(catalog.recent_for(session.kind, session.cwd.as_deref()).len(), 1);
+    }
+
+    fn staged_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let temp = tempfile::tempdir().expect("private store");
+        let projects = temp.path().join("projects");
+        let transcript = projects.join("project/conversation.jsonl");
+        let artifacts = transcript.with_extension("");
+        std::fs::create_dir_all(&artifacts).expect("artifacts");
+        std::fs::write(&transcript, "original transcript").expect("transcript");
+        std::fs::write(artifacts.join("agent.jsonl"), "original child").expect("child");
+        (temp, projects, transcript, artifacts)
+    }
+
+    #[test]
+    fn staging_failures_preserve_all_original_history() {
+        for failed_move in [1, 2] {
+            let (temp, projects, transcript, artifacts) = staged_fixture();
+            let moves = std::cell::Cell::new(0);
+            let result = stage_claude_deletion(
+                &projects,
+                &transcript,
+                Some(&artifacts),
+                |from, to| {
+                    moves.set(moves.get() + 1);
+                    if moves.get() == failed_move {
+                        Err(std::io::Error::other("injected staging failure"))
+                    } else {
+                        std::fs::rename(from, to)
+                    }
+                },
+                |_| panic!("staging failure must not purge history"),
+            );
+            assert!(result.is_err());
+            assert_eq!(
+                std::fs::read_to_string(&transcript).expect("transcript"),
+                "original transcript"
+            );
+            assert_eq!(
+                std::fs::read_to_string(artifacts.join("agent.jsonl")).expect("child"),
+                "original child"
+            );
+            assert_eq!(std::fs::read_dir(temp.path()).expect("store").count(), 1);
+        }
+    }
+
+    #[test]
+    fn rollback_failure_retains_recoverable_history_outside_discovery() {
+        let (temp, projects, transcript, artifacts) = staged_fixture();
+        let moves = std::cell::Cell::new(0);
+        let error = stage_claude_deletion(
+            &projects,
+            &transcript,
+            Some(&artifacts),
+            |from, to| {
+                moves.set(moves.get() + 1);
+                if moves.get() > 1 {
+                    Err(std::io::Error::other("injected move failure"))
+                } else {
+                    std::fs::rename(from, to)
+                }
+            },
+            |_| panic!("rollback failure must not purge history"),
+        )
+        .err()
+        .expect("failure");
+        let bundle = std::fs::read_dir(temp.path())
+            .expect("store")
+            .map(|entry| entry.expect("entry").path())
+            .find(|path| path != &projects)
+            .expect("recovery bundle");
+        assert!(error.to_string().contains(&bundle.display().to_string()));
+        assert_eq!(
+            std::fs::read_to_string(bundle.join("transcript.deleted")).expect("transcript"),
+            "original transcript"
+        );
+        assert_eq!(
+            std::fs::read_to_string(artifacts.join("agent.jsonl")).expect("child"),
+            "original child"
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(bundle.join("original-paths.json")).expect("manifest"))
+                .expect("paths");
+        assert_eq!(manifest["transcript"], transcript.to_string_lossy().as_ref());
+        assert!(!bundle.starts_with(&projects));
+    }
+
+    #[test]
+    fn partial_purge_is_cleanup_pending_and_never_a_resumable_failure() {
+        let (temp, projects, transcript, artifacts) = staged_fixture();
+        let session = binding(6);
+        let mut catalog = AgentSessionCatalog {
+            sessions: vec![AgentSessionRecord {
+                kind: session.kind,
+                session_id: session.session_id.clone(),
+                cwd: session.cwd.clone(),
+                label: None,
+                updated_at: 0,
+                interactive: true,
+            }],
+        };
+        let report = catalog.delete_with(std::slice::from_ref(&session), &HashSet::new(), |_| {
+            stage_claude_deletion(
+                &projects,
+                &transcript,
+                Some(&artifacts),
+                |from, to| std::fs::rename(from, to),
+                |directory| {
+                    std::fs::remove_file(directory.join("artifacts/agent.jsonl"))?;
+                    Err(std::io::Error::other("injected partial purge"))
+                },
+            )
+        });
+        assert_eq!(report.deleted.len(), 1);
+        assert!(report.failures.is_empty());
+        assert_eq!(report.cleanup_warnings.len(), 1);
+        let warning = &report.cleanup_warnings[0];
+        assert_eq!(warning.session_id, session.session_id);
+        assert!(warning.message.contains("injected partial purge"));
+        assert!(warning.directory.starts_with(temp.path()));
+        assert!(!warning.directory.starts_with(&projects));
+        assert!(!transcript.exists());
+        assert!(!artifacts.exists());
+        assert!(warning.directory.join("transcript.deleted").exists());
+        catalog.remove_deleted_sessions(&report);
+        assert!(catalog.recent_for(session.kind, session.cwd.as_deref()).is_empty());
+    }
+
+    #[test]
+    fn successful_staged_purge_removes_every_selected_byte() {
+        let (temp, projects, transcript, artifacts) = staged_fixture();
+        assert!(matches!(
+            stage_claude_deletion(
+                &projects,
+                &transcript,
+                Some(&artifacts),
+                |from, to| std::fs::rename(from, to),
+                |path| std::fs::remove_dir_all(path)
+            )
+            .expect("delete"),
+            DeletionOutcome::Removed
+        ));
+        assert!(!transcript.exists());
+        assert!(!artifacts.exists());
+        assert_eq!(std::fs::read_dir(temp.path()).expect("store").count(), 1);
     }
 
     #[cfg(unix)]

@@ -16,8 +16,8 @@ use super::{AgentSessionBinding, PanelKind, RuntimeState, normalize_cwd};
 mod codex;
 mod deletion;
 pub use deletion::{
-    AgentSessionDeletionFailure, AgentSessionDeletionReport, AgentSessionDeletionReservation,
-    reserve_saved_session_deletions, saved_session_deletion_pending,
+    AgentSessionDeletionCleanupWarning, AgentSessionDeletionFailure, AgentSessionDeletionReport,
+    AgentSessionDeletionReservation, reserve_saved_session_deletions, saved_session_deletion_pending,
 };
 mod grok;
 
