@@ -94,6 +94,9 @@ pub struct Board {
     /// process is still retiring. Global shutdown must inherit these signals
     /// instead of losing them in detached cleanup work.
     retired_browser_shutdown_signals: Vec<crate::browser::BrowserShutdownSignal>,
+    /// OSC 52 copies terminal panels made, collected every output pass so a
+    /// copy is never tied to the pass that observed activity.
+    pending_clipboard_writes: Vec<crate::terminal::ClipboardWrite>,
     /// Providers of remote sessions whose teardown finished without the
     /// driver establishing the release. Each entry keeps counting against
     /// that provider's `max_sessions` for the rest of this run, independent
@@ -131,6 +134,7 @@ impl Board {
             workspaces: Vec::new(),
             cloud_groups: crate::runtime_state::cloud_groups::CloudGroupsState::default(),
             retired_browser_shutdown_signals: Vec::new(),
+            pending_clipboard_writes: Vec::new(),
             unreleased_remote_holds: Vec::new(),
             retained_empty_workspaces: HashSet::new(),
             focused: None,
@@ -453,12 +457,22 @@ impl Board {
             output.activity.browser |= panel.visible && panel_output.activity.browser;
             output.cwd_changed |= panel_output.cwd_changed;
             output.persisted_state_changed |= panel_output.persisted_state_changed;
+            if let Some(terminal) = panel.terminal_mut() {
+                self.pending_clipboard_writes.extend(terminal.take_clipboard_writes());
+            }
         }
         // Working-status refresh runs every frame: the per-panel check is a
         // cheap timestamp compare for quiet panels, and the screen scan only
         // happens for panels with new output this frame.
         self.update_agent_status();
         output
+    }
+
+    /// OSC 52 copy requests terminal panels made since the last call. Output
+    /// passes collect them from every terminal, so a copy made before the first
+    /// pass, or drained by a caller that ignores it, is still returned here.
+    pub fn take_terminal_clipboard_writes(&mut self) -> Vec<crate::terminal::ClipboardWrite> {
+        std::mem::take(&mut self.pending_clipboard_writes)
     }
 
     /// Whether a browser removed from the board still has process or profile

@@ -62,4 +62,5 @@ rusqlite.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb.workspace = true
+wl-clipboard-rs.workspace = true
 horizon-wayland.workspace = true

@@ -59,17 +59,15 @@ pub(crate) fn handle_terminal_keyboard_input(
             egui::Event::Copy => {
                 if event.is_plain_ctrl_c_copy_command() {
                     terminal.write_input(&[3]);
-                } else if let Some(text) = terminal.selection_to_string() {
+                } else if let Some(text) = take_selection_for_copy(terminal) {
                     primary_selection.copy(&text);
                     ui.ctx().copy_text(text);
-                    terminal.clear_selection();
                 }
             }
             egui::Event::Cut => {
-                if let Some(text) = terminal.selection_to_string() {
+                if let Some(text) = take_selection_for_copy(terminal) {
                     primary_selection.copy(&text);
                     ui.ctx().copy_text(text);
-                    terminal.clear_selection();
                 }
                 terminal.write_input(&[24]);
             }
@@ -91,6 +89,14 @@ pub(crate) fn handle_terminal_keyboard_input(
     store_terminal_ime_enabled(ui, terminal_id, ime_enabled);
 
     false
+}
+
+/// The selected text, ending the selection either way so a drag over blank
+/// cells does not stay highlighted after a copy that had nothing to copy.
+fn take_selection_for_copy(terminal: &horizon_core::Terminal) -> Option<String> {
+    let text = terminal.selection_to_string();
+    terminal.clear_selection();
+    text
 }
 
 fn disconnected_ssh_reconnect_requested(
@@ -348,7 +354,9 @@ impl InputEmission {
 
 #[cfg(test)]
 mod tests {
-    use super::{KeyboardInputForwarder, TerminalInputEvent, disconnected_ssh_reconnect_requested};
+    use super::{
+        KeyboardInputForwarder, TerminalInputEvent, disconnected_ssh_reconnect_requested, take_selection_for_copy,
+    };
     use alacritty_terminal::term::TermMode;
     use egui::{Event, Key, Modifiers};
     use horizon_core::{PanelKind, SshConnectionStatus};
@@ -676,6 +684,59 @@ mod tests {
             let bytes = forward_bytes(&[event], TermMode::NONE);
             assert_eq!(bytes, expected, "{name}");
         }
+    }
+
+    fn snapshot_panel(replay: &str) -> (horizon_core::Panel, tempfile::TempDir) {
+        let transcript_root = tempfile::tempdir().expect("transcript tempdir");
+        std::fs::write(transcript_root.path().join("copy-panel.bin"), replay).expect("write transcript");
+        let panel = horizon_core::Panel::spawn(
+            horizon_core::PanelId(1),
+            horizon_core::WorkspaceId(1),
+            horizon_core::PanelOptions {
+                kind: PanelKind::Ssh,
+                rows: 8,
+                cols: 25,
+                local_id: Some("copy-panel".to_string()),
+                transcript_root: Some(transcript_root.path().to_path_buf()),
+                restore_as_disconnected_snapshot: true,
+                ..horizon_core::PanelOptions::default()
+            },
+        )
+        .expect("spawn disconnected snapshot");
+        (panel, transcript_root)
+    }
+
+    #[test]
+    fn copying_selected_text_returns_it_and_ends_the_selection() {
+        let (panel, _transcript_root) = snapshot_panel("copy me");
+        let terminal = panel.terminal().expect("terminal");
+        terminal.start_selection(
+            horizon_core::SelectionType::Simple,
+            0,
+            0,
+            horizon_core::TerminalSide::Left,
+        );
+        terminal.update_selection(0, 6, horizon_core::TerminalSide::Right);
+
+        assert_eq!(take_selection_for_copy(terminal).as_deref(), Some("copy me"));
+        assert!(!terminal.has_selection());
+    }
+
+    #[test]
+    fn copying_a_blank_selection_copies_nothing_and_ends_the_selection() {
+        let (panel, _transcript_root) = snapshot_panel("copy me");
+        let terminal = panel.terminal().expect("terminal");
+        terminal.start_selection(
+            horizon_core::SelectionType::Simple,
+            5,
+            0,
+            horizon_core::TerminalSide::Left,
+        );
+        terminal.update_selection(5, 12, horizon_core::TerminalSide::Right);
+        assert!(terminal.has_selection());
+
+        assert_eq!(take_selection_for_copy(terminal), None);
+        assert!(!terminal.has_selection());
     }
 
     fn forward_bytes(events: &[TerminalInputEvent], mode: TermMode) -> Vec<u8> {

@@ -1,4 +1,51 @@
-use super::{ColorLookup, Event, HorizonOscTitle, Rgb, TermMode, Terminal, term};
+use alacritty_terminal::term::ClipboardType;
+
+use super::{ColorLookup, Event, HorizonOscTitle, Rgb, TermMode, Terminal};
+
+/// Destination named by an OSC 52 copy request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipboardTarget {
+    /// The system clipboard (`c`).
+    Clipboard,
+    /// The primary selection (`p` / `s`); platforms without one ignore it.
+    Selection,
+}
+
+/// A copy request a program running in the terminal made through OSC 52.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClipboardWrite {
+    pub target: ClipboardTarget,
+    pub text: String,
+}
+
+/// Latest unforwarded OSC 52 copy per destination.
+///
+/// A newer copy supersedes an unforwarded older one, so a program that copies
+/// repeatedly between two frames cannot queue unbounded text.
+#[derive(Default)]
+pub(super) struct PendingClipboard {
+    clipboard: Option<String>,
+    selection: Option<String>,
+}
+
+impl PendingClipboard {
+    pub(super) fn store(&mut self, clipboard: ClipboardType, text: String) {
+        match clipboard {
+            ClipboardType::Clipboard => self.clipboard = Some(text),
+            ClipboardType::Selection => self.selection = Some(text),
+        }
+    }
+
+    pub(super) fn take(&mut self) -> Vec<ClipboardWrite> {
+        [
+            (ClipboardTarget::Clipboard, self.clipboard.take()),
+            (ClipboardTarget::Selection, self.selection.take()),
+        ]
+        .into_iter()
+        .filter_map(|(target, text)| text.map(|text| ClipboardWrite { target, text }))
+        .collect()
+    }
+}
 
 impl Terminal {
     /// Drain pending PTY events. Returns `true` if any events were processed.
@@ -60,21 +107,20 @@ impl Terminal {
         }
     }
 
+    /// Drain OSC 52 copy requests programs in this terminal made since the
+    /// last call. The host decides whether to honor them.
+    pub fn take_clipboard_writes(&mut self) -> Vec<ClipboardWrite> {
+        self.pending_clipboard.take()
+    }
+
     pub(crate) fn handle_event(&mut self, event: Event) {
         match event {
             Event::Title(title) => self.title.apply_incoming(&title),
             Event::ResetTitle => self.title.reset(),
-            Event::ClipboardStore(clipboard, contents) => match clipboard {
-                term::ClipboardType::Clipboard => self.clipboard_contents = contents,
-                term::ClipboardType::Selection => self.selection_contents = contents,
-            },
-            Event::ClipboardLoad(clipboard, formatter) => {
-                let contents = match clipboard {
-                    term::ClipboardType::Clipboard => self.clipboard_contents.as_str(),
-                    term::ClipboardType::Selection => self.selection_contents.as_str(),
-                };
-                self.write_protocol(formatter(contents).as_bytes());
-            }
+            Event::ClipboardStore(clipboard, contents) => self.pending_clipboard.store(clipboard, contents),
+            // OSC 52 reads are denied by the emulator config, and a program
+            // running in the terminal must not read the system clipboard.
+            Event::ClipboardLoad(_, formatter) => self.write_protocol(formatter("").as_bytes()),
             Event::ColorRequest(index, formatter) => {
                 let color = self.color_for_request(index);
                 self.write_protocol(formatter(color).as_bytes());
@@ -98,5 +144,33 @@ impl Terminal {
 
     fn color_for_request(&self, index: usize) -> Rgb {
         self.term.lock().colors().lookup(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClipboardTarget, ClipboardType, ClipboardWrite, PendingClipboard};
+
+    #[test]
+    fn newer_copy_replaces_an_unforwarded_one_per_target() {
+        let mut pending = PendingClipboard::default();
+        pending.store(ClipboardType::Clipboard, "first".to_owned());
+        pending.store(ClipboardType::Selection, "picked".to_owned());
+        pending.store(ClipboardType::Clipboard, "second".to_owned());
+
+        assert_eq!(
+            pending.take(),
+            vec![
+                ClipboardWrite {
+                    target: ClipboardTarget::Clipboard,
+                    text: "second".to_owned()
+                },
+                ClipboardWrite {
+                    target: ClipboardTarget::Selection,
+                    text: "picked".to_owned()
+                },
+            ]
+        );
+        assert!(pending.take().is_empty());
     }
 }
