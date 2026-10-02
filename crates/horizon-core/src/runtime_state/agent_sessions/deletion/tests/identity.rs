@@ -140,6 +140,30 @@ fn conflicting_or_invalid_folder_metadata_preserves_complete_history() {
 }
 
 #[test]
+fn empty_folder_matching_catalog_scope_preserves_history() {
+    let temp = tempfile::tempdir().expect("private store");
+    let project = temp.path().join("example");
+    let mut session = binding(806);
+    session.cwd = Some(String::new());
+    let path = project.join(format!("{}.jsonl", session.session_id));
+    let artifacts = path.with_extension("").join("subagents");
+    std::fs::create_dir_all(&artifacts).expect("artifacts");
+    let contents = serde_json::json!({"sessionId":session.session_id,"cwd":"","type":"user"}).to_string();
+    std::fs::write(&path, &contents).expect("transcript");
+    std::fs::write(artifacts.join("agent.jsonl"), "saved child history").expect("subagent");
+    let discovered = load_claude_project_session_summary(&path, 0)
+        .expect("discovery")
+        .expect("record");
+    assert_eq!(discovered.cwd, session.cwd);
+    assert!(delete_claude_transcript(temp.path(), &session).is_err());
+    assert_eq!(std::fs::read_to_string(path).expect("retained transcript"), contents);
+    assert_eq!(
+        std::fs::read_to_string(artifacts.join("agent.jsonl")).expect("retained subagent"),
+        "saved child history"
+    );
+}
+
+#[test]
 fn repeated_matching_identity_and_metadata_records_allow_deletion() {
     let temp = tempfile::tempdir().expect("private store");
     let project = temp.path().join("example");

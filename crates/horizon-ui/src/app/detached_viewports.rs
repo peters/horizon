@@ -226,9 +226,9 @@ impl HorizonApp {
         // one-shot frame keyboard metadata twice and re-run the stateful
         // speech filter (leaking an orphan hotkey key-up).
         self.filter_held_navigation_keys(ctx);
-        if !self.host_dialog_open()
-            && super::panels::session_picker_panel(ctx).is_none_or(|panel| self.board.panel(panel).is_none())
-        {
+        let session_picker_open =
+            super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
+        if !self.host_dialog_open() && !session_picker_open {
             self.handle_detached_shortcuts(ctx, workspace_id);
         }
         self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
@@ -242,7 +242,11 @@ impl HorizonApp {
         self.render_browser_connector_lines(ctx, canvas_rect, Some(workspace_id));
         self.record_detached_device_presentation(workspace_id, canvas_rect);
         self.render_panels_for_workspace(ctx, workspace_id);
-        self.render_file_drop_highlight(ctx);
+        let session_picker_open = session_picker_open
+            || super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
+        if !session_picker_open {
+            self.render_file_drop_highlight(ctx);
+        }
         self.render_workspace_minimap(
             ctx,
             &workspace_bounds,
@@ -250,7 +254,7 @@ impl HorizonApp {
             canvas_rect,
             egui::Id::new(("detached_workspace_minimap", workspace_local_id)),
         );
-        if !self.host_dialog_open() {
+        if !self.host_dialog_open() && !session_picker_open {
             self.handle_workspace_file_drop(ctx, workspace_id, canvas_rect);
         }
         self.render_ssh_upload_flow(ctx);

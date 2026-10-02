@@ -376,7 +376,7 @@ fn validate_claude_transcript_identity(path: &Path, session: &AgentSessionBindin
         let identity: ClaudeTranscriptIdentity = serde_json::from_str(&line)
             .map_err(|_| Error::State("Cannot verify identity of malformed Claude transcript".into()))?;
         if let Some(cwd) = identity.cwd
-            && normalize_cwd(Some(&cwd)) != expected_cwd
+            && (cwd.is_empty() || normalize_cwd(Some(&cwd)) != expected_cwd)
         {
             return Err(Error::State("Claude transcript has a conflicting folder".into()));
         }
