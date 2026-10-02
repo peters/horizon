@@ -11,6 +11,8 @@ use super::super::claude_live_sessions::verified_live_claude_session_ids;
 use super::{AgentSessionBinding, AgentSessionCatalog, PanelKind, normalize_cwd};
 use crate::error::{Error, Result};
 
+const MAX_TRANSCRIPT_RECORD_BYTES: usize = 16 * 1024 * 1024;
+
 static PENDING_DELETIONS: LazyLock<Mutex<HashSet<AgentSessionKey>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 static PENDING_DELETION_REVISION: AtomicU64 = AtomicU64::new(0);
 
@@ -362,8 +364,17 @@ fn validate_claude_transcript_identity(path: &Path, session: &AgentSessionBindin
     let mut identity_found = false;
     loop {
         line.clear();
-        if reader.read_line(&mut line)? == 0 {
+        let bytes = reader
+            .by_ref()
+            .take(MAX_TRANSCRIPT_RECORD_BYTES as u64 + 1)
+            .read_line(&mut line)?;
+        if bytes == 0 {
             break;
+        }
+        if bytes > MAX_TRANSCRIPT_RECORD_BYTES {
+            return Err(Error::State(
+                "Claude transcript record exceeds the 16 MiB validation limit".into(),
+            ));
         }
         if line.trim().is_empty() {
             continue;

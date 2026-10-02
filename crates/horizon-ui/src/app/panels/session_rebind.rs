@@ -340,9 +340,14 @@ fn render_session_row(
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    let width = (ui.available_width() - 84.0).max(1.0);
+                    let padding = ui.spacing().button_padding * 2.0;
+                    job.wrap.max_width = (width - padding.x).max(1.0);
+                    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                    let height = (galley.size().y + padding.y).max(78.0);
                     let response = ui.add_sized(
-                        Vec2::new(ui.available_width() - 84.0, 78.0),
-                        Button::new(job).right_text(()).frame(false).wrap(),
+                        Vec2::new(width, height),
+                        Button::new(galley).right_text(()).frame(false),
                     );
                     if focus_first {
                         response.request_focus();

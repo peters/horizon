@@ -128,7 +128,7 @@ fn conflicting_or_invalid_folder_metadata_preserves_complete_history() {
         let discovered = load_claude_project_session_summary(&path, 0)
             .expect("discovery")
             .expect("record");
-        assert_eq!(discovered.cwd.as_deref(), Some("/example"));
+        assert_eq!(discovered.cwd, normalize_cwd(session.cwd.as_deref()));
         assert!(delete_claude_transcript(&projects, &session).is_err());
         assert_eq!(std::fs::read_to_string(&path).expect("retained transcript"), contents);
         assert_eq!(
@@ -189,4 +189,41 @@ fn linked_transcripts_never_delete_their_target() {
     std::os::unix::fs::symlink(&outside, project.join(format!("{}.jsonl", session.session_id))).expect("link");
     assert!(delete_claude_transcript(&projects, &session).is_err());
     assert_eq!(std::fs::read_to_string(outside).expect("target preserved"), "keep");
+}
+
+#[test]
+fn oversized_record_preserves_history_and_boundary_record_deletes() {
+    for overflow in [false, true] {
+        let temp = tempfile::tempdir().expect("private store");
+        let session = binding(807);
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).expect("project");
+        let path = project.join(format!("{}.jsonl", session.session_id));
+        let artifacts = path.with_extension("");
+        std::fs::create_dir(&artifacts).expect("artifacts");
+        std::fs::write(artifacts.join("child.jsonl"), "saved child").expect("child");
+        let mut contents = serde_json::json!({"sessionId":session.session_id,"cwd":"/example"}).to_string();
+        contents.extend(std::iter::repeat_n(
+            ' ',
+            MAX_TRANSCRIPT_RECORD_BYTES - contents.len() - 1,
+        ));
+        contents.push('\n');
+        if overflow {
+            contents.insert(0, ' ');
+        }
+        std::fs::write(&path, &contents).expect("transcript");
+        let result = delete_claude_transcript(temp.path(), &session);
+        if overflow {
+            assert!(result.is_err());
+            assert_eq!(std::fs::read_to_string(path).expect("preserved transcript"), contents);
+            assert_eq!(
+                std::fs::read_to_string(artifacts.join("child.jsonl")).expect("preserved child"),
+                "saved child"
+            );
+        } else {
+            result.expect("boundary is valid");
+            assert!(!path.exists());
+            assert!(!artifacts.exists());
+        }
+    }
 }

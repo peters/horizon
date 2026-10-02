@@ -150,12 +150,19 @@ impl SessionDeletionUi {
                     selections.remove(&binding.session_id);
                 }
             }
-        } else if ui
-            .small_button(RichText::new("Delete").color(theme::PALETTE_RED()))
-            .clicked()
-        {
-            self.confirmation_all = false;
-            self.confirmation = Some(vec![binding.clone()].into());
+        } else {
+            let response = ui.small_button(RichText::new("Delete").color(theme::PALETTE_RED()));
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    response.enabled(),
+                    format!("Delete conversation {}", binding.session_id),
+                )
+            });
+            if response.clicked() {
+                self.confirmation_all = false;
+                self.confirmation = Some(vec![binding.clone()].into());
+            }
         }
     }
 

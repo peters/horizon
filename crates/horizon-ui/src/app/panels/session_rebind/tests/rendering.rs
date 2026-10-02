@@ -494,3 +494,56 @@ fn provider_scan_completion_tracks_only_its_provider() {
     assert!(!app.session_catalog_refresh.picker_times.contains_key(&PanelKind::Codex));
     assert!(app.session_catalog_refresh.provider.is_none());
 }
+
+#[test]
+fn wrapped_cards_keep_all_metadata_visible_and_delete_actions_identifiable() {
+    for width in [300.0, 440.0] {
+        let ctx = Context::default();
+        ctx.enable_accesskit();
+        let binding = AgentSessionBinding::new(
+            PanelKind::Claude,
+            "00000000-0000-0000-0000-000000000123".into(),
+            None,
+            Some("W".repeat(60)),
+            Some(1_700_000_000),
+        );
+        let mut outcome = SessionRebindRenderOutcome::default();
+        let output = ctx
+            .run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 900.0))),
+                    ..Default::default()
+                },
+                |ui| render_session_row(ui, &binding, false, &mut SessionDeletionUi::default(), &mut outcome),
+            )
+            .discard_textures();
+        let button = outcome.option_rects[0];
+        let card_text = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text.contains(&binding.session_id) => {
+                    Some((shape.clip_rect, text))
+                }
+                _ => None,
+            })
+            .expect("full metadata galley");
+        let bounds = Rect::from_min_size(card_text.1.pos, card_text.1.galley.size());
+        assert!(
+            button.expand(0.5).contains_rect(bounds),
+            "button {button:?}, text {bounds:?}"
+        );
+        assert!(card_text.0.contains_rect(bounds), "metadata must not be clipped");
+        assert!(button.height() > 78.0, "wrapped title grows the row");
+        let label = format!("Delete conversation {}", binding.session_id);
+        assert!(
+            output
+                .platform_output
+                .accesskit_update
+                .expect("accessibility update")
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some(label.as_str()))
+        );
+    }
+}
