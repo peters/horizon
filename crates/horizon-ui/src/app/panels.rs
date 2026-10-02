@@ -25,6 +25,7 @@ use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE
 mod interaction;
 pub(super) use interaction::ArrangedPanelDrag;
 mod session_deletion;
+pub(super) use session_deletion::SavedSessionDeletionState;
 mod session_rebind;
 #[cfg(test)]
 use session_rebind::SessionRebindRenderOutcome;

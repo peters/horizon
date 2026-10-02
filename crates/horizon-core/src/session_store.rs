@@ -1,3 +1,4 @@
+mod deletion_notice;
 mod model;
 #[cfg(test)]
 mod tests;

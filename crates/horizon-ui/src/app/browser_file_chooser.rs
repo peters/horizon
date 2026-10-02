@@ -12,6 +12,9 @@ impl HorizonApp {
     }
 
     pub(super) fn host_dialog_open(&self) -> bool {
+        if self.saved_session_deletion.has_notice() {
+            return true;
+        }
         #[cfg(feature = "cloud-workspaces")]
         if self.cloud_close_confirmation_open() {
             return true;

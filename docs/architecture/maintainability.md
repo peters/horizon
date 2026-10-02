@@ -914,3 +914,5 @@ Bounded per-request completions prevent latest-only polling from losing supersed
 user requests; the core adapter bounds lost-status waiting and surfaces uncertainty.
 
 Saved conversation deletion is implemented in `runtime_state/agent_sessions/deletion.rs`: provider removal, identity validation and process-wide reservation guards remain in core. Its identity, batch and staging regressions live in the colocated `deletion/tests/` tree. The modal session picker collects selection/confirmation actions and requests throttled catalog scans while open; its option cache invalidates on scan completion, provider/panel scope changes and process-wide deletion reservation revisions; `app/panels/session_deletion.rs` manages its background worker, bounded reports and result persistence, with presentation and worker regressions in `session_deletion/tests/`.
+
+Saved-conversation deletion worker ownership and recovery-notice presentation live in `app/panels/session_deletion/worker.rs`; profile-scoped immutable notice storage belongs to `session_store/deletion_notice.rs` in core. Shutdown joins destructive workers before process exit.

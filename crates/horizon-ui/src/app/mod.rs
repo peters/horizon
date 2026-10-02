@@ -295,6 +295,7 @@ pub struct HorizonApp {
     pending_startup_runtime_state_changed: bool,
     startup_bootstrap_failure: Option<StartupBootstrapFailure>,
     session_catalog_refresh: session::SessionCatalogRefreshState,
+    saved_session_deletion: panels::SavedSessionDeletionState,
     remote_hosts_overlay: Option<RemoteHostsOverlay>,
     remote_hosts_catalog: RemoteHostCatalog,
     remote_hosts_refresh_rx: Option<Receiver<horizon_core::Result<RemoteHostCatalog>>>,
@@ -432,6 +433,7 @@ impl eframe::App for HorizonApp {
             state.begin_frame();
         }
         self.update_ui(ui);
+        self.render_saved_session_deletion_notice(ui.ctx());
         self.record_root_device_presentation(ui.ctx());
         // Immediate detached viewports have finished too. Reconcile once, even
         // when startup or session-switch overlays bypass panel rendering.

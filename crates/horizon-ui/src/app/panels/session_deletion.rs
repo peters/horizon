@@ -11,6 +11,9 @@ use super::session_rebind::finish_session_deletion;
 use crate::app::HorizonApp;
 use crate::theme;
 
+mod worker;
+pub(in crate::app) use worker::SavedSessionDeletionState;
+
 #[derive(Clone, Default)]
 pub(super) struct SessionDeletionUi {
     managing: bool,
@@ -447,6 +450,10 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn poll_saved_session_deletion(&mut self, ctx: &egui::Context) {
+        if !self.join_finished_saved_session_deletion() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
         let Some(job) = ctx.data(|data| data.get_temp::<DeletionJob>(job_id())) else {
             return;
         };
@@ -460,6 +467,7 @@ impl HorizonApp {
         ctx.data_mut(|data| data.remove::<DeletionJob>(job_id()));
         let owner = job.owner;
         let viewport = job.viewport;
+        self.retain_saved_session_deletion_notice(&report);
         self.session_catalog.remove_deleted_sessions(&report);
         drop(job);
         ctx.data_mut(|data| data.insert_temp(receipt_id(), Arc::new(report.clone())));
@@ -549,7 +557,7 @@ impl HorizonApp {
                 state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).finished = true;
                 repaint.request_repaint();
             });
-        if let Err(error) = worker {
+        if let Err(error) = &worker {
             let unavailable = std::mem::take(
                 &mut job
                     .state
@@ -561,7 +569,12 @@ impl HorizonApp {
             let report = failed_deletion_start(&sessions, unavailable, &error.to_string());
             ctx.data_mut(|data| data.insert_temp(receipt_id(), Arc::new(report.clone())));
             finish_session_deletion(ctx, owner, ctx.viewport_id(), allowed, &report);
-        } else {
+        } else if let Ok(handle) = worker {
+            self.saved_session_deletion.worker = Some(worker::DeletionWorker {
+                handle,
+                context: ctx.clone(),
+                sessions,
+            });
             ctx.data_mut(|data| data.insert_temp(job_id(), job));
         }
     }
