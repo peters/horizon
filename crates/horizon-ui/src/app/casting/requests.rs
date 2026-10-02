@@ -75,12 +75,12 @@ impl HorizonApp {
                         receiver.id.clone(),
                         receiver.name.clone(),
                     );
-                    let worker = CastSession::start_remembered(
-                        receiver.address,
-                        super::video_format(*orientation, *resolution),
-                        store,
-                    )
-                    .map_err(|error| error.to_string())?;
+                    let format = super::video_format(*orientation, *resolution);
+                    let (width, height) = format.dimensions();
+                    let scaling = super::scaling::Scaler::new((usize::from(width), usize::from(height)))
+                        .map_err(|error| error.to_string())?;
+                    let worker = CastSession::start_remembered(receiver.address, format, store)
+                        .map_err(|error| error.to_string())?;
                     self.casting
                         .sessions
                         .retain(|session| session.receiver_id != *receiver_id);
@@ -92,8 +92,11 @@ impl HorizonApp {
                         orientation: *orientation,
                         resolution: *resolution,
                         worker,
+                        scaling,
+                        failure_notified: false,
                     });
                     self.casting.notice = None;
+                    self.casting.notification = None;
                 }
                 CastOperation::Pair { receiver_id, pin } => {
                     let session = self

@@ -1,6 +1,8 @@
 mod capture;
 mod controls;
+mod notifications;
 mod requests;
+mod scaling;
 
 use horizon_cast::{CastSession, PairedDevice, PairingStore, Receiver};
 use horizon_core::WorkspaceId;
@@ -25,6 +27,7 @@ pub(super) struct CastState {
     picker: Option<Picker>,
     control_menus: Option<[egui::LayerId; 2]>,
     notice: Option<String>,
+    notification: Option<String>,
     last_capture: Option<Instant>,
 }
 struct Session {
@@ -35,6 +38,8 @@ struct Session {
     orientation: CastOrientation,
     resolution: CastResolution,
     worker: CastSession,
+    scaling: scaling::Scaler,
+    failure_notified: bool,
 }
 struct Picker {
     workspace: WorkspaceId,
@@ -112,6 +117,7 @@ impl CastState {
         self.control_menus = None;
         self.receivers.clear();
         self.notice = None;
+        self.notification = None;
         self.last_capture = None;
         self.refresh_pairings();
     }
@@ -135,6 +141,10 @@ impl CastState {
     pub(super) fn picker_open(&self) -> bool {
         self.picker.is_some()
     }
+    fn notify(&mut self, message: String) {
+        self.notice = Some(message.clone());
+        self.notification = Some(message);
+    }
     fn discover(&mut self) {
         if self.discovery.is_some() {
             return;
@@ -147,6 +157,15 @@ impl CastState {
         });
     }
     fn poll(&mut self) {
+        for session in &mut self.sessions {
+            if !session.failure_notified
+                && let horizon_cast::CastStatus::Failed(error) = session.worker.status()
+            {
+                session.failure_notified = true;
+                self.notice = Some(error.clone());
+                self.notification = Some(error);
+            }
+        }
         let mut saved = false;
         for session in self.sessions.iter().chain(&self.retiring) {
             saved |= session.worker.take_pairing_saved();
@@ -164,7 +183,7 @@ impl CastState {
                 }
                 Err(error) => {
                     self.pairing_error = Some(error.clone());
-                    self.notice = Some(error);
+                    self.notify(error);
                 }
             }
             if std::mem::take(&mut self.paired_refresh_pending) {
@@ -180,7 +199,7 @@ impl CastState {
                 }
                 Err(error) => {
                     self.discovery_error = Some(error.clone());
-                    self.notice = Some(error);
+                    self.notify(error);
                 }
             }
         }
@@ -244,6 +263,8 @@ mod tests {
             orientation: CastOrientation::Landscape,
             resolution: CastResolution::default(),
             worker,
+            scaling: scaling::Scaler::new((1280, 720)).expect("scaler"),
+            failure_notified: false,
         });
         app.casting.reset_for_session_switch();
         assert!(app.casting.sessions.is_empty());

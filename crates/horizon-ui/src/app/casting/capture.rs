@@ -1,4 +1,6 @@
 use super::super::HorizonApp;
+#[cfg(test)]
+use super::scaling::letterbox;
 use egui::{Context, Id, LayerId, Order, Rect, ViewportId};
 use horizon_cast::CastStatus;
 use horizon_core::{WorkspaceId, browser::manifest::cast::CastSource};
@@ -16,6 +18,7 @@ impl HorizonApp {
     pub(in crate::app) fn cast_frame(&mut self, ctx: &Context) {
         self.drain_cast_requests(ctx, None);
         self.casting.poll();
+        let mut source_lost = false;
         for session in &self.casting.sessions {
             if session.worker.finished() {
                 continue;
@@ -24,8 +27,12 @@ impl HorizonApp {
                 || self.cast_source_rect(session.workspace, &session.source, ctx).is_err()
             {
                 session.worker.stop();
-                self.casting.notice = Some("Casting stopped because its source is no longer visible".into());
+                source_lost = true;
             }
+        }
+        if source_lost {
+            self.casting
+                .notify("Casting stopped because its source is no longer visible".into());
         }
         self.consume_cast_images(ctx);
         self.render_cast_controls(ctx);
@@ -48,6 +55,7 @@ impl HorizonApp {
             return;
         }
         let mut regions = Vec::new();
+        let mut source_obscured = false;
         for session in &self.casting.sessions {
             if !matches!(session.worker.status(), CastStatus::Streaming { .. }) {
                 continue;
@@ -63,9 +71,13 @@ impl HorizonApp {
                 }
                 _ => {
                     session.worker.stop();
-                    self.casting.notice = Some("Casting stopped because its source was hidden or covered".into());
+                    source_obscured = true;
                 }
             }
+        }
+        if source_obscured {
+            self.casting
+                .notify("Casting stopped because its source was hidden or covered".into());
         }
         if !regions.is_empty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(CaptureTicket {
@@ -238,6 +250,18 @@ impl HorizonApp {
         if self.cast_controls_visible(ctx) {
             return;
         }
+        for session in &self.casting.sessions {
+            if let Some(frame) = session.scaling.take()
+                && matches!(session.worker.status(), CastStatus::Streaming { .. })
+                && self
+                    .cast_source_rect(session.workspace, &session.source, ctx)
+                    .is_ok_and(|rect| rect == frame.rect)
+                && self.cast_geometry_settled(session.workspace, &session.source, ctx)
+                && !self.cast_obscured(&session.source, frame.rect, ctx)
+            {
+                let _ = session.worker.submit(frame.rgba);
+            }
+        }
         let events = ctx.input(|input| input.events.clone());
         for event in events {
             let egui::Event::Screenshot {
@@ -290,53 +314,13 @@ impl HorizonApp {
                     session.worker.stop();
                     continue;
                 }
-                let crop = image.region(rect, Some(ticket.pixels_per_point));
-                if crop.width() == 0 || crop.height() == 0 {
-                    continue;
-                }
-                let (width, height) = super::video_format(session.orientation, session.resolution).dimensions();
-                let dimensions = (usize::from(width), usize::from(height));
-                let _ = session.worker.submit(letterbox(&crop, dimensions));
+                session.scaling.submit(image.clone(), *rect, ticket.pixels_per_point);
             }
         }
     }
 }
 fn cast_picker_layer() -> LayerId {
     LayerId::new(Order::Foreground, Id::new("cast_picker"))
-}
-
-fn letterbox(image: &egui::ColorImage, (width, height): (usize, usize)) -> Vec<u8> {
-    let mut rgba = vec![0; width * height * 4];
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        pixel[3] = 255;
-    }
-    let (fit_width, fit_height) = if image.width() * height > image.height() * width {
-        (width, image.height() * width / image.width())
-    } else {
-        (image.width() * height / image.height(), height)
-    };
-    if fit_width == 0 || fit_height == 0 {
-        return rgba;
-    }
-    let left = (width - fit_width) / 2;
-    let top = (height - fit_height) / 2;
-    let source_x: Vec<_> = (0..fit_width).map(|x| x * image.width() / fit_width).collect();
-    let mut previous_source_y = None;
-    for y in 0..fit_height {
-        let source_y = y * image.height() / fit_height;
-        let at = ((y + top) * width + left) * 4;
-        let end = at + fit_width * 4;
-        if previous_source_y == Some(source_y) {
-            rgba.copy_within(at - width * 4..end - width * 4, at);
-        } else {
-            let row = &image.pixels[source_y * image.width()..(source_y + 1) * image.width()];
-            for (pixel, source_x) in rgba[at..end].as_chunks_mut::<4>().0.iter_mut().zip(&source_x) {
-                *pixel = row[*source_x].to_array();
-            }
-            previous_source_y = Some(source_y);
-        }
-    }
-    rgba
 }
 
 #[cfg(test)]

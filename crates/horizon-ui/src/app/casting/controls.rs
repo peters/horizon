@@ -8,6 +8,7 @@ impl HorizonApp {
             return;
         }
         self.render_cast_icons(ctx);
+        self.render_cast_notification(ctx);
         let Some(mut picker) = self.casting.picker.take() else {
             return;
         };
@@ -93,15 +94,28 @@ impl HorizonApp {
         {
             ctx.move_to_top(window.response.layer_id);
         }
-        if let Some(action) = action {
-            let outcome = self.cast_operation(picker.workspace, &action, ctx);
-            self.casting.notice = outcome.error;
-            if self.casting.notice.is_some() {
-                close_after = false;
-            }
+        if let Some(action) = action
+            && !self.apply_cast_control(picker.workspace, &action, ctx)
+        {
+            close_after = false;
         }
         if open && !close_after {
             self.casting.picker = Some(picker);
+        }
+    }
+    fn apply_cast_control(
+        &mut self,
+        workspace: horizon_core::WorkspaceId,
+        action: &CastOperation,
+        ctx: &Context,
+    ) -> bool {
+        let outcome = self.cast_operation(workspace, action, ctx);
+        if let Some(error) = outcome.error {
+            self.casting.notify(error);
+            false
+        } else {
+            self.casting.notice = None;
+            true
         }
     }
     fn render_cast_icons(&mut self, ctx: &Context) {
