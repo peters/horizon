@@ -17,9 +17,12 @@ const topmost = (x, y) => {
 // Content is clipped out of the gutter, so a hit there is the scrollbar only
 // when it is the container itself; any descendant hit overlays the gutter.
 const owns = (node, x, y) => topmost(x, y) === node;
-// Client metrics map onto the viewport only through translation.
+// Client metrics map onto the viewport only through translation: rotation,
+// scale and CSS zoom all change the box without changing those metrics.
 const translatedOnly = style => {
     if ((style.rotate || 'none') !== 'none' || (style.scale || 'none') !== 'none') return false;
+    const zoom = parseFloat(style.zoom);
+    if (Number.isFinite(zoom) && zoom !== 1) return false;
     if (style.transform === 'none') return true;
     const matrix = new DOMMatrixReadOnly(style.transform);
     return matrix.is2D && matrix.a === 1 && matrix.b === 0 && matrix.c === 0 && matrix.d === 1;
@@ -43,7 +46,7 @@ const firstVisible = (node, x, from, to, step) => {
     }
 };
 // Vertical span of the gutter that ancestors, the viewport and overlays leave
-// visible, or null when an ancestor rotates or scales the container.
+// visible, or null when an ancestor or the root rotates, scales or zooms it.
 const visibleSpan = (node, x, top, bottom) => {
     for (let clip = parentOf(node); clip && clip !== root; clip = parentOf(clip)) {
         const style = getComputedStyle(clip);
@@ -52,6 +55,9 @@ const visibleSpan = (node, x, top, bottom) => {
         const box = clip.getBoundingClientRect();
         top = Math.max(top, box.top + clip.clientTop);
         bottom = Math.min(bottom, box.top + clip.clientTop + clip.clientHeight);
+    }
+    for (const outer of new Set([root, document.documentElement])) {
+        if (!translatedOnly(getComputedStyle(outer))) return null;
     }
     top = Math.max(top, 0);
     bottom = Math.min(bottom, height);

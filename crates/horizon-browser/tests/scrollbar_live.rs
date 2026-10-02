@@ -1,7 +1,7 @@
 //! Live checks that nested scroll containers stay usable in browser panels:
 //! Chromium drags its native scrollbar, and Firefox publishes the host
-//! indicator its screenshots omit (clipped by overlays, skipped when rotated)
-//! while its native gutter still drags.
+//! indicator its screenshots omit (clipped by overlays, skipped when rotated
+//! or zoomed) while its native gutter still drags.
 //! Ignored in CI; run with `cargo test -p horizon-browser --test scrollbar_live -- --ignored`.
 
 #![cfg(unix)]
@@ -23,11 +23,15 @@ header{height:56px}main{position:absolute;top:56px;bottom:0;left:0;right:0;overf
 div{height:60px}
 #footer{position:fixed;left:0;right:0;top:560px;height:40px;background:#333}
 #rotated{position:absolute;left:0;top:200px;width:200px;height:150px;overflow:auto;transform:rotate(180deg)}
-</style><header></header><main id="list"><section id="footer"></section></main><section id="rotated"></section>
+#zoomed{position:absolute;left:0;top:200px;width:100px;height:60px;overflow:auto;zoom:2}
+</style><header></header><main id="list"><section id="footer"></section></main>
+<section id="rotated"></section><section id="zoomed"></section>
 <script>
 const list = document.getElementById('list');
 for (let i = 0; i < 120; i++) list.appendChild(document.createElement('div')).textContent = 'Item ' + i;
-for (let i = 0; i < 20; i++) document.getElementById('rotated').appendChild(document.createElement('div')).textContent = 'Rotated ' + i;
+for (const id of ['rotated', 'zoomed']) {
+    for (let i = 0; i < 20; i++) document.getElementById(id).appendChild(document.createElement('div')).textContent = id + ' ' + i;
+}
 const header = document.querySelector('header');
 list.addEventListener('scroll', () => { header.style.background = list.scrollTop > 1000 ? '#00ff00' : ''; });
 </script>"#;
@@ -73,7 +77,7 @@ fn firefox_publishes_and_drags_a_nested_scrollbar() {
     assert_eq!(
         frame_slot.nested_scrollbars().len(),
         1,
-        "a rotated container must not be published"
+        "rotated and zoomed containers must not be published"
     );
     assert!(bar.scroll_top.abs() < f32::EPSILON);
 
