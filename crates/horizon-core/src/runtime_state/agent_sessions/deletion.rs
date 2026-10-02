@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -122,7 +122,7 @@ impl AgentSessionCatalog {
 
     #[must_use]
     pub fn supports_saved_session_deletion(kind: PanelKind) -> bool {
-        matches!(kind, PanelKind::Codex | PanelKind::Claude)
+        kind == PanelKind::Codex || (cfg!(unix) && kind == PanelKind::Claude)
     }
 
     /// Permanently remove explicitly selected, unprotected saved conversations.
@@ -484,6 +484,26 @@ fn stage_claude_deletion(
     rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
     purge: impl Fn(&Path) -> std::io::Result<()>,
 ) -> Result<DeletionOutcome> {
+    if !cfg!(unix) {
+        return Err(Error::State(
+            "Claude deletion requires durable directory updates, supported only on Unix hosts".into(),
+        ));
+    }
+    stage_claude_deletion_with_sync(projects, transcript, artifacts, rename, purge, sync_deletion_directory)
+}
+
+fn sync_deletion_directory(directory: &Path) -> std::io::Result<()> {
+    std::fs::File::open(directory)?.sync_all()
+}
+
+fn stage_claude_deletion_with_sync(
+    projects: &Path,
+    transcript: &Path,
+    artifacts: Option<&Path>,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    purge: impl Fn(&Path) -> std::io::Result<()>,
+    sync: impl Fn(&Path) -> std::io::Result<()>,
+) -> Result<DeletionOutcome> {
     let parent = projects
         .parent()
         .ok_or_else(|| Error::State("Claude storage has no staging parent".into()))?;
@@ -494,13 +514,30 @@ fn stage_claude_deletion(
         artifacts: artifacts.map(Path::to_owned),
     })
     .map_err(std::io::Error::other)?;
-    std::fs::write(staging.path().join("original-paths.json"), manifest)?;
+    let mut manifest_file = std::fs::File::create(staging.path().join("original-paths.json"))?;
+    manifest_file.write_all(&manifest)?;
+    manifest_file.sync_all()?;
+    drop(manifest_file);
+    sync(staging.path())?;
+    sync(parent)?;
+    let source = transcript
+        .parent()
+        .ok_or_else(|| Error::State("Transcript has no parent".into()))?;
+    let sync_moves = |directory: &Path| sync(directory).and_then(|()| sync(source));
     // A retained bundle must never be purged by a temporary-directory destructor.
     let directory = staging.keep();
     let saved_transcript = directory.join("transcript.deleted");
     if let Err(error) = rename(transcript, &saved_transcript) {
         let _ = std::fs::remove_dir_all(&directory);
         return Err(error.into());
+    }
+    if let Err(error) = sync_moves(&directory) {
+        return Ok(DeletionOutcome::RecoveryRequired {
+            directory,
+            message: format!(
+                "Transcript staged but directory sync failed: {error}. Retained history has not been purged."
+            ),
+        });
     }
     if let Some(artifacts) = artifacts
         && let Err(error) = rename(artifacts, &directory.join("artifacts"))
@@ -513,12 +550,28 @@ fn stage_claude_deletion(
                 directory,
             });
         }
+        if let Err(sync_error) = sync_moves(&directory) {
+            return Ok(DeletionOutcome::RecoveryRequired {
+                directory,
+                message: format!(
+                    "Transcript restored but directory sync failed: {sync_error}. Inspect original paths before retrying."
+                ),
+            });
+        }
         let _ = std::fs::remove_dir_all(&directory);
         return Err(error.into());
     }
+    if let Err(error) = sync_moves(&directory) {
+        return Ok(DeletionOutcome::RecoveryRequired {
+            directory,
+            message: format!(
+                "History staged but directory sync failed: {error}. Retained history has not been purged."
+            ),
+        });
+    }
     // Both artifacts are now outside discovery. A purge error is cleanup pending,
     // never a failed deletion that would advertise partially removed history.
-    match purge(&directory) {
+    match purge(&directory).and_then(|()| sync(parent)) {
         Ok(()) => Ok(DeletionOutcome::Removed),
         Err(error) => Ok(DeletionOutcome::CleanupPending {
             directory,

@@ -88,7 +88,7 @@ impl SessionDeletionUi {
         if !supported {
             if !options.is_empty() {
                 ui.label(
-                    RichText::new("Saved conversation deletion is available for Codex and Claude.")
+                    RichText::new("Saved conversation deletion is available for Codex, and for Claude on Unix hosts.")
                         .size(12.0)
                         .color(theme::FG_SOFT()),
                 );
@@ -472,7 +472,8 @@ impl HorizonApp {
         drop(job);
         ctx.data_mut(|data| data.insert_temp(receipt_id(), Arc::new(report.clone())));
         self.session_catalog_refresh.receiver = None;
-        self.session_catalog_refresh.provider = None;
+        self.session_catalog_refresh.providers.clear();
+        self.session_catalog_refresh.full_scan_superseded = false;
         self.session_catalog_refresh.picker_times.clear();
         self.session_catalog_refresh.last_full_refresh = None;
         let options = self.session_rebind_options(owner);

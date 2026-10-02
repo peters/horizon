@@ -194,3 +194,90 @@ fn successful_staged_purge_removes_every_selected_byte() {
     assert!(!artifacts.exists());
     assert_eq!(std::fs::read_dir(temp.path()).expect("store").count(), 1);
 }
+
+#[test]
+fn failed_directory_sync_never_purges_uncommitted_history() {
+    for failed_sync in 1..=6 {
+        let (_temp, projects, transcript, artifacts) = staged_fixture();
+        let calls = std::cell::Cell::new(0);
+        let result = stage_claude_deletion_with_sync(
+            &projects,
+            &transcript,
+            Some(&artifacts),
+            |from, to| std::fs::rename(from, to),
+            |_| panic!("uncommitted history must not be purged"),
+            |directory| {
+                calls.set(calls.get() + 1);
+                if calls.get() == failed_sync {
+                    Err(std::io::Error::other("injected sync failure"))
+                } else {
+                    sync_deletion_directory(directory)
+                }
+            },
+        );
+        if failed_sync <= 2 {
+            assert!(result.is_err());
+            assert_eq!(
+                std::fs::read_to_string(&transcript).expect("original"),
+                "original transcript"
+            );
+        } else {
+            let DeletionOutcome::RecoveryRequired { directory, .. } = result.expect("recovery") else {
+                panic!("recovery required")
+            };
+            assert_eq!(
+                std::fs::read_to_string(directory.join("transcript.deleted")).expect("retained"),
+                "original transcript"
+            );
+            let manifest: ClaudeDeletionManifest =
+                serde_json::from_slice(&std::fs::read(directory.join("original-paths.json")).expect("manifest"))
+                    .expect("valid manifest");
+            assert_eq!(manifest.transcript, transcript);
+            let child = if artifacts.exists() {
+                artifacts.join("agent.jsonl")
+            } else {
+                directory.join("artifacts/agent.jsonl")
+            };
+            assert_eq!(std::fs::read_to_string(child).expect("child"), "original child");
+        }
+    }
+}
+
+#[test]
+fn rollback_sync_failure_retains_manifest_and_restored_transcript() {
+    let (_temp, projects, transcript, artifacts) = staged_fixture();
+    let moves = std::cell::Cell::new(0);
+    let syncs = std::cell::Cell::new(0);
+    let outcome = stage_claude_deletion_with_sync(
+        &projects,
+        &transcript,
+        Some(&artifacts),
+        |from, to| {
+            moves.set(moves.get() + 1);
+            if moves.get() == 2 {
+                Err(std::io::Error::other("artifact move failed"))
+            } else {
+                std::fs::rename(from, to)
+            }
+        },
+        |_| panic!("rollback must not purge"),
+        |directory| {
+            syncs.set(syncs.get() + 1);
+            if syncs.get() == 5 {
+                Err(std::io::Error::other("rollback sync failed"))
+            } else {
+                sync_deletion_directory(directory)
+            }
+        },
+    )
+    .expect("recovery");
+    let DeletionOutcome::RecoveryRequired { directory, .. } = outcome else {
+        panic!("recovery required")
+    };
+    assert!(directory.join("original-paths.json").is_file());
+    assert_eq!(
+        std::fs::read_to_string(transcript).expect("restored"),
+        "original transcript"
+    );
+    assert!(artifacts.join("agent.jsonl").is_file());
+}

@@ -11,6 +11,7 @@ pub(in crate::app) struct SavedSessionDeletionState {
     pub(super) worker: Option<DeletionWorker>,
     notice: Option<String>,
     persisted_notice: Option<String>,
+    unsaved_notices: Vec<String>,
 }
 
 pub(super) struct DeletionWorker {
@@ -29,15 +30,25 @@ impl HorizonApp {
     pub(in crate::app) fn restore_saved_session_deletion_notice(&mut self) {
         match self.session_store.saved_session_deletion_notice() {
             Ok(notice) => {
-                self.saved_session_deletion.persisted_notice.clone_from(&notice);
-                self.saved_session_deletion.notice = notice;
+                self.saved_session_deletion.persisted_notice = notice;
+                self.refresh_deletion_notice(None);
             }
-            Err(error) => {
-                self.saved_session_deletion.notice = Some(format!(
-                    "Could not read saved conversation recovery information: {error}"
-                ));
-            }
+            Err(error) => self.refresh_deletion_notice(Some(format!(
+                "Could not read saved conversation recovery information: {error}"
+            ))),
         }
+    }
+
+    fn refresh_deletion_notice(&mut self, error: Option<String>) {
+        let state = &mut self.saved_session_deletion;
+        let details: Vec<_> = state
+            .persisted_notice
+            .iter()
+            .chain(&state.unsaved_notices)
+            .cloned()
+            .chain(error)
+            .collect();
+        state.notice = (!details.is_empty()).then(|| details.join("\n\n"));
     }
 
     pub(in crate::app) fn saved_session_deletion_is_running(&self) -> bool {
@@ -120,20 +131,22 @@ impl HorizonApp {
     }
 
     fn retain_deletion_notice(&mut self, notice: &str) {
-        let combined = self
-            .saved_session_deletion
-            .notice
-            .as_ref()
-            .map_or_else(|| notice.to_owned(), |previous| format!("{previous}\n\n{notice}"));
-        match self.session_store.save_session_deletion_notice(notice) {
+        self.saved_session_deletion.unsaved_notices.push(notice.to_owned());
+        let pending = self.saved_session_deletion.unsaved_notices.join("\n\n");
+        match self.session_store.save_session_deletion_notice(&pending) {
             Ok(()) => {
+                self.saved_session_deletion.persisted_notice = Some(
+                    self.saved_session_deletion
+                        .persisted_notice
+                        .as_ref()
+                        .map_or_else(|| pending.clone(), |previous| format!("{previous}\n\n{pending}")),
+                );
+                self.saved_session_deletion.unsaved_notices.clear();
                 self.restore_saved_session_deletion_notice();
             }
-            Err(error) => {
-                self.saved_session_deletion.notice = Some(format!(
-                    "{combined}\n\nCould not save this notice: {error}. Keep these recovery paths before closing."
-                ));
-            }
+            Err(error) => self.refresh_deletion_notice(Some(format!(
+                "Could not save this notice: {error}. Keep these recovery paths before closing."
+            ))),
         }
     }
 
@@ -162,6 +175,7 @@ impl HorizonApp {
                 self.restore_saved_session_deletion_notice();
                 return;
             }
+            self.saved_session_deletion.unsaved_notices.clear();
             self.saved_session_deletion.notice = None;
             self.saved_session_deletion.persisted_notice = None;
             self.restore_saved_session_deletion_notice();
@@ -347,5 +361,41 @@ mod tests {
         );
         assert!(app.host_dialog_open());
         assert!(!app.finish_saved_session_deletion_for_shutdown());
+    }
+    #[test]
+    fn transient_write_failure_preserves_unsaved_paths_on_later_success() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let blocked = app.session_store.home().root().join("runtime/session-deletion");
+        std::fs::create_dir_all(blocked.parent().expect("parent")).expect("runtime");
+        std::fs::write(&blocked, "block directory creation").expect("block");
+        app.retain_deletion_notice("First path: /synthetic/first");
+        assert_eq!(app.saved_session_deletion.unsaved_notices.len(), 1);
+        app.restore_saved_session_deletion_notice();
+        assert!(
+            app.saved_session_deletion
+                .notice
+                .as_ref()
+                .expect("notice")
+                .contains("/synthetic/first")
+        );
+        std::fs::remove_file(blocked).expect("repair");
+        app.retain_deletion_notice("Second path: /synthetic/second");
+        assert!(app.saved_session_deletion.unsaved_notices.is_empty());
+        let saved = app
+            .session_store
+            .saved_session_deletion_notice()
+            .expect("read")
+            .expect("saved");
+        assert_eq!(saved.matches("/synthetic/first").count(), 1);
+        assert_eq!(saved.matches("/synthetic/second").count(), 1);
+        assert!(!saved.contains("Could not"));
+        app.retain_deletion_notice("Third path: /synthetic/third");
+        let saved = app
+            .session_store
+            .saved_session_deletion_notice()
+            .expect("read")
+            .expect("saved");
+        assert_eq!(saved.matches("/synthetic/first").count(), 1);
+        assert_eq!(saved.matches("/synthetic/third").count(), 1);
     }
 }

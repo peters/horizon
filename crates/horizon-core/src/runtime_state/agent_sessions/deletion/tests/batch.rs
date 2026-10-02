@@ -1,5 +1,11 @@
 use super::*;
 
+fn binding(id: u128) -> AgentSessionBinding {
+    let mut binding = super::binding(id);
+    binding.kind = PanelKind::Codex;
+    binding
+}
+
 #[test]
 fn batch_preserves_protected_sessions_deduplicates_and_reports_partial_failure() {
     let a = binding(1);

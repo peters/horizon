@@ -73,10 +73,10 @@ fn idle_picker_requests_a_provider_refresh_without_recent_panel_output() {
         })
         .discard_textures();
     assert!(
-        app.session_catalog_refresh.receiver.is_some(),
+        app.session_catalog_refresh.providers.contains_key(&PanelKind::Editor),
         "an open picker refreshes independently of panel output"
     );
-    assert_eq!(app.session_catalog_refresh.provider, Some(PanelKind::Editor));
+    assert!(app.session_catalog_refresh.receiver.is_none());
 }
 
 #[test]
@@ -473,8 +473,8 @@ fn picker_provider_refresh_is_not_throttled_by_another_provider() {
         .picker_times
         .insert(PanelKind::Codex, std::time::Instant::now());
     app.refresh_session_catalog_for_picker(&ctx, PanelKind::Claude);
-    assert_eq!(app.session_catalog_refresh.provider, Some(PanelKind::Claude));
-    assert!(app.session_catalog_refresh.receiver.is_some());
+    assert!(app.session_catalog_refresh.providers.contains_key(&PanelKind::Claude));
+    assert!(app.session_catalog_refresh.receiver.is_none());
 }
 
 #[test]
@@ -483,8 +483,7 @@ fn provider_scan_completion_tracks_only_its_provider() {
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(Ok(horizon_core::AgentSessionCatalog::default()))
         .expect("send provider scan");
-    app.session_catalog_refresh.receiver = Some(rx);
-    app.session_catalog_refresh.provider = Some(PanelKind::Claude);
+    app.session_catalog_refresh.providers.insert(PanelKind::Claude, rx);
     app.maybe_refresh_session_catalog(&Context::default());
     assert!(
         app.session_catalog_refresh
@@ -492,7 +491,7 @@ fn provider_scan_completion_tracks_only_its_provider() {
             .contains_key(&PanelKind::Claude)
     );
     assert!(!app.session_catalog_refresh.picker_times.contains_key(&PanelKind::Codex));
-    assert!(app.session_catalog_refresh.provider.is_none());
+    assert!(app.session_catalog_refresh.providers.is_empty());
 }
 
 #[test]
@@ -501,7 +500,7 @@ fn wrapped_cards_keep_all_metadata_visible_and_delete_actions_identifiable() {
         let ctx = Context::default();
         ctx.enable_accesskit();
         let binding = AgentSessionBinding::new(
-            PanelKind::Claude,
+            PanelKind::Codex,
             "00000000-0000-0000-0000-000000000123".into(),
             None,
             Some("W".repeat(60)),
@@ -581,8 +580,8 @@ fn open_picker_prioritizes_provider_refresh_after_full_scan_failure() {
                 app.maybe_refresh_session_catalog(&ctx);
                 assert!(app.session_catalog_refresh.receiver.is_some());
                 assert!(
-                    app.session_catalog_refresh.provider.is_none(),
-                    "in-flight full scan is retained"
+                    app.session_catalog_refresh.providers.contains_key(&PanelKind::Claude),
+                    "a pending full scan cannot block provider refresh"
                 );
             })
             .discard_textures();
@@ -593,10 +592,15 @@ fn open_picker_prioritizes_provider_refresh_after_full_scan_failure() {
         let _ = ctx
             .run_ui(root_input, |_| {
                 app.maybe_refresh_session_catalog(&ctx);
-                assert_eq!(app.session_catalog_refresh.provider, Some(PanelKind::Claude));
-                assert!(app.session_catalog_refresh.receiver.is_some());
-                app.session_catalog_refresh.receiver = None;
-                app.session_catalog_refresh.provider = None;
+                assert!(
+                    app.session_catalog_refresh.providers.contains_key(&PanelKind::Claude)
+                        || app
+                            .session_catalog_refresh
+                            .picker_times
+                            .contains_key(&PanelKind::Claude)
+                );
+                assert!(app.session_catalog_refresh.receiver.is_none());
+                app.session_catalog_refresh.providers.clear();
                 app.session_catalog_refresh
                     .picker_times
                     .insert(PanelKind::Claude, std::time::Instant::now());
@@ -612,8 +616,43 @@ fn open_picker_prioritizes_provider_refresh_after_full_scan_failure() {
                     app.session_catalog_refresh.receiver.is_some(),
                     "closing the picker restores full refresh"
                 );
-                assert!(app.session_catalog_refresh.provider.is_none());
+                assert!(app.session_catalog_refresh.providers.is_empty());
             })
             .discard_textures();
     }
+}
+
+#[test]
+fn pending_provider_and_full_scans_do_not_block_other_provider_completion() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = Context::default();
+    let (_slow_tx, slow_rx) = std::sync::mpsc::channel();
+    let (full_tx, full_rx) = std::sync::mpsc::channel();
+    app.session_catalog_refresh.providers.insert(PanelKind::Claude, slow_rx);
+    app.session_catalog_refresh.receiver = Some(full_rx);
+    app.refresh_session_catalog_for_picker(&ctx, PanelKind::Editor);
+    assert!(app.session_catalog_refresh.providers.contains_key(&PanelKind::Claude));
+    assert!(app.session_catalog_refresh.providers.contains_key(&PanelKind::Editor));
+    let (fast_tx, fast_rx) = std::sync::mpsc::channel();
+    app.session_catalog_refresh.providers.insert(PanelKind::Editor, fast_rx);
+    fast_tx
+        .send(Ok(horizon_core::AgentSessionCatalog::default()))
+        .expect("fast result");
+    app.maybe_refresh_session_catalog(&ctx);
+    assert!(app.session_catalog_refresh.providers.contains_key(&PanelKind::Claude));
+    assert!(!app.session_catalog_refresh.providers.contains_key(&PanelKind::Editor));
+    assert!(
+        app.session_catalog_refresh
+            .picker_times
+            .contains_key(&PanelKind::Editor)
+    );
+    assert!(app.session_catalog_refresh.receiver.is_some());
+    full_tx
+        .send(Ok(horizon_core::AgentSessionCatalog::default()))
+        .expect("stale full result");
+    app.maybe_refresh_session_catalog(&ctx);
+    assert!(
+        app.session_catalog_refresh.last_full_refresh.is_none(),
+        "superseded full scan must not overwrite provider results"
+    );
 }
