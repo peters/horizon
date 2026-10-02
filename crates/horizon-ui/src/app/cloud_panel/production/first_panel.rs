@@ -5,8 +5,18 @@ use horizon_core::cloud_panel::CloudGroup;
 
 /// Only a new deployment with nothing attached: a resumed or reconnected cloud, and one
 /// with sessions of its own, are left as the person had them.
-pub(super) fn state_opens_first_panel(state: &Deployment) -> bool {
+fn state_opens_first_panel(state: &Deployment) -> bool {
     state.sessions.is_empty() && state.timeline.as_ref().is_some_and(|timeline| !timeline.reconnected)
+}
+
+impl super::Runtime {
+    /// A cloud becomes Ready. Only its first Ready can ask for the first panel: resizes and
+    /// rebuilds reach Ready again later, and a session-less cloud is not a new deployment then.
+    pub(super) fn note_ready_for_first_panel(&mut self, state: &Deployment) {
+        if !std::mem::replace(&mut self.first_panel_considered, true) {
+            self.first_panel_due = state_opens_first_panel(state);
+        }
+    }
 }
 
 impl HorizonApp {
@@ -110,6 +120,31 @@ mod tests {
                 first_panel_due: true,
                 ..Default::default()
             },
+        );
+    }
+
+    #[test]
+    fn only_the_first_ready_of_a_runtime_asks_for_a_panel() {
+        let fresh = serde_json::json!({"reconnected": false, "spans": []});
+        let state = deployment(&serde_json::json!([]), &fresh);
+        let mut runtime = super::super::Runtime::default();
+        runtime.note_ready_for_first_panel(&state);
+        assert!(runtime.first_panel_due, "a new deployment asks");
+        runtime.first_panel_due = false;
+        // A resize or rebuild reaches Ready again; the cloud has no sessions, but it is not new.
+        runtime.note_ready_for_first_panel(&state);
+        assert!(!runtime.first_panel_due, "a later Ready never asks again");
+
+        let mut resumed = super::super::Runtime::default();
+        resumed.note_ready_for_first_panel(&deployment(
+            &serde_json::json!([]),
+            &serde_json::json!({"reconnected": true, "spans": []}),
+        ));
+        assert!(!resumed.first_panel_due);
+        resumed.note_ready_for_first_panel(&state);
+        assert!(
+            !resumed.first_panel_due,
+            "and a reconnect cannot be turned into a deployment later"
         );
     }
 

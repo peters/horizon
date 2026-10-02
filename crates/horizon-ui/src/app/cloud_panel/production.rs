@@ -26,7 +26,6 @@ mod resize;
 mod sessions;
 mod setup;
 use super::HorizonApp;
-use first_panel::state_opens_first_panel;
 use horizon_core::cloud_panel::CloudConfig;
 use horizon_core::{
     PanelKind, PanelOptions,
@@ -210,6 +209,9 @@ pub(super) struct Runtime {
     needs_attach: bool,
     /// A freshly deployed cloud that has not yet opened its first panel.
     first_panel_due: bool,
+    /// The first Ready of this runtime has been looked at; later ones (a resize, a rebuild) are not
+    /// a new deployment.
+    first_panel_considered: bool,
     pending_browser_attachments: std::collections::HashSet<String>,
     pending_member_attachments: std::collections::HashSet<String>,
     pending_session_attachments: std::collections::HashSet<String>,
@@ -525,7 +527,7 @@ impl HorizonApp {
                         runtime.progress.stage(Stage::Ready, at);
                         runtime.browsers = None;
                         runtime.needs_attach = true;
-                        runtime.first_panel_due = state_opens_first_panel(&state);
+                        runtime.note_ready_for_first_panel(&state);
                         runtime.state = Some(*state);
                         runtime.stage = Some(Stage::Ready);
                         runtime.error = None;
