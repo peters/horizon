@@ -19,6 +19,8 @@ pub(crate) struct CompanionInput {
     pub alias: String,
     /// A UUID to reuse after a lost answer. Omit it and one is generated and returned.
     pub operation_id: Option<String>,
+    /// A saved tailnet ID from `cloud_companions` for provisioning; "none" selects no network.
+    pub tailnet: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -42,6 +44,7 @@ impl BrowserController {
             cloud: None,
             alias: None,
             operation_id: None,
+            tailnet: None,
         })
         .await
     }
@@ -57,6 +60,7 @@ impl BrowserController {
             cloud: Some(input.cloud),
             alias: Some(input.alias),
             operation_id: Some(operation_id.clone()),
+            tailnet: input.tailnet,
         })
         .await
         .map_err(|error| {
@@ -75,6 +79,7 @@ impl BrowserController {
             cloud: Some(input.cloud),
             alias: Some(input.alias),
             operation_id: Some(input.operation_id),
+            tailnet: None,
         })
         .await
     }

@@ -1,5 +1,6 @@
 """A dedicated worker stops itself only after its whole idle period without activity."""
 import json
+import os
 from pathlib import Path
 import runpy
 import subprocess
@@ -53,6 +54,22 @@ class IdleTests(unittest.TestCase):
             self.assertEqual(MODULE['last_output'](), 300)
         with mock.patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'tmux')):
             self.assertIsNone(MODULE['last_output']())
+
+    def test_isolated_tmux_clients_clear_root_environment_before_dropping_uid(self):
+        with mock.patch('os.geteuid', return_value=0), mock.patch.object(Path, 'exists', return_value=True), \
+                mock.patch.dict(os.environ, {'RUNPOD_API_KEY': 'synthetic-provider-secret',
+                                             'TS_AUTHKEY': 'synthetic-tailnet-secret'}, clear=True), \
+                mock.patch('subprocess.run', return_value=subprocess.CompletedProcess([], 0, stdout='42\n')) as run:
+            self.assertEqual(MODULE['last_output'](), 42)
+            self.assertEqual(MODULE['tmux']('list-windows', run=run), '42\n')
+        for call in run.call_args_list:
+            command = call.args[0]
+            self.assertEqual(command[:4], ['env', '-i', 'PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/workspace/home'])
+            self.assertEqual(command[4], 'setpriv')
+            self.assertIn('--no-new-privs', command)
+            self.assertIn('--bounding-set=-all', command)
+            self.assertNotIn('synthetic-provider-secret', ' '.join(command))
+            self.assertNotIn('synthetic-tailnet-secret', ' '.join(command))
 
     def test_retries_wait_between_requests_while_activity_is_still_sampled(self):
         environment = {'HORIZON_IDLE_STOP_MINUTES': '10', 'RUNPOD_POD_ID': 'pod123', 'RUNPOD_API_KEY': 'key'}

@@ -95,6 +95,8 @@ pub(super) struct Context<'a> {
     pub status: &'a Status,
     pub companions: &'a mut companions::State,
     pub region_of: &'a dyn Fn(&str) -> Option<String>,
+    pub tailnets: &'a mut crate::app::tailnets::State,
+    pub root: Option<&'a std::path::Path>,
     pub body: bool,
     pub fullscreen: bool,
     pub teasers: [String; 6],
@@ -349,6 +351,16 @@ fn current(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) {
 }
 
 fn connections(ui: &mut egui::Ui, runtime: &mut Runtime, context: &mut Context<'_>, response: &mut Response) {
+    if let Some(root) = context.root {
+        context.tailnets.cloud(
+            ui,
+            root,
+            &context.launch.id,
+            runtime.receiver.is_some() || runtime.state.as_ref().is_some_and(|s| s.spec.is_some()),
+        );
+        ui.add_space(12.0);
+        ui.separator();
+    }
     ui.label(super::attachment_summary(context.group, runtime, context.board))
         .on_hover_text("Local terminal processes are counted separately from deployment. A running process alone does not confirm the remote connection; check the terminal output.");
     if let Some(state) = &runtime.state {

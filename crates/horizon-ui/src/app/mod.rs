@@ -47,6 +47,8 @@ mod sidebar;
 pub(crate) mod speech;
 mod ssh_upload;
 mod startup_session;
+#[cfg(feature = "cloud-workspaces")]
+mod tailnets;
 #[cfg(test)]
 mod test_support;
 mod updates;

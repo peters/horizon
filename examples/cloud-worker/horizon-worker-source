@@ -5,6 +5,10 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import sys
+if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists():
+    os.chdir('/workspace')
+    os.execv('/usr/local/bin/horizon-worker-tailnet', ['horizon-worker-tailnet', 'agent', '/usr/local/bin/horizon-worker-source', *sys.argv[1:]])
 import re
 import shutil
 import subprocess
@@ -73,11 +77,11 @@ def manifest(root):
 
 def staging(alias=None):
     # Each sibling has its own upload path, so no upload can replace another repository's.
-    return material(alias).parent / 'horizon-source.tar' if alias else Path('/workspace/horizon-source.tar')
+    return material(alias).parent / 'horizon-source.tar' if alias else Path('/workspace/source/transfers/horizon-source.tar' if os.environ.get('HORIZON_UNPRIVILEGED') else '/workspace/horizon-source.tar')
 
 
 def import_source(root, upload):
-    with tempfile.TemporaryDirectory(dir='/workspace') as temporary:
+    with tempfile.TemporaryDirectory(dir='/workspace/source' if os.environ.get('HORIZON_UNPRIVILEGED') else '/workspace') as temporary:
         folder = Path(temporary)
         with tarfile.open(upload) as archive:
             if any(not (m.isfile() or m.isdir()) for m in archive.getmembers()):
@@ -165,7 +169,7 @@ def missing_objects(repo, revision, object_format, history):
     # Reads through a scratch repository that borrows repo's objects, so repo's own
     # shallow file cannot hide missing ancestors. Without history, only the pinned
     # commit and its tree are checked.
-    with tempfile.TemporaryDirectory(dir=repo.parent) as scratch:
+    with tempfile.TemporaryDirectory() as scratch:
         probe = Path(scratch) / 'probe.git'
         git('init', '--bare', '-q', '--object-format=' + object_format, probe, stdout=subprocess.DEVNULL)
         (probe / 'objects' / 'info' / 'alternates').write_text(str((repo / 'objects').resolve()) + '\n')

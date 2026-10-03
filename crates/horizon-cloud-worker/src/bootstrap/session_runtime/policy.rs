@@ -26,6 +26,11 @@ pub(super) const ARGUMENTS: &[&str] = &[
     "--no-chrome",
 ];
 pub(super) fn qualify(store: &Store) -> io::Result<()> {
+    if std::path::Path::new("/workspace/.horizon-tailnet/selection").exists() {
+        return Err(io::Error::other(
+            "Signed project sessions require an unprivileged runtime before using a tailnet",
+        ));
+    }
     match fs::symlink_metadata("/etc/claude-code") {
         Ok(meta) if meta.is_dir() && fs::read_dir("/etc/claude-code")?.next().is_none() => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}

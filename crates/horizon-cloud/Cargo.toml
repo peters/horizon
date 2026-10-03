@@ -26,3 +26,15 @@ ureq.workspace = true
 unicode-general-category.workspace = true
 time.workspace = true
 zeroize.workspace = true
+keyring-core.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus-secret-service-keyring-store.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-native-keyring-store.workspace = true

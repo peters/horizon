@@ -48,8 +48,8 @@ The watcher also answers stop requests from agents on `/run/horizon-worker/stop.
 `horizon-worker-stop --reason TEXT`, or its `mcp` mode registered as the
 `stop_this_worker` tool on opted-in workers that hold a stop credential (not on Hetzner, where Horizon stops the worker), asks it to stop the worker when a task is
 done. The watcher is the only process that uses the provider credential, but agent
-sessions run as root today, so this is not an isolation boundary (per-agent credential
-isolation is tracked separately). It identifies the requesting session from the
+sessions in the stock image run as UID 10001 with no effective capabilities;
+older/custom images may still run as root. The root watcher retains provider credentials. It identifies the requesting session from the
 connecting process through the kernel's peer credentials and its tmux pane, never from
 the request, and refuses callers outside a Claude, Codex or Grok session (a shell
 session or an ad-hoc tmux session is not one). It refuses while another
@@ -121,14 +121,39 @@ use; later host-key changes fail. VNC listens on worker loopback and is read-onl
 SSH tunnels are required for presentation. Disconnecting the client detaches
 tmux. Deleting a worker loses its processes and Pod-local volume.
 
-The root-based Pod image uses Chromium with `--no-sandbox` inside the dedicated
-one-cloud container. Treat that container as the trust boundary: do not reuse
-it across unrelated repositories/accounts. The browser service and VNC endpoint
-listen only on worker loopback; presentation uses authenticated SSH. Browser
-and device MCP processes run on the worker and retain their injected agent identity.
-Private credential files protect against accidental inclusion in source, images
-and logs; they do not isolate agents from other root processes in the same cloud.
-Per-agent operating-system isolation requires a separate security architecture.
+The stock image runs agents and workspace services as UID 10001 with no
+capabilities or privilege escalation. Root owns the SSH/control lane, provider
+stop credential and private Tailscale state; these are inaccessible to agents.
+Agents share one identity and can access each other's workspace credentials, so
+keep each cloud dedicated to related repositories/accounts. This does not provide
+per-agent isolation. Chromium still uses `--no-sandbox` inside that cloud container.
+The browser service and VNC endpoint listen only on worker loopback; presentation
+uses authenticated SSH. Browser and device MCP processes retain their injected
+agent identity. Private credential files must never enter source, images or logs.
+
+## Cloud tailnet contract
+
+The stock image includes pinned Tailscale v1.102.5 binaries. Startup isolates
+workspace services before they can execute user code. `horizon-worker-tailnet`
+is a root control helper; agents cannot enroll, retrieve credentials, or open the
+administrative socket. `configure` accepts bounded private JSON on stdin and
+returns only `ready` or `needs_key`. Enrollment uses an anonymous memory file,
+never an auth key in argv, environment or a retained file.
+
+`/workspace/.horizon-tailnet` and `/run/horizon-tailnet` are root-only. The volume
+root stays root-owned and non-writable by agents. The supervisor restarts the
+userspace daemon and resumes its persistent node state after worker restart.
+Agents use HTTP/SOCKS proxies and the sanitized device inventory in
+`/run/horizon-tailnet-devices/devices.json`; this image does not require TUN or
+NET_ADMIN. Image qualification reports `horizon-tailnet-contract=1` only when the
+binaries and isolated launcher are installed. See
+[cloud tailnets](../../docs/cloud-workspaces.md#tailnets-auth-key-mvp) for scope,
+selection and follow-ups. Root SSH/SCP puts sibling uploads in private staging.
+Only the consuming import opens those inputs with `O_NOFOLLOW`, passes read-only
+descriptors to UID 10001 with no inherited credentials, and removes staging
+after successful atomic publication. Credential writes also run as UID 10001;
+agent-owned paths never receive privileged writes. Signed project sessions fail closed with a selected
+tailnet until that separate runtime is qualified for an unprivileged account.
 
 ## Helpers from the published artifact
 
@@ -155,7 +180,9 @@ shows the newest one. Keep tags out of recipes, so a rebuild copies the same
 helpers. The copy replaces older helpers and scripts in the base. The base still
 supplies the rest of the contract: Python 3.12 or newer, Bash 4.4 or newer at
 `/bin/bash` and glibc 2.36 or newer (Ubuntu 24.04 has all three), SSH, tmux, Git
-with LFS, `gh`, util-linux,
+with LFS, `gh`, util-linux (`setpriv`), and the `horizon-agent` account with
+UID and primary GID 10001. Tailnet support additionally requires `tailscale` and
+`tailscaled`; the pinned stock image supplies them. Also supply
 `/etc/horizon-worker/capabilities.json`, the worker entrypoint (the example runs
 `horizon-worker-start` under tini) and the selected agents, browsers and desktop
 packages. Run `horizon-worker-check --git-auth` after the copy so a missing
@@ -334,7 +361,8 @@ one path component of letters, digits, `.`, `_` or `-` that does not start with 
 or `-` (so never `.`, `..` or `.git`), and unique ignoring case. `set` refuses unknown keys, more than 16 siblings, input over 64 KiB,
 and a sibling whose `revision` differs from its imported `refs/heads/base` or whose
 source material has not been imported; a refused manifest leaves the previous one in
-place. The manifest is replaced atomically at `/workspace/siblings.json`. `show`
+place. The manifest is replaced atomically at `/workspace/siblings.json` on legacy
+workers, or `/workspace/.horizon/siblings.json` on isolated workers. `show`
 prints the validated manifest, or `{"version":1,"primary":null,"siblings":[]}` when
 none was recorded. An empty `siblings` list is valid and means no siblings; with an
 empty list `primary` may be `null`, so sending back what `show` printed before any

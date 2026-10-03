@@ -112,3 +112,35 @@ pub(super) fn released(
     record.released_workers.insert(worker_id.clone());
     write(store, &record)
 }
+
+/// Nonsecret selection accepted by an outstanding operation; caller holds the target lock.
+pub(in crate::cloud_runtime) fn requested_tailnet(
+    root: &std::path::Path,
+) -> Result<Option<horizon_cloud::tailnet::Selection>> {
+    let Some(claim) = load(root)? else {
+        return Ok(None);
+    };
+    if matches!(
+        claim.phase,
+        Phase::Ready | Phase::Stopped | Phase::Refused | Phase::RetryRequired
+    ) {
+        return Ok(None);
+    }
+    let path = root.join(format!("tailnet-request-{}.json", claim.id));
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Legacy claims reserve their current selection too.
+            return horizon_cloud::tailnet::Selection::load(root)
+                .map(Some)
+                .map_err(|_| Error::Json);
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let mut bytes = Vec::new();
+    file.take(1025).read_to_end(&mut bytes)?;
+    if bytes.len() > 1024 {
+        return Err(Error::Invalid("Pending tailnet request is too large"));
+    }
+    serde_json::from_slice(&bytes).map(Some).map_err(|_| Error::Json)
+}
