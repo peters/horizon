@@ -215,12 +215,22 @@ def own(path, recursive=False):
 
 
 def handoff():
+    private_directory(STATE)
     private_directory(RUNTIME)
     with open(RUNTIME / 'handoff.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        ready = RUNTIME / 'ownership-ready'
-        handoff_paths(not ready.exists())
-        ready.touch(mode=0o600)
+        ready = STATE / 'ownership-v1'
+        first = not ready.exists()
+        handoff_paths(first)
+        if first:
+            with ready.open('a') as marker:
+                os.fchmod(marker.fileno(), 0o600)
+                os.fsync(marker.fileno())
+            directory = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
 
 
 def handoff_paths(first):

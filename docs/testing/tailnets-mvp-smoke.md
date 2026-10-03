@@ -209,8 +209,8 @@ network-disabled container verified that synthetic provider and tailnet secrets
 are absent from both the child environment and `/proc/self/environ`; self-stop
 availability and private-state isolation still work.
 
-Workspace ownership migration is serialized and recorded in the private runtime
-directory only after success. Repeated launches hand off new primary and sibling
+Workspace ownership migration is serialized and recorded in versioned private persistent
+state only after success. Repeated launches hand off new primary and sibling
 uploads and configuration files without scanning existing checkout trees. Actual
 repeated handoff performed zero recursive ownership commands while transferring
 both upload types. Failure/retry regressions keep incomplete migration retryable.
@@ -223,3 +223,34 @@ matrix passed again: 4,711 workspace and 1,580 speech-tier tests, formatting,
 maintainability and both mandatory Clippy tiers. The existing advisory provider
 boolean warning remains unchanged. The final speech-enabled application SHA256
 still matches the native fixture and showcase above.
+
+
+## Interrupted submission and container-resume follow-up
+
+Tailnet submission stages only nonsecret request metadata before source persistence.
+The target selection changes after the source intent and target claim are both
+durable. A regression simulates exit after staging and an actual source-journal
+size-limit refusal; neither changes the target selection, and a later omitted
+choice remains None. Incomplete claimed submissions stay fenced and can be
+cancelled through the existing unstarted-operation recovery path.
+
+The versioned ownership completion marker is root-only on the persistent workspace
+volume. Runtime recreation preserved it and caused zero recursive ownership scans
+while handing off new primary and sibling uploads. The real offline probe again
+verified UID 10001 credential isolation, and the real prelogin daemon passed 20
+concurrent sanitized inventory publications without enrollment.
+
+
+The final exact-checkout matrix passed 4,712 workspace tests, 1,580 speech-tier
+tests, all 248 matching-helper worker tests, formatting, maintainability and both
+mandatory Clippy tiers. The existing provider boolean warning remains advisory.
+The frozen final native application child SHA256 is
+`4750c412b2d07572d5440585b159ee3f7afe7097de4ea7eba823c108d0190b90`.
+Three timestamped public native-viewer inspections confirmed displayed advancing
+frames. The final 657-frame continuous recording verifies two saved networks,
+empty/masked replacement, stable binding IDs with one new credential generation,
+Office/Lab/None provisioning choices, cancellation and clearing an edited removed
+binding. Both test bindings were deleted with no pending credential journal; all
+owned desktop children exited and target files expired. The showcase retains
+original native frames around 30 verified feature actions and omits idle waits
+and unrelated tab navigation. No new paid cloud was allocated.

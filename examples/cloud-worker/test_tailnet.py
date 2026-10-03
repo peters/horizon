@@ -175,9 +175,11 @@ class TailnetTests(unittest.TestCase):
     def test_failed_ownership_migration_retries_before_publishing_ready(self):
         with patch.object(worker, 'handoff_paths', side_effect=OSError):
             with self.assertRaises(OSError): worker.handoff()
-        self.assertFalse((self.runtime / 'ownership-ready').exists())
+        self.assertFalse((self.state / 'ownership-v1').exists())
         with patch.object(worker, 'handoff_paths') as migrate:
             worker.handoff()
+            (self.runtime / 'handoff.lock').unlink()
+            self.runtime.rmdir(); self.runtime.mkdir()
             worker.handoff()
         self.assertEqual([call.args for call in migrate.call_args_list], [(True,), (False,)])
 

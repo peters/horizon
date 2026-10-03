@@ -633,3 +633,57 @@ fn pending_tailnet_requests_fence_edits_and_fail_before_execution_on_drift() {
         assert!(crate::cloud_runtime::tailnet::validate_pending(&target).is_ok());
     }
 }
+
+#[test]
+fn uncommitted_tailnet_requests_never_change_the_default_selection() {
+    for interrupt_before_source_write in [true, false] {
+        let f = Fixture::new();
+        std::fs::write(
+            f.root.path().join("tailnets.json"),
+            br#"{"tailnets":[{"id":"work","name":"Work"}]}"#,
+        )
+        .unwrap();
+        let mut prepared = f.ready();
+        prepared.worker = None;
+        prepared.spec = None;
+        prepared.operation = CreateState::Prepared;
+        f.save(&prepared);
+        let target = f.root.path().join("target");
+        let id = OperationId::generate();
+        if interrupt_before_source_write {
+            let store = Store::lock(&target).unwrap();
+            let _staged = tailnet_choice::prepare(f.root.path(), &store, id, Some("work")).unwrap();
+            // Simulate exit after the request file is durable, before source persistence.
+        } else {
+            let store = journal::Store::open(f.root.path(), &f.owner).unwrap();
+            let mut state = store.load().unwrap();
+            let bytes = serde_json::to_vec(&state).unwrap().len();
+            state.grants.get_mut("consumer").unwrap().revision = Some("x".repeat(256 * 1024 - bytes - 5));
+            store.save(&state).unwrap();
+            drop(store);
+            // The existing source loads, but adding an intent exceeds its durable size limit.
+            assert!(submit_with_tailnet(&f.request(), Action::EnsureReady, id, Some("work")).is_err());
+            let store = journal::Store::open(f.root.path(), &f.owner).unwrap();
+            let mut state = store.load().unwrap();
+            assert!(state.intents.operation(id).is_none());
+            state.grants.get_mut("consumer").unwrap().revision = None;
+            store.save(&state).unwrap();
+        }
+        assert!(target.join(format!("tailnet-request-{id}.json")).is_file());
+        assert!(receipt::load(&target).unwrap().is_none());
+        assert!(
+            horizon_cloud::tailnet::Selection::load(&target)
+                .unwrap()
+                .tailnet
+                .is_none()
+        );
+        submit(&f.request(), Action::EnsureReady, OperationId::generate()).unwrap();
+        assert!(
+            horizon_cloud::tailnet::Selection::load(&target)
+                .unwrap()
+                .tailnet
+                .is_none()
+        );
+        assert!(crate::cloud_runtime::tailnet::validate_pending(&target).is_ok());
+    }
+}
