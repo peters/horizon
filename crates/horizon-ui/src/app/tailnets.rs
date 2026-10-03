@@ -274,7 +274,7 @@ impl State {
     pub(super) fn ready(&self) -> bool {
         self.initialized && self.receiver.is_none() && self.reload_barriers.is_empty() && !self.failed
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn loaded_fixture() -> Self {
         Self {
             initialized: true,
