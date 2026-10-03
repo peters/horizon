@@ -7,6 +7,14 @@ pub struct TransferFiles {
     directory: std::sync::OnceLock<tempfile::TempDir>,
 }
 impl TransferFiles {
+    /// Remove owned images before a host exit path that skips destructors.
+    ///
+    /// # Errors
+    /// Returns an error if the private directory cannot be removed.
+    pub fn clear(&mut self) -> std::io::Result<()> {
+        self.directory.take().map_or(Ok(()), tempfile::TempDir::close)
+    }
+
     const URI_LIST: &str = "text/uri-list";
     /// Decode local file URLs or persist an encoded PNG/JPEG in a private file.
     ///
@@ -100,7 +108,9 @@ mod tests {
         );
         assert_eq!(std::fs::read(&paths[0]).unwrap(), b"\x89PNG\r\n\x1a\nfixture");
         let directory = paths[0].parent().unwrap().to_path_buf();
-        drop(files);
+        let mut files = files;
+        files.clear().unwrap();
+        files.clear().unwrap();
         assert!(!paths[0].exists());
         assert!(!directory.exists());
         assert!(

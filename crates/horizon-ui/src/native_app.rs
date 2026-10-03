@@ -57,8 +57,7 @@ struct KeyboardAwareApp<'app> {
     image_paste_keys: std::collections::HashSet<(winit::window::WindowId, winit::keyboard::PhysicalKey)>,
     #[cfg(target_os = "linux")]
     clipboard: Option<smithay_clipboard::native::Subscription>,
-    #[cfg(target_os = "linux")]
-    transfer_files: horizon_wayland::TransferFiles,
+
     native_window_liveness: NativeWindowLiveness,
     // `pinch` borrows the platform display through raw FFI, so it must be
     // declared before `display_handle`: fields drop in declaration order, and
@@ -85,8 +84,7 @@ impl<'app> KeyboardAwareApp<'app> {
             image_paste_keys: std::collections::HashSet::new(),
             #[cfg(target_os = "linux")]
             clipboard: None,
-            #[cfg(target_os = "linux")]
-            transfer_files: horizon_wayland::TransferFiles::default(),
+
             native_window_liveness: NativeWindowLiveness::default(),
             #[cfg(target_os = "linux")]
             pinch: None,
@@ -147,7 +145,7 @@ impl KeyboardAwareApp<'_> {
             use smithay_clipboard::native::Event as TransferEvent;
             match transfer {
                 TransferEvent::Paste { recipient, mime, bytes } => {
-                    if let Ok(paths) = self.transfer_files.decode_transfer_payload(&mime, &bytes) {
+                    if let Ok(paths) = self.observed_keyboard_inputs.decode_native_transfer(&mime, &bytes) {
                         self.observed_keyboard_inputs.native_paste(recipient, paths);
                     } else {
                         self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
@@ -188,7 +186,13 @@ impl KeyboardAwareApp<'_> {
                     if self.observed_keyboard_inputs.native_window(surface).is_none() {
                         continue;
                     }
-                    let Ok(paths) = self.transfer_files.decode_transfer_payload(&mime, &bytes) else {
+                    let paths = self.observed_keyboard_inputs.decode_native_transfer(&mime, &bytes);
+                    self.inner.window_event(
+                        event_loop,
+                        winit::window::WindowId::from(surface),
+                        WindowEvent::HoveredFileCancelled,
+                    );
+                    let Ok(paths) = paths else {
                         continue;
                     };
                     self.observed_keyboard_inputs

@@ -11,6 +11,7 @@ pub(super) struct NativeFileInputs {
     pastes: Vec<NativePaste>,
     requests: std::collections::HashMap<u64, PasteRequest>,
     next_request: u64,
+    transfer_files: horizon_wayland::TransferFiles,
 }
 
 pub(crate) struct NativePaste {
@@ -32,6 +33,26 @@ struct NativeDrop {
 }
 
 impl ObservedKeyboardInputs {
+    pub(crate) fn decode_native_transfer(&self, mime: &str, bytes: &[u8]) -> std::io::Result<Vec<std::path::PathBuf>> {
+        self.1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .transfer_files
+            .decode_transfer_payload(mime, bytes)
+    }
+
+    pub(crate) fn clear_native_transfer_files(&self) {
+        if let Err(error) = self
+            .1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .transfer_files
+            .clear()
+        {
+            tracing::warn!(%error, "failed to remove native image files during shutdown");
+        }
+    }
+
     pub(crate) fn wake_native_input(&self) {
         let context = self
             .1
