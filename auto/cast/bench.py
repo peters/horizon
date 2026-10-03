@@ -260,6 +260,12 @@ def run_case(binary, root, arguments, resolution, orientation):
 
 
 def main():
+    if '--workload' in sys.argv:
+        index = sys.argv.index('--workload')
+        if sys.argv[index + 1:index + 2] == ['whole-window']:
+            from whole_window import main as window_main
+            arguments = sys.argv[1:index] + sys.argv[index + 2:]
+            return window_main(arguments)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=["cpu", "gpu"], default="cpu")
     parser.add_argument("--scaler", choices=["cpu", "cuda"], help="require this actual scaler; never substitute another path")

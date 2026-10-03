@@ -88,3 +88,95 @@ reason/hypothesis, and evidence path. A baseline is measured, not inferred.
 Failed/blocked runs retain logs and cannot become a numeric zero or a win.
 Do not edit older rows, automate destructive resets, or merge experimental
 changes without the repository's validation/review/merge gates.
+
+## Whole-window exploratory workload
+
+`--workload whole-window` is a separate versioned contract:
+`whole-window-v1-exploratory`. It runs the actual isolated Horizon root window,
+including capture, crop/scaling, encoding and encrypted loopback transport. Its
+`score` is always `null`; do not append these diagnostics to the encoder-v1
+numeric ledger or use them to declare an optimization win. Preserve each
+experiment's `summary.json` or failure file and all raw evidence. This version
+prepares the end-to-end workload for future CPU, memory and GPU research; it is
+not a complete scoring contract.
+
+Linux additionally needs the existing native smoke prerequisites: bubblewrap,
+Xvfb, Openbox, x11vnc, D-Bus and xdotool and xwininfo, plus built `horizon` and `horizon-device`
+binaries. `--tools PATH` accepts the existing unpacked smoke-tool directory.
+There is no new Rust or Python dependency. Build the candidate in its exact
+isolated worktree, then use the same source and immutable benchmark throughout
+the run. Preparation freezes both executables and records the actual application
+child PID, start identity and executable SHA-256, source/benchmark fingerprints,
+source commit, kernel, Python and FFmpeg version. A later tooling-only commit may
+have a different commit hash from the candidate; its Rust source fingerprint
+must still match the qualified build. Compilation provenance needs the retained
+build log in addition to the executable hash.
+
+```sh
+# This process stays running until the run phase completes; OUTPUT must be new.
+CAST_BENCH_PYTHON=/tmp/cast-bench-venv/bin/python bash auto/cast/bench.sh \
+  --workload whole-window prepare --horizon target/debug/horizon \
+  --horizon-device target/debug/horizon-device --output /tmp/window-baseline
+
+# After the native viewer and real UI consent steps below, in another terminal:
+CAST_BENCH_PYTHON=/tmp/cast-bench-venv/bin/python bash auto/cast/bench.sh \
+  --workload whole-window run --prepared /tmp/window-baseline \
+  --viewer-evidence /tmp/window-baseline/viewer-observations.json \
+  --seconds 10 --resolution 1080p --orientation landscape --backend cpu
+```
+
+Preparation creates a task-owned X11 desktop, private application state, synthetic
+terminal pixels, and two real agent controllers in different workspaces. Unlike
+encoder-v1, this workload advertises exactly one owned synthetic AirPlay receiver
+with a numeric loopback endpoint, because public discovery is required. Discovery
+can observe other devices but the controllers filter them before writing evidence;
+no physical receiver is selected, contacted or saved. Only the synthetic receiver
+is paired. Its remembered controller signatures are checked independently and
+its configuration-only tail is retained as metadata until an authenticated picture
+arrives, rather than fed to the decoder without a picture.
+
+Use the public `device_panel` operation to connect the reported `vnc_address` in
+the calling agent's current workspace. Retain at least three public status
+responses in a JSON array as `viewer-observations.json`: they must identify the
+same owned connection, span at least two seconds, show connected/received/displayed
+images and advancing frame sequences, and be fresh when `run` starts. Follow the
+native viewer health and recording rules in `AGENTS.md`; a receipt does not replace
+watching the interactive flow. Through the explicitly scoped `horizon-device`
+target, open the real Cast controls and grant **Entire Horizon** in the owning
+workspace. Do not modify configuration, forge agent identity or use test-only grants.
+
+`run` verifies the grant and cross-workspace denial, starts through public casting
+MCP, checks duplicate-start exclusion, warms for two seconds and samples the fixed
+requested interval. An independent device screenshot of the exact PID's root
+client window is taken before measurement. Decoding verifies every received frame,
+requested canvas/configuration dimensions, large grayscale guards and checker
+quality, non-reversing content IDs, and root chrome outside the terminal fixture
+against that reference. It separately requires decoded content to advance within
+the fixed interval selected by independent receiver monotonic timestamps; duplicate
+encoded frames are reported. Resource endpoints are frozen before waiting for GPU
+queries, and sender-counter polling is recorded as a separate interval.
+Sender throughput is not content-update rate, displayed TV FPS or latency.
+
+When `revoke-required.json` appears, revoke the owning workspace's application
+capture grant through its real Cast UI. The benchmark requires capture to stop,
+restart to be denied, authenticated receiver events, exact sender/receiver frame
+accounting, TEARDOWN, normal window close and owned-process cleanup. A missing gate
+fails the run and retains logs/partial diagnostics; it cannot produce a pass or a
+numeric zero. Cleanup targets only the task-owned desktop and processes.
+
+CPU is the application process-tree endpoint counter over the fixed interval,
+including reaped child time; RSS is sampled aggregate tree memory. Horizon-hosted fixture terminals, controllers and their public MCP children are
+included; the external X/VNC fixture and resource sampler are excluded. Endpoint sampling can miss a child that
+reparents away, so CPU evidence remains exploratory. GPU allocation is sampled
+from NVIDIA graphics and compute records attributed to actual owned PID identities;
+unavailable allocation is `null` with a reason. Software fallback fails a requested
+GPU lane. `--scaler cpu|cuda` requires matching public status; older candidates
+without scaler metadata report `null` and cannot qualify a requested scaler lane.
+Mixed scaling includes CPU work and must not be described as a fully GPU pipeline.
+
+Compare only identical contracts, machine/load, renderer, resolution/orientation,
+backend/scaler and immutable fixtures, with interleaved warm runs. Preserve quality,
+authentication and lifecycle gates. A future phone-controller workload must get its
+own versioned contract after the native phone interface exists; these synthetic
+whole-window diagnostics do not establish phone or physical-TV performance.
+Run failure tests with `python -m unittest discover -s auto/cast -p 'test_*.py'`.
