@@ -172,6 +172,15 @@ class TailnetTests(unittest.TestCase):
         self.assertIn('--tun=userspace-networking', args)
         self.assertNotIn(KEY, str(spawn.call_args))
 
+    def test_failed_ownership_migration_retries_before_publishing_ready(self):
+        with patch.object(worker, 'handoff_paths', side_effect=OSError):
+            with self.assertRaises(OSError): worker.handoff()
+        self.assertFalse((self.runtime / 'ownership-ready').exists())
+        with patch.object(worker, 'handoff_paths') as migrate:
+            worker.handoff()
+            worker.handoff()
+        self.assertEqual([call.args for call in migrate.call_args_list], [(True,), (False,)])
+
     def test_agent_drop_hands_off_siblings_and_only_nonsecret_stop_availability(self):
         workspace = Path(self.temp.name) / 'workspace'
         workspace.mkdir()
@@ -194,6 +203,14 @@ class TailnetTests(unittest.TestCase):
                                       'RUNPOD_POD_ID': 'synthetic-pod', 'TS_AUTHKEY': KEY}, clear=True):
             paths.cwd.return_value = workspace
             with self.assertRaises(Exec): worker.agent(['/usr/bin/true'])
+            self.assertTrue(any('-R' in call.args[0] for call in run.call_args_list))
+            run.reset_mock()
+            (workspace / 'horizon-transfer.pack').write_text('new root upload')
+            with self.assertRaises(Exec): worker.agent(['/usr/bin/true'])
+            self.assertFalse(any('-R' in call.args[0] for call in run.call_args_list))
+            transfer = workspace / 'source/transfers/horizon-transfer.pack'
+            self.assertEqual(transfer.read_text(), 'new root upload')
+            self.assertTrue(any(call.args[0][-1] == str(transfer) for call in run.call_args_list))
         self.assertTrue(any(call.args[0][-1] == str(manifest) for call in run.call_args_list))
         binary, args, environment = execute.call_args.args
         self.assertEqual(binary, '/usr/bin/setpriv')

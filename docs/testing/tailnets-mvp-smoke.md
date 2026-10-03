@@ -199,3 +199,27 @@ The refreshed native candidate child SHA256 is
 Live native VNC and continuous recording verify the final settings fields, two
 saved bindings, masked replacement with stable IDs, both provisioning choices and
 None, cancellation and removal while editing. No new paid allocation was made.
+
+
+## Probe environment and ownership follow-up
+
+Isolated idle-watcher tmux clients clear the environment while still root, before
+using `setpriv` with UID 10001, no new privileges and no capabilities. A real
+network-disabled container verified that synthetic provider and tailnet secrets
+are absent from both the child environment and `/proc/self/environ`; self-stop
+availability and private-state isolation still work.
+
+Workspace ownership migration is serialized and recorded in the private runtime
+directory only after success. Repeated launches hand off new primary and sibling
+uploads and configuration files without scanning existing checkout trees. Actual
+repeated handoff performed zero recursive ownership commands while transferring
+both upload types. Failure/retry regressions keep incomplete migration retryable.
+The real prelogin Tailscale daemon again published 20 concurrent complete sanitized
+inventories without an auth key. The UI executable and verified native recording
+are unchanged by these worker-only fixes.
+
+All 248 matching-helper worker tests passed without skips. The full required
+matrix passed again: 4,711 workspace and 1,580 speech-tier tests, formatting,
+maintainability and both mandatory Clippy tiers. The existing advisory provider
+boolean warning remains unchanged. The final speech-enabled application SHA256
+still matches the native fixture and showcase above.

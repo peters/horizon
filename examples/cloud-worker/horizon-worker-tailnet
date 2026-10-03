@@ -132,6 +132,7 @@ def prepare_agents():
                 raise ValueError()
         except (FileNotFoundError, PermissionError):
             pass
+    handoff()
     (RUNTIME / 'agent-isolation').touch(mode=0o600)
 
 
@@ -204,6 +205,69 @@ def wait_socket():
         time.sleep(0.1)
 
 
+def own(path, recursive=False):
+    if path.is_symlink():
+        raise ValueError()
+    if path.exists() and (recursive or path.stat().st_uid != USER):
+        subprocess.run(['/usr/bin/chown', *(['-R'] if recursive else []), '--no-dereference',
+                        f'{USER}:{USER}', str(path)], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def handoff():
+    private_directory(RUNTIME)
+    with open(RUNTIME / 'handoff.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        ready = RUNTIME / 'ownership-ready'
+        handoff_paths(not ready.exists())
+        ready.touch(mode=0o600)
+
+
+def handoff_paths(first):
+    # All workspace code and tool services run with the same unprivileged identity.
+    # The mount root and networking directories stay owned by the control lane.
+    folders = ['home', 'agents', 'sessions', 'session-data', 'locks', 'credentials',
+               'checkout', 'worktrees', 'companions', 'siblings', 'source', 'repository.git', '.horizon']
+    files = ['agent-mcp.json', 'capabilities.json', 'siblings.json', 'horizon-transfer.pack',
+             'horizon-source.tar', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log', 'device.json',
+             'shared-checkout.status', 'shared-checkout.log']
+    roots = [Path('/workspace', name) for name in folders + files]
+    for root in roots:
+        if root.is_symlink():
+            raise ValueError()
+        if root.name in folders:
+            root.mkdir(exist_ok=True)
+        if root.name in {'agent-mcp.json', 'device.json', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log'}:
+            root.touch(exist_ok=True)
+        own(root, recursive=first)
+    credentials = Path('/run/horizon-credentials')
+    if credentials.is_symlink():
+        raise ValueError()
+    credentials.mkdir(mode=0o700, exist_ok=True)
+    own(credentials, recursive=first)
+    transfers = Path('/workspace/source/transfers')
+    if transfers.is_symlink():
+        raise ValueError()
+    transfers.mkdir(exist_ok=True)
+    for name in ['horizon-transfer.pack', 'horizon-source.tar']:
+        incoming = Path('/workspace', name)
+        if incoming.exists():
+            if incoming.is_symlink():
+                raise ValueError()
+            destination = transfers / name
+            os.replace(incoming, destination)
+            own(destination)
+    own(transfers)
+    # SCP creates these files as root even after the sibling was prepared.
+    for sibling in Path('/workspace/siblings').iterdir():
+        if sibling.is_symlink():
+            raise ValueError()
+        if sibling.is_dir():
+            own(sibling, recursive=sibling.stat().st_uid != USER)
+            for name in ['horizon-transfer.pack', 'horizon-source.tar']:
+                own(sibling / name)
+
+
 def agent(arguments):
     # Tailnet-enabled agents share the network, never the controller privilege.
     if os.geteuid() != 0:
@@ -214,38 +278,7 @@ def agent(arguments):
         os.chdir(worktree)
     if worktree.is_relative_to(STATE):
         raise ValueError()
-    # All workspace code and tool services run with the same unprivileged identity.
-    # The mount root and networking directories stay owned by the control lane.
-    folders = ['home', 'agents', 'sessions', 'session-data', 'locks', 'credentials',
-               'checkout', 'worktrees', 'companions', 'siblings', 'source', 'repository.git', '.horizon']
-    files = ['agent-mcp.json', 'capabilities.json', 'siblings.json', 'horizon-transfer.pack',
-             'horizon-source.tar', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log', 'device.json',
-             'shared-checkout.status', 'shared-checkout.log']
-    roots = ([] if worktree == Path('/workspace') else [worktree]) + [Path('/workspace', name) for name in folders + files]
-    for root in roots:
-        if root.is_symlink():
-            raise ValueError()
-        if root.name in folders:
-            root.mkdir(exist_ok=True)
-        if root.name in {'agent-mcp.json', 'device.json', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log'}:
-            root.touch(exist_ok=True)
-        if root.exists():
-            subprocess.run(['/usr/bin/chown', '-R', '--no-dereference', f'{USER}:{USER}', str(root)], check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    credentials = Path('/run/horizon-credentials')
-    if credentials.is_symlink():
-        raise ValueError()
-    credentials.mkdir(mode=0o700, exist_ok=True)
-    subprocess.run(['/usr/bin/chown', '-R', '--no-dereference', f'{USER}:{USER}', str(credentials)], check=True)
-    transfers = Path('/workspace/source/transfers')
-    if transfers.is_symlink():
-        raise ValueError()
-    transfers.mkdir(exist_ok=True)
-    for name in ['horizon-transfer.pack', 'horizon-source.tar']:
-        incoming = Path('/workspace', name)
-        if incoming.exists():
-            os.replace(incoming, transfers / name)
-    subprocess.run(['/usr/bin/chown', '-R', '--no-dereference', f'{USER}:{USER}', str(transfers)], check=True)
+    handoff()
     environment = dict(os.environ)
     environment['HORIZON_UNPRIVILEGED'] = '1'
     environment['HORIZON_WORKER_SELF_STOP_AVAILABLE'] = '1' if environment.get('RUNPOD_POD_ID') and environment.get('RUNPOD_API_KEY') else '0'

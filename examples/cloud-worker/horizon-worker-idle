@@ -44,7 +44,9 @@ REPORT_CONTRACT = 'horizon-idle-report-contract=1'
 
 def tmux_command():
     if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists():
-        return ['setpriv', '--reuid=10001', '--regid=10001', '--clear-groups', '--', 'tmux', '-L', 'horizon-cloud']
+        return ['env', '-i', 'PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/workspace/home',
+                'setpriv', '--reuid=10001', '--regid=10001', '--clear-groups',
+                '--no-new-privs', '--bounding-set=-all', '--', 'tmux', '-L', 'horizon-cloud']
     return ['tmux', '-L', 'horizon-cloud']
 
 
