@@ -138,3 +138,64 @@ fn mouse_reporting_hover_and_canvas_pan_reuse_unchanged_grid() {
         "real terminal output must refresh the cached grid"
     );
 }
+
+#[test]
+fn tab_does_not_steal_focus_from_another_text_field() {
+    let mut harness = TerminalHarness::new();
+    let field = egui::Id::new("synthetic-pin");
+    let mut pin = String::new();
+    let mut pair_button = None;
+    for (frame, events) in [
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        vec![Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+            events,
+            ..RawInput::default()
+        };
+        let _ = harness
+            .ctx
+            .run_ui(input, |ui| {
+                TerminalView::new(&mut harness.panel, Some(&mut harness.cache)).show(
+                    ui,
+                    true,
+                    true,
+                    &mut harness.selection_drag,
+                    TerminalKeyboardContext {
+                        keyboard_events: &[],
+                        primary_selection: &harness.primary_selection,
+                        local_ssh_reconnect_enabled: false,
+                        reconnect_requested: &mut false,
+                    },
+                );
+                egui::Window::new("Synthetic pairing")
+                    .fixed_pos(Pos2::new(30.0, 30.0))
+                    .show(ui.ctx(), |ui| {
+                        let response = ui.add(egui::TextEdit::singleline(&mut pin).id(field).password(true));
+                        if !ui.input(|input| input.key_pressed(egui::Key::Tab)) {
+                            response.request_focus();
+                        }
+                        pair_button = Some(ui.button("Pair").id);
+                    });
+            })
+            .discard_textures();
+        if frame >= 2 {
+            assert_eq!(
+                harness.ctx.memory(egui::Memory::focused),
+                if frame == 2 { Some(field) } else { pair_button }
+            );
+        }
+    }
+}

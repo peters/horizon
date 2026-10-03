@@ -45,6 +45,7 @@ struct Session {
     agent_controlled: bool,
 }
 struct Picker {
+    anchor: horizon_core::PanelId,
     workspace: WorkspaceId,
     source: CastSource,
     receiver: Option<String>,
