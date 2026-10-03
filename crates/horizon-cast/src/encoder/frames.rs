@@ -5,7 +5,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, RecvTimeoutError},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(crate) struct Frame {
@@ -55,14 +55,23 @@ impl FrameInput {
         }
     }
     pub(crate) fn next(&mut self) -> Result<&Frame, RecvTimeoutError> {
-        if self.frozen.load(Ordering::Relaxed) && self.last.is_some() {
+        if self.frozen.load(Ordering::Relaxed) {
             // Repeat only the last validated source image, never the controls covering it.
             std::thread::sleep(Duration::from_millis(67));
-            while self.receiver.try_recv().is_ok() {}
+            // The source channel has one slot; discarding once keeps cancellation bounded.
+            let _ = self.receiver.try_recv();
         } else {
             self.last = Some(self.receiver.recv_timeout(Duration::from_millis(100))?);
         }
         self.last.as_ref().ok_or(RecvTimeoutError::Timeout)
+    }
+    pub(crate) fn stalled(&self, last_frame: &mut Instant, now: Instant) -> bool {
+        if self.frozen.load(Ordering::Relaxed) {
+            *last_frame = now;
+            false
+        } else {
+            now.saturating_duration_since(*last_frame) > Duration::from_secs(3)
+        }
     }
 }
 
@@ -89,6 +98,60 @@ mod tests {
         send.send(Frame::new(2, 1, vec![5; 8]).expect("valid frame"))
             .expect("new source image");
         assert_eq!(frames.next().expect("resume").rgba, [5; 8]);
+    }
+
+    #[test]
+    fn paused_startup_waits_without_private_frames_then_resumes_with_a_fresh_image() {
+        let (send, receiver) = mpsc::sync_channel(1);
+        let frozen = Arc::new(AtomicBool::new(true));
+        let mut frames = FrameInput::new(receiver, frozen.clone());
+        send.send(Frame::new(1, 1, vec![3; 4]).expect("queued frame"))
+            .expect("one slot");
+        let started = Instant::now();
+        let mut last_frame = started;
+        for seconds in [4, 8, 30] {
+            assert!(matches!(frames.next(), Err(RecvTimeoutError::Timeout)));
+            assert!(!frames.stalled(&mut last_frame, started + Duration::from_secs(seconds)));
+            assert!(
+                frames.last.is_none(),
+                "paused startup cannot validate or emit a queued image"
+            );
+        }
+        frozen.store(false, Ordering::Relaxed);
+        assert!(matches!(frames.next(), Err(RecvTimeoutError::Timeout)));
+        assert!(!frames.stalled(&mut last_frame, started + Duration::from_secs(32)));
+        assert!(
+            frames.stalled(&mut last_frame, started + Duration::from_secs(34)),
+            "unpaused starvation still fails"
+        );
+        send.send(Frame::new(1, 1, vec![7; 4]).expect("fresh frame"))
+            .expect("resumed frame");
+        assert_eq!(frames.next().expect("resumed source").rgba, [7; 4]);
+    }
+
+    #[test]
+    fn stop_interrupts_initial_paused_wait_without_a_frame() {
+        let (_send, receiver) = mpsc::sync_channel(1);
+        let frozen = Arc::new(AtomicBool::new(true));
+        let stop = Arc::new(AtomicBool::new(false));
+        let cancellation = stop.clone();
+        let (ready, entered) = mpsc::channel();
+        let (done, completed) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut frames = FrameInput::new(receiver, frozen);
+            assert!(matches!(frames.next(), Err(RecvTimeoutError::Timeout)));
+            ready.send(()).expect("wait ready");
+            while !cancellation.load(Ordering::Relaxed) {
+                assert!(matches!(frames.next(), Err(RecvTimeoutError::Timeout)));
+            }
+            done.send(()).expect("stopped");
+        });
+        entered.recv_timeout(Duration::from_secs(1)).expect("worker ready");
+        stop.store(true, Ordering::Relaxed);
+        completed
+            .recv_timeout(Duration::from_secs(1))
+            .expect("paused polling remains stop responsive");
+        worker.join().expect("wait worker joined");
     }
 
     #[test]

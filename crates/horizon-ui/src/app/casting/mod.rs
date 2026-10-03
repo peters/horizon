@@ -1,6 +1,7 @@
 mod capture;
 mod controls;
 mod notifications;
+mod popup;
 mod requests;
 mod scaling;
 
@@ -52,6 +53,8 @@ struct Picker {
     orientation: CastOrientation,
     resolution: CastResolution,
     pin: zeroize::Zeroizing<String>,
+    position: Option<egui::Pos2>,
+    binding: Option<popup::SessionBinding>,
 }
 impl CastState {
     pub(super) fn new(pairing_directory: std::path::PathBuf) -> Self {

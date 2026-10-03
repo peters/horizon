@@ -71,12 +71,13 @@ impl HorizonApp {
             ctx.pixels_per_point(),
             Instant::now(),
         ));
-        self.consume_cast_images(ctx);
         self.render_cast_controls(ctx);
-        let controls_visible = self.cast_controls_visible(ctx);
+        self.consume_cast_images(ctx);
         for session in &self.casting.sessions {
             session.worker.set_capture_paused(
-                controls_visible || !self.cast_geometry_settled(session.workspace, &session.source, ctx),
+                self.cast_source_rect(session.workspace, &session.source, ctx)
+                    .is_ok_and(|rect| self.cast_controls_cover(rect, ctx))
+                    || !self.cast_geometry_settled(session.workspace, &session.source, ctx),
             );
         }
         let active = !self.casting.finished();
@@ -102,7 +103,7 @@ impl HorizonApp {
                     if !self.cast_geometry_settled(session.workspace, &session.source, ctx) {
                         continue;
                     }
-                    if !controls_visible {
+                    if !self.cast_controls_cover(rect, ctx) {
                         regions.push((session.receiver_id.clone(), session.generation, rect));
                     }
                 }
@@ -264,15 +265,24 @@ impl HorizonApp {
                 })
             })
     }
-    fn cast_controls_visible(&self, ctx: &Context) -> bool {
-        self.casting.picker_open()
-            || ctx.memory(|memory| {
-                memory
-                    .areas()
-                    .visible_layer_ids()
-                    .into_iter()
-                    .any(|layer| self.is_cast_control_layer(layer))
-            })
+    pub(super) fn cast_controls_cover(&self, rect: Rect, ctx: &Context) -> bool {
+        let shadow = super::popup::control_shadow_margin(ctx);
+        ctx.memory(|memory| {
+            memory
+                .areas()
+                .visible_layer_ids()
+                .into_iter()
+                .filter(|layer| {
+                    self.is_cast_control_layer(*layer)
+                        || memory.areas().parent_layer(*layer) == Some(cast_picker_layer())
+                })
+                .any(|layer| {
+                    memory.area_rect(layer.id).is_some_and(|area| {
+                        let transform = memory.to_global.get(&layer).copied().unwrap_or_default();
+                        (transform * (area + shadow)).intersects(rect)
+                    })
+                })
+        })
     }
     pub(super) fn is_cast_control_layer(&self, layer: LayerId) -> bool {
         layer == cast_picker_layer() || self.casting.control_menus.is_some_and(|menus| menus.contains(&layer))
@@ -317,12 +327,11 @@ impl HorizonApp {
         })
     }
     fn consume_cast_images(&mut self, ctx: &Context) {
-        if self.cast_controls_visible(ctx)
-            || !self
-                .casting
-                .sessions
-                .iter()
-                .any(|session| matches!(session.worker.status(), CastStatus::Streaming { .. }))
+        if !self
+            .casting
+            .sessions
+            .iter()
+            .any(|session| matches!(session.worker.status(), CastStatus::Streaming { .. }))
         {
             return;
         }
@@ -334,6 +343,7 @@ impl HorizonApp {
                     .cast_source_rect(session.workspace, &session.source, ctx)
                     .is_ok_and(|rect| rect == frame.rect)
                 && self.cast_geometry_settled(session.workspace, &session.source, ctx)
+                && !self.cast_controls_cover(frame.rect, ctx)
                 && !self.cast_obscured(&session.source, frame.rect, ctx)
             {
                 let _ = session.worker.submit_source(frame.width, frame.height, frame.rgba);
@@ -386,6 +396,7 @@ impl HorizonApp {
                 };
                 if current != *rect
                     || !self.cast_geometry_settled(session.workspace, &session.source, ctx)
+                    || self.cast_controls_cover(current, ctx)
                     || self.cast_obscured(&session.source, current, ctx)
                 {
                     continue;
@@ -600,7 +611,53 @@ mod tests {
     }
 
     #[test]
-    fn cast_controls_freeze_capture_but_other_overlays_remain_private() {
+    fn cast_controls_shadow_alone_pauses_a_source() {
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        crate::theme::apply(&ctx, horizon_core::AppearanceTheme::Dark);
+        for menu in [false, true] {
+            let layer = if menu {
+                LayerId::new(Order::Foreground, Id::new("cast_shadow_menu"))
+            } else {
+                cast_picker_layer()
+            };
+            if menu {
+                app.casting.control_menus = Some([layer; 2]);
+            }
+            for _ in 0..3 {
+                let _ = ctx
+                    .run_ui(raw_input([1600.0, 1000.0], None), |ui| {
+                        egui::Area::new(layer.id)
+                            .order(layer.order)
+                            .fixed_pos(egui::pos2(400.0, 300.0))
+                            .show(ui.ctx(), |ui| {
+                                let frame = if menu {
+                                    egui::Frame::popup(ui.style())
+                                } else {
+                                    egui::Frame::window(ui.style())
+                                };
+                                frame.show(ui, |ui| {
+                                    ui.allocate_space(egui::vec2(200.0, 100.0));
+                                });
+                            });
+                    })
+                    .discard_textures();
+            }
+            let area = ctx.memory(|memory| memory.area_rect(layer.id)).expect("control area");
+            let strip = Rect::from_min_size(
+                egui::pos2(area.center().x, area.bottom() + if menu { 15.0 } else { 20.0 }),
+                egui::vec2(2.0, 2.0),
+            );
+            assert!(!area.intersects(strip));
+            assert!(app.cast_controls_cover(strip, &ctx), "shadow pixels must stay private");
+            let distant = strip.translate(egui::vec2(0.0, 40.0));
+            assert!(!app.cast_controls_cover(distant, &ctx));
+        }
+    }
+
+    #[test]
+    fn cast_controls_pause_only_covered_sources_and_other_overlays_remain_private() {
         let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
             runtime_state: Box::new(RuntimeState::default()),
         });
@@ -634,12 +691,13 @@ mod tests {
                                 ui.allocate_space(region.size());
                             });
                     }
-                    assert!(app.cast_controls_visible(ui.ctx()));
+                    assert!(app.cast_controls_cover(region, ui.ctx()));
+                    assert!(!app.cast_controls_cover(region.translate(egui::vec2(700.0, 0.0)), ui.ctx()));
                     assert_eq!(app.cast_obscured(&source, region, ui.ctx()), other_overlay);
                 })
                 .discard_textures();
             // egui has discarded sublayers but retained prior-frame areas.
-            assert!(app.cast_controls_visible(&ctx));
+            assert!(app.cast_controls_cover(region, &ctx));
             assert_eq!(app.cast_obscured(&source, region, &ctx), other_overlay);
         }
     }

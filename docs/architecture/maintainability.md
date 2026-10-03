@@ -925,7 +925,10 @@ and video, per-receiver reservations, and the bounded encoder worker. It has no
 core or UI dependency. `horizon-browser-control::manifest::cast` defines the
 workspace-scoped request/result contract; the existing UI request pump claims
 it even without a presented frame. `horizon-ui::app::casting` separates source
-validation and capture, picker rendering, and host request handling. UI and MCP
+validation and capture, picker rendering, and host request handling. The focused
+`casting::popup` module owns transient placement and exact-session close bindings.
+Picker/menu overlap pauses only the affected source; request and asynchronous
+frame delivery both recheck coverage. UI and MCP
 share those operations. Session switches cancel and discard cast bindings;
 shutdown cancels workers before the host exits. Capture remains limited to
 fully visible, unobscured regions of the main Horizon render target. The bounded

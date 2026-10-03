@@ -183,12 +183,7 @@ impl HorizonApp {
         outcome
     }
     fn close_application_cast_controls(&mut self, ctx: &egui::Context) {
-        self.casting.picker = None;
-        if let Some(menus) = self.casting.control_menus {
-            for menu in menus {
-                egui::Popup::close_id(ctx, menu.id);
-            }
-        }
+        self.casting.dismiss_picker(ctx);
     }
     fn validate_cast_start(
         &self,
@@ -305,7 +300,7 @@ impl HorizonApp {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::app::{
         DeviceRequestBridge,
@@ -315,7 +310,9 @@ mod tests {
     use horizon_core::{PanelKind, RuntimeState, StartupDecision};
     use std::time::Duration;
 
-    fn synthetic_pairing_receiver(ip: &str) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+    pub(in crate::app::casting) fn synthetic_pairing_receiver(
+        ip: &str,
+    ) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind((ip, 0)).expect("private receiver");
         let address = listener.local_addr().expect("address");
@@ -350,7 +347,7 @@ mod tests {
         (address, worker)
     }
 
-    fn await_pairing(worker: &CastSession) {
+    pub(in crate::app::casting) fn await_pairing(worker: &CastSession) {
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while worker.status() != CastStatus::PinRequired {
             assert!(
@@ -377,6 +374,8 @@ mod tests {
             orientation: cast::CastOrientation::default(),
             resolution: cast::CastResolution::default(),
             pin: zeroize::Zeroizing::new(String::new()),
+            position: None,
+            binding: None,
         });
         app.casting.control_menus = Some([egui::LayerId::background(); 2]);
     }
