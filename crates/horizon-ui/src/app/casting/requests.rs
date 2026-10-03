@@ -79,8 +79,11 @@ impl HorizonApp {
                     );
                     let format = super::video_format(*orientation, *resolution);
                     let (width, height) = format.dimensions();
-                    let scaling = super::scaling::Scaler::new((usize::from(width), usize::from(height)))
-                        .map_err(|error| error.to_string())?;
+                    let repaint = ctx.clone();
+                    let scaling = super::scaling::Scaler::new((usize::from(width), usize::from(height)), move || {
+                        repaint.request_repaint();
+                    })
+                    .map_err(|error| error.to_string())?;
                     let worker = CastSession::start_remembered(receiver.address, format, store)
                         .map_err(|error| error.to_string())?;
                     self.casting

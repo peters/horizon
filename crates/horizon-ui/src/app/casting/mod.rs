@@ -290,7 +290,7 @@ mod tests {
             orientation: CastOrientation::Landscape,
             resolution: CastResolution::default(),
             worker,
-            scaling: Some(scaling::Scaler::new((1280, 720)).expect("scaler")),
+            scaling: Some(scaling::Scaler::new((1280, 720), || {}).expect("scaler")),
             failure_notified: false,
         });
         app.casting.reset_for_session_switch();
@@ -334,7 +334,7 @@ mod tests {
             orientation: CastOrientation::Landscape,
             resolution: CastResolution::default(),
             worker,
-            scaling: Some(scaling::Scaler::new((8, 8)).expect("scaler")),
+            scaling: Some(scaling::Scaler::new((8, 8), || {}).expect("scaler")),
             failure_notified: false,
         });
         app.casting.poll();
