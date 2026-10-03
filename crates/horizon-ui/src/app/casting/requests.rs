@@ -140,6 +140,9 @@ impl HorizonApp {
                         agent_controlled: caller == CastCaller::WorkspaceAgent,
                     });
                     self.casting.notice = None;
+                    if caller == CastCaller::WorkspaceAgent && matches!(source, CastSource::Application { .. }) {
+                        self.close_application_cast_controls(ctx);
+                    }
                 }
                 CastOperation::Pair { receiver_id, pin } => {
                     let session = self
@@ -178,6 +181,14 @@ impl HorizonApp {
             .flatten()
         });
         outcome
+    }
+    fn close_application_cast_controls(&mut self, ctx: &egui::Context) {
+        self.casting.picker = None;
+        if let Some(menus) = self.casting.control_menus {
+            for menu in menus {
+                egui::Popup::close_id(ctx, menu.id);
+            }
+        }
     }
     fn validate_cast_start(
         &self,
@@ -350,6 +361,18 @@ mod tests {
         }
     }
 
+    fn open_application_picker(app: &mut HorizonApp, workspace: WorkspaceId, receiver: &str) {
+        app.casting.picker = Some(super::super::Picker {
+            workspace,
+            source: CastSource::Application {},
+            receiver: Some(receiver.into()),
+            orientation: cast::CastOrientation::default(),
+            resolution: cast::CastResolution::default(),
+            pin: zeroize::Zeroizing::new(String::new()),
+        });
+        app.casting.control_menus = Some([egui::LayerId::background(); 2]);
+    }
+
     #[test]
     fn replacing_and_revoking_consent_stops_only_agent_application_sessions() {
         let state = RuntimeState {
@@ -394,7 +417,16 @@ mod tests {
             "manual casting must not grant agent permission"
         );
         app.set_application_cast_approval(first, true);
+        open_application_picker(&mut app, first, "first-agent");
         assert!(app.cast_operation(first, &start("first-agent"), &ctx).error.is_none());
+        assert!(
+            app.casting.picker.is_none(),
+            "the approved start must allow its first safe image"
+        );
+        assert!(
+            app.casting.control_menus.is_some(),
+            "retain known layers through the next frame"
+        );
         await_pairing(&app.casting.sessions[1].worker);
         app.set_application_cast_approval(second, true);
         let replacement_deadline = std::time::Instant::now() + Duration::from_secs(3);
@@ -436,6 +468,58 @@ mod tests {
         for peer in peers {
             peer.join().expect("clean receiver closure");
         }
+    }
+
+    #[test]
+    fn removing_the_approved_workspace_stops_its_application_session() {
+        let state = RuntimeState {
+            workspaces: vec![
+                editor_workspace_state("controller", [0.0, 0.0]),
+                editor_workspace_state("remaining", [600.0, 0.0]),
+            ],
+            ..RuntimeState::default()
+        };
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(state),
+        });
+        let workspace = app.board.workspaces[0].id;
+        let (address, peer) = synthetic_pairing_receiver("127.251.123.4");
+        app.casting.receivers.push(horizon_cast::Receiver {
+            id: "removed-controller".into(),
+            name: "Synthetic TV".into(),
+            address,
+        });
+        app.set_application_cast_approval(workspace, true);
+        let start = CastOperation::Start {
+            receiver_id: "removed-controller".into(),
+            source: CastSource::Application {},
+            orientation: cast::CastOrientation::default(),
+            resolution: cast::CastResolution::default(),
+        };
+        assert!(app.cast_operation(workspace, &start, &ctx).error.is_none());
+        await_pairing(&app.casting.sessions[0].worker);
+        app.board.remove_workspace(workspace);
+        assert!(!app.application_cast_approved(workspace));
+        let _ = ctx
+            .run_ui(crate::app::test_support::raw_input([1600.0, 1000.0], None), |ui| {
+                assert!(
+                    app.cast_source_rect(workspace, &CastSource::Application {}, ui.ctx())
+                        .is_err()
+                );
+                app.cast_frame(ui.ctx());
+            })
+            .discard_textures();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !app.casting.sessions[0].worker.finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "removing consent scope must stop capture automatically"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(app.casting.sessions[0].worker.status(), CastStatus::Stopped);
+        assert!(app.casting.stop_and_wait(Duration::from_secs(3)));
+        peer.join().expect("removed workspace closes its receiver");
     }
 
     #[test]

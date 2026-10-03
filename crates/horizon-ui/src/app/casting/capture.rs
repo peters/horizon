@@ -131,6 +131,9 @@ impl HorizonApp {
         ctx: &Context,
     ) -> Result<Rect, String> {
         if matches!(source, CastSource::Application { .. }) {
+            if self.board.workspace(workspace).is_none() {
+                return Err("The casting workspace is no longer available".into());
+            }
             if ctx.viewport_id() != ViewportId::ROOT
                 || ctx.input(|input| input.viewport().minimized.unwrap_or(false))
                 || self.startup_chooser.is_some()
@@ -425,15 +428,18 @@ mod tests {
     #[test]
     fn application_capture_uses_the_root_window_and_includes_its_dialogs() {
         let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-            runtime_state: Box::new(RuntimeState::default()),
+            runtime_state: Box::new(RuntimeState {
+                workspaces: vec![editor_workspace_state("root source", [0.0, 0.0])],
+                ..RuntimeState::default()
+            }),
         });
-        let workspace = WorkspaceId(1);
+        let workspace = app.board.workspaces[0].id;
         for size in [[1600.0, 1000.0], [800.0, 1200.0]] {
             let _ = ctx
                 .run_ui(raw_input(size, None), |ui| {
                     let rect = app
                         .cast_source_rect(workspace, &CastSource::Application {}, ui.ctx())
-                        .expect("root source without panels");
+                        .expect("root source");
                     assert_eq!(
                         rect,
                         Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0], size[1]))
