@@ -361,7 +361,17 @@ viewport/canvas changes without identifying who caused them.
 moving away and back resets it. It is null when the required observations are
 missing. Counters are transient and reset with the viewer state.
 
-`reveal` answers after the host has drawn the connected image in a frame
+`reveal` is only for the first successful presentation of a viewer. After a
+non-discarded image has been displayed, further agent reveals return
+`navigation_preserved` immediately and leave visibility, workspace collapse,
+fullscreen, keyboard focus and canvas position unchanged. This protection
+survives reconnect and ownership transfer. Restored viewers preserve the saved
+canvas even when previous presentation history is unavailable: reconnect grants
+transport ownership, never navigation permission. A person can bring the viewer back
+through the UI. Continue background testing and inspection, and never
+close/recreate the viewer to bypass the guard.
+
+The first `reveal` answers after the host has drawn the connected image in a frame
 completed after the reveal reached the canvas, so its `image_displayed` is
 presentation evidence for that reveal. When that does not happen within three
 seconds, it answers with the latest observation instead: `presentation` and

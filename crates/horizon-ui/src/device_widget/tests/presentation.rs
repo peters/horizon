@@ -138,3 +138,21 @@ fn the_hint_stays_inside_the_part_of_the_picture_that_is_on_screen() {
     assert_eq!(clip, room, "it cannot paint over what is around the picture");
     assert!(room.contains(text.center()), "and it is where the picture can be seen");
 }
+
+#[test]
+fn only_a_non_discarded_presented_image_latches_navigation_protection() {
+    use horizon_core::browser::manifest::device::HostViewport;
+    let mut state = DeviceUiState::default();
+    state.image.received = true;
+    state.image.displayed = true;
+    state.host.record(HostViewport::Root, None, None);
+    state.host.finish(None, true, 1, true);
+    state.commit_pass();
+    assert!(!state.presented_once());
+    state.host.finish(None, true, 2, false);
+    state.commit_pass();
+    assert!(state.presented_once());
+    state.image.displayed = false;
+    state.commit_pass();
+    assert!(state.presented_once());
+}
