@@ -25,6 +25,12 @@ def execute(command, **kwargs):
     return subprocess.run(command, check=True, timeout=180, **kwargs)
 
 
+def aggregate_score(results):
+    if len({result["scaler"] for result in results}) != 1:
+        raise RuntimeError("mixed scaler paths cannot share a benchmark score; qualify them separately")
+    return statistics.mean(result["score"] for result in results)
+
+
 def fingerprint(paths):
     digest = hashlib.sha256()
     for path in sorted(paths):
@@ -193,6 +199,17 @@ def decode(root, result, receiver):
     return quality
 
 
+def validate_backend(result, backend, scaler):
+    expected = "h264_nvenc" if backend == "gpu" else "libx264"
+    if result.get("encoder") != expected:
+        raise RuntimeError("requested benchmark encoder unavailable; software fallback cannot qualify GPU")
+    actual = result.get("scaler")
+    if actual not in {"cpu", "cuda"} or (backend == "cpu" and actual != "cpu"):
+        raise RuntimeError("invalid benchmark scaler evidence")
+    if scaler is not None and actual != scaler:
+        raise RuntimeError("requested benchmark scaler unavailable")
+
+
 def run_case(binary, root, arguments, resolution, orientation):
     receiver = Receiver(root)
     gpu = arguments.backend == "gpu"
@@ -223,6 +240,7 @@ def run_case(binary, root, arguments, resolution, orientation):
     finally:
         receiver.close()
     result = json.loads((root / "sender.log").read_text())
+    validate_backend(result, arguments.backend, arguments.scaler)
     quality = decode(root, result, receiver)
     user, system, maximum = map(float, (root / "resource.txt").read_text().split())
     cpu = (user + system) * 1000 / result["total_frames"]
@@ -244,6 +262,7 @@ def run_case(binary, root, arguments, resolution, orientation):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=["cpu", "gpu"], default="cpu")
+    parser.add_argument("--scaler", choices=["cpu", "cuda"], help="require this actual scaler; never substitute another path")
     parser.add_argument("--objective", choices=["cpu", "memory", "throughput", "gpu-memory"], default="cpu")
     parser.add_argument("--seconds", type=int, choices=range(1, 121), default=4)
     parser.add_argument("--input-fps", type=int, choices=range(1, 121), default=120)
@@ -255,6 +274,8 @@ def main():
         parser.error("optimized Python disables protocol assertions; use normal Python")
     if sys.platform != "linux" or (arguments.objective == "gpu-memory" and arguments.backend != "gpu"):
         parser.error("Linux is required; gpu-memory additionally requires the GPU backend")
+    if arguments.backend == "cpu" and arguments.scaler == "cuda":
+        parser.error("CUDA scaling requires the GPU backend")
     resolutions, orientations = arguments.resolutions.split(","), arguments.orientations.split(",")
     if not set(resolutions) <= {"720p", "1080p", "4k"} or not set(orientations) <= {"landscape", "portrait"}:
         parser.error("invalid resolution/orientation matrix")
@@ -264,7 +285,8 @@ def main():
                        REPO / "crates/horizon-cast/examples/cast_bench.rs"]
     source_files = [*(REPO / "crates/horizon-cast/src").rglob("*.rs"), REPO / "Cargo.lock",
                     REPO / "Cargo.toml", REPO / "crates/horizon-cast/Cargo.toml"]
-    manifest = {"backend": arguments.backend, "objective": arguments.objective, "input_fps": arguments.input_fps,
+    manifest = {"backend": arguments.backend, "requested_scaler": arguments.scaler,
+                "objective": arguments.objective, "input_fps": arguments.input_fps,
                 "seconds": arguments.seconds, "resolutions": resolutions, "orientations": orientations,
                 "machine": platform.machine(), "kernel": platform.release(),
                 "commit": execute(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip(),
@@ -295,7 +317,7 @@ def main():
                 print(json.dumps({"case": case.name, "score": result["score"], "decoded_frames": result["decoded_frames"]}), flush=True)
         if fingerprint(benchmark_files) != manifest["benchmark_sha256"] or fingerprint(source_files) != manifest["source_sha256"]:
             raise RuntimeError("benchmark or source changed during measurement; re-baseline")
-        summary = {"status": "PASS", "score": statistics.mean(r["score"] for r in results),
+        summary = {"status": "PASS", "score": aggregate_score(results),
                    "objective": arguments.objective, "cases": results, "evidence": str(root)}
         (root / "summary.json").write_text(json.dumps(summary, indent=2))
         print(json.dumps(summary), flush=True)

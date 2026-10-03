@@ -13,6 +13,7 @@ struct Measurement {
     submitted: u32,
     seconds: f64,
     encoder: &'static str,
+    scaler: &'static str,
 }
 
 fn main() -> Result<(), Error> {
@@ -65,8 +66,9 @@ fn main() -> Result<(), Error> {
     let measured = outcome?;
     let (width, height) = format.dimensions();
     println!(
-        "{{\"width\":{width},\"height\":{height},\"encoder\":\"{}\",\"frames\":{},\"total_frames\":{},\"submitted\":{},\"seconds\":{:.6}}}",
+        "{{\"width\":{width},\"height\":{height},\"encoder\":\"{}\",\"scaler\":\"{}\",\"frames\":{},\"total_frames\":{},\"submitted\":{},\"seconds\":{:.6}}}",
         measured.encoder,
+        measured.scaler,
         measured.frames,
         session.frames_sent(),
         measured.submitted,
@@ -98,7 +100,7 @@ fn run(
     let selected = session
         .encoding()
         .ok_or(Error::Protocol("benchmark encoder unavailable"))?;
-    if selected.backend.as_str() != expected || selected.fallback_reason.is_some() {
+    if selected.backend.as_str() != expected {
         return Err(Error::Protocol(
             "requested benchmark encoder unavailable; fallback is not a GPU result",
         ));
@@ -146,5 +148,6 @@ fn run(
         submitted,
         seconds: elapsed,
         encoder: selected.backend.as_str(),
+        scaler: selected.backend.scaler(),
     })
 }

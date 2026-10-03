@@ -1,4 +1,5 @@
 use super::*;
+use crate::{Orientation, Resolution};
 use std::net::TcpListener;
 #[cfg(unix)]
 use std::{
@@ -116,4 +117,30 @@ fn persistent_pairing_fails_without_opening_a_receiver_connection() {
     );
     session.reap();
     assert!(session.worker.is_none());
+}
+#[test]
+fn raw_source_support_requires_nonzero_even_fitted_axes_for_the_selected_canvas() {
+    for resolution in [Resolution::Hd720, Resolution::FullHd1080, Resolution::Uhd4k] {
+        for orientation in [Orientation::Landscape, Orientation::Portrait] {
+            let (width, height) = VideoFormat {
+                orientation,
+                resolution,
+            }
+            .dimensions();
+            let canvas = (usize::from(width), usize::from(height));
+            assert!(CastSession::supports_source_dimensions(canvas.0, canvas.1, canvas));
+            for crop in [(641, 361), (1023, 767), (719, 1279)] {
+                assert!(CastSession::supports_source_dimensions(crop.0, crop.1, canvas));
+            }
+            for crop in [(0, 1), (1, 0), (8192, 4), (4, 8192), (8193, 1), (8192, 8192)] {
+                assert!(!CastSession::supports_source_dimensions(crop.0, crop.1, canvas));
+            }
+        }
+    }
+    assert!(!CastSession::supports_source_dimensions(4, 4, (0, 720)));
+    assert!(!CastSession::supports_source_dimensions(4, 4, (1280, 0)));
+    assert!(!CastSession::supports_source_dimensions(1, 2, (1, 100)));
+    assert!(!CastSession::supports_source_dimensions(2, 1, (100, 1)));
+    assert!(!CastSession::supports_source_dimensions(8192, 8, (1280, 720)));
+    assert!(CastSession::supports_source_dimensions(8192, 8, (3840, 2160)));
 }
