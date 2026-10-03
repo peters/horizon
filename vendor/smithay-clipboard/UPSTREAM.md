@@ -27,3 +27,5 @@ adapter; the workspace's macOS and Windows builds use their existing clipboard
 backends. The minimum Rust version matches the workspace (1.95).
 
 Session boundaries advance a worker generation, cancel pending reads, and discard queued events. Paste requests and drag offers retain their originating generation, so delayed completions cannot reach a replacement board that reuses panel IDs.
+
+Clipboard image data takes precedence over URI offers; URI selections with a plain-text representation retain the toolkit text paste path. Queue overflow advances the native transfer generation as well as cancelling queued events.

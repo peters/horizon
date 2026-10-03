@@ -189,22 +189,48 @@ impl ObservedKeyboardInputs {
         });
     }
 
+    pub(crate) fn take_native_drop_batches(
+        &self,
+        viewport: egui::ViewportId,
+        files: &[egui::DroppedFileHandle],
+    ) -> Vec<(std::ops::Range<usize>, [f64; 2])> {
+        let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let surface = state.viewports.get(&viewport).copied();
+        let mut batches = Vec::new();
+        let mut offset = 0;
+        while offset < files.len() {
+            let index = state.drops.iter().position(|drop| {
+                surface.is_none_or(|surface| drop.surface == surface)
+                    && !drop.paths.is_empty()
+                    && files.get(offset..offset + drop.paths.len()).is_some_and(|files| {
+                        drop.paths
+                            .iter()
+                            .map(std::path::PathBuf::as_path)
+                            .eq(files.iter().map(|file| file.path()))
+                    })
+            });
+            if let Some(drop) = index.and_then(|index| state.drops.remove(index)) {
+                let end = offset + drop.paths.len();
+                batches.push((offset..end, drop.position));
+                offset = end;
+            } else {
+                // A raw file event with no current transfer record may belong
+                // to an earlier session. Never route it using pointer state.
+                offset += 1;
+            }
+        }
+        batches
+    }
+
+    #[cfg(test)]
     pub(crate) fn take_native_drop_position(
         &self,
         viewport: egui::ViewportId,
         files: &[egui::DroppedFileHandle],
     ) -> Option<[f64; 2]> {
-        let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let surface = state.viewports.get(&viewport).copied();
-        let index = state.drops.iter().position(|drop| {
-            surface.is_none_or(|surface| drop.surface == surface)
-                && drop
-                    .paths
-                    .iter()
-                    .map(std::path::PathBuf::as_path)
-                    .eq(files.iter().map(|file| file.path()))
-        })?;
-        state.drops.remove(index).map(|drop| drop.position)
+        self.take_native_drop_batches(viewport, files)
+            .first()
+            .map(|(_, position)| *position)
     }
 
     pub(crate) fn native_window(&self, surface: u64) -> Option<(f64, Option<u64>)> {
@@ -370,6 +396,33 @@ mod tests {
         );
         drop(observed);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn concurrent_drop_batches_keep_each_coordinate_and_skip_stale_raw_events() {
+        let observed = super::ObservedKeyboardInputs::default();
+        let path = std::path::PathBuf::from("/tmp/same.png");
+        let second = std::path::PathBuf::from("/tmp/second.png");
+        observed.native_window_seen(10);
+        observed.native_focus(10, true);
+        observed.native_recipient_publisher()(egui::ViewportId::ROOT, 1.0, None);
+        observed.native_drop_position(20, [999.0, 999.0], vec![path.clone()]);
+        observed.native_drop_position(10, [1.0, 2.0], vec![path.clone()]);
+        observed.native_drop_position(10, [3.0, 4.0], vec![path.clone(), second.clone()]);
+        let files: Vec<egui::DroppedFileHandle> =
+            [std::path::PathBuf::from("/tmp/stale.png"), path.clone(), path, second]
+                .into_iter()
+                .map(|path| std::sync::Arc::new(TestFile(path)) as egui::DroppedFileHandle)
+                .collect();
+        assert_eq!(
+            observed.take_native_drop_batches(egui::ViewportId::ROOT, &files),
+            vec![(1..2, [1.0, 2.0]), (2..4, [3.0, 4.0])]
+        );
+        assert!(
+            observed
+                .take_native_drop_batches(egui::ViewportId::ROOT, &files)
+                .is_empty()
+        );
     }
 
     #[test]

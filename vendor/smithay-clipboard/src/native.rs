@@ -127,9 +127,13 @@ impl Hub {
             // A bounded queue must explicitly cancel its batch rather than
             // leave a claimed paste or drag waiting for an event we discarded.
             events.clear();
+            self.generation.fetch_add(1, Ordering::AcqRel);
             events.push_back(Event::Reset);
         }
         drop(events);
+        if !accepted {
+            let _ = self.commands.send(crate::worker::Command::ResetNative);
+        }
         let wake = lock(&self.wake).clone();
         if let Some(wake) = wake {
             wake();
@@ -242,6 +246,28 @@ pub(crate) fn preferred(mimes: &[String]) -> Option<String> {
         .into_iter()
         .find(|mime| mimes.iter().any(|offered| offered == mime))
         .map(str::to_owned)
+}
+
+pub(crate) fn preferred_clipboard(mimes: &[String]) -> Option<String> {
+    // An image's URI can be a web URL; use encoded image data first.
+    ["image/png", "image/jpeg"]
+        .into_iter()
+        .find(|mime| mimes.iter().any(|offered| offered == mime))
+        .map(str::to_owned)
+        .or_else(|| {
+            // Leave URI selections with a text representation to the toolkit's
+            // ordinary text paste path instead of claiming and rejecting them.
+            if mimes.iter().any(|mime| {
+                matches!(
+                    mime.as_str(),
+                    "text/plain;charset=utf-8" | "text/plain" | "UTF8_STRING" | "STRING" | "TEXT"
+                )
+            }) {
+                None
+            } else {
+                preferred(mimes)
+            }
+        })
 }
 
 pub(crate) enum Destination {
@@ -414,6 +440,29 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_images_precede_uris_and_text_uri_offers_keep_text_paste() {
+        let mimes = |values: &[&str]| values.iter().map(|value| (*value).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            preferred_clipboard(&mimes(&["text/uri-list", "image/png", "text/plain"])).as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(
+            preferred_clipboard(&mimes(&["text/uri-list", "image/jpeg"])).as_deref(),
+            Some("image/jpeg")
+        );
+        assert!(preferred_clipboard(&mimes(&["text/uri-list", "text/plain;charset=utf-8"])).is_none());
+        assert!(preferred_clipboard(&mimes(&["text/plain"])).is_none());
+        assert_eq!(
+            preferred_clipboard(&mimes(&["text/uri-list"])).as_deref(),
+            Some("text/uri-list")
+        );
+        assert_eq!(
+            preferred(&mimes(&["text/uri-list", "image/png"])).as_deref(),
+            Some("text/uri-list")
+        );
+    }
+
+    #[test]
     fn delayed_transfer_waits_for_eof_and_delivers_once_to_original_recipient() -> std::io::Result<()> {
         let hub = hub(101);
         let mut transfers = Transfers::new(hub.clone());
@@ -579,6 +628,11 @@ mod tests {
         let mut events = lock(&hub.events);
         assert!(matches!(events.pop_front(), Some(Event::Reset)));
         assert!(events.is_empty());
+        drop(events);
+        assert_eq!(hub.generation(), 1);
+        assert!(!hub.emit_at(0, Event::Leave { surface: 9 }));
+        assert!(lock(&hub.events).is_empty());
+        assert!(hub.emit_at(1, Event::Leave { surface: 10 }));
     }
 
     #[test]

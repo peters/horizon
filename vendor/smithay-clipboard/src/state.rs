@@ -384,7 +384,7 @@ impl State {
                         .data_device
                         .as_ref()
                         .and_then(|device| device.data().selection_offer())
-                        .and_then(|offer| offer.with_mime_types(crate::native::preferred))
+                        .and_then(|offer| offer.with_mime_types(crate::native::preferred_clipboard))
                         .is_some();
                 self.native.hub.selection(surface, available);
             }
@@ -401,7 +401,7 @@ impl State {
             .and_then(|seat| seat.data_device.as_ref())
             .and_then(|device| device.data().selection_offer());
         if let Some(offer) = offer
-            && let Some(mime) = offer.with_mime_types(crate::native::preferred)
+            && let Some(mime) = offer.with_mime_types(crate::native::preferred_clipboard)
             && let Ok(pipe) = offer.receive(mime.clone())
         {
             self.native
