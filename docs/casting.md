@@ -19,9 +19,11 @@ cargo build -p horizon-ui --release --features cast-nvenc
 
 This feature adds no Rust GPU dependencies and does not require the CUDA toolkit
 on the build machine. At runtime, it needs a usable NVIDIA driver/GPU and FFmpeg
-with `h264_nvenc`. A bounded probe checks the requested output dimensions before
-streaming. If hardware initialization fails, status reports the CPU fallback;
-the requested resolution stays unchanged.
+with `h264_nvenc`; CUDA scaling additionally needs `scale_cuda` and CUDA driver
+access. A bounded probe qualifies the complete scaling/encoding path at the
+requested output dimensions. If CUDA scaling fails, NVENC can retain CPU
+scaling; if encoding qualification fails too, software encoding is used. Status
+reports the actual paths and fallback reason, with the requested resolution unchanged.
 
 The computer and receiver must be reachable on the local network. Discovery
 uses the receiver's advertised AirPlay service. First use requires the fresh PIN
@@ -67,7 +69,8 @@ physical TV. Stop the receiver before changing source, orientation or
 resolution. A duplicate start cannot replace the existing session.
 
 `status.sessions` reports the state, cumulative successfully sent `frames`,
-selected `encoder`, `encoder_fallback`, and any terminal `error`. Sent-frame
+selected `encoder`, `scaler` (`cpu` or `cuda`), `encoder_fallback`, and any terminal
+`error`. Both selected paths appear under Details in the Cast picker. Sent-frame
 counts remain available after stopping or failing. They do not measure displayed
 TV frame rate or playback latency. `paired` exposes receiver metadata only,
 never credentials. Pairing PINs must not be written to durable plans or logs.
@@ -85,10 +88,13 @@ arbitrary-application capture, audio, HDR, legacy receivers, background renderin
 and automatic reconnect are outside this MVP.
 
 Capture is capped at approximately 15 frames per second. Whole-window GPU
-readback, CPU crop/scaling, rendering and encoder input transfer can lower the
-actual rate. A 4K output setting specifies encoded dimensions; it cannot create
-detail absent from the rendered source. NVENC reduces encoding work but does
-not move capture or scaling onto the GPU.
+readback, CPU cropping, rendering, scaling and encoder input transfer can lower
+the actual rate. A 4K output setting specifies encoded dimensions; it cannot create
+detail absent from the rendered source. NVENC reduces encoding work. When CUDA is selected, Horizon submits bounded
+source-sized crops for GPU scaling. Capture/cropping, NV12 conversion and final
+black padding remain on CPU, and the scaled image is downloaded before NVENC
+upload. This is not a zero-copy pipeline. Unsupported crops use the existing
+CPU letterbox path at the selected output dimensions.
 
 A 2026-10-03 physical receiver baseline on implementation `54a5620c`, using a
 silent terminal counter and an isolated native VNC desktop, sent approximately
@@ -112,8 +118,14 @@ versus 1.55 seconds / 1.51 CPU seconds with CUDA scaling. On the tested FFmpeg
 build, the RGBA CUDA route was rejected; the successful route converted to NV12
 before upload and downloaded the scaled image for CPU padding. It therefore
 requires an input-format and geometry integration, not merely an encoder flag.
-The measured benefit must be preserved across actual capture, dynamic geometry,
-source isolation and text-quality tests before enabling that path.
+The source-sized adapter preserves density/geometry checks and the same bounded
+queues. A short shared-host CPU/CUDA/CUDA/CPU comparison of a 1152×584 synthetic
+source at 4K/15 fps independently verified decoded frame IDs, checker quality and
+black borders. With the same NVENC encoder, CUDA reduced lifecycle CPU time per
+decoded frame from 46.35 to 28.15 ms and peak process-tree RSS from 602 to 444 MiB,
+while attributed GPU allocation increased from 497 to 655 MiB. Both paths
+transmitted approximately 15 fps in the measurement window. These exploratory
+source-pipeline results exclude UI capture and physical-TV display latency.
 
 [NVIDIA's FFmpeg guide](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/ffmpeg-with-nvidia-gpu/index.html)
 and the [FFmpeg filter documentation](https://ffmpeg.org/ffmpeg-filters.html#scale_005fcuda-1)

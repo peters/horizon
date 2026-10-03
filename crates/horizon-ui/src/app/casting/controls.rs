@@ -233,6 +233,13 @@ fn render_encoder_status(ui: &mut egui::Ui, session: &horizon_core::browser::man
             "Encoder: CPU"
         });
     }
+    if let Some(scaler) = &session.scaler {
+        ui.label(if scaler == "cuda" {
+            "Scaling: CUDA"
+        } else {
+            "Scaling: CPU"
+        });
+    }
     if let Some(reason) = &session.encoder_fallback {
         ui.label(reason);
     }
