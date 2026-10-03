@@ -40,8 +40,9 @@ If CUDA scaling is unavailable, a second bounded probe qualifies native RGBA
 NVENC with CPU scaling. If neither hardware path works, `libx264` handles encoding.
 Neither fallback changes resolution. Cancellation kills the probe; receiver
 ownership remains held throughout. Crate selection and benchmark results expose
-the actual scaler (`cuda` or `cpu`). UI/MCP reports the encoder and fallback;
-source-crop submission and separate scaler status are follow-up host-adapter work.
+the actual scaler (`cuda` or `cpu`). Horizon submits source crops when CUDA is
+selected, preserving capture isolation and density checks. UI Details and shared
+MCP/CLI status report the encoder, scaler and fallback reason.
 No GPU dependencies or build-time CUDA toolkit
 are added. This first adapter uses the existing FFmpeg subprocess; direct
 `moq-nvenc` integration remains deferred until a safe upload/configuration API is

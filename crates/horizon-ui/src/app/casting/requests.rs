@@ -271,6 +271,7 @@ impl HorizonApp {
                     state: state.into(),
                     frames: session.worker.frames_sent(),
                     encoder: encoding.as_ref().map(|selection| selection.backend.as_str().into()),
+                    scaler: encoding.as_ref().map(|selection| selection.backend.scaler().into()),
                     encoder_fallback: encoding.and_then(|selection| selection.fallback_reason),
                     error,
                 }

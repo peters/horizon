@@ -336,7 +336,7 @@ impl HorizonApp {
                 && self.cast_geometry_settled(session.workspace, &session.source, ctx)
                 && !self.cast_obscured(&session.source, frame.rect, ctx)
             {
-                let _ = session.worker.submit(frame.rgba);
+                let _ = session.worker.submit_source(frame.width, frame.height, frame.rgba);
             }
         }
         let events = ctx.input(|input| input.events.clone());
@@ -395,7 +395,12 @@ impl HorizonApp {
                     continue;
                 }
                 if let Some(scaling) = &session.scaling {
-                    scaling.submit(image.clone(), *rect, ticket.pixels_per_point);
+                    scaling.submit(
+                        image.clone(),
+                        *rect,
+                        ticket.pixels_per_point,
+                        session.worker.uses_source_frames(),
+                    );
                 }
             }
         }

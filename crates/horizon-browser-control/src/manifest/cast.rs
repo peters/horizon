@@ -132,6 +132,9 @@ pub struct CastSessionInfo {
     pub state: String,
     pub frames: u64,
     pub encoder: Option<String>,
+    /// Qualified encoder-output scaler; CPU capture/crop or letterboxing may precede it.
+    #[serde(default)]
+    pub scaler: Option<String>,
     pub encoder_fallback: Option<String>,
     pub error: Option<String>,
 }
@@ -377,6 +380,15 @@ pub fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<CastO
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scaling_status_is_additive_for_older_session_payloads() {
+        let mut value = serde_json::json!({"receiver_id":"synthetic","source":{"kind":"panel","id":"synthetic-panel"},"orientation":"landscape","resolution":"4k","state":"streaming","frames":1,"encoder":"h264_nvenc","encoder_fallback":null,"error":null});
+        let older: CastSessionInfo = serde_json::from_value(value.clone()).expect("older payload");
+        assert!(older.scaler.is_none());
+        value["scaler"] = "cuda".into();
+        let current: CastSessionInfo = serde_json::from_value(value).expect("scaling status");
+        assert_eq!(current.scaler.as_deref(), Some("cuda"));
+    }
     #[test]
     fn application_approval_is_explicit_scoped_and_revocable() {
         let mut approval = ApplicationCaptureApproval::default();
