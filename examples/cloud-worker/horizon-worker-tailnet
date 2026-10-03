@@ -9,6 +9,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 STATE = Path('/workspace/.horizon-tailnet')
@@ -89,10 +90,15 @@ def publish_devices():
     devices = [{'name': value.get('DNSName') or value.get('HostName', ''),
                 'addresses': value.get('TailscaleIPs', []), 'online': bool(value.get('Online'))}
                for value in values]
-    pending = PUBLIC / 'devices.pending'
-    pending.write_text(json.dumps({'devices': devices}))
-    os.chmod(pending, 0o644)
-    os.replace(pending, PUBLIC / 'devices.json')
+    fd, name = tempfile.mkstemp(dir=PUBLIC, prefix='devices-')
+    pending = Path(name)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            json.dump({'devices': devices}, output)
+        os.chmod(pending, 0o644)
+        os.replace(pending, PUBLIC / 'devices.json')
+    finally:
+        pending.unlink(missing_ok=True)
 
 
 def status(wait=False):

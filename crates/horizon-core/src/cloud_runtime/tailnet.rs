@@ -71,10 +71,7 @@ pub fn configure(connection: &Connection, cloud: &Path, runner: &Runner<'_>) -> 
 /// # Errors
 /// Caller-visible settings errors; every write uses the existing cloud lifecycle lock.
 pub fn select(root: &Path, cloud_id: &str, id: Option<&str>) -> Result<()> {
-    let cloud = state::cloud_directory(root, cloud_id)?;
-    let _lock = state::Store::lock(&cloud)?;
-    let catalog = store(root).load().map_err(mapped)?;
-    Selection::save(&cloud, id, &catalog).map_err(mapped)
+    change(root, cloud_id, id)
 }
 
 /// Choose a network before provisioning; a provisioned cloud retains its choice.
@@ -85,6 +82,11 @@ pub fn change(root: &Path, cloud_id: &str, id: Option<&str>) -> Result<()> {
     let cloud = state::cloud_directory(root, cloud_id)?;
     let lock = state::Store::lock(&cloud)?;
     let prior = Selection::load(&cloud).map_err(mapped)?;
+    if prior.tailnet.as_deref() != id && super::companions::lifecycle::requested_tailnet(&cloud)?.is_some() {
+        return Err(Error::Invalid(
+            "Tailnet is reserved by a pending cloud operation; cancel it before changing networks",
+        ));
+    }
     if lock
         .load()?
         .is_some_and(|s| s.spec.is_some() || s.worker.is_some() || s.operation != super::CreateState::Prepared)
@@ -98,4 +100,16 @@ pub fn change(root: &Path, cloud_id: &str, id: Option<&str>) -> Result<()> {
     }
     let catalog = store(root).load().map_err(mapped)?;
     Selection::save(&cloud, id, &catalog).map_err(mapped)
+}
+
+/// Refuse selection drift before any deployment or companion provider work.
+pub(in crate::cloud_runtime) fn validate_pending(cloud: &Path) -> Result<()> {
+    if let Some(requested) = super::companions::lifecycle::requested_tailnet(cloud)?
+        && Selection::load(cloud).map_err(mapped)? != requested
+    {
+        return Err(Error::Invalid(
+            "Tailnet differs from the pending cloud request; cancel and submit a new operation",
+        ));
+    }
+    Ok(())
 }

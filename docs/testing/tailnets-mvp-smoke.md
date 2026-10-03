@@ -175,3 +175,27 @@ actual privileged/unprivileged probe directory. All 244 worker tests passed with
 no skips. A disposable offline container verified the actual status subprocess for
 Running, NeedsLogin and Starting, plus agent isolation, sibling preparation and
 self-stop availability. These changes do not alter the UI or recorded flow.
+
+
+## Pending choice and concurrent inventory regression
+
+Ensure Ready captures both explicit and default selections in a durable nonsecret
+request. Pending requests reject UI/CLI edits and selection drift before companion
+execution or deployment initialization. Regressions cover a saved network, None,
+omitted selection, cancellation and failure before any backend execution. Existing
+companion lifecycle and recovery tests all passed.
+
+Inventory publishers use unique atomic temporary files. Concurrent writer and
+failed-write regressions preserve a complete final snapshot and clean temporary
+files. The real isolated prelogin daemon passed 20 concurrent publications without
+an auth key; its prelogin self placeholder has no addresses or online status.
+The actual offline agent isolation, sibling preparation and self-stop smoke passed.
+The full matrix passed 4,711 workspace tests and 1,580 speech-tier tests, formatting,
+maintainability and both mandatory Clippy tiers; all 246 worker tests passed without
+skips. The isolated real Secret Service regression passed again.
+
+The refreshed native candidate child SHA256 is
+`4e8ddb8355c4ba3108d6d55029ed64000387933d2fb8f234ecea3151db13e920`.
+Live native VNC and continuous recording verify the final settings fields, two
+saved bindings, masked replacement with stable IDs, both provisioning choices and
+None, cancellation and removal while editing. No new paid allocation was made.

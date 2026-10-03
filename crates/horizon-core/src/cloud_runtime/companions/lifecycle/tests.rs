@@ -598,3 +598,38 @@ fn tailnet_selection_is_nonsecret_authorized_and_bound_to_the_operation() {
         "a stale retry cannot restore its old choice"
     );
 }
+
+#[test]
+fn pending_tailnet_requests_fence_edits_and_fail_before_execution_on_drift() {
+    for requested in [Some("work"), Some("none"), None] {
+        let f = Fixture::new();
+        std::fs::write(
+            f.root.path().join("tailnets.json"),
+            br#"{"tailnets":[{"id":"work","name":"Work"}]}"#,
+        )
+        .unwrap();
+        let mut before = f.ready();
+        before.spec = None;
+        before.worker = None;
+        before.operation = CreateState::Prepared;
+        f.save(&before);
+        let id = OperationId::generate();
+        submit_with_tailnet(&f.request(), Action::EnsureReady, id, requested).unwrap();
+        let selected = requested.filter(|id| *id != "none");
+        let changed = if selected.is_some() { None } else { Some("work") };
+        let root = f.root.path();
+        assert!(crate::cloud_runtime::tailnet::change(root, "target", selected).is_ok());
+        assert!(crate::cloud_runtime::tailnet::change(root, "target", changed).is_err());
+        assert!(crate::cloud_runtime::tailnet::select(root, "target", changed).is_err());
+        let catalog = crate::cloud_runtime::tailnet::store(root).load().unwrap();
+        let target = root.join("target");
+        horizon_cloud::tailnet::Selection::save(&target, changed, &catalog).unwrap();
+        assert!(crate::cloud_runtime::tailnet::validate_pending(&target).is_err());
+        let mut backend = Fake::new(&f);
+        assert!(execute_with(&f.request(), id, &mut backend).is_err());
+        assert!(backend.decisions.is_empty());
+        cancel_submission(&f.request(), id).unwrap();
+        assert!(crate::cloud_runtime::tailnet::change(root, "target", changed).is_ok());
+        assert!(crate::cloud_runtime::tailnet::validate_pending(&target).is_ok());
+    }
+}

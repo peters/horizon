@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import importlib.machinery
 import importlib.util
 import io
@@ -5,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -84,6 +86,32 @@ class TailnetTests(unittest.TestCase):
         with patch.object(worker, 'call', return_value=json.dumps(report).encode()):
             worker.publish_devices()
         self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text()), {'devices': []})
+
+    def test_concurrent_inventory_publishers_use_distinct_atomic_files(self):
+        barrier = threading.Barrier(2)
+        replace = os.replace
+        pending = []
+        def publish(source, destination):
+            pending.append(source)
+            barrier.wait(timeout=5)
+            replace(source, destination)
+        report = json.dumps({'Self': {'HostName': 'Synthetic device'}}).encode()
+        with patch.object(worker, 'call', return_value=report), patch.object(worker.os, 'replace', side_effect=publish):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                tasks = [pool.submit(worker.publish_devices) for _ in range(2)]
+                for task in tasks: task.result(timeout=10)
+        self.assertEqual(len(set(pending)), 2)
+        self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text())['devices'][0]['name'], 'Synthetic device')
+        self.assertEqual(list(worker.PUBLIC.glob('devices-*')), [])
+
+    def test_inventory_write_failure_keeps_prior_snapshot_and_removes_pending_file(self):
+        worker.PUBLIC.mkdir()
+        snapshot = worker.PUBLIC / 'devices.json'
+        snapshot.write_text('{"devices":[]}')
+        with patch.object(worker.json, 'dump', side_effect=OSError('Synthetic full disk')):
+            with self.assertRaises(OSError): worker.publish_devices()
+        self.assertEqual(snapshot.read_text(), '{"devices":[]}')
+        self.assertEqual(list(worker.PUBLIC.glob('devices-*')), [])
 
     def test_resume_waits_for_persistent_identity_before_requesting_a_key(self):
         (self.state / 'selection').write_text('work')

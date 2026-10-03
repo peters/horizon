@@ -403,6 +403,7 @@ fn finish_ready(
 }
 
 fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
+    super::tailnet::validate_pending(store.root())?;
     if !repository::is_commit_id(&request.revision) {
         return Err(Error::Invalid(
             "Resolve a committed revision before preparing deployment",

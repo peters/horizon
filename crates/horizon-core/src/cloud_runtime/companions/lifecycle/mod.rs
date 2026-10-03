@@ -1,6 +1,7 @@
 //! Explicit controller operations. Loading, selecting and polling never execute work.
 mod execution;
 mod receipt;
+pub(in crate::cloud_runtime) use receipt::requested_tailnet;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -243,7 +244,9 @@ pub fn submit_with_tailnet(
     }
     // A crash between these writes leaves a submitted operation without a target
     // claim. Cancel that unstarted submission explicitly, never infer allocation.
-    select_tailnet(request.root, &target, intent.operation_id, tailnet)?;
+    if action == Action::EnsureReady {
+        select_tailnet(request.root, &target, intent.operation_id, tailnet)?;
+    }
     store.save(&state)?;
     receipt::save(&target, request.owner, intent.operation_id, Phase::Submitted)?;
     Ok(Operation {
@@ -389,6 +392,7 @@ fn execute_with(request: &Request<'_>, id: OperationId, backend: &mut impl execu
                 .clone(),
         );
     }
+    super::super::tailnet::validate_pending(target.root())?;
     let observed = target.load()?;
     let decision = execution::plan(&target, &binding, &intent, observed.as_ref())?;
     if decision == intent::Decision::Provision {
@@ -540,18 +544,23 @@ fn finish(
     )
 }
 
-fn select_tailnet(root: &std::path::Path, target: &Store, id: OperationId, tailnet: Option<&str>) -> Result<()> {
-    let Some(tailnet) = tailnet else {
-        return Ok(());
+fn select_tailnet(root: &Path, target: &Store, id: OperationId, tailnet: Option<&str>) -> Result<()> {
+    let prior = horizon_cloud::tailnet::Selection::load(target.root()).map_err(|_| Error::Json)?;
+    let selected = match tailnet {
+        Some("none") => None,
+        Some(id) => Some(id),
+        None => prior.tailnet.as_deref(),
     };
-    let selected = (tailnet != "none").then_some(tailnet);
-    let catalog = super::super::tailnet::store(root)
-        .load()
+    let catalog = tailnet
+        .map(|_| super::super::tailnet::store(root).load())
+        .transpose()
         .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
-    if selected.is_some_and(|id| !catalog.tailnets.iter().any(|t| t.id == id)) {
+    if catalog
+        .as_ref()
+        .is_some_and(|catalog| selected.is_some_and(|id| !catalog.tailnets.iter().any(|t| t.id == id)))
+    {
         return Err(Error::Invalid("Choose a saved tailnet ID from cloud_companions"));
     }
-    let prior = horizon_cloud::tailnet::Selection::load(target.root()).map_err(|_| Error::Json)?;
     if target
         .load()?
         .is_some_and(|s| s.spec.is_some() || s.worker.is_some() || s.operation != super::super::CreateState::Prepared)
@@ -569,13 +578,17 @@ fn select_tailnet(root: &std::path::Path, target: &Store, id: OperationId, tailn
         if prior != requested {
             return Err(Error::Invalid("A retried operation cannot change its tailnet"));
         }
-        return horizon_cloud::tailnet::Selection::save(target.root(), selected, &catalog)
-            .map_err(|_| Error::Invalid("Could not save tailnet selection"));
+    } else {
+        let mut pending = tempfile::NamedTempFile::new_in(target.root())?;
+        pending.write_all(&serde_json::to_vec(&requested).map_err(|_| Error::Json)?)?;
+        pending.as_file().sync_all()?;
+        pending.persist(path).map_err(|e| Error::Io(e.error))?;
     }
-    let mut pending = tempfile::NamedTempFile::new_in(target.root())?;
-    pending.write_all(&serde_json::to_vec(&requested).map_err(|_| Error::Json)?)?;
-    pending.as_file().sync_all()?;
-    pending.persist(path).map_err(|e| Error::Io(e.error))?;
-    horizon_cloud::tailnet::Selection::save(target.root(), selected, &catalog)
-        .map_err(|_| Error::Invalid("Could not save tailnet selection"))
+    if let Some(catalog) = catalog {
+        horizon_cloud::tailnet::Selection::save(target.root(), selected, &catalog)
+            .map_err(|_| Error::Invalid("Could not save tailnet selection"))?;
+    }
+    #[cfg(unix)]
+    std::fs::File::open(target.root())?.sync_all()?;
+    Ok(())
 }
