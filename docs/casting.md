@@ -70,7 +70,11 @@ resolution. A duplicate start cannot replace the existing session.
 
 `status.sessions` reports the state, cumulative successfully sent `frames`,
 selected `encoder`, `scaler` (`cpu` or `cuda`), `encoder_fallback`, and any terminal
-`error`. Both selected paths appear under Details in the Cast picker. Sent-frame
+`error`. The `scaler` describes the qualified encoder-output pipeline, not all
+source preparation. CUDA output scaling may receive a source crop or an already
+CPU-letterboxed canvas; the UI explicitly identifies CPU preparation in that
+mixed pipeline. Reporting `cpu` for the latter would conceal the still-active
+CUDA filter. Both selected paths appear under Details in the Cast picker. Sent-frame
 counts remain available after stopping or failing. They do not measure displayed
 TV frame rate or playback latency. `paired` exposes receiver metadata only,
 never credentials. Pairing PINs must not be written to durable plans or logs.

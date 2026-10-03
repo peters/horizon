@@ -132,6 +132,7 @@ pub struct CastSessionInfo {
     pub state: String,
     pub frames: u64,
     pub encoder: Option<String>,
+    /// Qualified encoder-output scaler; CPU capture/crop or letterboxing may precede it.
     #[serde(default)]
     pub scaler: Option<String>,
     pub encoder_fallback: Option<String>,

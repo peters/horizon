@@ -235,7 +235,7 @@ fn render_encoder_status(ui: &mut egui::Ui, session: &horizon_core::browser::man
     }
     if let Some(scaler) = &session.scaler {
         ui.label(if scaler == "cuda" {
-            "Scaling: CUDA"
+            "Scaling: CUDA (CPU preparation)"
         } else {
             "Scaling: CPU"
         });
