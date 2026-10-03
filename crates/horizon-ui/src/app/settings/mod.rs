@@ -191,7 +191,7 @@ impl HorizonApp {
         };
         let (status_text, status_color) = settings_status(&editor.status);
         #[cfg(feature = "cloud-workspaces")]
-        let configuration = editor.active_tab != SettingsTab::Tailnets;
+        let configuration = editor.active_tab != SettingsTab::Tailnets || has_changes;
         #[cfg(not(feature = "cloud-workspaces"))]
         let configuration = true;
         let action = bar::render(

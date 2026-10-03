@@ -41,7 +41,7 @@ pub fn valid_id(value: &str) -> bool {
 #[must_use]
 pub fn valid_key(value: &str) -> bool {
     value.starts_with("tskey-auth-")
-        && (30..=256).contains(&value.len())
+        && (31..=256).contains(&value.len())
         && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
@@ -221,6 +221,10 @@ mod tests {
         Selection::save(temp.path(), None, &catalog).unwrap();
         assert_eq!(Selection::load(temp.path()).unwrap(), Selection::default());
         assert!(valid_key("tskey-auth-synthetic12345678901234567890"));
+        assert!(!valid_key(&format!("tskey-auth-{}", "a".repeat(19))));
+        assert!(valid_key(&format!("tskey-auth-{}", "a".repeat(20))));
+        assert!(valid_key(&format!("tskey-auth-{}", "a".repeat(245))));
+        assert!(!valid_key(&format!("tskey-auth-{}", "a".repeat(246))));
         for invalid in [
             "tskey-api-synthetic12345678901234567890",
             "tskey-auth-short",

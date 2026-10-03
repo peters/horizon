@@ -207,7 +207,7 @@ def agent(arguments):
     # The mount root and networking directories stay owned by the control lane.
     folders = ['home', 'agents', 'sessions', 'session-data', 'locks', 'credentials',
                'checkout', 'worktrees', 'companions', 'siblings', 'source', 'repository.git', '.horizon']
-    files = ['agent-mcp.json', 'capabilities.json', 'horizon-transfer.pack',
+    files = ['agent-mcp.json', 'capabilities.json', 'siblings.json', 'horizon-transfer.pack',
              'horizon-source.tar', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log', 'device.json',
              'shared-checkout.status', 'shared-checkout.log']
     roots = ([] if worktree == Path('/workspace') else [worktree]) + [Path('/workspace', name) for name in folders + files]
@@ -237,6 +237,7 @@ def agent(arguments):
     subprocess.run(['/usr/bin/chown', '-R', '--no-dereference', f'{USER}:{USER}', str(transfers)], check=True)
     environment = dict(os.environ)
     environment['HORIZON_UNPRIVILEGED'] = '1'
+    environment['HORIZON_WORKER_SELF_STOP_AVAILABLE'] = '1' if environment.get('RUNPOD_POD_ID') and environment.get('RUNPOD_API_KEY') else '0'
     environment['HOME'] = '/workspace/home'
     for name in list(environment):
         if name.startswith(('TS_', 'TAILSCALE_')) or name == 'RUNPOD_API_KEY':

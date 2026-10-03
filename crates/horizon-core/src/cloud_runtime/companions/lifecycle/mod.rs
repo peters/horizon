@@ -202,8 +202,6 @@ pub fn submit_with_tailnet(
     if let Ok(intent) = candidate.submit(request.alias, action, id)
         && state.intents.operation(intent.operation_id).is_some()
     {
-        state.intents = candidate;
-        store.save(&state)?;
         if tailnet.is_some() {
             let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
             let saved: horizon_cloud::tailnet::Selection = serde_json::from_slice(&std::fs::read(
@@ -214,6 +212,8 @@ pub fn submit_with_tailnet(
                 return Err(Error::Invalid("A retried operation cannot change its tailnet"));
             }
         }
+        state.intents = candidate;
+        store.save(&state)?;
         return operation(request, &binding, intent);
     }
     let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;

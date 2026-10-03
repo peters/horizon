@@ -24,7 +24,7 @@ if capabilities.get('desktop', False):
 # Agents may stop the worker when done only where the profile opts in to stopping by itself
 # and the provider gave the worker a credential to stop with; a Hetzner worker has none
 # (Horizon stops it), so the tool could only ever refuse there.
-stops_itself = bool(os.environ.get('RUNPOD_POD_ID') and os.environ.get('RUNPOD_API_KEY'))
+stops_itself = os.environ.get('HORIZON_WORKER_SELF_STOP_AVAILABLE') == '1' or bool(os.environ.get('RUNPOD_POD_ID') and os.environ.get('RUNPOD_API_KEY'))
 # The watcher serves stop requests only for a period it accepts, as horizon-worker-idle does.
 minutes = os.environ.get('HORIZON_IDLE_STOP_MINUTES', '')
 idle_period = minutes.isdigit() and 10 <= int(minutes) <= 1440

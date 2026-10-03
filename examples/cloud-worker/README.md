@@ -121,14 +121,15 @@ use; later host-key changes fail. VNC listens on worker loopback and is read-onl
 SSH tunnels are required for presentation. Disconnecting the client detaches
 tmux. Deleting a worker loses its processes and Pod-local volume.
 
-The root-based Pod image uses Chromium with `--no-sandbox` inside the dedicated
-one-cloud container. Treat that container as the trust boundary: do not reuse
-it across unrelated repositories/accounts. The browser service and VNC endpoint
-listen only on worker loopback; presentation uses authenticated SSH. Browser
-and device MCP processes run on the worker and retain their injected agent identity.
-Private credential files protect against accidental inclusion in source, images
-and logs; they do not isolate agents from other root processes in the same cloud.
-Per-agent operating-system isolation requires a separate security architecture.
+The stock image runs agents and workspace services as UID 10001 with no
+capabilities or privilege escalation. Root owns the SSH/control lane, provider
+stop credential and private Tailscale state; these are inaccessible to agents.
+Agents share one identity and can access each other's workspace credentials, so
+keep each cloud dedicated to related repositories/accounts. This does not provide
+per-agent isolation. Chromium still uses `--no-sandbox` inside that cloud container.
+The browser service and VNC endpoint listen only on worker loopback; presentation
+uses authenticated SSH. Browser and device MCP processes retain their injected
+agent identity. Private credential files must never enter source, images or logs.
 
 ## Cloud tailnet contract
 

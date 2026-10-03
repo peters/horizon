@@ -110,4 +110,34 @@ class TailnetTests(unittest.TestCase):
         self.assertIn('--tun=userspace-networking', args)
         self.assertNotIn(KEY, str(spawn.call_args))
 
+    def test_agent_drop_hands_off_siblings_and_only_nonsecret_stop_availability(self):
+        workspace = Path(self.temp.name) / 'workspace'
+        workspace.mkdir()
+        manifest = workspace / 'siblings.json'
+        manifest.write_text('{}'); manifest.chmod(0o600)
+        def path(*parts):
+            value = Path(*parts)
+            if value.is_relative_to('/workspace'):
+                return workspace / value.relative_to('/workspace')
+            if value == Path('/run/horizon-credentials'):
+                return Path(self.temp.name) / 'credentials'
+            return value
+        class Exec(Exception): pass
+        with patch.object(worker, 'Path', side_effect=path) as paths, \
+                patch.object(worker.os, 'geteuid', return_value=0), \
+                patch.object(worker.os, 'chdir'), \
+                patch.object(worker.subprocess, 'run') as run, \
+                patch.object(worker.os, 'execve', side_effect=Exec) as execute, \
+                patch.dict(os.environ, {'RUNPOD_API_KEY': 'synthetic-provider-secret',
+                                      'RUNPOD_POD_ID': 'synthetic-pod', 'TS_AUTHKEY': KEY}, clear=True):
+            paths.cwd.return_value = workspace
+            with self.assertRaises(Exec): worker.agent(['/usr/bin/true'])
+        self.assertTrue(any(call.args[0][-1] == str(manifest) for call in run.call_args_list))
+        binary, args, environment = execute.call_args.args
+        self.assertEqual(binary, '/usr/bin/setpriv')
+        self.assertIn('--no-new-privs', args)
+        self.assertEqual(environment['HORIZON_WORKER_SELF_STOP_AVAILABLE'], '1')
+        self.assertNotIn('RUNPOD_API_KEY', environment)
+        self.assertNotIn('TS_AUTHKEY', environment)
+
 if __name__ == '__main__': unittest.main()

@@ -570,7 +570,13 @@ fn tailnet_selection_is_nonsecret_authorized_and_bound_to_the_operation() {
             .as_deref(),
         Some("work")
     );
+    let original = serde_json::to_value(f.request().load().unwrap().1.intents).unwrap();
     assert!(submit_with_tailnet(&f.request(), Action::EnsureReady, id, Some("none")).is_err());
+    assert!(submit_with_tailnet(&f.request(), Action::EnsureReady, OperationId::generate(), Some("none")).is_err());
+    assert_eq!(
+        serde_json::to_value(f.request().load().unwrap().1.intents).unwrap(),
+        original
+    );
     assert_eq!(
         submit_with_tailnet(&f.request(), Action::EnsureReady, id, Some("work"))
             .unwrap()

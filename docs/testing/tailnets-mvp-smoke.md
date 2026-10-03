@@ -84,3 +84,23 @@ removal. Full workspace and speech tests, formatting, maintainability and both
 mandatory Clippy tiers passed again. Pedantic Clippy remains advisory and reports
 existing excessive-bools warnings. No paid allocation was repeated for these
 presentation-only changes.
+
+## Review regressions
+
+The final review-fix UI SHA256 is
+`4c481af7b92f5e2322f9ac553d822c7ae48a4d1168d1b4d219530e1d81ee9231`;
+the running child matched it. Native testing also verifies that pending changes
+in another settings tab retain Save/Revert while Tailnets is open.
+
+All 240 worker Python tests passed with the matching CLI, with no skips. An
+offline container using the updated runtime prepared primary and sibling
+checkouts through the actual unprivileged session launcher. The root-written
+sibling manifest became readable by UID 10001. That UID could not read private
+Tailscale state or the provider API key. Self-stop MCP registration survived the
+privilege drop using only a nonsecret availability flag. Controller key-length
+bounds now match worker validation; rejected retry selections leave the journal
+unchanged; image validation qualifies the actual privilege-drop executable.
+
+The complete required local matrix passed again. These regressions were tested
+locally; the earlier paid discovery and connectivity evidence remains the real
+provider qualification described above.
