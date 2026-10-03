@@ -20,6 +20,8 @@ fn fixture() -> (tempfile::TempDir, Context, HorizonApp) {
         orientation: CastOrientation::Landscape,
         resolution: CastResolution::default(),
         pin: zeroize::Zeroizing::new(String::new()),
+        position: None,
+        binding: None,
     });
     app.panel_screen_rects.insert(
         panel.id,
@@ -37,23 +39,26 @@ fn frame(ctx: &Context, app: &mut HorizonApp, events: Vec<egui::Event>) {
 }
 
 #[test]
-fn picker_tracks_its_icon_across_movement_zoom_and_reopening() {
+fn picker_stays_put_across_source_movement_and_zoom() {
     let (_temp, ctx, mut app) = fixture();
-    let id = app.board.panels[0].id;
-    for (position, zoom) in [(Pos2::new(400.0, 140.0), 1.0), (Pos2::new(700.0, 220.0), 1.6)] {
-        app.canvas_view.zoom = zoom;
-        let panel = Rect::from_min_size(position, Vec2::new(400.0, 300.0));
-        app.panel_screen_rects.insert(id, panel);
-        for _ in 0..4 {
-            frame(&ctx, &mut app, Vec::new());
-        }
-        let popup = ctx.memory(|m| m.area_rect(Id::new("cast_picker"))).expect("picker");
-        let icon = cast_icon_rect(panel, zoom);
-        assert!((popup.right() - icon.right()).abs() < 1.0, "{popup:?}, {icon:?}");
-        assert!((popup.top() - icon.bottom() - 8.0).abs() < 1.0, "{popup:?}, {icon:?}");
-        assert!(ctx.memory(|m| m.area_rect(Id::new(("cast_icon", id.0)))).is_some());
-        assert!(app.canvas_rect(&ctx).contains_rect(popup));
+    for _ in 0..4 {
+        frame(&ctx, &mut app, Vec::new());
     }
+    let original = ctx.memory(|m| m.area_rect(Id::new("cast_picker"))).expect("picker");
+    let id = app.board.panels[0].id;
+    app.canvas_view.zoom = 1.6;
+    app.panel_screen_rects.insert(
+        id,
+        Rect::from_min_size(Pos2::new(700.0, 220.0), Vec2::new(400.0, 300.0)),
+    );
+    for _ in 0..4 {
+        frame(&ctx, &mut app, Vec::new());
+    }
+    let moved = ctx
+        .memory(|m| m.area_rect(Id::new("cast_picker")))
+        .expect("persistent picker");
+    assert_eq!(moved.min, original.min);
+    assert!(app.canvas_rect(&ctx).contains_rect(moved));
 }
 
 #[test]
@@ -115,12 +120,12 @@ fn clicking_the_visible_anchor_icon_closes_the_picker() {
 }
 
 #[test]
-fn losing_the_anchor_closes_the_picker() {
+fn losing_the_anchor_preserves_the_picker() {
     let (_temp, ctx, mut app) = fixture();
     frame(&ctx, &mut app, Vec::new());
     app.panel_screen_rects.clear();
     frame(&ctx, &mut app, Vec::new());
-    assert!(app.casting.picker.is_none());
+    assert!(app.casting.picker.is_some());
 }
 
 #[test]
@@ -133,9 +138,8 @@ fn bottom_edge_keeps_the_picker_and_icon_visible() {
         frame(&ctx, &mut app, Vec::new());
     }
     let popup = ctx.memory(|m| m.area_rect(Id::new("cast_picker"))).expect("picker");
-    let icon = cast_icon_rect(panel, app.canvas_view.zoom);
     assert!(app.canvas_rect(&ctx).contains_rect(popup));
-    assert!(popup.bottom() < icon.top(), "{popup:?}, {icon:?}");
+    assert!(!popup.intersects(panel), "{popup:?}, {panel:?}");
 }
 
 #[test]
@@ -169,7 +173,7 @@ fn picker_wheels_do_not_pan_or_zoom_the_canvas_but_outside_wheels_do() {
     }
     let mut input = raw_input([1600.0, 1000.0], None);
     input.events = vec![
-        egui::Event::PointerMoved(Pos2::new(1100.0, 650.0)),
+        egui::Event::PointerMoved(Pos2::new(1400.0, 800.0)),
         egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
             delta: Vec2::new(0.0, -5.0),
@@ -181,4 +185,50 @@ fn picker_wheels_do_not_pan_or_zoom_the_canvas_but_outside_wheels_do() {
         .run_ui(input, |ui| app.handle_canvas_pan(ui.ctx()))
         .discard_textures();
     assert_ne!(app.canvas_view.pan_offset.map(f32::to_bits), pan.map(f32::to_bits));
+}
+
+#[test]
+fn dragging_picker_changes_its_persistent_position() {
+    let (_temp, ctx, mut app) = fixture();
+    for _ in 0..4 {
+        frame(&ctx, &mut app, Vec::new());
+    }
+    let original = ctx.memory(|m| m.area_rect(Id::new("cast_picker"))).expect("picker");
+    let from = original.min + egui::vec2(150.0, 16.0);
+    frame(
+        &ctx,
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(from),
+            egui::Event::PointerButton {
+                pos: from,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let to = from + egui::vec2(80.0, 70.0);
+    frame(&ctx, &mut app, vec![egui::Event::PointerMoved(to)]);
+    frame(
+        &ctx,
+        &mut app,
+        vec![egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    for _ in 0..4 {
+        frame(&ctx, &mut app, Vec::new());
+    }
+    let moved = ctx
+        .memory(|m| m.area_rect(Id::new("cast_picker")))
+        .expect("moved picker");
+    assert!((moved.min - original.min).length() > 50.0, "{original:?} -> {moved:?}");
+    assert_eq!(
+        app.casting.picker.as_ref().expect("persistent picker").position,
+        Some(moved.min)
+    );
 }

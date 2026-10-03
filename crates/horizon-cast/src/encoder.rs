@@ -65,7 +65,7 @@ pub(crate) fn stream(
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
-                if last_frame.elapsed() > Duration::from_secs(3) {
+                if frames.stalled(&mut last_frame, Instant::now()) {
                     result = Err(Error::Protocol("capture stopped producing frames"));
                     break;
                 }

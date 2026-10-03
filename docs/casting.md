@@ -86,8 +86,12 @@ window. Fit the whole source into view first. Hidden, clipped, detached, deleted
 or covered panel/workspace sources stop casting. Entire Horizon captures the
 main window's rendered content, including its own dialogs, without capturing
 the surrounding desktop, other applications or detached windows. A minimized
-or unavailable main window cannot start that source. Opening Cast controls or changing source geometry
-briefly repeats the last validated image until capture is safe. Desktop and
+or unavailable main window cannot start that source. Panel/workspace Cast controls stay open and can be moved while using the canvas.
+Closing them stops only their bound TV session; other TVs continue. Controls or
+menus covering a source pause only that source until moved away; geometry changes
+also briefly repeat the last validated image until capture is safe. Whole-window
+casting hides controls after remembered Start or Pair so control/PIN pixels remain
+private; this automatic dismissal does not stop its session. Desktop and
 arbitrary-application capture, audio, HDR, legacy receivers, background rendering
 and automatic reconnect are outside this MVP.
 
