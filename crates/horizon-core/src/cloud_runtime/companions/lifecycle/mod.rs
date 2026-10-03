@@ -192,14 +192,6 @@ pub fn submit_with_tailnet(
     }
     let (store, mut state) = request.load()?;
     let binding = request.authorize(&state)?;
-    if let Some(tailnet) = tailnet {
-        let catalog = super::super::tailnet::store(request.root)
-            .load()
-            .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
-        if tailnet != "none" && !catalog.tailnets.iter().any(|t| t.id == tailnet) {
-            return Err(Error::Invalid("Choose a saved tailnet ID from cloud_companions"));
-        }
-    }
     let mut candidate = state.intents.clone();
     if let Ok(intent) = candidate.submit(request.alias, action, id)
         && state.intents.operation(intent.operation_id).is_some()

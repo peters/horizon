@@ -687,3 +687,56 @@ fn uncommitted_tailnet_requests_never_change_the_default_selection() {
         assert!(crate::cloud_runtime::tailnet::validate_pending(&target).is_ok());
     }
 }
+
+#[test]
+fn durable_tailnet_retries_survive_catalog_deletion_or_corruption() {
+    for phase in [Phase::Submitted, Phase::Ready] {
+        for catalog_bytes in [b"{\"tailnets\":[]}".as_slice(), b"invalid".as_slice()] {
+            let f = Fixture::new();
+            let catalog_path = f.root.path().join("tailnets.json");
+            std::fs::write(&catalog_path, br#"{"tailnets":[{"id":"work","name":"Work"}]}"#).unwrap();
+            let target = f.root.path().join("target");
+            let catalog = crate::cloud_runtime::tailnet::store(f.root.path()).load().unwrap();
+            horizon_cloud::tailnet::Selection::save(&target, Some("work"), &catalog).unwrap();
+            let id = OperationId::generate();
+            submit_with_tailnet(&f.request(), Action::EnsureReady, id, Some("work")).unwrap();
+            if phase == Phase::Ready {
+                let mut backend = Fake::new(&f);
+                assert_eq!(execute_with(&f.request(), id, &mut backend).unwrap().phase, phase);
+            }
+            let request_path = target.join(format!("tailnet-request-{id}.json"));
+            let saved = std::fs::read(&request_path).unwrap();
+            std::fs::write(&catalog_path, catalog_bytes).unwrap();
+            for requested in [Some("work"), None] {
+                let retried = submit_with_tailnet(&f.request(), Action::EnsureReady, id, requested).unwrap();
+                assert_eq!(retried.intent.operation_id, id);
+                assert_eq!(retried.phase, phase);
+            }
+            for changed in ["none", "unknown"] {
+                assert!(submit_with_tailnet(&f.request(), Action::EnsureReady, id, Some(changed)).is_err());
+            }
+            if phase == Phase::Ready {
+                assert!(
+                    submit_with_tailnet(&f.request(), Action::EnsureReady, OperationId::generate(), Some("work"))
+                        .is_err()
+                );
+            } else {
+                assert_eq!(
+                    submit_with_tailnet(&f.request(), Action::EnsureReady, OperationId::generate(), Some("work"))
+                        .unwrap()
+                        .intent
+                        .operation_id,
+                    id
+                );
+            }
+            assert_eq!(std::fs::read(request_path).unwrap(), saved);
+            assert_eq!(
+                horizon_cloud::tailnet::Selection::load(&target)
+                    .unwrap()
+                    .tailnet
+                    .as_deref(),
+                Some("work")
+            );
+        }
+    }
+}

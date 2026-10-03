@@ -322,3 +322,28 @@ advancing and the flow continued without revealing the viewer again. Both test
 bindings were removed without a pending journal. All owned fixture children
 exited, its device target expired and private fixture state was removed.
 No new paid allocation was made.
+
+## Durable retry after catalog removal
+
+Existing operation deduplication now precedes catalog membership validation.
+Retries compare any explicit choice with the durable request; only new requests
+validate a newly chosen binding against the current catalog. A regression covers
+submitted and completed existing-cloud operations, deleted and malformed catalogs,
+exact and omitted choices, concurrent deduplication, refused choice changes and
+refused new requests for removed bindings. Durable request bytes and allocated
+network selection remain unchanged. Provider behavior uses the existing fake
+backend; no enrollment, allocation or real credentials are involved.
+
+The final required matrix passed 4,714 workspace tests (39 ignored), 1,581
+speech-tier tests and all 252 matching-worker tests without skips. Formatting,
+maintainability and both mandatory Clippy tiers passed; pedantic Clippy retains
+its existing advisory provider warning. The actual isolated native application
+child matched frozen SHA256
+`f6add93fc93bd7893d0e47e90ae3ae75cf06f6c060d95fa845771ab7c76833c9`.
+Its 380-frame continuous capture covered 52 actions, including both named choices
+and None, stable-ID masked replacement, removing an actively edited binding,
+all three settings exits, cancellation and Fit. Public inspections established
+advancing displayed frames; after the person moved away, reception continued
+without forcing the viewer back. Both synthetic bindings were removed with no
+pending journal. All owned fixture children exited and its target expired.
+The updated showcase uses only this final recording. No new paid cloud was made.
