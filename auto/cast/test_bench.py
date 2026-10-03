@@ -99,8 +99,11 @@ class DecoderGates(unittest.TestCase):
             self.decode()
 
     def test_changed_image_content_never_scores(self):
-        self.pixels = self.pixels[:192] + bytes(bench.FRAME_BYTES - 192)
-        with self.assertRaisesRegex(RuntimeError, "quality"):
+        self.pixels = b"".join(
+            self.pixels[offset:offset + 192] + bytes(bench.FRAME_BYTES - 192)
+            for offset in range(0, len(self.pixels), bench.FRAME_BYTES)
+        )
+        with self.assertRaisesRegex(RuntimeError, "^decoded image quality regressed$"):
             self.decode()
 
     def test_resource_sampler_errors_are_retained(self):
