@@ -491,7 +491,7 @@ impl eframe::App for HorizonApp {
                     self.observed_keyboard_inputs.is_wayland_backend(),
                 )
             });
-            self.handle_native_image_pastes(ctx);
+            self.handle_native_image_pastes();
         }
         self.filter_canvas_gesture(ctx, raw_input);
         let viewport_id = raw_input.viewport_id;

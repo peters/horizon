@@ -57,6 +57,8 @@ struct KeyboardAwareApp<'app> {
     image_paste_keys: std::collections::HashSet<(winit::window::WindowId, winit::keyboard::PhysicalKey)>,
     #[cfg(target_os = "linux")]
     clipboard: Option<smithay_clipboard::native::Subscription>,
+    #[cfg(target_os = "linux")]
+    transfer_files: horizon_wayland::TransferFiles,
     native_window_liveness: NativeWindowLiveness,
     // `pinch` borrows the platform display through raw FFI, so it must be
     // declared before `display_handle`: fields drop in declaration order, and
@@ -83,6 +85,8 @@ impl<'app> KeyboardAwareApp<'app> {
             image_paste_keys: std::collections::HashSet::new(),
             #[cfg(target_os = "linux")]
             clipboard: None,
+            #[cfg(target_os = "linux")]
+            transfer_files: horizon_wayland::TransferFiles::default(),
             native_window_liveness: NativeWindowLiveness::default(),
             #[cfg(target_os = "linux")]
             pinch: None,
@@ -143,8 +147,10 @@ impl KeyboardAwareApp<'_> {
             use smithay_clipboard::native::Event as TransferEvent;
             match transfer {
                 TransferEvent::Paste { recipient, mime, bytes } => {
-                    if let Ok(paths) = horizon_wayland::decode_transfer_payload(&mime, &bytes) {
+                    if let Ok(paths) = self.transfer_files.decode_transfer_payload(&mime, &bytes) {
                         self.observed_keyboard_inputs.native_paste(recipient, paths);
+                    } else {
+                        self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
                     }
                 }
                 TransferEvent::Leave { surface } => {
@@ -182,7 +188,7 @@ impl KeyboardAwareApp<'_> {
                     if self.observed_keyboard_inputs.native_window(surface).is_none() {
                         continue;
                     }
-                    let Ok(paths) = horizon_wayland::decode_transfer_payload(&mime, &bytes) else {
+                    let Ok(paths) = self.transfer_files.decode_transfer_payload(&mime, &bytes) else {
                         continue;
                     };
                     self.observed_keyboard_inputs
@@ -297,15 +303,16 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
                         || (key.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Insert)
                             && self.modifiers.shift
                             && !self.modifiers.ctrl));
-                if paste
-                    && let Some((_, Some(recipient))) = self.observed_keyboard_inputs.native_window(surface)
-                    && self
+                if paste && let Some(recipient) = self.observed_keyboard_inputs.native_paste_request(surface) {
+                    if self
                         .clipboard
                         .as_mut()
                         .is_some_and(|bridge| bridge.request_paste(surface, recipient))
-                {
-                    self.image_paste_keys.insert(key_id);
-                    return;
+                    {
+                        self.image_paste_keys.insert(key_id);
+                        return;
+                    }
+                    self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
                 }
             }
         }

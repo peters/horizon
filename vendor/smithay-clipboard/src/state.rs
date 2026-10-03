@@ -142,6 +142,7 @@ impl State {
     }
 
     /// Load selection for the given target.
+    #[allow(unsafe_code)] // Upstream calloop I/O access.
     pub fn load_selection(&mut self, ty: SelectionTarget) -> Result<()> {
         let latest = self
             .latest_seat
@@ -197,6 +198,7 @@ impl State {
         let mut reader_buffer = [0; 4096];
         let mut content = Vec::new();
         let _ = self.loop_handle.insert_source(read_pipe, move |_, file, state| {
+            // SAFETY: upstream callback performs I/O without changing the registered file descriptor.
             let file = unsafe { file.get_mut() };
             loop {
                 match file.read(&mut reader_buffer) {
@@ -234,6 +236,7 @@ impl State {
         Ok(())
     }
 
+    #[allow(unsafe_code)] // Upstream calloop I/O access.
     fn send_request(&mut self, ty: SelectionTarget, write_pipe: WritePipe, mime: String) {
         // We can only send strings, so don't do anything with the mime-type.
         if MimeType::find_allowed(&[mime]).is_none() {
@@ -254,6 +257,7 @@ impl State {
 
         let mut written = 0;
         let _ = self.loop_handle.insert_source(write_pipe, move |_, file, _| {
+            // SAFETY: upstream callback performs I/O without changing the registered file descriptor.
             let file = unsafe { file.get_mut() };
             loop {
                 match file.write(&contents[written..]) {
@@ -606,13 +610,16 @@ impl Drop for ClipboardSeatState {
     }
 }
 
+#[allow(unsafe_code)] // Upstream fcntl boundary.
 fn set_non_blocking(raw_fd: RawFd) -> std::io::Result<()> {
+    // SAFETY: fcntl queries flags on the borrowed live file descriptor.
     let flags = unsafe { libc::fcntl(raw_fd, libc::F_GETFL) };
 
     if flags < 0 {
         return Err(std::io::Error::last_os_error());
     }
 
+    // SAFETY: fcntl updates only nonblocking flags on the same live descriptor.
     let result = unsafe { libc::fcntl(raw_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     if result < 0 {
         return Err(std::io::Error::last_os_error());

@@ -16,7 +16,9 @@ making the UI poll continuously.
 `native.rs` and its tests are new. The additions in `lib.rs`, `state.rs`, and
 `worker.rs` connect the subscription and transfers to the existing worker.
 The copied upstream assertion policy is retained in those files; new native
-input code denies unwrap and expect. No new unsafe operations are introduced.
+input code denies unwrap and expect and forbids unsafe code. The crate denies
+unsafe code except at the copied foreign-display and calloop/flags boundaries,
+which retain explicit safety contracts. No new unsafe operations are introduced.
 The fork is a workspace member so the normal tests and lint checks cover it.
 Its code and dependencies are Linux-only, matching Horizon's native Wayland
 adapter; the workspace's macOS and Windows builds use their existing clipboard

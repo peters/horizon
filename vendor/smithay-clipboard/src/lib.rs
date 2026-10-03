@@ -4,6 +4,7 @@
 //! should have surface around.
 
 #![cfg(target_os = "linux")]
+#![deny(unsafe_code)]
 // Preserve upstream assertion policy; the native extension has stricter lints.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![deny(clippy::all, clippy::if_not_else, clippy::enum_glob_use)]
@@ -47,6 +48,7 @@ impl Clipboard {
     ///
     /// `display` must be a valid `*mut wl_display` pointer, and it must remain
     /// valid for as long as `Clipboard` object is alive.
+    #[allow(unsafe_code)] // Upstream foreign-display adoption boundary.
     pub unsafe fn new(display: *mut c_void) -> Self {
         let mut workers = WORKERS
             .get_or_init(Mutex::default)
@@ -58,6 +60,7 @@ impl Clipboard {
         {
             return Self { worker };
         }
+        // SAFETY: the caller guarantees the foreign display lifetime above.
         let backend = unsafe { Backend::from_foreign_display(display.cast()) };
         let connection = Connection::from_backend(backend);
 

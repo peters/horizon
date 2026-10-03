@@ -1,4 +1,5 @@
 //! Native file input through the toolkit's existing clipboard data device.
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use sctk::data_device_manager::ReadPipe;

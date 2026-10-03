@@ -26,7 +26,7 @@ mod pinch;
 mod transfer;
 
 #[cfg(target_os = "linux")]
-pub use transfer::decode_transfer_payload;
+pub use transfer::TransferFiles;
 
 #[cfg(target_os = "linux")]
 pub use pinch::{Pinch, PinchBridge};

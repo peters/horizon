@@ -290,14 +290,15 @@ impl HorizonApp {
     }
 
     #[cfg(target_os = "linux")]
-    pub(super) fn handle_native_image_pastes(&mut self, ctx: &Context) {
-        for (panel, paths) in self.observed_keyboard_inputs.take_native_pastes() {
-            let files: Vec<egui::DroppedFileHandle> = paths
+    pub(super) fn handle_native_image_pastes(&mut self) {
+        for paste in self.observed_keyboard_inputs.take_native_pastes() {
+            let files: Vec<egui::DroppedFileHandle> = paste
+                .paths
                 .into_iter()
                 .map(|path| std::sync::Arc::new(ClipboardFile(path)) as egui::DroppedFileHandle)
                 .collect();
-            if !self.maybe_start_ssh_file_drop(panel, &files, ctx.viewport_id()) {
-                self.paste_dropped_paths_into_terminal(panel, &files, false);
+            if !self.maybe_start_ssh_file_drop(paste.panel, &files, paste.viewport) {
+                self.paste_dropped_paths_into_terminal(paste.panel, &files, false);
             }
         }
     }

@@ -8,7 +8,21 @@ pub(super) struct NativeFileInputs {
     drops: std::collections::VecDeque<NativeDrop>,
     viewports: std::collections::HashMap<egui::ViewportId, u64>,
     windows: std::collections::HashMap<u64, (f64, Option<u64>)>,
-    pastes: Vec<(horizon_core::PanelId, Vec<std::path::PathBuf>)>,
+    pastes: Vec<NativePaste>,
+    requests: std::collections::HashMap<u64, PasteRequest>,
+    next_request: u64,
+}
+
+pub(crate) struct NativePaste {
+    pub panel: horizon_core::PanelId,
+    pub viewport: egui::ViewportId,
+    pub paths: Vec<std::path::PathBuf>,
+}
+
+struct PasteRequest {
+    panel: horizon_core::PanelId,
+    viewport: egui::ViewportId,
+    started: std::time::Instant,
 }
 
 struct NativeDrop {
@@ -144,10 +158,51 @@ impl ObservedKeyboardInputs {
         }
     }
 
-    pub(crate) fn native_paste(&self, recipient: u64, paths: Vec<std::path::PathBuf>) {
+    pub(crate) fn native_paste_request(&self, surface: u64) -> Option<u64> {
+        let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .requests
+            .retain(|_, request| request.started.elapsed() < std::time::Duration::from_secs(15));
+        if state.requests.len() >= 16 {
+            return None;
+        }
+        let panel = horizon_core::PanelId(state.windows.get(&surface)?.1?);
+        let viewport = *state.viewports.iter().find(|(_, window)| **window == surface)?.0;
+        state.next_request = state.next_request.checked_add(1)?;
+        let token = state.next_request;
+        state.requests.insert(
+            token,
+            PasteRequest {
+                panel,
+                viewport,
+                started: std::time::Instant::now(),
+            },
+        );
+        Some(token)
+    }
+
+    pub(crate) fn cancel_native_paste_request(&self, token: u64) {
+        self.1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .requests
+            .remove(&token);
+    }
+
+    pub(crate) fn native_paste(&self, token: u64, paths: Vec<std::path::PathBuf>) {
         let context = {
             let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            state.pastes.push((horizon_core::PanelId(recipient), paths));
+            let Some(request) = state.requests.remove(&token) else {
+                return;
+            };
+            if paths.is_empty() {
+                return;
+            }
+            state.pastes.push(NativePaste {
+                panel: request.panel,
+                viewport: request.viewport,
+                paths,
+            });
             state.context.clone()
         };
         if let Some(context) = context {
@@ -155,7 +210,7 @@ impl ObservedKeyboardInputs {
         }
     }
 
-    pub(crate) fn take_native_pastes(&self) -> Vec<(horizon_core::PanelId, Vec<std::path::PathBuf>)> {
+    pub(crate) fn take_native_pastes(&self) -> Vec<NativePaste> {
         std::mem::take(&mut self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pastes)
     }
 }
@@ -180,18 +235,39 @@ mod tests {
         observed.native_window_seen(20);
         observed.native_focus(10, true);
         observed.native_recipient_publisher()(egui::ViewportId::ROOT, 1.5, Some(horizon_core::PanelId(2)));
+        let token = observed.native_paste_request(10).unwrap();
         observed.native_focus(10, false);
         observed.native_focus(20, true);
         observed.native_recipient_publisher()(egui::ViewportId::from_hash_of(20), 2.0, Some(horizon_core::PanelId(3)));
         assert_eq!(observed.native_window(10), Some((1.5, None)));
         assert_eq!(observed.native_window(20), Some((2.0, Some(3))));
-        observed.native_paste(2, vec![std::path::PathBuf::from("/tmp/image.png")]);
+        observed.native_paste(token, vec![std::path::PathBuf::from("/tmp/image.png")]);
         observed.native_focus(20, false);
         let pastes = observed.take_native_pastes();
-        assert_eq!(pastes[0].0, horizon_core::PanelId(2));
+        assert_eq!(pastes[0].panel, horizon_core::PanelId(2));
+        assert_eq!(pastes[0].viewport, egui::ViewportId::ROOT);
         assert!(observed.take_native_pastes().is_empty());
         observed.forget_native_window(10);
         assert!(observed.native_window(10).is_none());
+    }
+
+    #[test]
+    fn detached_paste_keeps_original_viewport_after_focus_changes() {
+        let observed = super::ObservedKeyboardInputs::default();
+        let child = egui::ViewportId::from_hash_of("detached");
+        observed.native_window_seen(20);
+        observed.native_focus(20, true);
+        observed.native_recipient_publisher()(child, 1.0, Some(horizon_core::PanelId(3)));
+        let token = observed.native_paste_request(20).unwrap();
+        observed.forget_native_window(20);
+        observed.native_window_seen(10);
+        observed.native_focus(10, true);
+        observed.native_recipient_publisher()(egui::ViewportId::ROOT, 1.0, Some(horizon_core::PanelId(4)));
+        observed.native_paste(token, vec![std::path::PathBuf::from("/tmp/image.png")]);
+        let paste = observed.take_native_pastes().pop().unwrap();
+        assert_eq!(paste.panel, horizon_core::PanelId(3));
+        assert_eq!(paste.viewport, child);
+        assert!(observed.native_paste_request(20).is_none());
     }
 
     #[test]
