@@ -283,6 +283,18 @@ class NativeViewerGates(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'stale'):
             self.validate(lambda rows: [row['panels'][0]['diagnostics'].update(observed_at_millis=1 + i * 2000) for i, row in enumerate(rows)])
 
+    def test_viewer_sequences_preserve_intermediate_progress(self):
+        for sequences, valid in [([1, 3, 2], False), ([1, 1, 2], True), ([1, 2, 2], True)]:
+            def advance(rows):
+                for row, sequence in zip(rows, sequences):
+                    row['panels'][0]['frame_sequence'] = sequence
+            with self.subTest(sequences=sequences):
+                if valid:
+                    self.assertEqual(self.validate(advance)['panel_id'], 'owned')
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'motion'):
+                        self.validate(advance)
+
     def test_static_viewer_receipt_cannot_prove_live_motion(self):
         with self.assertRaisesRegex(RuntimeError, 'motion'):
             self.validate(lambda rows: [row['panels'][0].update(frame_sequence=1) for row in rows])
@@ -392,7 +404,7 @@ class CandidateReviewGates(unittest.TestCase):
     def test_build_and_embedded_inputs_invalidate_source_fingerprint(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            inputs = ['.cargo/config.toml', 'crates/horizon-ui/build.rs',
+            inputs = ['rust-toolchain.toml', 'rust-toolchain', '.cargo/config.toml', 'crates/horizon-ui/build.rs',
                       'crates/horizon-ui/build/font_assets.rs', 'crates/horizon-cast/src/srp_group.txt',
                       'crates/horizon-cloud/examples/cloud.yml', 'crates/horizon-ui/assets/font.ttf',
                       'crates/horizon-ui/publish-assets/icons/icon.png', 'assets/icons/icon.png',

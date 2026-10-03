@@ -190,7 +190,7 @@ def validate_selection(value, backend, scaler):
 
 
 def source_digest():
-    patterns = ['Cargo*.toml', 'Cargo.lock', '.cargo/**/*', 'crates/**/*',
+    patterns = ['Cargo*.toml', 'Cargo.lock', 'rust-toolchain*', '.cargo/**/*', 'crates/**/*',
                 'assets/**/*', 'packaging/**/*']
     paths = {path for pattern in patterns for path in REPO.glob(pattern)
              if path.is_file() and not {'target', '__pycache__', '.git'}.intersection(path.relative_to(REPO).parts)}
@@ -322,7 +322,8 @@ def validate_viewer(receipt, endpoint):
     if len(identities) != 1 or not all(row.get('owned_by_caller') and row['connection'] == 'connected'
              and row.get('image_received') and presented(row) for row in panels):
         raise RuntimeError('native viewer ownership/live presentation unverified')
-    if panels[-1]['frame_sequence'] <= panels[0]['frame_sequence']:
+    sequences = [row['frame_sequence'] for row in panels]
+    if sequences[-1] <= sequences[0] or any(later < earlier for earlier, later in zip(sequences, sequences[1:])):
         raise RuntimeError('native viewer motion unverified')
     observed = [row.get('diagnostics', {}).get('observed_at_millis', 0) for row in panels]
     if not all(observed) or observed[-1] - observed[0] < 2000 or abs(time.time() * 1000 - observed[-1]) > 60000:
