@@ -51,6 +51,7 @@ pub enum Event {
         mime: String,
         bytes: Vec<u8>,
         text: Option<String>,
+        fallback: Option<TextFallback>,
     },
 }
 
@@ -118,7 +119,13 @@ impl Hub {
         }
         let bytes = |event: &Event| match event {
             Event::Drop { bytes, .. } => bytes.len(),
-            Event::Paste { bytes, text, .. } => bytes.len() + text.as_ref().map_or(0, String::len),
+            Event::Paste {
+                bytes, text, fallback, ..
+            } => {
+                bytes.len()
+                    + text.as_ref().map_or(0, String::len)
+                    + fallback.as_ref().map_or(0, |pending| pending.bytes.len())
+            }
             _ => 0,
         };
         let accepted =
@@ -261,23 +268,44 @@ pub(crate) fn preferred_clipboard(mimes: &[String]) -> Option<String> {
         .or_else(|| preferred(mimes))
 }
 pub(crate) fn preferred_text(mimes: &[String]) -> Option<String> {
-    [
-        "text/plain;charset=utf-8",
-        "UTF8_STRING",
-        "text/plain",
-        "STRING",
-        "TEXT",
-    ]
-    .into_iter()
-    .find(|mime| mimes.iter().any(|offered| offered == mime))
-    .map(str::to_owned)
+    crate::mime::MimeType::find_allowed(mimes).map(|mime| mime.to_string())
 }
 #[must_use]
 pub fn is_text_mime(mime: &str) -> bool {
-    matches!(
-        mime,
-        "text/plain;charset=utf-8" | "UTF8_STRING" | "text/plain" | "STRING" | "TEXT"
-    )
+    crate::mime::ALLOWED_MIME_TYPES.contains(&mime)
+}
+/// Decode text with the toolkit's lossy UTF-8 and MIME-specific newline rules.
+#[must_use]
+pub fn decode_clipboard_text(mime: &str, bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    if mime == "UTF8_STRING" {
+        text.into_owned()
+    } else {
+        crate::mime::normalize_to_lf(&text)
+    }
+}
+/// Same-offer text pipe handed to the file worker, used only after native decoding fails.
+#[derive(Debug)]
+pub struct TextFallback {
+    reader: File,
+    bytes: Vec<u8>,
+    mime: String,
+    deadline: Instant,
+    limit: usize,
+}
+impl TextFallback {
+    /// Read the bounded fallback off the UI thread, until EOF or its original deadline.
+    #[must_use]
+    pub fn read_text(mut self) -> Option<String> {
+        while Instant::now() < self.deadline {
+            match read_bounded(&mut self.reader, &mut self.bytes, self.limit) {
+                Ok(true) => return (!self.bytes.is_empty()).then(|| decode_clipboard_text(&self.mime, &self.bytes)),
+                Ok(false) => std::thread::sleep(Duration::from_millis(16)),
+                Err(_) => return None,
+            }
+        }
+        None
+    }
 }
 
 pub(crate) enum Destination {
@@ -295,6 +323,7 @@ struct Pending {
     fallback: Option<TextRead>,
 }
 struct TextRead {
+    mime: String,
     reader: File,
     bytes: Vec<u8>,
     complete: bool,
@@ -376,16 +405,17 @@ impl Transfers {
         mime: String,
         recipient: u64,
         generation: u64,
-        text: Option<ReadPipe>,
+        text: Option<(ReadPipe, String)>,
     ) {
         if self.receive(pipe, mime, Destination::Paste(recipient), generation)
-            && let Some(pipe) = text
+            && let Some((pipe, text_mime)) = text
         {
             let fd: OwnedFd = pipe.into();
             if rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK).is_ok()
                 && let Some(read) = self.reads.last_mut()
             {
                 read.fallback = Some(TextRead {
+                    mime: text_mime,
                     reader: fd.into(),
                     bytes: Vec::new(),
                     complete: false,
@@ -442,7 +472,7 @@ impl Transfers {
             }
             if expired && !read.complete {
                 self.cancel_at(read.destination, read.generation);
-            } else if !read.complete || (!expired && read.fallback.as_ref().is_some_and(|text| !text.complete)) {
+            } else if !read.complete {
                 self.reads.push(read);
             } else {
                 match read.destination {
@@ -470,12 +500,24 @@ impl Transfers {
                         }
                     }
                     Destination::Paste(recipient) => {
-                        let text = read
-                            .fallback
-                            .filter(|text| text.complete)
-                            .and_then(|text| String::from_utf8(text.bytes).ok())
-                            .filter(|text| !text.is_empty());
-                        if read.bytes.is_empty() && text.is_none() {
+                        let (text, fallback) = match read.fallback {
+                            Some(text) if text.complete => (
+                                (!text.bytes.is_empty()).then(|| decode_clipboard_text(&text.mime, &text.bytes)),
+                                None,
+                            ),
+                            Some(text) if !expired => (
+                                None,
+                                Some(TextFallback {
+                                    reader: text.reader,
+                                    bytes: text.bytes,
+                                    mime: text.mime,
+                                    deadline: read.deadline,
+                                    limit: 32 * 1024 * 1024 - read.bytes.len(),
+                                }),
+                            ),
+                            _ => (None, None),
+                        };
+                        if read.bytes.is_empty() && text.is_none() && fallback.is_none() {
                             self.cancel_at(Destination::Paste(recipient), read.generation);
                         } else {
                             self.hub.emit_at(
@@ -485,6 +527,7 @@ impl Transfers {
                                     mime: read.mime,
                                     bytes: read.bytes,
                                     text,
+                                    fallback,
                                 },
                             );
                         }
@@ -541,6 +584,17 @@ mod tests {
     }
 
     #[test]
+    fn fallback_text_matches_toolkit_lossy_utf8_and_mime_newline_rules() {
+        let bytes = b"a\r\nb\rc\n\xff";
+        assert_eq!(
+            decode_clipboard_text("text/plain;charset=utf-8", bytes),
+            "a\nb\nc\n\u{fffd}"
+        );
+        assert_eq!(decode_clipboard_text("UTF8_STRING", bytes), "a\r\nb\rc\n\u{fffd}");
+        assert!(preferred_text(&["STRING".into(), "TEXT".into()]).is_none());
+    }
+
+    #[test]
     fn availability_snapshot_removes_old_focus_without_losing_another_seat() {
         let hub = hub(113);
         hub.selection(10, true);
@@ -552,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn native_paste_carries_text_from_the_same_offer_after_both_pipes_complete() -> std::io::Result<()> {
+    fn completed_native_payload_hands_its_original_text_pipe_to_the_file_worker() -> std::io::Result<()> {
         let hub = hub(114);
         let mut transfers = Transfers::new(hub.clone());
         let (reader, mut writer) = UnixStream::pair()?;
@@ -562,24 +616,31 @@ mod tests {
             "text/uri-list".into(),
             42,
             0,
-            Some(ReadPipe::from(OwnedFd::from(text_reader))),
+            Some((
+                ReadPipe::from(OwnedFd::from(text_reader)),
+                "text/plain;charset=utf-8".into(),
+            )),
         );
         writer.write_all(b"https://example.invalid/image")?;
         drop(writer);
         transfers.poll();
-        assert!(lock(&hub.events).is_empty());
+        let Some(Event::Paste {
+            recipient: 42,
+            fallback: Some(fallback),
+            ..
+        }) = lock(&hub.events).pop_front()
+        else {
+            panic!("completed native payload was delayed")
+        };
         text_writer.write_all(b"synthetic text fallback")?;
         drop(text_writer);
-        transfers.poll();
-        assert!(
-            matches!(lock(&hub.events).pop_front(), Some(Event::Paste { recipient: 42, text: Some(text), .. }) if text == "synthetic text fallback")
-        );
+        assert_eq!(fallback.read_text().as_deref(), Some("synthetic text fallback"));
         assert!(!transfers.pending());
         Ok(())
     }
 
     #[test]
-    fn complete_image_with_stalled_text_finishes_at_the_bounded_deadline() -> std::io::Result<()> {
+    fn complete_image_never_waits_for_a_stalled_text_representation() -> std::io::Result<()> {
         let hub = hub(115);
         let mut transfers = Transfers::new(hub.clone());
         let (reader, mut writer) = UnixStream::pair()?;
@@ -589,19 +650,20 @@ mod tests {
             "image/png".into(),
             42,
             0,
-            Some(ReadPipe::from(OwnedFd::from(text_reader))),
+            Some((
+                ReadPipe::from(OwnedFd::from(text_reader)),
+                "text/plain;charset=utf-8".into(),
+            )),
         );
         writer.write_all(b"\x89PNG\r\n\x1a\nfixture")?;
         drop(writer);
-        transfers.poll();
-        assert!(lock(&hub.events).is_empty());
-        transfers.reads[0].deadline = Instant::now();
         transfers.poll();
         assert!(matches!(
             lock(&hub.events).pop_front(),
             Some(Event::Paste {
                 recipient: 42,
                 text: None,
+                fallback: Some(_),
                 ..
             })
         ));
@@ -620,7 +682,10 @@ mod tests {
             "image/png".into(),
             42,
             0,
-            Some(ReadPipe::from(OwnedFd::from(text_reader))),
+            Some((
+                ReadPipe::from(OwnedFd::from(text_reader)),
+                "text/plain;charset=utf-8".into(),
+            )),
         );
         writer.write_all(b"partial image")?;
         text_writer.write_all(b"fallback")?;
@@ -731,7 +796,8 @@ mod tests {
                 recipient: 43,
                 mime: "image/png".into(),
                 bytes: vec![2],
-                text: None
+                text: None,
+                fallback: None
             }
         ));
         assert!(matches!(
@@ -804,7 +870,8 @@ mod tests {
             recipient: 9,
             mime: "image/png".into(),
             bytes: vec![1],
-            text: None
+            text: None,
+            fallback: None
         }));
         let mut events = lock(&hub.events);
         assert!(matches!(events.pop_front(), Some(Event::Reset)));

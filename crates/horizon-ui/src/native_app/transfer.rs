@@ -36,7 +36,7 @@ enum Payload {
 pub(super) struct TransferWorker {
     sender: Option<SyncSender<Job>>,
     incoming: Option<Receiver<Completion>>,
-    worker: Option<std::thread::JoinHandle<()>>,
+    workers: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl TransferWorker {
@@ -46,30 +46,43 @@ impl TransferWorker {
     }
 
     fn spawn(
-        decode: impl Fn(Event) -> Completed + Send + 'static,
-        wake: impl Fn() + Send + 'static,
+        decode: impl Fn(Event) -> Completed + Send + Sync + 'static,
+        wake: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
         let (sender, jobs) = sync_channel::<Job>(4);
         let (done, incoming) = sync_channel(4);
-        let worker = std::thread::Builder::new()
-            .name("native-image-files".into())
-            .spawn(move || {
-                while let Ok(job) = jobs.recv() {
-                    let completion = Completion {
-                        generation: job.generation,
-                        event: decode(job.event),
-                    };
-                    if done.send(completion).is_err() {
-                        break;
-                    }
-                    wake();
-                }
-            })?;
-        Ok(Self {
+        let jobs = std::sync::Arc::new(std::sync::Mutex::new(jobs));
+        let decode = std::sync::Arc::new(decode);
+        let wake = std::sync::Arc::new(wake);
+        let mut pool = Self {
             sender: Some(sender),
             incoming: Some(incoming),
-            worker: Some(worker),
-        })
+            workers: Vec::new(),
+        };
+        for index in 0..4 {
+            let (jobs, done, decode, wake) = (jobs.clone(), done.clone(), decode.clone(), wake.clone());
+            pool.workers.push(
+                std::thread::Builder::new()
+                    .name(format!("native-image-files-{index}"))
+                    .spawn(move || {
+                        loop {
+                            let job = jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).recv();
+                            let Ok(job) = job else {
+                                break;
+                            };
+                            let completion = Completion {
+                                generation: job.generation,
+                                event: decode(job.event),
+                            };
+                            if done.send(completion).is_err() {
+                                break;
+                            }
+                            wake();
+                        }
+                    })?,
+            );
+        }
+        Ok(pool)
     }
 
     fn submit(&self, generation: u64, event: Event) -> bool {
@@ -93,7 +106,7 @@ impl Drop for TransferWorker {
     fn drop(&mut self) {
         self.sender.take();
         self.incoming.take();
-        if let Some(worker) = self.worker.take() {
+        for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
     }
@@ -106,6 +119,7 @@ fn decode(observed: &ObservedKeyboardInputs, event: Event) -> Completed {
             mime,
             bytes,
             text,
+            fallback,
         } => {
             let payload = observed
                 .decode_native_transfer(&mime, &bytes)
@@ -114,9 +128,9 @@ fn decode(observed: &ObservedKeyboardInputs, event: Event) -> Completed {
                 .or_else(|| {
                     text.or_else(|| {
                         smithay_clipboard::native::is_text_mime(&mime)
-                            .then(|| String::from_utf8(bytes).ok())
-                            .flatten()
+                            .then(|| smithay_clipboard::native::decode_clipboard_text(&mime, &bytes))
                     })
+                    .or_else(|| fallback.and_then(smithay_clipboard::native::TextFallback::read_text))
                     .map(Payload::Text)
                 });
             Completed::Paste { recipient, payload }
@@ -224,6 +238,7 @@ mod tests {
             mime: "image/png".into(),
             bytes: vec![],
             text: None,
+            fallback: None,
         }
     }
 
@@ -247,19 +262,67 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(worker.submit(0, paste()));
-        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        for _ in 0..4 {
+            assert!(worker.submit(0, paste()));
+            started.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
         for _ in 0..4 {
             assert!(worker.submit(0, paste()));
         }
         assert!(!worker.submit(0, paste()));
-        for _ in 0..5 {
+        for _ in 0..8 {
             release.send(()).unwrap();
         }
-        for _ in 0..5 {
+        for _ in 0..8 {
             notifications.recv_timeout(Duration::from_secs(2)).unwrap();
             assert!(worker.poll(1).is_empty());
         }
+        drop(worker);
+    }
+
+    #[test]
+    fn a_waiting_fallback_does_not_delay_another_image_completion() {
+        let (entered, started) = channel();
+        let (release, gate) = channel();
+        let gate = std::sync::Mutex::new(gate);
+        let (wake, notifications) = channel();
+        let worker = TransferWorker::spawn(
+            move |event| {
+                let Event::Paste { recipient, .. } = event else {
+                    panic!("fixture")
+                };
+                if recipient == 42 {
+                    entered.send(()).unwrap();
+                    gate.lock().unwrap().recv().unwrap();
+                }
+                Completed::Paste {
+                    recipient,
+                    payload: None,
+                }
+            },
+            move || {
+                wake.send(()).unwrap();
+            },
+        )
+        .unwrap();
+        assert!(worker.submit(0, paste()));
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(worker.submit(
+            0,
+            Event::Paste {
+                recipient: 43,
+                mime: "image/png".into(),
+                bytes: vec![],
+                text: None,
+                fallback: None
+            }
+        ));
+        notifications.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            worker.poll(0).as_slice(),
+            [Completed::Paste { recipient: 43, .. }]
+        ));
+        release.send(()).unwrap();
         drop(worker);
     }
 
@@ -277,7 +340,7 @@ mod tests {
             || {},
         )
         .unwrap();
-        for _ in 0..5 {
+        for _ in 0..8 {
             assert!(worker.submit(0, paste()));
             started.recv_timeout(Duration::from_secs(2)).unwrap();
         }
@@ -292,6 +355,7 @@ mod tests {
             mime: "image/png".into(),
             bytes: b"\x89PNG\r\n\x1a\ninvalid".to_vec(),
             text: Some("fallback".into()),
+            fallback: None,
         };
         assert!(
             matches!(decode(&observed, event), Completed::Paste { recipient: 42, payload: Some(Payload::Text(text)) } if text == "fallback")

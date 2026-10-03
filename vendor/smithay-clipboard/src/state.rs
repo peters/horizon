@@ -422,7 +422,7 @@ impl State {
             let text = offer
                 .with_mime_types(crate::native::preferred_text)
                 .filter(|text| text != &mime)
-                .and_then(|mime| offer.receive(mime).ok());
+                .and_then(|mime| offer.receive(mime.clone()).ok().map(|pipe| (pipe, mime)));
             self.native.receive_paste(pipe, mime, recipient, generation, text);
         } else {
             self.native
