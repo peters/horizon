@@ -19,6 +19,7 @@ pub(super) struct State {
     name: String,
     key: Zeroizing<String>,
     message: Option<String>,
+    settings_error: Option<String>,
     failed: bool,
 }
 impl Default for State {
@@ -34,6 +35,7 @@ impl Default for State {
             name: String::new(),
             key: Zeroizing::new(String::new()),
             message: None,
+            settings_error: None,
             failed: false,
         }
     }
@@ -86,8 +88,17 @@ impl State {
                 }
             }
         }
-        self.reload_barriers
-            .retain(|receiver| matches!(receiver.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+        self.reload_barriers.retain(|receiver| match receiver.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Ok(Ok(_)) => false,
+            result => {
+                self.settings_error = Some(match result {
+                    Ok(Err(error)) => error,
+                    _ => "Tailnet settings operation interrupted. Try again.".into(),
+                });
+                false
+            }
+        });
         if !self.reload_barriers.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -260,14 +271,29 @@ impl State {
             }
         });
     }
+    pub(super) fn ready(&self) -> bool {
+        self.initialized && self.receiver.is_none() && self.reload_barriers.is_empty() && !self.failed
+    }
+    #[cfg(test)]
+    pub(super) fn loaded_fixture() -> Self {
+        Self {
+            initialized: true,
+            ..Self::default()
+        }
+    }
     fn status(&self, ui: &mut egui::Ui) {
+        if let Some(error) = &self.settings_error {
+            ui.colored_label(theme::PALETTE_RED(), error);
+        }
         if self.receiver.is_some() {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label("Saving tailnet settings…");
             });
         }
-        if let Some(message) = &self.message {
+        if let Some(message) = &self.message
+            && self.settings_error.as_ref() != Some(message)
+        {
             ui.colored_label(
                 if self.failed {
                     theme::PALETTE_RED()
@@ -281,25 +307,28 @@ impl State {
     pub(super) fn choice(&mut self, ui: &mut egui::Ui, selected: &mut Option<String>) -> bool {
         self.poll(ui.ctx());
         let before = selected.clone();
+        self.status(ui);
         ui.label(egui::RichText::new("Tailnet").size(14.0).strong().color(theme::FG()));
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add(egui::Button::selectable(selected.is_none(), "None").min_size(egui::vec2(64.0, 32.0)))
-                .clicked()
-            {
-                *selected = None;
-            }
-            for tailnet in &self.catalog.tailnets {
+        ui.add_enabled_ui(self.ready(), |ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add(
-                        egui::Button::selectable(selected.as_ref() == Some(&tailnet.id), &tailnet.name)
-                            .min_size(egui::vec2(96.0, 32.0)),
-                    )
+                    .add(egui::Button::selectable(selected.is_none(), "None").min_size(egui::vec2(64.0, 32.0)))
                     .clicked()
                 {
-                    *selected = Some(tailnet.id.clone());
+                    *selected = None;
                 }
-            }
+                for tailnet in &self.catalog.tailnets {
+                    if ui
+                        .add(
+                            egui::Button::selectable(selected.as_ref() == Some(&tailnet.id), &tailnet.name)
+                                .min_size(egui::vec2(96.0, 32.0)),
+                        )
+                        .clicked()
+                    {
+                        *selected = Some(tailnet.id.clone());
+                    }
+                }
+            })
         });
         if selected
             .as_ref()
@@ -320,6 +349,7 @@ impl State {
     }
     pub(super) fn reload_after(&mut self, mut editor: Self) {
         self.reload();
+        self.settings_error = if editor.failed { editor.message.take() } else { None };
         if let Some(receiver) = editor.receiver.take() {
             self.reload_barriers.push(receiver);
         }
@@ -358,6 +388,7 @@ impl State {
                     .size(12.0)
                     .color(theme::FG_SOFT()),
             );
+            self.status(ui);
             return;
         }
         let changed = ui
@@ -371,7 +402,6 @@ impl State {
                 tailnet::store(&root).load().map_err(|e| e.to_string())
             });
         }
-        self.status(ui);
     }
 }
 
@@ -422,6 +452,47 @@ mod tests {
             assert!(state.receiver.is_none());
             assert_eq!(state.catalog.tailnets.len(), 1);
             assert_eq!(state.catalog.tailnets[0].id, "fresh");
+        }
+    }
+
+    #[test]
+    fn closed_settings_failures_remain_visible_after_catalog_reload() {
+        assert!(!State::default().ready());
+        let mut completed = State::default();
+        completed.reload_after(State {
+            failed: true,
+            message: Some("Completed save failure".into()),
+            ..State::default()
+        });
+        assert_eq!(completed.settings_error.as_deref(), Some("Completed save failure"));
+        for disconnected in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("tailnets.json"), r#"{"tailnets":[]}"#).unwrap();
+            let (sender, receiver) = channel();
+            let mut state = State {
+                root: root.path().into(),
+                initialized: true,
+                ..State::default()
+            };
+            state.reload_after(State {
+                receiver: Some(receiver),
+                ..State::default()
+            });
+            assert!(!state.ready());
+            if !disconnected {
+                sender.send(Err("Synthetic save failure".into())).unwrap();
+            }
+            drop(sender);
+            let ctx = egui::Context::default();
+            state.poll(&ctx);
+            assert!(state.settings_error.is_some());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while state.receiver.is_some() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                state.poll(&ctx);
+            }
+            assert!(state.ready());
+            assert!(state.settings_error.is_some());
         }
     }
 
