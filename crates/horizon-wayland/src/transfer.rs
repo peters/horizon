@@ -11,6 +11,7 @@ pub struct TransferFiles {
 struct Directory {
     owned: Option<tempfile::TempDir>,
     closed: bool,
+    generation: u64,
 }
 impl TransferFiles {
     /// Remove owned images before a host exit path that skips destructors.
@@ -23,12 +24,39 @@ impl TransferFiles {
         directory.owned.take().map_or(Ok(()), tempfile::TempDir::close)
     }
 
+    /// Invalidate pending image writes while keeping previously delivered files alive.
+    pub fn set_generation(&self, generation: u64) {
+        self.directory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .generation = generation;
+    }
+
     const URI_LIST: &str = "text/uri-list";
     /// Decode local file URLs or persist an encoded PNG/JPEG in a private file.
     ///
     /// # Errors
     /// Returns an error for unsupported formats, unsafe URLs, or failed file writes.
     pub fn decode_transfer_payload(&self, mime: &str, bytes: &[u8]) -> std::io::Result<Vec<PathBuf>> {
+        self.decode_transfer_payload_for_generation(0, mime, bytes)
+    }
+
+    /// Decode a payload only for the current session generation.
+    ///
+    /// # Errors
+    /// Returns an error for stale sessions, invalid formats, or failed file writes.
+    pub fn decode_transfer_payload_for_generation(
+        &self,
+        generation: u64,
+        mime: &str,
+        bytes: &[u8],
+    ) -> std::io::Result<Vec<PathBuf>> {
+        {
+            let owner = self.directory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if owner.closed || owner.generation != generation {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
+        }
         if bytes.len() > 32 * 1024 * 1024 {
             return Err(std::io::ErrorKind::InvalidData.into());
         }
@@ -63,7 +91,7 @@ impl TransferFiles {
             .decode()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         let mut owner = self.directory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if owner.closed {
+        if owner.closed || owner.generation != generation {
             return Err(std::io::ErrorKind::BrokenPipe.into());
         }
         if owner.owned.is_none() {
@@ -118,6 +146,28 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn session_reset_rejects_stale_persistence_without_removing_delivered_files() {
+        let files = TransferFiles::default();
+        let png = include_bytes!("fixtures/image.png");
+        let delivered = files.decode_transfer_payload("image/png", png).unwrap();
+        files.set_generation(1);
+        assert!(
+            files
+                .decode_transfer_payload_for_generation(0, "image/png", png)
+                .is_err()
+        );
+        assert!(delivered[0].exists());
+        assert_eq!(std::fs::read_dir(delivered[0].parent().unwrap()).unwrap().count(), 1);
+        assert!(
+            files
+                .decode_transfer_payload_for_generation(1, "image/png", png)
+                .unwrap()[0]
+                .exists()
+        );
+        files.clear().unwrap();
     }
 
     #[test]

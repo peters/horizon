@@ -1,5 +1,8 @@
 //! Bounded image decoding and persistence outside the native UI event loop.
-use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::{Arc, Condvar, Mutex};
 
 use smithay_clipboard::native::Event;
 use winit::application::ApplicationHandler;
@@ -33,47 +36,97 @@ enum Payload {
     Text(String),
 }
 
+#[derive(Default)]
+struct QueueState {
+    jobs: VecDeque<Job>,
+    closed: bool,
+}
+#[derive(Default)]
+struct Queue {
+    state: Mutex<QueueState>,
+    ready: Condvar,
+    generation: AtomicU64,
+}
+impl Queue {
+    fn reset(&self, generation: u64) {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.generation.store(generation, Ordering::Release);
+        state.jobs.clear();
+        self.ready.notify_all();
+    }
+}
+
 pub(super) struct TransferWorker {
-    sender: Option<SyncSender<Job>>,
+    queue: Arc<Queue>,
     incoming: Option<Receiver<Completion>>,
     workers: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl TransferWorker {
-    pub(super) fn start(observed: ObservedKeyboardInputs) -> std::io::Result<Self> {
+    pub(super) fn start(observed: &ObservedKeyboardInputs) -> std::io::Result<Self> {
         let wake = observed.clone();
-        Self::spawn(move |event| decode(&observed, event), move || wake.wake_native_input())
+        let decoder = observed.clone();
+        let pool = Self::spawn(
+            move |event, generation, current| decode(&decoder, generation, event, current),
+            move || wake.wake_native_input(),
+        )?;
+        pool.queue.reset(observed.native_transfer_generation());
+        let weak = Arc::downgrade(&pool.queue);
+        observed.native_persistence_resetter(move |generation| {
+            if let Some(queue) = weak.upgrade() {
+                queue.reset(generation);
+            }
+        });
+        Ok(pool)
     }
 
     fn spawn(
-        decode: impl Fn(Event) -> Completed + Send + Sync + 'static,
+        decode: impl Fn(Event, u64, &dyn Fn() -> bool) -> Completed + Send + Sync + 'static,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
-        let (sender, jobs) = sync_channel::<Job>(4);
         let (done, incoming) = sync_channel(4);
-        let jobs = std::sync::Arc::new(std::sync::Mutex::new(jobs));
-        let decode = std::sync::Arc::new(decode);
-        let wake = std::sync::Arc::new(wake);
+        let queue = Arc::new(Queue::default());
+        let decode = Arc::new(decode);
+        let wake = Arc::new(wake);
         let mut pool = Self {
-            sender: Some(sender),
+            queue: queue.clone(),
             incoming: Some(incoming),
             workers: Vec::new(),
         };
         for index in 0..4 {
-            let (jobs, done, decode, wake) = (jobs.clone(), done.clone(), decode.clone(), wake.clone());
+            let (queue, done, decode, wake) = (queue.clone(), done.clone(), decode.clone(), wake.clone());
             pool.workers.push(
                 std::thread::Builder::new()
                     .name(format!("native-image-files-{index}"))
                     .spawn(move || {
                         loop {
-                            let job = jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).recv();
-                            let Ok(job) = job else {
-                                break;
+                            let job = {
+                                let mut state = queue.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                                while state.jobs.is_empty() && !state.closed {
+                                    state = queue
+                                        .ready
+                                        .wait(state)
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                }
+                                if state.closed {
+                                    break;
+                                }
+                                state.jobs.pop_front()
                             };
+                            let Some(job) = job else {
+                                continue;
+                            };
+                            let current = || queue.generation.load(Ordering::Acquire) == job.generation;
+                            if !current() {
+                                continue;
+                            }
                             let completion = Completion {
                                 generation: job.generation,
-                                event: decode(job.event),
+                                event: decode(job.event, job.generation, &current),
                             };
+                            if !current() {
+                                continue;
+                            }
                             if done.send(completion).is_err() {
                                 break;
                             }
@@ -86,9 +139,17 @@ impl TransferWorker {
     }
 
     fn submit(&self, generation: u64, event: Event) -> bool {
-        self.sender
-            .as_ref()
-            .is_some_and(|sender| sender.try_send(Job { generation, event }).is_ok())
+        let mut state = self
+            .queue
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.closed || state.jobs.len() >= 4 || self.queue.generation.load(Ordering::Acquire) != generation {
+            return false;
+        }
+        state.jobs.push_back(Job { generation, event });
+        self.queue.ready.notify_one();
+        true
     }
 
     fn poll(&self, generation: u64) -> Vec<Completed> {
@@ -104,7 +165,17 @@ impl TransferWorker {
 
 impl Drop for TransferWorker {
     fn drop(&mut self) {
-        self.sender.take();
+        {
+            let mut state = self
+                .queue
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.closed = true;
+            state.jobs.clear();
+            self.queue.generation.fetch_add(1, Ordering::AcqRel);
+            self.queue.ready.notify_all();
+        }
         self.incoming.take();
         for worker in self.workers.drain(..) {
             let _ = worker.join();
@@ -112,7 +183,7 @@ impl Drop for TransferWorker {
     }
 }
 
-fn decode(observed: &ObservedKeyboardInputs, event: Event) -> Completed {
+fn decode(observed: &ObservedKeyboardInputs, generation: u64, event: Event, current: &dyn Fn() -> bool) -> Completed {
     match event {
         Event::Paste {
             recipient,
@@ -122,7 +193,7 @@ fn decode(observed: &ObservedKeyboardInputs, event: Event) -> Completed {
             fallback,
         } => {
             let payload = observed
-                .decode_native_transfer(&mime, &bytes)
+                .decode_native_transfer(generation, &mime, &bytes)
                 .ok()
                 .map(Payload::Files)
                 .or_else(|| {
@@ -130,7 +201,7 @@ fn decode(observed: &ObservedKeyboardInputs, event: Event) -> Completed {
                         smithay_clipboard::native::is_text_mime(&mime)
                             .then(|| smithay_clipboard::native::decode_clipboard_text(&mime, &bytes))
                     })
-                    .or_else(|| fallback.and_then(smithay_clipboard::native::TextFallback::read_text))
+                    .or_else(|| fallback.and_then(|fallback| fallback.read_text_while(current)))
                     .map(Payload::Text)
                 });
             Completed::Paste { recipient, payload }
@@ -143,13 +214,31 @@ fn decode(observed: &ObservedKeyboardInputs, event: Event) -> Completed {
         } => Completed::Drop {
             surface,
             position,
-            paths: observed.decode_native_transfer(&mime, &bytes).ok(),
+            paths: observed.decode_native_transfer(generation, &mime, &bytes).ok(),
         },
         _ => unreachable!("only clipboard and drop payloads are submitted"),
     }
 }
 
 impl KeyboardAwareApp<'_> {
+    pub(super) fn request_native_paste(&mut self, surface: u64) -> bool {
+        if self.transfer_worker.is_none() {
+            return false;
+        }
+        let Some(recipient) = self.observed_keyboard_inputs.native_paste_request(surface) else {
+            return false;
+        };
+        if self
+            .clipboard
+            .as_mut()
+            .is_some_and(|bridge| bridge.request_paste(surface, recipient))
+        {
+            return true;
+        }
+        self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
+        false
+    }
+
     pub(super) fn queue_native_transfer(&mut self, event_loop: &ActiveEventLoop, event: Event) {
         let recipient = if let Event::Paste { recipient, .. } = &event {
             Some(*recipient)
@@ -249,7 +338,7 @@ mod tests {
         let gate = std::sync::Mutex::new(gate);
         let (wake, notifications) = channel();
         let worker = TransferWorker::spawn(
-            move |_| {
+            move |_, _, _| {
                 entered.send(()).unwrap();
                 gate.lock().unwrap().recv().unwrap();
                 Completed::Paste {
@@ -281,13 +370,57 @@ mod tests {
     }
 
     #[test]
+    fn session_reset_cancels_active_reads_and_queued_decoding_before_new_work() {
+        let (entered, started) = channel();
+        let (wake, notifications) = channel();
+        let decoded = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = decoded.clone();
+        let worker = TransferWorker::spawn(
+            move |_, generation, current| {
+                count.fetch_add(1, Ordering::Relaxed);
+                if generation == 0 {
+                    entered.send(()).unwrap();
+                    while current() {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+                Completed::Paste {
+                    recipient: 42,
+                    payload: None,
+                }
+            },
+            move || {
+                wake.send(()).unwrap();
+            },
+        )
+        .unwrap();
+        for _ in 0..4 {
+            assert!(worker.submit(0, paste()));
+            started.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        for _ in 0..4 {
+            assert!(worker.submit(0, paste()));
+        }
+        worker.queue.reset(1);
+        assert!(!worker.submit(0, paste()));
+        assert!(worker.submit(1, paste()));
+        notifications.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            worker.poll(1).as_slice(),
+            [Completed::Paste { recipient: 42, .. }]
+        ));
+        assert_eq!(decoded.load(Ordering::Relaxed), 5);
+        drop(worker);
+    }
+
+    #[test]
     fn a_waiting_fallback_does_not_delay_another_image_completion() {
         let (entered, started) = channel();
         let (release, gate) = channel();
         let gate = std::sync::Mutex::new(gate);
         let (wake, notifications) = channel();
         let worker = TransferWorker::spawn(
-            move |event| {
+            move |event, _, _| {
                 let Event::Paste { recipient, .. } = event else {
                     panic!("fixture")
                 };
@@ -330,7 +463,7 @@ mod tests {
     fn shutdown_releases_a_worker_blocked_on_unconsumed_results() {
         let (entered, started) = channel();
         let worker = TransferWorker::spawn(
-            move |_| {
+            move |_, _, _| {
                 entered.send(()).unwrap();
                 Completed::Paste {
                     recipient: 42,
@@ -358,7 +491,7 @@ mod tests {
             fallback: None,
         };
         assert!(
-            matches!(decode(&observed, event), Completed::Paste { recipient: 42, payload: Some(Payload::Text(text)) } if text == "fallback")
+            matches!(decode(&observed, 0, event, &|| true), Completed::Paste { recipient: 42, payload: Some(Payload::Text(text)) } if text == "fallback")
         );
     }
 }

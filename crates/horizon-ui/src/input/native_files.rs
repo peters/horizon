@@ -4,6 +4,7 @@ use super::ObservedKeyboardInputs;
 pub(super) struct NativeFileInputs {
     context: Option<egui::Context>,
     reset_worker: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    cancel_persistence: Option<std::sync::Arc<dyn Fn(u64) + Send + Sync>>,
     focused_surface: Option<u64>,
     wayland: bool,
     drops: std::collections::VecDeque<NativeDrop>,
@@ -58,7 +59,7 @@ impl ObservedKeyboardInputs {
     }
 
     pub(crate) fn reset_native_session(&self) {
-        let (reset, context) = {
+        let (reset, cancel, generation, context) = {
             let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.generation = state.generation.wrapping_add(1);
             state.requests.clear();
@@ -67,8 +68,17 @@ impl ObservedKeyboardInputs {
             for window in state.windows.values_mut() {
                 window.1 = None;
             }
-            (state.reset_worker.clone(), state.context.clone())
+            state.transfer_files.set_generation(state.generation);
+            (
+                state.reset_worker.clone(),
+                state.cancel_persistence.clone(),
+                state.generation,
+                state.context.clone(),
+            )
         };
+        if let Some(cancel) = cancel {
+            cancel(generation);
+        }
         if let Some(reset) = reset {
             reset();
         }
@@ -80,13 +90,35 @@ impl ObservedKeyboardInputs {
         }
     }
 
+    pub(crate) fn native_persistence_resetter(&self, cancel: impl Fn(u64) + Send + Sync + 'static) {
+        self.1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .cancel_persistence = Some(std::sync::Arc::new(cancel));
+    }
+
     pub(crate) fn reset_native_transfers(&self) -> Vec<u64> {
-        let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.generation = state.generation.wrapping_add(1);
-        state.requests.clear();
-        state.pastes.clear();
-        state.drops.clear();
-        state.windows.keys().copied().collect()
+        let (cancel, generation, windows) = {
+            let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.generation = state.generation.wrapping_add(1);
+            state.transfer_files.set_generation(state.generation);
+            state.requests.clear();
+            state.pastes.clear();
+            state.drops.clear();
+            (
+                state.cancel_persistence.clone(),
+                state.generation,
+                state.windows.keys().copied().collect(),
+            )
+        };
+        if let Some(cancel) = cancel {
+            cancel(generation);
+        }
+        windows
+    }
+
+    pub(crate) fn is_native_drop_token(path: &std::path::Path) -> bool {
+        path.starts_with("/.horizon-native-drop")
     }
 
     pub(crate) fn native_transfer_generation(&self) -> u64 {
@@ -96,14 +128,19 @@ impl ObservedKeyboardInputs {
             .generation
     }
 
-    pub(crate) fn decode_native_transfer(&self, mime: &str, bytes: &[u8]) -> std::io::Result<Vec<std::path::PathBuf>> {
+    pub(crate) fn decode_native_transfer(
+        &self,
+        generation: u64,
+        mime: &str,
+        bytes: &[u8],
+    ) -> std::io::Result<Vec<std::path::PathBuf>> {
         let files = self
             .1
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .transfer_files
             .clone();
-        files.decode_transfer_payload(mime, bytes)
+        files.decode_transfer_payload_for_generation(generation, mime, bytes)
     }
 
     pub(crate) fn clear_native_transfer_files(&self) {

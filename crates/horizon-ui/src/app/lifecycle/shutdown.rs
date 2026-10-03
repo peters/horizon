@@ -188,6 +188,7 @@ mod tests {
         let observer = app.observed_keyboard_inputs.clone();
         let files = observer
             .decode_native_transfer(
+                observer.native_transfer_generation(),
                 "image/png",
                 include_bytes!("../../../../horizon-wayland/src/fixtures/image.png"),
             )

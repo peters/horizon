@@ -127,16 +127,23 @@ impl HorizonApp {
             scope,
         };
         #[cfg(target_os = "linux")]
-        if !dropped.is_empty() && self.observed_keyboard_inputs.is_wayland_backend() {
+        let dropped = if !dropped.is_empty() && self.observed_keyboard_inputs.is_wayland_backend() {
             let batches = self
                 .observed_keyboard_inputs
                 .take_native_drop_batches(viewport_id, &dropped);
             for (files, position) in batches {
                 self.handle_completed_file_drop(ctx, view, Some(native_drop_position_points(ctx, position)), &files);
             }
-            self.clear_file_drop_state(ctx);
-            return;
-        }
+            let mut remaining = dropped;
+            remaining.retain(|file| !crate::input::ObservedKeyboardInputs::is_native_drop_token(file.path()));
+            if remaining.is_empty() {
+                self.clear_file_drop_state(ctx);
+                return;
+            }
+            remaining
+        } else {
+            dropped
+        };
 
         // Only query the native cursor during an active drag; on Linux this
         // opens an X11 connection each call, so skip it when idle.
@@ -615,6 +622,32 @@ mod tests {
         TerminalDropHit, TerminalDropRects, TerminalDropTarget, format_dropped_paths_for_terminal, is_editor_drop_path,
         native_cursor_position, native_file_drop_local_pos, partition_dropped_files, select_terminal_drop_target,
     };
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wayland_unmatched_real_paths_survive_synthetic_token_rejection() {
+        let (temp, ctx, mut app) = test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        });
+        let real = temp.path().join("ordinary.md");
+        let native = temp.path().join("native.md");
+        std::fs::write(&real, "ordinary fallback").unwrap();
+        std::fs::write(&native, "native input").unwrap();
+        let observed = app.observed_keyboard_inputs.clone();
+        observed.set_wayland_backend(true);
+        observed.native_window_seen(10);
+        let token = observed.native_drop_position(10, [300.0, 200.0], vec![native]).unwrap();
+        ctx.input_mut(|input| {
+            input.raw.dropped_files = vec![
+                test_support::dropped_file("/.horizon-native-drop/999"),
+                test_support::dropped_file(real),
+                test_support::dropped_file(token),
+            ];
+        });
+        let before = app.board.panels.len();
+        app.handle_root_file_drop(&ctx);
+        assert_eq!(app.board.panels.len(), before + 2);
+    }
 
     #[test]
     #[cfg(target_os = "linux")]

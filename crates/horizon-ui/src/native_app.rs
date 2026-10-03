@@ -44,7 +44,7 @@ pub(crate) fn run_native_with_keyboard_observer(
             app.observed_keyboard_inputs
                 .native_worker_resetter(clipboard.resetter());
             app.clipboard = Some(clipboard);
-            match transfer::TransferWorker::start(app.observed_keyboard_inputs.clone()) {
+            match transfer::TransferWorker::start(&app.observed_keyboard_inputs) {
                 Ok(worker) => app.transfer_worker = Some(worker),
                 Err(error) => tracing::warn!(%error, "native image persistence worker unavailable"),
             }
@@ -303,16 +303,9 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
                         || (key.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Insert)
                             && self.modifiers.shift
                             && !self.modifiers.ctrl));
-                if paste && let Some(recipient) = self.observed_keyboard_inputs.native_paste_request(surface) {
-                    if self
-                        .clipboard
-                        .as_mut()
-                        .is_some_and(|bridge| bridge.request_paste(surface, recipient))
-                    {
-                        self.image_paste_keys.insert(key_id);
-                        return;
-                    }
-                    self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
+                if paste && self.request_native_paste(surface) {
+                    self.image_paste_keys.insert(key_id);
+                    return;
                 }
             }
         }

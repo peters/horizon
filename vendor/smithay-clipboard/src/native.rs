@@ -296,8 +296,13 @@ pub struct TextFallback {
 impl TextFallback {
     /// Read the bounded fallback off the UI thread, until EOF or its original deadline.
     #[must_use]
-    pub fn read_text(mut self) -> Option<String> {
-        while Instant::now() < self.deadline {
+    pub fn read_text(self) -> Option<String> {
+        self.read_text_while(|| true)
+    }
+    /// Stop a pending fallback when its recipient session is no longer current.
+    #[must_use]
+    pub fn read_text_while(mut self, current: impl Fn() -> bool) -> Option<String> {
+        while current() && Instant::now() < self.deadline {
             match read_bounded(&mut self.reader, &mut self.bytes, self.limit) {
                 Ok(true) => return (!self.bytes.is_empty()).then(|| decode_clipboard_text(&self.mime, &self.bytes)),
                 Ok(false) => std::thread::sleep(Duration::from_millis(16)),
