@@ -1,10 +1,9 @@
+use super::KEYCHAIN_SERVICE;
 use super::{Error, Result};
 use keyring_core::{CredentialStore, Entry};
 use std::sync::Arc;
-use zeroize::Zeroizing;
-const SERVICE: &str = "horizon-cloud-tailnets";
 fn entry(id: &str) -> Result<Entry> {
-    open()?.build(SERVICE, id, None).map_err(|_| Error::Keychain)
+    open()?.build(KEYCHAIN_SERVICE, id, None).map_err(|_| Error::Keychain)
 }
 pub(super) fn put(id: &str, key: &str) -> Result<()> {
     entry(id)?.set_secret(key.as_bytes()).map_err(|_| Error::Keychain)
@@ -14,9 +13,6 @@ pub(super) fn delete(id: &str) -> Result<()> {
         Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
         Err(_) => Err(Error::Keychain),
     }
-}
-pub(super) fn read(id: &str) -> Result<Zeroizing<Vec<u8>>> {
-    entry(id)?.get_secret().map(Zeroizing::new).map_err(|_| Error::Keychain)
 }
 #[cfg(target_os = "linux")]
 fn open() -> Result<Arc<CredentialStore>> {

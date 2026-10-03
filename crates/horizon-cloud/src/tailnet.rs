@@ -1,5 +1,7 @@
 //! Auth-key-only cloud networking. Persistent metadata never contains a secret.
 mod keychain;
+/// OS-store namespace; credentials have no public read API.
+pub const KEYCHAIN_SERVICE: &str = "horizon-cloud-tailnets";
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
@@ -45,7 +47,13 @@ pub fn valid_key(value: &str) -> bool {
         && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// Machine-local metadata and OS-store bindings. No method returns a credential.
+/// Machine-local metadata and write-only OS-store bindings.
+/// Credential reads belong to the private host deployment adapter.
+///
+/// ```compile_fail
+/// let store = horizon_cloud::tailnet::Store::new("settings".into());
+/// store.enroll("work", |bytes| { println!("{bytes:?}"); Ok(()) });
+/// ```
 #[derive(Clone, Debug)]
 pub struct Store {
     root: PathBuf,
@@ -115,19 +123,6 @@ impl Store {
         catalog.tailnets.retain(|t| t.id != id);
         write(&self.root.join("tailnets.json"), &catalog)?;
         Ok(catalog)
-    }
-    /// Only the trusted deployment adapter uses this sink. Never exposed through CLI/MCP.
-    /// # Errors
-    /// Missing metadata or unavailable OS credential store.
-    pub fn enroll(&self, id: &str, sink: impl FnOnce(&[u8]) -> Result<()>) -> Result<()> {
-        if !self.load()?.tailnets.iter().any(|t| t.id == id) {
-            return Err(Error::Missing);
-        }
-        let key = keychain::read(id)?;
-        if !std::str::from_utf8(&key).is_ok_and(valid_key) {
-            return Err(Error::Invalid);
-        }
-        sink(&key)
     }
     fn lock(&self) -> Result<File> {
         std::fs::create_dir_all(&self.root).map_err(|_| Error::Storage)?;

@@ -1,4 +1,5 @@
 //! Thin deployment adapter for cloud-only tailnet enrollment.
+mod keychain;
 use super::{Error, Result, command::Runner, ssh::Connection, state};
 pub use horizon_cloud::tailnet::{Catalog, Selection, Store, Tailnet, valid_key};
 use std::{path::Path, time::Duration};
@@ -52,21 +53,19 @@ pub fn configure(connection: &Connection, cloud: &Path, runner: &Runner<'_>) -> 
             let root = cloud
                 .parent()
                 .ok_or(Error::Invalid("Missing cloud settings directory"))?;
-            let mut outcome = Err(Error::Invalid("Tailnet enrollment was not attempted"));
-            store(root)
-                .enroll(id, |key| {
-                    let key = std::str::from_utf8(key).map_err(|_| horizon_cloud::tailnet::Error::Invalid)?;
-                    outcome = payload(Some(key)).and_then(|input| invoke(&input)).and_then(|reply| {
-                        if reply == b"ready\n" {
-                            Ok(())
-                        } else {
-                            Err(Error::Invalid("Tailnet enrollment was not confirmed"))
-                        }
-                    });
-                    Ok(())
-                })
-                .map_err(mapped)?;
-            outcome
+            if !store(root).load().map_err(mapped)?.tailnets.iter().any(|t| t.id == id) {
+                return Err(mapped(horizon_cloud::tailnet::Error::Missing));
+            }
+            let key = keychain::read(id).map_err(mapped)?;
+            let key = std::str::from_utf8(&key)
+                .ok()
+                .filter(|key| valid_key(key))
+                .ok_or_else(|| mapped(horizon_cloud::tailnet::Error::Invalid))?;
+            if invoke(&payload(Some(key))?)? == b"ready\n" {
+                Ok(())
+            } else {
+                Err(Error::Invalid("Tailnet enrollment was not confirmed"))
+            }
         }
         _ => Err(Error::Invalid("Unexpected tailnet enrollment response")),
     }

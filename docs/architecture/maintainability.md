@@ -634,6 +634,11 @@ tested offline.
 `deployment` orchestrates one deploy and still owns registry binding, provisioning,
 ready bookkeeping, initial state and replacement commits; the other steps have leaves.
 `sizing` applies CPU, memory and machine settings until a worker is requested;
+`tailnet` configures the root-owned worker networking lane before agent sessions start.
+`horizon-cloud::tailnet` shares nonsecret catalog/selection persistence and write-only
+OS credential bindings. Reading a saved key belongs solely to the private host
+`cloud_runtime::tailnet::keychain` adapter, which supplies the pinned deployment
+transport. No public callback, CLI or MCP operation can receive stored key bytes.
 `image` prepares the worker image and checks its contract before allocation;
 `source` validates and packs the committed source before allocation and transfers
 it to the ready worker; `git_credentials` and `agent_credentials` install or clear

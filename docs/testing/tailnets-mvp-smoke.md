@@ -104,3 +104,25 @@ unchanged; image validation qualifies the actual privilege-drop executable.
 The complete required local matrix passed again. These regressions were tested
 locally; the earlier paid discovery and connectivity evidence remains the real
 provider qualification described above.
+
+
+## Credential boundary regression
+
+The public credential-reading callback was removed. Shared cloud storage exposes
+metadata and credential writes/deletion only; the private host deployment adapter
+alone reads a saved key and sends it through pinned, silent transport. A
+compile-fail regression prevents reintroducing the old capturing callback.
+A real Secret Service round trip on a disposable private bus verified saving,
+private deployment reads, replacement and deletion with synthetic keys only.
+The native feature recording also verified two named bindings, masked replacement,
+provisioning choices for both bindings and None, cancellation and removal.
+The recorded application child SHA256 is
+`2aeaecb33080f9ad81d98bbac53c4c7e6d5bfccd56805a040e63a0d8bd25251e`.
+The earlier real-cloud enrollment path is unchanged apart from moving key retrieval
+behind this private boundary; no new paid allocation was made in this regression.
+
+The final integrated branch passed formatting, maintainability, 4,703 workspace
+tests and the speech tier, plus both mandatory Clippy tiers. The 38 workspace
+ignores include external integration fixtures; the new private-keyring fixture
+was run explicitly and passed. All 240 worker tests passed without skips.
+Pedantic Clippy retains the existing advisory excessive-bools finding.
