@@ -151,6 +151,13 @@ impl KeyboardAwareApp<'_> {
     /// rather than only when a bridge thread wakes the loop.
     #[cfg(target_os = "linux")]
     fn drain_pinch(&mut self, event_loop: &ActiveEventLoop) {
+        for surface in self.observed_keyboard_inputs.take_native_drag_cancellations() {
+            self.inner.window_event(
+                event_loop,
+                winit::window::WindowId::from(surface),
+                WindowEvent::HoveredFileCancelled,
+            );
+        }
         let transfers = self
             .clipboard
             .as_mut()

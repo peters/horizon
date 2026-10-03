@@ -38,7 +38,12 @@ impl TransferFiles {
     /// # Errors
     /// Returns an error for unsupported formats, unsafe URLs, or failed file writes.
     pub fn decode_transfer_payload(&self, mime: &str, bytes: &[u8]) -> std::io::Result<Vec<PathBuf>> {
-        self.decode_transfer_payload_for_generation(0, mime, bytes)
+        let generation = self
+            .directory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .generation;
+        self.decode_transfer_payload_for_generation(generation, mime, bytes)
     }
 
     /// Decode a payload only for the current session generation.
@@ -166,6 +171,13 @@ mod tests {
                 .decode_transfer_payload_for_generation(1, "image/png", png)
                 .unwrap()[0]
                 .exists()
+        );
+        assert!(files.decode_transfer_payload("image/png", png).unwrap()[0].exists());
+        assert_eq!(
+            files
+                .decode_transfer_payload(TransferFiles::URI_LIST, b"file:///tmp/current.png")
+                .unwrap(),
+            vec![PathBuf::from("/tmp/current.png")]
         );
         files.clear().unwrap();
     }

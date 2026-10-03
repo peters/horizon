@@ -10,6 +10,7 @@ pub(super) struct NativeFileInputs {
     drops: std::collections::VecDeque<NativeDrop>,
     viewports: std::collections::HashMap<egui::ViewportId, u64>,
     windows: std::collections::HashMap<u64, (f64, Option<u64>)>,
+    pending_drag_cancellations: std::collections::HashSet<u64>,
     pastes: Vec<NativePaste>,
     requests: std::collections::HashMap<u64, PasteRequest>,
     next_request: u64,
@@ -59,12 +60,14 @@ impl ObservedKeyboardInputs {
     }
 
     pub(crate) fn reset_native_session(&self) {
-        let (reset, cancel, generation, context) = {
+        let (reset, cancel, generation, context, mut viewports) = {
             let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.generation = state.generation.wrapping_add(1);
             state.requests.clear();
             state.pastes.clear();
             state.drops.clear();
+            let surfaces: Vec<_> = state.windows.keys().copied().collect();
+            state.pending_drag_cancellations.extend(surfaces);
             for window in state.windows.values_mut() {
                 window.1 = None;
             }
@@ -74,6 +77,7 @@ impl ObservedKeyboardInputs {
                 state.cancel_persistence.clone(),
                 state.generation,
                 state.context.clone(),
+                state.viewports.keys().copied().collect::<egui::ViewportIdSet>(),
             )
         };
         if let Some(cancel) = cancel {
@@ -83,11 +87,26 @@ impl ObservedKeyboardInputs {
             reset();
         }
         if let Some(ctx) = context {
-            ctx.input_mut(|input| {
-                input.raw.dropped_files.clear();
-                input.raw.hovered_files.clear();
-            });
+            viewports.extend(ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>()));
+            viewports.insert(egui::ViewportId::ROOT);
+            viewports.insert(ctx.viewport_id());
+            for viewport in viewports {
+                ctx.input_mut_for(viewport, |input| {
+                    input.raw.dropped_files.clear();
+                    input.raw.hovered_files.clear();
+                });
+            }
+            ctx.request_repaint();
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn take_native_drag_cancellations(&self) -> Vec<u64> {
+        let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut state.pending_drag_cancellations)
+            .into_iter()
+            .filter(|surface| state.windows.contains_key(surface))
+            .collect()
     }
 
     pub(crate) fn native_persistence_resetter(&self, cancel: impl Fn(u64) + Send + Sync + 'static) {
@@ -647,5 +666,43 @@ mod tests {
             observed.take_native_drop_position(egui::ViewportId::ROOT, &[new]),
             Some([3.0, 4.0])
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn session_reset_clears_every_viewport_and_cancels_each_live_native_window() {
+        let observed = super::ObservedKeyboardInputs::default();
+        let ctx = egui::Context::default();
+        observed.native_context(&ctx);
+        let child = egui::ViewportId::from_hash_of("detached hover");
+        for (surface, viewport) in [(10, egui::ViewportId::ROOT), (20, child)] {
+            observed.native_window_seen(surface);
+            observed.native_focus(surface, true);
+            observed.native_recipient_publisher()(viewport, 1.0, Some(horizon_core::PanelId(surface)));
+            ctx.input_mut_for(viewport, |input| {
+                input.raw.hovered_files.push(egui::HoveredFile::default());
+                input
+                    .raw
+                    .dropped_files
+                    .push(raw_file("/.horizon-native-drop/old".into()));
+            });
+        }
+        // Even a window that never gained keyboard focus needs toolkit cancellation.
+        observed.native_window_seen(30);
+        observed.reset_native_session();
+        observed.reset_native_session();
+        observed.forget_native_window(30);
+        for viewport in [egui::ViewportId::ROOT, child] {
+            ctx.input_for(viewport, |input| {
+                assert!(input.raw.hovered_files.is_empty());
+                assert!(input.raw.dropped_files.is_empty());
+            });
+        }
+        let mut cancellations = observed.take_native_drag_cancellations();
+        cancellations.sort_unstable();
+        assert_eq!(cancellations, vec![10, 20]);
+        assert!(observed.take_native_drag_cancellations().is_empty());
+        assert!(observed.native_paste_request(10).is_none());
+        assert!(observed.native_paste_request(20).is_none());
     }
 }
