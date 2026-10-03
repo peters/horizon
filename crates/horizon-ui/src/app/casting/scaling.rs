@@ -22,7 +22,7 @@ pub(super) struct Scaler {
     worker: Option<JoinHandle<()>>,
 }
 impl Scaler {
-    pub(super) fn new(dimensions: (usize, usize)) -> io::Result<Self> {
+    pub(super) fn new(dimensions: (usize, usize), repaint: impl Fn() + Send + 'static) -> io::Result<Self> {
         let (send, receive) = mpsc::sync_channel::<Input>(1);
         let (scaled, output) = mpsc::sync_channel(1);
         let worker = thread::Builder::new().name("cast-scale".into()).spawn(move || {
@@ -35,8 +35,10 @@ impl Scaler {
                     rect: input.rect,
                     rgba: letterbox(&crop, dimensions),
                 };
-                if let Err(mpsc::TrySendError::Disconnected(_)) = scaled.try_send(frame) {
-                    break;
+                match scaled.try_send(frame) {
+                    Ok(()) => repaint(),
+                    Err(mpsc::TrySendError::Disconnected(_)) => break,
+                    Err(mpsc::TrySendError::Full(_)) => {}
                 }
             }
         })?;
@@ -71,10 +73,7 @@ impl Drop for Scaler {
 }
 
 pub(super) fn letterbox(image: &egui::ColorImage, (width, height): (usize, usize)) -> Vec<u8> {
-    let mut rgba = vec![0; width * height * 4];
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        pixel[3] = 255;
-    }
+    let mut rgba = [0, 0, 0, 255].repeat(width * height);
     let (fit_width, fit_height) = if image.width() * height > image.height() * width {
         (width, image.height() * width / image.width())
     } else {
@@ -109,7 +108,7 @@ mod tests {
     use super::*;
     #[test]
     fn background_crop_preserves_region_and_letterbox_dimensions() {
-        let scaler = Scaler::new((8, 8)).expect("scaler");
+        let scaler = Scaler::new((8, 8), || {}).expect("scaler");
         let rect = egui::Rect::from_min_size(egui::pos2(2.0, 1.0), egui::vec2(2.0, 1.0));
         let mut image = egui::ColorImage::filled([6, 4], egui::Color32::BLUE);
         image[(2, 1)] = egui::Color32::RED;
@@ -130,9 +129,30 @@ mod tests {
     }
     #[test]
     fn dropping_scaler_disconnects_its_idle_worker() {
-        let mut scaler = Scaler::new((8, 8)).expect("scaler");
+        let mut scaler = Scaler::new((8, 8), || {}).expect("scaler");
         let worker = scaler.worker.take().expect("worker");
         drop(scaler);
         worker.join().expect("worker finished");
+    }
+
+    #[test]
+    fn completed_scaling_wakes_the_host_with_a_frame_ready() {
+        let (wake, notified) = mpsc::channel();
+        let scaler = Scaler::new((8, 8), move || {
+            let _ = wake.send(());
+        })
+        .expect("scaler");
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2.0, 2.0));
+        scaler.submit(
+            Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::RED)),
+            rect,
+            1.0,
+        );
+        notified
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("host wake");
+        let frame = scaler.take().expect("frame available at wake");
+        assert_eq!(frame.rect, rect);
+        assert_eq!(frame.rgba, egui::Color32::RED.to_array().repeat(64));
     }
 }

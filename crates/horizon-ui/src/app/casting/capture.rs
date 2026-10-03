@@ -86,7 +86,7 @@ impl HorizonApp {
                 pixels_per_point: ctx.pixels_per_point(),
                 regions,
             })));
-            self.casting.last_capture = Some(Instant::now());
+            self.casting.last_capture = Some(capture_slot(self.casting.last_capture, Instant::now()));
         }
     }
     pub(super) fn cast_source_rect(
@@ -329,6 +329,17 @@ impl HorizonApp {
         }
     }
 }
+fn capture_slot(previous: Option<Instant>, now: Instant) -> Instant {
+    // Preserve phase after a slightly late frame; longer stalls must not accumulate catch-up captures.
+    if let Some(next) = previous.and_then(|previous| previous.checked_add(CAPTURE_INTERVAL))
+        && next <= now
+        && now.duration_since(next) < CAPTURE_INTERVAL
+    {
+        next
+    } else {
+        now
+    }
+}
 fn cast_picker_layer() -> LayerId {
     LayerId::new(Order::Foreground, Id::new("cast_picker"))
 }
@@ -341,6 +352,29 @@ mod tests {
     };
     use crate::test_egui::DiscardTextures;
     use horizon_core::{RuntimeState, StartupDecision};
+
+    #[test]
+    fn slightly_late_ui_frames_preserve_the_capture_cadence() {
+        let start = Instant::now();
+        let mut previous = None;
+        let mut captures = 0;
+        for frame in 0..=100 {
+            let now = start + Duration::from_millis(frame * 60);
+            if previous.is_none_or(|previous| now.duration_since(previous) >= CAPTURE_INTERVAL) {
+                previous = Some(capture_slot(previous, now));
+                captures += 1;
+            }
+        }
+        assert_eq!(captures, 90);
+    }
+
+    #[test]
+    fn a_long_capture_stall_reanchors_without_a_catch_up_burst() {
+        let previous = Instant::now();
+        let now = previous + Duration::from_millis(300);
+        assert_eq!(capture_slot(Some(previous), now), now);
+        assert_eq!(capture_slot(None, now), now);
+    }
 
     #[test]
     fn letterbox_preserves_aspect_ratio_and_opaque_borders() {

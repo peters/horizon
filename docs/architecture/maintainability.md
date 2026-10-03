@@ -928,4 +928,7 @@ it even without a presented frame. `horizon-ui::app::casting` separates source
 validation and capture, picker rendering, and host request handling. UI and MCP
 share those operations. Session switches cancel and discard cast bindings;
 shutdown cancels workers before the host exits. Capture remains limited to
-fully visible, unobscured regions of the main Horizon render target.
+fully visible, unobscured regions of the main Horizon render target. The bounded
+scaling worker wakes the host only after publishing a frame, so submission does
+not wait for the next capture timer. Runtime and measured performance boundaries
+are documented in [Linux casting](../casting.md).
