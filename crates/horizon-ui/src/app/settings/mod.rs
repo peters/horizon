@@ -116,10 +116,8 @@ enum SettingsAction {
 
 impl HorizonApp {
     pub(super) fn toggle_settings(&mut self) {
-        if let Some(editor) = self.settings.take() {
-            if let Ok(config) = Config::from_yaml(&editor.original) {
-                self.apply_live_preview(&config);
-            }
+        if self.settings.is_some() {
+            self.close_settings();
         } else {
             #[cfg(target_os = "linux")]
             self.casting.refresh_pairings();
@@ -277,18 +275,20 @@ impl HorizonApp {
         self.apply_runtime_config(config);
     }
 
+    fn close_settings(&mut self) {
+        if let Some(editor) = self.settings.take() {
+            #[cfg(feature = "cloud-workspaces")]
+            self.cloud_prototype.reload_tailnets(editor.tailnets);
+            if let Ok(config) = Config::from_yaml(&editor.original) {
+                self.apply_live_preview(&config);
+            }
+        }
+    }
+
     fn apply_settings_action(&mut self, action: SettingsAction) {
         match action {
             SettingsAction::None => {}
-            SettingsAction::Close => {
-                #[cfg(feature = "cloud-workspaces")]
-                self.cloud_prototype.reload_tailnets();
-                if let Some(editor) = self.settings.take()
-                    && let Ok(config) = Config::from_yaml(&editor.original)
-                {
-                    self.apply_live_preview(&config);
-                }
-            }
+            SettingsAction::Close => self.close_settings(),
             SettingsAction::Revert => {
                 let original = self.settings.as_ref().map(|e| e.original.clone());
                 if let Some(original) = original {

@@ -14,6 +14,7 @@ pub(super) struct State {
     selections: BTreeMap<String, Option<String>>,
     receiver: Option<Receiver<Result<Catalog, String>>>,
     initialized: bool,
+    reload_barriers: Vec<Receiver<Result<Catalog, String>>>,
     edit: Option<String>,
     name: String,
     key: Zeroizing<String>,
@@ -28,6 +29,7 @@ impl Default for State {
             selections: BTreeMap::new(),
             receiver: None,
             initialized: false,
+            reload_barriers: Vec::new(),
             edit: None,
             name: String::new(),
             key: Zeroizing::new(String::new()),
@@ -84,13 +86,19 @@ impl State {
                 }
             }
         }
-        if !self.initialized {
+        self.reload_barriers
+            .retain(|receiver| matches!(receiver.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+        if !self.reload_barriers.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        if !self.initialized && self.receiver.is_none() && self.reload_barriers.is_empty() {
             self.initialized = true;
             self.refresh(ctx);
         }
     }
     pub(super) fn refresh(&mut self, ctx: &egui::Context) {
-        if self.receiver.is_some() {
+        if self.receiver.is_some() || !self.reload_barriers.is_empty() {
+            self.initialized = false;
             return;
         }
         let root = self.root.clone();
@@ -310,6 +318,12 @@ impl State {
         self.initialized = false;
         self.selections.clear();
     }
+    pub(super) fn reload_after(&mut self, mut editor: Self) {
+        self.reload();
+        if let Some(receiver) = editor.receiver.take() {
+            self.reload_barriers.push(receiver);
+        }
+    }
     pub(super) fn invalidate(&mut self, id: &str) {
         self.selections.remove(id);
     }
@@ -364,6 +378,52 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reload_waits_for_the_current_operation_then_loads_fresh_metadata() {
+        for result in [Ok(Catalog::default()), Err("Synthetic operation failure".into())] {
+            let root = tempfile::tempdir().unwrap();
+            let (saved, settings_receiver) = channel();
+            let editor = State {
+                root: root.path().into(),
+                receiver: Some(settings_receiver),
+                ..State::default()
+            };
+            let (sender, receiver) = channel();
+            let mut state = State {
+                root: root.path().into(),
+                initialized: true,
+                receiver: Some(receiver),
+                ..State::default()
+            };
+            let ctx = egui::Context::default();
+            state.reload_after(editor);
+            state.poll(&ctx);
+            assert!(!state.initialized);
+            assert!(state.receiver.is_some());
+            sender.send(result).unwrap();
+            state.poll(&ctx);
+            assert!(!state.initialized);
+            assert!(state.receiver.is_none());
+            std::fs::write(
+                root.path().join("tailnets.json"),
+                r#"{"tailnets":[{"id":"fresh","name":"New network"}]}"#,
+            )
+            .unwrap();
+            saved.send(Ok(Catalog::default())).unwrap();
+            state.poll(&ctx);
+            assert!(state.initialized);
+            assert!(state.receiver.is_some());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while state.receiver.is_some() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                state.poll(&ctx);
+            }
+            assert!(state.receiver.is_none());
+            assert_eq!(state.catalog.tailnets.len(), 1);
+            assert_eq!(state.catalog.tailnets[0].id, "fresh");
+        }
+    }
 
     #[test]
     fn removing_the_edited_binding_clears_the_form_only_after_success() {

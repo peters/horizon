@@ -284,3 +284,41 @@ Office/Lab/None provisioning selection, cancellation, removal while editing and
 Fit. Both synthetic bindings were removed without a pending journal; all owned
 processes exited and the device target expired. The showcase retains original
 frames around 32 feature actions. No new paid allocation was made.
+
+## Catalog refresh and image identity qualification
+
+Toolbar, command-palette and footer settings exits share the same close path
+and invalidate the production catalog. A pending reload remains queued until
+an in-flight operation finishes, then reads fresh metadata without dropping the
+operation's receiver. A deterministic regression covers successful and failed
+stale results. Image advertisement and startup require both the isolation UID
+and primary GID to be exactly 10001; mismatches fail before the contract is
+advertised or ownership is handed off.
+
+A closing editor's in-flight save/delete receiver also delays the catalog read,
+so closing immediately after a mutation cannot load the previous metadata.
+The final required matrix passed 4,713 workspace tests (39 ignored), 1,581
+speech-tier tests and all 252 worker tests without skips. Formatting,
+maintainability and both mandatory Clippy tiers passed; the existing pedantic
+provider warning remains advisory. A real offline container changed the account
+UID and primary GID separately to 10002: both advertisement and startup rejected
+each mismatch, and both passed after restoring 10001.
+
+The helper-image probe now supplies pinned Tailscale binaries and the same
+explicit UID/GID as the stock image. Its actual local Docker probe build and
+marker gate passed all 16 required contracts, using unchanged worker Rust code
+from the preceding commit plus the current scripts.
+
+The final native application child matched frozen SHA256
+`03b038370ba9fb3f7d5f353e2a72c5068ff4f6d84874fbcd34997c7e8566f72d`.
+The 1,555-frame continuous recording covered 51 verified actions: warm empty
+choices, two saved bindings, toolbar closing and refreshed choices, masked
+replacement with stable IDs and one new credential generation, active-edit
+removal, command-palette closing with only the remaining choice, footer closing
+with an empty catalog, cancellation and Fit. The showcase retains 191 original
+frames around the actions and omits idle waits. Public native observations
+established displayed frames; after the person navigated away, reception kept
+advancing and the flow continued without revealing the viewer again. Both test
+bindings were removed without a pending journal. All owned fixture children
+exited, its device target expired and private fixture state was removed.
+No new paid allocation was made.
