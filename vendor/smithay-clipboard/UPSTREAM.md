@@ -11,7 +11,9 @@ one worker per display, with serialized text reads. A second device on that conn
 compete with the text clipboard device for compositor offers. Text and primary
 selection APIs keep their upstream behavior. Native transfers use bounded,
 nonblocking reads with a deadline; their completion wakes Horizon rather than
-making the UI poll continuously.
+making the UI poll continuously. Failed, empty, expired and rejected reads
+complete as cancellation; worker loss and queue overflow reset pending native
+input, so bounded admission cannot strand paste requests or synthetic hover.
 
 `native.rs` and its tests are new. The additions in `lib.rs`, `state.rs`, and
 `worker.rs` connect the subscription and transfers to the existing worker.

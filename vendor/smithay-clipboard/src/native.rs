@@ -27,6 +27,11 @@ fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// File input; surface positions are Wayland logical coordinates.
 #[derive(Debug)]
 pub enum Event {
+    /// Discard pending native transfers after worker loss or queue backpressure.
+    Reset,
+    PasteCancelled {
+        recipient: u64,
+    },
     Motion {
         surface: u64,
         position: [f64; 2],
@@ -61,6 +66,10 @@ impl Hub {
     }
     pub(crate) fn stop(&self) {
         self.alive.store(false, Ordering::Release);
+        let wake = lock(&self.wake).clone();
+        if let Some(wake) = wake {
+            wake();
+        }
     }
     pub(crate) fn register(display: usize, commands: Sender<crate::worker::Command>) -> Arc<Self> {
         let hub = Arc::new(Self {
@@ -80,7 +89,7 @@ impl Hub {
         hubs.push(Arc::downgrade(&hub));
         hub
     }
-    pub(crate) fn emit(&self, event: Event) {
+    pub(crate) fn emit(&self, event: Event) -> bool {
         let mut events = lock(&self.events);
         if matches!((&event, events.back()), (Event::Motion { surface, entered: false, .. }, Some(Event::Motion { surface: old_surface, entered: false, .. })) if surface == old_surface)
         {
@@ -90,14 +99,22 @@ impl Hub {
             Event::Drop { bytes, .. } | Event::Paste { bytes, .. } => bytes.len(),
             _ => 0,
         };
-        if events.len() < 256 && events.iter().map(bytes).sum::<usize>() + bytes(&event) <= 32 * 1024 * 1024 {
+        let accepted =
+            events.len() < 256 && events.iter().map(bytes).sum::<usize>() + bytes(&event) <= 32 * 1024 * 1024;
+        if accepted {
             events.push_back(event);
+        } else {
+            // A bounded queue must explicitly cancel its batch rather than
+            // leave a claimed paste or drag waiting for an event we discarded.
+            events.clear();
+            events.push_back(Event::Reset);
         }
         drop(events);
         let wake = lock(&self.wake).clone();
         if let Some(wake) = wake {
             wake();
         }
+        accepted
     }
     pub(crate) fn selection(&self, surface: u64, available: bool) {
         let mut selections = lock(&self.available);
@@ -121,6 +138,7 @@ pub struct Subscription {
     display: usize,
     hubs: Vec<Arc<Hub>>,
     wake: Wake,
+    reset_pending: bool,
 }
 impl Subscription {
     /// `display` is an identity key only and is never dereferenced.
@@ -129,10 +147,15 @@ impl Subscription {
             display,
             hubs: Vec::new(),
             wake: Arc::new(wake),
+            reset_pending: false,
         }
     }
     pub fn refresh(&mut self) {
-        self.hubs.retain(|hub| hub.alive.load(Ordering::Acquire));
+        self.hubs.retain(|hub| {
+            let alive = hub.is_alive();
+            self.reset_pending |= !alive;
+            alive
+        });
         let mut entries = lock(registry());
         let Some(hubs) = entries.get_mut(&self.display) else {
             return;
@@ -151,10 +174,16 @@ impl Subscription {
     }
     pub fn poll(&mut self) -> Vec<Event> {
         self.refresh();
-        self.hubs
-            .iter()
-            .flat_map(|hub| lock(&hub.events).drain(..).collect::<Vec<_>>())
-            .collect()
+        let mut events = Vec::new();
+        if std::mem::take(&mut self.reset_pending) {
+            events.push(Event::Reset);
+        }
+        events.extend(
+            self.hubs
+                .iter()
+                .flat_map(|hub| lock(&hub.events).drain(..).collect::<Vec<_>>()),
+        );
+        events
     }
     pub fn request_paste(&self, surface: u64, recipient: u64) -> bool {
         self.hubs
@@ -199,18 +228,27 @@ impl Transfers {
             drags: HashMap::new(),
         }
     }
-    pub fn receive(&mut self, pipe: ReadPipe, mime: String, destination: Destination) {
-        if self.reads.len() >= 4 {
-            if let Destination::Drop(offer) = destination {
+    pub fn cancel(&self, destination: Destination) {
+        match destination {
+            Destination::Drop(offer) => {
+                self.hub.emit(Event::Leave {
+                    surface: offer.surface.id().as_ptr() as u64,
+                });
                 offer.destroy();
             }
+            Destination::Paste(recipient) => {
+                self.hub.emit(Event::PasteCancelled { recipient });
+            }
+        }
+    }
+    pub fn receive(&mut self, pipe: ReadPipe, mime: String, destination: Destination) {
+        if self.reads.len() >= 4 {
+            self.cancel(destination);
             return;
         }
         let fd: OwnedFd = pipe.into();
         if rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK).is_err() {
-            if let Destination::Drop(offer) = destination {
-                offer.destroy();
-            }
+            self.cancel(destination);
             return;
         }
         self.reads.push(Pending {
@@ -257,9 +295,7 @@ impl Transfers {
                 }
             }
             if failed {
-                if let Destination::Drop(offer) = read.destination {
-                    offer.destroy();
-                }
+                self.cancel(read.destination);
             } else if !complete {
                 self.reads.push(read);
             } else {
@@ -270,21 +306,31 @@ impl Transfers {
                                 == sctk::reexports::client::protocol::wl_data_device_manager::DndAction::Copy)
                             && !read.bytes.is_empty()
                         {
-                            self.hub.emit(Event::Drop {
+                            let accepted = self.hub.emit(Event::Drop {
                                 surface: offer.surface.id().as_ptr() as u64,
                                 position: [offer.x, offer.y],
                                 mime: read.mime,
                                 bytes: read.bytes,
                             });
-                            offer.finish();
+                            if accepted {
+                                offer.finish();
+                            }
+                            offer.destroy();
+                        } else {
+                            self.cancel(Destination::Drop(offer));
                         }
-                        offer.destroy();
                     }
-                    Destination::Paste(recipient) => self.hub.emit(Event::Paste {
-                        recipient,
-                        mime: read.mime,
-                        bytes: read.bytes,
-                    }),
+                    Destination::Paste(recipient) => {
+                        if read.bytes.is_empty() {
+                            self.cancel(Destination::Paste(recipient));
+                        } else {
+                            self.hub.emit(Event::Paste {
+                                recipient,
+                                mime: read.mime,
+                                bytes: read.bytes,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -293,10 +339,8 @@ impl Transfers {
 
 impl Drop for Transfers {
     fn drop(&mut self) {
-        for read in self.reads.drain(..) {
-            if let Destination::Drop(offer) = read.destination {
-                offer.destroy();
-            }
+        for read in std::mem::take(&mut self.reads) {
+            self.cancel(read.destination);
         }
     }
 }
@@ -355,8 +399,88 @@ mod tests {
         });
         transfers.poll();
         assert!(!transfers.pending());
+        assert!(matches!(
+            lock(&hub.events).pop_front(),
+            Some(Event::PasteCancelled { recipient: 7 })
+        ));
         assert!(lock(&hub.events).is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn empty_paste_completes_as_cancellation() -> std::io::Result<()> {
+        let hub = hub(108);
+        let mut transfers = Transfers::new(hub.clone());
+        let (reader, writer) = UnixStream::pair()?;
+        reader.set_nonblocking(true)?;
+        drop(writer);
+        transfers.reads.push(Pending {
+            reader: File::from(OwnedFd::from(reader)),
+            mime: "image/png".into(),
+            destination: Destination::Paste(8),
+            bytes: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(10),
+        });
+        transfers.poll();
+        assert!(!transfers.pending());
+        assert!(matches!(
+            lock(&hub.events).pop_front(),
+            Some(Event::PasteCancelled { recipient: 8 })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn admission_capacity_cancels_rejected_and_dropped_reads() -> std::io::Result<()> {
+        let hub = hub(110);
+        let mut transfers = Transfers::new(hub.clone());
+        let mut writers = Vec::new();
+        for recipient in 0..5 {
+            let (reader, writer) = UnixStream::pair()?;
+            writers.push(writer);
+            transfers.receive(
+                ReadPipe::from(OwnedFd::from(reader)),
+                "image/png".into(),
+                Destination::Paste(recipient),
+            );
+        }
+        assert_eq!(transfers.reads.len(), 4);
+        assert!(matches!(
+            lock(&hub.events).pop_front(),
+            Some(Event::PasteCancelled { recipient: 4 })
+        ));
+        drop(transfers);
+        let events = lock(&hub.events);
+        assert_eq!(events.len(), 4);
+        assert!(events.iter().all(|event| matches!(event, Event::PasteCancelled { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn full_event_queue_cancels_the_batch_instead_of_losing_completion() {
+        let hub = hub(109);
+        for surface in 0..256 {
+            assert!(hub.emit(Event::Leave { surface }));
+        }
+        assert!(!hub.emit(Event::Paste {
+            recipient: 9,
+            mime: "image/png".into(),
+            bytes: vec![1]
+        }));
+        let mut events = lock(&hub.events);
+        assert!(matches!(events.pop_front(), Some(Event::Reset)));
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn worker_stop_releases_the_wake_lock_before_invoking_callback() {
+        let hub = hub(111);
+        let callback_hub = hub.clone();
+        *lock(&hub.wake) = Some(Arc::new(move || {
+            assert!(callback_hub.wake.try_lock().is_ok());
+        }));
+        hub.stop();
+        *lock(&hub.wake) = None;
     }
 
     #[test]
@@ -371,6 +495,8 @@ mod tests {
         drop(WorkerGuard(first));
         subscription.refresh();
         assert!(subscription.hubs.is_empty());
+        assert!(matches!(subscription.poll().as_slice(), [Event::Reset]));
+        assert!(subscription.poll().is_empty());
     }
 
     #[test]

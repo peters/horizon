@@ -144,6 +144,20 @@ impl KeyboardAwareApp<'_> {
         for transfer in transfers {
             use smithay_clipboard::native::Event as TransferEvent;
             match transfer {
+                TransferEvent::Reset => {
+                    for surface in self.observed_keyboard_inputs.reset_native_transfers() {
+                        self.inner.window_event(
+                            event_loop,
+                            winit::window::WindowId::from(surface),
+                            WindowEvent::HoveredFileCancelled,
+                        );
+                    }
+                    tracing::debug!("cancelled native file transfers after worker loss or backpressure");
+                }
+                TransferEvent::PasteCancelled { recipient } => {
+                    self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
+                    tracing::debug!("native image paste transfer cancelled");
+                }
                 TransferEvent::Paste { recipient, mime, bytes } => {
                     if let Ok(paths) = self.observed_keyboard_inputs.decode_native_transfer(&mime, &bytes) {
                         self.observed_keyboard_inputs.native_paste(recipient, paths);

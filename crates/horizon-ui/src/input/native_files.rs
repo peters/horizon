@@ -33,6 +33,14 @@ struct NativeDrop {
 }
 
 impl ObservedKeyboardInputs {
+    pub(crate) fn reset_native_transfers(&self) -> Vec<u64> {
+        let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.requests.clear();
+        state.pastes.clear();
+        state.drops.clear();
+        state.windows.keys().copied().collect()
+    }
+
     pub(crate) fn decode_native_transfer(&self, mime: &str, bytes: &[u8]) -> std::io::Result<Vec<std::path::PathBuf>> {
         self.1
             .lock()
@@ -289,6 +297,23 @@ mod tests {
         assert_eq!(paste.panel, horizon_core::PanelId(3));
         assert_eq!(paste.viewport, child);
         assert!(observed.native_paste_request(20).is_none());
+    }
+
+    #[test]
+    fn cancelled_and_reset_requests_cannot_deliver_later() {
+        let observed = super::ObservedKeyboardInputs::default();
+        observed.native_window_seen(10);
+        observed.native_focus(10, true);
+        observed.native_recipient_publisher()(egui::ViewportId::ROOT, 1.0, Some(horizon_core::PanelId(2)));
+        let token = observed.native_paste_request(10).unwrap();
+        observed.cancel_native_paste_request(token);
+        observed.native_paste(token, vec![std::path::PathBuf::from("/tmp/image.png")]);
+        assert!(observed.take_native_pastes().is_empty());
+        let token = observed.native_paste_request(10).unwrap();
+        assert_eq!(observed.reset_native_transfers(), vec![10]);
+        observed.native_paste(token, vec![std::path::PathBuf::from("/tmp/image.png")]);
+        assert!(observed.take_native_pastes().is_empty());
+        assert!(observed.native_paste_request(10).is_some());
     }
 
     #[test]

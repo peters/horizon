@@ -402,6 +402,8 @@ impl State {
         {
             self.native
                 .receive(pipe, mime, crate::native::Destination::Paste(recipient));
+        } else {
+            self.native.cancel(crate::native::Destination::Paste(recipient));
         }
     }
 }
@@ -453,13 +455,19 @@ impl DataDeviceHandler for State {
         }
     }
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
-        if let Some(offer) = device
+        let offer = device
             .data::<sctk::data_device_manager::data_device::DataDeviceData>()
-            .and_then(|data| data.drag_offer())
-            && let Some(mime) = offer.with_mime_types(crate::native::preferred)
-            && let Ok(pipe) = offer.receive(mime.clone())
-        {
-            self.native.receive(pipe, mime, crate::native::Destination::Drop(offer));
+            .and_then(|data| data.drag_offer());
+        if let Some(offer) = offer {
+            if let Some(mime) = offer.with_mime_types(crate::native::preferred)
+                && let Ok(pipe) = offer.receive(mime.clone())
+            {
+                self.native.receive(pipe, mime, crate::native::Destination::Drop(offer));
+            } else {
+                self.native.cancel(crate::native::Destination::Drop(offer));
+            }
+        } else if let Some(surface) = self.native.drags.get(&device.id().protocol_id()).copied() {
+            self.native.hub.emit(crate::native::Event::Leave { surface });
         }
     }
     fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {
