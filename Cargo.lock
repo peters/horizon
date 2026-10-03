@@ -2584,6 +2584,7 @@ dependencies = [
 name = "horizon-wayland"
 version = "0.2.7"
 dependencies = [
+ "image",
  "raw-window-handle",
  "tempfile",
  "thiserror 2.0.21",
@@ -2857,6 +2858,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

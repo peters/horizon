@@ -12,7 +12,8 @@ pub(super) struct NativeFileInputs {
     pastes: Vec<NativePaste>,
     requests: std::collections::HashMap<u64, PasteRequest>,
     next_request: u64,
-    transfer_files: horizon_wayland::TransferFiles,
+    transfer_files: std::sync::Arc<horizon_wayland::TransferFiles>,
+    generation: u64,
 }
 
 pub(crate) struct NativePaste {
@@ -46,6 +47,7 @@ impl ObservedKeyboardInputs {
     pub(crate) fn reset_native_session(&self) {
         let (reset, context) = {
             let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.generation = state.generation.wrapping_add(1);
             state.requests.clear();
             state.pastes.clear();
             state.drops.clear();
@@ -67,28 +69,38 @@ impl ObservedKeyboardInputs {
 
     pub(crate) fn reset_native_transfers(&self) -> Vec<u64> {
         let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.generation = state.generation.wrapping_add(1);
         state.requests.clear();
         state.pastes.clear();
         state.drops.clear();
         state.windows.keys().copied().collect()
     }
 
-    pub(crate) fn decode_native_transfer(&self, mime: &str, bytes: &[u8]) -> std::io::Result<Vec<std::path::PathBuf>> {
+    pub(crate) fn native_transfer_generation(&self) -> u64 {
         self.1
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .transfer_files
-            .decode_transfer_payload(mime, bytes)
+            .generation
     }
 
-    pub(crate) fn clear_native_transfer_files(&self) {
-        if let Err(error) = self
+    pub(crate) fn decode_native_transfer(&self, mime: &str, bytes: &[u8]) -> std::io::Result<Vec<std::path::PathBuf>> {
+        let files = self
             .1
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .transfer_files
-            .clear()
-        {
+            .clone();
+        files.decode_transfer_payload(mime, bytes)
+    }
+
+    pub(crate) fn clear_native_transfer_files(&self) {
+        let files = self
+            .1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .transfer_files
+            .clone();
+        if let Err(error) = files.clear() {
             tracing::warn!(%error, "failed to remove native image files during shutdown");
         }
     }

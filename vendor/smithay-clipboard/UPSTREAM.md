@@ -29,3 +29,5 @@ backends. The minimum Rust version matches the workspace (1.95).
 Session boundaries advance a worker generation, cancel pending reads, and discard queued events. Paste requests and drag offers retain their originating generation, so delayed completions cannot reach a replacement board that reuses panel IDs.
 
 Clipboard image data takes precedence over URI offers; URI selections remain native file candidates. A bounded companion read captures text from the same offer for decoding failures; complete encoded images do not wait for text. Clipboard availability is replaced from the current focused-seat snapshot. Queue overflow advances the native transfer generation as well as cancelling queued events.
+
+The companion text representation is retained through image validation, including image payloads with a valid signature but corrupt content. Completed native reads with a stalled companion are released at the existing transfer deadline. Image validation and persistence run in Horizon's bounded file worker, outside the UI and clipboard event loops.

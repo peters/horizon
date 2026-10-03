@@ -10,6 +10,8 @@ use super::input::ObservedKeyboardInputs;
 
 #[cfg(target_os = "linux")]
 mod pinch;
+#[cfg(target_os = "linux")]
+mod transfer;
 
 pub(crate) fn run_native_with_keyboard_observer(
     app_name: &str,
@@ -42,6 +44,10 @@ pub(crate) fn run_native_with_keyboard_observer(
             app.observed_keyboard_inputs
                 .native_worker_resetter(clipboard.resetter());
             app.clipboard = Some(clipboard);
+            match transfer::TransferWorker::start(app.observed_keyboard_inputs.clone()) {
+                Ok(worker) => app.transfer_worker = Some(worker),
+                Err(error) => tracing::warn!(%error, "native image persistence worker unavailable"),
+            }
         }
         // Keeps the platform display alive independently of the event loop,
         // so the bridge above still outlives it when a callback unwinds.
@@ -60,6 +66,9 @@ struct KeyboardAwareApp<'app> {
     image_paste_keys: std::collections::HashSet<(winit::window::WindowId, winit::keyboard::PhysicalKey)>,
     #[cfg(target_os = "linux")]
     clipboard: Option<smithay_clipboard::native::Subscription>,
+
+    #[cfg(target_os = "linux")]
+    transfer_worker: Option<transfer::TransferWorker>,
 
     native_window_liveness: NativeWindowLiveness,
     // `pinch` borrows the platform display through raw FFI, so it must be
@@ -88,6 +97,8 @@ impl<'app> KeyboardAwareApp<'app> {
             #[cfg(target_os = "linux")]
             clipboard: None,
 
+            #[cfg(target_os = "linux")]
+            transfer_worker: None,
             native_window_liveness: NativeWindowLiveness::default(),
             #[cfg(target_os = "linux")]
             pinch: None,
@@ -161,13 +172,8 @@ impl KeyboardAwareApp<'_> {
                     self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
                     tracing::debug!("native image paste transfer cancelled");
                 }
-                TransferEvent::Paste {
-                    recipient,
-                    mime,
-                    bytes,
-                    text,
-                } => {
-                    self.complete_native_paste(recipient, &mime, bytes, text);
+                event @ (TransferEvent::Paste { .. } | TransferEvent::Drop { .. }) => {
+                    self.queue_native_transfer(event_loop, event);
                 }
                 TransferEvent::Leave { surface } => {
                     if self.observed_keyboard_inputs.native_window(surface).is_some() {
@@ -195,42 +201,9 @@ impl KeyboardAwareApp<'_> {
                     }
                     self.forward_drop_position(event_loop, surface, position);
                 }
-                TransferEvent::Drop {
-                    surface,
-                    position,
-                    mime,
-                    bytes,
-                } => {
-                    if self.observed_keyboard_inputs.native_window(surface).is_none() {
-                        continue;
-                    }
-                    let paths = self.observed_keyboard_inputs.decode_native_transfer(&mime, &bytes);
-                    self.inner.window_event(
-                        event_loop,
-                        winit::window::WindowId::from(surface),
-                        WindowEvent::HoveredFileCancelled,
-                    );
-                    let Ok(paths) = paths else {
-                        continue;
-                    };
-                    if !self
-                        .observed_keyboard_inputs
-                        .native_drop_position(surface, position, paths.clone())
-                    {
-                        tracing::debug!("native drop rejected before forwarding: completion queue full");
-                        continue;
-                    }
-                    self.forward_drop_position(event_loop, surface, position);
-                    for path in paths {
-                        self.inner.window_event(
-                            event_loop,
-                            winit::window::WindowId::from(surface),
-                            WindowEvent::DroppedFile(path),
-                        );
-                    }
-                }
             }
         }
+        self.drain_native_completions(event_loop);
         let Some(pinch) = &mut self.pinch else {
             return;
         };
@@ -242,20 +215,6 @@ impl KeyboardAwareApp<'_> {
 
 #[cfg(target_os = "linux")]
 impl KeyboardAwareApp<'_> {
-    fn complete_native_paste(&self, recipient: u64, mime: &str, bytes: Vec<u8>, text: Option<String>) {
-        if let Ok(paths) = self.observed_keyboard_inputs.decode_native_transfer(mime, &bytes) {
-            self.observed_keyboard_inputs.native_paste(recipient, paths);
-        } else if let Some(text) = text.or_else(|| {
-            smithay_clipboard::native::is_text_mime(mime)
-                .then(|| String::from_utf8(bytes).ok())
-                .flatten()
-        }) {
-            self.observed_keyboard_inputs.native_paste_text(recipient, text);
-        } else {
-            self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
-        }
-    }
-
     fn forward_drop_position(&mut self, event_loop: &ActiveEventLoop, surface: u64, position: [f64; 2]) {
         if let Some((scale, _)) = self.observed_keyboard_inputs.native_window(surface) {
             self.inner.window_event(
@@ -441,6 +400,7 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
         #[cfg(target_os = "linux")]
         {
             self.pinch = None;
+            self.transfer_worker = None;
         }
         // `exiting` is the one callback that remains safe and necessary after
         // the native root handle is gone: eframe uses it to run `App::on_exit`

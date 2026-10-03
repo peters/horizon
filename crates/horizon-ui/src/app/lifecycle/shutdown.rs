@@ -187,7 +187,10 @@ mod tests {
         let (_temp, mut app) = crate::app::test_support::test_app();
         let observer = app.observed_keyboard_inputs.clone();
         let files = observer
-            .decode_native_transfer("image/png", b"\x89PNG\r\n\x1a\nfixture")
+            .decode_native_transfer(
+                "image/png",
+                include_bytes!("../../../../horizon-wayland/src/fixtures/image.png"),
+            )
             .unwrap();
         let directory = files[0].parent().unwrap().to_path_buf();
         assert!(files[0].exists());

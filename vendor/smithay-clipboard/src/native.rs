@@ -417,12 +417,6 @@ impl Transfers {
                     read.complete = true;
                 }
             }
-            if read.complete
-                && ((read.mime == "image/png" && read.bytes.starts_with(b"\x89PNG\r\n\x1a\n"))
-                    || (read.mime == "image/jpeg" && read.bytes.starts_with(&[0xff, 0xd8, 0xff])))
-            {
-                read.fallback = None;
-            }
             if !expired
                 && let Some(text) = &mut read.fallback
                 && !text.complete
@@ -585,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_image_does_not_wait_for_a_stalled_text_representation() -> std::io::Result<()> {
+    fn complete_image_with_stalled_text_finishes_at_the_bounded_deadline() -> std::io::Result<()> {
         let hub = hub(115);
         let mut transfers = Transfers::new(hub.clone());
         let (reader, mut writer) = UnixStream::pair()?;
@@ -599,6 +593,9 @@ mod tests {
         );
         writer.write_all(b"\x89PNG\r\n\x1a\nfixture")?;
         drop(writer);
+        transfers.poll();
+        assert!(lock(&hub.events).is_empty());
+        transfers.reads[0].deadline = Instant::now();
         transfers.poll();
         assert!(matches!(
             lock(&hub.events).pop_front(),

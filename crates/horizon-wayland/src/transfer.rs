@@ -5,15 +5,22 @@ use std::path::PathBuf;
 /// Owns private images until the native application exits.
 #[derive(Default)]
 pub struct TransferFiles {
-    directory: std::sync::OnceLock<tempfile::TempDir>,
+    directory: std::sync::Mutex<Directory>,
+}
+#[derive(Default)]
+struct Directory {
+    owned: Option<tempfile::TempDir>,
+    closed: bool,
 }
 impl TransferFiles {
     /// Remove owned images before a host exit path that skips destructors.
     ///
     /// # Errors
     /// Returns an error if the private directory cannot be removed.
-    pub fn clear(&mut self) -> std::io::Result<()> {
-        self.directory.take().map_or(Ok(()), tempfile::TempDir::close)
+    pub fn clear(&self) -> std::io::Result<()> {
+        let mut directory = self.directory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        directory.closed = true;
+        directory.owned.take().map_or(Ok(()), tempfile::TempDir::close)
     }
 
     const URI_LIST: &str = "text/uri-list";
@@ -41,21 +48,35 @@ impl TransferFiles {
             }
             return Ok(paths);
         }
-        let suffix = match mime {
-            "image/png" if bytes.starts_with(b"\x89PNG\r\n\x1a\n") => ".png",
-            "image/jpeg" if bytes.starts_with(&[0xff, 0xd8, 0xff]) => ".jpg",
+        let (suffix, format) = match mime {
+            "image/png" => (".png", image::ImageFormat::Png),
+            "image/jpeg" => (".jpg", image::ImageFormat::Jpeg),
             _ => return Err(std::io::ErrorKind::InvalidData.into()),
         };
-        if self.directory.get().is_none() {
-            let directory = tempfile::Builder::new()
-                .prefix("horizon-images-")
-                .permissions(std::fs::Permissions::from_mode(0o700))
-                .tempdir()?;
-            let _ = self.directory.set(directory);
+        let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(16384);
+        limits.max_image_height = Some(16384);
+        limits.max_alloc = Some(256 * 1024 * 1024);
+        reader.limits(limits);
+        reader
+            .decode()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let mut owner = self.directory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if owner.closed {
+            return Err(std::io::ErrorKind::BrokenPipe.into());
         }
-        let directory = self
-            .directory
-            .get()
+        if owner.owned.is_none() {
+            owner.owned = Some(
+                tempfile::Builder::new()
+                    .prefix("horizon-images-")
+                    .permissions(std::fs::Permissions::from_mode(0o700))
+                    .tempdir()?,
+            );
+        }
+        let directory = owner
+            .owned
+            .as_ref()
             .ok_or_else(|| std::io::Error::other("image directory unavailable"))?;
         let mut file = tempfile::Builder::new()
             .prefix("horizon-image-")
@@ -100,27 +121,63 @@ mod tests {
     }
 
     #[test]
+    fn jpeg_payloads_validate_and_oversized_dimensions_are_rejected() {
+        let files = TransferFiles::default();
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .encode(&[0, 255, 255], 1, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        assert!(files.decode_transfer_payload("image/jpeg", &jpeg).unwrap()[0].exists());
+        let mut png = Vec::new();
+        image::ImageEncoder::write_image(
+            image::codecs::png::PngEncoder::new(&mut png),
+            &vec![0; 16385 * 3],
+            16385,
+            1,
+            image::ExtendedColorType::Rgb8,
+        )
+        .unwrap();
+        assert!(files.decode_transfer_payload("image/png", &png).is_err());
+    }
+
+    #[test]
+    fn truncated_images_with_valid_signatures_are_rejected() {
+        let files = TransferFiles::default();
+        for (mime, bytes) in [
+            ("image/png", &b"\x89PNG\r\n\x1a\nfixture"[..]),
+            ("image/jpeg", &b"\xff\xd8\xfffixture"[..]),
+        ] {
+            assert!(files.decode_transfer_payload(mime, bytes).is_err());
+        }
+        assert!(files.directory.lock().unwrap().owned.is_none());
+    }
+
+    #[test]
     fn image_payloads_are_private_files_and_wrong_formats_are_rejected() {
         use std::os::unix::fs::PermissionsExt;
         let files = TransferFiles::default();
         let paths = files
-            .decode_transfer_payload("image/png", b"\x89PNG\r\n\x1a\nfixture")
+            .decode_transfer_payload("image/png", include_bytes!("fixtures/image.png"))
             .unwrap();
         assert_eq!(
             std::fs::metadata(&paths[0]).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert_eq!(std::fs::read(&paths[0]).unwrap(), b"\x89PNG\r\n\x1a\nfixture");
+        assert_eq!(std::fs::read(&paths[0]).unwrap(), include_bytes!("fixtures/image.png"));
         let directory = paths[0].parent().unwrap().to_path_buf();
         assert_eq!(
             std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
             0o700
         );
-        let mut files = files;
         files.clear().unwrap();
         files.clear().unwrap();
         assert!(!paths[0].exists());
         assert!(!directory.exists());
+        assert!(
+            files
+                .decode_transfer_payload("image/png", include_bytes!("fixtures/image.png"))
+                .is_err()
+        );
         assert!(
             TransferFiles::default()
                 .decode_transfer_payload("image/png", b"not an image")
