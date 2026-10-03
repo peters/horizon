@@ -15,6 +15,20 @@ from unittest.mock import patch
 import bench
 
 
+class BackendGates(unittest.TestCase):
+    def test_nvenc_with_cpu_scaling_still_qualifies_encoder_only_gpu(self):
+        bench.validate_backend({"encoder": "h264_nvenc", "scaler": "cpu"}, "gpu", None)
+
+    def test_software_encoding_never_qualifies_gpu(self):
+        with self.assertRaisesRegex(RuntimeError, "software fallback"):
+            bench.validate_backend({"encoder": "libx264", "scaler": "cpu"}, "gpu", None)
+
+    def test_missing_or_changed_scaler_never_qualifies_requested_cuda(self):
+        for scaler in [None, "cpu", "unknown"]:
+            with self.subTest(scaler=scaler), self.assertRaisesRegex(RuntimeError, "scaler"):
+                bench.validate_backend({"encoder": "h264_nvenc", "scaler": scaler}, "gpu", "cuda")
+
+
 class DecoderGates(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

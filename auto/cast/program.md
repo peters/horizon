@@ -49,6 +49,13 @@ and real text readability. The fixed canvas uses the production selected backend
 it does not claim GPU crop/scaling coverage. Keep the hardware acceptance gates
 in #1215/#1218 separate. Never report sender counters as displayed FPS.
 
+Every result records the actual `scaler` (`cpu` or `cuda`). Usable NVENC with CPU
+scaling still qualifies the encoder-only GPU lane. Use `--scaler cuda` or
+`--scaler cpu` when a campaign requires a particular path; a mismatch fails.
+Mixed scaler paths cannot share an aggregate score. Match the actual scaler in
+each baseline/candidate case and re-baseline after changing this measurement
+contract; scores from different scaler paths are not directly comparable.
+
 Retain raw logs, binary and source fingerprints, command parameters, independently
 decoded frame totals and quality checks in the returned evidence directory.
 The committed ledger starts with a header: establish and record a real baseline

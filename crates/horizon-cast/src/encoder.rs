@@ -3,14 +3,14 @@ mod diagnostics;
 mod frames;
 pub(crate) use backend::select;
 pub use backend::{EncoderBackend, EncoderSelection};
-pub(crate) use frames::FrameInput;
+pub(crate) use frames::{Frame, FrameInput};
 
 use crate::{
     CastStatus, Error, MirrorSession, Result, VideoFormat,
     session::{Progress, lock},
 };
 use std::{
-    io::{Read, Write},
+    io::Read,
     process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex, mpsc::RecvTimeoutError},
@@ -27,24 +27,8 @@ pub(crate) fn stream(
     process: &Arc<Mutex<Option<Child>>>,
     backend: EncoderBackend,
 ) -> Result<()> {
-    let (width, height) = format.dimensions();
     let mut child = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "rawvideo",
-            "-pixel_format",
-            "rgba",
-            "-video_size",
-            &format!("{width}x{height}"),
-            "-framerate",
-            "15",
-            "-i",
-            "pipe:0",
-            "-an",
-        ])
+        .args(backend.input_arguments(format))
         .args(backend.arguments())
         .args(["-g", "30", "-bf", "0", "-flush_packets", "1", "-f", "h264", "pipe:1"])
         .stdin(Stdio::piped())
@@ -75,7 +59,7 @@ pub(crate) fn stream(
         match frames.next() {
             Ok(frame) => {
                 last_frame = Instant::now();
-                if let Err(error) = input.write_all(frame) {
+                if let Err(error) = frame.write(&mut input, backend.source_frames()) {
                     result = Err(error.into());
                     break;
                 }

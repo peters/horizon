@@ -233,3 +233,74 @@ fn restarts_with_saved_pairing_and_requests_a_pin_only_after_forget() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[test]
+#[ignore = "requires a loopback receiver, usable CUDA/NVENC and independent H.264 decoding"]
+fn gpu_scaling_preserves_each_output_canvas_across_source_geometry_changes() {
+    let address: SocketAddr = std::env::var("HORIZON_CAST_TEST_RECEIVERS")
+        .expect("receiver")
+        .split(',')
+        .next()
+        .expect("first")
+        .parse()
+        .expect("address");
+    assert!(address.ip().is_loopback());
+    let home = tempfile::tempdir().expect("private state");
+    let store = PairingStore::new(
+        home.path().join("pairings"),
+        "gpu-scaling-fixture".into(),
+        "Synthetic GPU TV".into(),
+    );
+    for resolution in [Resolution::Hd720, Resolution::FullHd1080, Resolution::Uhd4k] {
+        for orientation in [Orientation::Landscape, Orientation::Portrait] {
+            let format = VideoFormat {
+                orientation,
+                resolution,
+            };
+            let session = CastSession::start_remembered(address, format, store.clone()).expect("start");
+            let deadline = Instant::now() + Duration::from_secs(12);
+            let mut submitted = 0;
+            loop {
+                match session.status() {
+                    CastStatus::PinRequired => session
+                        .pair(zeroize::Zeroizing::new("1234".into()))
+                        .expect("synthetic PIN"),
+                    CastStatus::Streaming { frames } => {
+                        let selection = session.encoding().expect("backend");
+                        assert_eq!(selection.backend.scaler(), "cuda");
+                        assert!(selection.fallback_reason.is_none());
+                        if frames >= 35 {
+                            break;
+                        }
+                        let (width, height, pixel) = match submitted / 15 % 3 {
+                            0 => (641, 361, [210, 40, 40, 255]),
+                            1 => (1023, 767, [40, 210, 40, 255]),
+                            _ => (719, 1279, [40, 40, 210, 255]),
+                        };
+                        session
+                            .submit_source(width, height, pixel.repeat(usize::from(width) * usize::from(height)))
+                            .expect("source crop");
+                        submitted += 1;
+                    }
+                    CastStatus::Failed(error) => panic!("{error}"),
+                    _ => {}
+                }
+                assert!(Instant::now() < deadline, "source stream did not advance");
+                std::thread::sleep(Duration::from_millis(67));
+            }
+            session.stop();
+            while !session.finished() {
+                assert!(Instant::now() < deadline, "receiver lease remained busy");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert_eq!(session.status(), CastStatus::Stopped);
+            println!(
+                "source geometry qualification {}x{}: {} frames sent",
+                format.dimensions().0,
+                format.dimensions().1,
+                session.frames_sent()
+            );
+        }
+    }
+    store.forget().expect("final receiver lease released");
+}
