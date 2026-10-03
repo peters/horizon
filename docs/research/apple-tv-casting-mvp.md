@@ -62,9 +62,19 @@ No independent source-to-TV latency or receiver-display recording was available.
 Only one physical TV is available; simulation does not qualify two physical TVs.
 Upscaling a small source to a 4K canvas cannot create missing source detail.
 
+The separate Horizon source-crop adapter reused saved pairing and stopped cleanly
+on the available physical TV across four formats. Sender cadence was about
+7.3-7.4 fps during that shared-host run. A later 90-second 4K landscape run,
+while full local validation ran concurrently, measured 6.4 transmitted fps;
+the person watching the TV confirmed readable text and a moving counter. This
+qualifies that observation, not a numeric displayed FPS or latency result.
+The lower host cadence remains unexplained and must not be hidden by the
+standalone encoder measurements or described as an AirPlay protocol limit.
+
 ## Delivery boundaries and next work
 
-- #1215 retains physical motion, readability and latency acceptance.
+- #1215 has one physical motion/readability observation; latency and the
+  remaining required physical acceptance are still open.
 - #1218 retains final host adapter, CPU/GPU physical comparison and display metrics.
 - #1238 adds main-window capture with explicit volatile workspace consent. Its
   whole-window autoresearch workload is a separate outcome; do not close the

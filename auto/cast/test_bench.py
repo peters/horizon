@@ -16,6 +16,17 @@ import bench
 
 
 class BackendGates(unittest.TestCase):
+    def test_homogeneous_scaler_cases_produce_one_score(self):
+        for scaler in ["cpu", "cuda"]:
+            with self.subTest(scaler=scaler):
+                results = [{"scaler": scaler, "score": score} for score in [2, 4, 6]]
+                self.assertEqual(bench.aggregate_score(results), 4)
+
+    def test_mixed_scaler_cases_never_produce_one_score(self):
+        for scalers in [["cpu", "cuda"], ["cuda", "cpu"]]:
+            with self.subTest(scalers=scalers), self.assertRaisesRegex(RuntimeError, "mixed scaler"):
+                bench.aggregate_score([{"scaler": scaler, "score": 4} for scaler in scalers])
+
     def test_nvenc_with_cpu_scaling_still_qualifies_encoder_only_gpu(self):
         bench.validate_backend({"encoder": "h264_nvenc", "scaler": "cpu"}, "gpu", None)
 

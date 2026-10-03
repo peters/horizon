@@ -25,6 +25,12 @@ def execute(command, **kwargs):
     return subprocess.run(command, check=True, timeout=180, **kwargs)
 
 
+def aggregate_score(results):
+    if len({result["scaler"] for result in results}) != 1:
+        raise RuntimeError("mixed scaler paths cannot share a benchmark score; qualify them separately")
+    return statistics.mean(result["score"] for result in results)
+
+
 def fingerprint(paths):
     digest = hashlib.sha256()
     for path in sorted(paths):
@@ -311,9 +317,7 @@ def main():
                 print(json.dumps({"case": case.name, "score": result["score"], "decoded_frames": result["decoded_frames"]}), flush=True)
         if fingerprint(benchmark_files) != manifest["benchmark_sha256"] or fingerprint(source_files) != manifest["source_sha256"]:
             raise RuntimeError("benchmark or source changed during measurement; re-baseline")
-        if len({result["scaler"] for result in results}) != 1:
-            raise RuntimeError("mixed scaler paths cannot share a benchmark score; qualify them separately")
-        summary = {"status": "PASS", "score": statistics.mean(r["score"] for r in results),
+        summary = {"status": "PASS", "score": aggregate_score(results),
                    "objective": arguments.objective, "cases": results, "evidence": str(root)}
         (root / "summary.json").write_text(json.dumps(summary, indent=2))
         print(json.dumps(summary), flush=True)
