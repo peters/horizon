@@ -5,7 +5,10 @@ pub(crate) use backend::select;
 pub use backend::{EncoderBackend, EncoderSelection};
 pub(crate) use frames::FrameInput;
 
-use crate::{CastStatus, Error, MirrorSession, Result, VideoFormat, session::lock};
+use crate::{
+    CastStatus, Error, MirrorSession, Result, VideoFormat,
+    session::{Progress, lock},
+};
 use std::{
     io::{Read, Write},
     process::{Child, Command, Stdio},
@@ -19,7 +22,7 @@ pub(crate) fn stream(
     mut mirror: MirrorSession,
     format: VideoFormat,
     mut frames: FrameInput,
-    status: &Arc<Mutex<CastStatus>>,
+    status: &Arc<Mutex<Progress>>,
     stop: &Arc<AtomicBool>,
     process: &Arc<Mutex<Option<Child>>>,
     backend: EncoderBackend,
@@ -55,7 +58,7 @@ pub(crate) fn stream(
         .take()
         .ok_or(Error::Protocol("encoder output unavailable"))?;
     *lock(process) = Some(child);
-    *lock(status) = CastStatus::Streaming { frames: 0 };
+    lock(status).state = CastStatus::Streaming { frames: 0 };
     let state = status.clone();
     let cancel = stop.clone();
     let killer = process.clone();
@@ -107,14 +110,13 @@ pub(crate) fn stream(
 fn consume(
     mut reader: impl Read,
     mirror: &mut MirrorSession,
-    status: &Mutex<CastStatus>,
+    status: &Mutex<Progress>,
     stop: &AtomicBool,
 ) -> Result<()> {
     let mut pending = Vec::new();
     let mut chunk = vec![0; 32768];
     let mut access = Vec::new();
     let mut sps = Vec::new();
-    let mut sent = 0;
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
@@ -138,8 +140,7 @@ fn consume(
                     if !access.is_empty() {
                         mirror.send(&access.iter().map(Vec::as_slice).collect::<Vec<_>>())?;
                         access.clear();
-                        sent += 1;
-                        *lock(status) = CastStatus::Streaming { frames: sent };
+                        lock(status).record_transmission();
                     }
                 }
                 7 => sps = nal,

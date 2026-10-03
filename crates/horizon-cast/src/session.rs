@@ -15,6 +15,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod progress;
+pub(crate) use progress::Progress;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CastStatus {
     Connecting,
@@ -28,7 +31,7 @@ pub enum CastStatus {
 
 /// Bounded background pairing/encoder/transport worker for one receiver.
 pub struct CastSession {
-    status: Arc<Mutex<CastStatus>>,
+    status: Arc<Mutex<Progress>>,
     cancellation: Arc<Cancellation>,
     pin: SyncSender<Zeroizing<String>>,
     frames: SyncSender<Vec<u8>>,
@@ -53,7 +56,7 @@ impl CastSession {
         Self::start_worker(address, format, Some(store))
     }
     fn start_worker(address: SocketAddr, format: VideoFormat, store: Option<PairingStore>) -> Result<Self> {
-        let status = Arc::new(Mutex::new(CastStatus::Connecting));
+        let status = Arc::new(Mutex::new(Progress::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let cancellation = Arc::new(Cancellation::new(stop.clone()));
         let authentication = cancellation.clone();
@@ -94,7 +97,7 @@ impl CastSession {
                 let _ = process.kill();
                 let _ = process.wait();
             }
-            *lock(&state) = match result {
+            lock(&state).state = match result {
                 Err(error) if !cancel.load(Ordering::Relaxed) => CastStatus::Failed(error.to_string()),
                 _ => CastStatus::Stopped,
             };
@@ -115,7 +118,12 @@ impl CastSession {
     }
     #[must_use]
     pub fn status(&self) -> CastStatus {
-        lock(&self.status).clone()
+        lock(&self.status).state.clone()
+    }
+    /// Cumulative successfully transmitted frames, retained after stopping or failure.
+    #[must_use]
+    pub fn frames_sent(&self) -> u64 {
+        lock(&self.status).frames_sent()
     }
     /// Selected encoder and any pre-stream hardware fallback.
     #[must_use]
@@ -135,13 +143,13 @@ impl CastSession {
             return Err(Error::Protocol("enter the four-digit code shown on the TV"));
         }
         let mut status = lock(&self.status);
-        if *status != CastStatus::PinRequired {
+        if status.state != CastStatus::PinRequired {
             return Err(Error::Protocol("not waiting for a PIN"));
         }
         self.pin
             .try_send(pin)
             .map_err(|_| Error::Protocol("pairing worker unavailable"))?;
-        *status = CastStatus::Starting;
+        status.state = CastStatus::Starting;
         Ok(())
     }
     /// Freeze the last validated frame while host controls cover the capture surface.
@@ -168,8 +176,8 @@ impl CastSession {
         self.cancellation.stop();
         {
             let mut status = lock(&self.status);
-            if !matches!(*status, CastStatus::Stopped | CastStatus::Failed(_)) {
-                *status = CastStatus::Stopping;
+            if !matches!(status.state, CastStatus::Stopped | CastStatus::Failed(_)) {
+                status.state = CastStatus::Stopping;
             }
         }
         if let Some(child) = lock(&self.process).as_mut() {
@@ -205,7 +213,7 @@ pub(crate) fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn authenticate(
     address: SocketAddr,
     pins: &Receiver<Zeroizing<String>>,
-    status: &Arc<Mutex<CastStatus>>,
+    status: &Arc<Mutex<Progress>>,
     cancellation: &Arc<Cancellation>,
     store: Option<&PairingStore>,
     saved: &AtomicBool,
@@ -214,7 +222,7 @@ fn authenticate(
         return PairedReceiver::connect_cancellable(address, credentials, Some(cancellation.clone()));
     }
     let pairing = Pairing::begin_cancellable(address, Some(cancellation.clone()))?;
-    *lock(status) = CastStatus::PinRequired;
+    lock(status).state = CastStatus::PinRequired;
     let deadline = Instant::now() + Duration::from_secs(180);
     let pin = loop {
         cancellation.check()?;

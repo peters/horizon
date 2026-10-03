@@ -170,14 +170,14 @@ impl HorizonApp {
             .iter()
             .filter(|session| session.workspace == workspace)
             .map(|session| {
-                let (state, frames, error) = match session.worker.status() {
-                    CastStatus::Connecting => ("connecting", 0, None),
-                    CastStatus::PinRequired => ("pin_required", 0, None),
-                    CastStatus::Starting => ("starting", 0, None),
-                    CastStatus::Streaming { frames } => ("streaming", frames, None),
-                    CastStatus::Stopping => ("stopping", 0, None),
-                    CastStatus::Stopped => ("stopped", 0, None),
-                    CastStatus::Failed(error) => ("failed", 0, Some(error)),
+                let (state, error) = match session.worker.status() {
+                    CastStatus::Connecting => ("connecting", None),
+                    CastStatus::PinRequired => ("pin_required", None),
+                    CastStatus::Starting => ("starting", None),
+                    CastStatus::Streaming { .. } => ("streaming", None),
+                    CastStatus::Stopping => ("stopping", None),
+                    CastStatus::Stopped => ("stopped", None),
+                    CastStatus::Failed(error) => ("failed", Some(error)),
                 };
                 let encoding = session.worker.encoding();
                 CastSessionInfo {
@@ -186,7 +186,7 @@ impl HorizonApp {
                     orientation: session.orientation,
                     resolution: session.resolution,
                     state: state.into(),
-                    frames,
+                    frames: session.worker.frames_sent(),
                     encoder: encoding.as_ref().map(|selection| selection.backend.as_str().into()),
                     encoder_fallback: encoding.and_then(|selection| selection.fallback_reason),
                     error,
