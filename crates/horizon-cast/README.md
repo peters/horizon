@@ -83,3 +83,9 @@ The interactive `pair` example reads the current PIN from stdin. Do not place
 real PINs in command arguments, logs, source files or test fixtures. Receiver
 information and network endpoints are private evidence. Sustained physical-TV
 playback and latency must be checked separately before shipping.
+
+For repeatable CPU, memory and GPU optimization experiments, start with
+[`auto/cast/program.md`](../../auto/cast/program.md). Its canonical benchmark
+uses this crate's optimized `cast_bench` example and an independent authenticated
+loopback receiver, checks decoded frames and image quality, and retains resource
+measurements and fingerprints. It never discovers a TV or reads saved pairings.

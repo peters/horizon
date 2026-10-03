@@ -265,6 +265,15 @@ Releases are tag-driven and documented in [`docs/release-flow.md`](docs/release-
 
 When cutting a new release, generate concise release notes from the commits since the last tag (`git log <prev-tag>..HEAD --oneline --no-merges`). Group into **What's new** (features) and **Fixes** (bug fixes). Keep it scannable -- one line per item, no commit hashes. Pass the notes to `gh release create --notes --draft`.
 
+### Casting autoresearch
+
+For CPU, memory or GPU optimization of `horizon-cast`, start with
+[`auto/cast/program.md`](auto/cast/program.md) and its canonical `bench.sh`.
+Read the complete append-only experiment ledger before proposing a hypothesis.
+Compare same-machine warm baselines, preserve independent decode/quality and
+lifecycle gates, and record every keep/discard with evidence. This loop does not
+authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
+
 ### Dependencies
 
 - Always check crates.io for the latest stable version before adding
