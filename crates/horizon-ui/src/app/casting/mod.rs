@@ -157,7 +157,8 @@ impl CastState {
             let _ = send.send(horizon_cast::discover().map_err(|error| error.to_string()));
         });
     }
-    fn poll(&mut self) {
+    fn poll(&mut self) -> bool {
+        let mut async_completed = false;
         for session in &mut self.sessions {
             if session.worker.finished() {
                 session.scaling = None;
@@ -180,6 +181,7 @@ impl CastState {
             self.refresh_pairings();
         }
         if let Some(result) = self.paired_refresh.as_ref().and_then(|receive| receive.try_recv().ok()) {
+            async_completed = true;
             self.paired_refresh = None;
             match result {
                 Ok(receivers) => {
@@ -196,6 +198,7 @@ impl CastState {
             }
         }
         if let Some(result) = self.discovery.as_ref().and_then(|receive| receive.try_recv().ok()) {
+            async_completed = true;
             self.discovery = None;
             match result {
                 Ok(receivers) => {
@@ -208,6 +211,7 @@ impl CastState {
                 }
             }
         }
+        async_completed
     }
 }
 
@@ -233,6 +237,24 @@ mod tests {
         io::{Read, Write},
         net::TcpListener,
     };
+
+    #[test]
+    fn final_async_results_report_a_repaint_even_when_no_work_remains() {
+        let mut state = CastState::default();
+        let (discovery_send, discovery_receive) = mpsc::channel();
+        let (pairing_send, pairing_receive) = mpsc::channel();
+        state.discovery = Some(discovery_receive);
+        state.paired_refresh = Some(pairing_receive);
+        assert!(!state.poll());
+        discovery_send.send(Ok(Vec::new())).expect("discovery");
+        assert!(state.poll());
+        assert!(state.discovery.is_none());
+        assert!(state.pairing_loading());
+        pairing_send.send(Ok(Vec::new())).expect("pairings");
+        assert!(state.poll());
+        assert!(!state.pairing_loading());
+        assert!(!state.poll());
+    }
 
     #[test]
     fn session_switch_retains_pairing_worker_until_synchronous_exit() {

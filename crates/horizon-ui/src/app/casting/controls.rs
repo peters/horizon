@@ -121,17 +121,12 @@ impl HorizonApp {
     }
     fn render_cast_icons(&mut self, ctx: &Context) {
         if !self.host_dialog_open() && self.casting.picker.is_none() {
-            let panels: Vec<_> = self
-                .board
-                .panels
-                .iter()
-                .filter_map(|panel| {
-                    self.panel_screen_rects
-                        .get(&panel.id)
-                        .map(|rect| (panel.id, panel.local_id.clone(), panel.workspace_id, *rect))
-                })
-                .collect();
-            for (id, local_id, workspace, rect) in panels {
+            for panel in &self.board.panels {
+                let Some(&rect) = self.panel_screen_rects.get(&panel.id) else {
+                    continue;
+                };
+                let id = panel.id;
+                let workspace = panel.workspace_id;
                 if self.workspace_is_detached(workspace) || !self.canvas_rect(ctx).intersects(rect) {
                     continue;
                 }
@@ -196,7 +191,9 @@ impl HorizonApp {
                         });
                     self.casting.picker = Some(Picker {
                         workspace,
-                        source: CastSource::Panel { id: local_id },
+                        source: CastSource::Panel {
+                            id: panel.local_id.clone(),
+                        },
                         receiver: session.map(|session| session.receiver_id.clone()),
                         orientation: session.map_or(CastOrientation::Landscape, |session| session.orientation),
                         resolution: session.map_or(CastResolution::default(), |session| session.resolution),

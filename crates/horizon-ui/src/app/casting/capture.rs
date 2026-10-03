@@ -17,7 +17,9 @@ struct CaptureTicket {
 impl HorizonApp {
     pub(in crate::app) fn cast_frame(&mut self, ctx: &Context) {
         self.drain_cast_requests(ctx, None);
-        self.casting.poll();
+        if self.casting.poll() {
+            ctx.request_repaint();
+        }
         let mut source_lost = false;
         for session in &self.casting.sessions {
             if session.worker.finished() {

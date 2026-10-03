@@ -42,7 +42,9 @@ impl HorizonApp {
         operation: &CastOperation,
         ctx: &egui::Context,
     ) -> CastOutcome {
-        self.casting.poll();
+        if self.casting.poll() {
+            ctx.request_repaint();
+        }
         let result = (|| -> Result<(), String> {
             match operation {
                 CastOperation::Discover => self.casting.discover(),
