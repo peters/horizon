@@ -25,3 +25,5 @@ The fork is a workspace member so the normal tests and lint checks cover it.
 Its code and dependencies are Linux-only, matching Horizon's native Wayland
 adapter; the workspace's macOS and Windows builds use their existing clipboard
 backends. The minimum Rust version matches the workspace (1.95).
+
+Session boundaries advance a worker generation, cancel pending reads, and discard queued events. Paste requests and drag offers retain their originating generation, so delayed completions cannot reach a replacement board that reuses panel IDs.

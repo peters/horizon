@@ -10,7 +10,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::OwnedFd;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -55,6 +55,7 @@ pub enum Event {
 
 pub(crate) struct Hub {
     alive: AtomicBool,
+    generation: AtomicU64,
     commands: Sender<crate::worker::Command>,
     events: Mutex<VecDeque<Event>>,
     available: Mutex<HashMap<u64, bool>>,
@@ -74,6 +75,7 @@ impl Hub {
     pub(crate) fn register(display: usize, commands: Sender<crate::worker::Command>) -> Arc<Self> {
         let hub = Arc::new(Self {
             alive: AtomicBool::new(true),
+            generation: AtomicU64::new(0),
             commands,
             events: Mutex::default(),
             available: Mutex::default(),
@@ -89,8 +91,26 @@ impl Hub {
         hubs.push(Arc::downgrade(&hub));
         hub
     }
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+    fn reset(&self) {
+        {
+            let mut events = lock(&self.events);
+            self.generation.fetch_add(1, Ordering::AcqRel);
+            events.clear();
+        }
+        let _ = self.commands.send(crate::worker::Command::ResetNative);
+    }
+    #[cfg(test)]
     pub(crate) fn emit(&self, event: Event) -> bool {
+        self.emit_at(self.generation(), event)
+    }
+    pub(crate) fn emit_at(&self, generation: u64, event: Event) -> bool {
         let mut events = lock(&self.events);
+        if generation != self.generation() {
+            return false;
+        }
         if matches!((&event, events.back()), (Event::Motion { surface, entered: false, .. }, Some(Event::Motion { surface: old_surface, entered: false, .. })) if surface == old_surface)
         {
             events.pop_back();
@@ -185,6 +205,21 @@ impl Subscription {
         );
         events
     }
+    /// Cancel native transfers at a session boundary, preserving text clipboard state.
+    pub fn resetter(&self) -> impl Fn() + Send + Sync + 'static {
+        let display = self.display;
+        move || {
+            let hubs: Vec<_> = lock(registry())
+                .get(&display)
+                .into_iter()
+                .flatten()
+                .filter_map(Weak::upgrade)
+                .collect();
+            for hub in hubs {
+                hub.reset();
+            }
+        }
+    }
     #[must_use]
     pub fn request_paste(&self, surface: u64, recipient: u64) -> bool {
         self.hubs
@@ -192,7 +227,11 @@ impl Subscription {
             .find(|hub| lock(&hub.available).get(&surface) == Some(&true))
             .is_some_and(|hub| {
                 hub.commands
-                    .send(crate::worker::Command::NativeRead { surface, recipient })
+                    .send(crate::worker::Command::NativeRead {
+                        surface,
+                        recipient,
+                        generation: hub.generation(),
+                    })
                     .is_ok()
             })
     }
@@ -215,10 +254,11 @@ struct Pending {
     destination: Destination,
     bytes: Vec<u8>,
     deadline: Instant,
+    generation: u64,
 }
 pub(crate) struct Transfers {
     pub hub: Arc<Hub>,
-    pub drags: HashMap<u32, u64>,
+    pub drags: HashMap<u32, (u64, u64)>,
     reads: Vec<Pending>,
 }
 impl Transfers {
@@ -229,27 +269,36 @@ impl Transfers {
             drags: HashMap::new(),
         }
     }
-    pub fn cancel(&self, destination: Destination) {
+    pub fn reset(&mut self) {
+        for read in std::mem::take(&mut self.reads) {
+            self.cancel_at(read.destination, read.generation);
+        }
+        self.drags.clear();
+    }
+    pub fn cancel_at(&self, destination: Destination, generation: u64) {
         match destination {
             Destination::Drop(offer) => {
-                self.hub.emit(Event::Leave {
-                    surface: offer.surface.id().as_ptr() as u64,
-                });
+                self.hub.emit_at(
+                    generation,
+                    Event::Leave {
+                        surface: offer.surface.id().as_ptr() as u64,
+                    },
+                );
                 offer.destroy();
             }
             Destination::Paste(recipient) => {
-                self.hub.emit(Event::PasteCancelled { recipient });
+                self.hub.emit_at(generation, Event::PasteCancelled { recipient });
             }
         }
     }
-    pub fn receive(&mut self, pipe: ReadPipe, mime: String, destination: Destination) {
+    pub fn receive(&mut self, pipe: ReadPipe, mime: String, destination: Destination, generation: u64) {
         if self.reads.len() >= 4 {
-            self.cancel(destination);
+            self.cancel_at(destination, generation);
             return;
         }
         let fd: OwnedFd = pipe.into();
         if rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK).is_err() {
-            self.cancel(destination);
+            self.cancel_at(destination, generation);
             return;
         }
         self.reads.push(Pending {
@@ -258,6 +307,7 @@ impl Transfers {
             destination,
             bytes: Vec::new(),
             deadline: Instant::now() + Duration::from_secs(10),
+            generation,
         });
     }
     pub fn pending(&self) -> bool {
@@ -296,7 +346,7 @@ impl Transfers {
                 }
             }
             if failed {
-                self.cancel(read.destination);
+                self.cancel_at(read.destination, read.generation);
             } else if !complete {
                 self.reads.push(read);
             } else {
@@ -307,29 +357,35 @@ impl Transfers {
                                 == sctk::reexports::client::protocol::wl_data_device_manager::DndAction::Copy)
                             && !read.bytes.is_empty()
                         {
-                            let accepted = self.hub.emit(Event::Drop {
-                                surface: offer.surface.id().as_ptr() as u64,
-                                position: [offer.x, offer.y],
-                                mime: read.mime,
-                                bytes: read.bytes,
-                            });
+                            let accepted = self.hub.emit_at(
+                                read.generation,
+                                Event::Drop {
+                                    surface: offer.surface.id().as_ptr() as u64,
+                                    position: [offer.x, offer.y],
+                                    mime: read.mime,
+                                    bytes: read.bytes,
+                                },
+                            );
                             if accepted {
                                 offer.finish();
                             }
                             offer.destroy();
                         } else {
-                            self.cancel(Destination::Drop(offer));
+                            self.cancel_at(Destination::Drop(offer), read.generation);
                         }
                     }
                     Destination::Paste(recipient) => {
                         if read.bytes.is_empty() {
-                            self.cancel(Destination::Paste(recipient));
+                            self.cancel_at(Destination::Paste(recipient), read.generation);
                         } else {
-                            self.hub.emit(Event::Paste {
-                                recipient,
-                                mime: read.mime,
-                                bytes: read.bytes,
-                            });
+                            self.hub.emit_at(
+                                read.generation,
+                                Event::Paste {
+                                    recipient,
+                                    mime: read.mime,
+                                    bytes: read.bytes,
+                                },
+                            );
                         }
                     }
                 }
@@ -341,7 +397,7 @@ impl Transfers {
 impl Drop for Transfers {
     fn drop(&mut self) {
         for read in std::mem::take(&mut self.reads) {
-            self.cancel(read.destination);
+            self.cancel_at(read.destination, read.generation);
         }
     }
 }
@@ -368,6 +424,7 @@ mod tests {
             mime: "image/png".into(),
             destination: Destination::Paste(42),
             bytes: Vec::new(),
+            generation: 0,
             deadline: Instant::now() + Duration::from_secs(10),
         });
         writer.write_all(b"partial")?;
@@ -396,6 +453,7 @@ mod tests {
             mime: "image/png".into(),
             destination: Destination::Paste(7),
             bytes: b"partial".to_vec(),
+            generation: 0,
             deadline: Instant::now(),
         });
         transfers.poll();
@@ -405,6 +463,54 @@ mod tests {
             Some(Event::PasteCancelled { recipient: 7 })
         ));
         assert!(lock(&hub.events).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn session_boundary_discards_queued_and_delayed_transfer_events() -> std::io::Result<()> {
+        let hub = hub(112);
+        let mut transfers = Transfers::new(hub.clone());
+        let (reader, mut writer) = UnixStream::pair()?;
+        transfers.receive(
+            ReadPipe::from(OwnedFd::from(reader)),
+            "image/png".into(),
+            Destination::Paste(42),
+            0,
+        );
+        writer.write_all(b"partial")?;
+        transfers.poll();
+        assert!(hub.emit(Event::Motion {
+            surface: 1,
+            position: [1.0, 2.0],
+            entered: true
+        }));
+        let subscription = Subscription::new(112, || {});
+        subscription.resetter()();
+        writer.write_all(b" late")?;
+        drop(writer);
+        transfers.poll();
+        assert!(lock(&hub.events).is_empty());
+        assert!(!hub.emit_at(
+            0,
+            Event::Drop {
+                surface: 1,
+                position: [1.0, 2.0],
+                mime: "image/png".into(),
+                bytes: vec![1]
+            }
+        ));
+        assert!(hub.emit_at(
+            hub.generation(),
+            Event::Paste {
+                recipient: 43,
+                mime: "image/png".into(),
+                bytes: vec![2]
+            }
+        ));
+        assert!(matches!(
+            lock(&hub.events).pop_front(),
+            Some(Event::Paste { recipient: 43, .. })
+        ));
         Ok(())
     }
 
@@ -420,6 +526,7 @@ mod tests {
             mime: "image/png".into(),
             destination: Destination::Paste(8),
             bytes: Vec::new(),
+            generation: 0,
             deadline: Instant::now() + Duration::from_secs(10),
         });
         transfers.poll();
@@ -443,6 +550,7 @@ mod tests {
                 ReadPipe::from(OwnedFd::from(reader)),
                 "image/png".into(),
                 Destination::Paste(recipient),
+                0,
             );
         }
         assert_eq!(transfers.reads.len(), 4);

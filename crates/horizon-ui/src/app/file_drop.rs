@@ -53,7 +53,17 @@ pub(super) enum FileDropHighlight {
 }
 
 impl HorizonApp {
+    pub(super) fn reset_native_file_input(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.observed_keyboard_inputs.reset_native_session();
+        self.file_drop_highlight = None;
+        self.file_hover_positions.clear();
+    }
+
     pub(super) fn clear_file_drop_state(&mut self, ctx: &Context) {
+        #[cfg(target_os = "linux")]
+        self.observed_keyboard_inputs
+            .discard_native_drop_positions(ctx.viewport_id());
         self.file_drop_highlight = None;
         self.file_hover_positions.remove(&ctx.viewport_id());
     }
@@ -102,10 +112,23 @@ impl HorizonApp {
             )
         });
 
+        let captured = if dropped.is_empty() {
+            None
+        } else {
+            self.native_transfer_drop_position(ctx, &dropped)
+        };
+        #[cfg(target_os = "linux")]
+        if !dropped.is_empty() && self.observed_keyboard_inputs.is_wayland_backend() && captured.is_none() {
+            // A native drop queued in another viewport can outlive its board.
+            // Every Wayland file drop comes through our bridge and must still
+            // have its original routing record; never fall back after reset.
+            self.clear_file_drop_state(ctx);
+            return;
+        }
+
         // Only query the native cursor during an active drag; on Linux this
         // opens an X11 connection each call, so skip it when idle.
         let native_pointer_pos = if hovered || !dropped.is_empty() {
-            let captured = self.native_transfer_drop_position(ctx, &dropped);
             captured.or_else(|| native_file_drop_position(ctx))
         } else {
             None

@@ -31,7 +31,9 @@ pub enum Command {
     NativeRead {
         surface: u64,
         recipient: u64,
+        generation: u64,
     },
+    ResetNative,
     /// Store data to a clipboard.
     Store(String),
     /// Store data to a primary selection.
@@ -67,7 +69,12 @@ fn worker_impl(
         .insert_source(rx_chan, |event, (), state| {
             if let channel::Event::Msg(event) = event {
                 match event {
-                    Command::NativeRead { surface, recipient } => state.read_native(surface, recipient),
+                    Command::NativeRead {
+                        surface,
+                        recipient,
+                        generation,
+                    } => state.read_native(surface, recipient, generation),
+                    Command::ResetNative => state.native.reset(),
                     Command::StorePrimary(contents) => {
                         state.store_selection(SelectionTarget::Primary, contents);
                     }

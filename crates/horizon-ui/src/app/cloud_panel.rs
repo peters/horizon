@@ -72,6 +72,7 @@ impl HorizonApp {
                             self.transcript_root.as_deref(),
                         ) {
                             Ok(board) => {
+                                self.reset_native_file_input();
                                 self.board = board;
                                 self.cloud_prototype.groups = snapshot.groups;
                                 self.cloud_prototype.groups.restore_visibility(&mut self.board);

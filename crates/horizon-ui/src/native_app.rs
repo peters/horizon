@@ -35,10 +35,13 @@ pub(crate) fn run_native_with_keyboard_observer(
             && let winit::raw_window_handle::RawDisplayHandle::Wayland(display) = handle.as_raw()
         {
             let observed = app.observed_keyboard_inputs.clone();
-            app.clipboard = Some(smithay_clipboard::native::Subscription::new(
-                display.display.as_ptr() as usize,
-                move || observed.wake_native_input(),
-            ));
+            let clipboard =
+                smithay_clipboard::native::Subscription::new(display.display.as_ptr() as usize, move || {
+                    observed.wake_native_input();
+                });
+            app.observed_keyboard_inputs
+                .native_worker_resetter(clipboard.resetter());
+            app.clipboard = Some(clipboard);
         }
         // Keeps the platform display alive independently of the event loop,
         // so the bridge above still outlives it when a callback unwinds.

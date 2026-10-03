@@ -249,6 +249,7 @@ impl HorizonApp {
     }
 
     fn begin_session_switch(&mut self, session: &ResolvedSession) {
+        self.reset_native_file_input();
         #[cfg(target_os = "linux")]
         {
             self.casting.reset_for_session_switch();
@@ -374,6 +375,7 @@ impl HorizonApp {
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         self.finish_session_switch();
+        self.reset_native_file_input();
         self.board = Board::new();
         self.arranged_panel_drag = None;
     }

@@ -390,7 +390,10 @@ impl State {
             }
         }
     }
-    pub fn read_native(&mut self, surface: u64, recipient: u64) {
+    pub fn read_native(&mut self, surface: u64, recipient: u64, generation: u64) {
+        if generation != self.native.hub.generation() {
+            return;
+        }
         let offer = self
             .seats
             .values()
@@ -402,9 +405,10 @@ impl State {
             && let Ok(pipe) = offer.receive(mime.clone())
         {
             self.native
-                .receive(pipe, mime, crate::native::Destination::Paste(recipient));
+                .receive(pipe, mime, crate::native::Destination::Paste(recipient), generation);
         } else {
-            self.native.cancel(crate::native::Destination::Paste(recipient));
+            self.native
+                .cancel_at(crate::native::Destination::Paste(recipient), generation);
         }
     }
 }
@@ -425,21 +429,27 @@ impl DataDeviceHandler for State {
             let mime = offer.with_mime_types(crate::native::preferred);
             offer.accept_mime_type(offer.serial, mime.clone());
             if mime.is_some() {
+                let generation = self.native.hub.generation();
                 self.native
                     .drags
-                    .insert(device.id().protocol_id(), surface.id().as_ptr() as u64);
+                    .insert(device.id().protocol_id(), (surface.id().as_ptr() as u64, generation));
                 offer.set_actions(DndAction::Copy, DndAction::Copy);
-                self.native.hub.emit(crate::native::Event::Motion {
-                    surface: surface.id().as_ptr() as u64,
-                    position: [x, y],
-                    entered: true,
-                });
+                self.native.hub.emit_at(
+                    generation,
+                    crate::native::Event::Motion {
+                        surface: surface.id().as_ptr() as u64,
+                        position: [x, y],
+                        entered: true,
+                    },
+                );
             }
         }
     }
     fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
-        if let Some(surface) = self.native.drags.remove(&device.id().protocol_id()) {
-            self.native.hub.emit(crate::native::Event::Leave { surface });
+        if let Some((surface, generation)) = self.native.drags.remove(&device.id().protocol_id()) {
+            self.native
+                .hub
+                .emit_at(generation, crate::native::Event::Leave { surface });
         }
     }
     fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice, x: f64, y: f64) {
@@ -447,12 +457,16 @@ impl DataDeviceHandler for State {
             .data::<sctk::data_device_manager::data_device::DataDeviceData>()
             .and_then(sctk::data_device_manager::data_device::DataDeviceData::drag_offer)
             && offer.with_mime_types(crate::native::preferred).is_some()
+            && let Some((_, generation)) = self.native.drags.get(&device.id().protocol_id()).copied()
         {
-            self.native.hub.emit(crate::native::Event::Motion {
-                surface: offer.surface.id().as_ptr() as u64,
-                position: [x, y],
-                entered: false,
-            });
+            self.native.hub.emit_at(
+                generation,
+                crate::native::Event::Motion {
+                    surface: offer.surface.id().as_ptr() as u64,
+                    position: [x, y],
+                    entered: false,
+                },
+            );
         }
     }
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
@@ -460,15 +474,27 @@ impl DataDeviceHandler for State {
             .data::<sctk::data_device_manager::data_device::DataDeviceData>()
             .and_then(sctk::data_device_manager::data_device::DataDeviceData::drag_offer);
         if let Some(offer) = offer {
+            let Some((_, generation)) = self.native.drags.get(&device.id().protocol_id()).copied() else {
+                offer.destroy();
+                return;
+            };
+            if generation != self.native.hub.generation() {
+                offer.destroy();
+                return;
+            }
             if let Some(mime) = offer.with_mime_types(crate::native::preferred)
                 && let Ok(pipe) = offer.receive(mime.clone())
             {
-                self.native.receive(pipe, mime, crate::native::Destination::Drop(offer));
+                self.native
+                    .receive(pipe, mime, crate::native::Destination::Drop(offer), generation);
             } else {
-                self.native.cancel(crate::native::Destination::Drop(offer));
+                self.native
+                    .cancel_at(crate::native::Destination::Drop(offer), generation);
             }
-        } else if let Some(surface) = self.native.drags.get(&device.id().protocol_id()).copied() {
-            self.native.hub.emit(crate::native::Event::Leave { surface });
+        } else if let Some((surface, generation)) = self.native.drags.get(&device.id().protocol_id()).copied() {
+            self.native
+                .hub
+                .emit_at(generation, crate::native::Event::Leave { surface });
         }
     }
     fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {

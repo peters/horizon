@@ -3,6 +3,7 @@ use super::ObservedKeyboardInputs;
 #[derive(Default)]
 pub(super) struct NativeFileInputs {
     context: Option<egui::Context>,
+    reset_worker: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     focused_surface: Option<u64>,
     wayland: bool,
     drops: std::collections::VecDeque<NativeDrop>,
@@ -33,6 +34,36 @@ struct NativeDrop {
 }
 
 impl ObservedKeyboardInputs {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn native_worker_resetter(&self, reset: impl Fn() + Send + Sync + 'static) {
+        self.1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reset_worker = Some(std::sync::Arc::new(reset));
+    }
+
+    pub(crate) fn reset_native_session(&self) {
+        let (reset, context) = {
+            let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.requests.clear();
+            state.pastes.clear();
+            state.drops.clear();
+            for window in state.windows.values_mut() {
+                window.1 = None;
+            }
+            (state.reset_worker.clone(), state.context.clone())
+        };
+        if let Some(reset) = reset {
+            reset();
+        }
+        if let Some(ctx) = context {
+            ctx.input_mut(|input| {
+                input.raw.dropped_files.clear();
+                input.raw.hovered_files.clear();
+            });
+        }
+    }
+
     pub(crate) fn reset_native_transfers(&self) -> Vec<u64> {
         let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.requests.clear();
@@ -136,6 +167,14 @@ impl ObservedKeyboardInputs {
                 }
             }
         }
+    }
+
+    pub(crate) fn discard_native_drop_positions(&self, viewport: egui::ViewportId) {
+        let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let surface = state.viewports.get(&viewport).copied();
+        state
+            .drops
+            .retain(|drop| surface.is_some_and(|surface| drop.surface != surface));
     }
 
     pub(crate) fn native_drop_position(&self, surface: u64, position: [f64; 2], paths: Vec<std::path::PathBuf>) {
@@ -331,6 +370,25 @@ mod tests {
         );
         drop(observed);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn ignored_drop_cannot_supply_coordinates_to_a_later_identical_path() {
+        let observed = super::ObservedKeyboardInputs::default();
+        let path = std::path::PathBuf::from("/tmp/a.png");
+        observed.native_drop_position(10, [1.0, 2.0], vec![path.clone()]);
+        observed.discard_native_drop_positions(egui::ViewportId::ROOT);
+        let files: Vec<egui::DroppedFileHandle> = vec![std::sync::Arc::new(TestFile(path.clone()))];
+        assert!(
+            observed
+                .take_native_drop_position(egui::ViewportId::ROOT, &files)
+                .is_none()
+        );
+        observed.native_drop_position(10, [3.0, 4.0], vec![path]);
+        assert_eq!(
+            observed.take_native_drop_position(egui::ViewportId::ROOT, &files),
+            Some([3.0, 4.0])
+        );
     }
 
     #[test]

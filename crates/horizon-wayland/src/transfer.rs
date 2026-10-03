@@ -1,5 +1,6 @@
 //! Decode bounded native file transfer payloads into local paths.
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 /// Owns private images until the native application exits.
 #[derive(Default)]
@@ -46,7 +47,10 @@ impl TransferFiles {
             _ => return Err(std::io::ErrorKind::InvalidData.into()),
         };
         if self.directory.get().is_none() {
-            let directory = tempfile::Builder::new().prefix("horizon-images-").tempdir()?;
+            let directory = tempfile::Builder::new()
+                .prefix("horizon-images-")
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()?;
             let _ = self.directory.set(directory);
         }
         let directory = self
@@ -108,6 +112,10 @@ mod tests {
         );
         assert_eq!(std::fs::read(&paths[0]).unwrap(), b"\x89PNG\r\n\x1a\nfixture");
         let directory = paths[0].parent().unwrap().to_path_buf();
+        assert_eq!(
+            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         let mut files = files;
         files.clear().unwrap();
         files.clear().unwrap();
