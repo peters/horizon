@@ -180,7 +180,9 @@ shows the newest one. Keep tags out of recipes, so a rebuild copies the same
 helpers. The copy replaces older helpers and scripts in the base. The base still
 supplies the rest of the contract: Python 3.12 or newer, Bash 4.4 or newer at
 `/bin/bash` and glibc 2.36 or newer (Ubuntu 24.04 has all three), SSH, tmux, Git
-with LFS, `gh`, util-linux,
+with LFS, `gh`, util-linux (`setpriv`), and the `horizon-agent` account with
+UID and primary GID 10001. Tailnet support additionally requires `tailscale` and
+`tailscaled`; the pinned stock image supplies them. Also supply
 `/etc/horizon-worker/capabilities.json`, the worker entrypoint (the example runs
 `horizon-worker-start` under tini) and the selected agents, browsers and desktop
 packages. Run `horizon-worker-check --git-auth` after the copy so a missing

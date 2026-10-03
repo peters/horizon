@@ -18,7 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server tmux git git-lfs gh rsync ca-certificates curl python3 tini util-linux \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=tailscale-runtime /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
-RUN useradd --uid 10001 --no-create-home --shell /bin/bash horizon-agent
+RUN groupadd --gid 10001 horizon-agent \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /bin/bash horizon-agent
 COPY --from=agent-runtime /output/ /
 ARG HORIZON_DESKTOP=false
 RUN if [ "$HORIZON_DESKTOP" = true ]; then apt-get update \

@@ -121,7 +121,11 @@ def prepare_agents():
     info = workspace.lstat()
     if info.st_uid != 0 or info.st_mode & 0o022 or workspace.is_symlink():
         raise ValueError()
-    subprocess.run(['/usr/bin/id', '-u', 'horizon-agent'], check=True, stdout=subprocess.DEVNULL)
+    for flag in ['-u', '-g']:
+        identity = subprocess.run(['/usr/bin/id', flag, 'horizon-agent'], check=True, timeout=20,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
+        if identity.strip() != str(USER).encode():
+            raise ValueError('Worker agent identity does not match the isolation launcher')
     # Do not enroll alongside a pre-existing privileged agent. Stop and resume first.
     for process in Path('/proc').iterdir():
         if not process.name.isdecimal():
