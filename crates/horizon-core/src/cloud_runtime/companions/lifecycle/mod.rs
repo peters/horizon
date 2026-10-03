@@ -206,6 +206,21 @@ pub fn submit_with_tailnet(
                 return Err(Error::Invalid("A retried operation cannot change its tailnet"));
             }
         }
+        if intent.action == Action::EnsureReady && intent.state == State::Submitted {
+            let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
+            if root
+                .join(format!("tailnet-commit-{}.pending", intent.operation_id))
+                .try_exists()?
+            {
+                let _execution = receipt::execution_lock(&root)?;
+                let target = request.target_store(&binding)?;
+                if receipt::load(&root)?.is_some_and(|r| {
+                    r.owner == *request.owner && r.id == intent.operation_id && r.phase == Phase::Submitted
+                }) {
+                    tailnet_choice::recover(&target, intent.operation_id)?;
+                }
+            }
+        }
         state.intents = candidate;
         store.save(&state)?;
         return operation(request, &binding, intent);
@@ -389,7 +404,7 @@ fn execute_with(request: &Request<'_>, id: OperationId, backend: &mut impl execu
                 .clone(),
         );
     }
-    super::super::tailnet::validate_pending(target.root())?;
+    tailnet_choice::validate_pending(&target, &intent, &claim)?;
     let observed = target.load()?;
     let decision = execution::plan(&target, &binding, &intent, observed.as_ref())?;
     if decision == intent::Decision::Provision {

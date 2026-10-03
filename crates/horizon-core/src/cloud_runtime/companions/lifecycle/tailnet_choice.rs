@@ -1,19 +1,23 @@
 use super::{Error, OperationId, Result, Store};
 use crate::cloud_runtime::{CreateState, tailnet};
-use horizon_cloud::tailnet::{Catalog, Selection};
-use std::{io::Write, path::Path};
+use horizon_cloud::tailnet::Selection;
+use std::{
+    io::{Read, Write},
+    path::Path,
+};
 
 pub(super) struct Choice {
     selection: Selection,
-    catalog: Option<Catalog>,
+    id: OperationId,
 }
 
 impl Choice {
     pub(super) fn commit(self, target: &Store) -> Result<()> {
-        if let Some(catalog) = self.catalog {
-            Selection::save(target.root(), self.selection.tailnet.as_deref(), &catalog)
-                .map_err(|_| Error::Invalid("Could not save tailnet selection"))?;
-        }
+        self.selection
+            .commit(target.root())
+            .map_err(|_| Error::Invalid("Could not save tailnet selection"))?;
+        std::fs::remove_file(target.root().join(format!("tailnet-commit-{}.pending", self.id)))?;
+        sync(target.root())?;
         Ok(())
     }
 }
@@ -58,10 +62,59 @@ pub(super) fn prepare(root: &Path, target: &Store, id: OperationId, tailnet: Opt
         pending.as_file().sync_all()?;
         pending.persist(path).map_err(|e| Error::Io(e.error))?;
     }
-    #[cfg(unix)]
-    std::fs::File::open(target.root())?.sync_all()?;
+    let mut pending = tempfile::NamedTempFile::new_in(target.root())?;
+    pending.write_all(b"1")?;
+    pending.as_file().sync_all()?;
+    pending
+        .persist(target.root().join(format!("tailnet-commit-{id}.pending")))
+        .map_err(|e| Error::Io(e.error))?;
+    sync(target.root())?;
     Ok(Choice {
         selection: requested,
-        catalog,
+        id,
     })
+}
+
+fn sync(root: &Path) -> Result<()> {
+    #[cfg(unix)]
+    std::fs::File::open(root)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = root;
+    Ok(())
+}
+
+pub(super) fn recover(target: &Store, id: OperationId) -> Result<()> {
+    if !target
+        .root()
+        .join(format!("tailnet-commit-{id}.pending"))
+        .try_exists()?
+    {
+        return Ok(());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(target.root().join(format!("tailnet-request-{id}.json")))?
+        .take(1025)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 1024 {
+        return Err(Error::Invalid("Pending tailnet request is too large"));
+    }
+    let selection: Selection = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
+    if target
+        .load()?
+        .is_some_and(|s| s.spec.is_some() || s.worker.is_some() || s.operation != CreateState::Prepared)
+        && Selection::load(target.root()).map_err(|_| Error::Json)? != selection
+    {
+        return Err(Error::Invalid("Cannot recover a changed tailnet on an allocated cloud"));
+    }
+    Choice { selection, id }.commit(target)
+}
+
+pub(super) fn validate_pending(target: &Store, intent: &super::Intent, claim: &super::receipt::Receipt) -> Result<()> {
+    if intent.action == super::Action::EnsureReady
+        && intent.state == super::State::Submitted
+        && claim.phase == super::Phase::Submitted
+    {
+        recover(target, intent.operation_id)?;
+    }
+    tailnet::validate_pending(target.root())
 }

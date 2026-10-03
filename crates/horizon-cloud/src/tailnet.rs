@@ -78,13 +78,20 @@ impl Selection {
         if id.is_some_and(|id| !catalog.tailnets.iter().any(|t| t.id == id)) {
             return Err(Error::Missing);
         }
+        Self {
+            tailnet: id.map(str::to_owned),
+        }
+        .commit(cloud)
+    }
+    /// Persist a previously validated durable request while holding the cloud lock.
+    /// # Errors
+    /// Invalid ID or failed durable selection write.
+    pub fn commit(&self, cloud: &Path) -> Result<()> {
+        if self.tailnet.as_deref().is_some_and(|id| !valid_id(id)) {
+            return Err(Error::Invalid);
+        }
         std::fs::create_dir_all(cloud).map_err(|_| Error::Storage)?;
-        write(
-            &cloud.join("tailnet.json"),
-            &Self {
-                tailnet: id.map(str::to_owned),
-            },
-        )
+        write(&cloud.join("tailnet.json"), self)
     }
 }
 fn write(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -129,6 +136,14 @@ mod tests {
         assert_eq!(Selection::load(temp.path()).unwrap().tailnet.as_deref(), Some("work"));
         assert!(Selection::save(temp.path(), Some("unknown"), &catalog).is_err());
         Selection::save(temp.path(), None, &catalog).unwrap();
+        assert_eq!(Selection::load(temp.path()).unwrap(), Selection::default());
+        assert!(
+            Selection {
+                tailnet: Some("invalid/id".into())
+            }
+            .commit(temp.path())
+            .is_err()
+        );
         assert_eq!(Selection::load(temp.path()).unwrap(), Selection::default());
         assert!(valid_key("tskey-auth-synthetic12345678901234567890"));
         assert!(!valid_key(&format!("tskey-auth-{}", "a".repeat(19))));
