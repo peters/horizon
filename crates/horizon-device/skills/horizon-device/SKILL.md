@@ -74,7 +74,9 @@ displayed. Do not close/recreate viewers in a loop. Retain the attempt budget
 across retries for the same incident. For a viewer that has never presented an image, a connected, visible,
 unpresented viewer requires `operation: "reveal"` on hosts advertising it.
 Current hosts return `navigation_preserved` once this viewer has presented a
-non-discarded image, including after reconnect or ownership transfer. Keep
+non-discarded image, including after reconnect or ownership transfer. Restored
+viewers also preserve the saved canvas when their previous display history is
+unavailable; reconnect grants transport ownership, never navigation permission. Keep
 background testing, recording and inspection running; use the UI to return to
 the viewer when needed. Never close/recreate it to bypass this protection.
 Reveal an owned viewer at most once; it changes the viewport without reconnecting and answers once the

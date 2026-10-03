@@ -126,6 +126,8 @@ decisions and attempted operations with the task's private smoke evidence.
    advertising `reveal`, call it once only if the owned viewer has never
    presented an image. Hosts return `navigation_preserved` after the first
    non-discarded displayed image, even after reconnect or ownership transfer.
+   Restored viewers also preserve saved navigation when past display history
+   is unavailable; reconnect only acquires the transport.
    Continue testing and inspection; never close/recreate the viewer to bypass
    the guard. The first Reveal changes
    canvas presentation, preserves keyboard focus and does not reconnect; new

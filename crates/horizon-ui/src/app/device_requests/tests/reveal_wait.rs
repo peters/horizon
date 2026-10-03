@@ -439,3 +439,62 @@ fn pending_reveals_cannot_move_a_viewer_that_was_presented_in_the_meantime() {
     );
     assert_eq!(app.canvas_view, before);
 }
+
+#[test]
+fn a_saved_viewer_preserves_navigation_after_real_restore_and_ownership_acquisition() {
+    let (_temp, ctx, mut app, _id, local) = off_canvas_viewer();
+    reveal(&mut app, &ctx, &local);
+    assert!(
+        one(frames_until_settled(&ctx, &mut app).remove(0))
+            .image
+            .image_displayed
+    );
+    app.canvas_view.set_pan_offset([20_000.0, 5_000.0]);
+    for panel in &mut app.board.panels {
+        if panel.device().is_none() {
+            panel.kind = PanelKind::Editor;
+        }
+    }
+    let saved = RuntimeState::from_board(&app.board, horizon_core::WindowConfig::default(), app.canvas_view);
+    let saved: RuntimeState = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+    let (_restored_temp, restored_ctx, mut restored) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(saved),
+    });
+    restored.board.panels[0].kind = PanelKind::Claude;
+    let id = restored.board.panel_id_by_local_id(&local).unwrap();
+    assert!(!restored.board.panel(id).unwrap().device().unwrap().connect_on_start);
+    assert!(restored.panel_render_caches.device_ui_state.is_empty());
+    let before = restored.canvas_view;
+    let focused = restored.board.focused;
+    let active = restored.board.active_workspace;
+    let inspect = request(
+        &restored,
+        Operation::Inspect {
+            panel_id: local.clone(),
+        },
+    );
+    let stopped = one(restored.apply_device_request(&inspect, &restored_ctx));
+    assert!(!stopped.owned_by_caller);
+    assert_eq!(stopped.connection, Connection::Stopped);
+    let reconnect = request(
+        &restored,
+        Operation::Reconnect {
+            panel_id: local.clone(),
+        },
+    );
+    assert!(one(restored.apply_device_request(&reconnect, &restored_ctx)).owned_by_caller);
+    assert!(!restored.panel_render_caches.device_ui_state[&id].presented_once());
+    let reveal = request(&restored, Operation::Reveal { panel_id: local });
+    let outcome = restored.apply_device_request(&reveal, &restored_ctx);
+    assert!(matches!(outcome, Outcome::Failed { ref code, .. } if code == "navigation_preserved"));
+    assert!(restored.defer_device_reveal(&reveal, outcome, None).is_some());
+    restored.apply_pending_root_device_reveal(&restored_ctx);
+    assert_eq!(restored.canvas_view, before);
+    assert_eq!(restored.board.focused, focused);
+    assert_eq!(restored.board.active_workspace, active);
+    assert!(restored.panel_render_caches.pending_device_reveal.is_none());
+    assert_eq!(
+        restored.panel_render_caches.device_ui_state[&id].host.reveal_requests(),
+        0
+    );
+}

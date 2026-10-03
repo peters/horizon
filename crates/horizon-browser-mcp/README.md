@@ -365,7 +365,9 @@ missing. Counters are transient and reset with the viewer state.
 non-discarded image has been displayed, further agent reveals return
 `navigation_preserved` immediately and leave visibility, workspace collapse,
 fullscreen, keyboard focus and canvas position unchanged. This protection
-survives reconnect and ownership transfer; a person can bring the viewer back
+survives reconnect and ownership transfer. Restored viewers preserve the saved
+canvas even when previous presentation history is unavailable: reconnect grants
+transport ownership, never navigation permission. A person can bring the viewer back
 through the UI. Continue background testing and inspection, and never
 close/recreate the viewer to bypass the guard.
 

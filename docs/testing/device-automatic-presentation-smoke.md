@@ -47,7 +47,10 @@ freshness. Use the bounded recovery procedure in scripts/device-smoke/README.md.
    loop reconnects.
 7. Another agent cannot Reveal, hide, close or reconnect an owned viewer. Other
    workspaces remain inaccessible. A restored viewer requires explicit ownership
-   acquisition through Reconnect; Reveal never acquires it implicitly.
+   acquisition through Reconnect; Reveal never acquires it implicitly. Save and
+   restore a viewer, acquire it from an empty UI cache, and require Reveal to
+   return navigation_preserved without changing the saved canvas. Unknown past
+   presentation is never permission to navigate.
 8. Legacy host observations lacking diagnostics still deserialize. Unsupported
    Reveal reports a host limitation; it never triggers private-file fallback,
    manual confirmation or replacement of the user's running Horizon.
