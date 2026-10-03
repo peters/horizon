@@ -246,6 +246,12 @@ impl HorizonApp {
                 self.mark_runtime_dirty();
             }
             Operation::Reveal { .. } => {
+                if state.presented_once() {
+                    return Outcome::failed(
+                        "navigation_preserved",
+                        "This viewer was already presented. Continue background inspection and testing; use the UI to bring it back into view.",
+                    );
+                }
                 self.reveal_device_viewer(ctx, id, actor);
             }
             Operation::Close { panel_id } => {
@@ -353,6 +359,14 @@ impl HorizonApp {
         let Some(pending) = self.panel_render_caches.pending_device_reveal.take() else {
             return;
         };
+        if self
+            .panel_render_caches
+            .device_ui_state
+            .get(&pending.id)
+            .is_some_and(crate::device_widget::DeviceUiState::presented_once)
+        {
+            return;
+        }
         if !self.board.panel(pending.id).is_some_and(|panel| {
             panel.visible && panel.device().is_some() && !self.workspace_is_detached(panel.workspace_id)
         }) {
@@ -385,6 +399,14 @@ impl HorizonApp {
             .get_mut(local)
             .and_then(|state| state.pending_device_reveal.take());
         let Some(id) = pending else { return };
+        if self
+            .panel_render_caches
+            .device_ui_state
+            .get(&id)
+            .is_some_and(crate::device_widget::DeviceUiState::presented_once)
+        {
+            return;
+        }
         let valid = self.board.panel(id).is_some_and(|panel| {
             panel.device().is_some()
                 && self

@@ -123,7 +123,11 @@ decisions and attempted operations with the task's private smoke evidence.
 3. Repeat the bounded observations after recovery. Never compare frame counters
    across reconnects. A connected, visible panel that remains unpresented is a
    presentation problem, not evidence that another reconnect will help. On hosts
-   advertising `reveal`, call it once for the owned viewer. Reveal changes
+   advertising `reveal`, call it once only if the owned viewer has never
+   presented an image. Hosts return `navigation_preserved` after the first
+   non-discarded displayed image, even after reconnect or ownership transfer.
+   Continue testing and inspection; never close/recreate the viewer to bypass
+   the guard. The first Reveal changes
    canvas presentation, preserves keyboard focus and does not reconnect; new
    hosts answer once the viewer was drawn after the reveal, or after at most
    three seconds with `presentation` and `diagnostics.host.exclusion` naming the
@@ -166,7 +170,7 @@ decisions and attempted operations with the task's private smoke evidence.
    `outside_canvas` while uploads or reception keep advancing was navigated away
    from by the person: keep the interactive test and its recording running, do
    not pause the lane, and do not spend the reveal budget just to advance
-   counters; reveal only when the person's attention is needed.
+   counters. A person can return to the viewer through the UI.
 
 `image_received` and `frame_sequence` retain their original texture-upload
 meaning for compatibility. The separate decoded-frame counter is available only
