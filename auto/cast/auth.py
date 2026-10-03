@@ -10,6 +10,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 class Reference(BaseAirPlayServerAuth):
 
+    def __init__(self, *args, controllers=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.controllers = {} if controllers is None else controllers
+
     def enable_encryption(self, output_key, input_key):
         self.ready = (output_key, input_key)
 
@@ -24,6 +28,7 @@ class Reference(BaseAirPlayServerAuth):
         self.client_key = inner[TlvValue.PublicKey]
         self.client_id = inner[TlvValue.Identifier]
         response = super()._m5_setup(message, transient)
+        self.controllers[self.client_id] = self.client_key
         return response
 
     def _m1_verify(self, message):
@@ -36,7 +41,8 @@ class Reference(BaseAirPlayServerAuth):
         key = hkdf_expand('Pair-Verify-Encrypt-Salt', 'Pair-Verify-Encrypt-Info', self.shared_key)
         cipher = Chacha20Cipher8byteNonce(key, key)
         inner = read_tlv(cipher.decrypt(message[TlvValue.EncryptedData], nonce=b'PV-Msg03'))
-        assert inner[TlvValue.Identifier] == self.client_id
+        self.client_id = inner[TlvValue.Identifier]
+        self.client_key = self.controllers[self.client_id]
         server = self.keys.verify_pub.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         Ed25519PublicKey.from_public_bytes(self.client_key).verify(inner[TlvValue.Signature], self.client_ephemeral + self.client_id + server)
         return super()._m3_verify(message)

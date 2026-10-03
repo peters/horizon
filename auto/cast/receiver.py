@@ -1,14 +1,16 @@
 """Synthetic interoperability receiver. Never connects to a physical television."""
-import socket, threading, plistlib, struct, time, json
+import socket, threading, plistlib, struct, time, json, ipaddress
 from pathlib import Path
 from auth import Reference, HAPSession, read_tlv, TlvValue, hkdf_expand
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 class Receiver:
 
-    def __init__(self, root):
-        ip = '127.0.0.1'
-        label = 'Synthetic-Cast'
+    def __init__(self, root, ip='127.0.0.1', label='Synthetic-Cast', split_streams=False):
+        if not ipaddress.ip_address(ip).is_loopback:
+            raise ValueError('benchmark receiver must bind loopback')
+        self.split_streams = split_streams
+        self.controllers = {}
         clock_id = 4242
         self.root = Path(root)
         self.clock_id = clock_id
@@ -61,14 +63,16 @@ class Receiver:
 
     def control(self, conn):
         state = {'frames': 0, 'configs': 0, 'feedback': 0, 'teardown': False, 'events': False}
-        self.sessions.append(state)
+        with self.lock:
+            self.sessions.append(state)
+            state['stream_file'] = f'received-{len(self.sessions)}.h264' if self.split_streams else 'received.h264'
         events = video = None
         workers = []
         try:
             events = self.listener()
             video = self.listener()
             conn.settimeout(190)
-            auth = Reference('Synthetic Receiver', unique_id='synthetic-' + self.label, pin=1234)
+            auth = Reference('Synthetic Receiver', unique_id='synthetic-' + self.label, pin=1234, controllers=self.controllers)
             auth.ready = None
             cipher = HAPSession()
             buffer = b''
@@ -167,12 +171,14 @@ class Receiver:
 
     def video(self, listener, secret, stream, state):
 
-        def exact(conn, n):
+        def exact(conn, n, allow_eof=False):
             result = b''
             while len(result) < n:
                 part = conn.recv(n - len(result))
                 if not part:
-                    raise EOFError()
+                    if allow_eof and not result:
+                        raise EOFError()
+                    raise RuntimeError('truncated video packet')
                 result += part
             return result
         try:
@@ -183,9 +189,10 @@ class Receiver:
             counter = 0
             previous = 0
             cipher = ChaCha20Poly1305(hkdf_expand(f'DataStream-Salt{stream}', 'DataStream-Output-Encryption-Key', secret))
-            with conn, (self.root / 'received.h264').open('wb') as output:
+            pending_configuration = bytearray()
+            with conn, (self.root / state['stream_file']).open('wb') as output:
                 while True:
-                    head = exact(conn, 128)
+                    head = exact(conn, 128, allow_eof=True)
                     length = struct.unpack_from('<I', head)[0]
                     assert length < 9 * 1024 * 1024
                     body = exact(conn, length)
@@ -195,19 +202,28 @@ class Receiver:
                         state.setdefault('config_dimensions', []).extend(
                             list(struct.unpack_from('<ff', head, at)) for at in [16, 40, 56])
                         assert body[0] == 1
+                        configuration = bytearray()
                         offset = 6
                         for _ in range(body[5] & 31):
                             n = struct.unpack_from('>H', body, offset)[0]
                             offset += 2
-                            output.write(b'\x00\x00\x00\x01' + body[offset:offset + n])
+                            assert n > 0 and offset + n <= len(body)
+                            configuration.extend(b'\x00\x00\x00\x01' + body[offset:offset + n])
                             offset += n
                         count = body[offset]
                         offset += 1
                         for _ in range(count):
                             n = struct.unpack_from('>H', body, offset)[0]
                             offset += 2
-                            output.write(b'\x00\x00\x00\x01' + body[offset:offset + n])
+                            assert n > 0 and offset + n <= len(body)
+                            configuration.extend(b'\x00\x00\x00\x01' + body[offset:offset + n])
                             offset += n
+                        assert offset == len(body)
+                        if self.split_streams:
+                            pending_configuration[:] = configuration
+                            state['pending_configuration_bytes'] = len(configuration)
+                        else:
+                            output.write(configuration)
                     else:
                         assert head[4] == 0 and struct.unpack_from('<Q', head, 40)[0] == self.clock_id & (1 << 64) - 1
                         stamp = struct.unpack_from('<Q', head, 8)[0]
@@ -215,6 +231,10 @@ class Receiver:
                         previous = stamp
                         payload = cipher.decrypt(b'\x00' * 4 + counter.to_bytes(8, 'little'), body, head)
                         counter += 1
+                        if pending_configuration:
+                            output.write(pending_configuration)
+                            pending_configuration.clear()
+                            state['pending_configuration_bytes'] = 0
                         offset = 0
                         while offset < len(payload):
                             n = struct.unpack_from('>I', payload, offset)[0]
@@ -223,6 +243,8 @@ class Receiver:
                             output.write(b'\x00\x00\x00\x01' + payload[offset:offset + n])
                             offset += n
                         state['frames'] += 1
+                        if self.split_streams:
+                            state.setdefault('frame_received_times', []).append(time.monotonic())
                         output.flush()
         except EOFError:
             pass
