@@ -141,7 +141,11 @@ responses in a JSON array as `viewer-observations.json`: they must identify the
 same owned connection, span at least two seconds, show connected/received/displayed
 images and advancing frame sequences, and be fresh when `run` starts. Follow the
 native viewer health and recording rules in `AGENTS.md`; a receipt does not replace
-watching the interactive flow. Through the explicitly scoped `horizon-device`
+watching the interactive flow. A same-connection viewer previously presented and
+then navigated outside the canvas or clipped retains its presentation proof only
+when public diagnostics record both that presentation and subsequent navigation;
+fresh reception and motion are still required. Never reveal it again just to
+advance counters. Through the explicitly scoped `horizon-device`
 target, open the real Cast controls and grant **Entire Horizon** in the owning
 workspace. Do not modify configuration, forge agent identity or use test-only grants.
 

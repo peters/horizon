@@ -16,7 +16,7 @@ import uuid
 
 from bench import fingerprint
 from receiver import Receiver
-from window_fixture import Desktop, verify_candidate, root_region
+from window_fixture import Desktop, verify_candidate, root_region, native_environment
 from window_decode import decode
 
 HERE = Path(__file__).resolve().parent
@@ -189,8 +189,10 @@ def validate_selection(value, backend, scaler):
 
 
 def source_digest():
-    paths = [*REPO.glob('Cargo*.toml'), REPO / 'Cargo.lock', *REPO.glob('crates/*/Cargo.toml'),
-             *REPO.glob('crates/*/src/**/*.rs')]
+    patterns = ['Cargo*.toml', 'Cargo.lock', '.cargo/**/*', 'crates/**/*',
+                'assets/**/*', 'packaging/**/*']
+    paths = {path for pattern in patterns for path in REPO.glob(pattern)
+             if path.is_file() and not {'target', '__pycache__', '.git'}.intersection(path.relative_to(REPO).parts)}
     return fingerprint(paths)
 
 
@@ -268,7 +270,7 @@ def prepare(arguments):
 
 
 def capture_reference(root, lab, candidate):
-    env = {**os.environ, 'DISPLAY': lab['display']}
+    env = native_environment(lab)
     windows = subprocess.check_output(['xdotool', 'search', '--onlyvisible', '--pid',
               str(candidate['pid'])], env=env, text=True, timeout=10).split()
     if len(windows) != 1:
@@ -279,7 +281,7 @@ def capture_reference(root, lab, candidate):
     image = root / 'root-reference.png'
     receipt = json.loads(subprocess.check_output([str(root / 'bin/horizon-device'), '--target',
               str(root / 'target.json'), 'screenshot', str(image), '--options',
-              json.dumps({'region': region})], text=True, timeout=15))
+              json.dumps({'region': region})], env=env, text=True, timeout=15))
     if not receipt['ok'] or receipt['result']['source_region'] != region:
         raise RuntimeError('independent root-client reference capture failed')
     reference = {'image': str(image), 'region': region,
@@ -302,8 +304,18 @@ def validate_viewer(receipt, endpoint):
     if len(panels) < 3:
         raise RuntimeError('three public native viewer observations are required')
     identities = {(row['panel_id'], row.get('diagnostics', {}).get('connection_generation')) for row in panels}
+    def presented(row):
+        diagnostics = row.get('diagnostics', {})
+        host = diagnostics.get('host', {})
+        presentation = diagnostics.get('presentation')
+        if presentation == 'hidden':
+            return False
+        outside = presentation == 'not_rendered' and host.get('exclusion') == 'outside_canvas'
+        clipped = presentation == 'clipped' and host.get('view_changed_since_reveal') is True
+        return row.get('image_displayed') or ((outside or clipped)
+                    and diagnostics.get('last_displayed_age_millis') is not None)
     if len(identities) != 1 or not all(row.get('owned_by_caller') and row['connection'] == 'connected'
-             and row.get('image_received') and row.get('image_displayed') for row in panels):
+             and row.get('image_received') and presented(row) for row in panels):
         raise RuntimeError('native viewer ownership/live presentation unverified')
     if panels[-1]['frame_sequence'] <= panels[0]['frame_sequence']:
         raise RuntimeError('native viewer motion unverified')
@@ -349,14 +361,11 @@ def run(arguments):
         time.sleep(2)
         reference = capture_reference(root, lab, candidate)
         sampler = Sampler(candidate['pid'], gpu=True)
-        sampler.start()
         first = session(root)
         validate_selection(first, arguments.backend, arguments.scaler)
         first_counter_at = time.monotonic()
-        began = time.monotonic()
+        sampler.start()
         time.sleep(arguments.seconds)
-        ended = time.monotonic()
-        elapsed = ended - began
         sampler.stop()
         last = session(root)
         last_counter_at = time.monotonic()
@@ -367,8 +376,9 @@ def run(arguments):
             raise RuntimeError('encoding/scaling selection changed during measurement')
         if last['state'] != 'streaming' or last['frames'] <= first['frames']:
             raise RuntimeError('no sender advancement during fixed measurement window')
-        write(root / 'measurement.json', {'seconds': elapsed, 'began_monotonic': began,
-              'ended_monotonic': ended, 'first_frame': first['frames'],
+        write(root / 'measurement.json', {'seconds': resources['seconds'],
+              'began_monotonic': resources['began_monotonic'],
+              'ended_monotonic': resources['ended_monotonic'], 'first_frame': first['frames'],
               'last_frame': last['frames'], 'frames': last['frames'] - first['frames'],
               'sender_counter_seconds': last_counter_at - first_counter_at,
               'sender_fps': (last['frames'] - first['frames']) / (last_counter_at - first_counter_at), 'encoder': last['encoder'],

@@ -161,6 +161,10 @@ def measurement_ids(identifiers, state, measurement):
     return measured
 
 
+def identifier_progresses(previous, current):
+    return (current - previous) % 65536 < 32768
+
+
 def decode(root, state, expected_canvas, reference=None, measurement=None):
     root = Path(root)
     stream = root / state['stream_file']
@@ -196,8 +200,8 @@ def decode(root, state, expected_canvas, reference=None, measurement=None):
                 raise RuntimeError('truncated independent decoded image coverage')
             marker = marker or locate(frame, width, height, unit_hint)
             identifier, quality = inspect_frame(frame, width, height, marker)
-            if identifiers and identifier < identifiers[-1]:
-                raise RuntimeError('fixture IDs reversed or wrapped')
+            if identifiers and not identifier_progresses(identifiers[-1], identifier):
+                raise RuntimeError('fixture IDs reversed or advanced ambiguously')
             identifiers.append(identifier)
             errors.extend(quality)
             if chrome:

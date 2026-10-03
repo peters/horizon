@@ -95,6 +95,7 @@ class Sampler:
     def start(self):
         if self.thread is not None:
             raise RuntimeError('resource sampler already started')
+        self.begin_snapshot_started = time.monotonic()
         self.begin = self.snapshot()
         self.started = time.monotonic()
         self.thread = threading.Thread(target=self.sample, daemon=True)
@@ -123,10 +124,12 @@ class Sampler:
                         reading['gpu_memory_mib'] = gpu_allocation(result.stdout, pids)
                         reading['gpu_observed_seconds'] = time.monotonic() - self.started
                     except (RuntimeError, ET.ParseError, OSError, subprocess.TimeoutExpired) as error:
-                        self.gpu_errors.append(str(error))
+                        self.gpu_errors.append({'elapsed_seconds': time.monotonic() - self.started,
+                                                'error': str(error)})
                 self.readings.append(reading)
             except Exception as error:
-                self.errors.append(str(error))
+                self.errors.append({'elapsed_seconds': time.monotonic() - self.started,
+                                    'error': str(error)})
             self.done.wait(0.05)
 
     def stop(self):
@@ -134,6 +137,7 @@ class Sampler:
             raise RuntimeError('resource sampler was not started')
         if self.end is None:
             self.done.set()
+            self.end_snapshot_started = time.monotonic()
             self.end = self.snapshot()
             self.ended = time.monotonic()
 
@@ -145,19 +149,30 @@ class Sampler:
         end = self.end
         elapsed = self.ended - self.started
         ticks = total_ticks(end) - total_ticks(self.begin)
-        if ticks < 0 or not self.readings or self.errors:
-            raise RuntimeError(f'resource measurement incomplete: {self.errors}')
-        allocations = [item['gpu_memory_mib'] for item in self.readings if item['gpu_memory_mib'] is not None
-                       and item.get('gpu_observed_seconds', float('inf')) <= elapsed]
+        readings = [dict(item) for item in self.readings if 0 <= item['elapsed_seconds'] <= elapsed]
+        errors = [item['error'] for item in self.errors if 0 <= item['elapsed_seconds'] <= elapsed]
+        gpu_errors = [item['error'] for item in self.gpu_errors if 0 <= item['elapsed_seconds'] <= elapsed]
+        if ticks < 0 or not readings or errors:
+            raise RuntimeError(f'resource measurement incomplete: {errors}')
+        late_gpu = 0
+        for item in readings:
+            if not 0 <= item.get('gpu_observed_seconds', float('inf')) <= elapsed:
+                late_gpu += item['gpu_memory_mib'] is not None
+                item['gpu_memory_mib'] = None
+        allocations = [item['gpu_memory_mib'] for item in readings if item['gpu_memory_mib'] is not None]
         return {'contract': 'whole-window-resources-v1', 'score': None,
                 'scope': 'verified Horizon application and descendants only',
                 'identity': self.identity, 'seconds': elapsed,
+                'began_monotonic': self.started, 'ended_monotonic': self.ended,
+                'snapshot_envelopes': {'begin': [self.begin_snapshot_started, self.started],
+                                       'end': [self.end_snapshot_started, self.ended]},
                 'cpu_ms': ticks * 1000 / os.sysconf('SC_CLK_TCK'),
-                'peak_tree_rss_kib': max(item['tree_rss_kib'] for item in self.readings),
-                'gpu_memory_mib': max(allocations) if allocations and not self.gpu_errors else None,
-                'gpu_errors': self.gpu_errors,
+                'peak_tree_rss_kib': max(item['tree_rss_kib'] for item in readings),
+                'gpu_memory_mib': max(allocations) if allocations and not gpu_errors else None,
+                'gpu_errors': gpu_errors,
                 'gpu_unavailable_reason': ('sampling disabled' if not self.gpu else
-                    '; '.join(self.gpu_errors) if self.gpu_errors else
+                    '; '.join(gpu_errors) if gpu_errors else
                     'no attributable graphics/compute allocation observed' if not allocations else None),
-                'readings': self.readings,
-                'limitations': 'Sampled aggregate RSS/GPU allocation; endpoint CPU counter observations; not encoder-v1, displayed FPS or a physical latency score.'}
+                'readings': readings, 'excluded_rss_observations': len(self.readings) - len(readings),
+                'excluded_late_gpu_observations': late_gpu,
+                'limitations': 'Same-window sampled RSS/GPU and endpoint CPU observations; sequential snapshot uncertainty is retained in snapshot_envelopes. Includes application work responding to coordinator requests during the interval, excludes coordinator process CPU. Sender polling uses a separate interval; not a performance score.'}

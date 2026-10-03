@@ -60,6 +60,14 @@ def closing_screenshot(command):
         time.sleep(0.1)
 
 
+def native_environment(lab):
+    env = {**os.environ, 'DISPLAY': lab['display']}
+    if tools := lab.get('tools'):
+        env['PATH'] = str(Path(tools) / 'usr/bin') + ':' + env.get('PATH', '')
+        env['LD_LIBRARY_PATH'] = str(Path(tools) / 'usr/lib/x86_64-linux-gnu')
+    return env
+
+
 class Desktop:
     def __init__(self, root, binaries, tools=None):
         self.root = Path(root)
@@ -119,7 +127,8 @@ class Desktop:
                                  '-autoport', '40000', '-viewonly', '-forever', '-shared', '-nopw', '-noxdamage', '-noshm'])
         port = bound_port(vnc, self.root / 'vnc.log', r'^PORT=(\d+)$')
         self.manifest = {'display': self.env['DISPLAY'], 'vnc_address': f'127.0.0.1:{port}',
-                         'viewer_url': None, 'launcher_pid': self.application.pid,
+                         'viewer_url': None, 'tools': str(tools) if tools else None,
+                         'launcher_pid': self.application.pid,
                          'pids': [child.pid for child in self.children]}
         (self.root / 'lab.json').write_text(json.dumps(self.manifest, indent=2))
         (self.root / 'target.json').write_text(json.dumps({'id': self.root.name,

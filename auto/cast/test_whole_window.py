@@ -240,6 +240,41 @@ class NativeViewerGates(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'presentation'):
             self.validate(lambda rows: rows[0]['panels'][0].update(image_displayed=False))
 
+    def test_navigation_after_presentation_preserves_same_connection_proof(self):
+        def navigate(rows):
+            for row in rows:
+                panel = row['panels'][0]; panel['image_displayed'] = False
+                panel['diagnostics'].update(last_displayed_age_millis=3000, presentation='clipped',
+                                           host={'view_changed_since_reveal': True})
+        self.assertEqual(self.validate(navigate)['panel_id'], 'owned')
+
+    def test_clipping_without_navigation_cannot_replace_live_presentation(self):
+        def clip(rows):
+            for row in rows:
+                panel = row['panels'][0]; panel['image_displayed'] = False
+                panel['diagnostics'].update(last_displayed_age_millis=3000, presentation='clipped')
+        with self.assertRaisesRegex(RuntimeError, 'presentation'):
+            self.validate(clip)
+
+    def test_previously_displayed_outside_viewer_needs_no_reveal(self):
+        def outside(rows):
+            for row in rows:
+                panel = row['panels'][0]; panel['image_displayed'] = False
+                panel['diagnostics'].update(last_displayed_age_millis=3000, presentation='not_rendered',
+                    host={'exclusion': 'outside_canvas', 'view_changed_since_reveal': None,
+                          'applied_reveal_request': 0})
+        self.assertEqual(self.validate(outside)['panel_id'], 'owned')
+
+    def test_hidden_viewer_cannot_use_stale_outside_presentation(self):
+        for displayed in [False, True]:
+            def hidden(rows):
+                for row in rows:
+                    panel = row['panels'][0]; panel['image_displayed'] = displayed
+                    panel['diagnostics'].update(last_displayed_age_millis=3000, presentation='hidden',
+                        host={'exclusion': 'outside_canvas', 'view_changed_since_reveal': True})
+            with self.subTest(displayed=displayed), self.assertRaisesRegex(RuntimeError, 'presentation'):
+                self.validate(hidden)
+
     def test_other_owner_viewer_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, 'ownership'):
             self.validate(lambda rows: rows[0]['panels'][0].update(owned_by_caller=False))
@@ -269,12 +304,12 @@ class ReviewRegressionGates(unittest.TestCase):
     def test_gpu_join_cannot_extend_cpu_interval_or_count_late_allocation(self):
         sampler = object.__new__(resources.Sampler)
         sampler.thread = MagicMock(); sampler.thread.is_alive.return_value = False
-        sampler.done = MagicMock(); sampler.end = None; sampler.started = 1
+        sampler.done = MagicMock(); sampler.end = None; sampler.started = 1; sampler.begin_snapshot_started = 1
         sampler.begin = {1: row(1, own=10)}; sampler.snapshot = lambda: {1: row(1, own=20)}
         sampler.identity = {}; sampler.errors = []; sampler.gpu_errors = []; sampler.gpu = True
-        sampler.readings = [{'tree_rss_kib': 100, 'gpu_memory_mib': 40, 'gpu_observed_seconds': .5},
-                            {'tree_rss_kib': 120, 'gpu_memory_mib': 999, 'gpu_observed_seconds': 5}]
-        with patch.object(resources.time, 'monotonic', side_effect=[2, 9]):
+        sampler.readings = [{'elapsed_seconds': .2, 'tree_rss_kib': 100, 'gpu_memory_mib': 40, 'gpu_observed_seconds': .5},
+                            {'elapsed_seconds': .8, 'tree_rss_kib': 120, 'gpu_memory_mib': 999, 'gpu_observed_seconds': 5}]
+        with patch.object(resources.time, 'monotonic', side_effect=[2, 2, 9]):
             result = sampler.finish()
         self.assertEqual(result['seconds'], 1)
         self.assertEqual(result['gpu_memory_mib'], 40)
@@ -351,6 +386,39 @@ class ClosingScreenshotTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 window_fixture.closing_screenshot(['device', 'screenshot'])
             self.assertEqual(run.call_count, 1)
+
+
+class CandidateReviewGates(unittest.TestCase):
+    def test_build_and_embedded_inputs_invalidate_source_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inputs = ['.cargo/config.toml', 'crates/horizon-ui/build.rs',
+                      'crates/horizon-ui/build/font_assets.rs', 'crates/horizon-cast/src/srp_group.txt',
+                      'crates/horizon-cloud/examples/cloud.yml', 'crates/horizon-ui/assets/font.ttf',
+                      'crates/horizon-ui/publish-assets/icons/icon.png', 'assets/icons/icon.png',
+                      'packaging/linux/horizon.desktop']
+            for name in inputs:
+                path = root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'original')
+            with patch.object(whole_window, 'REPO', root), patch('bench.REPO', root):
+                original = whole_window.source_digest()
+                for name in inputs:
+                    path = root / name; path.write_bytes(b'changed')
+                    self.assertNotEqual(whole_window.source_digest(), original, name)
+                    path.write_bytes(b'original')
+
+    def test_run_native_environment_restores_bundle_for_all_commands(self):
+        with patch.dict(os.environ, {'PATH': '/ambient', 'LD_LIBRARY_PATH': '/ambient-lib'}, clear=True):
+            env = window_fixture.native_environment({'display': ':88', 'tools': '/owned/bundle'})
+            self.assertEqual(env['DISPLAY'], ':88')
+            self.assertEqual(env['PATH'], '/owned/bundle/usr/bin:/ambient')
+            self.assertEqual(env['LD_LIBRARY_PATH'], '/owned/bundle/usr/lib/x86_64-linux-gnu')
+            self.assertEqual(window_fixture.native_environment({'display': ':88'})['PATH'], '/ambient')
+
+    def test_fixture_rollover_advances_but_reverse_and_half_range_do_not(self):
+        cases = [(65535, 0, True), (65534, 2, True), (12, 12, True), (0, 65535, False),
+                 (12, 11, False), (0, 32768, False)]
+        for previous, current, valid in cases:
+            self.assertEqual(window_decode.identifier_progresses(previous, current), valid)
 
 
 if __name__ == '__main__':
