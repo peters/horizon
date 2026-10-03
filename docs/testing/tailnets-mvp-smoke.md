@@ -25,7 +25,7 @@ follow-ups to [#1166](https://github.com/peters/horizon/issues/1166).
 | Formatting and maintainability | Passed |
 | Native UI | Dedicated Tailnets tab; named masked save/replace/remove flows, restart persistence and errors; dark/light themes and narrow/wide layout inspected |
 | Provisioning UI | Multiple saved networks and None; cancelled creation starts nothing; allocated cloud shows a read-only provisioning choice |
-| Native viewing | Connected native VNC panels, actual presentation and advancing frames on isolated desktops; 576-frame final-candidate video fully decoded and representative feature frames inspected |
+| Native viewing | Connected native VNC panels, actual presentation and advancing frames on isolated desktops; 576-frame final-candidate video and 83-frame selection video fully decoded; representative feature frames inspected |
 | Live MCP | Real agent panel; two saved entries returned as names/IDs only; selection schema present; raw keys and Stop selection refused without echo; no credential-reading tool |
 | Selection fences | Core integration tests cover prepared selection, first-allocation confirmation, duplicate/lost-answer retry and refusal to change an allocated cloud |
 | Real allocation | Minimal Linux cloud provisioned and this PC discovered in sanitized inventory |
@@ -56,3 +56,14 @@ layout/theme interaction. The final feature was visible in the verified recordin
 no terminal renderer changes or renderer qualification are claimed by this work.
 Private screenshots, recordings, provider identifiers and network details are
 excluded from this repository and the public issue.
+
+## Cleanup
+
+The owner approved deletion after the smoke. The cloud reached `Deleted`;
+read-only provider queries confirmed the task's server, persistent volume and
+labelled SSH key were absent. Its disposable network session had been logged out.
+Task-owned canaries and the synthetic local worker container were stopped, and
+private registry login material was removed. The shared PC's network policy was
+unchanged. The auth-key-only scope and follow-ups are already in the issue;
+publishing the later test results was blocked by an invalid CLI login and an
+integration without issue-edit permission. The complete results are retained here.
