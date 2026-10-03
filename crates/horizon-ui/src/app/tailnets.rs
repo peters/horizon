@@ -56,6 +56,15 @@ impl State {
                     match result {
                         Ok(catalog) => {
                             self.catalog = catalog;
+                            if self
+                                .edit
+                                .as_ref()
+                                .is_some_and(|id| !self.catalog.tailnets.iter().any(|network| &network.id == id))
+                            {
+                                self.edit = None;
+                                self.name.clear();
+                                self.key.zeroize();
+                            }
                             self.message = None;
                         }
                         Err(error) => {
@@ -349,5 +358,36 @@ impl State {
             });
         }
         self.status(ui);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removing_the_edited_binding_clears_the_form_only_after_success() {
+        for success in [false, true] {
+            let (sender, receiver) = channel();
+            let mut state = State {
+                initialized: true,
+                edit: Some("removed".into()),
+                name: "Work network".into(),
+                key: Zeroizing::new("synthetic-input".into()),
+                receiver: Some(receiver),
+                ..State::default()
+            };
+            sender
+                .send(if success {
+                    Ok(Catalog::default())
+                } else {
+                    Err("Synthetic deletion failure".into())
+                })
+                .unwrap();
+            state.poll(&egui::Context::default());
+            assert_eq!(state.edit.is_none(), success);
+            assert_eq!(state.name.is_empty(), success);
+            assert_eq!(state.key.is_empty(), success);
+        }
     }
 }

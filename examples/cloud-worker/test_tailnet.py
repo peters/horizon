@@ -92,6 +92,27 @@ class TailnetTests(unittest.TestCase):
             self.assertEqual(self.configure('work', None), 'ready\n')
         self.assertEqual([args.args for args in call.call_args_list], [('status', '--json')] * 2)
 
+    def test_resume_timeout_and_admission_states_never_request_or_reuse_a_key(self):
+        (self.state / 'selection').write_text('work')
+        for state in ['Starting', 'NoState', 'Stopped', 'NeedsMachineAuth', 'InUseOtherUser', 'Unknown']:
+            for key in [None, KEY]:
+                with self.subTest(state=state, key_supplied=key is not None):
+                    with patch.object(worker, 'call', return_value=json.dumps({'BackendState': state}).encode()) as call, \
+                            patch.object(worker.time, 'monotonic', side_effect=[0, 6]), \
+                            patch('sys.stdout', new_callable=io.StringIO) as output:
+                        with self.assertRaises(ValueError): self.configure('work', key)
+                    self.assertEqual(output.getvalue(), '')
+                    self.assertEqual([args.args for args in call.call_args_list], [('status', '--json')])
+                    self.assertEqual((self.state / 'selection').read_text(), 'work')
+        self.joined = True
+        self.assertEqual(self.configure('work', None), 'ready\n')
+        self.assertFalse(any(args[0] in {'up', 'logout'} for args in self.calls))
+
+    def test_explicit_login_required_state_can_request_a_key_after_resume(self):
+        (self.state / 'selection').write_text('work')
+        self.assertEqual(self.configure('work', None), 'needs_key\n')
+        self.assertEqual(self.configure('work', KEY), 'ready\n')
+
     def test_resume_never_needs_a_key_or_touches_the_host_tailscale(self):
         (self.state / 'selection').write_text('work')
         with patch.object(worker.sys, 'argv', ['worker', 'resume']): worker.main()

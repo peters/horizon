@@ -144,3 +144,27 @@ The refreshed native application child SHA256 is
 The required final matrix passed again: 4,709 workspace tests, 1,579 speech-tier
 tests, formatting, maintainability and both mandatory Clippy tiers. All 240
 matching-helper worker Python tests passed without skips.
+
+
+## Slow resume and active-edit deletion
+
+Transient daemon states now fail retryably instead of requesting an auth key.
+Only explicit `NeedsLogin` permits enrollment; a slow `Starting` reconnect,
+unknown state or pending machine approval cannot reuse a consumed one-time key.
+Regressions cover all non-login states, with and without a supplied key, followed
+by a successful same-identity retry. Removing an edited binding clears its form
+only after successful deletion; a failed deletion retains the edit.
+
+The required matrix passed: 4,710 workspace tests, 1,580 speech-tier tests,
+formatting, maintainability and both mandatory Clippy tiers. All 242 matching-helper
+worker tests passed without skips. The isolated Secret Service test and actual
+offline container isolation/sibling/self-stop smoke passed again.
+
+The refreshed live native VNC flow verified two saved networks, empty/masked
+replacement, stable binding IDs with one new credential generation, provisioning
+choices for both networks and None, cancellation, deletion during active editing
+and an empty final catalog with no pending journal. The running child SHA256 was
+`48c7f8ed7933dc65052431b36b05cfd3a7a80b863b9dd2f7777e637264fcfe8e`.
+A new continuous native recording covers this final candidate. No new paid cloud
+allocation was made; the earlier discovery/connectivity proof retains its stated
+policy and platform limits.

@@ -99,10 +99,11 @@ def status(wait=False):
     deadline = time.monotonic() + (5 if wait else 0)
     while True:
         result = json.loads(call('status', '--json'))
-        if result.get('BackendState') == 'Running':
-            return True
+        state = result.get('BackendState')
+        if state in {'Running', 'NeedsLogin'}:
+            return state
         if time.monotonic() >= deadline:
-            return False
+            raise ValueError()
         time.sleep(0.1)
 
 
@@ -154,11 +155,15 @@ def configure():
         prepare_agents()
         start()
         wait_socket()
-        if old == identity and status(wait=True):
-            print('ready')
-            return
         if old and old != identity:
             call('logout')
+        backend = status(wait=True)
+        if old == identity and backend == 'Running':
+            print('ready')
+            return
+        # A reconnect timeout is not proof that a persistent identity needs login.
+        if backend != 'NeedsLogin':
+            raise ValueError()
         if key is None:
             print('needs_key')
             return
@@ -179,7 +184,7 @@ def configure():
                  '--timeout=30s', pass_fds=(fd,))
         finally:
             os.close(fd)
-        if not status():
+        if status(wait=True) != 'Running':
             raise ValueError()
         publish_devices()
         print('ready')
