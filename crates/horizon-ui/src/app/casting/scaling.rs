@@ -14,6 +14,7 @@ struct Input {
 }
 pub(super) struct ScaledFrame {
     pub(super) rect: egui::Rect,
+    pub(super) pixels_per_point: f32,
     pub(super) rgba: Vec<u8>,
 }
 pub(super) struct Scaler {
@@ -33,6 +34,7 @@ impl Scaler {
                 }
                 let frame = ScaledFrame {
                     rect: input.rect,
+                    pixels_per_point: input.pixels_per_point,
                     rgba: letterbox(&crop, dimensions),
                 };
                 match scaled.try_send(frame) {
@@ -119,6 +121,7 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(1))
             .expect("scaled frame");
         assert_eq!(frame.rect, rect);
+        assert_eq!(frame.pixels_per_point.to_bits(), 1.0_f32.to_bits());
         assert_eq!(frame.rgba.len(), 8 * 8 * 4);
         assert_eq!(&frame.rgba[..8 * 2 * 4], &[0, 0, 0, 255].repeat(16));
         assert_eq!(&frame.rgba[8 * 2 * 4..8 * 2 * 4 + 4], &egui::Color32::RED.to_array());

@@ -1,6 +1,7 @@
 # Linux casting
 
-Horizon can mirror a selected panel or workspace to a modern Apple TV. Casting
+Horizon can mirror a selected panel, workspace or its entire main window to a
+modern Apple TV. Casting
 is Linux-only. The Cast icon appears beside the recording/microphone controls
 on supported builds. It opens source, receiver, orientation and resolution
 selection, plus status and stop controls. Each TV allows one session, including
@@ -37,6 +38,15 @@ The CLI plan runner also exposes `cast`. An agent must run from an authorized
 Horizon agent panel; another workspace's source IDs are refused. None of these
 operations requires Settings to be open.
 
+The **Entire Horizon** source is `{ "kind": "application" }`. It includes the
+toolbar, sidebar, canvas and in-window dialogs. A person can start it directly
+in the Cast picker. Agent starts require that person to select **Allow this
+workspace's agents**; `sources` reports `requires_user_approval` until then.
+Approval belongs to one workspace, lasts only for the current application
+session, and cannot be granted through MCP or CLI. Revoking it or approving
+another workspace stops agent-started application casts while preserving casts
+started by the person. Switching application sessions clears approval.
+
 Call `discover`, wait for `status.discovering` to become false, and obtain a
 source from `sources`. Pass the returned source object unchanged when starting:
 
@@ -64,9 +74,12 @@ never credentials. Pairing PINs must not be written to durable plans or logs.
 
 ## Capture and performance boundaries
 
-Only fully visible, unobscured sources in Horizon's main window can be captured.
-Fit the whole source into view first. Hidden, clipped, detached, deleted or
-covered sources stop casting. Opening Cast controls or changing source geometry
+Panels and workspaces must be fully visible and unobscured in Horizon's main
+window. Fit the whole source into view first. Hidden, clipped, detached, deleted
+or covered panel/workspace sources stop casting. Entire Horizon captures the
+main window's rendered content, including its own dialogs, without capturing
+the surrounding desktop, other applications or detached windows. A minimized
+or unavailable main window cannot start that source. Opening Cast controls or changing source geometry
 briefly repeats the last validated image until capture is safe. Desktop and
 arbitrary-application capture, audio, HDR, legacy receivers, background rendering
 and automatic reconnect are outside this MVP.

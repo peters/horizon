@@ -71,6 +71,26 @@ impl Drop for CastOperation {
 pub enum CastSource {
     Panel { id: String },
     Workspace { id: String },
+    Application {},
+}
+
+/// Volatile user consent for application-wide casting by one workspace's agents.
+/// This is deliberately absent from persisted settings and agent operations.
+#[derive(Debug, Default)]
+pub struct ApplicationCaptureApproval {
+    workspace: Option<String>,
+}
+impl ApplicationCaptureApproval {
+    #[must_use]
+    pub fn permits(&self, workspace: &str) -> bool {
+        self.workspace.as_deref() == Some(workspace)
+    }
+    pub fn grant(&mut self, workspace: String) {
+        self.workspace = Some(workspace);
+    }
+    pub fn revoke(&mut self) {
+        self.workspace = None;
+    }
 }
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -99,6 +119,9 @@ pub struct CastSourceInfo {
     pub source: CastSource,
     pub name: String,
     pub available: bool,
+    /// Workspace agents need explicit consent for an application-wide start.
+    #[serde(default)]
+    pub requires_user_approval: bool,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CastSessionInfo {
@@ -354,6 +377,26 @@ pub fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<CastO
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn application_approval_is_explicit_scoped_and_revocable() {
+        let mut approval = ApplicationCaptureApproval::default();
+        assert!(!approval.permits("first"));
+        approval.grant("first".into());
+        assert!(approval.permits("first"));
+        assert!(!approval.permits("second"));
+        approval.grant("second".into());
+        assert!(!approval.permits("first"));
+        approval.revoke();
+        assert!(!approval.permits("second"));
+        let source = serde_json::json!({"kind":"application"});
+        assert_eq!(
+            serde_json::from_value::<CastSource>(source).expect("application"),
+            CastSource::Application {}
+        );
+        assert!(
+            serde_json::from_value::<CastSource>(serde_json::json!({"kind":"application","id":"desktop"})).is_err()
+        );
+    }
     #[test]
     fn isolates_hosts_and_claims_a_request_once() {
         let root = tempfile::tempdir().expect("root");

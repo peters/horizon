@@ -18,6 +18,8 @@ impl HorizonApp {
         let mut action = None;
         let mut close_after = false;
         let mut close_requested = false;
+        let mut approved = self.application_cast_approved(picker.workspace);
+        let mut approval_changed = false;
         let window = egui::Window::new("Cast")
             .id(Id::new("cast_picker"))
             .order(Order::Foreground)
@@ -43,6 +45,17 @@ impl HorizonApp {
                 render_picker_header(ui, &mut close_requested);
                 ui.add_space(6.0);
                 let menu_ids = render_selection(ui, &mut picker, &snapshot, &mut action);
+                if matches!(picker.source, CastSource::Application { .. }) {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("Shares the main window and its dialogs.")
+                                .size(11.0)
+                                .color(theme::FG_SOFT()),
+                        )
+                        .wrap(),
+                    );
+                    approval_changed = ui.checkbox(&mut approved, "Allow this workspace's agents").changed();
+                }
                 self.casting.control_menus =
                     Some(menu_ids.map(|id| egui::LayerId::new(Order::Foreground, id.with("popup"))));
                 render_session_actions(
@@ -62,6 +75,9 @@ impl HorizonApp {
         {
             ctx.move_to_top(window.response.layer_id);
         }
+        if approval_changed {
+            self.set_application_cast_approval(picker.workspace, approved);
+        }
         if let Some(action) = action
             && !self.apply_cast_control(picker.workspace, &action, ctx)
         {
@@ -77,7 +93,7 @@ impl HorizonApp {
         action: &CastOperation,
         ctx: &Context,
     ) -> bool {
-        let outcome = self.cast_operation(workspace, action, ctx);
+        let outcome = self.cast_user_operation(workspace, action, ctx);
         if let Some(error) = outcome.error {
             self.casting.notify(error);
             false
