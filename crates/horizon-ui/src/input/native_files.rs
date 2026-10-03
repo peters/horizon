@@ -19,6 +19,7 @@ pub(crate) struct NativePaste {
     pub panel: horizon_core::PanelId,
     pub viewport: egui::ViewportId,
     pub paths: Vec<std::path::PathBuf>,
+    pub text: Option<String>,
 }
 
 struct PasteRequest {
@@ -177,16 +178,22 @@ impl ObservedKeyboardInputs {
             .retain(|drop| surface.is_some_and(|surface| drop.surface != surface));
     }
 
-    pub(crate) fn native_drop_position(&self, surface: u64, position: [f64; 2], paths: Vec<std::path::PathBuf>) {
+    pub(crate) fn native_drop_position(
+        &self,
+        surface: u64,
+        position: [f64; 2],
+        paths: Vec<std::path::PathBuf>,
+    ) -> bool {
         let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.drops.len() >= 4 {
-            state.drops.pop_front();
+        if state.drops.len() >= 256 {
+            return false;
         }
         state.drops.push_back(NativeDrop {
             surface,
             paths,
             position,
         });
+        true
     }
 
     pub(crate) fn take_native_drop_batches(
@@ -284,18 +291,27 @@ impl ObservedKeyboardInputs {
     }
 
     pub(crate) fn native_paste(&self, token: u64, paths: Vec<std::path::PathBuf>) {
+        self.complete_native_paste(token, paths, None);
+    }
+
+    pub(crate) fn native_paste_text(&self, token: u64, text: String) {
+        self.complete_native_paste(token, Vec::new(), Some(text));
+    }
+
+    fn complete_native_paste(&self, token: u64, paths: Vec<std::path::PathBuf>, text: Option<String>) {
         let context = {
             let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(request) = state.requests.remove(&token) else {
                 return;
             };
-            if paths.is_empty() {
+            if paths.is_empty() && text.as_ref().is_none_or(String::is_empty) {
                 return;
             }
             state.pastes.push(NativePaste {
                 panel: request.panel,
                 viewport: request.viewport,
                 paths,
+                text,
             });
             state.context.clone()
         };
@@ -396,6 +412,42 @@ mod tests {
         );
         drop(observed);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn completion_admission_never_evicts_an_accepted_drop() {
+        let observed = super::ObservedKeyboardInputs::default();
+        let path = std::path::PathBuf::from("/tmp/image.png");
+        for _ in 0..256 {
+            assert!(observed.native_drop_position(10, [1.0, 2.0], vec![path.clone()]));
+        }
+        assert!(!observed.native_drop_position(10, [3.0, 4.0], vec![path.clone()]));
+        let files: Vec<egui::DroppedFileHandle> = (0..256)
+            .map(|_| std::sync::Arc::new(TestFile(path.clone())) as egui::DroppedFileHandle)
+            .collect();
+        let batches = observed.take_native_drop_batches(egui::ViewportId::ROOT, &files);
+        assert_eq!(batches.len(), 256);
+        assert_eq!(
+            batches.iter().map(|(_, position)| *position).collect::<Vec<_>>(),
+            vec![[1.0, 2.0]; 256]
+        );
+    }
+
+    #[test]
+    fn text_fallback_keeps_the_original_recipient_and_cannot_cross_a_session_reset() {
+        let observed = super::ObservedKeyboardInputs::default();
+        observed.native_window_seen(10);
+        observed.native_focus(10, true);
+        observed.native_recipient_publisher()(egui::ViewportId::ROOT, 1.0, Some(horizon_core::PanelId(2)));
+        let token = observed.native_paste_request(10).unwrap();
+        observed.native_paste_text(token, "same-offer text".into());
+        let paste = observed.take_native_pastes().pop().unwrap();
+        assert_eq!(paste.panel, horizon_core::PanelId(2));
+        assert_eq!(paste.text.as_deref(), Some("same-offer text"));
+        let token = observed.native_paste_request(10).unwrap();
+        observed.reset_native_session();
+        observed.native_paste_text(token, "stale text".into());
+        assert!(observed.take_native_pastes().is_empty());
     }
 
     #[test]

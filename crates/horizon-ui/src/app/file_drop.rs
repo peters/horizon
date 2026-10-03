@@ -324,6 +324,10 @@ impl HorizonApp {
             return false;
         };
 
+        self.paste_native_text_into_terminal(panel_id, &payload, focus)
+    }
+
+    fn paste_native_text_into_terminal(&mut self, panel_id: PanelId, payload: &str, focus: bool) -> bool {
         let did_paste = {
             let Some(panel) = self.board.panel_mut(panel_id) else {
                 return false;
@@ -333,7 +337,7 @@ impl HorizonApp {
             };
 
             terminal.clear_selection();
-            let bytes = input::paste_bytes(&payload, terminal.mode(), true);
+            let bytes = input::paste_bytes(payload, terminal.mode(), true);
             terminal.write_input(&bytes);
             true
         };
@@ -348,6 +352,10 @@ impl HorizonApp {
     #[cfg(target_os = "linux")]
     pub(super) fn handle_native_image_pastes(&mut self) {
         for paste in self.observed_keyboard_inputs.take_native_pastes() {
+            if let Some(text) = paste.text {
+                self.paste_native_text_into_terminal(paste.panel, &text, false);
+                continue;
+            }
             let files: Vec<egui::DroppedFileHandle> = paste
                 .paths
                 .into_iter()
@@ -615,11 +623,13 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn concurrent_native_drops_in_one_raw_frame_open_both_files() {
+    fn concurrent_native_drops_in_one_raw_frame_open_five_files() {
         let (temp, ctx, mut app) = test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
             runtime_state: Box::new(horizon_core::RuntimeState::default()),
         });
-        let paths = [temp.path().join("first.md"), temp.path().join("second.md")];
+        let paths: Vec<_> = (0..5)
+            .map(|index| temp.path().join(format!("file-{index}.md")))
+            .collect();
         for path in &paths {
             std::fs::write(path, "synthetic editor drop").expect("fixture");
         }
@@ -628,12 +638,13 @@ mod tests {
         observed.native_window_seen(10);
         observed.native_focus(10, true);
         observed.native_recipient_publisher()(egui::ViewportId::ROOT, 1.0, None);
-        observed.native_drop_position(10, [300.0, 200.0], vec![paths[0].clone()]);
-        observed.native_drop_position(10, [600.0, 400.0], vec![paths[1].clone()]);
+        for path in &paths {
+            assert!(observed.native_drop_position(10, [300.0, 200.0], vec![path.clone()]));
+        }
         ctx.input_mut(|input| input.raw.dropped_files = paths.into_iter().map(test_support::dropped_file).collect());
         let before = app.board.panels.len();
         app.handle_root_file_drop(&ctx);
-        assert_eq!(app.board.panels.len(), before + 2);
+        assert_eq!(app.board.panels.len(), before + 5);
         assert!(
             observed
                 .take_native_drop_batches(

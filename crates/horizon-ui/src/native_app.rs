@@ -161,12 +161,13 @@ impl KeyboardAwareApp<'_> {
                     self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
                     tracing::debug!("native image paste transfer cancelled");
                 }
-                TransferEvent::Paste { recipient, mime, bytes } => {
-                    if let Ok(paths) = self.observed_keyboard_inputs.decode_native_transfer(&mime, &bytes) {
-                        self.observed_keyboard_inputs.native_paste(recipient, paths);
-                    } else {
-                        self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
-                    }
+                TransferEvent::Paste {
+                    recipient,
+                    mime,
+                    bytes,
+                    text,
+                } => {
+                    self.complete_native_paste(recipient, &mime, bytes, text);
                 }
                 TransferEvent::Leave { surface } => {
                     if self.observed_keyboard_inputs.native_window(surface).is_some() {
@@ -212,8 +213,13 @@ impl KeyboardAwareApp<'_> {
                     let Ok(paths) = paths else {
                         continue;
                     };
-                    self.observed_keyboard_inputs
-                        .native_drop_position(surface, position, paths.clone());
+                    if !self
+                        .observed_keyboard_inputs
+                        .native_drop_position(surface, position, paths.clone())
+                    {
+                        tracing::debug!("native drop rejected before forwarding: completion queue full");
+                        continue;
+                    }
                     self.forward_drop_position(event_loop, surface, position);
                     for path in paths {
                         self.inner.window_event(
@@ -236,6 +242,20 @@ impl KeyboardAwareApp<'_> {
 
 #[cfg(target_os = "linux")]
 impl KeyboardAwareApp<'_> {
+    fn complete_native_paste(&self, recipient: u64, mime: &str, bytes: Vec<u8>, text: Option<String>) {
+        if let Ok(paths) = self.observed_keyboard_inputs.decode_native_transfer(mime, &bytes) {
+            self.observed_keyboard_inputs.native_paste(recipient, paths);
+        } else if let Some(text) = text.or_else(|| {
+            smithay_clipboard::native::is_text_mime(mime)
+                .then(|| String::from_utf8(bytes).ok())
+                .flatten()
+        }) {
+            self.observed_keyboard_inputs.native_paste_text(recipient, text);
+        } else {
+            self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
+        }
+    }
+
     fn forward_drop_position(&mut self, event_loop: &ActiveEventLoop, surface: u64, position: [f64; 2]) {
         if let Some((scale, _)) = self.observed_keyboard_inputs.native_window(surface) {
             self.inner.window_event(

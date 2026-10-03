@@ -377,35 +377,53 @@ impl PointerHandler for State {
 
 impl State {
     pub fn publish_native_selection(&self) {
-        for seat in self.seats.values() {
-            if let Some(surface) = seat.surface {
-                let available = seat.has_focus
+        self.native
+            .hub
+            .replace_selections(self.seats.values().filter_map(|seat| {
+                (seat.has_focus
                     && seat
                         .data_device
                         .as_ref()
                         .and_then(|device| device.data().selection_offer())
                         .and_then(|offer| offer.with_mime_types(crate::native::preferred_clipboard))
-                        .is_some();
-                self.native.hub.selection(surface, available);
-            }
-        }
+                        .is_some())
+                .then_some(seat.surface)
+                .flatten()
+            }));
     }
     pub fn read_native(&mut self, surface: u64, recipient: u64, generation: u64) {
         if generation != self.native.hub.generation() {
             return;
         }
-        let offer = self
+        let offers: Vec<_> = self
             .seats
             .values()
-            .find(|seat| seat.has_focus && seat.surface == Some(surface))
-            .and_then(|seat| seat.data_device.as_ref())
-            .and_then(|device| device.data().selection_offer());
-        if let Some(offer) = offer
-            && let Some(mime) = offer.with_mime_types(crate::native::preferred_clipboard)
+            .filter(|seat| seat.has_focus && seat.surface == Some(surface))
+            .filter_map(|seat| seat.data_device.as_ref())
+            .filter_map(|device| device.data().selection_offer())
+            .collect();
+        let offer = offers
+            .iter()
+            .find_map(|offer| {
+                offer
+                    .with_mime_types(crate::native::preferred_clipboard)
+                    .map(|mime| (offer, mime))
+            })
+            .or_else(|| {
+                offers.iter().find_map(|offer| {
+                    offer
+                        .with_mime_types(crate::native::preferred_text)
+                        .map(|mime| (offer, mime))
+                })
+            });
+        if let Some((offer, mime)) = offer
             && let Ok(pipe) = offer.receive(mime.clone())
         {
-            self.native
-                .receive(pipe, mime, crate::native::Destination::Paste(recipient), generation);
+            let text = offer
+                .with_mime_types(crate::native::preferred_text)
+                .filter(|text| text != &mime)
+                .and_then(|mime| offer.receive(mime).ok());
+            self.native.receive_paste(pipe, mime, recipient, generation, text);
         } else {
             self.native
                 .cancel_at(crate::native::Destination::Paste(recipient), generation);

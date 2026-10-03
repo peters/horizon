@@ -50,6 +50,7 @@ pub enum Event {
         recipient: u64,
         mime: String,
         bytes: Vec<u8>,
+        text: Option<String>,
     },
 }
 
@@ -116,7 +117,8 @@ impl Hub {
             events.pop_back();
         }
         let bytes = |event: &Event| match event {
-            Event::Drop { bytes, .. } | Event::Paste { bytes, .. } => bytes.len(),
+            Event::Drop { bytes, .. } => bytes.len(),
+            Event::Paste { bytes, text, .. } => bytes.len() + text.as_ref().map_or(0, String::len),
             _ => 0,
         };
         let accepted =
@@ -147,6 +149,9 @@ impl Hub {
         } else {
             selections.remove(&surface);
         }
+    }
+    pub(crate) fn replace_selections(&self, surfaces: impl IntoIterator<Item = u64>) {
+        *lock(&self.available) = surfaces.into_iter().map(|surface| (surface, true)).collect();
     }
 }
 
@@ -249,25 +254,30 @@ pub(crate) fn preferred(mimes: &[String]) -> Option<String> {
 }
 
 pub(crate) fn preferred_clipboard(mimes: &[String]) -> Option<String> {
-    // An image's URI can be a web URL; use encoded image data first.
     ["image/png", "image/jpeg"]
         .into_iter()
         .find(|mime| mimes.iter().any(|offered| offered == mime))
         .map(str::to_owned)
-        .or_else(|| {
-            // Leave URI selections with a text representation to the toolkit's
-            // ordinary text paste path instead of claiming and rejecting them.
-            if mimes.iter().any(|mime| {
-                matches!(
-                    mime.as_str(),
-                    "text/plain;charset=utf-8" | "text/plain" | "UTF8_STRING" | "STRING" | "TEXT"
-                )
-            }) {
-                None
-            } else {
-                preferred(mimes)
-            }
-        })
+        .or_else(|| preferred(mimes))
+}
+pub(crate) fn preferred_text(mimes: &[String]) -> Option<String> {
+    [
+        "text/plain;charset=utf-8",
+        "UTF8_STRING",
+        "text/plain",
+        "STRING",
+        "TEXT",
+    ]
+    .into_iter()
+    .find(|mime| mimes.iter().any(|offered| offered == mime))
+    .map(str::to_owned)
+}
+#[must_use]
+pub fn is_text_mime(mime: &str) -> bool {
+    matches!(
+        mime,
+        "text/plain;charset=utf-8" | "UTF8_STRING" | "text/plain" | "STRING" | "TEXT"
+    )
 }
 
 pub(crate) enum Destination {
@@ -281,6 +291,27 @@ struct Pending {
     bytes: Vec<u8>,
     deadline: Instant,
     generation: u64,
+    complete: bool,
+    fallback: Option<TextRead>,
+}
+struct TextRead {
+    reader: File,
+    bytes: Vec<u8>,
+    complete: bool,
+}
+
+fn read_bounded(reader: &mut File, bytes: &mut Vec<u8>, limit: usize) -> std::io::Result<bool> {
+    let mut buffer = [0; 8192];
+    for _ in 0..16 {
+        match reader.read(&mut buffer) {
+            Ok(0) => return Ok(true),
+            Ok(count) if bytes.len() + count <= limit => bytes.extend_from_slice(&buffer[..count]),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(false),
+            Err(error) => return Err(error),
+            _ => return Err(std::io::ErrorKind::InvalidData.into()),
+        }
+    }
+    Ok(false)
 }
 pub(crate) struct Transfers {
     pub hub: Arc<Hub>,
@@ -317,15 +348,15 @@ impl Transfers {
             }
         }
     }
-    pub fn receive(&mut self, pipe: ReadPipe, mime: String, destination: Destination, generation: u64) {
+    pub fn receive(&mut self, pipe: ReadPipe, mime: String, destination: Destination, generation: u64) -> bool {
         if self.reads.len() >= 4 {
             self.cancel_at(destination, generation);
-            return;
+            return false;
         }
         let fd: OwnedFd = pipe.into();
         if rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK).is_err() {
             self.cancel_at(destination, generation);
-            return;
+            return false;
         }
         self.reads.push(Pending {
             reader: fd.into(),
@@ -334,7 +365,33 @@ impl Transfers {
             bytes: Vec::new(),
             deadline: Instant::now() + Duration::from_secs(10),
             generation,
+            complete: false,
+            fallback: None,
         });
+        true
+    }
+    pub fn receive_paste(
+        &mut self,
+        pipe: ReadPipe,
+        mime: String,
+        recipient: u64,
+        generation: u64,
+        text: Option<ReadPipe>,
+    ) {
+        if self.receive(pipe, mime, Destination::Paste(recipient), generation)
+            && let Some(pipe) = text
+        {
+            let fd: OwnedFd = pipe.into();
+            if rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK).is_ok()
+                && let Some(read) = self.reads.last_mut()
+            {
+                read.fallback = Some(TextRead {
+                    reader: fd.into(),
+                    bytes: Vec::new(),
+                    complete: false,
+                });
+            }
+        }
     }
     pub fn pending(&self) -> bool {
         !self.reads.is_empty()
@@ -350,30 +407,48 @@ impl Transfers {
     }
     pub fn poll(&mut self) {
         for mut read in std::mem::take(&mut self.reads) {
-            let mut complete = false;
-            let mut failed = Instant::now() >= read.deadline;
-            let mut buffer = [0; 8192];
-            if !failed {
-                for _ in 0..16 {
-                    match read.reader.read(&mut buffer) {
-                        Ok(0) => {
-                            complete = true;
-                            break;
-                        }
-                        Ok(count) if read.bytes.len() + count <= 32 * 1024 * 1024 => {
-                            read.bytes.extend_from_slice(&buffer[..count]);
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                        _ => {
-                            failed = true;
-                            break;
-                        }
-                    }
+            let expired = Instant::now() >= read.deadline;
+            if !expired && !read.complete {
+                let limit = 32 * 1024 * 1024 - read.fallback.as_ref().map_or(0, |text| text.bytes.len());
+                if let Ok(complete) = read_bounded(&mut read.reader, &mut read.bytes, limit) {
+                    read.complete = complete;
+                } else {
+                    read.bytes.clear();
+                    read.complete = true;
                 }
             }
-            if failed {
+            if read.complete
+                && ((read.mime == "image/png" && read.bytes.starts_with(b"\x89PNG\r\n\x1a\n"))
+                    || (read.mime == "image/jpeg" && read.bytes.starts_with(&[0xff, 0xd8, 0xff])))
+            {
+                read.fallback = None;
+            }
+            if !expired
+                && let Some(text) = &mut read.fallback
+                && !text.complete
+            {
+                if let Ok(complete) =
+                    read_bounded(&mut text.reader, &mut text.bytes, 32 * 1024 * 1024 - read.bytes.len())
+                {
+                    text.complete = complete;
+                } else {
+                    text.bytes.clear();
+                    text.complete = true;
+                }
+            }
+            if expired
+                && !read.complete
+                && read
+                    .fallback
+                    .as_ref()
+                    .is_some_and(|text| text.complete && !text.bytes.is_empty())
+            {
+                read.bytes.clear();
+                read.complete = true;
+            }
+            if expired && !read.complete {
                 self.cancel_at(read.destination, read.generation);
-            } else if !complete {
+            } else if !read.complete || (!expired && read.fallback.as_ref().is_some_and(|text| !text.complete)) {
                 self.reads.push(read);
             } else {
                 match read.destination {
@@ -401,7 +476,12 @@ impl Transfers {
                         }
                     }
                     Destination::Paste(recipient) => {
-                        if read.bytes.is_empty() {
+                        let text = read
+                            .fallback
+                            .filter(|text| text.complete)
+                            .and_then(|text| String::from_utf8(text.bytes).ok())
+                            .filter(|text| !text.is_empty());
+                        if read.bytes.is_empty() && text.is_none() {
                             self.cancel_at(Destination::Paste(recipient), read.generation);
                         } else {
                             self.hub.emit_at(
@@ -410,6 +490,7 @@ impl Transfers {
                                     recipient,
                                     mime: read.mime,
                                     bytes: read.bytes,
+                                    text,
                                 },
                             );
                         }
@@ -450,7 +531,10 @@ mod tests {
             preferred_clipboard(&mimes(&["text/uri-list", "image/jpeg"])).as_deref(),
             Some("image/jpeg")
         );
-        assert!(preferred_clipboard(&mimes(&["text/uri-list", "text/plain;charset=utf-8"])).is_none());
+        assert_eq!(
+            preferred_clipboard(&mimes(&["text/uri-list", "text/plain;charset=utf-8"])).as_deref(),
+            Some("text/uri-list")
+        );
         assert!(preferred_clipboard(&mimes(&["text/plain"])).is_none());
         assert_eq!(
             preferred_clipboard(&mimes(&["text/uri-list"])).as_deref(),
@@ -460,6 +544,98 @@ mod tests {
             preferred(&mimes(&["text/uri-list", "image/png"])).as_deref(),
             Some("text/uri-list")
         );
+    }
+
+    #[test]
+    fn availability_snapshot_removes_old_focus_without_losing_another_seat() {
+        let hub = hub(113);
+        hub.selection(10, true);
+        hub.replace_selections([20, 20, 30]);
+        assert!(!lock(&hub.available).contains_key(&10));
+        assert_eq!(lock(&hub.available).len(), 2);
+        hub.replace_selections([]);
+        assert!(lock(&hub.available).is_empty());
+    }
+
+    #[test]
+    fn native_paste_carries_text_from_the_same_offer_after_both_pipes_complete() -> std::io::Result<()> {
+        let hub = hub(114);
+        let mut transfers = Transfers::new(hub.clone());
+        let (reader, mut writer) = UnixStream::pair()?;
+        let (text_reader, mut text_writer) = UnixStream::pair()?;
+        transfers.receive_paste(
+            ReadPipe::from(OwnedFd::from(reader)),
+            "text/uri-list".into(),
+            42,
+            0,
+            Some(ReadPipe::from(OwnedFd::from(text_reader))),
+        );
+        writer.write_all(b"https://example.invalid/image")?;
+        drop(writer);
+        transfers.poll();
+        assert!(lock(&hub.events).is_empty());
+        text_writer.write_all(b"synthetic text fallback")?;
+        drop(text_writer);
+        transfers.poll();
+        assert!(
+            matches!(lock(&hub.events).pop_front(), Some(Event::Paste { recipient: 42, text: Some(text), .. }) if text == "synthetic text fallback")
+        );
+        assert!(!transfers.pending());
+        Ok(())
+    }
+
+    #[test]
+    fn complete_image_does_not_wait_for_a_stalled_text_representation() -> std::io::Result<()> {
+        let hub = hub(115);
+        let mut transfers = Transfers::new(hub.clone());
+        let (reader, mut writer) = UnixStream::pair()?;
+        let (text_reader, _text_writer) = UnixStream::pair()?;
+        transfers.receive_paste(
+            ReadPipe::from(OwnedFd::from(reader)),
+            "image/png".into(),
+            42,
+            0,
+            Some(ReadPipe::from(OwnedFd::from(text_reader))),
+        );
+        writer.write_all(b"\x89PNG\r\n\x1a\nfixture")?;
+        drop(writer);
+        transfers.poll();
+        assert!(matches!(
+            lock(&hub.events).pop_front(),
+            Some(Event::Paste {
+                recipient: 42,
+                text: None,
+                ..
+            })
+        ));
+        assert!(!transfers.pending());
+        Ok(())
+    }
+
+    #[test]
+    fn timed_out_native_pipe_delivers_completed_text_without_partial_image() -> std::io::Result<()> {
+        let hub = hub(116);
+        let mut transfers = Transfers::new(hub.clone());
+        let (reader, mut writer) = UnixStream::pair()?;
+        let (text_reader, mut text_writer) = UnixStream::pair()?;
+        transfers.receive_paste(
+            ReadPipe::from(OwnedFd::from(reader)),
+            "image/png".into(),
+            42,
+            0,
+            Some(ReadPipe::from(OwnedFd::from(text_reader))),
+        );
+        writer.write_all(b"partial image")?;
+        text_writer.write_all(b"fallback")?;
+        drop(text_writer);
+        transfers.poll();
+        assert!(lock(&hub.events).is_empty());
+        transfers.reads[0].deadline = Instant::now();
+        transfers.poll();
+        assert!(
+            matches!(lock(&hub.events).pop_front(), Some(Event::Paste { recipient: 42, bytes, text: Some(text), .. }) if bytes.is_empty() && text == "fallback")
+        );
+        Ok(())
     }
 
     #[test]
@@ -475,6 +651,8 @@ mod tests {
             bytes: Vec::new(),
             generation: 0,
             deadline: Instant::now() + Duration::from_secs(10),
+            complete: false,
+            fallback: None,
         });
         writer.write_all(b"partial")?;
         transfers.poll();
@@ -504,6 +682,8 @@ mod tests {
             bytes: b"partial".to_vec(),
             generation: 0,
             deadline: Instant::now(),
+            complete: false,
+            fallback: None,
         });
         transfers.poll();
         assert!(!transfers.pending());
@@ -545,7 +725,7 @@ mod tests {
                 surface: 1,
                 position: [1.0, 2.0],
                 mime: "image/png".into(),
-                bytes: vec![1]
+                bytes: vec![1],
             }
         ));
         assert!(hub.emit_at(
@@ -553,7 +733,8 @@ mod tests {
             Event::Paste {
                 recipient: 43,
                 mime: "image/png".into(),
-                bytes: vec![2]
+                bytes: vec![2],
+                text: None
             }
         ));
         assert!(matches!(
@@ -577,6 +758,8 @@ mod tests {
             bytes: Vec::new(),
             generation: 0,
             deadline: Instant::now() + Duration::from_secs(10),
+            complete: false,
+            fallback: None,
         });
         transfers.poll();
         assert!(!transfers.pending());
@@ -623,7 +806,8 @@ mod tests {
         assert!(!hub.emit(Event::Paste {
             recipient: 9,
             mime: "image/png".into(),
-            bytes: vec![1]
+            bytes: vec![1],
+            text: None
         }));
         let mut events = lock(&hub.events);
         assert!(matches!(events.pop_front(), Some(Event::Reset)));
