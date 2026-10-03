@@ -42,6 +42,7 @@ struct Session {
     failure_notified: bool,
 }
 struct Picker {
+    anchor: horizon_core::PanelId,
     workspace: WorkspaceId,
     source: CastSource,
     receiver: Option<String>,

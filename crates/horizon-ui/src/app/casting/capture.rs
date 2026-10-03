@@ -204,7 +204,7 @@ impl HorizonApp {
             })
     }
     fn cast_controls_visible(&self, ctx: &Context) -> bool {
-        self.casting.picker.is_some()
+        self.casting.picker_open()
             || ctx.memory(|memory| {
                 memory
                     .areas()
@@ -213,7 +213,7 @@ impl HorizonApp {
                     .any(|layer| self.is_cast_control_layer(layer))
             })
     }
-    fn is_cast_control_layer(&self, layer: LayerId) -> bool {
+    pub(super) fn is_cast_control_layer(&self, layer: LayerId) -> bool {
         layer == cast_picker_layer() || self.casting.control_menus.is_some_and(|menus| menus.contains(&layer))
     }
     fn cast_obscured(&self, source: &CastSource, rect: Rect, ctx: &Context) -> bool {

@@ -1,9 +1,24 @@
 use super::{super::HorizonApp, Picker};
 use crate::theme;
-use egui::{Context, Id, Order, Pos2, Rect, Sense, Stroke, Vec2};
+use egui::{Align2, Context, Id, Order, Pos2, Rect, Sense, Stroke, Vec2};
 use horizon_core::browser::manifest::cast::{CastOperation, CastOrientation, CastResolution, CastSource};
 
 impl HorizonApp {
+    pub(in crate::app) fn cast_control_screen_rects(&self, ctx: &Context) -> Vec<Rect> {
+        if !self.casting.picker_open() {
+            return Vec::new();
+        }
+        ctx.memory(|memory| {
+            memory
+                .areas()
+                .visible_layer_ids()
+                .into_iter()
+                .filter(|layer| self.is_cast_control_layer(*layer))
+                .filter_map(|layer| memory.area_rect(layer.id))
+                .collect()
+        })
+    }
+
     pub(super) fn render_cast_controls(&mut self, ctx: &Context) {
         if self.startup_chooser.is_some() || self.shutdown_progress.is_some() {
             return;
@@ -12,6 +27,23 @@ impl HorizonApp {
         self.render_cast_notification(ctx);
         let Some(mut picker) = self.casting.picker.take() else {
             return;
+        };
+        let Some(panel_rect) = self.panel_screen_rects.get(&picker.anchor) else {
+            return;
+        };
+        let canvas = self.canvas_rect(ctx);
+        if self.workspace_is_detached(picker.workspace) || !canvas.intersects(*panel_rect) {
+            return;
+        }
+        let anchor = cast_icon_rect(*panel_rect, self.canvas_view.zoom);
+        let height = ctx
+            .memory(|memory| memory.area_rect(Id::new("cast_picker")))
+            .map_or(340.0, |rect| rect.height());
+        let above = anchor.bottom() + 8.0 + height > canvas.bottom() && anchor.top() - 8.0 - height >= canvas.top();
+        let (pivot, position) = if above {
+            (Align2::RIGHT_BOTTOM, anchor.right_top() - egui::vec2(0.0, 8.0))
+        } else {
+            (Align2::RIGHT_TOP, anchor.right_bottom() + egui::vec2(0.0, 8.0))
         };
         let snapshot = self.cast_snapshot(picker.workspace, ctx);
         let mut open = true;
@@ -33,10 +65,9 @@ impl HorizonApp {
             .min_width(264.0)
             .max_width(264.0)
             .default_width(264.0)
-            .default_pos(egui::pos2(
-                (self.canvas_rect(ctx).right() - 300.0).max(self.canvas_rect(ctx).left() + 12.0),
-                self.canvas_rect(ctx).top() + 40.0,
-            ))
+            .pivot(pivot)
+            .fixed_pos(position)
+            .constrain_to(canvas)
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                 ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
@@ -87,7 +118,7 @@ impl HorizonApp {
         }
     }
     fn render_cast_icons(&mut self, ctx: &Context) {
-        if !self.host_dialog_open() && self.casting.picker.is_none() {
+        if !self.host_dialog_open() {
             for panel in &self.board.panels {
                 let Some(&rect) = self.panel_screen_rects.get(&panel.id) else {
                     continue;
@@ -98,7 +129,7 @@ impl HorizonApp {
                     continue;
                 }
                 let scale = self.canvas_view.zoom;
-                let position = Pos2::new(rect.right() - 80.0 * scale, rect.top() + 7.0 * scale);
+                let position = cast_icon_rect(rect, scale).min;
                 let order = if self.board.focused == Some(id) {
                     Order::Foreground
                 } else {
@@ -112,23 +143,24 @@ impl HorizonApp {
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cast panel or workspace")
                         });
+                        let selected = self.casting.picker.as_ref().is_some_and(|picker| picker.anchor == id);
                         let active = self
                             .casting
                             .sessions
                             .iter()
                             .any(|session| session.workspace == workspace && !session.worker.finished());
-                        let color = if active {
+                        let color = if active || selected {
                             ui.visuals().selection.stroke.color
                         } else if response.hovered() {
                             ui.visuals().strong_text_color()
                         } else {
                             ui.visuals().weak_text_color()
                         };
-                        if response.hovered() || active {
+                        if response.hovered() || active || selected {
                             ui.painter().rect_filled(
                                 button.expand(3.0 * scale),
                                 5.0 * scale,
-                                color.gamma_multiply(if active { 0.14 } else { 0.08 }),
+                                color.gamma_multiply(if active || selected { 0.14 } else { 0.08 }),
                             );
                         }
                         paint_cast_icon(ui.painter(), button, color);
@@ -143,6 +175,10 @@ impl HorizonApp {
                     response.response.layer_id,
                 );
                 if response.inner.clicked() {
+                    if self.casting.picker.as_ref().is_some_and(|picker| picker.anchor == id) {
+                        self.casting.picker = None;
+                        continue;
+                    }
                     let session = self
                         .casting
                         .sessions
@@ -157,6 +193,7 @@ impl HorizonApp {
                                 .find(|session| session.workspace == workspace)
                         });
                     self.casting.picker = Some(Picker {
+                        anchor: id,
                         workspace,
                         source: session.map_or_else(
                             || CastSource::Panel {
@@ -174,6 +211,13 @@ impl HorizonApp {
             }
         }
     }
+}
+
+fn cast_icon_rect(panel: Rect, scale: f32) -> Rect {
+    Rect::from_min_size(
+        Pos2::new(panel.right() - 80.0 * scale, panel.top() + 7.0 * scale),
+        Vec2::splat(20.0 * scale),
+    )
 }
 
 fn paint_cast_icon(painter: &egui::Painter, rect: Rect, color: egui::Color32) {
@@ -494,6 +538,7 @@ fn render_selection(
 
 #[cfg(test)]
 mod tests {
+    mod docking;
     use super::*;
     use crate::test_egui::DiscardTextures;
     use horizon_core::{
@@ -541,6 +586,7 @@ mod tests {
     fn receiver_menu_stays_above_picker_after_window_is_raised() {
         let ctx = Context::default();
         let mut picker = Picker {
+            anchor: horizon_core::PanelId(1),
             workspace: WorkspaceId(1),
             source: CastSource::Panel { id: "synthetic".into() },
             receiver: None,

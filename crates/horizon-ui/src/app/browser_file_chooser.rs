@@ -12,10 +12,6 @@ impl HorizonApp {
     }
 
     pub(super) fn host_dialog_open(&self) -> bool {
-        #[cfg(target_os = "linux")]
-        if self.casting.picker_open() {
-            return true;
-        }
         self.host_content_dialog_open()
     }
 
