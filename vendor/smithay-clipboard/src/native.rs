@@ -185,6 +185,7 @@ impl Subscription {
         );
         events
     }
+    #[must_use]
     pub fn request_paste(&self, surface: u64, recipient: u64) -> bool {
         self.hubs
             .iter()
@@ -284,7 +285,7 @@ impl Transfers {
                             break;
                         }
                         Ok(count) if read.bytes.len() + count <= 32 * 1024 * 1024 => {
-                            read.bytes.extend_from_slice(&buffer[..count])
+                            read.bytes.extend_from_slice(&buffer[..count]);
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                         _ => {

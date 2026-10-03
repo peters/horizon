@@ -8,7 +8,7 @@ pub enum MimeType {
     ///
     /// The primary mime type used by most clients
     TextPlainUtf8 = 0,
-    /// UTF8_STRING mime type.
+    /// `UTF8_STRING` mime type.
     ///
     /// Some X11 clients are using only this mime type, so we
     /// should have it as a fallback just in case.
@@ -26,7 +26,7 @@ impl MimeType {
     /// match, returns `Some(MimeType)`, otherwise `None`.
     pub fn find_allowed(offered_mime_types: &[String]) -> Option<Self> {
         let mut fallback = None;
-        for offered_mime_type in offered_mime_types.iter() {
+        for offered_mime_type in offered_mime_types {
             if offered_mime_type == ALLOWED_MIME_TYPES[Self::TextPlainUtf8 as usize] {
                 return Some(Self::TextPlainUtf8);
             } else if offered_mime_type == ALLOWED_MIME_TYPES[Self::Utf8String as usize] {
@@ -52,6 +52,6 @@ impl std::fmt::Display for MimeType {
 /// 'text' mime types require CRLF line ending according to
 /// RFC-2046, however the platform line terminator and what applications
 /// expect is LF.
-pub fn normalize_to_lf(text: String) -> String {
+pub fn normalize_to_lf(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }

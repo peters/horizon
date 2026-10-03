@@ -89,6 +89,9 @@ impl Clipboard {
     /// Load clipboard data.
     ///
     /// Loads content from a clipboard on a last observed seat.
+    ///
+    /// # Errors
+    /// Returns an error when the worker or selection transfer fails.
     pub fn load(&self) -> Result<String> {
         self.worker.load(worker::Command::Load)
     }
@@ -104,6 +107,9 @@ impl Clipboard {
     /// Load primary clipboard data.
     ///
     /// Loads content from a  primary clipboard on a last observed seat.
+    ///
+    /// # Errors
+    /// Returns an error when the worker or primary selection transfer fails.
     pub fn load_primary(&self) -> Result<String> {
         self.worker.load(worker::Command::LoadPrimary)
     }

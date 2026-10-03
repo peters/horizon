@@ -52,21 +52,19 @@ fn worker_impl(
     native: std::sync::Arc<crate::native::Hub>,
 ) {
     let _guard = crate::native::WorkerGuard(native.clone());
-    let (globals, event_queue) = match registry_queue_init(&connection) {
-        Ok(data) => data,
-        Err(_) => return,
+    let Ok((globals, event_queue)) = registry_queue_init(&connection) else {
+        return;
     };
 
     let mut event_loop = EventLoop::<State>::try_new().unwrap();
     let loop_handle = event_loop.handle();
 
-    let mut state = match State::new(&globals, &event_queue.handle(), loop_handle.clone(), reply_tx, native) {
-        Some(state) => state,
-        None => return,
+    let Some(mut state) = State::new(&globals, &event_queue.handle(), loop_handle.clone(), reply_tx, native) else {
+        return;
     };
 
     loop_handle
-        .insert_source(rx_chan, |event, _, state| {
+        .insert_source(rx_chan, |event, (), state| {
             if let channel::Event::Msg(event) = event {
                 match event {
                     Command::NativeRead { surface, recipient } => state.read_native(surface, recipient),

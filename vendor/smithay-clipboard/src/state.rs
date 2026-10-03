@@ -39,6 +39,8 @@ use wayland_backend::client::ObjectId;
 
 use crate::mime::{ALLOWED_MIME_TYPES, MimeType, normalize_to_lf};
 
+// Retain upstream names that identify the corresponding toolkit state types.
+#[allow(clippy::struct_field_names)]
 pub struct State {
     pub native: crate::native::Transfers,
     pub primary_selection_manager_state: Option<PrimarySelectionManagerState>,
@@ -86,7 +88,7 @@ impl State {
 
         let seat_state = SeatState::new(globals, queue_handle);
         for seat in seat_state.seats() {
-            seats.insert(seat.id(), Default::default());
+            seats.insert(seat.id(), ClipboardSeatState::default());
         }
 
         Some(Self {
@@ -197,7 +199,7 @@ impl State {
 
         let mut reader_buffer = [0; 4096];
         let mut content = Vec::new();
-        let _ = self.loop_handle.insert_source(read_pipe, move |_, file, state| {
+        let _ = self.loop_handle.insert_source(read_pipe, move |(), file, state| {
             // SAFETY: upstream callback performs I/O without changing the registered file descriptor.
             let file = unsafe { file.get_mut() };
             loop {
@@ -216,7 +218,7 @@ impl State {
 
                         // Post-process the content according to mime type.
                         let content = match mime_type {
-                            MimeType::TextPlainUtf8 | MimeType::TextPlain => normalize_to_lf(content),
+                            MimeType::TextPlainUtf8 | MimeType::TextPlain => normalize_to_lf(&content),
                             MimeType::Utf8String => content,
                         };
 
@@ -229,7 +231,7 @@ impl State {
                         let _ = state.reply_tx.send(Err(err));
                         break PostAction::Remove;
                     }
-                };
+                }
             }
         });
 
@@ -256,7 +258,7 @@ impl State {
         };
 
         let mut written = 0;
-        let _ = self.loop_handle.insert_source(write_pipe, move |_, file, _| {
+        let _ = self.loop_handle.insert_source(write_pipe, move |(), file, _| {
             // SAFETY: upstream callback performs I/O without changing the registered file descriptor.
             let file = unsafe { file.get_mut() };
             loop {
@@ -280,7 +282,7 @@ impl SeatHandler for State {
     }
 
     fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, seat: WlSeat) {
-        self.seats.insert(seat.id(), Default::default());
+        self.seats.insert(seat.id(), ClipboardSeatState::default());
     }
 
     fn new_capability(&mut self, _: &Connection, qh: &QueueHandle<Self>, seat: WlSeat, capability: Capability) {
@@ -324,14 +326,14 @@ impl SeatHandler for State {
                 if let Some(keyboard) = seat_state.keyboard.take()
                     && keyboard.version() >= 3
                 {
-                    keyboard.release()
+                    keyboard.release();
                 }
             }
             Capability::Pointer => {
                 if let Some(pointer) = seat_state.pointer.take()
                     && pointer.version() >= 3
                 {
-                    pointer.release()
+                    pointer.release();
                 }
             }
             _ => (),
@@ -351,9 +353,8 @@ impl PointerHandler for State {
     fn pointer_frame(&mut self, _: &Connection, _: &QueueHandle<Self>, pointer: &WlPointer, events: &[PointerEvent]) {
         let seat = pointer.data::<PointerData>().unwrap().seat();
         let seat_id = seat.id();
-        let seat_state = match self.seats.get_mut(&seat_id) {
-            Some(seat_state) => seat_state,
-            None => return,
+        let Some(seat_state) = self.seats.get_mut(&seat_id) else {
+            return;
         };
 
         let mut updated_serial = false;
@@ -419,7 +420,7 @@ impl DataDeviceHandler for State {
     ) {
         let offer = device
             .data::<sctk::data_device_manager::data_device::DataDeviceData>()
-            .and_then(|data| data.drag_offer());
+            .and_then(sctk::data_device_manager::data_device::DataDeviceData::drag_offer);
         if let Some(offer) = offer {
             let mime = offer.with_mime_types(crate::native::preferred);
             offer.accept_mime_type(offer.serial, mime.clone());
@@ -444,7 +445,7 @@ impl DataDeviceHandler for State {
     fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice, x: f64, y: f64) {
         if let Some(offer) = device
             .data::<sctk::data_device_manager::data_device::DataDeviceData>()
-            .and_then(|data| data.drag_offer())
+            .and_then(sctk::data_device_manager::data_device::DataDeviceData::drag_offer)
             && offer.with_mime_types(crate::native::preferred).is_some()
         {
             self.native.hub.emit(crate::native::Event::Motion {
@@ -457,7 +458,7 @@ impl DataDeviceHandler for State {
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
         let offer = device
             .data::<sctk::data_device_manager::data_device::DataDeviceData>()
-            .and_then(|data| data.drag_offer());
+            .and_then(sctk::data_device_manager::data_device::DataDeviceData::drag_offer);
         if let Some(offer) = offer {
             if let Some(mime) = offer.with_mime_types(crate::native::preferred)
                 && let Ok(pipe) = offer.receive(mime.clone())
@@ -484,11 +485,11 @@ impl DataSourceHandler for State {
         mime: String,
         write_pipe: WritePipe,
     ) {
-        self.send_request(SelectionTarget::Clipboard, write_pipe, mime)
+        self.send_request(SelectionTarget::Clipboard, write_pipe, mime);
     }
 
     fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, deleted: &WlDataSource) {
-        self.data_sources.retain(|source| source.inner() != deleted)
+        self.data_sources.retain(|source| source.inner() != deleted);
     }
 
     fn accept_mime(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource, _: Option<String>) {}
@@ -533,7 +534,7 @@ impl PrimarySelectionSourceHandler for State {
     }
 
     fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, deleted: &ZwpPrimarySelectionSourceV1) {
-        self.primary_sources.retain(|source| source.inner() != deleted)
+        self.primary_sources.retain(|source| source.inner() != deleted);
     }
 }
 
@@ -547,9 +548,8 @@ impl Dispatch<WlKeyboard, ObjectId, State> for State {
         _: &QueueHandle<State>,
     ) {
         use sctk::reexports::client::protocol::wl_keyboard::Event as WlKeyboardEvent;
-        let seat_state = match state.seats.get_mut(data) {
-            Some(seat_state) => seat_state,
-            None => return,
+        let Some(seat_state) = state.seats.get_mut(data) else {
+            return;
         };
         match event {
             WlKeyboardEvent::Key { serial, .. } | WlKeyboardEvent::Modifiers { serial, .. } => {
