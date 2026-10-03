@@ -139,6 +139,8 @@ fn raw_source_support_requires_nonzero_even_fitted_axes_for_the_selected_canvas(
     }
     assert!(!CastSession::supports_source_dimensions(4, 4, (0, 720)));
     assert!(!CastSession::supports_source_dimensions(4, 4, (1280, 0)));
+    assert!(!CastSession::supports_source_dimensions(1, 2, (1, 100)));
+    assert!(!CastSession::supports_source_dimensions(2, 1, (100, 1)));
     assert!(!CastSession::supports_source_dimensions(8192, 8, (1280, 720)));
     assert!(CastSession::supports_source_dimensions(8192, 8, (3840, 2160)));
 }

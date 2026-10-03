@@ -141,8 +141,8 @@ impl CastSession {
     #[must_use]
     pub const fn supports_source_dimensions(width: usize, height: usize, canvas: (usize, usize)) -> bool {
         encoder::Frame::supports_source_dimensions(width, height)
-            && canvas.0 > 0
-            && canvas.1 > 0
+            && canvas.0 >= 2
+            && canvas.1 >= 2
             && width.saturating_mul(canvas.1) / height >= 2
             && height.saturating_mul(canvas.0) / width >= 2
     }
