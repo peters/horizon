@@ -237,6 +237,21 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assert_no_session_state('prepare')
         self.assertEqual(f.launches(), [])
 
+    def test_failed_probe_creation_reports_its_actual_privileged_or_agent_directory(self):
+        f = self.fixture
+        stub = f.tools / 'mktemp'
+        stub.write_text('#!/bin/sh\ncase "$1" in */.horizon-write-probe.*) exit 1;; esac\nexec /usr/bin/mktemp "$@"\n')
+        stub.chmod(0o700)
+        for unprivileged in ['0', '1']:
+            with self.subTest(unprivileged=unprivileged):
+                f.env['HORIZON_UNPRIVILEGED'] = unprivileged
+                refused = self.prepare_only()
+                self.assertEqual(refused.returncode, 74, refused.stderr)
+                root = f.workspace / 'sessions' if unprivileged == '1' else f.workspace
+                self.assertIn(str(root / '.horizon-write-probe'), refused.stderr)
+                self.assertEqual(self.source_calls(), [])
+                self.assertEqual(f.launches(), [])
+
     def test_prepare_only_proves_the_volume_takes_a_write_before_any_checkout_work(self):
         f = self.fixture
         self.release.touch()

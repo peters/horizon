@@ -301,7 +301,7 @@ if "$prepare_only"; then
     # trap whatever ends the run, so an interrupted probe leaves nothing behind.
     probe_root=/workspace
     if [ "${HORIZON_UNPRIVILEGED:-}" = 1 ]; then probe_root=/workspace/sessions; fi
-    probe="$(mktemp "$probe_root/.horizon-write-probe.XXXXXX")" || flush_failed /workspace/.horizon-write-probe
+    probe="$(mktemp "$probe_root/.horizon-write-probe.XXXXXX")" || flush_failed "$probe_root/.horizon-write-probe"
     { dd if=/dev/zero of="$probe" bs=1M count=64 conv=fsync status=none && sync -f "$probe"; } \
         || flush_failed "$probe"
     rm -f "$probe"

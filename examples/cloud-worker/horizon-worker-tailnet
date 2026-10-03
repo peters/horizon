@@ -272,7 +272,7 @@ def main():
         serve()
     elif sys.argv[1:] == ['status']:
         # No credential or daemon state is returned.
-        print('joined' if (STATE / 'selection').exists() and status() else 'none')
+        print('joined' if (STATE / 'selection').exists() and status() == 'Running' else 'none')
     elif len(sys.argv) >= 3 and sys.argv[1] == 'agent':
         agent(sys.argv[2:])
     else:

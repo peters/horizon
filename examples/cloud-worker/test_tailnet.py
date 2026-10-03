@@ -113,6 +113,19 @@ class TailnetTests(unittest.TestCase):
         self.assertEqual(self.configure('work', None), 'needs_key\n')
         self.assertEqual(self.configure('work', KEY), 'ready\n')
 
+    def test_status_reports_joined_only_for_running_selected_identity(self):
+        for selected, state, expected in [(False, 'Running', 'none'), (True, 'Running', 'joined'),
+                                           (True, 'NeedsLogin', 'none')]:
+            with self.subTest(selected=selected, state=state):
+                selection = self.state / 'selection'
+                if selected: selection.write_text('work')
+                else: selection.unlink(missing_ok=True)
+                with patch.object(worker.sys, 'argv', ['worker', 'status']), \
+                        patch.object(worker, 'call', return_value=json.dumps({'BackendState': state}).encode()), \
+                        patch('sys.stdout', new_callable=io.StringIO) as output:
+                    worker.main()
+                self.assertEqual(output.getvalue(), expected + '\n')
+
     def test_resume_never_needs_a_key_or_touches_the_host_tailscale(self):
         (self.state / 'selection').write_text('work')
         with patch.object(worker.sys, 'argv', ['worker', 'resume']): worker.main()

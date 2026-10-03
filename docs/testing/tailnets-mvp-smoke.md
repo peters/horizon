@@ -168,3 +168,10 @@ and an empty final catalog with no pending journal. The running child SHA256 was
 A new continuous native recording covers this final candidate. No new paid cloud
 allocation was made; the earlier discovery/connectivity proof retains its stated
 policy and platform limits.
+
+The final worker-only review refresh corrects the public status command so only
+`Running` reports joined, and derives storage-probe failure diagnostics from the
+actual privileged/unprivileged probe directory. All 244 worker tests passed with
+no skips. A disposable offline container verified the actual status subprocess for
+Running, NeedsLogin and Starting, plus agent isolation, sibling preparation and
+self-stop availability. These changes do not alter the UI or recorded flow.
