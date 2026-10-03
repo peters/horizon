@@ -276,11 +276,19 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.release.touch()
         # sync never returns, as when a flush hangs on a stalled volume; the run is then terminated.
         stub = f.tools / 'sync'
-        stub.write_text('#!/bin/sh\nsleep 30\n')
+        flushing = f.root / 'probe-flushing'
+        f.env['PROBE_FLUSHING'] = str(flushing)
+        stub.write_text('#!/bin/sh\nprintf "%s\\n" "$2" > "$PROBE_FLUSHING"\nsleep 30\n')
         stub.chmod(0o700)
         running = subprocess.Popen(['bash', str(f.script), '--shared', '--prepare-only', 'prepare', 'shell', f.revision],
                                    env=f.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        wait_for(lambda: list(f.workspace.glob('.horizon-write-probe.*')))
+        # File creation precedes the shell assigning mktemp's result. Interrupt the
+        # intended stalled flush only after sync proves that assignment completed.
+        wait_for(lambda: flushing.exists() and flushing.read_text().strip())
+        probe = Path(flushing.read_text().strip())
+        self.assertEqual(probe.parent, f.workspace)
+        self.assertTrue(probe.name.startswith('.horizon-write-probe.'))
+        self.assertTrue(probe.is_file())
         running.terminate()
         running.communicate(timeout=BOUND)
         self.assertEqual([p.name for p in f.workspace.glob('.horizon-write-probe.*')], [], 'the exit trap removed it')
