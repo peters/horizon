@@ -1,13 +1,13 @@
 //! Auth-key-only cloud networking. Persistent metadata never contains a secret.
+mod bindings;
 mod keychain;
+pub use bindings::Store;
 /// OS-store namespace; credentials have no public read API.
 pub const KEYCHAIN_SERVICE: &str = "horizon-cloud-tailnets";
 use serde::{Deserialize, Serialize};
-use std::{
-    fs::{File, OpenOptions},
-    io::Write,
-    path::{Path, PathBuf},
-};
+#[cfg(unix)]
+use std::fs::File;
+use std::{io::Write, path::Path};
 use zeroize::Zeroizing;
 
 #[derive(Debug, thiserror::Error)]
@@ -47,96 +47,6 @@ pub fn valid_key(value: &str) -> bool {
         && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// Machine-local metadata and write-only OS-store bindings.
-/// Credential reads belong to the private host deployment adapter.
-///
-/// ```compile_fail
-/// let store = horizon_cloud::tailnet::Store::new("settings".into());
-/// store.enroll("work", |bytes| { println!("{bytes:?}"); Ok(()) });
-/// ```
-#[derive(Clone, Debug)]
-pub struct Store {
-    root: PathBuf,
-}
-impl Store {
-    #[must_use]
-    pub fn new(root: PathBuf) -> Self {
-        Self { root }
-    }
-    /// # Errors
-    /// Refuses corrupt metadata instead of treating it as an empty catalog.
-    pub fn load(&self) -> Result<Catalog> {
-        let bytes = match std::fs::read(self.root.join("tailnets.json")) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Catalog::default()),
-            Err(_) => return Err(Error::Storage),
-        };
-        if bytes.len() > 64 * 1024 {
-            return Err(Error::Storage);
-        }
-        let catalog: Catalog = serde_json::from_slice(&bytes).map_err(|_| Error::Storage)?;
-        let mut ids = std::collections::BTreeSet::new();
-        if catalog
-            .tailnets
-            .iter()
-            .any(|t| !valid_id(&t.id) || !valid_name(&t.name) || !ids.insert(&t.id))
-        {
-            return Err(Error::Storage);
-        }
-        Ok(catalog)
-    }
-    /// Save or replace only; saved keys are never loaded into Settings.
-    /// # Errors
-    /// Invalid input, unavailable keychain or failed metadata write.
-    pub fn save(&self, id: Option<&str>, name: &str, key: &str) -> Result<Catalog> {
-        if !valid_name(name) || !valid_key(key) {
-            return Err(Error::Invalid);
-        }
-        let _lock = self.lock()?;
-        let mut catalog = self.load()?;
-        let id = id.map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_owned);
-        if !valid_id(&id) {
-            return Err(Error::Invalid);
-        }
-        if let Some(t) = catalog.tailnets.iter_mut().find(|t| t.id == id) {
-            t.name = name.trim().into();
-        } else {
-            catalog.tailnets.push(Tailnet {
-                id: id.clone(),
-                name: name.trim().into(),
-            });
-        }
-        keychain::put(&id, key)?;
-        write(&self.root.join("tailnets.json"), &catalog)?;
-        Ok(catalog)
-    }
-    /// # Errors
-    /// Missing binding, keychain or storage failure. Existing cloud assignments remain
-    /// explicit missing selections; they never silently switch to another tailnet.
-    pub fn delete(&self, id: &str) -> Result<Catalog> {
-        let _lock = self.lock()?;
-        let mut catalog = self.load()?;
-        if !catalog.tailnets.iter().any(|t| t.id == id) {
-            return Err(Error::Missing);
-        }
-        keychain::delete(id)?;
-        catalog.tailnets.retain(|t| t.id != id);
-        write(&self.root.join("tailnets.json"), &catalog)?;
-        Ok(catalog)
-    }
-    fn lock(&self) -> Result<File> {
-        std::fs::create_dir_all(&self.root).map_err(|_| Error::Storage)?;
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(self.root.join("tailnets.lock"))
-            .map_err(|_| Error::Storage)?;
-        file.lock().map_err(|_| Error::Storage)?;
-        Ok(file)
-    }
-}
 fn valid_name(name: &str) -> bool {
     !name.trim().is_empty() && name.len() <= 80 && !name.chars().any(char::is_control)
 }
@@ -184,10 +94,15 @@ fn write(path: &Path, value: &impl Serialize) -> Result<()> {
     pending.write_all(&bytes).map_err(|_| Error::Storage)?;
     pending.as_file().sync_all().map_err(|_| Error::Storage)?;
     pending.persist(path).map_err(|_| Error::Storage)?;
+    sync_directory(parent)
+}
+fn sync_directory(parent: &Path) -> Result<()> {
     #[cfg(unix)]
     File::open(parent)
         .and_then(|f| f.sync_all())
         .map_err(|_| Error::Storage)?;
+    #[cfg(not(unix))]
+    let _ = parent;
     Ok(())
 }
 #[cfg(test)]

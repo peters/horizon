@@ -85,7 +85,10 @@ impl State {
             return;
         }
         let root = self.root.clone();
-        self.start(ctx, move || tailnet::store(&root).load().map_err(|e| e.to_string()));
+        self.start(ctx, move || {
+            let store = tailnet::store(&root);
+            store.recover().and_then(|()| store.load()).map_err(|e| e.to_string())
+        });
     }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui) {
         self.poll(ui.ctx());

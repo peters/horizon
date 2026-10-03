@@ -53,10 +53,8 @@ pub fn configure(connection: &Connection, cloud: &Path, runner: &Runner<'_>) -> 
             let root = cloud
                 .parent()
                 .ok_or(Error::Invalid("Missing cloud settings directory"))?;
-            if !store(root).load().map_err(mapped)?.tailnets.iter().any(|t| t.id == id) {
-                return Err(mapped(horizon_cloud::tailnet::Error::Missing));
-            }
-            let key = keychain::read(id).map_err(mapped)?;
+            let slot = store(root).credential_slot(id).map_err(mapped)?;
+            let key = keychain::read(&slot).map_err(mapped)?;
             let key = std::str::from_utf8(&key)
                 .ok()
                 .filter(|key| valid_key(key))

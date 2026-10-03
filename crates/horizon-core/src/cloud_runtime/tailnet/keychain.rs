@@ -61,11 +61,21 @@ mod tests {
         let second = "tskey-auth-synthetic98765432109876543210";
         let catalog = store.save(None, "Synthetic enrollment", first).unwrap();
         let id = &catalog.tailnets[0].id;
-        assert_eq!(read(id).unwrap().as_slice(), first.as_bytes());
+        let original_slot = store.credential_slot(id).unwrap();
+        assert_eq!(
+            read(&store.credential_slot(id).unwrap()).unwrap().as_slice(),
+            first.as_bytes()
+        );
         store.save(Some(id), "Synthetic replacement", second).unwrap();
-        assert_eq!(read(id).unwrap().as_slice(), second.as_bytes());
+        assert_eq!(
+            read(&store.credential_slot(id).unwrap()).unwrap().as_slice(),
+            second.as_bytes()
+        );
+        let slot = store.credential_slot(id).unwrap();
+        assert_ne!(original_slot, slot);
+        assert!(read(&original_slot).is_err());
         store.delete(id).unwrap();
-        assert!(read(id).is_err());
+        assert!(read(&slot).is_err());
         assert!(store.load().unwrap().tailnets.is_empty());
     }
 }

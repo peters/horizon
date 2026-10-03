@@ -126,3 +126,21 @@ tests and the speech tier, plus both mandatory Clippy tiers. The 38 workspace
 ignores include external integration fixtures; the new private-keyring fixture
 was run explicitly and passed. All 240 worker tests passed without skips.
 Pedantic Clippy retains the existing advisory excessive-bools finding.
+
+
+## Interrupted persistence regression
+
+Credential updates now use fresh OS-store slots and a durable nonsecret journal.
+Six focused regressions cover journal-only and post-key-write interruptions,
+before/after catalog publication, idempotent cleanup, failed key writes, failed
+catalog rename, cleanup failure/retry, deletion and legacy binding migration.
+The real isolated Secret Service test verifies that replacement retires the old
+credential while retaining the binding ID. Native metadata observations verify
+that only the replaced network advances its credential generation, with no
+pending journal after success. Public catalog serialization excludes slot data.
+The refreshed native application child SHA256 is
+`76929fc60134caa0315fdbae914c8fa71cf4dda2b90dd0c9d7678a20cc5e618a`.
+
+The required final matrix passed again: 4,709 workspace tests, 1,579 speech-tier
+tests, formatting, maintainability and both mandatory Clippy tiers. All 240
+matching-helper worker Python tests passed without skips.
