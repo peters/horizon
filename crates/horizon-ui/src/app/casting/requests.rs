@@ -363,6 +363,13 @@ mod tests {
 
     fn open_application_picker(app: &mut HorizonApp, workspace: WorkspaceId, receiver: &str) {
         app.casting.picker = Some(super::super::Picker {
+            anchor: app
+                .board
+                .panels
+                .iter()
+                .find(|panel| panel.workspace_id == workspace)
+                .expect("picker workspace has a panel")
+                .id,
             workspace,
             source: CastSource::Application {},
             receiver: Some(receiver.into()),
