@@ -347,3 +347,39 @@ advancing displayed frames; after the person moved away, reception continued
 without forcing the viewer back. Both synthetic bindings were removed with no
 pending journal. All owned fixture children exited and its target expired.
 The updated showcase uses only this final recording. No new paid cloud was made.
+
+
+## Interrupted selection and visible failure recovery
+
+A nonsecret pending-commit marker makes the previously validated network choice
+recoverable after the source intent and target receipt persist. Exact submission
+retries and direct execution repair prepared choices under the existing locks,
+without requiring a subsequently removed catalog. Allocated clouds refuse changed
+choices. The regression forces the selection commit to fail and covers Work/None,
+idempotent retries, unchanged durable requests and the allocation boundary.
+
+Settings retain completed and late save/delete failures after closing, including
+disconnected operation receivers. Fresh catalog reads do not hide those errors.
+Provisioning waits for its catalog to initialize. Native fault injection verified
+one visible failure after settings closed, then successful correction cleared it.
+Malformed supervisor records (empty, truncated, extra fields, nonnumeric or dead
+PID) restart safely; a valid live record is retained.
+
+The final required matrix passed 4,716 workspace tests (39 ignored), 1,582
+speech-tier tests and all 253 worker tests without skips. Formatting,
+maintainability and both mandatory Clippy tiers passed; the existing provider
+boolean warning remains advisory. The running native child and final matrix build
+both matched frozen SHA256
+`71e6c7c3d3fe74b33ecccd4f190817526a6a484aa6c599c85041d93592f65f51`.
+The 363-frame continuous capture covered 60 verified actions: fault recovery,
+two bindings, all three settings exits, Office/Lab/None provisioning selection,
+masked replacement with stable IDs and one rotated credential reference, active
+edit removal, cancellation and Fit. Public native inspections established
+advancing displayed frames. Both synthetic bindings were removed without a
+pending journal. All owned children exited, the device target expired and private
+fixture state was removed. The public showcase retains original feature frames
+after the private fault-injection flow. No new paid allocation was made.
+
+The preceding PR head's unchanged Windows device-restoration UI test failed its
+initial two-frame timing assertion and passed one bounded rerun. No test or device
+behavior was altered for that failure; current-head CI remains a separate gate.

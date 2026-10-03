@@ -43,11 +43,11 @@ def start():
     private_directory(RUNTIME)
     pidfile = RUNTIME / 'supervisor.pid'
     if pidfile.exists():
-        pid, started = pidfile.read_text().split()
         try:
+            pid, started = pidfile.read_text().split()
             if Path('/proc', pid, 'stat').read_text().rsplit(') ', 1)[1].split()[19] == started:
                 return
-        except (OSError, IndexError):
+        except (OSError, IndexError, ValueError):
             pass
     process = subprocess.Popen([SELF, 'serve'], stdin=subprocess.DEVNULL,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

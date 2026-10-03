@@ -245,3 +245,16 @@ class TailnetTests(unittest.TestCase):
         self.assertNotIn('TS_AUTHKEY', environment)
 
 if __name__ == '__main__': unittest.main()
+
+
+class SupervisorRecordTests(unittest.TestCase):
+    def test_malformed_stale_record_is_replaced_but_live_record_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(worker, 'RUNTIME', Path(temp)), patch.object(worker, 'private_directory'), patch.object(worker.subprocess, 'Popen') as spawn:
+            spawn.return_value.pid = os.getpid()
+            started = Path('/proc', str(os.getpid()), 'stat').read_text().rsplit(') ', 1)[1].split()[19]
+            record = Path(temp) / 'supervisor.pid'
+            for value in ['', '123', '123 456 extra', 'not-a-pid stamp', '999999999 0']:
+                record.write_text(value); worker.start()
+                self.assertEqual(record.read_text(), f'{os.getpid()} {started}')
+            self.assertEqual(spawn.call_count, 5)
+            worker.start(); self.assertEqual(spawn.call_count, 5)
