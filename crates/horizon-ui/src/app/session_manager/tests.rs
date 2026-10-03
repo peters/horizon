@@ -153,3 +153,64 @@ fn persisted_target_view_and_window_are_protected_during_session_switch() {
         target_before
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn session_switch_cancels_native_input_before_panel_ids_are_reused() {
+    #[derive(Debug)]
+    struct File(std::path::PathBuf);
+    impl egui::DroppedFile for File {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            Ok(b"synthetic stale drop".to_vec())
+        }
+    }
+    let config = Config::default();
+    let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+        &config,
+        StartupDecision::Ephemeral {
+            runtime_state: Box::new(runtime_with_staggered_workspaces("old")),
+        },
+    );
+    app.root_viewport_stabilizer = None;
+    let target = app
+        .session_store
+        .create_session_from_runtime(runtime_with_staggered_workspaces("target"))
+        .expect("target session");
+    let input = app.observed_keyboard_inputs.clone();
+    input.native_context(&ctx);
+    let files: Vec<egui::DroppedFileHandle> = vec![std::sync::Arc::new(File(std::path::PathBuf::from("/tmp/old.txt")))];
+    ctx.input_mut(|input| input.raw.dropped_files = files.clone());
+
+    input.native_window_seen(10);
+    input.native_focus(10, true);
+    input.native_recipient_publisher()(egui::ViewportId::ROOT, 1.0, Some(horizon_core::PanelId(1)));
+    let queued = input.native_paste_request(10).expect("queued request");
+    let pending = input.native_paste_request(10).expect("pending request");
+    input.native_paste(queued, vec![std::path::PathBuf::from("/tmp/old.txt")]);
+    input.native_drop_position(10, [10.0, 20.0], vec![std::path::PathBuf::from("/tmp/old.txt")]);
+    app.begin_session_switch(&target);
+    assert!(ctx.input(|input| input.raw.dropped_files.is_empty()));
+    assert!(
+        input
+            .take_native_drop_position(egui::ViewportId::ROOT, &files)
+            .is_none()
+    );
+    input.native_paste(pending, vec![std::path::PathBuf::from("/tmp/late.png")]);
+    assert!(input.take_native_pastes().is_empty());
+    assert!(input.native_paste_request(10).is_none());
+    let _ = app.poll_session_switch(&ctx);
+    input.set_wayland_backend(true);
+    ctx.input_mut(|input| input.raw.dropped_files = files);
+    let panels = app.board.panels.len();
+    app.handle_root_file_drop(&ctx);
+    assert_eq!(
+        app.board.panels.len(),
+        panels,
+        "stale raw drop opened a file on the replacement board"
+    );
+    input.native_paste(pending, vec![std::path::PathBuf::from("/tmp/later.png")]);
+    assert!(input.take_native_pastes().is_empty());
+}

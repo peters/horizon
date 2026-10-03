@@ -82,6 +82,13 @@ impl<'a> TerminalView<'a> {
             window_focused && (interaction.body.has_focus() || (is_active_panel && !other_widget_has_focus));
         self.panel.set_focused(has_terminal_focus);
 
+        #[cfg(target_os = "linux")]
+        if interactive && has_terminal_focus {
+            let target_id = egui::Id::new(("native_image_paste_target", ui.ctx().viewport_id()));
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(target_id, (self.panel.id, interaction.body.id)));
+        }
+
         if interactive && has_terminal_focus {
             ui.memory_mut(|mem| {
                 mem.set_focus_lock_filter(

@@ -82,6 +82,8 @@ impl HorizonApp {
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         self.abandon_device_reveals("Horizon is exiting");
+        #[cfg(target_os = "linux")]
+        self.observed_keyboard_inputs.clear_native_transfer_files();
         self.exit_cleanup_complete = true;
         self.release_active_session_lease();
         if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
@@ -134,6 +136,8 @@ impl HorizonApp {
         }
 
         self.wait_for_saved_session_deletion();
+        #[cfg(target_os = "linux")]
+        self.observed_keyboard_inputs.clear_native_transfer_files();
         self.exit_cleanup_complete = true;
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
@@ -176,6 +180,22 @@ impl HorizonApp {
 #[cfg(test)]
 mod tests {
     use super::{BrowserShutdownOutcome, shutdown_ready_to_exit};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn explicit_exit_cleanup_removes_native_images_with_observers_still_alive() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let observer = app.observed_keyboard_inputs.clone();
+        let files = observer
+            .decode_native_transfer("image/png", b"\x89PNG\r\n\x1a\nfixture")
+            .unwrap();
+        let directory = files[0].parent().unwrap().to_path_buf();
+        assert!(files[0].exists());
+        app.run_exit_cleanup();
+        assert!(!files[0].exists());
+        assert!(!directory.exists());
+        app.run_exit_cleanup();
+    }
 
     #[test]
     fn timeout_never_bypasses_browser_teardown() {

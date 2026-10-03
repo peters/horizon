@@ -454,6 +454,45 @@ impl eframe::App for HorizonApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        #[cfg(target_os = "linux")]
+        {
+            if self.observed_keyboard_inputs.native_context(ctx) {
+                let publish_target = self.observed_keyboard_inputs.native_recipient_publisher();
+                // Immediate child viewports bypass App::raw_input_hook. Publish
+                // the recipient after each viewport has resolved widget focus.
+                ctx.on_end_pass(
+                    "native image paste recipient",
+                    std::sync::Arc::new(move |ctx| {
+                        let viewport = ctx.viewport_id();
+                        let target = ctx.data_mut(|data| {
+                            let id = egui::Id::new(("native_image_paste_target", viewport));
+                            let target = data.get_temp::<(PanelId, egui::Id)>(id);
+                            data.remove::<(PanelId, egui::Id)>(id);
+                            target
+                        });
+                        if ctx.input(|input| input.focused) {
+                            let target = target
+                                .filter(|(_, widget)| {
+                                    !super::app::shortcuts::hotkey_capture_active(ctx)
+                                        && ctx
+                                            .memory(egui::Memory::focused)
+                                            .is_none_or(|focused| focused == *widget)
+                                })
+                                .map(|(panel, _)| panel);
+                            let scale = ctx.input(|input| input.viewport().native_pixels_per_point.unwrap_or(1.0));
+                            publish_target(viewport, f64::from(scale), target);
+                        }
+                    }),
+                );
+            }
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new("native_wayland_input"),
+                    self.observed_keyboard_inputs.is_wayland_backend(),
+                )
+            });
+            self.handle_native_image_pastes();
+        }
         self.filter_canvas_gesture(ctx, raw_input);
         let viewport_id = raw_input.viewport_id;
         self.ime_commit_normalizer.normalize(viewport_id, &mut raw_input.events);

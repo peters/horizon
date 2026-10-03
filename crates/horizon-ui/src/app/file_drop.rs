@@ -16,6 +16,14 @@ enum FileDropScope {
 }
 
 #[derive(Clone, Copy)]
+struct FileDropView {
+    canvas_rect: Rect,
+    workspace_id: Option<WorkspaceId>,
+    fullscreen_panel: Option<PanelId>,
+    scope: FileDropScope,
+}
+
+#[derive(Clone, Copy)]
 struct TerminalDropRects<'a> {
     panels: &'a HashMap<PanelId, Rect>,
     terminal_bodies: &'a HashMap<PanelId, Rect>,
@@ -53,7 +61,17 @@ pub(super) enum FileDropHighlight {
 }
 
 impl HorizonApp {
+    pub(super) fn reset_native_file_input(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.observed_keyboard_inputs.reset_native_session();
+        self.file_drop_highlight = None;
+        self.file_hover_positions.clear();
+    }
+
     pub(super) fn clear_file_drop_state(&mut self, ctx: &Context) {
+        #[cfg(target_os = "linux")]
+        self.observed_keyboard_inputs
+            .discard_native_drop_positions(ctx.viewport_id());
         self.file_drop_highlight = None;
         self.file_hover_positions.remove(&ctx.viewport_id());
     }
@@ -102,6 +120,29 @@ impl HorizonApp {
             )
         });
 
+        let view = FileDropView {
+            canvas_rect,
+            workspace_id,
+            fullscreen_panel,
+            scope,
+        };
+        #[cfg(target_os = "linux")]
+        if !dropped.is_empty() && self.observed_keyboard_inputs.is_wayland_backend() {
+            let batches = self
+                .observed_keyboard_inputs
+                .take_native_drop_batches(viewport_id, &dropped);
+            for (range, position) in batches {
+                self.handle_completed_file_drop(
+                    ctx,
+                    view,
+                    Some(native_drop_position_points(ctx, position)),
+                    &dropped[range],
+                );
+            }
+            self.clear_file_drop_state(ctx);
+            return;
+        }
+
         // Only query the native cursor during an active drag; on Linux this
         // opens an X11 connection each call, so skip it when idle.
         let native_pointer_pos = if hovered || !dropped.is_empty() {
@@ -128,19 +169,35 @@ impl HorizonApp {
         let screen_pos = native_pointer_pos
             .or_else(|| self.file_hover_positions.remove(&viewport_id))
             .or(pointer_pos);
-        let (editor_drops, non_editor_drops) = partition_dropped_files(&dropped);
+        self.handle_completed_file_drop(ctx, view, screen_pos, &dropped);
+    }
+
+    fn handle_completed_file_drop(
+        &mut self,
+        ctx: &Context,
+        view: FileDropView,
+        screen_pos: Option<Pos2>,
+        dropped: &[egui::DroppedFileHandle],
+    ) {
+        let FileDropView {
+            canvas_rect,
+            workspace_id,
+            fullscreen_panel,
+            scope,
+        } = view;
+        let (editor_drops, non_editor_drops) = partition_dropped_files(dropped);
 
         if let Some(target) =
             self.terminal_drop_target(fullscreen_panel, screen_pos, scope, !non_editor_drops.is_empty())
         {
             let terminal_drops = match target {
-                TerminalDropTarget::Explicit(_) => dropped.as_slice(),
+                TerminalDropTarget::Explicit(_) => dropped,
                 TerminalDropTarget::Fallback(_) => non_editor_drops.as_slice(),
             };
             let panel_id = target.panel_id();
             let handled_terminal_drop = !terminal_drops.is_empty()
-                && (self.maybe_start_ssh_file_drop(panel_id, terminal_drops, viewport_id)
-                    || self.paste_dropped_paths_into_terminal(panel_id, terminal_drops));
+                && (self.maybe_start_ssh_file_drop(panel_id, terminal_drops, ctx.viewport_id())
+                    || self.paste_dropped_paths_into_terminal(panel_id, terminal_drops, true));
             if handled_terminal_drop && (target.is_explicit() || editor_drops.is_empty()) {
                 return;
             }
@@ -257,11 +314,20 @@ impl HorizonApp {
         None
     }
 
-    fn paste_dropped_paths_into_terminal(&mut self, panel_id: PanelId, dropped: &[egui::DroppedFileHandle]) -> bool {
+    fn paste_dropped_paths_into_terminal(
+        &mut self,
+        panel_id: PanelId,
+        dropped: &[egui::DroppedFileHandle],
+        focus: bool,
+    ) -> bool {
         let Some(payload) = format_dropped_paths_for_terminal(dropped) else {
             return false;
         };
 
+        self.paste_native_text_into_terminal(panel_id, &payload, focus)
+    }
+
+    fn paste_native_text_into_terminal(&mut self, panel_id: PanelId, payload: &str, focus: bool) -> bool {
         let did_paste = {
             let Some(panel) = self.board.panel_mut(panel_id) else {
                 return false;
@@ -271,16 +337,34 @@ impl HorizonApp {
             };
 
             terminal.clear_selection();
-            let bytes = input::paste_bytes(&payload, terminal.mode(), true);
+            let bytes = input::paste_bytes(payload, terminal.mode(), true);
             terminal.write_input(&bytes);
             true
         };
 
-        if did_paste {
+        if did_paste && focus {
             self.board.focus(panel_id);
         }
 
         did_paste
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn handle_native_image_pastes(&mut self) {
+        for paste in self.observed_keyboard_inputs.take_native_pastes() {
+            if let Some(text) = paste.text {
+                self.paste_native_text_into_terminal(paste.panel, &text, false);
+                continue;
+            }
+            let files: Vec<egui::DroppedFileHandle> = paste
+                .paths
+                .into_iter()
+                .map(|path| std::sync::Arc::new(ClipboardFile(path)) as egui::DroppedFileHandle)
+                .collect();
+            if !self.maybe_start_ssh_file_drop(paste.panel, &files, paste.viewport) {
+                self.paste_dropped_paths_into_terminal(paste.panel, &files, false);
+            }
+        }
     }
 
     fn open_dropped_editor_files(
@@ -324,6 +408,15 @@ impl HorizonApp {
             self.mark_runtime_dirty();
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn native_drop_position_points(ctx: &Context, [x, y]: [f64; 2]) -> Pos2 {
+    let scale = ctx.input(|input| input.viewport().native_pixels_per_point.unwrap_or(1.0));
+    let factor = scale / ctx.pixels_per_point();
+    // Convert Wayland logical coordinates to this viewport's egui points.
+    #[allow(clippy::cast_possible_truncation)]
+    egui::pos2(x as f32 * factor, y as f32 * factor)
 }
 
 fn is_editor_drop_path(path: &Path) -> bool {
@@ -466,7 +559,29 @@ fn path_needs_windows_quotes(path: &str) -> bool {
             .any(|ch| matches!(ch, ' ' | '\t' | '&' | '|' | '<' | '>' | '^' | '(' | ')' | '%' | '!'))
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct ClipboardFile(std::path::PathBuf);
+
+#[cfg(target_os = "linux")]
+impl egui::DroppedFile for ClipboardFile {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|error| error.to_string())
+    }
+}
+
 fn native_file_drop_position(ctx: &Context) -> Option<Pos2> {
+    // XWayland's root coordinates do not describe a native Wayland surface.
+    #[cfg(target_os = "linux")]
+    if ctx
+        .data(|data| data.get_temp::<bool>(egui::Id::new("native_wayland_input")))
+        .unwrap_or(false)
+    {
+        return None;
+    }
     let inner_rect = ctx.input(|input| input.viewport().inner_rect)?;
     let global_pos = native_cursor_position()?;
     native_file_drop_local_pos(inner_rect, ctx.pixels_per_point(), global_pos)
@@ -505,6 +620,40 @@ mod tests {
         TerminalDropHit, TerminalDropRects, TerminalDropTarget, format_dropped_paths_for_terminal, is_editor_drop_path,
         native_cursor_position, native_file_drop_local_pos, partition_dropped_files, select_terminal_drop_target,
     };
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn concurrent_native_drops_in_one_raw_frame_open_five_files() {
+        let (temp, ctx, mut app) = test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        });
+        let paths: Vec<_> = (0..5)
+            .map(|index| temp.path().join(format!("file-{index}.md")))
+            .collect();
+        for path in &paths {
+            std::fs::write(path, "synthetic editor drop").expect("fixture");
+        }
+        let observed = app.observed_keyboard_inputs.clone();
+        observed.set_wayland_backend(true);
+        observed.native_window_seen(10);
+        observed.native_focus(10, true);
+        observed.native_recipient_publisher()(egui::ViewportId::ROOT, 1.0, None);
+        for path in &paths {
+            assert!(observed.native_drop_position(10, [300.0, 200.0], vec![path.clone()]));
+        }
+        ctx.input_mut(|input| input.raw.dropped_files = paths.into_iter().map(test_support::dropped_file).collect());
+        let before = app.board.panels.len();
+        app.handle_root_file_drop(&ctx);
+        assert_eq!(app.board.panels.len(), before + 5);
+        assert!(
+            observed
+                .take_native_drop_batches(
+                    egui::ViewportId::ROOT,
+                    &ctx.input(|input| input.raw.dropped_files.clone())
+                )
+                .is_empty()
+        );
+    }
 
     #[test]
     fn formatting_keeps_safe_paths_unquoted() {

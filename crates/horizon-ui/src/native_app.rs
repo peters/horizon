@@ -26,7 +26,23 @@ pub(crate) fn run_native_with_keyboard_observer(
     let mut app = KeyboardAwareApp::new(eframe_app, observed_keyboard_inputs, device_requests);
     #[cfg(target_os = "linux")]
     {
+        use winit::platform::wayland::EventLoopExtWayland as _;
+        use winit::raw_window_handle::HasDisplayHandle as _;
+        app.observed_keyboard_inputs
+            .set_wayland_backend(event_loop.is_wayland());
         app.pinch = pinch::NativePinch::start(&event_loop);
+        if let Ok(handle) = event_loop.display_handle()
+            && let winit::raw_window_handle::RawDisplayHandle::Wayland(display) = handle.as_raw()
+        {
+            let observed = app.observed_keyboard_inputs.clone();
+            let clipboard =
+                smithay_clipboard::native::Subscription::new(display.display.as_ptr() as usize, move || {
+                    observed.wake_native_input();
+                });
+            app.observed_keyboard_inputs
+                .native_worker_resetter(clipboard.resetter());
+            app.clipboard = Some(clipboard);
+        }
         // Keeps the platform display alive independently of the event loop,
         // so the bridge above still outlives it when a callback unwinds.
         app.display_handle = Some(event_loop.owned_display_handle());
@@ -40,6 +56,11 @@ struct KeyboardAwareApp<'app> {
     observed_keyboard_inputs: ObservedKeyboardInputs,
     device_requests: Arc<DeviceRequestBridge>,
     modifiers: egui::Modifiers,
+    #[cfg(target_os = "linux")]
+    image_paste_keys: std::collections::HashSet<(winit::window::WindowId, winit::keyboard::PhysicalKey)>,
+    #[cfg(target_os = "linux")]
+    clipboard: Option<smithay_clipboard::native::Subscription>,
+
     native_window_liveness: NativeWindowLiveness,
     // `pinch` borrows the platform display through raw FFI, so it must be
     // declared before `display_handle`: fields drop in declaration order, and
@@ -62,6 +83,11 @@ impl<'app> KeyboardAwareApp<'app> {
             observed_keyboard_inputs,
             device_requests,
             modifiers: egui::Modifiers::default(),
+            #[cfg(target_os = "linux")]
+            image_paste_keys: std::collections::HashSet::new(),
+            #[cfg(target_os = "linux")]
+            clipboard: None,
+
             native_window_liveness: NativeWindowLiveness::default(),
             #[cfg(target_os = "linux")]
             pinch: None,
@@ -114,11 +140,132 @@ impl KeyboardAwareApp<'_> {
     /// rather than only when a bridge thread wakes the loop.
     #[cfg(target_os = "linux")]
     fn drain_pinch(&mut self, event_loop: &ActiveEventLoop) {
+        let transfers = self
+            .clipboard
+            .as_mut()
+            .map_or_else(Vec::new, smithay_clipboard::native::Subscription::poll);
+        for transfer in transfers {
+            use smithay_clipboard::native::Event as TransferEvent;
+            match transfer {
+                TransferEvent::Reset => {
+                    for surface in self.observed_keyboard_inputs.reset_native_transfers() {
+                        self.inner.window_event(
+                            event_loop,
+                            winit::window::WindowId::from(surface),
+                            WindowEvent::HoveredFileCancelled,
+                        );
+                    }
+                    tracing::debug!("cancelled native file transfers after worker loss or backpressure");
+                }
+                TransferEvent::PasteCancelled { recipient } => {
+                    self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
+                    tracing::debug!("native image paste transfer cancelled");
+                }
+                TransferEvent::Paste {
+                    recipient,
+                    mime,
+                    bytes,
+                    text,
+                } => {
+                    self.complete_native_paste(recipient, &mime, bytes, text);
+                }
+                TransferEvent::Leave { surface } => {
+                    if self.observed_keyboard_inputs.native_window(surface).is_some() {
+                        self.inner.window_event(
+                            event_loop,
+                            winit::window::WindowId::from(surface),
+                            WindowEvent::HoveredFileCancelled,
+                        );
+                    }
+                }
+                TransferEvent::Motion {
+                    surface,
+                    position,
+                    entered,
+                } => {
+                    if self.observed_keyboard_inputs.native_window(surface).is_none() {
+                        continue;
+                    }
+                    if entered {
+                        self.inner.window_event(
+                            event_loop,
+                            winit::window::WindowId::from(surface),
+                            WindowEvent::HoveredFile(std::path::PathBuf::new()),
+                        );
+                    }
+                    self.forward_drop_position(event_loop, surface, position);
+                }
+                TransferEvent::Drop {
+                    surface,
+                    position,
+                    mime,
+                    bytes,
+                } => {
+                    if self.observed_keyboard_inputs.native_window(surface).is_none() {
+                        continue;
+                    }
+                    let paths = self.observed_keyboard_inputs.decode_native_transfer(&mime, &bytes);
+                    self.inner.window_event(
+                        event_loop,
+                        winit::window::WindowId::from(surface),
+                        WindowEvent::HoveredFileCancelled,
+                    );
+                    let Ok(paths) = paths else {
+                        continue;
+                    };
+                    if !self
+                        .observed_keyboard_inputs
+                        .native_drop_position(surface, position, paths.clone())
+                    {
+                        tracing::debug!("native drop rejected before forwarding: completion queue full");
+                        continue;
+                    }
+                    self.forward_drop_position(event_loop, surface, position);
+                    for path in paths {
+                        self.inner.window_event(
+                            event_loop,
+                            winit::window::WindowId::from(surface),
+                            WindowEvent::DroppedFile(path),
+                        );
+                    }
+                }
+            }
+        }
         let Some(pinch) = &mut self.pinch else {
             return;
         };
         for (window_id, event) in pinch.take_events() {
             self.inner.window_event(event_loop, window_id, event);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl KeyboardAwareApp<'_> {
+    fn complete_native_paste(&self, recipient: u64, mime: &str, bytes: Vec<u8>, text: Option<String>) {
+        if let Ok(paths) = self.observed_keyboard_inputs.decode_native_transfer(mime, &bytes) {
+            self.observed_keyboard_inputs.native_paste(recipient, paths);
+        } else if let Some(text) = text.or_else(|| {
+            smithay_clipboard::native::is_text_mime(mime)
+                .then(|| String::from_utf8(bytes).ok())
+                .flatten()
+        }) {
+            self.observed_keyboard_inputs.native_paste_text(recipient, text);
+        } else {
+            self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
+        }
+    }
+
+    fn forward_drop_position(&mut self, event_loop: &ActiveEventLoop, surface: u64, position: [f64; 2]) {
+        if let Some((scale, _)) = self.observed_keyboard_inputs.native_window(surface) {
+            self.inner.window_event(
+                event_loop,
+                winit::window::WindowId::from(surface),
+                WindowEvent::CursorMoved {
+                    device_id: winit::event::DeviceId::dummy(),
+                    position: winit::dpi::PhysicalPosition::new(position[0] * scale, position[1] * scale),
+                },
+            );
         }
     }
 }
@@ -136,6 +283,15 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
         if let Some(pinch) = &mut self.pinch {
             pinch.observe_window(window_id, &event);
         }
+        #[cfg(target_os = "linux")]
+        if matches!(event, WindowEvent::Destroyed) {
+            self.observed_keyboard_inputs.forget_native_window(u64::from(window_id));
+            self.image_paste_keys.retain(|(window, _)| *window != window_id);
+        }
+        #[cfg(target_os = "linux")]
+        if !matches!(event, WindowEvent::Destroyed) {
+            self.observed_keyboard_inputs.native_window_seen(u64::from(window_id));
+        }
         match self.native_window_liveness.classify(window_id, &event) {
             NativeWindowEventAction::RootDestroyed => {
                 tracing::warn!(
@@ -147,6 +303,59 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
             }
             NativeWindowEventAction::Ignore => return,
             NativeWindowEventAction::Forward => {}
+        }
+
+        #[cfg(target_os = "linux")]
+        if matches!(event, WindowEvent::KeyboardInput { .. }) {
+            self.drain_pinch(event_loop);
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let surface = u64::from(window_id);
+            if let WindowEvent::ScaleFactorChanged { scale_factor, .. } = &event {
+                self.observed_keyboard_inputs
+                    .native_window_scale(surface, *scale_factor);
+            }
+            if let WindowEvent::Focused(focused) = &event {
+                self.observed_keyboard_inputs.native_focus(surface, *focused);
+            }
+            if matches!(event, WindowEvent::Focused(false)) {
+                self.image_paste_keys.retain(|(window, _)| *window != window_id);
+            }
+            if let WindowEvent::KeyboardInput {
+                event: key,
+                is_synthetic: false,
+                ..
+            } = &event
+            {
+                let key_id = (window_id, key.physical_key);
+                if self.image_paste_keys.contains(&key_id) {
+                    if key.state == ElementState::Released {
+                        self.image_paste_keys.remove(&key_id);
+                    }
+                    return;
+                }
+                let paste = key.state == ElementState::Pressed
+                    && !key.repeat
+                    && !self.modifiers.alt
+                    && ((matches!(&key.logical_key, winit::keyboard::Key::Character(text) if text.eq_ignore_ascii_case("v"))
+                        && self.modifiers.ctrl)
+                        || (key.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Insert)
+                            && self.modifiers.shift
+                            && !self.modifiers.ctrl));
+                if paste && let Some(recipient) = self.observed_keyboard_inputs.native_paste_request(surface) {
+                    if self
+                        .clipboard
+                        .as_mut()
+                        .is_some_and(|bridge| bridge.request_paste(surface, recipient))
+                    {
+                        self.image_paste_keys.insert(key_id);
+                        return;
+                    }
+                    self.observed_keyboard_inputs.cancel_native_paste_request(recipient);
+                }
+            }
         }
 
         match &event {
