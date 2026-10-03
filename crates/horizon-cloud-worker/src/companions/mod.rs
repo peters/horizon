@@ -18,6 +18,7 @@ struct Runtime {
     live: PathBuf,
     ssh_home: PathBuf,
     source_helper: PathBuf,
+    workspace_launcher: Option<PathBuf>,
     /// How long an inspection waits for companion setup that holds the lock, as
     /// the owning Horizon's own refresh does for a few seconds.
     probe_wait: Duration,
@@ -52,6 +53,20 @@ pub(super) fn run() -> io::Result<()> {
     io::stdout().write_all(b"\n")
 }
 
+/// Workspace mutations stay separate from privileged SSH grant publication.
+pub(super) fn workspace() -> io::Result<()> {
+    let arguments: Vec<_> = std::env::args().skip(2).collect();
+    match arguments.as_slice() {
+        [action, grant, revision] if action == "prepare" && horizon_cloud::valid_id(grant) => {
+            runtime().prepare_worktree(grant, revision)
+        }
+        [action, grant] if action == "remove" && horizon_cloud::valid_id(grant) => {
+            runtime().remove_clean_worktree(grant)
+        }
+        _ => Err(io::Error::other("Invalid companion workspace request")),
+    }
+}
+
 fn runtime() -> Runtime {
     Runtime {
         workspace: "/workspace".into(),
@@ -59,6 +74,9 @@ fn runtime() -> Runtime {
         // OpenSSH looks up the login's home in passwd, not the agent's HOME override.
         ssh_home: "/root/.ssh".into(),
         source_helper: "/usr/local/bin/horizon-worker-source".into(),
+        workspace_launcher: Path::new("/run/horizon-tailnet/agent-isolation")
+            .exists()
+            .then(|| "/usr/local/bin/horizon-worker-tailnet".into()),
         probe_wait: Duration::from_secs(10),
     }
 }
@@ -159,7 +177,7 @@ impl Runtime {
                 self.authorized_key(grant, None)?;
                 // The key is gone, which is what revocation needs; a worktree that
                 // cannot be checked is kept rather than failing the revocation.
-                let _ = self.remove_clean_worktree(grant);
+                let _ = self.workspace_action("remove", grant, None);
                 Ok(Response::Revoked)
             }
             Request::Forget { .. } => self.forget(grant),
@@ -257,8 +275,7 @@ impl Runtime {
         })
     }
 
-    fn authorize(&self, grant: &str, public_key: &str, revision: &str) -> io::Result<Response> {
-        let public_key = ssh::public_key(public_key)?;
+    fn prepare_worktree(&self, grant: &str, revision: &str) -> io::Result<()> {
         if !matches!(revision.len(), 40 | 64) || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(io::Error::other("Invalid companion source revision"));
         }
@@ -298,6 +315,32 @@ impl Runtime {
                 .arg(&worktree)
                 .args(["rev-parse", "--show-toplevel"]),
         )?;
+        Ok(())
+    }
+
+    fn workspace_action(&self, action: &str, grant: &str, revision: Option<&str>) -> io::Result<()> {
+        if let Some(launcher) = &self.workspace_launcher {
+            let mut command = std::process::Command::new(launcher);
+            command
+                .args(["agent"])
+                .arg(std::env::current_exe()?)
+                .args(["companion-workspace", action, grant]);
+            if let Some(revision) = revision {
+                command.arg(revision);
+            }
+            ssh::checked_with_timeout(&mut command, Duration::from_secs(300))?;
+            Ok(())
+        } else if let Some(revision) = revision {
+            self.prepare_worktree(grant, revision)
+        } else {
+            self.remove_clean_worktree(grant)
+        }
+    }
+
+    fn authorize(&self, grant: &str, public_key: &str, revision: &str) -> io::Result<Response> {
+        let public_key = ssh::public_key(public_key)?;
+        self.workspace_action("prepare", grant, Some(revision))?;
+        let worktree = self.worktree(grant);
         let host_key = ssh::checked(
             std::process::Command::new("ssh-keygen")
                 .args(["-y", "-f"])

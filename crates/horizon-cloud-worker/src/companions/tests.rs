@@ -7,6 +7,7 @@ fn runtime(root: &Path) -> Runtime {
         live: root.join("run"),
         ssh_home: root.join("home/.ssh"),
         source_helper: "/usr/bin/true".into(),
+        workspace_launcher: None,
         probe_wait: Duration::from_millis(300),
     }
 }
@@ -518,4 +519,18 @@ fn a_disconnected_grant_key_is_forgotten_only_after_disconnect() {
         runtime.apply(&Request::Forget { grant: "pair".into() }).unwrap(),
         Response::Forgotten
     );
+}
+
+#[test]
+fn failed_unprivileged_checkout_never_publishes_ssh_access() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut runtime, request) = authorizable(root.path());
+    runtime.workspace_launcher = Some("/usr/bin/false".into());
+    assert!(runtime.apply(&request).is_err());
+    assert!(!runtime.worktree("pair").exists());
+    assert_eq!(
+        std::fs::read_to_string(runtime.live.join("horizon-authorized-keys")).unwrap(),
+        "owner-key\n"
+    );
+    assert!(!runtime.workspace.join("companions/prepared/pair").exists());
 }

@@ -383,3 +383,33 @@ after the private fault-injection flow. No new paid allocation was made.
 The preceding PR head's unchanged Windows device-restoration UI test failed its
 initial two-frame timing assertion and passed one bounded rerun. No test or device
 behavior was altered for that failure; current-head CI remains a separate gate.
+
+The final candidate initially exposed a Windows compile warning in a new
+Unix-only selector test fixture. Its definition now has the same test/Unix
+configuration as its callers; no production behavior or warning suppression
+changed. The unchanged Linux native binary remains the demonstrated candidate.
+
+
+## Companion workspace isolation
+
+New companion checkout preparation and clean-worktree revocation run through the
+unprivileged launcher when worker isolation is active. The privileged controller
+keeps its existing grant lock, private SSH keys and authorized-key updates; it
+publishes access only after successful workspace preparation. A regression proves
+failed preparation publishes no SSH access or prepared record.
+
+A network-disabled disposable container used the actual final compiled helper.
+After the initial ownership handoff, it authorized a new companion and performed
+a real forced OpenSSH login: the checkout and prepared record belonged to UID
+10001, the login could edit it with zero capabilities and no privilege escalation,
+and private Tailscale state was unreadable. Dirty retries and revocation preserved
+work, clean revocation removed the worktree and prepared record, and a hostile
+agent-owned parent link could not redirect writes into a root-only directory.
+SSH-key updates remained root-owned and private. The container was removed.
+
+The final local matrix passed 4,717 workspace tests (39 ignored), 1,582 speech-tier
+tests and 253 matching-helper worker tests without skips. Formatting,
+maintainability and both mandatory Clippy tiers passed; the existing provider
+boolean warning remains advisory. The final UI build retained the exact frozen
+native SHA256 above, so the completed native flow and public GIF still demonstrate
+this candidate. No additional paid cloud or host credentials were used.
