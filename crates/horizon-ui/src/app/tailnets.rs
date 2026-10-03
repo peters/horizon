@@ -92,26 +92,6 @@ impl State {
         ui.label(egui::RichText::new("Tailnets").size(24.0).strong().color(theme::FG()));
         ui.label(egui::RichText::new("Private networks for your clouds").color(theme::FG_SOFT()));
         ui.add_space(20.0);
-        egui::Frame::new()
-            .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.08))
-            .corner_radius(12)
-            .inner_margin(16)
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new("Protected credentials")
-                        .size(14.0)
-                        .strong()
-                        .color(theme::FG()),
-                );
-                ui.label("Auth keys stay in your OS keychain. Agents select a saved network without seeing its key.");
-                ui.add_space(8.0);
-                ui.label(
-                    egui::RichText::new("Cloud panels only · Auth keys")
-                        .size(12.0)
-                        .color(theme::FG_SOFT()),
-                );
-            });
-        ui.add_space(16.0);
         let networks = self.catalog.tailnets.clone();
         ui.add_enabled_ui(self.receiver.is_none(), |ui| {
             for network in networks {
@@ -164,37 +144,51 @@ impl State {
                 ui.label("Add a tailnet, then choose it when starting a cloud.");
                 ui.add_space(12.0);
             }
-            self.form(ui);
+            ui.scope(|ui| {
+                let widgets = &mut ui.visuals_mut().widgets;
+                for visual in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active] {
+                    visual.corner_radius = egui::CornerRadius::same(8);
+                }
+                self.form(ui);
+            });
         });
         self.status(ui);
     }
     fn form(&mut self, ui: &mut egui::Ui) {
         ui.separator();
-        ui.add_space(12.0);
+        ui.add_space(20.0);
         ui.label(
             egui::RichText::new(if self.edit.is_some() {
                 "Replace auth key"
             } else {
                 "Add tailnet"
             })
-            .strong(),
+            .size(18.0)
+            .strong()
+            .color(theme::FG()),
         );
-        ui.add_space(10.0);
-        ui.label("Name");
+        ui.add_space(18.0);
+        ui.label(egui::RichText::new("Name").size(13.0).strong());
+        ui.add_space(4.0);
         ui.add(
             egui::TextEdit::singleline(&mut self.name)
                 .hint_text("Work network")
                 .desired_width(f32::INFINITY)
-                .min_size(egui::vec2(0.0, 32.0)),
+                .font(egui::FontId::proportional(14.0))
+                .margin(egui::Margin::symmetric(12, 12))
+                .background_color(theme::PANEL_BG_ALT()),
         );
-        ui.add_space(12.0);
-        ui.label("Auth key");
+        ui.add_space(18.0);
+        ui.label(egui::RichText::new("Auth key").size(13.0).strong());
+        ui.add_space(4.0);
         let password = ui.add(
             egui::TextEdit::singleline(&mut *self.key)
                 .password(true)
                 .hint_text("tskey-auth-…")
                 .desired_width(f32::INFINITY)
-                .min_size(egui::vec2(0.0, 32.0)),
+                .font(egui::FontId::proportional(14.0))
+                .margin(egui::Margin::symmetric(12, 12))
+                .background_color(theme::PANEL_BG_ALT()),
         );
         if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), password.id) {
             state.clear_undoer();
@@ -208,13 +202,14 @@ impl State {
             .size(12.0)
             .color(theme::FG_SOFT()),
         );
-        ui.add_space(8.0);
+        ui.add_space(20.0);
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
             let valid = !self.name.trim().is_empty() && tailnet::valid_key(self.key.trim());
             if ui
                 .add_enabled(
                     valid,
-                    egui::Button::new(egui::RichText::new("Save tailnet").strong()).min_size(egui::vec2(112.0, 32.0)),
+                    egui::Button::new(egui::RichText::new("Save tailnet").strong()).min_size(egui::vec2(112.0, 36.0)),
                 )
                 .clicked()
             {
@@ -228,12 +223,19 @@ impl State {
                         .map_err(|e| e.to_string())
                 });
             }
-            if self.edit.is_some() && ui.button("Cancel").clicked() {
+            if self.edit.is_some()
+                && ui
+                    .add(egui::Button::new("Cancel").min_size(egui::vec2(80.0, 36.0)))
+                    .clicked()
+            {
                 self.edit = None;
                 self.name.clear();
                 self.key.zeroize();
             }
-            if ui.button("Refresh").clicked() {
+            if ui
+                .add(egui::Button::new("Refresh").min_size(egui::vec2(80.0, 36.0)))
+                .clicked()
+            {
                 self.refresh(ui.ctx());
             }
         });

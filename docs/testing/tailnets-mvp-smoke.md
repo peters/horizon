@@ -67,3 +67,20 @@ private registry login material was removed. The shared PC's network policy was
 unchanged. The auth-key-only scope and follow-ups are already in the issue;
 publishing the later test results was blocked by an invalid CLI login and an
 integration without issue-edit permission. The complete results are retained here.
+
+## PR UI refresh
+
+The final settings view removes the introductory credentials card and gives the
+name/key fields consistent 12-pixel padding, 14-pixel text, eight-pixel corners
+and larger spacing between labels, inputs and actions. Credential behavior is
+unchanged. The refreshed frozen UI SHA256 is
+`fb53b38b653652d8c2bcb10b3de9aef2f2558d3b15e46438254e6d2f78a1482c`;
+the actual application child matched it.
+
+A fresh isolated native VNC recording covers two synthetic saved networks, masked
+save and replacement, an empty replacement-key field, selecting either network
+or None in the real provisioning dialog, cancellation without allocation, and
+removal. Full workspace and speech tests, formatting, maintainability and both
+mandatory Clippy tiers passed again. Pedantic Clippy remains advisory and reports
+existing excessive-bools warnings. No paid allocation was repeated for these
+presentation-only changes.
