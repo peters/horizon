@@ -107,7 +107,10 @@ There is no new Rust or Python dependency. Build the candidate in its exact
 isolated worktree, then use the same source and immutable benchmark throughout
 the run. Preparation freezes both executables and records the actual application
 child PID, start identity and executable SHA-256, source/benchmark fingerprints,
-source commit, kernel, Python and FFmpeg version. A later tooling-only commit may
+source commit, kernel and Python. Frozen `horizon-device` integrity is checked before
+independent screenshot capture and final close. Resolved FFmpeg/FFprobe paths,
+SHA-256 hashes and versions are recorded; changed tool resolution or bytes fails
+the run, and final decoding uses the verified absolute paths. A later tooling-only commit may
 have a different commit hash from the candidate; its Rust source fingerprint
 must still match the qualified build. Compilation provenance needs the retained
 build log in addition to the executable hash.

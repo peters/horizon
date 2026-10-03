@@ -13,6 +13,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'scripts/device-smoke'))
 import sandbox
 from serve import bound_port
+from window_provenance import verify_file
 
 
 def fixture_output(counter):
@@ -69,8 +70,9 @@ def native_environment(lab):
 
 
 class Desktop:
-    def __init__(self, root, binaries, tools=None):
+    def __init__(self, root, binaries, tools=None, *, device_sha256):
         self.root = Path(root)
+        self.device_sha256 = device_sha256
         self.children, self.logs = [], []
         self.application = None
         try:
@@ -145,6 +147,7 @@ class Desktop:
 
     def close_normally(self, device):
         # Scope normal titlebar input to the verified isolated GUI.
+        device = verify_file(device, self.device_sha256)
         target = self.root / 'target.json'
         command = [str(device), '--target', str(target)]
         receipt = closing_screenshot(command + ['screenshot', str(self.root / 'close-before.png')])
@@ -165,6 +168,7 @@ class Desktop:
         if not (0 <= at['x'] < geometry['width'] and 0 <= at['y'] < geometry['height']):
             raise RuntimeError('owned titlebar close control is outside fresh screenshot')
         action = {'geometry': geometry, 'action': {'kind': 'click', 'at': at, 'button': 'left'}}
+        verify_file(device, self.device_sha256)
         result = subprocess.run(command + ['act', json.dumps(action)],
                                 capture_output=True, text=True, timeout=15)
         if result.returncode or not json.loads(result.stdout).get('ok'):

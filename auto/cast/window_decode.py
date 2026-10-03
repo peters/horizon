@@ -86,12 +86,12 @@ def locate(frame, width, height, unit_hint=None):
     raise RuntimeError('large fixture guards/checker absent from decoded whole window')
 
 
-def chrome_reference(reference, scale=1):
+def chrome_reference(reference, scale=1, ffmpeg='ffmpeg'):
     image = Path(reference['image'])
     if hashlib.sha256(image.read_bytes()).hexdigest() != reference['sha256']:
         raise RuntimeError('independent root reference changed')
     width, height = reference['region']['width'], reference['region']['height']
-    pixels = subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(image), '-pix_fmt',
+    pixels = subprocess.check_output([ffmpeg, '-v', 'error', '-i', str(image), '-pix_fmt',
               'rgb24', '-f', 'rawvideo', 'pipe:1'], timeout=30)
     if len(pixels) != width * height * 3:
         raise RuntimeError('root reference dimensions changed')
@@ -165,10 +165,11 @@ def identifier_progresses(previous, current):
     return (current - previous) % 65536 < 32768
 
 
-def decode(root, state, expected_canvas, reference=None, measurement=None):
+def decode(root, state, expected_canvas, reference=None, measurement=None, tools=None):
+    tools = tools or {'ffmpeg': 'ffmpeg', 'ffprobe': 'ffprobe'}
     root = Path(root)
     stream = root / state['stream_file']
-    probe = subprocess.run(['ffprobe', '-v', 'error', '-count_frames', '-show_streams', '-of', 'json', str(stream)],
+    probe = subprocess.run([tools['ffprobe'], '-v', 'error', '-count_frames', '-show_streams', '-of', 'json', str(stream)],
                            check=True, capture_output=True, text=True, timeout=180)
     info = json.loads(probe.stdout)['streams'][0]
     if (info['width'], info['height']) != tuple(expected_canvas):
@@ -184,10 +185,10 @@ def decode(root, state, expected_canvas, reference=None, measurement=None):
     ratio = min(960 / dimensions[0], 960 / dimensions[1])
     width, height = [int(value * ratio) // 2 * 2 for value in dimensions]
     chrome = chrome_reference(reference, min(width / reference['region']['width'],
-                                            height / reference['region']['height'])) if reference else None
+                                            height / reference['region']['height']), tools['ffmpeg']) if reference else None
     diagnostic_path = root / (stream.stem + '-ffmpeg.log')
     diagnostic_log = diagnostic_path.open('wb')
-    process = subprocess.Popen(['ffmpeg', '-v', 'error', '-i', str(stream), '-vf', graph,
+    process = subprocess.Popen([tools['ffmpeg'], '-v', 'error', '-i', str(stream), '-vf', graph,
                                 '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'], stdout=subprocess.PIPE,
                                stderr=diagnostic_log)
     identifiers, errors, chrome_errors, marker = [], [], [], None

@@ -18,6 +18,7 @@ from bench import fingerprint
 from receiver import Receiver
 from window_fixture import Desktop, verify_candidate, root_region, native_environment
 from window_decode import decode
+from window_provenance import decoder_identities, executable_sha256, verified_decoders, verify_file
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -227,12 +228,14 @@ def prepare(arguments):
         manifest = {'contract': CONTRACT, 'receiver_id': receiver.label,
                     'source_sha256': source_digest(), 'benchmark_sha256': benchmark_digest(),
                     'machine': {'kernel': platform.release(), 'architecture': platform.machine(),
-                                'python': sys.version, 'ffmpeg': subprocess.check_output(
-                                    ['ffmpeg', '-version'], text=True).splitlines()[0]},
+                                'python': sys.version},
                     'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip(),
-                    'binary_sha256': hashlib.sha256((binaries / 'horizon').read_bytes()).hexdigest()}
+                    'binary_sha256': hashlib.sha256((binaries / 'horizon').read_bytes()).hexdigest(),
+                    'device_sha256': executable_sha256(binaries / 'horizon-device'),
+                    'decoder_tools': decoder_identities()}
         write(root / 'prepare.json', manifest)
-        desktop = Desktop(root, binaries, arguments.tools.resolve() if arguments.tools else None)
+        desktop = Desktop(root, binaries, arguments.tools.resolve() if arguments.tools else None,
+                          device_sha256=manifest['device_sha256'])
         wait(lambda: (root / 'owner-ready.json').exists() and (root / 'outsider-ready.json').exists(), 60)
         manifest['candidate'] = verify_candidate(desktop.application.pid, binaries / 'horizon', root / 'data/horizon.yaml')
         require_ok(request(root, 'owner', 'discover'))
@@ -269,7 +272,8 @@ def prepare(arguments):
             raise RuntimeError('fixture cleanup failed: ' + '; '.join(failures))
 
 
-def capture_reference(root, lab, candidate):
+def capture_reference(root, lab, candidate, device_sha256):
+    device = verify_file(root / 'bin/horizon-device', device_sha256)
     env = native_environment(lab)
     windows = subprocess.check_output(['xdotool', 'search', '--onlyvisible', '--pid',
               str(candidate['pid'])], env=env, text=True, timeout=10).split()
@@ -279,7 +283,8 @@ def capture_reference(root, lab, candidate):
                                        env={**env, 'LC_ALL': 'C'}, text=True, timeout=10)
     region = root_region(geometry)
     image = root / 'root-reference.png'
-    receipt = json.loads(subprocess.check_output([str(root / 'bin/horizon-device'), '--target',
+    verify_file(device, device_sha256)
+    receipt = json.loads(subprocess.check_output([device, '--target',
               str(root / 'target.json'), 'screenshot', str(image), '--options',
               json.dumps({'region': region})], env=env, text=True, timeout=15))
     if not receipt['ok'] or receipt['result']['source_region'] != region:
@@ -342,6 +347,8 @@ def run(arguments):
         candidate = verify_candidate(lab['launcher_pid'], root / 'bin/horizon', root / 'data/horizon.yaml')
         if candidate != manifest['candidate'] or source_digest() != manifest['source_sha256'] or benchmark_digest() != manifest['benchmark_sha256']:
             raise RuntimeError('candidate or benchmark changed since preparation')
+        verify_file(root / 'bin/horizon-device', manifest['device_sha256'])
+        verified_decoders(manifest['decoder_tools'])
         source = next(row for row in require_ok(request(root, 'owner', 'sources'))['sources'] if row['source']['kind'] == 'application')
         if source['requires_user_approval'] or not source['available']:
             raise RuntimeError('grant Entire Horizon through the actual UI before running')
@@ -359,7 +366,7 @@ def run(arguments):
         if not duplicate['isError'] or 'already has' not in (duplicate['outcome'].get('error') or ''):
             raise RuntimeError('duplicate start did not preserve receiver ownership')
         time.sleep(2)
-        reference = capture_reference(root, lab, candidate)
+        reference = capture_reference(root, lab, candidate, manifest['device_sha256'])
         sampler = Sampler(candidate['pid'], gpu=True)
         first = session(root)
         validate_selection(first, arguments.backend, arguments.scaler)
@@ -409,7 +416,9 @@ def run(arguments):
         if arguments.orientation == 'portrait':
             dimensions = dimensions[::-1]
         quality = decode(root / 'receiver', state, dimensions, reference,
-                         json.loads((root / 'measurement.json').read_text()))
+                         json.loads((root / 'measurement.json').read_text()),
+                         tools=verified_decoders(manifest['decoder_tools']))
+        verified_decoders(manifest['decoder_tools'])
         if source_digest() != manifest['source_sha256'] or benchmark_digest() != manifest['benchmark_sha256']:
             raise RuntimeError('source or benchmark changed during experiment')
         summary = {'status': 'PASS', 'contract': CONTRACT, 'score': None, 'exploratory': True,

@@ -114,13 +114,15 @@ class ResourceIntervalReviewTests(unittest.TestCase):
             root = Path(directory)
             (root / 'prepare.json').write_text(json.dumps({'contract': whole_window.CONTRACT,
                 'preapproval_denied': True, 'receiver_id': 'Window-owned', 'candidate': {'pid': 1},
-                'source_sha256': 'source', 'benchmark_sha256': 'benchmark'}))
+                'source_sha256': 'source', 'benchmark_sha256': 'benchmark',
+                'device_sha256': 'device', 'decoder_tools': {}}))
             (root / 'lab.json').write_text(json.dumps({'vnc_address': '127.0.0.1:40000', 'launcher_pid': 2}))
             (root / 'closed.json').write_text('{"closed":true}')
             args = SimpleNamespace(prepared=root, viewer_evidence=root / 'viewer.json',
                 resolution='1080p', orientation='landscape', backend='cpu', scaler=None, seconds=10)
             with patch.object(whole_window, 'validate_viewer'), \
                  patch.object(whole_window, 'verify_candidate', return_value={'pid': 1}), \
+                 patch.object(whole_window, 'verify_file'), patch.object(whole_window, 'verified_decoders'), \
                  patch.object(whole_window, 'source_digest', return_value='source'), \
                  patch.object(whole_window, 'benchmark_digest', return_value='benchmark'), \
                  patch.object(whole_window, 'capture_reference'), patch.object(whole_window, 'request', side_effect=request), \
