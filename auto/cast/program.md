@@ -29,7 +29,8 @@ dependency is added. Never install or change host GPU drivers for an experiment.
 The benchmark compiles an optimized load generator against the actual crate,
 starts an independent authenticated receiver on numeric loopback, sends only
 generated grayscale frames, verifies encryption, decodes the received H.264,
-and requires the selected output canvas, advancing embedded frame IDs, image
+and requires the selected output canvas, at least two decoded frames with strictly
+advancing embedded frame IDs, image
 quality and clean teardown. There is no mDNS advertisement, real-device discovery,
 saved pairing access, TV interaction or UI capture.
 

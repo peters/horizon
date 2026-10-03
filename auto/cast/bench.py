@@ -160,6 +160,8 @@ def decode(root, result, receiver):
         raise RuntimeError("decoded canvas differs from requested resolution/orientation")
     if int(info["nb_read_frames"]) != state["frames"]:
         raise RuntimeError("independent decoder frame coverage differs from receiver count")
+    if state["frames"] < 2:
+        raise RuntimeError("at least two decoded frames are required to verify advancement")
     # First row contains each embedded counter bit twice; remaining rows sample the full canvas.
     graph = "split[a][b];[a]crop=iw:32:0:0,scale=64:1:flags=neighbor[ids];[b]scale=64:32:flags=neighbor[image];[ids][image]vstack"
     pixels = execute(["ffmpeg", "-v", "error", "-i", str(stream), "-filter_complex", graph,

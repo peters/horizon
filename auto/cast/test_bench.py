@@ -20,11 +20,11 @@ class DecoderGates(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
-        self.result = {"width": 1280, "height": 720, "total_frames": 1, "submitted": 1}
-        self.state = {"teardown": True, "events": True, "frames": 1,
+        self.result = {"width": 1280, "height": 720, "total_frames": 2, "submitted": 2}
+        self.state = {"teardown": True, "events": True, "frames": 2,
                       "configs": 1, "config_dimensions": [[1280, 720]] * 3}
         self.receiver = SimpleNamespace(errors=[], sessions=[self.state])
-        self.info = {"streams": [{"width": 1280, "height": 720, "nb_read_frames": "1"}]}
+        self.info = {"streams": [{"width": 1280, "height": 720, "nb_read_frames": "2"}]}
         pixels = bytearray(bench.FRAME_BYTES)
         pixels[0:6] = bytes([255] * 6)  # Counter = 1, twice per bit.
         for row in range(32):
@@ -34,7 +34,10 @@ class DecoderGates(unittest.TestCase):
                 value = 30 if (x // 16 + y // 16) % 2 == 0 else 180
                 at = ((row + 1) * 64 + column) * 3
                 pixels[at:at + 3] = bytes([value] * 3)
-        self.pixels = bytes(pixels)
+        second = bytearray(pixels)
+        second[0:6] = bytes(6)
+        second[6:12] = bytes([255] * 6)
+        self.pixels = bytes(pixels + second)
 
     def decode(self):
         with patch.object(bench, "execute", side_effect=[SimpleNamespace(stdout=json.dumps(self.info)),
@@ -42,7 +45,14 @@ class DecoderGates(unittest.TestCase):
             return bench.decode(self.root, self.result, self.receiver)
 
     def test_valid_decoded_fixture_qualifies(self):
-        self.assertEqual(self.decode()["decoded_frames"], 1)
+        self.assertEqual(self.decode()["decoded_frames"], 2)
+
+    def test_single_frame_does_not_prove_advancement(self):
+        self.state["frames"] = self.result["total_frames"] = self.result["submitted"] = 1
+        self.info["streams"][0]["nb_read_frames"] = "1"
+        self.pixels = self.pixels[:bench.FRAME_BYTES]
+        with self.assertRaisesRegex(RuntimeError, "advancement"):
+            self.decode()
 
     def test_receiver_authentication_failure_never_scores(self):
         self.receiver.errors.append("authentication failed")
@@ -84,7 +94,7 @@ class DecoderGates(unittest.TestCase):
     def test_frozen_frame_ids_never_score(self):
         self.state["frames"] = self.result["total_frames"] = 2
         self.info["streams"][0]["nb_read_frames"] = "2"
-        self.pixels *= 2
+        self.pixels = self.pixels[:bench.FRAME_BYTES] * 2
         with self.assertRaisesRegex(RuntimeError, "duplicated"):
             self.decode()
 
