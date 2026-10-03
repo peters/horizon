@@ -43,7 +43,12 @@ pub(super) struct MicControl {
 impl PanelChrome<'_> {
     /// Leftmost titlebar control: badges and the title stop left of this.
     fn controls_anchor(&self) -> Rect {
-        self.mic.map_or(self.close_rect, |mic| mic.rect)
+        if cfg!(target_os = "linux") {
+            // Reserve the casting control beside the microphone.
+            self.close_rect.translate(egui::vec2(-52.0, 0.0))
+        } else {
+            self.mic.map_or(self.close_rect, |mic| mic.rect)
+        }
     }
 }
 
@@ -654,7 +659,12 @@ fn ssh_status_color(status: SshConnectionStatus) -> Color32 {
 }
 
 fn panel_history_badge_rect(titlebar_rect: Rect, close_rect: Rect) -> Rect {
-    let badge_size = Vec2::new(96.0, 20.0);
+    let width = if cfg!(target_os = "linux") && titlebar_rect.width() < 380.0 {
+        56.0
+    } else {
+        96.0
+    };
+    let badge_size = Vec2::new(width, 20.0);
     Rect::from_center_size(
         Pos2::new(close_rect.min.x - (badge_size.x * 0.5) - 10.0, titlebar_rect.center().y),
         badge_size,

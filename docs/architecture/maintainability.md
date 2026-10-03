@@ -916,3 +916,16 @@ user requests; the core adapter bounds lost-status waiting and surfaces uncertai
 Saved conversation deletion is implemented in `runtime_state/agent_sessions/deletion.rs`: provider removal, identity validation and process-wide reservation guards remain in core. Its identity, batch and staging regressions live in the colocated `deletion/tests/` tree. The modal session picker collects selection/confirmation actions and requests throttled catalog scans while open; its option cache invalidates on scan completion, provider/panel scope changes and process-wide deletion reservation revisions; `app/panels/session_deletion.rs` manages its background worker, bounded reports and result persistence, with presentation and worker regressions in `session_deletion/tests/`.
 
 Saved-conversation deletion worker ownership and recovery-notice presentation live in `app/panels/session_deletion/worker.rs`; profile-scoped immutable notice storage belongs to `session_store/deletion_notice.rs` in core. Shutdown joins destructive workers before process exit.
+### Linux casting
+
+Long-term identities live in private per-device files managed by `horizon-cast::PairingStore`, separate from YAML and temporary PINs. Its file lease spans authentication, streaming and teardown; forgetting uses the same lease. Settings Remote Devices and MCP paired/forget share the host casting state, including busy checks and metadata refresh. The settings leaf module only renders metadata and collects actions.
+
+`horizon-cast` owns receiver discovery, authenticated pairing, encrypted control
+and video, per-receiver reservations, and the bounded encoder worker. It has no
+core or UI dependency. `horizon-browser-control::manifest::cast` defines the
+workspace-scoped request/result contract; the existing UI request pump claims
+it even without a presented frame. `horizon-ui::app::casting` separates source
+validation and capture, picker rendering, and host request handling. UI and MCP
+share those operations. Session switches cancel and discard cast bindings;
+shutdown cancels workers before the host exits. Capture remains limited to
+fully visible, unobscured regions of the main Horizon render target.

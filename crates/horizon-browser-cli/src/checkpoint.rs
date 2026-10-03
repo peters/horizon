@@ -161,6 +161,11 @@ pub enum ResumeError {
         "durable job `{0}` cannot resume remaining work that requires HTTP auth credentials: credentials are not stored in job state; re-run the plan with username and password"
     )]
     HttpAuthCredentialsNotPersisted(String),
+    /// Pairing PINs are transient and must never be replayed.
+    #[error(
+        "durable job `{0}` cannot resume casting pairing or reuse its PIN: start a new pairing request with a fresh code"
+    )]
+    CastPairingNotReplayable(String),
 }
 
 impl UncertainPolicy {

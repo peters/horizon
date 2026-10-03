@@ -249,6 +249,10 @@ impl HorizonApp {
     }
 
     fn begin_session_switch(&mut self, session: &ResolvedSession) {
+        #[cfg(target_os = "linux")]
+        {
+            self.casting.reset_for_session_switch();
+        }
         let _ = self.auto_save_runtime_state();
         // Panel ids restart from 1 in the next board; a transcript finishing
         // after the switch must not inject into an unrelated same-id panel,

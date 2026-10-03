@@ -13,6 +13,7 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+zeroize.workspace = true
 horizon-browser.workspace = true
 atomicwrites.workspace = true
 serde.workspace = true

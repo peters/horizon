@@ -135,7 +135,8 @@ impl JobTrace {
         if self.calls.len() >= MAX_TRACE_CALLS {
             return Err(call_limit_error());
         }
-        let replayable = redact_arguments(&mut call.arguments);
+        let pairing = call.tool == "cast" && call.arguments.get("operation").and_then(Value::as_str) == Some("pair");
+        let replayable = redact_arguments(&mut call.arguments) && !pairing;
         if !call.ok || !replayable {
             self.replayable = false;
         }
@@ -522,8 +523,8 @@ fn redact_map(values: &mut Map<String, Value>, replayable: &mut bool) {
                 }
             }
             "url_patterns" => redact_url_patterns(value, replayable),
-            "body" | "data" | "expression" | "headers" | "password" | "reason" | "script" | "selector" | "text"
-            | "token" | "username" | "value" => {
+            "body" | "data" | "expression" | "headers" | "password" | "pin" | "reason" | "script" | "selector"
+            | "text" | "token" | "username" | "value" => {
                 if !value.is_null() {
                     *value = Value::String("<redacted>".to_string());
                     *replayable = false;
@@ -1074,5 +1075,55 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    #[test]
+    fn casting_pin_never_enters_trace_or_executed_plan() {
+        for (pin, ok) in [
+            (json!("7391"), true),
+            (json!({"nested":["7391"]}), false),
+            (Value::Null, true),
+        ] {
+            let directory = tempfile::tempdir().expect("job");
+            let mut trace = JobTrace::start(directory.path()).expect("trace");
+            trace
+                .record_line(&event("browser_list", &json!({})))
+                .expect("initial list");
+            let mut call: Value = serde_json::from_str(&event(
+                "cast",
+                &json!({"operation":"pair","receiver_id":"synthetic-tv","pin":pin}),
+            ))
+            .expect("call");
+            if !ok {
+                call["item"]["status"] = json!("failed");
+                call["item"]["result"]["isError"] = json!(true);
+            }
+            trace.record_line(&call.to_string()).expect("pair call");
+            let options = JobOptions {
+                prompt: "pair receiver".into(),
+                backend: None,
+                visible: false,
+                json: true,
+            };
+            let artifacts = trace
+                .finish(
+                    directory.path(),
+                    &ReportInput {
+                        options: &options,
+                        backend: BackendKind::ChromiumCdp,
+                        ok,
+                        summary: "done",
+                        artifact: None,
+                        browser_cleanup_ok: true,
+                    },
+                )
+                .expect("artifacts");
+            assert!(!artifacts.replayable);
+            for file in [artifacts.trace, artifacts.plan] {
+                let text = std::fs::read_to_string(file).expect("artifact");
+                assert!(!text.contains("7391"));
+                assert!(text.contains("cast"), "pair call recorded");
+            }
+        }
     }
 }

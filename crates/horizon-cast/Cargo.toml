@@ -1,0 +1,29 @@
+[package]
+name = "horizon-cast"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Modern Apple TV mirroring transport"
+
+[features]
+default = []
+nvenc = []
+
+[lints]
+workspace = true
+
+[dependencies]
+ring.workspace = true
+crypto-bigint.workspace = true
+plist.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+uuid.workspace = true
+
+mdns-sd.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

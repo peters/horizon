@@ -14,6 +14,8 @@ mod canvas;
 mod canvas_drag;
 mod canvas_gesture;
 mod canvas_scroll;
+#[cfg(target_os = "linux")]
+mod casting;
 mod cloud_offers;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud_panel;
@@ -212,6 +214,8 @@ pub struct PanelRenderCaches {
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
+    #[cfg(target_os = "linux")]
+    casting: casting::CastState,
     board: Board,
     #[cfg(feature = "cloud-workspaces")]
     cloud_prototype: cloud_panel::CloudPrototype,
@@ -434,6 +438,8 @@ impl eframe::App for HorizonApp {
         }
         self.update_ui(ui);
         self.render_saved_session_deletion_notice(ui.ctx());
+        #[cfg(target_os = "linux")]
+        self.cast_frame(ui.ctx());
         self.record_root_device_presentation(ui.ctx());
         // Immediate detached viewports have finished too. Reconcile once, even
         // when startup or session-switch overlays bypass panel rendering.

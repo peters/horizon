@@ -54,17 +54,22 @@ pub(crate) fn lookup(variables: &BTreeMap<String, Value>, step: &PlanStep, name:
     })
 }
 
-/// Copy of a plan with HTTP auth username/password values replaced so durable
-/// job state does not keep those secrets. Other steps keep their variables.
+/// Copy of a plan with credentials and pairing PINs removed from durable state.
 pub(crate) fn redact_plan(plan: &Plan) -> Plan {
     let mut plan = plan.clone();
-    let secret_variables = http_auth_secret_variables(&plan);
+    let mut secret_variables = http_auth_secret_variables(&plan);
+    secret_variables.extend(cast_pin_secret_variables(&plan));
     for name in &secret_variables {
         if let Some(value) = plan.variables.get_mut(name) {
             *value = Value::String(REDACTED_SECRET.to_string());
         }
     }
     for step in &mut plan.steps {
+        if step.tool == "cast"
+            && let Some(pin) = step.arguments.get_mut("pin")
+        {
+            redact_credential_literal(pin);
+        }
         if step.tool != "browser_http_auth" {
             continue;
         }
@@ -101,6 +106,18 @@ pub(crate) fn http_auth_secret_variables(plan: &Plan) -> BTreeSet<String> {
                     .into_iter()
                     .filter(|name| plan.variables.get(name).is_some_and(|value| !valid_origin_value(value))),
             );
+        }
+    }
+    names
+}
+
+pub(crate) fn cast_pin_secret_variables(plan: &Plan) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for step in &plan.steps {
+        if step.tool == "cast"
+            && let Some(pin) = step.arguments.get("pin")
+        {
+            collect_variable_names(pin, &mut names);
         }
     }
     names
@@ -150,14 +167,47 @@ pub(crate) fn resume_blocked_by_http_auth_secrets(
     start_index: usize,
     persisted_secret_variables: &BTreeSet<String>,
 ) -> bool {
-    let mut secret_variables: BTreeSet<String> = http_auth_secret_variables(plan)
+    resume_blocked_by_secrets(
+        plan,
+        start_index,
+        persisted_secret_variables,
+        http_auth_secret_variables(plan),
+        remaining_http_auth_cannot_resume,
+    )
+}
+
+pub(crate) fn resume_blocked_by_cast_secrets(
+    plan: &Plan,
+    start_index: usize,
+    persisted_secret_variables: &BTreeSet<String>,
+) -> bool {
+    let mut secret_variables = cast_pin_secret_variables(plan);
+    secret_variables.extend(persisted_secret_variables.iter().cloned());
+    resume_blocked_by_secrets(plan, start_index, &secret_variables, BTreeSet::new(), |step| {
+        step.tool == "cast"
+            && (step.arguments.contains_key("pin")
+                || matches!(
+                    step.arguments.get("operation").and_then(Value::as_str),
+                    None | Some("pair")
+                ))
+    })
+}
+
+fn resume_blocked_by_secrets(
+    plan: &Plan,
+    start_index: usize,
+    persisted_secret_variables: &BTreeSet<String>,
+    candidate_variables: BTreeSet<String>,
+    cannot_resume: fn(&PlanStep) -> bool,
+) -> bool {
+    let mut secret_variables: BTreeSet<String> = candidate_variables
         .into_iter()
         .filter(|name| plan.variables.get(name).and_then(Value::as_str) == Some(REDACTED_SECRET))
         .collect();
     secret_variables.extend(persisted_secret_variables.iter().cloned());
     plan.steps.get(start_index..).is_some_and(|steps| {
         steps.iter().any(|step| {
-            remaining_http_auth_cannot_resume(step)
+            cannot_resume(step)
                 || step
                     .arguments
                     .values()
@@ -395,5 +445,49 @@ mod tests {
             .arguments
             .insert("operation".to_string(), json!({ "$var": "op" }));
         assert!(resume_blocked_by_http_auth_secrets(&substituted, 1, &BTreeSet::new()));
+    }
+
+    #[test]
+    fn casting_pairing_is_not_resumable_even_in_legacy_plans() {
+        for pin in [json!("7391"), json!({"$var":"code"}), json!({"$ref":"earlier#/code"})] {
+            let plan = Plan {
+                version: 1,
+                project: None,
+                variables: BTreeMap::from([("code".into(), json!("7391"))]),
+                steps: vec![
+                    PlanStep {
+                        id: "pair".into(),
+                        tool: "cast".into(),
+                        arguments: Map::from_iter([("operation".into(), json!("pair")), ("pin".into(), pin)]),
+                    },
+                    PlanStep {
+                        id: "status".into(),
+                        tool: "cast".into(),
+                        arguments: Map::from_iter([("operation".into(), json!("status"))]),
+                    },
+                ],
+            };
+            assert!(resume_blocked_by_cast_secrets(&plan, 0, &BTreeSet::new()));
+            let mut legacy = plan.clone();
+            legacy.steps[1]
+                .arguments
+                .insert("receiver_id".into(), json!({"$var":"code"}));
+            assert_eq!(
+                resume_blocked_by_cast_secrets(&legacy, 1, &BTreeSet::new()),
+                legacy.steps[0].arguments["pin"].get("$var").is_some(),
+                "legacy PIN-variable reuse must not bypass replay protection",
+            );
+            assert!(!resume_blocked_by_cast_secrets(
+                &redact_plan(&plan),
+                1,
+                &cast_pin_secret_variables(&plan)
+            ));
+            let mut substituted = plan.clone();
+            substituted.steps[0].arguments.remove("pin");
+            substituted.steps[0]
+                .arguments
+                .insert("operation".into(), json!({"$var":"operation"}));
+            assert!(resume_blocked_by_cast_secrets(&substituted, 0, &BTreeSet::new()));
+        }
     }
 }

@@ -56,6 +56,20 @@ impl HorizonBrowserMcp {
 #[tool_router]
 impl HorizonBrowserMcp {
     #[tool(
+        name = "cast",
+        description = "Cast only a Horizon panel or workspace from the calling agent's workspace to a discovered modern Apple TV. Linux only. Discover is asynchronous: poll status for results. One session per TV; separate TVs may cast concurrently. Sources lists stable source IDs. Paired lists remembered TVs, including offline devices, without keys. Forget deletes one receiver's saved pairing and is refused while that TV has an active session. Start reuses saved pairing; poll status and immediately notify the user when state is pin_required, then submit their onscreen code with pair. If saved pairing is rejected, explicitly forget it before starting a fresh pairing. Landscape and portrait are selected at start. Set resolution to 720p, 1080p (default), or 4k; status reports the selected resolution. Higher resolution cannot restore detail absent from the visible source. Stop is receiver-specific and idempotent. Socket transmission does not prove TV display. No desktop or arbitrary application capture."
+    )]
+    async fn cast(
+        &self,
+        Parameters(input): Parameters<horizon_browser_control::manifest::cast::CastOperation>,
+    ) -> Result<Json<horizon_browser_control::manifest::cast::CastOutcome>, String> {
+        let outcome = self.controller.cast(input).await?;
+        if let Some(error) = &outcome.error {
+            return Err(error.clone());
+        }
+        Ok(Json(outcome))
+    }
+    #[tool(
         name = "device_panel",
         description = "Manage native Device viewers in the calling agent's current Horizon workspace; they are read-only for agents (a person may turn Interact on in the UI, no operation can). Operations: create(endpoint,identity?,ssh?), list, inspect(panel_id), visibility(panel_id,visible), reveal(panel_id), reconnect(panel_id), close(panel_id). Optional identity contains creator-supplied machine_name, hostname, numeric ip_addresses and tailscale_name, not verified identity. Optional ssh {host,user?,port?} reaches endpoint on that host's loopback through an SSH tunnel (ssh -W) using the Horizon machine's own SSH configuration and keys; the host must already be trusted in known_hosts, and never pass credentials, key paths or ssh options. Inspect/list report ssh for tunnelled viewers. Inspect/list return identity and server details (name and desktop_size); server details are last-observed when disconnected and cleared on reconnect. Endpoints must be explicit numeric loopback addresses with nonzero ports. Create returns a stable id immediately, not proof of a live image: inspect connection, image_received, image_displayed and frame_sequence. Viewers that are not drawn (hidden, off canvas, behind a fullscreen panel) keep receiving and keep uploading about once a second, so image_received and frame_sequence stay live evidence while image_displayed is false; received_frame_sequence counts worker image updates independently of those uploads. Both reset on reconnect; neither is a heartbeat, so an unchanged desktop is not a connection failure. A viewer displayed earlier in this connection (last_displayed_age_millis present) that now reports not_rendered with exclusion outside_canvas was navigated away from by the person: keep testing and recording, do not pause, and do not reveal just to advance counters. Visible means host presentation state; image_displayed describes the latest completed UI frame. New hosts return diagnostics with decoded frames, sampling pause, frame ages and presentation reason. Static frames alone never prove a stalled stream. Reveal brings an owned viewer into view without reconnecting or stealing keyboard focus, then answers once the host has drawn the connected image after the reveal (image_displayed true), or after at most three seconds with the observation explaining why not (presentation and diagnostics.host.exclusion); stopped or disconnected viewers answer at once. In the reveal answer image_displayed is true only for a draw after the reveal applied; presentation still describes the latest pass. A host that runs no UI frames cannot draw the viewer and answers when the bound expires. A drawn image proves presentation, not motion. Do not ask a human to verify visibility. Reconnect explicitly acquires an unowned/restored viewer; another owner's viewer cannot be mutated. Close releases only the owned viewer connection and never terminates its target. Restores never reconnect automatically. Requires a supporting Horizon host; host response is bounded to 15 seconds. Native input is separate, through explicitly configured standalone device CLI/MCP targets."
     )]
@@ -761,6 +775,7 @@ mod tests {
                 "browser_video",
                 "browser_visibility",
                 "browser_wait",
+                "cast",
                 "cloud_companion_ensure_ready",
                 "cloud_companion_operation",
                 "cloud_companion_stop",
