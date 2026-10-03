@@ -189,9 +189,11 @@ fn write(path: &Path, value: &impl Serialize) -> Result<()> {
     pending.write_all(&bytes).map_err(|_| Error::Storage)?;
     pending.as_file().sync_all().map_err(|_| Error::Storage)?;
     pending.persist(path).map_err(|_| Error::Storage)?;
+    #[cfg(unix)]
     File::open(parent)
         .and_then(|f| f.sync_all())
-        .map_err(|_| Error::Storage)
+        .map_err(|_| Error::Storage)?;
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
