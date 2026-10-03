@@ -157,12 +157,12 @@ impl Connection {
             return Err(Error::Invalid("Invalid committed revision"));
         }
         let remote = SiblingRemote::new(alias)?;
-        runner.run(
+        let directory = runner.run(
             "Sibling upload directory",
             &mut self.command(&remote.stage),
             Duration::from_secs(20),
         )?;
-        self.upload(pack, &remote.pack, runner)?;
+        self.upload(pack, &remote.upload_path(&directory, "horizon-transfer.pack")?, runner)?;
         runner.run(
             super::timeline::IMPORTING_OBJECTS,
             &mut self.command(&remote.import(revision)),
@@ -174,7 +174,12 @@ impl Connection {
     /// Uploads a sibling's verified source dependencies and imports them for it alone.
     pub fn transfer_sibling_material(&self, alias: &str, archive: &Path, runner: &Runner<'_>) -> Result<()> {
         let remote = SiblingRemote::new(alias)?;
-        self.upload(archive, &remote.archive, runner)?;
+        let directory = runner.run(
+            "Sibling upload directory",
+            &mut self.command(&remote.stage),
+            Duration::from_secs(20),
+        )?;
+        self.upload(archive, &remote.upload_path(&directory, "horizon-source.tar")?, runner)?;
         runner.run(
             super::timeline::IMPORTING_DEPENDENCIES,
             &mut self.command(&remote.material),
@@ -261,8 +266,6 @@ impl Connection {
 struct SiblingRemote {
     alias: String,
     stage: String,
-    pack: String,
-    archive: String,
     material: String,
 }
 
@@ -275,10 +278,21 @@ impl SiblingRemote {
         Ok(Self {
             alias: alias.to_owned(),
             stage: format!("horizon-worker-siblings stage {alias}"),
-            pack: format!("siblings/{alias}/horizon-transfer.pack"),
-            archive: format!("siblings/{alias}/horizon-source.tar"),
             material: format!("horizon-worker-source import --sibling {alias}"),
         })
+    }
+
+    fn upload_path(&self, directory: &str, name: &str) -> Result<String> {
+        let directory = directory.trim();
+        if ![
+            format!("/workspace/siblings/{}", self.alias),
+            format!("/workspace/.horizon-tailnet/uploads/{}", self.alias),
+        ]
+        .contains(&directory.to_owned())
+        {
+            return Err(Error::Invalid("Worker returned an invalid sibling upload directory"));
+        }
+        Ok(format!("{}/{name}", &directory["/workspace/".len()..]))
     }
 
     fn import(&self, revision: &str) -> String {
@@ -503,8 +517,32 @@ mod tests {
     fn sibling_commands_and_uploads_stay_with_an_accepted_siblings_own_material() {
         let remote = SiblingRemote::new("native-lib").unwrap();
         assert_eq!(remote.stage, "horizon-worker-siblings stage native-lib");
-        assert_eq!(remote.pack, "siblings/native-lib/horizon-transfer.pack");
-        assert_eq!(remote.archive, "siblings/native-lib/horizon-source.tar");
+        assert_eq!(
+            remote
+                .upload_path("/workspace/siblings/native-lib\n", "horizon-transfer.pack")
+                .unwrap(),
+            "siblings/native-lib/horizon-transfer.pack"
+        );
+        assert_eq!(
+            remote
+                .upload_path(
+                    "/workspace/.horizon-tailnet/uploads/native-lib\n",
+                    "horizon-transfer.pack"
+                )
+                .unwrap(),
+            ".horizon-tailnet/uploads/native-lib/horizon-transfer.pack"
+        );
+        assert!(
+            remote
+                .upload_path("/workspace/.horizon-tailnet/uploads/other", "horizon-transfer.pack")
+                .is_err()
+        );
+        assert_eq!(
+            remote
+                .upload_path("/workspace/siblings/native-lib", "horizon-source.tar")
+                .unwrap(),
+            "siblings/native-lib/horizon-source.tar"
+        );
         assert_eq!(remote.material, "horizon-worker-source import --sibling native-lib");
         assert_eq!(
             remote.import(&"a".repeat(40)),

@@ -2396,17 +2396,23 @@ dependencies = [
 name = "horizon-cloud"
 version = "0.2.7"
 dependencies = [
+ "apple-native-keyring-store",
  "base64 0.23.1",
  "ed25519-dalek",
+ "keyring-core",
  "ring",
  "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.21",
  "time",
  "unicode-general-category",
  "ureq",
+ "uuid",
+ "windows-native-keyring-store",
+ "zbus-secret-service-keyring-store",
  "zeroize",
 ]
 

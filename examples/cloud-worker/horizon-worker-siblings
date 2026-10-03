@@ -16,7 +16,7 @@ import re
 import subprocess
 import sys
 
-MANIFEST = Path('/workspace/siblings.json')
+MANIFEST = Path('/workspace/.horizon/siblings.json' if os.environ.get('HORIZON_UNPRIVILEGED') else '/workspace/siblings.json')
 EMPTY = {'version': 1, 'primary': None, 'siblings': []}
 LIMIT = 64 * 1024
 MAX_SIBLINGS = 16
@@ -95,6 +95,8 @@ def write(value):
 
 
 def stage(alias):
+    if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists():
+        os.execv('/usr/local/bin/horizon-worker-tailnet', ['horizon-worker-tailnet', 'stage', alias])
     if not ALIAS.fullmatch(alias):
         raise ValueError('Invalid sibling alias')
     root = Path('/workspace/siblings') / alias
@@ -137,6 +139,9 @@ def main(arguments):
 
 if __name__ == '__main__':
     os.umask(0o077)
+    if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists() and sys.argv[1:2] != ['stage']:
+        os.chdir('/workspace')
+        os.execv('/usr/local/bin/horizon-worker-tailnet', ['horizon-worker-tailnet', 'agent', '/usr/local/bin/horizon-worker-siblings', *sys.argv[1:]])
     try:
         main(sys.argv[1:])
     except (ValueError, OSError) as error:

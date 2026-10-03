@@ -38,6 +38,13 @@ pub(super) struct CloudPrototype {
     creation_holds: Vec<String>,
 }
 
+#[cfg(feature = "cloud-workspaces")]
+impl CloudPrototype {
+    pub(super) fn reload_tailnets(&mut self) {
+        self.production.tailnets.reload();
+    }
+}
+
 impl CloudPrototype {
     pub(super) fn creation_open(&self) -> bool {
         self.production.creating || self.production.setup.open

@@ -30,6 +30,7 @@ pub mod setup;
 pub mod siblings;
 pub mod ssh;
 pub mod state;
+pub mod tailnet;
 pub mod timeline;
 pub mod tunnel;
 mod worker_contract;

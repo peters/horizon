@@ -36,6 +36,8 @@ enum SettingsTab {
     RemoteBrowsers,
     RemoteDevices,
     Yaml,
+    #[cfg(feature = "cloud-workspaces")]
+    Tailnets,
 }
 
 impl SettingsTab {
@@ -47,16 +49,20 @@ impl SettingsTab {
             Self::RemoteBrowsers => "Remote browsers",
             Self::RemoteDevices => "Remote Devices",
             Self::Yaml => "YAML",
+            #[cfg(feature = "cloud-workspaces")]
+            Self::Tailnets => "Tailnets",
         }
     }
 
-    const ALL: [Self; 6] = [
+    const ALL: &[Self] = &[
         Self::General,
         Self::Shortcuts,
         Self::Presets,
         Self::RemoteBrowsers,
         Self::RemoteDevices,
         Self::Yaml,
+        #[cfg(feature = "cloud-workspaces")]
+        Self::Tailnets,
     ];
 }
 
@@ -76,6 +82,8 @@ pub(super) struct SettingsEditor {
     credential_inputs: remote_browsers::CredentialInputs,
     portable_profile: remote_browsers::PortableProfilePanel,
     provider_usage: remote_usage::UsagePanels,
+    #[cfg(feature = "cloud-workspaces")]
+    tailnets: super::tailnets::State,
     #[cfg(target_os = "linux")]
     remote_devices: remote_devices::RemoteDevicesPanel,
 }
@@ -126,6 +134,8 @@ impl HorizonApp {
                 credential_inputs: remote_browsers::CredentialInputs::default(),
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
+                #[cfg(feature = "cloud-workspaces")]
+                tailnets: super::tailnets::State::default(),
                 #[cfg(target_os = "linux")]
                 remote_devices: remote_devices::RemoteDevicesPanel::default(),
             });
@@ -180,7 +190,18 @@ impl HorizonApp {
             return;
         };
         let (status_text, status_color) = settings_status(&editor.status);
-        let action = bar::render(ui, &status_text, status_color, is_valid, has_changes);
+        #[cfg(feature = "cloud-workspaces")]
+        let configuration = editor.active_tab != SettingsTab::Tailnets || has_changes;
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let configuration = true;
+        let action = bar::render(
+            ui,
+            if configuration { &status_text } else { "" },
+            status_color,
+            is_valid,
+            has_changes,
+            configuration,
+        );
         self.apply_settings_action(action);
 
         #[cfg(target_os = "linux")]
@@ -260,6 +281,8 @@ impl HorizonApp {
         match action {
             SettingsAction::None => {}
             SettingsAction::Close => {
+                #[cfg(feature = "cloud-workspaces")]
+                self.cloud_prototype.reload_tailnets();
                 if let Some(editor) = self.settings.take()
                     && let Ok(config) = Config::from_yaml(&editor.original)
                 {
@@ -422,6 +445,12 @@ fn render_settings_panel(
 
             let available = ui.available_size() - Vec2::new(0.0, 8.0);
             match editor.active_tab {
+                #[cfg(feature = "cloud-workspaces")]
+                SettingsTab::Tailnets => {
+                    egui::ScrollArea::vertical()
+                        .max_height(available.y)
+                        .show(ui, |ui| editor.tailnets.settings(ui));
+                }
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, config_path, &mut editor.buffer, available);
                 }
@@ -486,6 +515,8 @@ fn render_gui_tab(
                 }
                 // Yaml is handled before this function is called.
                 SettingsTab::Yaml | SettingsTab::RemoteDevices => return,
+                #[cfg(feature = "cloud-workspaces")]
+                SettingsTab::Tailnets => return,
             };
             if changed && let Ok(yaml) = config.to_yaml() {
                 *buffer = yaml;
@@ -498,7 +529,7 @@ fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
 
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
-        for tab in SettingsTab::ALL {
+        for &tab in SettingsTab::ALL {
             let selected = editor.active_tab == tab;
             let (fill, text_color) = if selected {
                 (theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.2), theme::FG())

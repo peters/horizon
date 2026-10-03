@@ -157,6 +157,8 @@ class Supervisor:
         self.stopping = False
 
     def start(self, name, command):
+        if name not in {'sshd', 'idle', 'control'} and Path('/run/horizon-tailnet/agent-isolation').exists():
+            command = ['/usr/local/bin/horizon-worker-tailnet', 'agent', *command]
         with (self.workspace / (name + '.log')).open('ab') as log:
             child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
                                      preexec_fn=limit_vnc_descriptors if name == 'vnc' else None)
@@ -213,7 +215,7 @@ class Supervisor:
                  'services': {name: self.identities[name] for name in sorted(names)}}
         pending = self.runtime / 'services.new'
         pending.write_text(json.dumps(state))
-        pending.chmod(0o600)
+        pending.chmod(0o644)
         pending.replace(self.runtime / 'services.json')
 
     def run(self, desktop):
@@ -280,6 +282,7 @@ def main():
             return 0
         os.umask(0o077)
         RUNTIME.mkdir(parents=True, exist_ok=True)
+        RUNTIME.chmod(0o755)
         with (RUNTIME / 'supervisor.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             (RUNTIME / 'services.json').unlink(missing_ok=True)

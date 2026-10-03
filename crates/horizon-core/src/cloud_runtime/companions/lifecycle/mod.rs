@@ -1,6 +1,8 @@
 //! Explicit controller operations. Loading, selecting and polling never execute work.
 mod execution;
 mod receipt;
+mod tailnet_choice;
+pub(in crate::cloud_runtime) use receipt::requested_tailnet;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -173,12 +175,45 @@ pub fn bind_selected(request: &Request<'_>) -> Result<()> {
 /// A different source's pending operation returns Busy, never starts a second action.
 /// That caller must explicitly retry after the operation is reconciled.
 pub fn submit(request: &Request<'_>, action: Action, id: OperationId) -> Result<Operation> {
+    submit_with_tailnet(request, action, id, None)
+}
+
+/// Submit with an optional saved tailnet ID, fenced by the same source and target locks.
+/// # Errors
+/// As `submit`; also refuses changing the tailnet of a retried operation.
+pub fn submit_with_tailnet(
+    request: &Request<'_>,
+    action: Action,
+    id: OperationId,
+    tailnet: Option<&str>,
+) -> Result<Operation> {
+    if tailnet.is_some() && action != Action::EnsureReady {
+        return Err(Error::Invalid("Tailnet selection requires Ensure Ready"));
+    }
     let (store, mut state) = request.load()?;
     let binding = request.authorize(&state)?;
+    if let Some(tailnet) = tailnet {
+        let catalog = super::super::tailnet::store(request.root)
+            .load()
+            .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
+        if tailnet != "none" && !catalog.tailnets.iter().any(|t| t.id == tailnet) {
+            return Err(Error::Invalid("Choose a saved tailnet ID from cloud_companions"));
+        }
+    }
     let mut candidate = state.intents.clone();
     if let Ok(intent) = candidate.submit(request.alias, action, id)
         && state.intents.operation(intent.operation_id).is_some()
     {
+        if tailnet.is_some() {
+            let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
+            let saved: horizon_cloud::tailnet::Selection = serde_json::from_slice(&std::fs::read(
+                root.join(format!("tailnet-request-{}.json", intent.operation_id)),
+            )?)
+            .map_err(|_| Error::Json)?;
+            if saved.tailnet.as_deref() != tailnet.filter(|id| *id != "none") {
+                return Err(Error::Invalid("A retried operation cannot change its tailnet"));
+            }
+        }
         state.intents = candidate;
         store.save(&state)?;
         return operation(request, &binding, intent);
@@ -210,8 +245,15 @@ pub fn submit(request: &Request<'_>, action: Action, id: OperationId) -> Result<
     }
     // A crash between these writes leaves a submitted operation without a target
     // claim. Cancel that unstarted submission explicitly, never infer allocation.
+    let choice = (action == Action::EnsureReady)
+        .then(|| tailnet_choice::prepare(request.root, &target, intent.operation_id, tailnet))
+        .transpose()?;
     store.save(&state)?;
-    receipt::save(&target, request.owner, id, Phase::Submitted)?;
+    receipt::save(&target, request.owner, intent.operation_id, Phase::Submitted)?;
+    // Selection changes only after a durable source intent and target fence exist.
+    if let Some(choice) = choice {
+        choice.commit(&target)?;
+    }
     Ok(Operation {
         intent,
         phase: Phase::Submitted,
@@ -355,6 +397,7 @@ fn execute_with(request: &Request<'_>, id: OperationId, backend: &mut impl execu
                 .clone(),
         );
     }
+    super::super::tailnet::validate_pending(target.root())?;
     let observed = target.load()?;
     let decision = execution::plan(&target, &binding, &intent, observed.as_ref())?;
     if decision == intent::Decision::Provision {

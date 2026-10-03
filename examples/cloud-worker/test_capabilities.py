@@ -192,7 +192,14 @@ class CapabilitiesTests(unittest.TestCase):
                           ['git', 'lfs', 'version'],
                           ['horizon-worker-supervise', '--idle-stop-contract'],
                           ['horizon-worker-source', '--shallow-contract'],
-                          ['horizon-worker-source', '--lfs-selection-contract']])
+                          ['horizon-worker-source', '--lfs-selection-contract'],
+                          ['/usr/bin/setpriv', '--help'],
+                          ['id', '-u', 'horizon-agent']])
+
+    def test_tailnet_contract_requires_the_privilege_drop_runtime(self):
+        status, output, _ = self.run_check(missing=('/usr/bin/setpriv',))
+        self.assertEqual(status, 1)
+        self.assertNotIn('horizon-tailnet-contract=1', output)
 
     def test_environment_selection_rejects_full_defaults_on_minimal_images(self):
         self.write('/etc/horizon-worker/capabilities.json', {})
@@ -318,7 +325,8 @@ class CapabilitiesTests(unittest.TestCase):
                                       ({'HORIZON_IDLE_STOP_MINUTES': '30'}, False),
                                       # A period the watcher refuses leaves it passive.
                                       (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='5'), False),
-                                      (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='1441'), False)]:
+                                      (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='1441'), False),
+                                      ({'HORIZON_WORKER_SELF_STOP_AVAILABLE': '1', 'HORIZON_IDLE_STOP_MINUTES': '30'}, True)]:
             with mock.patch.dict(os.environ, environment, clear=True):
                 self.configure()
             servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']
