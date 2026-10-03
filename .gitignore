@@ -22,3 +22,7 @@ profiling-output/
 # Python bytecode caches from the script test suites
 __pycache__/
 *.pyc
+
+# Local casting benchmark runs and Python environment.
+auto/cast/runs/
+auto/cast/.venv/

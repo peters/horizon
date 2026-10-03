@@ -110,6 +110,13 @@ current subprocess adapter avoids importing the low-level GPU bindings.
 
 ## Acceptance still requiring physical evidence
 
+The [casting autoresearch program](../auto/cast/program.md) provides separate
+CPU, process-tree memory, throughput and GPU-allocation objectives for future
+agents. Its canonical benchmark covers every output resolution/orientation using
+generated frames and an independent loopback receiver. Decoder, image-quality
+and teardown gates prevent broken output from scoring as an improvement. These
+development measurements exclude UI capture and the physical display.
+
 Sustained sender sessions, remembered pairing and clean stop have been checked
 on one physical receiver. Synthetic receivers qualify protocol rejection,
 independent sessions and decoded geometry. Physical displayed motion, text
