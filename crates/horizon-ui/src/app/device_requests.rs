@@ -246,6 +246,12 @@ impl HorizonApp {
                 self.mark_runtime_dirty();
             }
             Operation::Reveal { .. } => {
+                if self.device_reveal_navigation_preserved(id) {
+                    return Outcome::failed(
+                        "navigation_preserved",
+                        "This viewer is restored or was already presented. Continue background inspection and testing; use the UI to bring it back into view.",
+                    );
+                }
                 self.reveal_device_viewer(ctx, id, actor);
             }
             Operation::Close { panel_id } => {
@@ -274,6 +280,20 @@ impl HorizonApp {
             || Outcome::failed("panel_unavailable", "Device panel closed"),
             |panel| Outcome::Panels { panels: vec![panel] },
         )
+    }
+
+    fn device_reveal_navigation_preserved(&self, id: PanelId) -> bool {
+        // Restored viewers have unknown presentation history. Reconnecting
+        // acquires their transport, never permission to replace the saved view.
+        self.board
+            .panel(id)
+            .and_then(horizon_core::Panel::device)
+            .is_some_and(|device| !device.connect_on_start)
+            || self
+                .panel_render_caches
+                .device_ui_state
+                .get(&id)
+                .is_some_and(crate::device_widget::DeviceUiState::presented_once)
     }
 
     fn reveal_device_viewer(&mut self, ctx: &Context, id: PanelId, actor: ActorPanel) {
@@ -353,6 +373,9 @@ impl HorizonApp {
         let Some(pending) = self.panel_render_caches.pending_device_reveal.take() else {
             return;
         };
+        if self.device_reveal_navigation_preserved(pending.id) {
+            return;
+        }
         if !self.board.panel(pending.id).is_some_and(|panel| {
             panel.visible && panel.device().is_some() && !self.workspace_is_detached(panel.workspace_id)
         }) {
@@ -385,6 +408,9 @@ impl HorizonApp {
             .get_mut(local)
             .and_then(|state| state.pending_device_reveal.take());
         let Some(id) = pending else { return };
+        if self.device_reveal_navigation_preserved(id) {
+            return;
+        }
         let valid = self.board.panel(id).is_some_and(|panel| {
             panel.device().is_some()
                 && self

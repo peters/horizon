@@ -30,6 +30,9 @@ pub(crate) struct DeviceUiState {
     pub(crate) owner: Option<String>,
     pub(crate) host: host::HostState,
     image: ImageDisplay,
+    /// A real image was presented during this viewer's lifetime. Reconnecting
+    /// resets transport evidence, but must not grant another canvas takeover.
+    presented_once: bool,
     initialized: bool,
     rendered: bool,
     previous_rendered: bool,
@@ -68,6 +71,10 @@ struct ImageDisplay {
 }
 
 impl DeviceUiState {
+    pub(crate) fn presented_once(&self) -> bool {
+        self.presented_once
+    }
+
     pub(crate) fn was_rendered(&self) -> bool {
         self.rendered
     }
@@ -160,6 +167,7 @@ impl DeviceUiState {
     /// display evidence for inspection or a held reveal.
     fn commit_pass(&mut self) {
         self.image.previous_displayed = self.image.displayed && !self.host.last_pass_discarded();
+        self.presented_once |= self.image.previous_displayed;
         self.previous_rendered = self.rendered;
     }
 
