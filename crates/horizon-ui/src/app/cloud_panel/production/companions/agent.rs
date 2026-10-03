@@ -145,6 +145,12 @@ impl HorizonApp {
         submitted: Submitted,
         ctx: &egui::Context,
     ) -> (Value, bool) {
+        if request.cloud_companion.as_ref().is_some_and(|r| r.tailnet.is_some()) {
+            self.cloud_prototype
+                .production
+                .tailnets
+                .invalidate(&submitted.operation.intent.target_cloud_id);
+        }
         if reads_only(request) {
             let mut answer = describe(source, &submitted.alias, &submitted.operation);
             let operation = &submitted.operation;
@@ -270,7 +276,14 @@ impl HorizonApp {
                 }))
             })
             .collect::<Vec<_>>();
-        json!({ "clouds": clouds })
+        let tailnets = self
+            .cloud_prototype
+            .root
+            .as_deref()
+            .map(cloud_runtime::tailnet::store)
+            .and_then(|store| store.load().ok())
+            .map(|catalog| catalog.tailnets);
+        json!({ "clouds": clouds, "tailnets": tailnets })
     }
 
     /// Runs a submitted operation on the target cloud's card when nothing else is
@@ -485,7 +498,7 @@ fn submit(
             } else {
                 intent::Action::EnsureReady
             };
-            lifecycle::submit(&request, action, id)
+            lifecycle::submit_with_tailnet(&request, action, id, companion.tailnet.as_deref())
         }),
         CompanionAction::List => return Err("cloud_companion_invalid_request".into()),
     }

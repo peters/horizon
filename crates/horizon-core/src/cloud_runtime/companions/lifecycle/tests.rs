@@ -543,3 +543,52 @@ fn an_unchecked_companion_is_not_bound() {
         .unwrap();
     assert!(state.intents.binding("consumer").is_none());
 }
+
+#[test]
+fn tailnet_selection_is_nonsecret_authorized_and_bound_to_the_operation() {
+    let f = Fixture::new();
+    std::fs::write(
+        f.root.path().join("tailnets.json"),
+        br#"{"tailnets":[{"id":"work","name":"Work"}]}"#,
+    )
+    .unwrap();
+    let mut before = f.ready();
+    before.spec = None;
+    before.worker = None;
+    before.operation = CreateState::Prepared;
+    f.save(&before);
+    let id = OperationId::generate();
+    assert!(submit_with_tailnet(&f.request(), Action::EnsureReady, id, Some("unknown")).is_err());
+    assert!(submit_with_tailnet(&f.request(), Action::Stop, id, Some("work")).is_err());
+    let op = submit_with_tailnet(&f.request(), Action::EnsureReady, id, Some("work")).unwrap();
+    assert_eq!(op.phase, Phase::Submitted);
+    let target = f.root.path().join("target");
+    assert_eq!(
+        horizon_cloud::tailnet::Selection::load(&target)
+            .unwrap()
+            .tailnet
+            .as_deref(),
+        Some("work")
+    );
+    assert!(submit_with_tailnet(&f.request(), Action::EnsureReady, id, Some("none")).is_err());
+    assert_eq!(
+        submit_with_tailnet(&f.request(), Action::EnsureReady, id, Some("work"))
+            .unwrap()
+            .intent
+            .operation_id,
+        id
+    );
+    let catalog = crate::cloud_runtime::tailnet::store(f.root.path()).load().unwrap();
+    horizon_cloud::tailnet::Selection::save(&target, None, &catalog).unwrap();
+    let store = Store::lock(&target).unwrap();
+    receipt::save(&store, &f.owner, id, Phase::Ready).unwrap();
+    drop(store);
+    submit_with_tailnet(&f.request(), Action::EnsureReady, id, Some("work")).unwrap();
+    assert!(
+        horizon_cloud::tailnet::Selection::load(&target)
+            .unwrap()
+            .tailnet
+            .is_none(),
+        "a stale retry cannot restore its old choice"
+    );
+}

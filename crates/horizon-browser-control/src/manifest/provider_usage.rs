@@ -432,6 +432,7 @@ mod tests {
             cloud: Some("cloud-1".into()),
             alias: Some("consumer".into()),
             operation_id: Some(new_operation_id()),
+            tailnet: None,
         };
         let id = enqueue_companion_at(root.path(), identity, request.clone()).unwrap();
         let claimed = claim_at(root.path(), "host-a").unwrap().remove(0);
@@ -449,6 +450,7 @@ mod tests {
             cloud: None,
             alias: None,
             operation_id: None,
+            tailnet: None,
         };
         assert!(enqueue_companion_at(root.path(), identity, list.clone()).is_ok());
         for invalid in [
@@ -458,10 +460,12 @@ mod tests {
             },
             CompanionRequest {
                 operation_id: Some("not-an-id".into()),
+                tailnet: None,
                 ..request.clone()
             },
             CompanionRequest {
                 operation_id: None,
+                tailnet: None,
                 ..request.clone()
             },
             CompanionRequest {

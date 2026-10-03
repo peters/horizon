@@ -192,7 +192,8 @@ class CapabilitiesTests(unittest.TestCase):
                           ['git', 'lfs', 'version'],
                           ['horizon-worker-supervise', '--idle-stop-contract'],
                           ['horizon-worker-source', '--shallow-contract'],
-                          ['horizon-worker-source', '--lfs-selection-contract']])
+                          ['horizon-worker-source', '--lfs-selection-contract'],
+                          ['id', '-u', 'horizon-agent']])
 
     def test_environment_selection_rejects_full_defaults_on_minimal_images(self):
         self.write('/etc/horizon-worker/capabilities.json', {})

@@ -42,10 +42,16 @@ REPORT_FRESH_SECONDS = 3 * POLL_SECONDS
 REPORT_CONTRACT = 'horizon-idle-report-contract=1'
 
 
+def tmux_command():
+    if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists():
+        return ['setpriv', '--reuid=10001', '--regid=10001', '--clear-groups', '--', 'tmux', '-L', 'horizon-cloud']
+    return ['tmux', '-L', 'horizon-cloud']
+
+
 def last_output():
     """Newest output time of any agent tmux window, or None without sessions."""
     try:
-        listing = subprocess.run(['tmux', '-L', 'horizon-cloud', 'list-windows', '-a', '-F', '#{window_activity}'],
+        listing = subprocess.run(tmux_command() + [ 'list-windows', '-a', '-F', '#{window_activity}'],
                                  capture_output=True, text=True, timeout=10, check=True).stdout
     except (OSError, subprocess.SubprocessError):
         return None
@@ -158,7 +164,7 @@ def tmux(*args, run=subprocess.run):
     """Output of one tmux query, empty without any agent session. Any other failure
     refuses the stop, since activity is unknown."""
     try:
-        return run(['tmux', '-L', 'horizon-cloud', *args], capture_output=True, text=True, timeout=10,
+        return run(tmux_command() + [ *args], capture_output=True, text=True, timeout=10,
                    check=True).stdout
     except subprocess.CalledProcessError as error:
         if any(message in (error.stderr or '') for message in NO_SERVER):
@@ -293,7 +299,9 @@ def serve_stop_requests(pod_id, key, path=STOP_SOCKET, stop=self_stop, identify=
         path.unlink(missing_ok=True)
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(str(path))
-        path.chmod(0o600)
+        path.chmod(0o660)
+        if Path('/run/horizon-tailnet/agent-isolation').exists():
+            os.chown(path, 0, 10001)
         server.listen(4)
     # Idle stop keeps working; agents are told the worker cannot stop itself.
     except OSError as error:

@@ -48,8 +48,8 @@ The watcher also answers stop requests from agents on `/run/horizon-worker/stop.
 `horizon-worker-stop --reason TEXT`, or its `mcp` mode registered as the
 `stop_this_worker` tool on opted-in workers that hold a stop credential (not on Hetzner, where Horizon stops the worker), asks it to stop the worker when a task is
 done. The watcher is the only process that uses the provider credential, but agent
-sessions run as root today, so this is not an isolation boundary (per-agent credential
-isolation is tracked separately). It identifies the requesting session from the
+sessions in the stock image run as UID 10001 with no effective capabilities;
+older/custom images may still run as root. The root watcher retains provider credentials. It identifies the requesting session from the
 connecting process through the kernel's peer credentials and its tmux pane, never from
 the request, and refuses callers outside a Claude, Codex or Grok session (a shell
 session or an ad-hoc tmux session is not one). It refuses while another
@@ -129,6 +129,26 @@ and device MCP processes run on the worker and retain their injected agent ident
 Private credential files protect against accidental inclusion in source, images
 and logs; they do not isolate agents from other root processes in the same cloud.
 Per-agent operating-system isolation requires a separate security architecture.
+
+## Cloud tailnet contract
+
+The stock image includes pinned Tailscale v1.102.5 binaries. Startup isolates
+workspace services before they can execute user code. `horizon-worker-tailnet`
+is a root control helper; agents cannot enroll, retrieve credentials, or open the
+administrative socket. `configure` accepts bounded private JSON on stdin and
+returns only `ready` or `needs_key`. Enrollment uses an anonymous memory file,
+never an auth key in argv, environment or a retained file.
+
+`/workspace/.horizon-tailnet` and `/run/horizon-tailnet` are root-only. The volume
+root stays root-owned and non-writable by agents. The supervisor restarts the
+userspace daemon and resumes its persistent node state after worker restart.
+Agents use HTTP/SOCKS proxies and the sanitized device inventory in
+`/run/horizon-tailnet-devices/devices.json`; this image does not require TUN or
+NET_ADMIN. Image qualification reports `horizon-tailnet-contract=1` only when the
+binaries and isolated launcher are installed. See
+[cloud tailnets](../../docs/cloud-workspaces.md#tailnets-auth-key-mvp) for scope,
+selection and follow-ups. Signed project sessions fail closed with a selected
+tailnet until that separate runtime is qualified for an unprivileged account.
 
 ## Helpers from the published artifact
 

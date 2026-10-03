@@ -10,6 +10,7 @@ pub(super) fn render(
     status_color: Color32,
     is_valid: bool,
     has_changes: bool,
+    configuration: bool,
 ) -> SettingsAction {
     let mut action = SettingsAction::None;
 
@@ -35,11 +36,11 @@ pub(super) fn render(
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(primary_button("Save")).clicked() {
+                    if configuration && ui.add(primary_button("Save")).clicked() {
                         action = SettingsAction::Save;
-                    } else if ui.add(chrome_button("Reset Defaults")).clicked() {
+                    } else if configuration && ui.add(chrome_button("Reset Defaults")).clicked() {
                         action = SettingsAction::ResetDefaults;
-                    } else if has_changes && ui.add(chrome_button("Revert")).clicked() {
+                    } else if configuration && has_changes && ui.add(chrome_button("Revert")).clicked() {
                         action = SettingsAction::Revert;
                     } else if ui
                         .add(

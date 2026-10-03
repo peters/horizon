@@ -1,5 +1,9 @@
 #!/bin/bash
 set -u
+# Re-enter once through the protected launcher; it drops privileges before any user code.
+if [ "$(id -u)" = 0 ] && [ -f /run/horizon-tailnet/agent-isolation ]; then
+    exec horizon-worker-tailnet agent /usr/local/bin/horizon-worker-run "$@"
+fi
 id="$1"; agent="$2"
 if [ "$agent" = companion ]; then
     [[ "$id" =~ ^[a-zA-Z0-9_-]{1,100}$ ]] || exit 2

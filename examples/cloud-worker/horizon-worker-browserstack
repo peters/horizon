@@ -5,6 +5,10 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import os, sys
+if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists():
+    os.chdir('/workspace')
+    os.execv('/usr/local/bin/horizon-worker-tailnet', ['horizon-worker-tailnet', 'agent', '/usr/local/bin/horizon-worker-browserstack', *sys.argv[1:]])
 import re
 import socket
 import signal

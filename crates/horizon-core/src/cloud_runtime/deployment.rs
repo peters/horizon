@@ -229,6 +229,7 @@ fn deploy_with(
         "Requesting or reconciling worker capacity",
     )));
     let (connection, contract) = provider.provision_ready(request, store, &runner, &mut state, &spec, observe)?;
+    super::tailnet::configure(&connection, store.root(), &runner)?;
     source::transfer(&connection, store, &mut state, packed, &contract, &runner, emit)?;
     begin_sessions(&mut state, store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;

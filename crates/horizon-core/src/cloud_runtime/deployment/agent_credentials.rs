@@ -22,7 +22,7 @@ pub(super) fn configure_agent_auth(
     runner: &Runner<'_>,
 ) -> Result<()> {
     let clear = format!(
-        "python3 - {} {} {} <<'HORIZON_AUTH_CLEANUP'\n{}\nHORIZON_AUTH_CLEANUP",
+        "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi; $launcher - {} {} {} <<'HORIZON_AUTH_CLEANUP'\n{}\nHORIZON_AUTH_CLEANUP",
         u8::from(!capabilities.permits_agent("claude") || settings.anthropic_api_key_file.is_none()),
         u8::from(!capabilities.permits_agent("codex") || settings.openai_api_key_file.is_none()),
         u8::from(!capabilities.permits_agent("claude") || settings.anthropic_workspace_id.is_none()),
@@ -44,7 +44,7 @@ pub(super) fn configure_agent_auth(
         && let Some(path) = &settings.openai_api_key_file
     {
         runner.private_input(
-            &mut connection.command("umask 077; HOME=/workspace/home codex login --with-api-key"),
+            &mut connection.command("umask 077; if [ -f /run/horizon-tailnet/agent-isolation ]; then exec horizon-worker-tailnet agent codex login --with-api-key; else HOME=/workspace/home codex login --with-api-key; fi"),
             path,
         )?;
     }

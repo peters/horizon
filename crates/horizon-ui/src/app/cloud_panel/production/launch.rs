@@ -74,6 +74,8 @@ impl HorizonApp {
         form.launch.workspace = Some(local);
         form.launch.session = self.active_session.as_ref().map(|session| session.session_id.clone());
         form.title.clear();
+        form.tailnet = None;
+        form.tailnets.refresh(ctx);
         form.repository = repository;
         form.revision.clear();
         form.profiles = None;

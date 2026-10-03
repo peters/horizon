@@ -435,7 +435,9 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         false
     } else if form.profiles.is_some() {
         profiles::field(ui, form);
-        ui.add_space(8.0);
+        ui.add_space(12.0);
+        form.tailnets.choice(ui, &mut form.tailnet);
+        ui.add_space(12.0);
         machine(ui, form)
     } else {
         false

@@ -8,7 +8,7 @@ use super::{Context, Error, Owner, Result, intent, journal};
 use crate::cloud_runtime::{Cancellation, Event, settings::Settings, state::Store};
 use horizon_cloud_protocol::OperationId;
 use intent::{Action, Binding, Intent, State};
-use std::path::Path;
+use std::{io::Write, path::Path};
 
 /// Trusted owning-controller inputs, refreshed from the current workspace before each call.
 /// Never construct this from an agent's claimed workspace, inventory or credentials.
@@ -173,14 +173,47 @@ pub fn bind_selected(request: &Request<'_>) -> Result<()> {
 /// A different source's pending operation returns Busy, never starts a second action.
 /// That caller must explicitly retry after the operation is reconciled.
 pub fn submit(request: &Request<'_>, action: Action, id: OperationId) -> Result<Operation> {
+    submit_with_tailnet(request, action, id, None)
+}
+
+/// Submit with an optional saved tailnet ID, fenced by the same source and target locks.
+/// # Errors
+/// As `submit`; also refuses changing the tailnet of a retried operation.
+pub fn submit_with_tailnet(
+    request: &Request<'_>,
+    action: Action,
+    id: OperationId,
+    tailnet: Option<&str>,
+) -> Result<Operation> {
+    if tailnet.is_some() && action != Action::EnsureReady {
+        return Err(Error::Invalid("Tailnet selection requires Ensure Ready"));
+    }
     let (store, mut state) = request.load()?;
     let binding = request.authorize(&state)?;
+    if let Some(tailnet) = tailnet {
+        let catalog = super::super::tailnet::store(request.root)
+            .load()
+            .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
+        if tailnet != "none" && !catalog.tailnets.iter().any(|t| t.id == tailnet) {
+            return Err(Error::Invalid("Choose a saved tailnet ID from cloud_companions"));
+        }
+    }
     let mut candidate = state.intents.clone();
     if let Ok(intent) = candidate.submit(request.alias, action, id)
         && state.intents.operation(intent.operation_id).is_some()
     {
         state.intents = candidate;
         store.save(&state)?;
+        if tailnet.is_some() {
+            let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
+            let saved: horizon_cloud::tailnet::Selection = serde_json::from_slice(&std::fs::read(
+                root.join(format!("tailnet-request-{}.json", intent.operation_id)),
+            )?)
+            .map_err(|_| Error::Json)?;
+            if saved.tailnet.as_deref() != tailnet.filter(|id| *id != "none") {
+                return Err(Error::Invalid("A retried operation cannot change its tailnet"));
+            }
+        }
         return operation(request, &binding, intent);
     }
     let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
@@ -210,8 +243,9 @@ pub fn submit(request: &Request<'_>, action: Action, id: OperationId) -> Result<
     }
     // A crash between these writes leaves a submitted operation without a target
     // claim. Cancel that unstarted submission explicitly, never infer allocation.
+    select_tailnet(request.root, &target, intent.operation_id, tailnet)?;
     store.save(&state)?;
-    receipt::save(&target, request.owner, id, Phase::Submitted)?;
+    receipt::save(&target, request.owner, intent.operation_id, Phase::Submitted)?;
     Ok(Operation {
         intent,
         phase: Phase::Submitted,
@@ -504,4 +538,44 @@ fn finish(
             .ok_or(Error::Invalid("Companion operation disappeared"))?
             .clone(),
     )
+}
+
+fn select_tailnet(root: &std::path::Path, target: &Store, id: OperationId, tailnet: Option<&str>) -> Result<()> {
+    let Some(tailnet) = tailnet else {
+        return Ok(());
+    };
+    let selected = (tailnet != "none").then_some(tailnet);
+    let catalog = super::super::tailnet::store(root)
+        .load()
+        .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
+    if selected.is_some_and(|id| !catalog.tailnets.iter().any(|t| t.id == id)) {
+        return Err(Error::Invalid("Choose a saved tailnet ID from cloud_companions"));
+    }
+    let prior = horizon_cloud::tailnet::Selection::load(target.root()).map_err(|_| Error::Json)?;
+    if target
+        .load()?
+        .is_some_and(|s| s.spec.is_some() || s.worker.is_some() || s.operation != super::super::CreateState::Prepared)
+        && prior.tailnet.as_deref() != selected
+    {
+        return Err(Error::Invalid("Tailnet is chosen only when provisioning a cloud"));
+    }
+    let path = target.root().join(format!("tailnet-request-{id}.json"));
+    let requested = horizon_cloud::tailnet::Selection {
+        tailnet: selected.map(str::to_owned),
+    };
+    if path.exists() {
+        let bytes = std::fs::read(&path)?;
+        let prior: horizon_cloud::tailnet::Selection = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
+        if prior != requested {
+            return Err(Error::Invalid("A retried operation cannot change its tailnet"));
+        }
+        return horizon_cloud::tailnet::Selection::save(target.root(), selected, &catalog)
+            .map_err(|_| Error::Invalid("Could not save tailnet selection"));
+    }
+    let mut pending = tempfile::NamedTempFile::new_in(target.root())?;
+    pending.write_all(&serde_json::to_vec(&requested).map_err(|_| Error::Json)?)?;
+    pending.as_file().sync_all()?;
+    pending.persist(path).map_err(|e| Error::Io(e.error))?;
+    horizon_cloud::tailnet::Selection::save(target.root(), selected, &catalog)
+        .map_err(|_| Error::Invalid("Could not save tailnet selection"))
 }
