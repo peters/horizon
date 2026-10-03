@@ -181,8 +181,6 @@ fn session_switch_cancels_native_input_before_panel_ids_are_reused() {
         .expect("target session");
     let input = app.observed_keyboard_inputs.clone();
     input.native_context(&ctx);
-    let files: Vec<egui::DroppedFileHandle> = vec![std::sync::Arc::new(File(std::path::PathBuf::from("/tmp/old.txt")))];
-    ctx.input_mut(|input| input.raw.dropped_files = files.clone());
 
     input.native_window_seen(10);
     input.native_focus(10, true);
@@ -190,7 +188,11 @@ fn session_switch_cancels_native_input_before_panel_ids_are_reused() {
     let queued = input.native_paste_request(10).expect("queued request");
     let pending = input.native_paste_request(10).expect("pending request");
     input.native_paste(queued, vec![std::path::PathBuf::from("/tmp/old.txt")]);
-    input.native_drop_position(10, [10.0, 20.0], vec![std::path::PathBuf::from("/tmp/old.txt")]);
+    let token = input
+        .native_drop_position(10, [10.0, 20.0], vec![std::path::PathBuf::from("/tmp/old.txt")])
+        .expect("admitted drop");
+    let files: Vec<egui::DroppedFileHandle> = vec![std::sync::Arc::new(File(token))];
+    ctx.input_mut(|input| input.raw.dropped_files = files.clone());
     app.begin_session_switch(&target);
     assert!(ctx.input(|input| input.raw.dropped_files.is_empty()));
     assert!(

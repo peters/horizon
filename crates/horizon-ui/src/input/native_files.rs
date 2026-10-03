@@ -12,6 +12,7 @@ pub(super) struct NativeFileInputs {
     pastes: Vec<NativePaste>,
     requests: std::collections::HashMap<u64, PasteRequest>,
     next_request: u64,
+    next_drop: u64,
     transfer_files: std::sync::Arc<horizon_wayland::TransferFiles>,
     generation: u64,
 }
@@ -30,9 +31,21 @@ struct PasteRequest {
 }
 
 struct NativeDrop {
+    token: std::path::PathBuf,
     surface: u64,
     paths: Vec<std::path::PathBuf>,
     position: [f64; 2],
+}
+
+#[derive(Debug)]
+struct NativeDroppedFile(std::path::PathBuf);
+impl egui::DroppedFile for NativeDroppedFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|error| error.to_string())
+    }
 }
 
 impl ObservedKeyboardInputs {
@@ -182,12 +195,11 @@ impl ObservedKeyboardInputs {
         }
     }
 
-    pub(crate) fn discard_native_drop_positions(&self, viewport: egui::ViewportId) {
+    pub(crate) fn discard_native_drop_positions(&self, files: &[egui::DroppedFileHandle]) {
         let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let surface = state.viewports.get(&viewport).copied();
         state
             .drops
-            .retain(|drop| surface.is_some_and(|surface| drop.surface != surface));
+            .retain(|drop| !files.iter().any(|file| file.path() == drop.token));
     }
 
     pub(crate) fn native_drop_position(
@@ -195,47 +207,44 @@ impl ObservedKeyboardInputs {
         surface: u64,
         position: [f64; 2],
         paths: Vec<std::path::PathBuf>,
-    ) -> bool {
+    ) -> Option<std::path::PathBuf> {
         let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.drops.len() >= 256 {
-            return false;
+        if state.drops.len() >= 256 || paths.is_empty() {
+            return None;
         }
+        state.next_drop = state.next_drop.checked_add(1)?;
+        // Each raw event carries a unique transfer token, rather than matching
+        // filenames that two surfaces can drop simultaneously. Only the
+        // receiving viewport resolves it to the original paths and surface.
+        let token = std::path::PathBuf::from(format!("/.horizon-native-drop/{}", state.next_drop));
         state.drops.push_back(NativeDrop {
+            token: token.clone(),
             surface,
             paths,
             position,
         });
-        true
+        Some(token)
     }
 
     pub(crate) fn take_native_drop_batches(
         &self,
         viewport: egui::ViewportId,
         files: &[egui::DroppedFileHandle],
-    ) -> Vec<(std::ops::Range<usize>, [f64; 2])> {
+    ) -> Vec<(Vec<egui::DroppedFileHandle>, [f64; 2])> {
         let mut state = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let surface = state.viewports.get(&viewport).copied();
         let mut batches = Vec::new();
-        let mut offset = 0;
-        while offset < files.len() {
-            let index = state.drops.iter().position(|drop| {
-                surface.is_none_or(|surface| drop.surface == surface)
-                    && !drop.paths.is_empty()
-                    && files.get(offset..offset + drop.paths.len()).is_some_and(|files| {
-                        drop.paths
-                            .iter()
-                            .map(std::path::PathBuf::as_path)
-                            .eq(files.iter().map(|file| file.path()))
-                    })
-            });
+        for file in files {
+            let index = state.drops.iter().position(|drop| file.path() == drop.token);
             if let Some(drop) = index.and_then(|index| state.drops.remove(index)) {
-                let end = offset + drop.paths.len();
-                batches.push((offset..end, drop.position));
-                offset = end;
-            } else {
-                // A raw file event with no current transfer record may belong
-                // to an earlier session. Never route it using pointer state.
-                offset += 1;
+                // The event loop delivered this token to the surface's own
+                // winit window. Establish routing even before keyboard focus.
+                state.viewports.insert(viewport, drop.surface);
+                let paths = drop
+                    .paths
+                    .into_iter()
+                    .map(|path| std::sync::Arc::new(NativeDroppedFile(path)) as egui::DroppedFileHandle)
+                    .collect();
+                batches.push((paths, drop.position));
             }
         }
         batches
@@ -426,19 +435,31 @@ mod tests {
         assert!(weak.upgrade().is_none());
     }
 
+    fn raw_file(token: std::path::PathBuf) -> egui::DroppedFileHandle {
+        std::sync::Arc::new(TestFile(token))
+    }
+
     #[test]
     fn completion_admission_never_evicts_an_accepted_drop() {
         let observed = super::ObservedKeyboardInputs::default();
         let path = std::path::PathBuf::from("/tmp/image.png");
-        for _ in 0..256 {
-            assert!(observed.native_drop_position(10, [1.0, 2.0], vec![path.clone()]));
-        }
-        assert!(!observed.native_drop_position(10, [3.0, 4.0], vec![path.clone()]));
-        let files: Vec<egui::DroppedFileHandle> = (0..256)
-            .map(|_| std::sync::Arc::new(TestFile(path.clone())) as egui::DroppedFileHandle)
+        let files: Vec<_> = (0..256)
+            .map(|_| {
+                raw_file(
+                    observed
+                        .native_drop_position(10, [1.0, 2.0], vec![path.clone()])
+                        .unwrap(),
+                )
+            })
             .collect();
+        assert!(
+            observed
+                .native_drop_position(10, [3.0, 4.0], vec![path.clone()])
+                .is_none()
+        );
         let batches = observed.take_native_drop_batches(egui::ViewportId::ROOT, &files);
         assert_eq!(batches.len(), 256);
+        assert!(batches.iter().all(|(files, _)| files[0].path() == path));
         assert_eq!(
             batches.iter().map(|(_, position)| *position).collect::<Vec<_>>(),
             vec![[1.0, 2.0]; 256]
@@ -463,76 +484,131 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_drop_batches_keep_each_coordinate_and_skip_stale_raw_events() {
+    fn unfocused_viewports_keep_same_filename_drops_on_their_original_surfaces() {
         let observed = super::ObservedKeyboardInputs::default();
+        let child = egui::ViewportId::from_hash_of("never focused");
         let path = std::path::PathBuf::from("/tmp/same.png");
-        let second = std::path::PathBuf::from("/tmp/second.png");
-        observed.native_window_seen(10);
-        observed.native_focus(10, true);
-        observed.native_recipient_publisher()(egui::ViewportId::ROOT, 1.0, None);
-        observed.native_drop_position(20, [999.0, 999.0], vec![path.clone()]);
-        observed.native_drop_position(10, [1.0, 2.0], vec![path.clone()]);
-        observed.native_drop_position(10, [3.0, 4.0], vec![path.clone(), second.clone()]);
-        let files: Vec<egui::DroppedFileHandle> =
-            [std::path::PathBuf::from("/tmp/stale.png"), path.clone(), path, second]
-                .into_iter()
-                .map(|path| std::sync::Arc::new(TestFile(path)) as egui::DroppedFileHandle)
-                .collect();
+        let other = raw_file(
+            observed
+                .native_drop_position(20, [999.0, 999.0], vec![path.clone()])
+                .unwrap(),
+        );
+        let first = raw_file(
+            observed
+                .native_drop_position(10, [1.0, 2.0], vec![path.clone()])
+                .unwrap(),
+        );
+        let second = raw_file(
+            observed
+                .native_drop_position(10, [3.0, 4.0], vec![path.clone(), path.clone()])
+                .unwrap(),
+        );
+        observed.discard_native_drop_positions(&[]);
+        assert!(
+            observed
+                .take_native_drop_batches(child, &[raw_file(path.clone())])
+                .is_empty()
+        );
+        let files = [raw_file("/.horizon-native-drop/stale".into()), first, second];
+        let batches = observed.take_native_drop_batches(egui::ViewportId::ROOT, &files);
         assert_eq!(
-            observed.take_native_drop_batches(egui::ViewportId::ROOT, &files),
-            vec![(1..2, [1.0, 2.0]), (2..4, [3.0, 4.0])]
+            batches
+                .iter()
+                .map(|(files, pos)| (files.len(), *pos))
+                .collect::<Vec<_>>(),
+            vec![(1, [1.0, 2.0]), (2, [3.0, 4.0])]
+        );
+        assert!(
+            batches
+                .iter()
+                .flat_map(|(files, _)| files)
+                .all(|file| file.path() == path)
         );
         assert!(
             observed
                 .take_native_drop_batches(egui::ViewportId::ROOT, &files)
                 .is_empty()
         );
+        assert_eq!(
+            observed.take_native_drop_position(child, &[other]),
+            Some([999.0, 999.0])
+        );
     }
 
     #[test]
-    fn ignored_drop_cannot_supply_coordinates_to_a_later_identical_path() {
+    fn ignored_unmapped_viewport_discards_only_its_delivered_token() {
         let observed = super::ObservedKeyboardInputs::default();
-        let path = std::path::PathBuf::from("/tmp/a.png");
-        observed.native_drop_position(10, [1.0, 2.0], vec![path.clone()]);
-        observed.discard_native_drop_positions(egui::ViewportId::ROOT);
-        let files: Vec<egui::DroppedFileHandle> = vec![std::sync::Arc::new(TestFile(path.clone()))];
-        assert!(
+        let child = egui::ViewportId::from_hash_of("ignored unfocused");
+        let path = std::path::PathBuf::from("/tmp/image.png");
+        let root = raw_file(
             observed
-                .take_native_drop_position(egui::ViewportId::ROOT, &files)
-                .is_none()
+                .native_drop_position(10, [1.0, 2.0], vec![path.clone()])
+                .unwrap(),
         );
-        observed.native_drop_position(10, [3.0, 4.0], vec![path]);
+        let ignored = raw_file(
+            observed
+                .native_drop_position(20, [3.0, 4.0], vec![path.clone()])
+                .unwrap(),
+        );
+        observed.discard_native_drop_positions(std::slice::from_ref(&ignored));
+        assert!(observed.take_native_drop_batches(child, &[ignored]).is_empty());
         assert_eq!(
-            observed.take_native_drop_position(egui::ViewportId::ROOT, &files),
-            Some([3.0, 4.0])
+            observed.take_native_drop_position(egui::ViewportId::ROOT, &[root]),
+            Some([1.0, 2.0])
+        );
+        let recovered = raw_file(observed.native_drop_position(20, [5.0, 6.0], vec![path]).unwrap());
+        assert_eq!(
+            observed.take_native_drop_position(child, &[recovered]),
+            Some([5.0, 6.0])
         );
     }
 
     #[test]
     fn asynchronous_drop_coordinates_follow_the_payload_into_its_viewport() {
         let observed = super::ObservedKeyboardInputs::default();
-        let paths = vec![std::path::PathBuf::from("/tmp/a.png")];
-        observed.native_drop_position(10, [120.0, 240.0], paths.clone());
+        let token = raw_file(
+            observed
+                .native_drop_position(10, [120.0, 240.0], vec!["/tmp/a.png".into()])
+                .unwrap(),
+        );
         assert!(
             observed
                 .take_native_drop_position(egui::ViewportId::ROOT, &[])
                 .is_none()
         );
-        let files: Vec<egui::DroppedFileHandle> = paths
-            .into_iter()
-            .map(|path| {
-                let file: egui::DroppedFileHandle = std::sync::Arc::new(TestFile(path));
-                file
-            })
-            .collect();
         assert_eq!(
-            observed.take_native_drop_position(egui::ViewportId::ROOT, &files),
+            observed.take_native_drop_position(egui::ViewportId::ROOT, std::slice::from_ref(&token)),
             Some([120.0, 240.0])
         );
         assert!(
             observed
-                .take_native_drop_position(egui::ViewportId::ROOT, &files)
+                .take_native_drop_position(egui::ViewportId::ROOT, &[token])
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn session_reset_never_reuses_a_raw_transfer_token() {
+        let observed = super::ObservedKeyboardInputs::default();
+        let old = raw_file(
+            observed
+                .native_drop_position(10, [1.0, 2.0], vec!["/tmp/a.png".into()])
+                .unwrap(),
+        );
+        observed.reset_native_session();
+        let new = raw_file(
+            observed
+                .native_drop_position(10, [3.0, 4.0], vec!["/tmp/a.png".into()])
+                .unwrap(),
+        );
+        assert!(
+            observed
+                .take_native_drop_batches(egui::ViewportId::ROOT, &[old])
+                .is_empty()
+        );
+        assert_eq!(
+            observed.take_native_drop_position(egui::ViewportId::ROOT, &[new]),
+            Some([3.0, 4.0])
         );
     }
 }

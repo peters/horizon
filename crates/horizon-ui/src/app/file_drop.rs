@@ -71,7 +71,7 @@ impl HorizonApp {
     pub(super) fn clear_file_drop_state(&mut self, ctx: &Context) {
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs
-            .discard_native_drop_positions(ctx.viewport_id());
+            .discard_native_drop_positions(&ctx.input(|input| input.raw.dropped_files.clone()));
         self.file_drop_highlight = None;
         self.file_hover_positions.remove(&ctx.viewport_id());
     }
@@ -131,13 +131,8 @@ impl HorizonApp {
             let batches = self
                 .observed_keyboard_inputs
                 .take_native_drop_batches(viewport_id, &dropped);
-            for (range, position) in batches {
-                self.handle_completed_file_drop(
-                    ctx,
-                    view,
-                    Some(native_drop_position_points(ctx, position)),
-                    &dropped[range],
-                );
+            for (files, position) in batches {
+                self.handle_completed_file_drop(ctx, view, Some(native_drop_position_points(ctx, position)), &files);
             }
             self.clear_file_drop_state(ctx);
             return;
@@ -638,10 +633,16 @@ mod tests {
         observed.native_window_seen(10);
         observed.native_focus(10, true);
         observed.native_recipient_publisher()(egui::ViewportId::ROOT, 1.0, None);
-        for path in &paths {
-            assert!(observed.native_drop_position(10, [300.0, 200.0], vec![path.clone()]));
-        }
-        ctx.input_mut(|input| input.raw.dropped_files = paths.into_iter().map(test_support::dropped_file).collect());
+        let tokens = paths
+            .into_iter()
+            .map(|path| {
+                observed
+                    .native_drop_position(10, [300.0, 200.0], vec![path])
+                    .expect("admitted drop")
+            })
+            .map(test_support::dropped_file)
+            .collect();
+        ctx.input_mut(|input| input.raw.dropped_files = tokens);
         let before = app.board.panels.len();
         app.handle_root_file_drop(&ctx);
         assert_eq!(app.board.panels.len(), before + 5);

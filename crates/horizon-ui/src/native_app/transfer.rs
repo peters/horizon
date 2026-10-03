@@ -204,21 +204,21 @@ impl KeyboardAwareApp<'_> {
                     position,
                     paths: Some(paths),
                 } => {
-                    if self.observed_keyboard_inputs.native_window(surface).is_none()
-                        || !self
-                            .observed_keyboard_inputs
-                            .native_drop_position(surface, position, paths.clone())
-                    {
+                    if self.observed_keyboard_inputs.native_window(surface).is_none() {
                         continue;
                     }
+                    let Some(token) = self
+                        .observed_keyboard_inputs
+                        .native_drop_position(surface, position, paths)
+                    else {
+                        continue;
+                    };
                     self.forward_drop_position(event_loop, surface, position);
-                    for path in paths {
-                        self.inner.window_event(
-                            event_loop,
-                            winit::window::WindowId::from(surface),
-                            WindowEvent::DroppedFile(path),
-                        );
-                    }
+                    self.inner.window_event(
+                        event_loop,
+                        winit::window::WindowId::from(surface),
+                        WindowEvent::DroppedFile(token),
+                    );
                 }
                 Completed::Drop { paths: None, .. } => {}
             }
