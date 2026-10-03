@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import stat
 import subprocess
 import sys
@@ -238,8 +239,7 @@ def handoff_paths(first):
     # The mount root and networking directories stay owned by the control lane.
     folders = ['home', 'agents', 'sessions', 'session-data', 'locks', 'credentials',
                'checkout', 'worktrees', 'companions', 'siblings', 'source', 'repository.git', '.horizon']
-    files = ['agent-mcp.json', 'capabilities.json', 'siblings.json', 'horizon-transfer.pack',
-             'horizon-source.tar', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log', 'device.json',
+    files = ['agent-mcp.json', 'capabilities.json', 'siblings.json', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log', 'device.json',
              'shared-checkout.status', 'shared-checkout.log']
     roots = [Path('/workspace', name) for name in folders + files]
     for root in roots:
@@ -255,27 +255,74 @@ def handoff_paths(first):
         raise ValueError()
     credentials.mkdir(mode=0o700, exist_ok=True)
     own(credentials, recursive=first)
-    transfers = Path('/workspace/source/transfers')
-    if transfers.is_symlink():
+
+
+def stage(alias):
+    if os.geteuid() != 0 or not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', alias):
         raise ValueError()
-    transfers.mkdir(exist_ok=True)
-    for name in ['horizon-transfer.pack', 'horizon-source.tar']:
-        incoming = Path('/workspace', name)
-        if incoming.exists():
-            if incoming.is_symlink():
+    for path in [STATE, STATE / 'uploads', STATE / 'uploads' / alias]:
+        private_directory(path)
+    print(STATE / 'uploads' / alias)
+
+
+def copy_uploads(files):
+    if os.geteuid() != USER:
+        raise ValueError()
+    for descriptor, destination in files:
+        target = Path('/workspace', destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=target.parent)
+        try:
+            with os.fdopen(descriptor, 'rb') as source, os.fdopen(fd, 'wb') as pending:
+                shutil.copyfileobj(source, pending)
+                pending.flush()
+                os.fsync(pending.fileno())
+            os.replace(name, target)
+            directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            Path(name).unlink(missing_ok=True)
+
+
+def handoff_uploads(arguments):
+    # Only the upload consumer opens its completed input; other panel launches
+    # must not consume a concurrent SCP transfer. Agent-owned paths are written
+    # exclusively after dropping privilege, using inherited read-only descriptors.
+    sources = [(Path('/workspace/siblings.json'), '.horizon/siblings.json')]
+    program = Path(arguments[0]).name
+    name = 'horizon-transfer.pack' if program == 'horizon-worker-import' else 'horizon-source.tar'
+    if program == 'horizon-worker-import' or program == 'horizon-worker-source' and arguments[1:2] == ['import']:
+        if '--sibling' in arguments:
+            alias = arguments[arguments.index('--sibling') + 1]
+            if not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', alias):
                 raise ValueError()
-            destination = transfers / name
-            os.replace(incoming, destination)
-            own(destination)
-    own(transfers)
-    # SCP creates these files as root even after the sibling was prepared.
-    for sibling in Path('/workspace/siblings').iterdir():
-        if sibling.is_symlink():
-            raise ValueError()
-        if sibling.is_dir():
-            own(sibling, recursive=sibling.stat().st_uid != USER)
-            for name in ['horizon-transfer.pack', 'horizon-source.tar']:
-                own(sibling / name)
+            sources.append((STATE / 'uploads' / alias / name, f'siblings/{alias}/{name}'))
+        else:
+            sources.append((Path('/workspace', name), 'source/transfers/' + name))
+    opened = []
+    try:
+        for source, destination in sources:
+            try:
+                fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                continue
+            opened.append((fd, source, destination))
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError()
+        if opened:
+            subprocess.run(['/usr/bin/setpriv', '--reuid=' + str(USER), '--regid=' + str(USER),
+                            '--clear-groups', '--no-new-privs', '--bounding-set=-all', '--',
+                            SELF, 'copy-uploads', json.dumps([(fd, dest) for fd, _, dest in opened])],
+                           pass_fds=tuple(fd for fd, _, _ in opened), stdin=subprocess.DEVNULL,
+                           check=True, env={'PATH': '/usr/local/bin:/usr/bin:/bin'})
+            for _, source, _ in opened:
+                source.unlink(missing_ok=True)
+    finally:
+        for fd, _, _ in opened:
+            os.close(fd)
 
 
 def agent(arguments):
@@ -289,6 +336,9 @@ def agent(arguments):
     if worktree.is_relative_to(STATE):
         raise ValueError()
     handoff()
+    with open(RUNTIME / 'upload.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        handoff_uploads(arguments)
     environment = dict(os.environ)
     environment['HORIZON_UNPRIVILEGED'] = '1'
     environment['HORIZON_WORKER_SELF_STOP_AVAILABLE'] = '1' if environment.get('RUNPOD_POD_ID') and environment.get('RUNPOD_API_KEY') else '0'
@@ -308,6 +358,10 @@ def agent(arguments):
 def main():
     if sys.argv[1:] == ['configure']:
         configure()
+    elif len(sys.argv) == 3 and sys.argv[1] == 'stage':
+        stage(sys.argv[2])
+    elif len(sys.argv) == 3 and sys.argv[1] == 'copy-uploads':
+        copy_uploads(json.loads(sys.argv[2]))
     elif sys.argv[1:] == ['isolate']:
         private_directory(RUNTIME)
         prepare_agents()

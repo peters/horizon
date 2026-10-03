@@ -36,9 +36,7 @@ pub(super) fn configure_agent_auth(
     if capabilities.permits_agent("claude")
         && let Some(path) = &settings.anthropic_api_key_file
     {
-        runner.private_input(&mut connection.command(
-            "umask 077; mkdir -p /workspace/credentials && cat > /workspace/credentials/anthropic-api-key.new && mv /workspace/credentials/anthropic-api-key.new /workspace/credentials/anthropic-api-key"
-        ), path)?;
+        runner.private_input(&mut connection.command(&write_command("anthropic-api-key", None)), path)?;
     }
     if capabilities.permits_agent("codex")
         && let Some(path) = &settings.openai_api_key_file
@@ -51,16 +49,44 @@ pub(super) fn configure_agent_auth(
     if capabilities.permits_agent("claude")
         && let Some(workspace) = &settings.anthropic_workspace_id
     {
-        runner.run("Agent workspace binding", &mut connection.command(&format!(
-            "umask 077; mkdir -p /workspace/credentials && printf '%s' '{workspace}' > /workspace/credentials/anthropic-workspace"
-        )), Duration::from_secs(20))?;
+        runner.run(
+            "Agent workspace binding",
+            &mut connection.command(&write_command("anthropic-workspace", Some(workspace))),
+            Duration::from_secs(20),
+        )?;
     }
     Ok(())
+}
+
+fn write_command(name: &str, value: Option<&str>) -> String {
+    let quote = |text: &str| format!("'{}'", text.replace('\'', "'\"'\"'"));
+    let command = format!(
+        "python3 -c {} {} {}",
+        quote(include_str!("write_agent_auth.py")),
+        quote(name),
+        value.map_or_else(String::new, quote),
+    );
+    format!(
+        "if [ -f /run/horizon-tailnet/agent-isolation ]; then exec horizon-worker-tailnet agent /bin/sh -c {}; else exec /bin/sh -c {}; fi",
+        quote(&command),
+        quote(&command),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "exports nonsecret commands for an explicitly isolated worker smoke"]
+    fn export_protected_commands_for_isolated_smoke() {
+        let output = std::env::var_os("HORIZON_TEST_AUTH_COMMANDS").unwrap();
+        let commands = serde_json::json!({
+            "key": write_command("anthropic-api-key", None),
+            "workspace": write_command("anthropic-workspace", Some("synthetic-workspace")),
+        });
+        std::fs::write(output, serde_json::to_vec(&commands).unwrap()).unwrap();
+    }
+
     #[test]
     fn selected_agent_credentials_must_be_nonempty_before_deployment() {
         let file = tempfile::NamedTempFile::new().unwrap();

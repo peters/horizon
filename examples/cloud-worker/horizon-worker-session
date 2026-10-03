@@ -319,7 +319,9 @@ else
     printf '%s\n' "$agent" > "$staging/agent"
     printf '%s\n' "$revision" > "$staging/revision"
     if "$shared"; then touch "$staging/shared-checkout"; fi
-    if [ -f /workspace/siblings.json ]; then
+    manifest=/workspace/siblings.json
+    if [ "${HORIZON_UNPRIVILEGED:-}" = 1 ]; then manifest=/workspace/.horizon/siblings.json; fi
+    if [ -f "$manifest" ]; then
         horizon-worker-siblings show > "$staging/siblings.json"
         listing="$(horizon-worker-siblings layout "$staging/siblings.json")"
         [ -n "$listing" ] || rm "$staging/siblings.json"

@@ -254,3 +254,33 @@ binding. Both test bindings were deleted with no pending credential journal; all
 owned desktop children exited and target files expired. The showcase retains
 original native frames around 30 verified feature actions and omits idle waits
 and unrelated tab navigation. No new paid cloud was allocated.
+
+## Privileged-write regression
+
+The controller writes agent credentials after dropping to UID 10001, using
+unique mode-0600 temporary files and atomic replacement. Root SSH/SCP uploads
+siblings into root-only staging; only the completed upload's consumer passes
+read-only descriptors into an environment-cleared UID-10001 process. Ordinary
+panel launches leave unfinished transfers untouched. Sibling manifests live in
+the agent-owned `.horizon` directory on isolated workers.
+
+A network-disabled disposable worker tested actual compiled credential commands
+with synthetic secrets, leaf links to root-only files, an agent-owned sibling
+parent pointing at a root-only directory, and primary/sibling pack/archive
+handoff. Protected files stayed unchanged; valid destination files belonged to
+UID 10001, failed handoffs retained their input, and resumed ownership migration
+performed no recursive scans. A real loopback OpenSSH/SCP transfer followed by
+Git import verified the private stage path and unprivileged import with a
+malicious destination link. No host credentials or external network were used.
+
+The final required matrix passed 4,712 workspace tests, 1,580 speech-tier tests
+and all 250 worker tests with no skips. Formatting, maintainability and both
+mandatory Clippy tiers passed; the existing provider boolean warning remains
+advisory. The actual native application child matched the frozen speech-enabled
+SHA256 `1ffbdb3ef0cdffc229b25c5e4fd8b811df42ba83412d929249084fcaf0fa027a`.
+Public native-viewer observations established displayed advancing frames. The
+334-frame recording covers two bindings, masked replacement with stable IDs,
+Office/Lab/None provisioning selection, cancellation, removal while editing and
+Fit. Both synthetic bindings were removed without a pending journal; all owned
+processes exited and the device target expired. The showcase retains original
+frames around 32 feature actions. No new paid allocation was made.

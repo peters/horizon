@@ -148,7 +148,11 @@ Agents use HTTP/SOCKS proxies and the sanitized device inventory in
 NET_ADMIN. Image qualification reports `horizon-tailnet-contract=1` only when the
 binaries and isolated launcher are installed. See
 [cloud tailnets](../../docs/cloud-workspaces.md#tailnets-auth-key-mvp) for scope,
-selection and follow-ups. Signed project sessions fail closed with a selected
+selection and follow-ups. Root SSH/SCP puts sibling uploads in private staging.
+Only the consuming import opens those inputs with `O_NOFOLLOW`, passes read-only
+descriptors to UID 10001 with no inherited credentials, and removes staging
+after successful atomic publication. Credential writes also run as UID 10001;
+agent-owned paths never receive privileged writes. Signed project sessions fail closed with a selected
 tailnet until that separate runtime is qualified for an unprivileged account.
 
 ## Helpers from the published artifact
@@ -355,7 +359,8 @@ one path component of letters, digits, `.`, `_` or `-` that does not start with 
 or `-` (so never `.`, `..` or `.git`), and unique ignoring case. `set` refuses unknown keys, more than 16 siblings, input over 64 KiB,
 and a sibling whose `revision` differs from its imported `refs/heads/base` or whose
 source material has not been imported; a refused manifest leaves the previous one in
-place. The manifest is replaced atomically at `/workspace/siblings.json`. `show`
+place. The manifest is replaced atomically at `/workspace/siblings.json` on legacy
+workers, or `/workspace/.horizon/siblings.json` on isolated workers. `show`
 prints the validated manifest, or `{"version":1,"primary":null,"siblings":[]}` when
 none was recorded. An empty `siblings` list is valid and means no siblings; with an
 empty list `primary` may be `null`, so sending back what `show` printed before any

@@ -183,6 +183,29 @@ class TailnetTests(unittest.TestCase):
             worker.handoff()
         self.assertEqual([call.args for call in migrate.call_args_list], [(True,), (False,)])
 
+    def test_nonconsumer_launch_leaves_a_partial_upload_untouched(self):
+        workspace = Path(self.temp.name) / 'workspace'; workspace.mkdir()
+        pack = workspace / 'horizon-transfer.pack'; pack.write_text('partial upload')
+        def path(*parts):
+            value = Path(*parts)
+            return workspace / value.relative_to('/workspace') if value.is_relative_to('/workspace') else value
+        with patch.object(worker, 'Path', side_effect=path), patch.object(worker.subprocess, 'run') as run:
+            worker.handoff_uploads(['/usr/bin/true'])
+        run.assert_not_called()
+        self.assertEqual(pack.read_text(), 'partial upload')
+
+    def test_upload_source_symlinks_are_refused_before_any_handoff(self):
+        workspace = Path(self.temp.name) / 'workspace'; workspace.mkdir()
+        protected = workspace / 'protected'; protected.write_text('unchanged')
+        (workspace / 'horizon-transfer.pack').symlink_to(protected)
+        def path(*parts):
+            value = Path(*parts)
+            return workspace / value.relative_to('/workspace') if value.is_relative_to('/workspace') else value
+        with patch.object(worker, 'Path', side_effect=path), patch.object(worker.subprocess, 'run') as run:
+            with self.assertRaises(OSError): worker.handoff_uploads(['horizon-worker-import', 'revision'])
+        run.assert_not_called()
+        self.assertEqual(protected.read_text(), 'unchanged')
+
     def test_agent_drop_hands_off_siblings_and_only_nonsecret_stop_availability(self):
         workspace = Path(self.temp.name) / 'workspace'
         workspace.mkdir()
@@ -199,6 +222,7 @@ class TailnetTests(unittest.TestCase):
         with patch.object(worker, 'Path', side_effect=path) as paths, \
                 patch.object(worker.os, 'geteuid', return_value=0), \
                 patch.object(worker.os, 'chdir'), \
+                patch.object(worker, 'handoff_uploads') as handoff, \
                 patch.object(worker.subprocess, 'run') as run, \
                 patch.object(worker.os, 'execve', side_effect=Exec) as execute, \
                 patch.dict(os.environ, {'RUNPOD_API_KEY': 'synthetic-provider-secret',
@@ -206,14 +230,13 @@ class TailnetTests(unittest.TestCase):
             paths.cwd.return_value = workspace
             with self.assertRaises(Exec): worker.agent(['/usr/bin/true'])
             self.assertTrue(any('-R' in call.args[0] for call in run.call_args_list))
+            self.assertTrue(any(call.args[0][-1] == str(manifest) for call in run.call_args_list))
             run.reset_mock()
             (workspace / 'horizon-transfer.pack').write_text('new root upload')
             with self.assertRaises(Exec): worker.agent(['/usr/bin/true'])
             self.assertFalse(any('-R' in call.args[0] for call in run.call_args_list))
-            transfer = workspace / 'source/transfers/horizon-transfer.pack'
-            self.assertEqual(transfer.read_text(), 'new root upload')
-            self.assertTrue(any(call.args[0][-1] == str(transfer) for call in run.call_args_list))
-        self.assertTrue(any(call.args[0][-1] == str(manifest) for call in run.call_args_list))
+            self.assertEqual((workspace / 'horizon-transfer.pack').read_text(), 'new root upload')
+            self.assertEqual(handoff.call_count, 2)
         binary, args, environment = execute.call_args.args
         self.assertEqual(binary, '/usr/bin/setpriv')
         self.assertIn('--no-new-privs', args)
