@@ -105,7 +105,8 @@ impl HorizonApp {
         // Only query the native cursor during an active drag; on Linux this
         // opens an X11 connection each call, so skip it when idle.
         let native_pointer_pos = if hovered || !dropped.is_empty() {
-            native_file_drop_position(ctx)
+            let captured = self.native_transfer_drop_position(ctx, &dropped);
+            captured.or_else(|| native_file_drop_position(ctx))
         } else {
             None
         };
@@ -140,7 +141,7 @@ impl HorizonApp {
             let panel_id = target.panel_id();
             let handled_terminal_drop = !terminal_drops.is_empty()
                 && (self.maybe_start_ssh_file_drop(panel_id, terminal_drops, viewport_id)
-                    || self.paste_dropped_paths_into_terminal(panel_id, terminal_drops));
+                    || self.paste_dropped_paths_into_terminal(panel_id, terminal_drops, true));
             if handled_terminal_drop && (target.is_explicit() || editor_drops.is_empty()) {
                 return;
             }
@@ -257,7 +258,12 @@ impl HorizonApp {
         None
     }
 
-    fn paste_dropped_paths_into_terminal(&mut self, panel_id: PanelId, dropped: &[egui::DroppedFileHandle]) -> bool {
+    fn paste_dropped_paths_into_terminal(
+        &mut self,
+        panel_id: PanelId,
+        dropped: &[egui::DroppedFileHandle],
+        focus: bool,
+    ) -> bool {
         let Some(payload) = format_dropped_paths_for_terminal(dropped) else {
             return false;
         };
@@ -276,11 +282,43 @@ impl HorizonApp {
             true
         };
 
-        if did_paste {
+        if did_paste && focus {
             self.board.focus(panel_id);
         }
 
         did_paste
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn handle_native_image_pastes(&mut self, ctx: &Context) {
+        for (panel, paths) in self.observed_keyboard_inputs.take_native_pastes() {
+            let files: Vec<egui::DroppedFileHandle> = paths
+                .into_iter()
+                .map(|path| std::sync::Arc::new(ClipboardFile(path)) as egui::DroppedFileHandle)
+                .collect();
+            if !self.maybe_start_ssh_file_drop(panel, &files, ctx.viewport_id()) {
+                self.paste_dropped_paths_into_terminal(panel, &files, false);
+            }
+        }
+    }
+
+    fn native_transfer_drop_position(&self, ctx: &Context, files: &[egui::DroppedFileHandle]) -> Option<Pos2> {
+        #[cfg(target_os = "linux")]
+        {
+            let [x, y] = self
+                .observed_keyboard_inputs
+                .take_native_drop_position(ctx.viewport_id(), files)?;
+            let scale = ctx.input(|input| input.viewport().native_pixels_per_point.unwrap_or(1.0));
+            let factor = scale / ctx.pixels_per_point();
+            // Convert Wayland logical coordinates to this viewport's egui points.
+            #[allow(clippy::cast_possible_truncation)]
+            Some(egui::pos2(x as f32 * factor, y as f32 * factor))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (ctx, files);
+            None
+        }
     }
 
     fn open_dropped_editor_files(
@@ -466,7 +504,29 @@ fn path_needs_windows_quotes(path: &str) -> bool {
             .any(|ch| matches!(ch, ' ' | '\t' | '&' | '|' | '<' | '>' | '^' | '(' | ')' | '%' | '!'))
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct ClipboardFile(std::path::PathBuf);
+
+#[cfg(target_os = "linux")]
+impl egui::DroppedFile for ClipboardFile {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|error| error.to_string())
+    }
+}
+
 fn native_file_drop_position(ctx: &Context) -> Option<Pos2> {
+    // XWayland's root coordinates do not describe a native Wayland surface.
+    #[cfg(target_os = "linux")]
+    if ctx
+        .data(|data| data.get_temp::<bool>(egui::Id::new("native_wayland_input")))
+        .unwrap_or(false)
+    {
+        return None;
+    }
     let inner_rect = ctx.input(|input| input.viewport().inner_rect)?;
     let global_pos = native_cursor_position()?;
     native_file_drop_local_pos(inner_rect, ctx.pixels_per_point(), global_pos)

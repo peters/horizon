@@ -33,7 +33,10 @@ impl TerminalInputEvent {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct ObservedKeyboardInputs(Arc<Mutex<VecDeque<ObservedKeyboardEvent>>>);
+pub(crate) struct ObservedKeyboardInputs(
+    Arc<Mutex<VecDeque<ObservedKeyboardEvent>>>,
+    #[cfg(target_os = "linux")] pub(super) Arc<Mutex<super::native_files::NativeFileInputs>>,
+);
 
 impl ObservedKeyboardInputs {
     pub(crate) fn observe(&self, event: &KeyEvent, modifiers: Modifiers) {

@@ -1,6 +1,8 @@
 mod ime_commit;
 mod keyboard;
 mod mouse;
+#[cfg(target_os = "linux")]
+mod native_files;
 mod sequence;
 mod winit_keyboard;
 

@@ -2563,6 +2563,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "serde_yaml",
+ "smithay-clipboard",
  "surge-core",
  "tempfile",
  "thiserror 2.0.21",
@@ -2584,8 +2585,10 @@ name = "horizon-wayland"
 version = "0.2.7"
 dependencies = [
  "raw-window-handle",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "url",
  "wayland-client",
  "wayland-protocols",
  "wayland-server",
@@ -5317,10 +5320,9 @@ dependencies = [
 [[package]]
 name = "smithay-clipboard"
 version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71704c03f739f7745053bde45fa203a46c58d25bc5c4efba1d9a60e9dba81226"
 dependencies = [
  "libc",
+ "rustix 1.1.5",
  "smithay-client-toolkit 0.20.0",
  "wayland-backend",
 ]

@@ -1,0 +1,401 @@
+//! Native file input through the toolkit's existing clipboard data device.
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
+use sctk::data_device_manager::ReadPipe;
+use sctk::data_device_manager::data_offer::DragOffer;
+use sctk::reexports::calloop::channel::Sender;
+use sctk::reexports::client::Proxy;
+use std::collections::{HashMap, VecDeque};
+use std::fs::File;
+use std::io::Read;
+use std::os::fd::OwnedFd;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::{Duration, Instant};
+
+type Wake = Arc<dyn Fn() + Send + Sync>;
+type Registry = HashMap<usize, Vec<Weak<Hub>>>;
+static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
+fn registry() -> &'static Mutex<Registry> {
+    REGISTRY.get_or_init(Mutex::default)
+}
+fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    value.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// File input; surface positions are Wayland logical coordinates.
+#[derive(Debug)]
+pub enum Event {
+    Motion {
+        surface: u64,
+        position: [f64; 2],
+        entered: bool,
+    },
+    Leave {
+        surface: u64,
+    },
+    Drop {
+        surface: u64,
+        position: [f64; 2],
+        mime: String,
+        bytes: Vec<u8>,
+    },
+    Paste {
+        recipient: u64,
+        mime: String,
+        bytes: Vec<u8>,
+    },
+}
+
+pub(crate) struct Hub {
+    alive: AtomicBool,
+    commands: Sender<crate::worker::Command>,
+    events: Mutex<VecDeque<Event>>,
+    available: Mutex<HashMap<u64, bool>>,
+    wake: Mutex<Option<Wake>>,
+}
+impl Hub {
+    pub(crate) fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
+    }
+    pub(crate) fn stop(&self) {
+        self.alive.store(false, Ordering::Release);
+    }
+    pub(crate) fn register(display: usize, commands: Sender<crate::worker::Command>) -> Arc<Self> {
+        let hub = Arc::new(Self {
+            alive: AtomicBool::new(true),
+            commands,
+            events: Mutex::default(),
+            available: Mutex::default(),
+            wake: Mutex::default(),
+        });
+        let mut entries = lock(registry());
+        entries.retain(|_, hubs| {
+            hubs.retain(|hub| hub.strong_count() > 0);
+            !hubs.is_empty()
+        });
+        let hubs = entries.entry(display).or_default();
+        hubs.retain(|hub| hub.strong_count() > 0);
+        hubs.push(Arc::downgrade(&hub));
+        hub
+    }
+    pub(crate) fn emit(&self, event: Event) {
+        let mut events = lock(&self.events);
+        if matches!((&event, events.back()), (Event::Motion { surface, entered: false, .. }, Some(Event::Motion { surface: old_surface, entered: false, .. })) if surface == old_surface)
+        {
+            events.pop_back();
+        }
+        let bytes = |event: &Event| match event {
+            Event::Drop { bytes, .. } | Event::Paste { bytes, .. } => bytes.len(),
+            _ => 0,
+        };
+        if events.len() < 256 && events.iter().map(bytes).sum::<usize>() + bytes(&event) <= 32 * 1024 * 1024 {
+            events.push_back(event);
+        }
+        drop(events);
+        let wake = lock(&self.wake).clone();
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+    pub(crate) fn selection(&self, surface: u64, available: bool) {
+        let mut selections = lock(&self.available);
+        if available {
+            selections.insert(surface, true);
+        } else {
+            selections.remove(&surface);
+        }
+    }
+}
+
+pub(crate) struct WorkerGuard(pub Arc<Hub>);
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}
+
+/// Subscribe without opening another connection or binding another data device.
+pub struct Subscription {
+    display: usize,
+    hubs: Vec<Arc<Hub>>,
+    wake: Wake,
+}
+impl Subscription {
+    /// `display` is an identity key only and is never dereferenced.
+    pub fn new(display: usize, wake: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            display,
+            hubs: Vec::new(),
+            wake: Arc::new(wake),
+        }
+    }
+    pub fn refresh(&mut self) {
+        self.hubs.retain(|hub| hub.alive.load(Ordering::Acquire));
+        let mut entries = lock(registry());
+        let Some(hubs) = entries.get_mut(&self.display) else {
+            return;
+        };
+        hubs.retain(|hub| hub.strong_count() > 0);
+        for hub in hubs
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter(|hub| hub.alive.load(Ordering::Acquire))
+        {
+            if !self.hubs.iter().any(|known| Arc::ptr_eq(known, &hub)) {
+                *lock(&hub.wake) = Some(Arc::clone(&self.wake));
+                self.hubs.push(hub);
+            }
+        }
+    }
+    pub fn poll(&mut self) -> Vec<Event> {
+        self.refresh();
+        self.hubs
+            .iter()
+            .flat_map(|hub| lock(&hub.events).drain(..).collect::<Vec<_>>())
+            .collect()
+    }
+    pub fn request_paste(&self, surface: u64, recipient: u64) -> bool {
+        self.hubs
+            .iter()
+            .find(|hub| lock(&hub.available).get(&surface) == Some(&true))
+            .is_some_and(|hub| {
+                hub.commands
+                    .send(crate::worker::Command::NativeRead { surface, recipient })
+                    .is_ok()
+            })
+    }
+}
+
+pub(crate) fn preferred(mimes: &[String]) -> Option<String> {
+    ["text/uri-list", "image/png", "image/jpeg"]
+        .into_iter()
+        .find(|mime| mimes.iter().any(|offered| offered == mime))
+        .map(str::to_owned)
+}
+
+pub(crate) enum Destination {
+    Drop(DragOffer),
+    Paste(u64),
+}
+struct Pending {
+    reader: File,
+    mime: String,
+    destination: Destination,
+    bytes: Vec<u8>,
+    deadline: Instant,
+}
+pub(crate) struct Transfers {
+    pub hub: Arc<Hub>,
+    pub drags: HashMap<u32, u64>,
+    reads: Vec<Pending>,
+}
+impl Transfers {
+    pub fn new(hub: Arc<Hub>) -> Self {
+        Self {
+            hub,
+            reads: Vec::new(),
+            drags: HashMap::new(),
+        }
+    }
+    pub fn receive(&mut self, pipe: ReadPipe, mime: String, destination: Destination) {
+        if self.reads.len() >= 4 {
+            if let Destination::Drop(offer) = destination {
+                offer.destroy();
+            }
+            return;
+        }
+        let fd: OwnedFd = pipe.into();
+        if rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK).is_err() {
+            if let Destination::Drop(offer) = destination {
+                offer.destroy();
+            }
+            return;
+        }
+        self.reads.push(Pending {
+            reader: fd.into(),
+            mime,
+            destination,
+            bytes: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(10),
+        });
+    }
+    pub fn pending(&self) -> bool {
+        !self.reads.is_empty()
+    }
+    pub fn action(&mut self, offer: &DragOffer) {
+        for read in &mut self.reads {
+            if let Destination::Drop(pending) = &mut read.destination
+                && pending.inner() == offer.inner()
+            {
+                pending.selected_action = offer.selected_action;
+            }
+        }
+    }
+    pub fn poll(&mut self) {
+        for mut read in std::mem::take(&mut self.reads) {
+            let mut complete = false;
+            let mut failed = Instant::now() >= read.deadline;
+            let mut buffer = [0; 8192];
+            if !failed {
+                for _ in 0..16 {
+                    match read.reader.read(&mut buffer) {
+                        Ok(0) => {
+                            complete = true;
+                            break;
+                        }
+                        Ok(count) if read.bytes.len() + count <= 32 * 1024 * 1024 => {
+                            read.bytes.extend_from_slice(&buffer[..count])
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                        _ => {
+                            failed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if failed {
+                if let Destination::Drop(offer) = read.destination {
+                    offer.destroy();
+                }
+            } else if !complete {
+                self.reads.push(read);
+            } else {
+                match read.destination {
+                    Destination::Drop(offer) => {
+                        if (offer.inner().version() < 3
+                            || offer.selected_action
+                                == sctk::reexports::client::protocol::wl_data_device_manager::DndAction::Copy)
+                            && !read.bytes.is_empty()
+                        {
+                            self.hub.emit(Event::Drop {
+                                surface: offer.surface.id().as_ptr() as u64,
+                                position: [offer.x, offer.y],
+                                mime: read.mime,
+                                bytes: read.bytes,
+                            });
+                            offer.finish();
+                        }
+                        offer.destroy();
+                    }
+                    Destination::Paste(recipient) => self.hub.emit(Event::Paste {
+                        recipient,
+                        mime: read.mime,
+                        bytes: read.bytes,
+                    }),
+                }
+            }
+        }
+    }
+}
+
+impl Drop for Transfers {
+    fn drop(&mut self) {
+        for read in self.reads.drain(..) {
+            if let Destination::Drop(offer) = read.destination {
+                offer.destroy();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    fn hub(display: usize) -> Arc<Hub> {
+        let (sender, _receiver) = sctk::reexports::calloop::channel::channel();
+        Hub::register(display, sender)
+    }
+
+    #[test]
+    fn delayed_transfer_waits_for_eof_and_delivers_once_to_original_recipient() -> std::io::Result<()> {
+        let hub = hub(101);
+        let mut transfers = Transfers::new(hub.clone());
+        let (reader, mut writer) = UnixStream::pair()?;
+        reader.set_nonblocking(true)?;
+        transfers.reads.push(Pending {
+            reader: File::from(OwnedFd::from(reader)),
+            mime: "image/png".into(),
+            destination: Destination::Paste(42),
+            bytes: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(10),
+        });
+        writer.write_all(b"partial")?;
+        transfers.poll();
+        assert!(transfers.pending());
+        assert!(lock(&hub.events).is_empty());
+        writer.write_all(b" image")?;
+        drop(writer);
+        transfers.poll();
+        assert!(!transfers.pending());
+        assert!(
+            matches!(lock(&hub.events).pop_front(), Some(Event::Paste {recipient: 42, bytes, ..}) if bytes == b"partial image")
+        );
+        transfers.poll();
+        assert!(lock(&hub.events).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn expired_transfer_never_delivers_partial_data() -> std::io::Result<()> {
+        let hub = hub(102);
+        let mut transfers = Transfers::new(hub.clone());
+        let (reader, _writer) = UnixStream::pair()?;
+        transfers.reads.push(Pending {
+            reader: File::from(OwnedFd::from(reader)),
+            mime: "image/png".into(),
+            destination: Destination::Paste(7),
+            bytes: b"partial".to_vec(),
+            deadline: Instant::now(),
+        });
+        transfers.poll();
+        assert!(!transfers.pending());
+        assert!(lock(&hub.events).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn subscription_is_display_scoped_and_drops_stopped_workers() {
+        let first = hub(103);
+        let second = hub(104);
+        first.emit(Event::Leave { surface: 1 });
+        second.emit(Event::Leave { surface: 2 });
+        let mut subscription = Subscription::new(103, || {});
+        assert!(matches!(subscription.poll().as_slice(), [Event::Leave { surface: 1 }]));
+        assert_eq!(lock(&second.events).len(), 1);
+        drop(WorkerGuard(first));
+        subscription.refresh();
+        assert!(subscription.hubs.is_empty());
+    }
+
+    #[test]
+    fn motion_coalesces_only_on_the_same_surface_and_preserves_drop_order() {
+        let hub = hub(105);
+        for (surface, entered) in [(1, true), (1, false), (1, false), (2, false)] {
+            hub.emit(Event::Motion {
+                surface,
+                position: [2.0, 3.0],
+                entered,
+            });
+        }
+        hub.emit(Event::Leave { surface: 2 });
+        assert_eq!(lock(&hub.events).len(), 4);
+    }
+
+    #[test]
+    fn only_file_or_image_offers_claim_native_paste() {
+        assert_eq!(preferred(&["text/plain".into()]), None);
+        assert_eq!(
+            preferred(&["image/jpeg".into(), "image/png".into()]),
+            Some("image/png".into())
+        );
+        assert_eq!(
+            preferred(&["image/png".into(), "text/uri-list".into()]),
+            Some("text/uri-list".into())
+        );
+    }
+}
