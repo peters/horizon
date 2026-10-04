@@ -308,6 +308,7 @@ pub(crate) fn release_held_agent_plugin_host() {
 }
 
 pub(crate) fn exit_after_releasing_plugins(code: i32) -> ! {
+    crate::screenshot::clear_exports();
     release_held_agent_plugin_host();
     std::process::exit(code);
 }

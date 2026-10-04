@@ -129,7 +129,70 @@ impl HorizonApp {
                         .collect(),
                 }
             }
+            Operation::Screenshot { input } => self.capture_panel(input, actor, &request.actor, ctx, false),
+            Operation::BrowserScreenshot { input } => self.capture_panel(input, actor, &request.actor, ctx, true),
             operation => self.change_device_viewer(operation, actor, &request.actor, ctx),
+        }
+    }
+
+    fn capture_panel(
+        &mut self,
+        input: &device::ScreenshotInput,
+        actor: ActorPanel,
+        owner: &str,
+        ctx: &Context,
+        browser: bool,
+    ) -> Outcome {
+        let Some(panel) = self
+            .board
+            .panels
+            .iter()
+            .find(|panel| panel.local_id == input.panel_id && panel.workspace_id == actor.workspace_id)
+        else {
+            return Outcome::failed("panel_unavailable", "Panel is unavailable in this workspace");
+        };
+        let id = panel.id;
+        let capture = if browser {
+            let Some(browser) = panel.browser() else {
+                return Outcome::failed("not_browser_panel", "Target is not a browser panel");
+            };
+            let Some(live) = manifest::read(&input.panel_id) else {
+                return Outcome::failed("browser_unavailable", "Browser manifest is unavailable");
+            };
+            if live
+                .live_owner(manifest::now_millis())
+                .is_some_and(|claim| claim.name != owner)
+            {
+                return Outcome::failed("not_owner", "Another agent owns this browser panel");
+            }
+            if live.handoff_pending().is_some() || browser.handoff_reason.is_some() {
+                return Outcome::failed("handoff_pending", "A person is steering this browser panel");
+            }
+            crate::screenshot::browser_image(browser).and_then(|image| {
+                self.panel_render_caches
+                    .browser_ui_state
+                    .entry(id)
+                    .or_default()
+                    .screenshots
+                    .export(ctx, input.panel_id.clone(), image, input.copy_to_clipboard)
+            })
+        } else {
+            if panel.device().is_none() {
+                return Outcome::failed("not_device_panel", "Target is not a native Device viewer");
+            }
+            let state = self.panel_render_caches.device_ui_state.entry(id).or_default();
+            if state.owner.as_deref().is_some_and(|claim| claim != owner) {
+                return Outcome::failed("not_owner", "Another agent owns this Device viewer");
+            }
+            state.screenshot_image().and_then(|image| {
+                state
+                    .screenshots
+                    .export(ctx, input.panel_id.clone(), image, input.copy_to_clipboard)
+            })
+        };
+        match capture {
+            Ok(capture) => Outcome::Screenshot { capture },
+            Err(message) => Outcome::failed("screenshot_unavailable", &message),
         }
     }
 
@@ -474,6 +537,68 @@ mod tests {
             deadline_at_millis: manifest::now_millis() + 10_000,
             operation,
         }
+    }
+
+    #[test]
+    fn screenshot_exports_hidden_connected_viewers_without_navigation_or_input_and_checks_scope() {
+        let (_temp, ctx, mut app) = app();
+        let create = request(
+            &app,
+            Operation::Create {
+                endpoint: "127.0.0.1:5900".into(),
+                identity: None,
+                ssh: None,
+            },
+        );
+        let created = one(app.apply_device_request(&create, &ctx));
+        let id = app.board.panel_id_by_local_id(&created.panel_id).unwrap();
+        let owner = create.actor.clone();
+        app.panel_render_caches
+            .device_ui_state
+            .insert(id, crate::device_widget::DeviceUiState::connected_fixture(&owner));
+        app.board.set_panel_visible(id, false);
+        let view = app.canvas_view;
+        let focused = app.board.focused;
+        let capture_request = request(
+            &app,
+            Operation::Screenshot {
+                input: device::ScreenshotInput {
+                    panel_id: created.panel_id.clone(),
+                    copy_to_clipboard: false,
+                },
+            },
+        );
+        let Outcome::Screenshot { capture } = app.apply_device_request(&capture_request, &ctx) else {
+            panic!("capture failed")
+        };
+        assert_eq!((capture.width, capture.height), (4, 4));
+        assert!(capture.path.exists());
+        assert!(!capture.clipboard_requested);
+        assert_eq!(app.canvas_view, view);
+        assert_eq!(app.board.focused, focused);
+        assert!(!app.board.panel(id).unwrap().visible);
+        let mut other = capture_request.clone();
+        other.actor = format!("horizon:{}", app.board.panels[1].local_id);
+        assert!(
+            matches!(app.apply_device_request(&other, &ctx), Outcome::Failed { code, .. } if code == "panel_unavailable")
+        );
+        app.board.panels[1].workspace_id = app.board.panels[0].workspace_id;
+        assert!(matches!(app.apply_device_request(&other, &ctx), Outcome::Failed { code, .. } if code == "not_owner"));
+        other = capture_request.clone();
+        other.host_instance = "wrong-host".into();
+        assert!(matches!(app.apply_device_request(&other, &ctx), Outcome::Failed { code, .. } if code == "wrong_host"));
+        other = capture_request.clone();
+        other.deadline_at_millis = 0;
+        assert!(
+            matches!(app.apply_device_request(&other, &ctx), Outcome::Failed { code, .. } if code == "request_expired")
+        );
+        app.panel_render_caches
+            .device_ui_state
+            .insert(id, crate::device_widget::DeviceUiState::default());
+        assert!(!capture.path.exists());
+        assert!(
+            matches!(app.apply_device_request(&capture_request, &ctx), Outcome::Failed { code, .. } if code == "screenshot_unavailable")
+        );
     }
 
     fn one(outcome: Outcome) -> PanelState {

@@ -38,7 +38,9 @@ impl HorizonApp {
             self.panel_render_caches.terminal_grid_cache.clear();
             self.canvas_grid_cache = CanvasGridCache::default();
             self.panel_render_caches.editor_preview_cache.clear();
-            self.panel_render_caches.browser_ui_state.clear();
+            for state in self.panel_render_caches.browser_ui_state.values_mut() {
+                state.reset_rendering();
+            }
         }
 
         if !self.prepare_startup_bootstrap(ui) {

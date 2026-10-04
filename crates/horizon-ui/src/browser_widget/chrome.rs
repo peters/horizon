@@ -53,6 +53,12 @@ pub fn show(
         clicked |= nav_button(ui, "→", "Forward", browser, BrowserCommand::Forward, interactive);
         clicked |= nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
         clicked |= video_controls(ui, browser, interactive);
+        clicked |=
+            state
+                .screenshots
+                .copy_button(ui, interactive && crate::screenshot::browser_available(browser), || {
+                    crate::screenshot::browser_image(browser)
+                });
         clicked |= super::orientation::controls(ui, browser, interactive);
         clicked |= backend_picker(ui, panel_id, browser, interactive);
         // Measure after the nav buttons so the cap fits the real remainder.

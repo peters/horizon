@@ -35,6 +35,16 @@ pub enum Operation {
     Inspect {
         panel_id: String,
     },
+    /// Capture the latest connected desktop frame without changing navigation or input.
+    Screenshot {
+        #[serde(flatten)]
+        input: ScreenshotInput,
+    },
+    /// Browser captures share the host request pump, including when the UI is offscreen.
+    BrowserScreenshot {
+        #[serde(flatten)]
+        input: ScreenshotInput,
+    },
     Visibility {
         panel_id: String,
         visible: bool,
@@ -50,6 +60,26 @@ pub enum Operation {
     Close {
         panel_id: String,
     },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScreenshotInput {
+    pub panel_id: String,
+    /// Also request an image copy on the Horizon host's clipboard. Defaults to false.
+    #[serde(default)]
+    pub copy_to_clipboard: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Screenshot {
+    pub panel_id: String,
+    /// Private PNG, retained until panel close or eight subsequent captures on this panel.
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    /// The host queued a native clipboard image copy; this is not an OS acknowledgement.
+    pub clipboard_requested: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -261,6 +291,7 @@ pub struct ImageEvidence {
 #[schemars(extend("type" = "object"))]
 pub enum Outcome {
     Panels { panels: Vec<PanelState> },
+    Screenshot { capture: Screenshot },
     Closed { panel_id: String },
     Failed { code: String, message: String },
 }

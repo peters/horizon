@@ -349,14 +349,21 @@ fn assert_orientation_contract(tools: &Value) {
     );
 }
 
-fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
-    let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(30));
-    assert_catalog_contract(tools);
-    assert_device_panel_contract(tools);
-    assert_provider_tools_contract(tools);
-    assert_companion_tools_contract(tools);
-    assert_orientation_contract(tools);
+fn assert_screenshot_contract(tools: &Value) {
+    let screenshot = listed_tool(tools, "browser_screenshot");
+    for field in ["panel_id", "copy_to_clipboard"] {
+        assert!(
+            screenshot["inputSchema"]["properties"].get(field).is_some(),
+            "screenshot schema lacks {field}"
+        );
+    }
+    assert_eq!(
+        screenshot["inputSchema"]["properties"]["copy_to_clipboard"]["default"],
+        false
+    );
+}
+
+fn assert_resize_contract(tools: &Value) {
     let resize = listed_tool(tools, "browser_resize");
     for field in ["panel_id", "width", "height", "reset", "timeout_millis"] {
         assert!(
@@ -365,6 +372,18 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
         );
     }
     assert!(resize["description"].as_str().unwrap().contains("CSS pixels"));
+}
+
+fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
+    let encoded_tools = tools.to_string();
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(31));
+    assert_catalog_contract(tools);
+    assert_device_panel_contract(tools);
+    assert_provider_tools_contract(tools);
+    assert_companion_tools_contract(tools);
+    assert_orientation_contract(tools);
+    assert_screenshot_contract(tools);
+    assert_resize_contract(tools);
     let create = listed_tool(tools, "browser_create");
     let target = &create["inputSchema"]["properties"]["target"];
     assert!(

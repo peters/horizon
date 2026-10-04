@@ -19,6 +19,7 @@ mod native_app;
 mod plugin_install;
 mod primary_selection;
 mod remote_hosts_overlay;
+mod screenshot;
 mod search_overlay;
 mod terminal_widget;
 #[cfg(test)]
