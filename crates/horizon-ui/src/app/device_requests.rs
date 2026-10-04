@@ -177,7 +177,10 @@ impl HorizonApp {
             {
                 return Outcome::failed("not_owner", "Another agent owns this browser panel");
             }
-            if live.handoff_pending().is_some() || browser.handoff_reason.is_some() {
+            if live.user_is_active(manifest::now_millis())
+                || live.handoff_pending().is_some()
+                || browser.handoff_reason.is_some()
+            {
                 return Outcome::failed("handoff_pending", "A person is steering this browser panel");
             }
             crate::screenshot::browser_image(browser).and_then(|image| {
@@ -643,6 +646,19 @@ mod tests {
             tty: None,
             updated_at: manifest::now_millis(),
         });
+        live.user_active = true;
+        live.user_active_at = manifest::now_millis();
+        manifest::write_at(path, &live).unwrap();
+        assert!(
+            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "handoff_pending")
+        );
+        live.user_active_at = manifest::now_millis() - 6_000;
+        manifest::write_at(path, &live).unwrap();
+        assert!(matches!(
+            app.apply_device_request_at(capture_request, ctx, Some(root)),
+            Outcome::Screenshot { .. }
+        ));
+        live.user_active = false;
         live.handoff = Some(manifest::ManifestHandoff {
             request_id: "handoff".into(),
             reason: "test".into(),
