@@ -82,7 +82,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_screenshot",
-        description = "Capture the latest decoded viewport pixels of a ready browser panel in the calling agent's Horizon workspace. Returns a private PNG path and its original dimensions; this is a retained frame, not a fresh navigation or a full-page screenshot. Optional copy_to_clipboard (default false) also requests an image copy on the Horizon host clipboard; clipboard_requested reports dispatch, not OS acknowledgement. Requires a live Horizon host, not a standalone browser. Refuses another live owner's panel and pending human handoff. Does not change focus, viewport, visibility or canvas. Keep sensitive screenshots private. The latest eight exports per panel survive until panel close or host exit."
+        description = "Capture the latest decoded viewport pixels of a ready browser panel in the calling agent's Horizon workspace. Returns a private PNG path and its original dimensions; this is a retained frame, not a fresh navigation or a full-page screenshot. Optional copy_to_clipboard (default false) also requests an image copy on the Horizon host clipboard; clipboard_requested reports dispatch, not OS acknowledgement. Requires a live Horizon host, not a standalone browser. Acquires or renews the caller's browser claim and rechecks it at host dispatch and result delivery. Refuses another live owner, active human steering and pending handoff. Does not change focus, viewport, visibility or canvas. Keep sensitive screenshots private. The latest eight exports per panel survive until panel close or host exit."
     )]
     async fn browser_screenshot(
         &self,

@@ -84,7 +84,7 @@ shell commands, files, or other MCP servers.
   `clipboard_requested` (dispatch only, not an OS acknowledgement). These are
   retained pixels, not full-page captures or a forced fresh frame. No focus,
   visibility, viewport or canvas change is required. Captures reject another
-  live owner's panel; browser handoff remains protected. A live Horizon host
+  live owner's panel; browser capture acquires or renews the caller's claim and requires it at dispatch and result delivery. Active human steering and handoff remain protected. A live Horizon host
   is required; standalone browser hosts cannot provide this route. Exports
   use private temporary storage, retain the latest eight captures per panel,
   survive browser theme/backend cache resets, and are deleted on panel close or

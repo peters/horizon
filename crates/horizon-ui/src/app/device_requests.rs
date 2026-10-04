@@ -171,11 +171,16 @@ impl HorizonApp {
             let Some(live) = live else {
                 return Outcome::failed("browser_unavailable", "Browser manifest is unavailable");
             };
+            if live.panel_local_id != input.panel_id
+                || !live.authorizes(manifest::AgentIdentity::new(owner, Some(manifest::host_instance())))
+            {
+                return Outcome::failed("panel_unavailable", "Browser authorization changed before capture");
+            }
             if live
                 .live_owner(manifest::now_millis())
-                .is_some_and(|claim| claim.name != owner)
+                .is_none_or(|claim| claim.name != owner)
             {
-                return Outcome::failed("not_owner", "Another agent owns this browser panel");
+                return Outcome::failed("not_owner", "The caller does not hold this browser panel's live claim");
             }
             if live.user_is_active(manifest::now_millis())
                 || live.handoff_pending().is_some()
@@ -593,6 +598,17 @@ mod tests {
         let path = manifest::manifest_path_for_root(temp.path(), &local);
         let live = manifest::BrowserManifest {
             panel_local_id: local,
+            host: Some(manifest::host_instance().into()),
+            workspace: Some(manifest::ManifestWorkspace::new(
+                manifest::host_instance(),
+                "workspace",
+                vec![capture_request.actor.clone()],
+            )),
+            owner: Some(manifest::ManifestOwner {
+                name: capture_request.actor.clone(),
+                tty: None,
+                updated_at: manifest::now_millis(),
+            }),
             ..manifest::BrowserManifest::default()
         };
         manifest::write_at(&path, &live).unwrap();
@@ -641,11 +657,23 @@ mod tests {
         assert!(
             matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "not_owner")
         );
+        live.owner.as_mut().unwrap().name.clone_from(&capture_request.actor);
+        assert_browser_manifest_authorization(app, ctx, root, capture_request, path, &live);
+        live.owner = None;
+        manifest::write_at(path, &live).unwrap();
+        assert!(
+            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "not_owner")
+        );
         live.owner = Some(manifest::ManifestOwner {
             name: capture_request.actor.clone(),
             tty: None,
-            updated_at: manifest::now_millis(),
+            updated_at: manifest::now_millis() - manifest::OWNER_TTL_MILLIS - 1_000,
         });
+        manifest::write_at(path, &live).unwrap();
+        assert!(
+            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "not_owner")
+        );
+        live.owner.as_mut().unwrap().updated_at = manifest::now_millis();
         live.user_active = true;
         live.user_active_at = manifest::now_millis();
         manifest::write_at(path, &live).unwrap();
@@ -686,6 +714,33 @@ mod tests {
         assert!(
             matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "screenshot_unavailable")
         );
+    }
+
+    fn assert_browser_manifest_authorization(
+        app: &mut HorizonApp,
+        ctx: &Context,
+        root: &Path,
+        request: &Request,
+        path: &Path,
+        baseline: &manifest::BrowserManifest,
+    ) {
+        for variant in ["foreign-host", "missing-stamp", "foreign-actor", "wrong-panel"] {
+            let mut live = baseline.clone();
+            match variant {
+                "foreign-host" => {
+                    live.host = Some("foreign-host".into());
+                    live.workspace.as_mut().unwrap().host_instance = "foreign-host".into();
+                }
+                "missing-stamp" => live.workspace = None,
+                "foreign-actor" => live.workspace.as_mut().unwrap().actors.clear(),
+                _ => live.panel_local_id = "another-panel".into(),
+            }
+            manifest::write_at(path, &live).unwrap();
+            assert!(
+                matches!(app.apply_device_request_at(request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "panel_unavailable"),
+                "{variant}",
+            );
+        }
     }
 
     #[test]

@@ -17,6 +17,7 @@ impl McpProcess {
     fn start_as(home: &std::path::Path, actor: &str) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser-mcp"))
             .env("HOME", home)
+            .env("HORIZON_BROWSER_ROOT", home.join(".horizon"))
             .env("HORIZON_BROWSER_ACTOR", actor)
             .env("HORIZON_BROWSER_HOST_INSTANCE", "test-host")
             .env("RUST_LOG", "off")
@@ -600,4 +601,30 @@ fn assert_catalog_contract(tools: &Value) {
     let devices = listed_tool(tools, "browser_provider_devices");
     assert!(devices["inputSchema"]["properties"]["provider"].is_object());
     assert!(devices["inputSchema"]["properties"].get("credentials").is_none());
+}
+
+#[test]
+fn screenshot_refuses_standalone_without_claiming_browser() {
+    use horizon_browser_control::manifest::{self, BrowserManifest};
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join(".horizon");
+    let path = manifest::manifest_path_for_root(&root, "panel");
+    manifest::write_at(
+        &path,
+        &BrowserManifest {
+            panel_local_id: "panel".into(),
+            updated_at: manifest::now_millis(),
+            ..BrowserManifest::default()
+        },
+    )
+    .unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut process = McpProcess::start(home.path());
+    process.send(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}));
+    process.notify(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    let result = process.send(&json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"browser_screenshot","arguments":{"panel_id":"panel"}}}));
+    assert_eq!(result["result"]["isError"], true);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert!(manifest::read_at(&path).unwrap().owner.is_none());
+    process.close();
 }
