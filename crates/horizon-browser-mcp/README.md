@@ -74,6 +74,29 @@ shell commands, files, or other MCP servers.
   device may still be held; check the provider before creating again). Such a panel reports `remote_target`,
   `remote_device` (model, OS version, hardware evidence), classic
   `WebDriver` and no network capture.
+- `browser_screenshot` captures the latest decoded viewport frame of a ready
+  browser panel, and `device_panel` with `operation: screenshot` captures the
+  full source desktop of a connected native VNC viewer. UI **Copy screenshot**
+  buttons copy the same source pixels directly as an image to the host clipboard.
+  Native Fit, crop, scale and 1:1 controls do not alter the captured desktop.
+  MCP requests accept `panel_id` and optional `copy_to_clipboard` (default false).
+  Results return a private PNG `path`, original `width`/`height`, and
+  `clipboard_requested` (dispatch only, not an OS acknowledgement). These are
+  retained pixels, not full-page captures or a forced fresh frame. No focus,
+  visibility, viewport or canvas change is required. Captures reject another
+  live owner's panel; browser capture acquires or renews the caller's claim and requires it at dispatch and result delivery. Active human steering and handoff remain protected. A live Horizon host
+  is required; standalone browser hosts cannot provide this route. Exports
+  use private temporary storage, retain the latest eight captures per panel,
+  survive browser theme/backend cache resets, and are deleted on panel close or
+  normal host exit. Copy a returned file elsewhere before its retention ends.
+  A forced kill or machine failure can leave private temporary files behind.
+  Keep sensitive pixels private; screenshots never enter the action audit.
+  CLI plans use the same MCP tool without a second browser controller:
+
+  ```json
+  {"version":1,"steps":[{"id":"capture","tool":"browser_screenshot","arguments":{"panel_id":"<browser-panel-id>","copy_to_clipboard":true}}]}
+  ```
+
 - `browser_video` records sampled page pixels as a private AV1/WebM export.
   `fps` is the requested sample rate; `effective_fps` is encoded frames divided
   by active recording seconds (including repeated frames). `frames_dropped`

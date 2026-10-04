@@ -2565,6 +2565,7 @@ dependencies = [
  "horizon-core",
  "horizon-cursor",
  "horizon-wayland",
+ "png",
  "profiling",
  "rusqlite",
  "serde_json",
