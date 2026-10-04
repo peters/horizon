@@ -18,6 +18,7 @@ members = [
     "crates/horizon-process-time",
     "crates/horizon-ui",
     "crates/horizon-wayland",
+    "vendor/smithay-clipboard",
 ]
 
 [workspace.package]
@@ -168,3 +169,6 @@ strip = true
 inherits = "release"
 debug = 1
 strip = false
+
+[patch.crates-io]
+smithay-clipboard = { path = "vendor/smithay-clipboard" }
