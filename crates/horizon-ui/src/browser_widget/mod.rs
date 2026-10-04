@@ -238,7 +238,7 @@ impl<'a> BrowserView<'a> {
                 // per-session input/render cache so this frame immediately
                 // resends the panel's real viewport and cannot carry a held
                 // button or key into the replacement session.
-                *state = BrowserUiState::default();
+                state.reset_rendering();
             }
             // A fixed viewport (a remote device) never converges on the
             // panel's size: the frame is letterboxed and scaled instead, so
@@ -585,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn screenshots_survive_first_presentation_backend_switch_and_theme_reset() {
+    fn screenshots_survive_first_presentation_backend_switch_retry_and_theme_reset() {
         let ctx = egui::Context::default();
         let mut state = BrowserUiState::default();
         let capture = state
@@ -601,6 +601,12 @@ mod tests {
         assert!(capture.path.exists());
         state.synchronize_backend(BackendKind::FirefoxBidi);
         assert!(capture.path.exists());
+        // Retry clears the old session's rendering state before the replacement presents.
+        state.reset_rendering();
+        assert!(capture.path.exists());
+        assert!(state.active_backend.is_none());
+        state.synchronize_backend(BackendKind::ChromiumCdp);
+        // Theme changes use the same preserving reset.
         state.reset_rendering();
         assert!(capture.path.exists());
         drop(state);

@@ -14,7 +14,7 @@ use super::{
 };
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
-/// Native viewer lifecycle only. Input belongs to the standalone device API.
+/// Host coordination commands. Input belongs to the standalone device API.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 #[schemars(extend("type" = "object"))]
@@ -41,6 +41,7 @@ pub enum Operation {
         input: ScreenshotInput,
     },
     /// Browser captures share the host request pump, including when the UI is offscreen.
+    #[schemars(skip)]
     BrowserScreenshot {
         #[serde(flatten)]
         input: ScreenshotInput,
@@ -60,6 +61,31 @@ pub enum Operation {
     Close {
         panel_id: String,
     },
+}
+
+/// Public native Device input. Internal host commands cannot be deserialized here.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(extend("type" = "object"))]
+pub struct DevicePanelInput(Operation);
+
+impl DevicePanelInput {
+    #[must_use]
+    pub fn into_operation(self) -> Operation {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for DevicePanelInput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let operation = Operation::deserialize(deserializer)?;
+        if matches!(operation, Operation::BrowserScreenshot { .. }) {
+            return Err(serde::de::Error::custom(
+                "Use the browser_screenshot tool for browser captures",
+            ));
+        }
+        Ok(Self(operation))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]

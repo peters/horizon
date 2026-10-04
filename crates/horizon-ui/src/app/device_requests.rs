@@ -84,7 +84,10 @@ impl HorizonApp {
         };
         let changed = !requests.is_empty();
         for request in requests {
-            let outcome = self.apply_device_request(&request, ctx);
+            let outcome = match root {
+                Some(_) => self.apply_device_request_at(&request, ctx, root),
+                None => self.apply_device_request(&request, ctx),
+            };
             let Some(outcome) = self.defer_device_reveal(&request, outcome, root) else {
                 continue;
             };
@@ -96,6 +99,10 @@ impl HorizonApp {
     }
 
     fn apply_device_request(&mut self, request: &Request, ctx: &Context) -> Outcome {
+        self.apply_device_request_at(request, ctx, None)
+    }
+
+    fn apply_device_request_at(&mut self, request: &Request, ctx: &Context, root: Option<&Path>) -> Outcome {
         if request.host_instance != manifest::host_instance() {
             return Outcome::failed("wrong_host", "Request belongs to another Horizon host");
         }
@@ -129,8 +136,8 @@ impl HorizonApp {
                         .collect(),
                 }
             }
-            Operation::Screenshot { input } => self.capture_panel(input, actor, &request.actor, ctx, false),
-            Operation::BrowserScreenshot { input } => self.capture_panel(input, actor, &request.actor, ctx, true),
+            Operation::Screenshot { input } => self.capture_panel(input, actor, &request.actor, ctx, false, root),
+            Operation::BrowserScreenshot { input } => self.capture_panel(input, actor, &request.actor, ctx, true, root),
             operation => self.change_device_viewer(operation, actor, &request.actor, ctx),
         }
     }
@@ -142,6 +149,7 @@ impl HorizonApp {
         owner: &str,
         ctx: &Context,
         browser: bool,
+        root: Option<&Path>,
     ) -> Outcome {
         let Some(panel) = self
             .board
@@ -156,7 +164,11 @@ impl HorizonApp {
             let Some(browser) = panel.browser() else {
                 return Outcome::failed("not_browser_panel", "Target is not a browser panel");
             };
-            let Some(live) = manifest::read(&input.panel_id) else {
+            let live = root.map_or_else(
+                || manifest::read(&input.panel_id),
+                |root| manifest::read_at(&manifest::manifest_path_for_root(root, &input.panel_id)),
+            );
+            let Some(live) = live else {
                 return Outcome::failed("browser_unavailable", "Browser manifest is unavailable");
             };
             if live
@@ -537,6 +549,127 @@ mod tests {
             deadline_at_millis: manifest::now_millis() + 10_000,
             operation,
         }
+    }
+
+    #[test]
+    fn browser_screenshot_checks_scope_ownership_handoff_and_dispatches_source_pixels() {
+        use crate::test_egui::DiscardTextures as _;
+        use horizon_core::{
+            Panel, PanelContent,
+            browser::{BrowserPanelState, BrowserStatus},
+        };
+        let (temp, ctx, mut app) = app();
+        let image = egui::ColorImage::filled([3, 2], egui::Color32::BLUE);
+        let mut seed = crate::screenshot::Screenshots::default();
+        let source = seed.export(&ctx, "seed".into(), image.clone(), false).unwrap();
+        let mut browser = BrowserPanelState::inert();
+        browser
+            .frame_slot
+            .store_png(&std::fs::read(&source.path).unwrap())
+            .unwrap();
+        browser.status = BrowserStatus::Ready;
+        let id = PanelId(999);
+        let mut panel = Panel::from_content(
+            id,
+            app.board.panels[0].workspace_id,
+            PanelKind::Browser,
+            PanelContent::Browser(Box::new(browser)),
+        );
+        panel.visible = false;
+        let local = panel.local_id.clone();
+        app.board.panels.push(panel);
+        let capture_request = request(
+            &app,
+            Operation::BrowserScreenshot {
+                input: device::ScreenshotInput {
+                    panel_id: local.clone(),
+                    copy_to_clipboard: true,
+                },
+            },
+        );
+        let path = manifest::manifest_path_for_root(temp.path(), &local);
+        let live = manifest::BrowserManifest {
+            panel_local_id: local,
+            ..manifest::BrowserManifest::default()
+        };
+        manifest::write_at(&path, &live).unwrap();
+        let view = app.canvas_view;
+        let focused = app.board.focused;
+        let mut outcome = None;
+        let output = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                outcome = Some(app.apply_device_request_at(&capture_request, ui.ctx(), Some(temp.path())));
+            })
+            .discard_textures();
+        let Outcome::Screenshot { capture } = outcome.unwrap() else {
+            panic!("browser capture failed")
+        };
+        assert_eq!((capture.width, capture.height), (3, 2));
+        assert!(capture.path.exists() && capture.clipboard_requested);
+        assert!(
+            matches!(&output.platform_output.commands[..], [egui::OutputCommand::CopyImage(copied)] if copied == &image)
+        );
+        assert_eq!(app.canvas_view, view);
+        assert_eq!(app.board.focused, focused);
+        assert!(!app.board.panel(id).unwrap().visible);
+        assert_browser_capture_refusals(&mut app, &ctx, temp.path(), id, &capture_request, &path, live);
+    }
+
+    fn assert_browser_capture_refusals(
+        app: &mut HorizonApp,
+        ctx: &Context,
+        root: &Path,
+        id: PanelId,
+        capture_request: &Request,
+        path: &Path,
+        mut live: manifest::BrowserManifest,
+    ) {
+        let mut foreign = capture_request.clone();
+        foreign.actor = format!("horizon:{}", app.board.panels[1].local_id);
+        assert!(
+            matches!(app.apply_device_request_at(&foreign, ctx, Some(root)), Outcome::Failed { code, .. } if code == "panel_unavailable")
+        );
+        live.owner = Some(manifest::ManifestOwner {
+            name: "another-agent".into(),
+            tty: None,
+            updated_at: manifest::now_millis(),
+        });
+        manifest::write_at(path, &live).unwrap();
+        assert!(
+            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "not_owner")
+        );
+        live.owner = Some(manifest::ManifestOwner {
+            name: capture_request.actor.clone(),
+            tty: None,
+            updated_at: manifest::now_millis(),
+        });
+        live.handoff = Some(manifest::ManifestHandoff {
+            request_id: "handoff".into(),
+            reason: "test".into(),
+            requested_at: manifest::now_millis(),
+            done: false,
+        });
+        manifest::write_at(path, &live).unwrap();
+        assert!(
+            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "handoff_pending")
+        );
+        live.handoff = None;
+        manifest::write_at(path, &live).unwrap();
+        app.board.panel_mut(id).unwrap().browser_mut().unwrap().handoff_reason = Some("local handoff".into());
+        assert!(
+            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "handoff_pending")
+        );
+        app.board.panel_mut(id).unwrap().browser_mut().unwrap().handoff_reason = None;
+        app.board
+            .panel_mut(id)
+            .unwrap()
+            .browser_mut()
+            .unwrap()
+            .frame_slot
+            .clear();
+        assert!(
+            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "screenshot_unavailable")
+        );
     }
 
     #[test]

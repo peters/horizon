@@ -75,9 +75,9 @@ impl HorizonBrowserMcp {
     )]
     async fn device_panel(
         &self,
-        Parameters(input): Parameters<horizon_browser_control::manifest::device::Operation>,
+        Parameters(input): Parameters<horizon_browser_control::manifest::device::DevicePanelInput>,
     ) -> Result<Json<horizon_browser_control::manifest::device::Outcome>, String> {
-        self.controller.device_panel(input).await.map(Json)
+        self.controller.device_panel(input.into_operation()).await.map(Json)
     }
 
     #[tool(
@@ -744,6 +744,20 @@ async fn wait_for_selector(controller: &BrowserController, input: WaitInput) -> 
 mod tests {
     use super::*;
     use crate::model::WaitState;
+
+    #[test]
+    fn public_device_input_rejects_internal_browser_commands() {
+        use horizon_browser_control::manifest::device::{DevicePanelInput, Operation};
+        let internal = serde_json::json!({"operation":"browser_screenshot", "panel_id":"panel"});
+        assert!(serde_json::from_value::<DevicePanelInput>(internal.clone()).is_err());
+        // The private host queue can still deserialize its own command.
+        assert!(serde_json::from_value::<Operation>(internal).is_ok());
+        let native = serde_json::json!({"operation":"screenshot", "panel_id":"panel", "copy_to_clipboard":true});
+        assert!(matches!(
+            serde_json::from_value::<DevicePanelInput>(native).unwrap().into_operation(),
+            Operation::Screenshot { input } if input.copy_to_clipboard
+        ));
+    }
 
     #[test]
     fn evaluation_bounds_follow_the_protocol_contract() {
