@@ -18,24 +18,6 @@ fn canonical_temp() -> CanonicalTemp {
     }
 }
 
-struct CanonicalTemp {
-    _directory: tempfile::TempDir,
-    path: PathBuf,
-}
-impl CanonicalTemp {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-fn canonical_temp() -> CanonicalTemp {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().canonicalize().unwrap();
-    CanonicalTemp {
-        _directory: directory,
-        path,
-    }
-}
-
 fn journal(path: &Path, realm: char) -> Journal {
     Journal {
         store: Store::open(path).unwrap(),
