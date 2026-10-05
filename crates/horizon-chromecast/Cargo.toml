@@ -1,0 +1,33 @@
+[package]
+name = "horizon-chromecast"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Google Cast sender: receiver discovery and Cast v2 control"
+
+[features]
+default = ["discovery"]
+# Multicast DNS browsing. Hosts that discover receivers through a platform
+# service (for example Bonjour on iOS) can disable it.
+discovery = ["dep:mdns-sd"]
+
+[lints]
+workspace = true
+
+[dependencies]
+mdns-sd = { workspace = true, optional = true }
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[[example]]
+name = "chromecast"
+required-features = ["discovery"]
+
+[dev-dependencies]
+rcgen.workspace = true

@@ -310,6 +310,17 @@ jobs:
           HORIZON_CI_SHARD: ${{ matrix.shard }}
           HORIZON_CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: bash scripts/ci-cargo-test-shard.sh
+      # horizon-chromecast is a standalone library that also targets Apple
+      # mobile platforms; keep both device and simulator builds compiling.
+      - name: Cross-build horizon-chromecast for Apple mobile targets
+        if: startsWith(matrix.os, 'macos-') && matrix.shard == 'libs'
+        shell: bash
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+          for target in aarch64-apple-ios aarch64-apple-ios-sim; do
+            cargo build --locked -p horizon-chromecast --target "$target"
+            cargo build --locked -p horizon-chromecast --no-default-features --target "$target"
+          done
       # The worker image scripts need util-linux flock and bash 4, so the
       # suite runs on the Linux libs shard only. That shard already built the
       # helper. A skipped test fails the step: the helper-gated contract tests
