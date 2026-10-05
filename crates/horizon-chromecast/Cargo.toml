@@ -13,6 +13,8 @@ default = ["discovery"]
 # Multicast DNS browsing. Hosts that discover receivers through a platform
 # service (for example Bonjour on iOS) can disable it.
 discovery = ["horizon-media/discovery"]
+# Feed the desktop `ffmpeg` encoder pipeline from horizon-media into a live cast.
+encoder = ["horizon-media/encoder"]
 
 [lints]
 workspace = true

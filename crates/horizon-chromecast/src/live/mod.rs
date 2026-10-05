@@ -2,6 +2,8 @@
 //! serves them as HLS and keeps the Default Media Receiver playing them.
 mod hls;
 mod http;
+#[cfg(feature = "encoder")]
+mod sink;
 mod ts;
 
 /// Converts a length-prefixed (AVCC) sample to Annex B, putting
@@ -15,6 +17,8 @@ pub fn avcc_to_annexb(sample: &[u8], length_size: usize, parameter_sets: &[&[u8]
         parameter_sets,
     )?)
 }
+#[cfg(feature = "encoder")]
+pub use sink::LiveCastSink;
 
 use crate::{
     Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaLoad, MediaStatus, Result, StreamType,

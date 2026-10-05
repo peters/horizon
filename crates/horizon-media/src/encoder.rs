@@ -1,12 +1,15 @@
-//! Encoder pipeline pieces shared by the casting transports: capture frame
-//! input, `ffmpeg` backend selection and encoder diagnostics.
+//! The encoder pipeline shared by the casting transports: capture frame
+//! input, `ffmpeg` backend selection, the encoder process and diagnostics.
+//! Transports receive access units through [`AccessUnitSink`].
 mod backend;
 mod diagnostics;
 mod frames;
+mod pipeline;
 
 pub use backend::{EncoderBackend, EncoderSelection, select};
 pub use diagnostics::drain as drain_diagnostics;
 pub use frames::{Frame, FrameError, FrameInput};
+pub use pipeline::{AccessUnitSink, EncoderConfig, INPUT_FRAME_RATE, PipelineError, stream};
 
 /// Ignores poisoning: the guarded value is an optional encoder process handle,
 /// which a panicking holder cannot leave half-updated.
