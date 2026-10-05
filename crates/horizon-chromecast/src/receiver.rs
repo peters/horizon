@@ -12,6 +12,9 @@ pub(crate) const NS_RECEIVER: &str = "urn:x-cast:com.google.cast.receiver";
 /// Application id of the Default Media Receiver, which plays a URL it is given.
 pub const DEFAULT_MEDIA_RECEIVER: &str = "CC1AD845";
 
+/// TV platforms can take well over ten seconds to start a web receiver from
+/// their idle screen, and may first ask the viewer to allow the cast.
+const LAUNCH_TIMEOUT: Duration = Duration::from_secs(45);
 const LAUNCH_POLLS: usize = 10;
 const LAUNCH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -82,10 +85,11 @@ impl CastClient {
     /// # Errors
     /// Returns [`Error::Rejected`] if the receiver refuses the launch.
     pub fn launch(&self, app_id: &str) -> Result<Application> {
-        let reply = self.request(
+        let reply = self.request_within(
             PLATFORM_RECEIVER,
             NS_RECEIVER,
             json!({"type": "LAUNCH", "appId": app_id}),
+            LAUNCH_TIMEOUT,
         )?;
         let mut status = ReceiverStatus::from_reply(&reply)?;
         // Some receivers acknowledge LAUNCH before the application reports a transport.

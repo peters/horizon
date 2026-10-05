@@ -131,7 +131,20 @@ impl CastClient {
     /// carrying the same id.
     /// # Errors
     /// Returns [`Error::Timeout`] when no reply arrives, or [`Error::Closed`].
-    pub fn request(&self, destination: &str, namespace: &str, mut payload: Value) -> Result<Value> {
+    pub fn request(&self, destination: &str, namespace: &str, payload: Value) -> Result<Value> {
+        self.request_within(destination, namespace, payload, REQUEST_TIMEOUT)
+    }
+
+    /// [`CastClient::request`] with a caller-chosen reply timeout.
+    /// # Errors
+    /// Returns [`Error::Timeout`] when no reply arrives, or [`Error::Closed`].
+    pub fn request_within(
+        &self,
+        destination: &str,
+        namespace: &str,
+        mut payload: Value,
+        timeout: Duration,
+    ) -> Result<Value> {
         let id = self.shared.next_request.fetch_add(1, Ordering::Relaxed);
         let Some(fields) = payload.as_object_mut() else {
             return Err(Error::Protocol("request payload must be an object"));
@@ -140,7 +153,7 @@ impl CastClient {
         let (reply, response) = mpsc::sync_channel(1);
         lock(&self.shared.pending).insert(id, reply);
         let sent = self.send(destination, namespace, &payload);
-        let result = sent.and_then(|()| match response.recv_timeout(REQUEST_TIMEOUT) {
+        let result = sent.and_then(|()| match response.recv_timeout(timeout) {
             Ok(value) => Ok(value),
             Err(RecvTimeoutError::Timeout) => Err(Error::Timeout(request_kind(&payload))),
             Err(RecvTimeoutError::Disconnected) => Err(Error::Closed),
