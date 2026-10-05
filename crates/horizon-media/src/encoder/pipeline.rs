@@ -35,7 +35,9 @@ impl EncoderConfig {
     /// One keyframe per segment, so segmenters can cut on schedule.
     #[must_use]
     pub fn for_segments(segment: Duration) -> Self {
-        let frames = (segment.as_millis() * u128::from(INPUT_FRAME_RATE) + 500) / 1000;
+        // Round up: a shorter interval would land before the segmenter's cut
+        // threshold and push every cut to the following keyframe.
+        let frames = (segment.as_millis() * u128::from(INPUT_FRAME_RATE)).div_ceil(1000);
         Self {
             keyframe_interval: u32::try_from(frames.clamp(1, 600)).unwrap_or(600),
         }
