@@ -103,6 +103,35 @@ fn shared_state_parent_is_refused_before_creating_registry_or_namespace() {
 }
 
 #[test]
+fn relocation_during_first_open_keeps_namespace_and_retention_registry_together() {
+    let folder = canonical_temp();
+    let root = folder.path().join("host");
+    let moved = folder.path().join("relocated");
+    let state = root.join("namespace");
+    let store = Store::open_with(&state, || std::fs::rename(&root, &moved).unwrap()).unwrap();
+    assert!(!root.exists());
+    assert!(moved.join(".native-journal-registry").is_dir());
+    assert!(moved.join("namespace/journal.json").is_file());
+    let journal = Journal {
+        store,
+        realm: "a".repeat(64),
+    };
+    let owner = Uuid::new_v4();
+    let operation = journal
+        .start(owner, folder.path(), Kind::Session, Duration::from_secs(30))
+        .unwrap();
+    journal.reserve(owner, operation.id, quota).unwrap();
+    assert_eq!(journal.pending(owner).unwrap().len(), 1);
+    drop(journal);
+    std::fs::remove_dir_all(moved.join("namespace")).unwrap();
+    assert!(matches!(
+        Store::open(&moved.join("namespace")),
+        Err(Error::JournalInvalid)
+    ));
+    assert!(!moved.join("namespace/journal.json").exists());
+}
+
+#[test]
 fn simultaneous_profiles_share_capacity_without_crossing_credential_ownership() {
     let folder = canonical_temp();
     let state = folder.path().join("state");

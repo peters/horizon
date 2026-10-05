@@ -15,11 +15,14 @@ pub(super) struct Store {
 }
 impl Store {
     pub(super) fn open(path: &Path) -> Result<Self> {
+        Self::open_with(path, || ())
+    }
+    pub(super) fn open_with(path: &Path, after_registry: impl FnOnce()) -> Result<Self> {
         use sha2::{Digest, Sha256};
         use std::fmt::Write as _;
         let parent = path.parent().ok_or(Error::JournalUnavailable)?;
-        let _parent = private_directory(parent)?;
-        let registry = private_directory(&parent.join(".native-journal-registry"))?;
+        let parent = private_directory(parent)?;
+        let registry = private_child(&parent, std::ffi::OsStr::new(".native-journal-registry"))?;
         let registry_lock = open_file(&registry, "journal.lock", true)?;
         registry_lock.lock().map_err(|_| Error::JournalUnavailable)?;
         let filename = path.file_name().ok_or(Error::JournalUnavailable)?;
@@ -33,7 +36,8 @@ impl Store {
             Err(Error::JournalMissing) => None,
             Err(error) => return Err(error),
         };
-        let directory = private_directory(path)?;
+        after_registry();
+        let directory = private_child(&parent, filename)?;
         let lock = open_file(&directory, "journal.lock", true)?;
         lock.lock().map_err(|_| Error::JournalUnavailable)?;
         if let Some(expected) = expected {
@@ -273,6 +277,42 @@ fn private_directory(path: &Path) -> Result<File> {
         return Err(Error::JournalUnavailable);
     }
     Ok(current)
+}
+
+#[cfg(unix)]
+fn private_child(parent: &File, name: &std::ffi::OsStr) -> Result<File> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::unix::fs::MetadataExt;
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let open = || rustix::fs::openat(parent, name, flags, Mode::empty());
+    let child = match open() {
+        Ok(file) => file,
+        Err(rustix::io::Errno::NOENT) => {
+            rustix::fs::mkdirat(parent, name, Mode::RWXU)
+                .or_else(|error| {
+                    if error == rustix::io::Errno::EXIST {
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                })
+                .map_err(|_| Error::JournalUnavailable)?;
+            parent.sync_all().map_err(|_| Error::JournalUnavailable)?;
+            open().map_err(|_| Error::JournalUnavailable)?
+        }
+        Err(_) => return Err(Error::JournalUnavailable),
+    };
+    let child = File::from(child);
+    let metadata = child.metadata().map_err(|_| Error::JournalUnavailable)?;
+    if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o077 != 0 {
+        return Err(Error::JournalUnavailable);
+    }
+    Ok(child)
+}
+
+#[cfg(not(unix))]
+fn private_child(_parent: &File, _name: &std::ffi::OsStr) -> Result<File> {
+    Err(Error::JournalUnavailable)
 }
 
 #[cfg(unix)]
