@@ -1,11 +1,10 @@
 //! Live H.264 casting: the host pushes encoded access units, this module
 //! serves them as HLS and keeps the Default Media Receiver playing them.
-mod h264;
 mod hls;
 mod http;
 mod ts;
 
-pub use h264::avcc_to_annexb;
+pub use horizon_media::h264::avcc_to_annexb;
 
 use crate::{
     Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaLoad, MediaStatus, Result, StreamType,

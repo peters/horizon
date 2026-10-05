@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/horizon-cast",
     "crates/horizon-chromecast",
+    "crates/horizon-media",
     "crates/horizon-cloud-worker",
     "crates/horizon-cloud-protocol",
     "crates/horizon-cloud",
@@ -43,6 +44,7 @@ struct_excessive_bools = "allow"
 plist = "1.10.1"
 mdns-sd = "0.21.4"
 horizon-cast = { path = "crates/horizon-cast" }
+horizon-media = { path = "crates/horizon-media" }
 # Cast v2 receivers present self-signed TLS certificates on port 8009.
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }

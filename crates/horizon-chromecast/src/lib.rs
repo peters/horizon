@@ -41,6 +41,8 @@ pub enum Error {
     Closed,
     #[error("invalid live options: {0}")]
     InvalidOptions(&'static str),
+    #[error("invalid H.264: {0}")]
+    H264(#[from] horizon_media::h264::H264Error),
     #[error("receiver rejected the request: {kind}{}", reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default())]
     Rejected { kind: String, reason: Option<String> },
 }

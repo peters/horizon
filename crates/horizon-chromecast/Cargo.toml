@@ -18,6 +18,7 @@ discovery = ["dep:mdns-sd"]
 workspace = true
 
 [dependencies]
+horizon-media.workspace = true
 mdns-sd = { workspace = true, optional = true }
 rustls.workspace = true
 serde.workspace = true
