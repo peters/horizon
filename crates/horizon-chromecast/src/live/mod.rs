@@ -179,7 +179,7 @@ impl Session {
             }
             std::thread::sleep(BUFFER_POLL);
         }
-        client.media(&app).load(&MediaLoad {
+        let loaded = client.media(&app).load(&MediaLoad {
             url: self.url.clone(),
             content_type: "application/x-mpegurl".to_owned(),
             stream_type: StreamType::Live,
@@ -197,7 +197,7 @@ impl Session {
             let Some(event) = client.next_event(EVENT_POLL)? else {
                 continue;
             };
-            match self.follow(&event, &app.session_id, &app.transport_id) {
+            match self.follow(&event, &app.session_id, &app.transport_id, loaded.media_session_id) {
                 Ok(true) => {}
                 Ok(false) => return Ok(()),
                 Err(error) => break Err(error),
@@ -209,7 +209,7 @@ impl Session {
     }
 
     /// Applies one receiver event; `Ok(false)` means the session is over.
-    fn follow(&self, event: &Event, session_id: &str, transport_id: &str) -> Result<bool> {
+    fn follow(&self, event: &Event, session_id: &str, transport_id: &str, media_session_id: i64) -> Result<bool> {
         if event.namespace == NS_CONNECTION && event.source == transport_id && event.kind() == Some("CLOSE") {
             return Ok(false);
         }
@@ -221,7 +221,11 @@ impl Session {
                 .is_some_and(|apps| !apps.iter().any(|app| app["sessionId"] == session_id));
             return Ok(!replaced);
         }
-        for status in MediaStatus::from_event(event) {
+        // A joined receiver may still report the item our LOAD replaced.
+        let ours = MediaStatus::from_event(event)
+            .into_iter()
+            .filter(|status| status.media_session_id == media_session_id);
+        for status in ours {
             match (status.player_state.as_str(), status.idle_reason.as_deref()) {
                 ("PLAYING", _) => {
                     self.last_playing.set(Some(Instant::now()));

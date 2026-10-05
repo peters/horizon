@@ -136,6 +136,9 @@ fn receiver_with(listener: TcpListener, config: Arc<ServerConfig>, running: bool
                         // TVs interleave short BUFFERING reports while playback advances.
                         let blip = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "BUFFERING"}]});
                         send(&mut stream, to, NS_MEDIA, &blip);
+                        // The item this LOAD replaced reports its end; it must not end our session.
+                        let replaced = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 8, "playerState": "IDLE", "idleReason": "INTERRUPTED"}]});
+                        send(&mut stream, to, NS_MEDIA, &replaced);
                         send(&mut stream, PLATFORM_RECEIVER, NS_HEARTBEAT, &json!({"type": "PING"}));
                     }
                     (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => return log,
