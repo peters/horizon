@@ -184,12 +184,14 @@ impl AnnexBReader {
     /// Returns an error when a NAL unit or access unit exceeds the limit.
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<Unit>, H264Error> {
         self.pending.extend_from_slice(bytes);
-        if self.pending.len() > self.limit {
-            return Err(H264Error::NalTooLarge);
-        }
         let mut units = Vec::new();
         while let Some(nal) = take_nal(&mut self.pending) {
             self.accept(nal, &mut units)?;
+        }
+        // Only the still-incomplete NAL counts against the limit, so one large
+        // chunk holding many complete small units is accepted.
+        if self.pending.len() > self.limit {
+            return Err(H264Error::NalTooLarge);
         }
         Ok(units)
     }
@@ -372,5 +374,20 @@ mod tests {
         assert_eq!(leading_delimiter_len(&annexb), 6);
         assert_eq!(leading_delimiter_len(&annexb[6..]), 0);
         assert_eq!(leading_delimiter_len(&[0, 0, 1, 0x09, 0xf0]), 5);
+    }
+
+    #[test]
+    fn one_large_chunk_of_small_units_is_within_the_limit() {
+        let mut chunk = Vec::new();
+        for picture in 0..4 {
+            chunk.extend_from_slice(&[0, 0, 1, 0x09, 0xf0, 0, 0, 1, 0x41, picture]);
+        }
+        chunk.extend_from_slice(&[0, 0, 1, 0x09, 0xf0]);
+        let mut reader = AnnexBReader::new(16);
+        assert!(chunk.len() > 16);
+        let units = reader.push(&chunk).unwrap();
+        // The trailing delimiter stays pending until the next start code arrives.
+        assert_eq!(units.len(), 3);
+        assert_eq!(reader.finish().unwrap().len(), 1);
     }
 }
