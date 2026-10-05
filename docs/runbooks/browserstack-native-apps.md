@@ -1,8 +1,8 @@
 # BrowserStack native-app testing
 
 Use this runbook with [the native contract](../architecture/remote-native-app-testing.md).
-The reference project is the sibling `youpark.mobile.native`, with a synthetic backend
-from `youpark.no`. Read both projects' AGENTS.md before changing their workflows.
+Select the native app checkout and its declared synthetic backend source from private
+host setup. Read both projects' AGENTS.md before changing their workflows.
 
 ## Implementation status
 
@@ -37,7 +37,7 @@ simulator or helper tests as an end-to-end `device_test_run` result.
 From the selected isolated native checkout, the existing helper commands are:
 
 ```sh
-python3 scripts/remote-device/build.py ios --host fintermac
+python3 scripts/remote-device/build.py ios --host "<approved-mac-ssh-alias>"
 python3 scripts/remote-device/build.py android
 python3 -m unittest discover -s scripts/remote-device -p test_helpers.py -v
 ```

@@ -3,6 +3,7 @@
 pub mod api;
 pub mod artifact;
 pub mod cache;
+pub mod reconcile;
 pub mod tunnel;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -31,6 +32,10 @@ pub enum Error {
     TunnelStartFailed,
     #[error("app_upload_uncertain: upload outcome must be reconciled before retry")]
     UploadUncertain,
+    #[error("app_reconcile_incomplete: native resource discovery is incomplete or ambiguous")]
+    ReconcileIncomplete,
+    #[error("app_device_unverified: native session evidence does not match the selected app and device")]
+    DeviceUnverified,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -1,16 +1,15 @@
 use super::*;
-use std::sync::{Arc, Barrier};
 
-struct CanonicalTemp {
+pub(super) struct CanonicalTemp {
     _directory: tempfile::TempDir,
     path: PathBuf,
 }
 impl CanonicalTemp {
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.path
     }
 }
-fn canonical_temp() -> CanonicalTemp {
+pub(super) fn canonical_temp() -> CanonicalTemp {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().canonicalize().unwrap();
     CanonicalTemp {
@@ -19,14 +18,14 @@ fn canonical_temp() -> CanonicalTemp {
     }
 }
 
-fn journal(path: &Path, realm: char) -> Journal {
+pub(super) fn journal(path: &Path, realm: char) -> Journal {
     Journal {
         store: Store::open(path).unwrap(),
         realm: realm.to_string().repeat(64),
     }
 }
 
-fn quota() -> Result<Capacity> {
+pub(super) fn quota() -> Result<Capacity> {
     Capacity::observed(
         Quota {
             parallel_sessions_max_allowed: 2,
@@ -82,27 +81,44 @@ fn restart_preserves_owned_intent_and_never_serializes_provider_ids_to_status() 
 fn simultaneous_profiles_share_capacity_without_crossing_credential_ownership() {
     let folder = canonical_temp();
     let state = folder.path().join("state");
-    let barrier = Arc::new(Barrier::new(4));
+    let (ready_send, ready) = std::sync::mpsc::channel();
     let workers = (0..4)
         .map(|index| {
             let state = state.clone();
             let root = folder.path().to_owned();
-            let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                let journal = journal(&state, if index % 2 == 0 { 'a' } else { 'b' });
-                let owner = Uuid::new_v4();
-                let operation = journal
-                    .start(owner, &root, Kind::Session, Duration::from_secs(30))
-                    .unwrap();
-                barrier.wait();
+            let ready_send = ready_send.clone();
+            let (release, released) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let prepared = (|| {
+                    let journal = Journal {
+                        store: Store::open(&state)?,
+                        realm: if index % 2 == 0 { "a" } else { "b" }.repeat(64),
+                    };
+                    let owner = Uuid::new_v4();
+                    let operation = journal.start(owner, &root, Kind::Session, Duration::from_secs(30))?;
+                    Ok::<_, Error>((journal, owner, operation))
+                })();
+                let _ = ready_send.send(prepared.is_ok());
+                let (journal, owner, operation) = prepared?;
+                if released.recv_timeout(Duration::from_secs(10)) != Ok(true) {
+                    return Err(Error::JournalUnavailable);
+                }
                 journal.reserve(owner, operation.id, quota)
-            })
+            });
+            (release, worker)
         })
         .collect::<Vec<_>>();
-    let outcomes = workers
-        .into_iter()
-        .map(|worker| worker.join().unwrap())
+    let initialization = (0..4)
+        .map(|_| ready.recv_timeout(Duration::from_secs(10)) == Ok(true))
         .collect::<Vec<_>>();
+    let admitted = initialization.iter().all(|ready| *ready);
+    for (release, _) in &workers {
+        let _ = release.send(admitted);
+    }
+    // Join every worker before any assertion can destroy the fixture directory.
+    let outcomes = workers.into_iter().map(|(_, worker)| worker.join()).collect::<Vec<_>>();
+    assert!(admitted, "native journal initialization failed: {outcomes:?}");
+    let outcomes = outcomes.into_iter().map(|result| result.unwrap()).collect::<Vec<_>>();
     assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 2);
     assert_eq!(
         outcomes
@@ -470,4 +486,73 @@ fn slow_capacity_reply_cannot_admit_an_expired_operation() {
     let status = journal.status(owner, a.id).unwrap();
     assert_eq!(status.phase, Phase::Preparing);
     assert_eq!(status.pending_resources, 0);
+}
+
+#[test]
+fn missing_or_replaced_namespace_cannot_forget_reservations() {
+    let folder = canonical_temp();
+    let state = folder.path().join("state");
+    let first = journal(&state, 'a');
+    let owner = Uuid::new_v4();
+    let operation = first
+        .start(owner, folder.path(), Kind::Session, Duration::from_secs(30))
+        .unwrap();
+    first.reserve(owner, operation.id, quota).unwrap();
+    drop(first);
+    std::fs::rename(&state, folder.path().join("saved")).unwrap();
+    assert!(matches!(Store::open(&state), Err(Error::JournalInvalid)));
+    std::fs::remove_dir_all(&state).unwrap();
+    std::fs::rename(folder.path().join("saved"), &state).unwrap();
+    let restored = journal(&state, 'a');
+    assert_eq!(restored.status(owner, operation.id).unwrap().phase, Phase::Allocating);
+}
+
+#[test]
+fn equivalent_paths_and_relocated_registry_cannot_forget_owned_reservations() {
+    let folder = canonical_temp();
+    let host = folder.path().join("host");
+    let state = host.join("browserstack");
+    let owner = Uuid::new_v4();
+    let first = journal(&state, 'a');
+    let operation = first
+        .start(owner, folder.path(), Kind::Session, Duration::from_secs(30))
+        .unwrap();
+    first.reserve(owner, operation.id, quota).unwrap();
+    drop(first);
+    let moved = folder.path().join("relocated-host");
+    std::fs::rename(host, &moved).unwrap();
+    let state = moved.join("browserstack");
+    let reopened = journal(&state, 'a');
+    assert_eq!(reopened.status(owner, operation.id).unwrap().phase, Phase::Allocating);
+    drop(reopened);
+    std::fs::rename(&state, moved.join("saved")).unwrap();
+    for equivalent in [state.clone(), moved.join(".").join("browserstack")] {
+        assert!(matches!(Store::open(&equivalent), Err(Error::JournalInvalid)));
+    }
+    std::fs::remove_dir_all(&state).unwrap();
+    std::fs::rename(moved.join("saved"), &state).unwrap();
+    let restored = journal(&moved.join(".").join("browserstack"), 'a');
+    assert_eq!(restored.status(owner, operation.id).unwrap().phase, Phase::Allocating);
+}
+
+#[test]
+fn byte_identical_replacement_cannot_create_another_account_lock() {
+    let folder = canonical_temp();
+    let state = folder.path().join("state");
+    let first = journal(&state, 'a');
+    let original = open_test_lock(&state);
+    original.lock().unwrap();
+    let replacement = state.join("copied-lock");
+    std::fs::copy(state.join("journal.lock"), &replacement).unwrap();
+    std::fs::rename(replacement, state.join("journal.lock")).unwrap();
+    assert!(matches!(Store::open(&state), Err(Error::JournalInvalid)));
+    assert_eq!(first.pending(Uuid::new_v4()).err(), Some(Error::JournalInvalid));
+}
+
+fn open_test_lock(state: &Path) -> std::fs::File {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(state.join("journal.lock"))
+        .unwrap()
 }
