@@ -188,9 +188,19 @@ impl AnnexBReader {
         while let Some(nal) = take_nal(&mut self.pending) {
             self.accept(nal, &mut units)?;
         }
-        // Only the still-incomplete NAL counts against the limit, so one large
-        // chunk holding many complete small units is accepted.
-        if self.pending.len() > self.limit {
+        // Only the payload of the still-incomplete NAL counts against the
+        // limit, as for completed NALs, so chunk boundaries cannot change the
+        // outcome. Bytes before the first start code belong to no NAL.
+        let payload = if let Some((at, length)) = start_code(&self.pending, 0) {
+            self.pending.drain(..at);
+            self.pending.len() - length
+        } else {
+            // Keep a possible partial start code.
+            let keep = self.pending.len().min(3);
+            self.pending.drain(..self.pending.len() - keep);
+            0
+        };
+        if payload > self.limit {
             return Err(H264Error::NalTooLarge);
         }
         Ok(units)
@@ -357,7 +367,10 @@ mod tests {
     #[test]
     fn reader_enforces_limits() {
         let mut reader = AnnexBReader::new(8);
-        assert_eq!(reader.push(&[0; 9]), Err(H264Error::NalTooLarge));
+        assert_eq!(
+            reader.push(&[0, 0, 1, 0x41, 0, 0, 0, 0, 0, 0, 0, 9]),
+            Err(H264Error::NalTooLarge)
+        );
         let mut reader = AnnexBReader::new(10);
         assert!(reader.push(&[0, 0, 1, 0x41, 1, 2, 3, 0, 0, 1]).is_ok());
         assert!(reader.push(&[0x41, 1, 2, 3, 0, 0, 1]).is_ok());
@@ -377,6 +390,20 @@ mod tests {
         assert_eq!(leading_delimiter_len(&annexb), 6);
         assert_eq!(leading_delimiter_len(&annexb[6..]), 0);
         assert_eq!(leading_delimiter_len(&[0, 0, 1, 0x09, 0xf0]), 5);
+    }
+
+    #[test]
+    fn the_nal_limit_does_not_depend_on_chunk_boundaries() {
+        let nal = [0, 0, 1, 0x41, 1, 2, 3, 4, 5, 6, 7];
+        let mut split = AnnexBReader::new(8);
+        assert!(split.push(&nal).is_ok(), "an 8-byte NAL still waiting for its end");
+        assert!(split.push(&[0, 0, 1, 0x09, 0xf0]).is_ok());
+        let mut whole = AnnexBReader::new(8);
+        assert!(whole.push(&[&nal[..], &[0, 0, 1, 0x09, 0xf0]].concat()).is_ok());
+        let mut over = AnnexBReader::new(8);
+        assert_eq!(over.push(&[&nal[..], &[8]].concat()), Err(H264Error::NalTooLarge));
+        let mut junk = AnnexBReader::new(8);
+        assert!(junk.push(&[7; 64]).is_ok(), "bytes before any start code are dropped");
     }
 
     #[test]
