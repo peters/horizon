@@ -1,6 +1,6 @@
 //! Reference rates fetched in the background, independently of provider credentials.
 use super::{ANSWER_MARGIN_MILLIS, Fetched, Job, RETRY_FAILED, finished};
-use horizon_core::cloud_runtime::offers::exchange::Rates;
+use horizon_core::cloud_runtime::{offers::exchange::Rates, prices::freshness};
 use std::{
     sync::mpsc::channel,
     time::{Duration, Instant},
@@ -67,9 +67,32 @@ impl State {
 
     pub fn fresh(&self) -> Option<&Rates> {
         self.at.filter(|at| at.elapsed() < FRESH)?;
+        self.current_rates()
+    }
+
+    /// The rates while they are dated for today's comparison, however long ago they came.
+    fn current_rates(&self) -> Option<&Rates> {
         self.rates.as_ref().filter(|rates| {
             rates.current(horizon_core::cloud_runtime::offers::exchange::OffsetDateTime::now_utc().date())
         })
+    }
+
+    /// The rates while the dialog may compare with them: current, or gone stale while a
+    /// background refresh for them runs. Agents' offers use [`Self::fresh`].
+    pub fn comparable(&self) -> Option<&Rates> {
+        // A manual refresh forgets when the rates came, so they are never superseded here.
+        let answer = self.at.map(|at| freshness::Answer::since(at, None));
+        freshness::comparable(answer, FRESH, freshness::Fetch::running(self.job.is_some()))
+            .then(|| self.current_rates())
+            .flatten()
+    }
+
+    /// Until rates whose refresh is running stop counting as current, for waking an idle
+    /// dialog then.
+    pub(super) fn grace_left(&self) -> Option<Duration> {
+        self.at
+            .filter(|_| self.job.is_some())
+            .and_then(|at| freshness::grace_left(at.elapsed(), FRESH))
     }
 
     pub fn waiting_for_deadline(&self, deadline_in_millis: i64) -> bool {
@@ -115,6 +138,36 @@ mod tests {
         assert!(state.fresh().is_some());
         state.refresh();
         assert!(state.rates.is_some() && state.fresh().is_none());
+    }
+
+    #[test]
+    fn a_background_refresh_keeps_the_last_rates_comparable_until_it_answers() {
+        let rates = Rates {
+            date: horizon_core::cloud_runtime::offers::exchange::OffsetDateTime::now_utc()
+                .date()
+                .to_string(),
+            usd_per_unit: std::collections::BTreeMap::from([("USD".into(), 1.0), ("EUR".into(), 1.2)]),
+        };
+        let mut state = State::default();
+        assert!(state.comparable().is_none(), "nothing answered yet");
+        let Some(answered_at) = Instant::now().checked_sub(FRESH + Duration::from_secs(1)) else {
+            return;
+        };
+        state.answered(Fetched {
+            value: rates,
+            at: answered_at,
+        });
+        assert!(state.comparable().is_none() && state.fresh().is_none());
+        let (_sender, receiver) = channel();
+        state.job = Some(receiver);
+        assert!(state.comparable().is_some(), "the refresh keeps the last rates");
+        assert!(state.fresh().is_none(), "agents still wait for current rates");
+        assert!(
+            state.grace_left().is_some_and(|left| left <= freshness::REFRESH_GRACE),
+            "the dialog wakes when the grace ends"
+        );
+        state.refresh();
+        assert!(state.comparable().is_none(), "a manual refresh waits for new rates");
     }
 
     #[test]

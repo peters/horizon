@@ -26,3 +26,4 @@ documents that are not yet STE.
 | Procedure | Feature | Cost |
 |---|---|---|
 | [cloud-settings-replace-key](procedures/cloud-settings-replace-key.md) | Cloud settings saved keys | none |
+| [new-cloud-catalog-refresh](procedures/new-cloud-catalog-refresh.md) | New cloud dialog, background price refresh | none |

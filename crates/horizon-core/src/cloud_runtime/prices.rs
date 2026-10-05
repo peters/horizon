@@ -13,6 +13,7 @@ use horizon_cloud::{hetzner::Hetzner, runpod::RunPod};
 
 pub use horizon_cloud::runpod::volumes::Tier as StorageTier;
 
+pub mod freshness;
 pub mod watch;
 
 /// Current prices and the preferences they apply to.
