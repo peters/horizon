@@ -25,4 +25,4 @@ documents that are not yet STE.
 
 | Procedure | Feature | Cost |
 |---|---|---|
-| — | No procedures yet. | — |
+| [cloud-settings-replace-key](procedures/cloud-settings-replace-key.md) | Cloud settings saved keys | none |
