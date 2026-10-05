@@ -144,3 +144,60 @@ fn credentials_survive_secret_service_restart() {
     assert!(!store.contains(&user_locator).unwrap());
     assert!(!store.contains(&key_locator).unwrap());
 }
+
+#[test]
+#[ignore = "requires scripts/browser-smoke/credentials.sh private Secret Service fixture"]
+fn locked_and_ambiguous_credentials_fail_without_unlocking() {
+    use super::super::keyring_store::KEYRING_SERVICE;
+    use secret_service::{EncryptionType, blocking::SecretService};
+    use std::collections::HashMap;
+
+    let root = fixture_root();
+    let _daemon = Daemon::start(&root);
+    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::OsKeychain);
+    let locator = locator(&profile, "user");
+    let user = format!("{}|{}", locator.origin, locator.slot.as_deref().unwrap());
+    let mut store = KeyringCredentialStore::open().unwrap();
+    let mut capture = Capture(b"unchanged".to_vec());
+    assert_eq!(
+        store.with_secret(&locator, &mut capture),
+        Err(RemoteCredentialError::Missing)
+    );
+    store.put(&locator, b"synthetic-original").unwrap();
+    store.with_secret(&locator, &mut capture).unwrap();
+    assert_eq!(capture.0, b"synthetic-original");
+
+    let service = SecretService::connect(EncryptionType::Dh).unwrap();
+    let second = service.get_collection_by_alias("session").unwrap();
+    let duplicate = second
+        .create_item(
+            "Synthetic duplicate",
+            HashMap::from([("service", KEYRING_SERVICE), ("username", user.as_str())]),
+            b"synthetic-duplicate",
+            false,
+            "text/plain",
+        )
+        .unwrap();
+    capture.0 = b"unchanged".to_vec();
+    assert_eq!(
+        store.with_secret(&locator, &mut capture),
+        Err(RemoteCredentialError::Platform { kind: "ambiguous" })
+    );
+    assert_eq!(capture.0, b"unchanged");
+
+    let login = service.get_default_collection().unwrap();
+    login.lock().unwrap();
+    assert_eq!(
+        store.with_secret(&locator, &mut capture),
+        Err(RemoteCredentialError::Locked)
+    );
+    assert!(login.is_locked().unwrap(), "mixed matches must remain locked");
+    assert_eq!(capture.0, b"unchanged");
+    duplicate.delete().unwrap();
+    assert_eq!(
+        store.with_secret(&locator, &mut capture),
+        Err(RemoteCredentialError::Locked)
+    );
+    assert!(login.is_locked().unwrap());
+    assert_eq!(capture.0, b"unchanged");
+}
