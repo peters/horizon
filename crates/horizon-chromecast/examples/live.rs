@@ -22,20 +22,37 @@ fn access_units(data: &[u8]) -> Vec<(&[u8], bool)> {
         .collect()
 }
 
-/// The longest distance between IDR pictures, in frames, counting the wrap
-/// from the end of the looped file back to its start.
-fn keyframe_spacing(units: &[(&[u8], bool)]) -> Option<u32> {
+/// IDR gaps in frames, counting the wrap from the end of the looped file
+/// back to its start.
+fn keyframe_gaps(units: &[(&[u8], bool)]) -> Vec<u32> {
     let idrs: Vec<usize> = units
         .iter()
         .enumerate()
         .filter(|(_, (_, idr))| *idr)
         .map(|(at, _)| at)
         .collect();
-    let first = *idrs.first()?;
-    let last = *idrs.last()?;
-    let wrap = units.len() - last + first;
-    let longest = idrs.windows(2).map(|pair| pair[1] - pair[0]).chain([wrap]).max()?;
-    u32::try_from(longest).ok()
+    let (Some(&first), Some(&last)) = (idrs.first(), idrs.last()) else {
+        return Vec::new();
+    };
+    idrs.windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .chain([units.len() - last + first])
+        .filter_map(|gap| u32::try_from(gap).ok())
+        .collect()
+}
+
+/// A segment length every IDR gap can close: each gap must reach the 90%
+/// cut threshold of the longest one, or segments would be dropped.
+fn segment_frames(units: &[(&[u8], bool)]) -> Result<u32, String> {
+    let gaps = keyframe_gaps(units);
+    let longest = *gaps.iter().max().ok_or("the file contains no IDR picture")?;
+    let shortest = *gaps.iter().min().ok_or("the file contains no IDR picture")?;
+    if u64::from(shortest) * 10 < u64::from(longest) * 9 {
+        return Err(format!(
+            "IDR pictures are {shortest} to {longest} frames apart; re-encode with a fixed keyframe interval"
+        ));
+    }
+    Ok(longest)
 }
 
 fn run() -> Result<(), String> {
@@ -57,7 +74,7 @@ fn run() -> Result<(), String> {
     }
     let frame = Duration::from_secs(1) / fps;
     // A file cannot be asked for keyframes, so segments follow its IDR spacing.
-    let segment = frame * keyframe_spacing(&units).ok_or("the file contains no IDR picture")?;
+    let segment = frame * segment_frames(&units)?;
     let options = LiveOptions {
         segment,
         ..LiveOptions::default()

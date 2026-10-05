@@ -26,6 +26,8 @@ pub(crate) struct Segmenter {
     next_sequence: u64,
     segments: VecDeque<Segment>,
     origin: Option<Duration>,
+    /// Latest accepted timestamp; PCR may never move backwards.
+    last_pts: Option<Duration>,
     sps: Option<Vec<u8>>,
     pps: Option<Vec<u8>>,
     /// The next published segment follows a dropped one.
@@ -45,6 +47,7 @@ impl Segmenter {
             next_sequence: 0,
             segments: VecDeque::new(),
             origin: None,
+            last_pts: None,
             sps: None,
             pps: None,
             gap: false,
@@ -57,6 +60,13 @@ impl Segmenter {
     pub(crate) fn push(&mut self, annexb: &[u8], pts: Duration, keyframe: bool) {
         let origin = *self.origin.get_or_insert(pts);
         let pts = pts.saturating_sub(origin);
+        // Without separate decode timestamps, reordered (B-frame) input would
+        // make PCR regress; such units are dropped.
+        if self.last_pts.is_some_and(|last| pts < last) {
+            tracing::debug!("dropping an access unit whose timestamp went backwards");
+            return;
+        }
+        self.last_pts = Some(pts);
         let carries_both = self.remember_parameter_sets(annexb);
         if let Some(start) = self.current_start
             && self.over_budget(pts.saturating_sub(start))
@@ -417,5 +427,17 @@ mod tests {
         let playlist = segmenter.playlist();
         assert!(playlist.contains("#EXT-X-DISCONTINUITY-SEQUENCE:1\n"), "{playlist}");
         assert!(!playlist.contains("#EXT-X-DISCONTINUITY\n"), "{playlist}");
+    }
+
+    #[test]
+    fn units_whose_timestamp_goes_backwards_are_dropped() {
+        let mut segmenter = Segmenter::new(Duration::from_secs(1), 4);
+        segmenter.push(IDR, Duration::ZERO, true);
+        segmenter.push(SLICE, Duration::from_millis(120), false);
+        let before = segmenter.current.len();
+        segmenter.push(SLICE, Duration::from_millis(40), false);
+        assert_eq!(segmenter.current.len(), before, "a reordered unit is not muxed");
+        segmenter.push(SLICE, Duration::from_millis(160), false);
+        assert!(segmenter.current.len() > before);
     }
 }

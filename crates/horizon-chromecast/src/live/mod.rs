@@ -132,7 +132,9 @@ impl LiveCast {
         })
     }
 
-    /// Adds one Annex B access unit with its presentation time.
+    /// Adds one Annex B access unit with its presentation time. Input must be
+    /// in presentation order (no B-frames): units whose timestamp goes
+    /// backwards are dropped, since segments carry no separate decode time.
     pub fn push_annexb(&self, annexb: &[u8], pts: Duration, keyframe: bool) {
         lock(&self.segmenter).push(annexb, pts, keyframe);
     }
