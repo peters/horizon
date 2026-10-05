@@ -13,6 +13,8 @@ pub(crate) struct Segment {
     pub(crate) sequence: u64,
     pub(crate) duration: Duration,
     pub(crate) data: Arc<[u8]>,
+    /// Follows a dropped segment: timestamps and continuity counters jump.
+    pub(crate) discontinuity: bool,
 }
 
 pub(crate) struct Segmenter {
@@ -26,6 +28,10 @@ pub(crate) struct Segmenter {
     origin: Option<Duration>,
     sps: Option<Vec<u8>>,
     pps: Option<Vec<u8>>,
+    /// The next published segment follows a dropped one.
+    gap: bool,
+    /// Discontinuities that have left the window (`EXT-X-DISCONTINUITY-SEQUENCE`).
+    discontinuity_sequence: u64,
 }
 
 impl Segmenter {
@@ -41,6 +47,8 @@ impl Segmenter {
             origin: None,
             sps: None,
             pps: None,
+            gap: false,
+            discontinuity_sequence: 0,
         }
     }
 
@@ -58,6 +66,7 @@ impl Segmenter {
             tracing::debug!("dropping an open HLS segment that outgrew its budget");
             self.current.clear();
             self.current_start = None;
+            self.gap = self.next_sequence > 0;
         }
         match self.current_start {
             None if !keyframe => return,
@@ -162,9 +171,13 @@ impl Segmenter {
             .front()
             .map_or(self.next_sequence, |segment| segment.sequence);
         let mut playlist = format!(
-            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-TARGETDURATION:{target}\n#EXT-X-MEDIA-SEQUENCE:{first}\n"
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-TARGETDURATION:{target}\n#EXT-X-MEDIA-SEQUENCE:{first}\n#EXT-X-DISCONTINUITY-SEQUENCE:{}\n",
+            self.discontinuity_sequence
         );
         for segment in &self.segments {
+            if segment.discontinuity {
+                playlist.push_str("#EXT-X-DISCONTINUITY\n");
+            }
             let _ = write!(
                 playlist,
                 "#EXTINF:{:.3},\nseg{}.ts\n",
@@ -183,10 +196,13 @@ impl Segmenter {
             sequence: self.next_sequence,
             duration: end.saturating_sub(start),
             data: std::mem::take(&mut self.current).into(),
+            discontinuity: std::mem::take(&mut self.gap),
         });
         self.next_sequence += 1;
         while self.segments.len() > self.window {
-            self.segments.pop_front();
+            if self.segments.pop_front().is_some_and(|segment| segment.discontinuity) {
+                self.discontinuity_sequence += 1;
+            }
         }
     }
 }
@@ -378,5 +394,28 @@ mod tests {
         segmenter.push(IDR, frame * 45, true);
         assert_eq!(segmenter.ready_segments(), 0, "{}", segmenter.playlist());
         assert!(!segmenter.playlist().contains("EXTINF:1.500"));
+    }
+
+    #[test]
+    fn a_dropped_segment_marks_the_next_one_as_a_discontinuity() {
+        let mut segmenter = Segmenter::new(Duration::from_millis(500), 2);
+        segmenter.push(IDR, Duration::ZERO, true);
+        segmenter.push(IDR, Duration::from_millis(500), true);
+        for frame in 6..=20u64 {
+            segmenter.push(SLICE, Duration::from_millis(frame * 100), false);
+        }
+        segmenter.push(IDR, Duration::from_millis(2_100), true);
+        segmenter.push(IDR, Duration::from_millis(2_600), true);
+        let playlist = segmenter.playlist();
+        assert!(playlist.contains("#EXT-X-DISCONTINUITY-SEQUENCE:0\n"), "{playlist}");
+        assert!(
+            playlist.contains("#EXT-X-DISCONTINUITY\n#EXTINF:0.500,\nseg1.ts"),
+            "{playlist}"
+        );
+        segmenter.push(IDR, Duration::from_millis(3_100), true);
+        segmenter.push(IDR, Duration::from_millis(3_600), true);
+        let playlist = segmenter.playlist();
+        assert!(playlist.contains("#EXT-X-DISCONTINUITY-SEQUENCE:1\n"), "{playlist}");
+        assert!(!playlist.contains("#EXT-X-DISCONTINUITY\n"), "{playlist}");
     }
 }

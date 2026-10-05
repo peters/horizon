@@ -4,10 +4,11 @@ use horizon_chromecast::{DEFAULT_PORT, LiveCast, LiveOptions};
 use std::{net::SocketAddr, process::ExitCode, time::Duration, time::Instant};
 
 fn access_units(data: &[u8]) -> Vec<(&[u8], bool)> {
+    // Three- and four-byte start codes both mark a delimiter.
     let mut starts: Vec<usize> = data
-        .windows(5)
+        .windows(4)
         .enumerate()
-        .filter(|(_, w)| w[..4] == [0, 0, 0, 1] && w[4] & 0x1f == 9)
+        .filter(|(_, w)| w[..3] == [0, 0, 1] && w[3] & 0x1f == 9)
         .map(|(at, _)| at)
         .collect();
     starts.push(data.len());
@@ -19,6 +20,22 @@ fn access_units(data: &[u8]) -> Vec<(&[u8], bool)> {
             (unit, idr)
         })
         .collect()
+}
+
+/// The longest distance between IDR pictures, in frames, counting the wrap
+/// from the end of the looped file back to its start.
+fn keyframe_spacing(units: &[(&[u8], bool)]) -> Option<u32> {
+    let idrs: Vec<usize> = units
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, idr))| *idr)
+        .map(|(at, _)| at)
+        .collect();
+    let first = *idrs.first()?;
+    let last = *idrs.last()?;
+    let wrap = units.len() - last + first;
+    let longest = idrs.windows(2).map(|pair| pair[1] - pair[0]).chain([wrap]).max()?;
+    u32::try_from(longest).ok()
 }
 
 fn run() -> Result<(), String> {
@@ -38,9 +55,15 @@ fn run() -> Result<(), String> {
     if units.is_empty() {
         return Err("no access unit delimiters found; encode with aud=1".to_owned());
     }
-    let live = LiveCast::start(address, LiveOptions::default()).map_err(|e| e.to_string())?;
-    println!("serving {}", live.url());
     let frame = Duration::from_secs(1) / fps;
+    // A file cannot be asked for keyframes, so segments follow its IDR spacing.
+    let segment = frame * keyframe_spacing(&units).ok_or("the file contains no IDR picture")?;
+    let options = LiveOptions {
+        segment,
+        ..LiveOptions::default()
+    };
+    let live = LiveCast::start(address, options).map_err(|e| e.to_string())?;
+    println!("serving {} ({:.2} s segments)", live.url(), segment.as_secs_f32());
     let started = Instant::now();
     let mut last_state = None;
     for (index, (unit, keyframe)) in units.iter().cycle().enumerate() {

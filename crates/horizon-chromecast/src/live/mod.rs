@@ -116,6 +116,7 @@ impl LiveCast {
                 state: state.clone(),
                 stop: stop.clone(),
                 buffering_since: Cell::new(None),
+                started: Cell::new(false),
             };
             std::thread::Builder::new()
                 .name("chromecast-live".to_owned())
@@ -168,7 +169,7 @@ impl Drop for LiveCast {
     }
 }
 
-struct Session {
+pub(crate) struct Session {
     receiver: SocketAddr,
     url: String,
     options: LiveOptions,
@@ -176,6 +177,8 @@ struct Session {
     state: Arc<Mutex<LiveState>>,
     stop: Arc<AtomicBool>,
     buffering_since: Cell<Option<Instant>>,
+    /// Our media session has reported PLAYING at least once.
+    started: Cell<bool>,
 }
 
 impl Session {
@@ -250,7 +253,13 @@ impl Session {
     }
 
     /// Applies one receiver event; `Ok(false)` means the session is over.
-    fn follow(&self, event: &Event, session_id: &str, transport_id: &str, media_session_id: i64) -> Result<bool> {
+    pub(crate) fn follow(
+        &self,
+        event: &Event,
+        session_id: &str,
+        transport_id: &str,
+        media_session_id: i64,
+    ) -> Result<bool> {
         if event.namespace == NS_CONNECTION && event.source == transport_id && event.kind() == Some("CLOSE") {
             return Ok(false);
         }
@@ -262,8 +271,20 @@ impl Session {
                 .is_some_and(|apps| !apps.iter().any(|app| app["sessionId"] == session_id));
             return Ok(!replaced);
         }
+        let statuses = MediaStatus::from_event(event);
+        // Media session ids grow per LOAD: an active newer session on our
+        // transport means another sender loaded over this cast. It now owns the
+        // application, so end without stopping it.
+        if media_session_id != NO_MEDIA_SESSION
+            && event.source == transport_id
+            && statuses
+                .iter()
+                .any(|status| status.media_session_id > media_session_id && status.player_state != "IDLE")
+        {
+            return Ok(false);
+        }
         // A joined receiver may still report the item our LOAD replaced.
-        let ours = MediaStatus::from_event(event)
+        let ours = statuses
             .into_iter()
             .filter(|status| status.media_session_id == media_session_id);
         let detail = event.payload.get("status").map(Value::to_string);
@@ -279,6 +300,7 @@ impl Session {
     fn apply(&self, status: &MediaStatus, detail: Option<String>) -> Result<bool> {
         match (status.player_state.as_str(), status.idle_reason.as_deref()) {
             ("PLAYING", _) => {
+                self.started.set(true);
                 self.buffering_since.set(None);
                 self.set(LiveState::Playing);
             }
@@ -297,6 +319,9 @@ impl Session {
                 });
             }
             ("IDLE", Some(_)) => return Ok(false),
+            // `idleReason` is optional. A freshly loaded item can report a bare
+            // IDLE before it plays; once it has played, a bare IDLE means it ended.
+            ("IDLE", None) if self.started.get() => return Ok(false),
             _ => {}
         }
         Ok(true)
@@ -322,4 +347,18 @@ impl Session {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+pub(crate) fn test_session() -> Session {
+    Session {
+        receiver: SocketAddr::from(([192, 0, 2, 1], crate::DEFAULT_PORT)),
+        url: String::new(),
+        options: LiveOptions::default(),
+        segmenter: Arc::new(Mutex::new(Segmenter::new(Duration::from_millis(500), 10))),
+        state: Arc::new(Mutex::new(LiveState::Buffering)),
+        stop: Arc::new(AtomicBool::new(false)),
+        buffering_since: Cell::new(None),
+        started: Cell::new(false),
+    }
 }

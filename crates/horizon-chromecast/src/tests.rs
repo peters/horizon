@@ -127,6 +127,9 @@ fn receiver_with(listener: TcpListener, config: Arc<ServerConfig>, running: bool
                         }
                         let loaded = json!({"type": "MEDIA_STATUS", "status": [{"mediaSessionId": 9, "playerState": "BUFFERING"}]});
                         send(&mut stream, to, NS_MEDIA, &reply(&request, loaded));
+                        // Receivers can report a bare IDLE for the new item before it loads.
+                        let fresh = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "IDLE"}]});
+                        send(&mut stream, to, NS_MEDIA, &fresh);
                         // TVs report volume changes without an application list.
                         let volume =
                             json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {"volume": {"level": 0.1}}});
@@ -172,7 +175,7 @@ fn launches_loads_and_follows_media_status() {
     );
     let playing = std::iter::from_fn(|| client.next_event(Duration::from_secs(5)).unwrap())
         .flat_map(|event| MediaStatus::from_event(&event))
-        .next()
+        .find(|status| status.player_state != "IDLE")
         .unwrap();
     assert_eq!(playing.player_state, "PLAYING");
     client.stop_application(&app.session_id).unwrap();
@@ -342,4 +345,38 @@ fn live_cast_ends_without_load_when_the_application_closes_during_pre_roll() {
     let log = server.join().unwrap();
     assert!(!log.iter().any(|line| line.ends_with(" LOAD")), "{log:#?}");
     assert!(!log.iter().any(|line| line.ends_with(" STOP")), "{log:#?}");
+}
+
+fn media_event(source: &str, statuses: &Value) -> crate::Event {
+    crate::Event {
+        namespace: NS_MEDIA.to_owned(),
+        source: source.to_owned(),
+        payload: json!({"type": "MEDIA_STATUS", "requestId": 0, "status": statuses.clone()}),
+    }
+}
+
+#[test]
+fn live_session_ends_on_bare_idle_and_on_a_newer_load_but_not_on_the_replaced_item() {
+    let session = crate::live::test_session();
+    let follow =
+        |statuses: Value| session.follow(&media_event("transport-1", &statuses), "session-1", "transport-1", 9);
+    // The item our LOAD replaced may still report its end.
+    assert!(follow(json!([{"mediaSessionId": 8, "playerState": "IDLE", "idleReason": "INTERRUPTED"}])).unwrap());
+    assert!(follow(json!([{"mediaSessionId": 8, "playerState": "IDLE"}])).unwrap());
+    // A bare IDLE right after LOAD, before the item has played, is not the end.
+    assert!(follow(json!([{"mediaSessionId": 9, "playerState": "BUFFERING"}])).unwrap());
+    assert!(follow(json!([{"mediaSessionId": 9, "playerState": "IDLE"}])).unwrap());
+    assert!(follow(json!([{"mediaSessionId": 9, "playerState": "PLAYING"}])).unwrap());
+    // Once it has played, a bare IDLE ends the cast.
+    assert!(!follow(json!([{"mediaSessionId": 9, "playerState": "IDLE"}])).unwrap());
+
+    let replaced = crate::live::test_session();
+    let event = media_event(
+        "transport-1",
+        &json!([{"mediaSessionId": 10, "playerState": "BUFFERING"}]),
+    );
+    assert!(
+        !replaced.follow(&event, "session-1", "transport-1", 9).unwrap(),
+        "another sender loaded over us"
+    );
 }
