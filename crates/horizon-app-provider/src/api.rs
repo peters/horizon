@@ -216,25 +216,37 @@ impl BrowserStack {
         crate::tunnel::Tunnel::start(binary, key, ports, id, lifetime, journal)
     }
 
-    fn get(&self, path: &str) -> Result<Value> {
-        decode(
+    pub(crate) fn get(&self, path: &str) -> Result<Value> {
+        self.get_bounded(path, Duration::from_secs(180), MAX_RESPONSE)
+    }
+
+    pub(crate) fn get_bounded(&self, path: &str, timeout: Duration, bytes: u64) -> Result<Value> {
+        decode_bounded(
             self.agent
                 .get(&format!("{API}{path}"))
                 .header("Authorization", self.authorization.as_str())
+                .config()
+                .timeout_global(Some(timeout))
+                .build()
                 .call()
                 .map_err(|_| Error::ProviderFailed)?,
+            bytes,
         )
     }
 }
 
-fn decode(mut response: ureq::http::Response<ureq::Body>) -> Result<Value> {
+fn decode(response: ureq::http::Response<ureq::Body>) -> Result<Value> {
+    decode_bounded(response, MAX_RESPONSE)
+}
+
+fn decode_bounded(mut response: ureq::http::Response<ureq::Body>, limit: u64) -> Result<Value> {
     if !response.status().is_success() {
         return Err(Error::ProviderFailed);
     }
     let bytes = response
         .body_mut()
         .with_config()
-        .limit(MAX_RESPONSE)
+        .limit(limit)
         .read_to_vec()
         .map_err(|_| Error::ProviderFailed)?;
     serde_json::from_slice(&bytes).map_err(|_| Error::ProviderRejected)

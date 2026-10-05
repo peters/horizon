@@ -12,7 +12,6 @@ description = "Host-owned native app lifecycle and durable reconciliation"
 workspace = true
 
 [dependencies]
-horizon-app-testing.workspace = true
 horizon-app-provider.workspace = true
 horizon-core.workspace = true
 horizon-browser.workspace = true

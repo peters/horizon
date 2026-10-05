@@ -2310,7 +2310,6 @@ name = "horizon-app-runtime"
 version = "0.2.7"
 dependencies = [
  "horizon-app-provider",
- "horizon-app-testing",
  "horizon-browser",
  "horizon-core",
  "rustix 1.1.5",
