@@ -1,6 +1,6 @@
 //! Control flow against a synthetic receiver over loopback TLS.
 use crate::{
-    CastClient, DEFAULT_MEDIA_RECEIVER, Error, MediaLoad, MediaStatus, StreamType,
+    CastClient, DEFAULT_MEDIA_RECEIVER, Error, LiveCast, LiveOptions, LiveState, MediaLoad, MediaStatus, StreamType,
     client::{NS_CONNECTION, NS_HEARTBEAT, PLATFORM_RECEIVER},
     media::NS_MEDIA,
     proto::{self, CastMessage, Payload},
@@ -69,6 +69,17 @@ fn app_status(running: bool) -> Value {
     json!({"type": "RECEIVER_STATUS", "status": {"applications": applications, "volume": {"level": 0.5}}})
 }
 
+fn fetch(url: &str) -> String {
+    let rest = url.strip_prefix("http://").unwrap();
+    let (host, path) = rest.split_at(rest.find('/').unwrap());
+    let mut socket = TcpStream::connect(host).unwrap();
+    write!(socket, "GET {path} HTTP/1.1\r\nHost: {host}\r\n\r\n").unwrap();
+    let mut response = String::new();
+    socket.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    response
+}
+
 /// Serves one sender and returns `namespace destination type` for every message it saw.
 fn receiver(listener: TcpListener, config: Arc<ServerConfig>) -> JoinHandle<Vec<String>> {
     receiver_with(listener, config, false)
@@ -107,6 +118,13 @@ fn receiver_with(listener: TcpListener, config: Arc<ServerConfig>, running: bool
                     }
                     (NS_MEDIA, "LOAD") => {
                         assert_eq!(request["media"]["streamType"], "LIVE");
+                        if let Some(url) = request["media"]["contentId"]
+                            .as_str()
+                            .filter(|u| u.contains("127.0.0.1"))
+                        {
+                            assert!(fetch(url).contains("#EXTM3U"));
+                            log.push("fetched playlist".to_owned());
+                        }
                         let loaded = json!({"type": "MEDIA_STATUS", "status": [{"mediaSessionId": 9, "playerState": "BUFFERING"}]});
                         send(&mut stream, to, NS_MEDIA, &reply(&request, loaded));
                         let playing = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "PLAYING"}]});
@@ -193,4 +211,34 @@ fn reports_closed_when_receiver_disconnects() {
     server.join().unwrap();
     assert!(matches!(client.receiver_status(), Err(Error::Closed | Error::Io(_))));
     assert!(!client.is_open());
+}
+
+#[test]
+fn live_cast_loads_the_served_playlist_and_tracks_playback() {
+    let (address, listener, config) = listen();
+    let server = receiver(listener, config);
+    let mut live = LiveCast::start(address, LiveOptions::default()).unwrap();
+    assert!(live.url().starts_with("http://127.0.0.1:"));
+    for frame in 0..30u64 {
+        let pts = Duration::from_millis(frame * 100);
+        let keyframe = live.wants_keyframe(pts);
+        let unit: &[u8] = if keyframe {
+            &[0, 0, 0, 1, 0x65, 1]
+        } else {
+            &[0, 0, 0, 1, 0x41, 2]
+        };
+        live.push_annexb(unit, pts, keyframe);
+    }
+    for _ in 0..100 {
+        if live.state() == LiveState::Playing {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(live.state(), LiveState::Playing);
+    live.stop();
+    assert_eq!(live.state(), LiveState::Ended);
+    let log = server.join().unwrap();
+    assert!(log.contains(&"fetched playlist".to_owned()), "{log:#?}");
+    assert!(log.contains(&format!("{NS_RECEIVER} receiver-0 STOP")), "{log:#?}");
 }
