@@ -301,21 +301,29 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn apply_pending_workspace_changes(&mut self) {
-        for panel_id in self.workspace_creates.drain(..) {
+        for panel_id in std::mem::take(&mut self.workspace_creates) {
             #[cfg(feature = "cloud-workspaces")]
             if self.cloud_prototype.groups.contains_panel(&self.board, panel_id) {
                 continue;
             }
             let name = format!("Workspace {}", self.board.workspaces.len() + 1);
             let workspace_id = self.board.create_workspace(&name);
-            self.board.assign_panel_to_workspace(panel_id, workspace_id);
+            self.assign_panel_workspace_and_mark_dirty(panel_id, workspace_id);
         }
-        for (panel_id, workspace_id) in self.workspace_assignments.drain(..) {
+        for (panel_id, workspace_id) in std::mem::take(&mut self.workspace_assignments) {
             #[cfg(feature = "cloud-workspaces")]
             if self.cloud_prototype.groups.contains_panel(&self.board, panel_id) {
                 continue;
             }
-            self.board.assign_panel_to_workspace(panel_id, workspace_id);
+            self.assign_panel_workspace_and_mark_dirty(panel_id, workspace_id);
+        }
+    }
+
+    fn assign_panel_workspace_and_mark_dirty(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
+        let previous_workspace = self.board.panel_workspace_id(panel_id);
+        self.board.assign_panel_to_workspace(panel_id, workspace_id);
+        if self.board.panel_workspace_id(panel_id) != previous_workspace {
+            self.mark_runtime_dirty();
         }
     }
 
@@ -708,3 +716,7 @@ mod tests {
 #[cfg(all(test, unix))]
 #[path = "lifecycle/terminal_cache_tests.rs"]
 mod terminal_cache_tests;
+
+#[cfg(test)]
+#[path = "lifecycle/workspace_persistence_tests.rs"]
+mod workspace_persistence_tests;
