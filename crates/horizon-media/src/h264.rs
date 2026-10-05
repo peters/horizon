@@ -185,9 +185,18 @@ impl AnnexBReader {
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<Unit>, H264Error> {
         self.pending.extend_from_slice(bytes);
         let mut units = Vec::new();
-        while let Some(nal) = take_nal(&mut self.pending) {
-            self.accept(nal, &mut units)?;
+        // Walk completed NALs by offset and drain once, so a large chunk of
+        // many small NALs stays linear.
+        let mut consumed = 0;
+        while let Some((nal, next)) = next_nal(&self.pending, consumed) {
+            let nal = nal.to_vec();
+            consumed = next;
+            if let Err(error) = self.accept(nal, &mut units) {
+                self.pending.drain(..consumed);
+                return Err(error);
+            }
         }
+        self.pending.drain(..consumed);
         // Only the payload of the still-incomplete NAL counts against the
         // limit, as for completed NALs, so chunk boundaries cannot change the
         // outcome. Bytes before the first start code belong to no NAL.
@@ -260,12 +269,12 @@ impl AnnexBReader {
     }
 }
 
-fn take_nal(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
-    let first = start_code(buffer, 0)?;
+/// The first complete NAL at or after `from`, and the offset of the start
+/// code that ends it.
+fn next_nal(buffer: &[u8], from: usize) -> Option<(&[u8], usize)> {
+    let first = start_code(buffer, from)?;
     let next = start_code(buffer, first.0 + first.1)?;
-    let nal = buffer[first.0 + first.1..next.0].to_vec();
-    buffer.drain(..next.0);
-    Some(nal)
+    Some((&buffer[first.0 + first.1..next.0], next.0))
 }
 
 fn start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
@@ -444,5 +453,22 @@ mod tests {
         // The trailing delimiter stays pending until the next start code arrives.
         assert_eq!(units.len(), 3);
         assert_eq!(reader.finish().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_large_chunk_of_small_nals_parses_in_linear_time() {
+        let mut chunk = Vec::with_capacity(4 << 20);
+        while chunk.len() < 4 << 20 {
+            chunk.extend_from_slice(&[0, 0, 1, 0x09, 0xf0, 0, 0, 1, 0x41, 1, 2, 3]);
+        }
+        chunk.extend_from_slice(&[0, 0, 1, 0x09, 0xf0]);
+        let started = std::time::Instant::now();
+        let units = AnnexBReader::default().push(&chunk).unwrap();
+        assert!(units.len() > 300_000);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
     }
 }
