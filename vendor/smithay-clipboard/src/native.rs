@@ -260,12 +260,37 @@ pub(crate) fn preferred(mimes: &[String]) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(crate) fn preferred_clipboard(mimes: &[String]) -> Option<String> {
+fn preferred_image(mimes: &[String]) -> Option<String> {
     ["image/png", "image/jpeg"]
         .into_iter()
         .find(|mime| mimes.iter().any(|offered| offered == mime))
         .map(str::to_owned)
-        .or_else(|| preferred(mimes))
+}
+
+pub(crate) fn preferred_clipboard(mimes: &[String]) -> Option<String> {
+    preferred_image(mimes).or_else(|| preferred(mimes))
+}
+
+/// Browsers drag images as remote URLs with the encoded image alongside; only
+/// local file entries can become paths, so anything else reads the image.
+pub(crate) fn drop_image_fallback(mime: &str, bytes: &[u8], mimes: &[String]) -> Option<String> {
+    (mime == "text/uri-list" && !lists_only_local_files(bytes))
+        .then(|| preferred_image(mimes))
+        .flatten()
+}
+
+fn lists_only_local_files(bytes: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(bytes);
+    let mut entries = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .peekable();
+    entries.peek().is_some()
+        && entries.all(|entry| {
+            let entry = entry.to_ascii_lowercase();
+            entry.starts_with("file:///") || entry.starts_with("file://localhost/")
+        })
 }
 pub(crate) fn preferred_text(mimes: &[String]) -> Option<String> {
     crate::mime::MimeType::find_allowed(mimes).map(|mime| mime.to_string())
@@ -440,6 +465,33 @@ impl Transfers {
             }
         }
     }
+    fn complete_drop(&mut self, offer: DragOffer, mime: String, bytes: Vec<u8>, generation: u64) {
+        let copies = offer.inner().version() < 3
+            || offer.selected_action == sctk::reexports::client::protocol::wl_data_device_manager::DndAction::Copy;
+        if copies
+            && generation == self.hub.generation()
+            && let Some(image) = offer.with_mime_types(|mimes| drop_image_fallback(&mime, &bytes, mimes))
+            && let Ok(pipe) = offer.receive(image.clone())
+        {
+            self.receive(pipe, image, Destination::Drop(offer), generation);
+        } else if copies && !bytes.is_empty() {
+            let accepted = self.hub.emit_at(
+                generation,
+                Event::Drop {
+                    surface: offer.surface.id().as_ptr() as u64,
+                    position: [offer.x, offer.y],
+                    mime,
+                    bytes,
+                },
+            );
+            if accepted {
+                offer.finish();
+            }
+            offer.destroy();
+        } else {
+            self.cancel_at(Destination::Drop(offer), generation);
+        }
+    }
     pub fn poll(&mut self) {
         for mut read in std::mem::take(&mut self.reads) {
             let expired = Instant::now() >= read.deadline;
@@ -481,29 +533,7 @@ impl Transfers {
                 self.reads.push(read);
             } else {
                 match read.destination {
-                    Destination::Drop(offer) => {
-                        if (offer.inner().version() < 3
-                            || offer.selected_action
-                                == sctk::reexports::client::protocol::wl_data_device_manager::DndAction::Copy)
-                            && !read.bytes.is_empty()
-                        {
-                            let accepted = self.hub.emit_at(
-                                read.generation,
-                                Event::Drop {
-                                    surface: offer.surface.id().as_ptr() as u64,
-                                    position: [offer.x, offer.y],
-                                    mime: read.mime,
-                                    bytes: read.bytes,
-                                },
-                            );
-                            if accepted {
-                                offer.finish();
-                            }
-                            offer.destroy();
-                        } else {
-                            self.cancel_at(Destination::Drop(offer), read.generation);
-                        }
-                    }
+                    Destination::Drop(offer) => self.complete_drop(offer, read.mime, read.bytes, read.generation),
                     Destination::Paste(recipient) => {
                         let (text, fallback) = match read.fallback {
                             Some(text) if text.complete => (
@@ -939,6 +969,39 @@ mod tests {
         assert_eq!(
             preferred(&["image/png".into(), "text/uri-list".into()]),
             Some("text/uri-list".into())
+        );
+    }
+
+    #[test]
+    fn remote_uri_drops_fall_back_to_the_offered_image() {
+        let browser = [
+            "text/uri-list".to_owned(),
+            "image/jpeg".to_owned(),
+            "image/png".to_owned(),
+        ];
+        let fallback = |bytes: &[u8]| drop_image_fallback("text/uri-list", bytes, &browser);
+        assert_eq!(
+            fallback(b"https://example.test/a.png\r\n").as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(
+            fallback(b"file:///tmp/a.png\r\nhttps://example.test/b.png").as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(fallback(b"file://remote/a.png").as_deref(), Some("image/png"));
+        assert_eq!(fallback(b"file:relative.png").as_deref(), Some("image/png"));
+        assert_eq!(fallback(b"file://localhost/tmp/a.png"), None);
+        assert_eq!(fallback(b"# comment only\r\n").as_deref(), Some("image/png"));
+        assert_eq!(fallback(b"").as_deref(), Some("image/png"));
+        assert_eq!(fallback(b"file:///tmp/a.png\r\n# comment\r\nFILE:///tmp/b.png\n"), None);
+        assert_eq!(drop_image_fallback("image/png", b"", &browser), None);
+        assert_eq!(
+            drop_image_fallback(
+                "text/uri-list",
+                b"https://example.test/a.png",
+                &["text/uri-list".to_owned()]
+            ),
+            None
         );
     }
 }
