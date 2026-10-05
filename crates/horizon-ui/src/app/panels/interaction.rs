@@ -138,7 +138,7 @@ impl HorizonApp {
             outcome.drag.stopped = true;
         }
         if resize_response.dragged() {
-            outcome.resize_delta = resize_response.drag_delta();
+            outcome.resize_delta = super::resize::drag_delta(resize_response);
         }
         if resize_response.drag_stopped() {
             outcome.commit_terminal_resize = true;

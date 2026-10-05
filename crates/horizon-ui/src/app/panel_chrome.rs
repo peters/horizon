@@ -18,7 +18,6 @@ pub(super) struct PanelChrome<'a> {
     pub panel_rect: Rect,
     pub titlebar_rect: Rect,
     pub close_rect: Rect,
-    pub resize_rect: Rect,
     pub title: Option<&'a str>,
     pub history_size: usize,
     pub scrollback_limit: usize,
@@ -265,7 +264,7 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
             chrome.focused,
         );
     }
-    paint_close_and_resize_controls(&painter, chrome.close_rect, chrome.resize_rect, chrome.close_hovered);
+    paint_close_control(&painter, chrome.close_rect, chrome.close_hovered);
 }
 
 /// Painter-drawn microphone glyph: capsule body, U-shaped cradle, and stem.
@@ -332,7 +331,7 @@ fn paint_mic_control(ui: &egui::Ui, painter: &egui::Painter, mic: MicControl) {
     );
 }
 
-fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, resize_rect: Rect, close_hovered: bool) {
+fn paint_close_control(painter: &egui::Painter, close_rect: Rect, close_hovered: bool) {
     painter.circle_filled(
         close_rect.center(),
         5.0,
@@ -341,22 +340,6 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
         } else {
             theme::alpha(theme::FG_DIM(), 140)
         },
-    );
-
-    let handle_stroke = Stroke::new(1.0_f32, theme::alpha(theme::FG_DIM(), 170));
-    painter.line_segment(
-        [
-            resize_rect.right_bottom(),
-            resize_rect.left_top() + Vec2::new(6.0, 12.0),
-        ],
-        handle_stroke,
-    );
-    painter.line_segment(
-        [
-            resize_rect.right_bottom() - Vec2::new(0.0, 6.0),
-            resize_rect.left_top() + Vec2::new(12.0, 12.0),
-        ],
-        handle_stroke,
     );
 }
 
@@ -752,7 +735,6 @@ mod tests {
             panel_rect,
             titlebar_rect,
             close_rect,
-            resize_rect: panel_rect,
             title: Some("Smoke"),
             history_size: 100,
             scrollback_limit: 24_000,

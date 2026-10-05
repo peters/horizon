@@ -85,7 +85,10 @@ pub(super) fn events(
                 pos, button, pressed, ..
             } => {
                 flush_pending_move(browser, &mut pending_move);
-                if overlay_blocks_pointer(browser, frame, transform(*pos)) && *pressed {
+                if *pressed
+                    && (ctx.layer_id_at(*pos) != Some(ui.layer_id())
+                        || overlay_blocks_pointer(browser, frame, transform(*pos)))
+                {
                     continue;
                 }
                 replay_button_event(
@@ -542,6 +545,69 @@ fn button_mask(button: BrowserButton) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chrome_layer_blocks_page_press_without_stranding_captured_release() {
+        use crate::test_egui::DiscardTextures;
+        let ctx = egui::Context::default();
+        let mut browser = BrowserPanelState::inert();
+        let mut state = BrowserUiState::default();
+        let body = egui::Rect::from_min_size(egui::pos2(80.0, 80.0), egui::vec2(400.0, 320.0));
+        let grip = egui::Rect::from_min_size(body.max - egui::vec2(32.0, 32.0), egui::vec2(32.0, 32.0));
+        let mut run = |input_events: Vec<Event>| {
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 500.0))),
+                        events: input_events.clone(),
+                        ..egui::RawInput::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let layer = egui::LayerId::new(ui.layer_id().order, egui::Id::new("chrome-grip"));
+                            ctx.set_sublayer(ui.layer_id(), layer);
+                            egui::Area::new(layer.id)
+                                .order(layer.order)
+                                .fixed_pos(grip.min)
+                                .show(&ctx, |ui| {
+                                    ui.allocate_exact_size(grip.size(), egui::Sense::drag());
+                                });
+                            events(
+                                ui,
+                                &input_events,
+                                &mut browser,
+                                &mut state,
+                                PointerFrame {
+                                    rect: body,
+                                    frame_size: [400.0, 320.0],
+                                    // Cached body responses can retain ownership across layout changes.
+                                    pointer_target: true,
+                                    frame_has_pointer_button: true,
+                                    zoom_wheel_owner: ShortcutOwner::App,
+                                },
+                            );
+                        });
+                    },
+                )
+                .discard_textures();
+            state.captured_clicks[0].is_some()
+        };
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run(vec![]);
+        run(vec![]);
+        assert!(!run(vec![
+            Event::PointerMoved(grip.center()),
+            button(grip.center(), true)
+        ]));
+        run(vec![button(grip.center(), false)]);
+        assert!(run(vec![button(body.center(), true)]));
+        assert!(!run(vec![button(grip.center(), false)]));
+    }
 
     #[test]
     fn replay_boundary_separates_page_clicks_without_breaking_later_double_clicks() {

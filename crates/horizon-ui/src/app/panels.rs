@@ -20,7 +20,9 @@ use super::shortcut_inventory::{global_shortcut_bindings, ssh_reconnect_shortcut
 use super::speech::MicState;
 use super::util::primary_shortcut_label;
 use super::view::canvas_scene_transform;
-use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
+use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RenameEditAction};
+
+mod resize;
 
 mod interaction;
 pub(super) use interaction::ArrangedPanelDrag;
@@ -115,7 +117,6 @@ struct PanelFrame {
     /// Mic control slot left of the close button; only interactive/painted
     /// when speech input is enabled.
     mic: Rect,
-    resize: Rect,
 }
 
 impl PanelFrame {
@@ -138,13 +139,6 @@ impl PanelFrame {
             Pos2::new(panel_rect.max.x - 44.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
             Vec2::splat(16.0),
         );
-        let resize = Rect::from_min_size(
-            Pos2::new(
-                panel_rect.max.x - RESIZE_HANDLE_SIZE,
-                panel_rect.max.y - RESIZE_HANDLE_SIZE,
-            ),
-            Vec2::splat(RESIZE_HANDLE_SIZE),
-        );
 
         Self {
             panel: panel_rect,
@@ -152,7 +146,6 @@ impl PanelFrame {
             body,
             close,
             mic,
-            resize,
         }
     }
 }
@@ -713,26 +706,6 @@ impl HorizonApp {
                         enabled,
                     }
                 });
-                let resize_response = ui.interact(
-                    rects.resize.expand2(Vec2::splat(6.0)),
-                    ui.make_persistent_id(("panel_resize", panel_id.0)),
-                    if interactive {
-                        Sense::click_and_drag()
-                    } else {
-                        Sense::hover()
-                    },
-                );
-
-                if interactive {
-                    Self::update_panel_interactions(
-                        snapshot.is_renaming,
-                        &drag_response,
-                        &close_response,
-                        mic_response.as_ref().map(|mic| &mic.response),
-                        &resize_response,
-                        &mut outcome,
-                    );
-                }
                 if interactive && !snapshot.is_renaming {
                     self.show_panel_context_menu(
                         &drag_response,
@@ -742,6 +715,10 @@ impl HorizonApp {
                         &mut outcome,
                     );
                 }
+
+                // Update the grip layer before raw body events use topmost-layer routing.
+                let resize_response =
+                    resize::show_resize_control(ui, rects.panel, self.canvas_view.zoom, panel_id, interactive);
 
                 // Compute display_title and the session badge from the board on
                 // demand, avoiding a per-panel String clone in PanelSnapshot.
@@ -763,7 +740,6 @@ impl HorizonApp {
                     panel_rect: rects.panel,
                     titlebar_rect: rects.titlebar,
                     close_rect: rects.close,
-                    resize_rect: rects.resize,
                     title: display_title.as_deref(),
                     history_size: snapshot.history_size,
                     scrollback_limit: snapshot.scrollback_limit,
@@ -859,6 +835,19 @@ impl HorizonApp {
                         }
                     },
                 );
+                if interactive {
+                    Self::update_panel_interactions(
+                        snapshot.is_renaming,
+                        &drag_response,
+                        &close_response,
+                        mic_response.as_ref().map(|mic| &mic.response),
+                        &resize_response,
+                        &mut outcome,
+                    );
+                }
+                if interactive && (resize_response.hovered() || resize_response.dragged()) {
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+                }
                 outcome.session_rebind_and_restart = self.render_saved_session_picker(ctx, panel_id);
             });
 
