@@ -103,6 +103,19 @@ fn contract_failures_never_echo_values() {
 }
 
 #[test]
+fn refuses_credential_aliases_without_echoing_values() {
+    for name in ["AUTH", "auth", "BEARER", "COOKIE", "PWD", "P_W_D"] {
+        let invalid = AGENTS.replace(
+            "    BASE_URL: \"http://localhost:{tunnel.port.backend}\"",
+            &format!("    {name}: opaque-credential-value"),
+        );
+        let error = Contract::from_agents(&invalid).err();
+        assert_eq!(error, Some(Error::ContractInvalid), "alias {name}");
+        assert!(!format!("{error:?}").contains("opaque-credential-value"));
+    }
+}
+
+#[test]
 fn rejects_traversal_and_inconsistent_platform_artifacts() {
     for (before, after, expected) in [
         ("build/ios/App.ipa", "../App.ipa", Error::PathRejected),
@@ -137,6 +150,10 @@ fn refuses_external_endpoints_undeclared_ports_and_unresolved_templates() -> Res
         "http://localhost:{tunnel.port.other}",
         "{env.TOKEN}",
         "http://localhost:0",
+        "ws:/[",
+        "wss:/[",
+        "ftp:/[",
+        " WS:/[",
     ] {
         assert_eq!(contract.resolve_value(value).err(), Some(Error::ContractInvalid));
     }

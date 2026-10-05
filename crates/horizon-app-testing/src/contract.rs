@@ -209,10 +209,12 @@ impl Contract {
             return Err(Error::ContractInvalid);
         }
         let parsed_url = url::Url::parse(&resolved);
+        let folded = resolved.trim().to_ascii_lowercase();
         if parsed_url.is_ok()
             || resolved.contains("://")
-            || resolved.trim().to_ascii_lowercase().starts_with("http:")
-            || resolved.trim().to_ascii_lowercase().starts_with("https:")
+            || ["http:", "https:", "ws:", "wss:", "ftp:"]
+                .iter()
+                .any(|scheme| folded.starts_with(scheme))
         {
             let url = parsed_url.map_err(|_| Error::ContractInvalid)?;
             let port = url.port_or_known_default().ok_or(Error::ContractInvalid)?;
@@ -284,6 +286,9 @@ fn secret_name(value: &str) -> bool {
         .chars()
         .filter(char::is_ascii_alphanumeric)
         .collect();
+    if ["auth", "bearer", "cookie", "pwd"].contains(&folded.as_str()) {
+        return true;
+    }
     [
         "secret",
         "token",
