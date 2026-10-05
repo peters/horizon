@@ -728,3 +728,33 @@ fn avcc_conversion_reports_the_crate_error_type() {
     let result: crate::Result<Vec<u8>> = crate::avcc_to_annexb(&[0, 0, 0, 9, 1], 4, &[]);
     assert!(matches!(result, Err(Error::H264(_))));
 }
+
+#[test]
+fn live_cast_retries_a_receiver_that_is_not_listening_yet() {
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let late = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1200));
+        let (_, _, config) = listen();
+        receiver(TcpListener::bind(address).unwrap(), config).join().unwrap()
+    });
+    let options = LiveOptions {
+        transport: Transport::Hls,
+        ..LiveOptions::default()
+    };
+    let mut live = LiveCast::start(address, options).unwrap();
+    for frame in 0..60u64 {
+        let pts = Duration::from_millis(frame * 100);
+        let keyframe = live.wants_keyframe(pts);
+        live.push_annexb(&access_unit(keyframe), pts, keyframe);
+        if live.state() == LiveState::Playing {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(live.state(), LiveState::Playing);
+    live.stop();
+    let log = late.join().unwrap();
+    assert!(log.contains(&format!("{NS_MEDIA} transport-1 LOAD")), "{log:#?}");
+}

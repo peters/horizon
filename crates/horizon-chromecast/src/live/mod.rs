@@ -52,6 +52,8 @@ const CATCH_UP_ABOVE: f64 = 1.0;
 const TARGET_LAG: f64 = 0.4;
 const CATCH_UP_RATE: f64 = 1.5;
 const LAG_CHECK: Duration = Duration::from_secs(2);
+const CONNECT_ATTEMPTS: u32 = 3;
+const CONNECT_RETRY: Duration = Duration::from_secs(2);
 
 /// How the stream reaches the receiver.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -289,7 +291,7 @@ impl Session {
     }
 
     fn cast(&self) -> Result<()> {
-        let client = CastClient::connect(self.receiver)?;
+        let client = self.connect()?;
         let app = client.launch(DEFAULT_MEDIA_RECEIVER)?;
         self.set(LiveState::Buffering);
         while !self.ready_to_load() {
@@ -481,6 +483,22 @@ impl Session {
             _ => {}
         }
         Ok(true)
+    }
+
+    /// The first connection can fail while the host OS asks for local network
+    /// access, or while a TV wakes its network; retry I/O failures briefly.
+    fn connect(&self) -> Result<CastClient> {
+        let mut attempt = 1;
+        loop {
+            match CastClient::connect(self.receiver) {
+                Err(Error::Io(error)) if attempt < CONNECT_ATTEMPTS && !self.stopped() => {
+                    tracing::debug!(%error, attempt, "retrying the receiver connection");
+                    std::thread::sleep(CONNECT_RETRY);
+                    attempt += 1;
+                }
+                result => return result,
+            }
+        }
     }
 
     fn ready_to_load(&self) -> bool {
