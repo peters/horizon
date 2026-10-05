@@ -35,7 +35,7 @@ fn worker() -> &'static Path {
 }
 
 fn backend() -> Vec<String> {
-    vec!["python3".into(), "-c".into(), "import json,socket,sys,signal; signal.signal(signal.SIGTERM,lambda *args:None); s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(json.dumps({'native_backend_ready':1,'port':s.getsockname()[1]}),flush=True); sys.stdin.read(); s.close(); print(json.dumps({'native_backend_closed':1}),flush=True)".into()]
+    vec!["python3".into(), "-c".into(), "import json,socket,sys,time; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(json.dumps({'native_backend_ready':1,'port':s.getsockname()[1]}),flush=True); request=json.loads(sys.stdin.read()); time.sleep(.1); s.close(); print(json.dumps({'native_backend_closed':1,'nonce':request['nonce']}),flush=True)".into()]
 }
 
 fn ready(process: &mut Process) -> u16 {
@@ -140,7 +140,7 @@ fn malformed_readiness_and_deadline_fail_without_public_process_diagnostics() {
         vec![
             "python3".into(),
             "-c".into(),
-            "import json,sys,signal; signal.signal(signal.SIGTERM,lambda *args:None); print('secret-output',flush=True); sys.stdin.read(); print(json.dumps({'native_backend_closed':1}),flush=True)".into(),
+            "import json,sys,signal; signal.signal(signal.SIGTERM,lambda *args:None); print('secret-output',flush=True); request=json.loads(sys.stdin.read()); print(json.dumps({'native_backend_closed':1,'nonce':request['nonce']}),flush=True)".into(),
         ],
         Kind::Backend,
         1,
@@ -160,7 +160,7 @@ fn malformed_readiness_and_deadline_fail_without_public_process_diagnostics() {
     let request = Request::new(
         root.path(),
         state.path(),
-        vec!["python3".into(), "-c".into(), "import json,sys,signal; signal.signal(signal.SIGTERM,lambda *args:None); sys.stdin.read(); print(json.dumps({'native_backend_closed':1}),flush=True)".into()],
+        vec!["python3".into(), "-c".into(), "import json,sys,signal; signal.signal(signal.SIGTERM,lambda *args:None); request=json.loads(sys.stdin.read()); print(json.dumps({'native_backend_closed':1,'nonce':request['nonce']}),flush=True)".into()],
         Kind::Backend,
         1,
         2,
@@ -333,4 +333,97 @@ fn missing_nested_cleanup_acknowledgement_keeps_receipt_uncertain() {
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
     let receipt: Value = serde_json::from_slice(&std::fs::read(state.path().join("process.json")).unwrap()).unwrap();
     assert_eq!(receipt["complete"], false);
+    let task = Path::new(receipt["task"].as_str().unwrap());
+    assert!(task.is_dir());
+    assert!(!receipt["task_identity"].is_null());
+    assert!(
+        task.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains(&receipt["operation"].as_str().unwrap().replace('-', ""))
+    );
+    // This fixture creates no nested children; its exact helper has exited and loopback socket is closed.
+    std::fs::remove_dir_all(task).unwrap();
+}
+
+#[test]
+fn premature_nested_cleanup_acknowledgement_never_authorizes_completion() {
+    let root = private_temp().unwrap();
+    let state = private_temp().unwrap();
+    let argv = vec!["python3".into(), "-c".into(), "import json,socket,sys; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(json.dumps({'native_backend_ready':1,'port':s.getsockname()[1]}),flush=True); print(json.dumps({'native_backend_closed':1,'nonce':'11111111-1111-4111-8111-111111111111'}),flush=True); sys.stdin.read()".into()];
+    let mut process = Process::start(
+        worker(),
+        Request::new(root.path(), state.path(), argv, Kind::Backend, 2, 10).unwrap(),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    let port = ready(&mut process);
+    assert_eq!(process.close(), Err(Error::CleanupUncertain));
+    assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
+    let receipt: Value = serde_json::from_slice(&std::fs::read(state.path().join("process.json")).unwrap()).unwrap();
+    assert_eq!(receipt["complete"], false);
+    let task = Path::new(receipt["task"].as_str().unwrap());
+    assert!(task.is_dir());
+    assert!(!receipt["task_identity"].is_null());
+    assert!(
+        task.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains(&receipt["operation"].as_str().unwrap().replace('-', ""))
+    );
+    // This fixture creates no nested children; its exact helper has exited and loopback socket is closed.
+    std::fs::remove_dir_all(task).unwrap();
+}
+
+#[test]
+fn missing_executable_reports_known_no_child_failure_with_complete_receipt() {
+    let root = private_temp().unwrap();
+    let state = private_temp().unwrap();
+    let mut process = Process::start(
+        worker(),
+        Request::new(
+            root.path(),
+            state.path(),
+            vec![root.path().join("missing-executable").to_string_lossy().into_owned()],
+            Kind::Build,
+            2,
+            3,
+        )
+        .unwrap(),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    assert!(
+        matches!(process.next(Duration::from_secs(5)).unwrap(), Event::Failed { code } if code == "app_process_start_failed")
+    );
+    process.close().unwrap();
+    let receipt: Value = serde_json::from_slice(&std::fs::read(state.path().join("process.json")).unwrap()).unwrap();
+    assert_eq!(receipt["complete"], true);
+    assert!(receipt["child_pid"].is_null());
+}
+
+#[test]
+fn declared_command_task_directory_does_not_contain_guardian_receipt_or_log() {
+    let root = private_temp().unwrap();
+    let state = private_temp().unwrap();
+    let argv = vec!["python3".into(), "-c".into(), "import os,pathlib; p=pathlib.Path(os.environ['HORIZON_APP_BACKEND_DIR']); assert not (p/'process.json').exists(); assert not (p/'output.log').exists(); (p/'process.json').write_text('synthetic child-owned file'); print(p,flush=True)".into()];
+    let mut process = Process::start(
+        worker(),
+        Request::new(root.path(), state.path(), argv, Kind::Build, 2, 3).unwrap(),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    assert!(matches!(
+        process.next(Duration::from_secs(5)).unwrap(),
+        Event::Started {}
+    ));
+    assert!(matches!(
+        process.next(Duration::from_secs(5)).unwrap(),
+        Event::Complete { success: true }
+    ));
+    process.close().unwrap();
+    let receipt: Value = serde_json::from_slice(&std::fs::read(state.path().join("process.json")).unwrap()).unwrap();
+    assert_eq!(receipt["complete"], true);
+    let child_path = std::fs::read_to_string(state.path().join("output.log")).unwrap();
+    assert!(!Path::new(child_path.trim()).exists());
 }

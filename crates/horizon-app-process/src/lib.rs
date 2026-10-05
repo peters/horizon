@@ -78,7 +78,6 @@ impl Request {
             "JAVA_HOME",
             "ANDROID_HOME",
             "ANDROID_SDK_ROOT",
-            "SSH_AUTH_SOCK",
         ]
         .into_iter()
         .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
@@ -126,7 +125,6 @@ impl Spec {
                         | "JAVA_HOME"
                         | "ANDROID_HOME"
                         | "ANDROID_SDK_ROOT"
-                        | "SSH_AUTH_SOCK"
                 ) || value.len() > 8192
                     || value.contains('\0')
             })

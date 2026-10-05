@@ -213,11 +213,25 @@ This increment provides Unix-only durable storage and admission primitives. It d
 A lost final app-deletion reply marks its cached asset uncertain before returning the failure. The original lease remains available only for exact cleanup retry; the asset cannot be used for a driver, reused or uploaded again by content until cleanup is confirmed. A reused app handle reports `remaining_seconds` from the original asset acquisition, rather than claiming a fresh 24-hour lifetime. Native plan responses without a team cap normalize that cap to the plan cap; a declared team cap still lowers available capacity.
 
 Managed helpers must emit a second newline-delimited stdout record,
-`{"native_backend_closed":1}`, only after confirming their nested process groups
+`{"native_backend_closed":1,"nonce":"<cleanup-nonce>"}`, only after confirming their nested process groups
 have stopped and their task-owned worktree has been removed. A missing, malformed
 or premature acknowledgement retains cleanup uncertainty; helper exit alone is
 insufficient. Diagnostics remain private and are capped at 4 MiB while draining
 the complete child output.
+
+The guardian generates the cleanup nonce only when it sends one private stdin
+record, `{"native_backend_cleanup":1,"nonce":"<cleanup-nonce>"}`, then closes
+stdin. Helpers must echo that exact nonce after cleanup; old or buffered records
+cannot authorize completion. EOF without a request still requires the helper to
+stop its children, but cannot furnish this correlated acknowledgement. The guardian
+allows two seconds for normal EOF cleanup before bounded TERM/KILL fallback.
+The child receives a separate private task directory. Its intended path and held
+device/inode identity are durably recorded before execution; uncertain cleanup
+retains that mapping and task state. Guardian receipts and diagnostics remain in
+the host's separate private state. Declared commands are trusted project code
+running as the host OS user; these directories do not provide an OS sandbox.
+SSH agent sockets are excluded from the inherited environment. Remote builds need
+the selected host's explicitly provisioned unattended SSH access.
 
 ## Guarded build and backend commands
 

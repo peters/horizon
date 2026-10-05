@@ -48,13 +48,13 @@ fn terminate_with(
     let group = pid(child)?;
     exited(child)?; // retain the waitable leader before any reusable-PID signalling
     child.stdin.take();
-    signal(group, Signal::TERM).map_err(|_| Error::CleanupUncertain)?;
+    acknowledge_signal(child, group, signal(group, Signal::TERM))?;
     let deadline = Instant::now() + Duration::from_secs(10);
     while !exited(child)? && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
     // An exited leader can still have descendants; finish group cleanup before reap.
-    signal(group, Signal::KILL).map_err(|_| Error::CleanupUncertain)?;
+    acknowledge_signal(child, group, signal(group, Signal::KILL))?;
     let deadline = Instant::now() + Duration::from_secs(2);
     while !exited(child)? {
         if Instant::now() >= deadline {
@@ -68,6 +68,8 @@ fn terminate_with(
     loop {
         match rustix::process::test_kill_process_group(group) {
             Err(rustix::io::Errno::SRCH) => return Ok(()),
+            #[cfg(target_os = "macos")]
+            Err(rustix::io::Errno::PERM) if group_cannot_execute(group)? => return Ok(()),
             Err(_) => return Err(Error::CleanupUncertain),
             Ok(()) if group_cannot_execute(group)? => return Ok(()),
             Ok(()) => (),
@@ -76,6 +78,19 @@ fn terminate_with(
             return Err(Error::CleanupUncertain);
         }
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(unix)]
+fn acknowledge_signal(child: &Child, _group: rustix::process::Pid, result: rustix::io::Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(rustix::io::Errno::SRCH) if exited(child)? => Ok(()),
+        // XNU skips zombies and returns EPERM when no live recipient remains. This is not
+        // permission to ignore EPERM for a live child or any executing group member.
+        #[cfg(target_os = "macos")]
+        Err(rustix::io::Errno::PERM) if exited(child)? && group_cannot_execute(_group)? => Ok(()),
+        Err(_) => Err(Error::CleanupUncertain),
     }
 }
 
@@ -110,7 +125,16 @@ fn group_cannot_execute(group: rustix::process::Pid) -> Result<bool> {
     Ok(true)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn group_cannot_execute(group: rustix::process::Pid) -> Result<bool> {
+    mac_group::cannot_execute(group)
+}
+
+#[cfg(target_os = "macos")]
+#[path = "group/mac.rs"]
+mod mac_group;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn group_cannot_execute(_group: rustix::process::Pid) -> Result<bool> {
     Ok(false)
 }

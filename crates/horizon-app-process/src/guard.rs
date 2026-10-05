@@ -19,6 +19,55 @@ struct Receipt {
     guardian_pid: u32,
     child_pid: Option<u32>,
     complete: bool,
+    task: std::path::PathBuf,
+    task_identity: Option<(u64, u64)>,
+}
+
+struct Task {
+    path: std::path::PathBuf,
+    directory: std::fs::File,
+}
+impl Task {
+    fn new(path: &std::path::Path) -> Result<Self> {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path)
+            .map_err(|_| Error::StateUnavailable)?;
+        let directory = std::fs::File::open(path).map_err(|_| Error::StateUnavailable)?;
+        let parent =
+            std::fs::File::open(path.parent().ok_or(Error::StateUnavailable)?).map_err(|_| Error::StateUnavailable)?;
+        parent.sync_all().map_err(|_| Error::StateUnavailable)?;
+        Ok(Self {
+            path: path.to_owned(),
+            directory,
+        })
+    }
+    fn identity(&self) -> Result<(u64, u64)> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = self.directory.metadata().map_err(|_| Error::StateUnavailable)?;
+        Ok((metadata.dev(), metadata.ino()))
+    }
+    fn retire(&self) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(&self.path).map_err(|_| Error::StateUnavailable)?;
+        if !metadata.is_dir() || (metadata.dev(), metadata.ino()) != self.identity()? {
+            return Err(Error::StateUnavailable);
+        }
+        std::fs::remove_dir_all(&self.path).map_err(|_| Error::StateUnavailable)?;
+        std::fs::File::open(self.path.parent().ok_or(Error::StateUnavailable)?)
+            .and_then(|parent| parent.sync_all())
+            .map_err(|_| Error::StateUnavailable)
+    }
+}
+
+fn no_child_failure(directory: &storage::Directory, receipt: &mut Receipt, error: Error) -> Result<()> {
+    receipt.complete = true;
+    directory.save(receipt)?;
+    emit(&Event::Failed {
+        code: code(error).into(),
+    })?;
+    Err(error)
 }
 
 fn emit(event: &Event) -> Result<()> {
@@ -38,6 +87,132 @@ pub(crate) fn run() -> Result<()> {
 #[cfg(unix)]
 pub(crate) fn run() -> Result<()> {
     use std::os::unix::process::CommandExt;
+    let (spec, mut input) = read_spec()?;
+    let directory = storage::Directory::open(&spec.state)?;
+    directory
+        .new_file("initialized")?
+        .sync_all()
+        .map_err(|_| Error::StateUnavailable)?;
+    let mut receipt = Receipt {
+        version: 1,
+        operation: spec.operation,
+        guardian_pid: std::process::id(),
+        child_pid: None,
+        complete: false,
+        task: std::env::temp_dir()
+            .canonicalize()
+            .map_err(|_| Error::StateUnavailable)?
+            .join(format!("horizon-native-command-{}", spec.operation.simple())),
+        task_identity: None,
+    };
+    directory.save(&receipt)?;
+    emit(&Event::Armed {})?;
+    let mut start = String::new();
+    input
+        .by_ref()
+        .take(16)
+        .read_line(&mut start)
+        .map_err(|_| Error::Invalid)?;
+    if start != "start\n" {
+        return no_child_failure(&directory, &mut receipt, Error::StartFailed);
+    }
+    let (stop_send, stop_receive) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("native-process-parent".into())
+        .spawn(move || {
+            let mut byte = [0];
+            let _ = input.read(&mut byte);
+            let _ = stop_send.send(());
+        })
+        .map_err(|_| Error::StartFailed)?;
+    let log = Arc::new(Mutex::new((directory.new_file("output.log")?, 0_usize)));
+    let task = Task::new(&receipt.task)?;
+    receipt.task_identity = Some(task.identity()?);
+    directory.save(&receipt)?;
+    let mut command = Command::new(&spec.argv[0]);
+    command
+        .args(&spec.argv[1..])
+        .current_dir(&spec.root)
+        .env_clear()
+        .envs(&spec.environment)
+        .env("HORIZON_APP_BACKEND_DIR", &task.path)
+        .env("HORIZON_APP_BACKEND_HEARTBEAT", "stdin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let Ok(mut child) = command.spawn() else {
+        task.retire()?;
+        return no_child_failure(&directory, &mut receipt, Error::StartFailed);
+    };
+    receipt.child_pid = Some(child.id());
+    let mut readers = Readers::new();
+    let outcome = monitor(
+        &mut child,
+        &spec,
+        &receipt,
+        &directory,
+        Arc::clone(&log),
+        &stop_receive,
+        &mut readers,
+    );
+    let cleanup = stop_child(&mut child, &spec, &readers);
+    readers.finish()?;
+    cleanup?;
+    if matches!(spec.kind, Kind::Backend) && !readers.backend_closed.load(Ordering::Acquire) {
+        return Err(Error::CleanupUncertain);
+    }
+    log.lock()
+        .map_err(|_| Error::StateUnavailable)?
+        .0
+        .sync_all()
+        .map_err(|_| Error::StateUnavailable)?;
+    // Closing the parent's pipe makes a qualified backend helper clean its nested process group.
+    task.retire()?;
+    receipt.complete = true;
+    directory.save(&receipt)?;
+    match outcome {
+        Ok(success) => emit(&Event::Complete { success }),
+        Err(error) => {
+            let _ = emit(&Event::Failed {
+                code: code(error).into(),
+            });
+            Err(error)
+        }
+    }
+}
+
+fn stop_child(child: &mut Child, spec: &Spec, readers: &Readers) -> Result<()> {
+    let cleanup = if matches!(spec.kind, Kind::Backend) {
+        request_cleanup(child, readers)
+    } else {
+        Ok(())
+    };
+    child.stdin.take();
+    if matches!(spec.kind, Kind::Backend) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !exited(child)? && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    terminate(child)?;
+    cleanup
+}
+
+fn request_cleanup(child: &mut Child, readers: &Readers) -> Result<()> {
+    let nonce = uuid::Uuid::new_v4();
+    *readers.cleanup_nonce.lock().map_err(|_| Error::StateUnavailable)? = Some(nonce);
+    let input = child.stdin.as_mut().ok_or(Error::CleanupUncertain)?;
+    let request = serde_json::json!({"native_backend_cleanup":1, "nonce":nonce});
+    serde_json::to_writer(&mut *input, &request).map_err(|_| Error::CleanupUncertain)?;
+    input
+        .write_all(b"\n")
+        .and_then(|()| input.flush())
+        .map_err(|_| Error::CleanupUncertain)
+}
+
+#[cfg(unix)]
+fn read_spec() -> Result<(Spec, BufReader<std::io::Stdin>)> {
     let mut input = BufReader::new(std::io::stdin());
     let mut first = Vec::new();
     input
@@ -50,86 +225,7 @@ pub(crate) fn run() -> Result<()> {
     }
     let spec: Spec = serde_json::from_slice(&first).map_err(|_| Error::Invalid)?;
     spec.validate()?;
-    let directory = storage::Directory::open(&spec.state)?;
-    directory
-        .new_file("initialized")?
-        .sync_all()
-        .map_err(|_| Error::StateUnavailable)?;
-    let mut receipt = Receipt {
-        version: 1,
-        operation: spec.operation,
-        guardian_pid: std::process::id(),
-        child_pid: None,
-        complete: false,
-    };
-    directory.save(&receipt)?;
-    emit(&Event::Armed {})?;
-    let mut start = String::new();
-    input
-        .by_ref()
-        .take(16)
-        .read_line(&mut start)
-        .map_err(|_| Error::Invalid)?;
-    if start != "start\n" {
-        return Err(Error::StartFailed);
-    }
-    let (stop_send, stop_receive) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("native-process-parent".into())
-        .spawn(move || {
-            let mut byte = [0];
-            let _ = input.read(&mut byte);
-            let _ = stop_send.send(());
-        })
-        .map_err(|_| Error::StartFailed)?;
-    let log = Arc::new(Mutex::new((directory.new_file("output.log")?, 0_usize)));
-    let mut command = Command::new(&spec.argv[0]);
-    command
-        .args(&spec.argv[1..])
-        .current_dir(&spec.root)
-        .env_clear()
-        .envs(&spec.environment)
-        .env("HORIZON_APP_BACKEND_DIR", &spec.state)
-        .env("HORIZON_APP_BACKEND_HEARTBEAT", "stdin")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    let mut child = command.spawn().map_err(|_| Error::StartFailed)?;
-    receipt.child_pid = Some(child.id());
-    let mut readers = Readers::new();
-    let outcome = monitor(
-        &mut child,
-        &spec,
-        &receipt,
-        &directory,
-        Arc::clone(&log),
-        &stop_receive,
-        &mut readers,
-    );
-    terminate(&mut child)?;
-    readers.finish()?;
-    if matches!(spec.kind, Kind::Backend) && !readers.backend_closed.load(Ordering::Acquire) {
-        return Err(Error::CleanupUncertain);
-    }
-    log.lock()
-        .map_err(|_| Error::StateUnavailable)?
-        .0
-        .sync_all()
-        .map_err(|_| Error::StateUnavailable)?;
-    // Closing the parent's pipe makes a qualified backend helper clean its nested process group.
-    child.stdin.take();
-    receipt.complete = true;
-    directory.save(&receipt)?;
-    match outcome {
-        Ok(success) => emit(&Event::Complete { success }),
-        Err(error) => {
-            let _ = emit(&Event::Failed {
-                code: code(error).into(),
-            });
-            Err(error)
-        }
-    }
+    Ok((spec, input))
 }
 
 #[cfg(unix)]
@@ -150,7 +246,7 @@ fn monitor(
     readers.spawn("native-process-stderr", stderr, stderr_log, None, None)?;
     let stdout = child.stdout.take().ok_or(Error::StartFailed)?;
     let backend = matches!(spec.kind, Kind::Backend);
-    let closed = backend.then(|| Arc::clone(&readers.backend_closed));
+    let closed = backend.then(|| (Arc::clone(&readers.cleanup_nonce), Arc::clone(&readers.backend_closed)));
     readers.spawn(
         "native-process-stdout",
         stdout,
@@ -181,11 +277,14 @@ fn monitor(
     }
 }
 
+type Cleanup = (Arc<Mutex<Option<uuid::Uuid>>>, Arc<AtomicBool>);
+
 struct Readers {
-    send: mpsc::Sender<()>,
-    done: mpsc::Receiver<()>,
+    send: mpsc::Sender<Result<()>>,
+    done: mpsc::Receiver<Result<()>>,
     started: usize,
     backend_closed: Arc<AtomicBool>,
+    cleanup_nonce: Arc<Mutex<Option<uuid::Uuid>>>,
 }
 impl Readers {
     fn new() -> Self {
@@ -195,6 +294,7 @@ impl Readers {
             done,
             started: 0,
             backend_closed: Arc::new(AtomicBool::new(false)),
+            cleanup_nonce: Arc::new(Mutex::new(None)),
         }
     }
     fn spawn(
@@ -203,14 +303,19 @@ impl Readers {
         input: impl Read + Send + 'static,
         log: Arc<Mutex<(std::fs::File, usize)>>,
         ready: Option<mpsc::Sender<Result<u16>>>,
-        closed: Option<Arc<AtomicBool>>,
+        closed: Option<Cleanup>,
     ) -> Result<()> {
         let done = self.send.clone();
         std::thread::Builder::new()
             .name(name.into())
             .spawn(move || {
-                drain(input, &log, ready, closed.as_deref());
-                let _ = done.send(());
+                let result = drain(
+                    input,
+                    &log,
+                    ready,
+                    closed.as_ref().map(|(cleaning, closed)| (&**cleaning, &**closed)),
+                );
+                let _ = done.send(result);
             })
             .map_err(|_| Error::StartFailed)?;
         self.started += 1;
@@ -221,7 +326,7 @@ impl Readers {
         for _ in 0..self.started {
             self.done
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .map_err(|_| Error::CleanupUncertain)?;
+                .map_err(|_| Error::CleanupUncertain)??;
         }
         Ok(())
     }
@@ -231,19 +336,30 @@ fn drain(
     mut input: impl Read,
     log: &Mutex<(std::fs::File, usize)>,
     mut ready: Option<mpsc::Sender<Result<u16>>>,
-    closed: Option<&AtomicBool>,
-) {
+    closed: Option<(&Mutex<Option<uuid::Uuid>>, &AtomicBool)>,
+) -> Result<()> {
     let mut chunk = [0; 8192];
     let mut line = Vec::new();
     let mut overflow = false;
-    while let Ok(count) = input.read(&mut chunk) {
+    let mut failure = None;
+    loop {
+        let Ok(count) = input.read(&mut chunk) else {
+            failure.get_or_insert(Error::StateUnavailable);
+            break;
+        };
         if count == 0 {
             break;
         }
         let mut output = log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let retained = count.min((4 * 1024 * 1024_usize).saturating_sub(output.1));
-        let _ = output.0.write_all(&chunk[..retained]);
-        output.1 += retained;
+        if failure.is_none() {
+            match output.0.write_all(&chunk[..retained]) {
+                Ok(()) => output.1 += retained,
+                Err(_) => {
+                    failure = Some(Error::StateUnavailable);
+                }
+            }
+        }
         drop(output);
         if ready.is_some() || closed.is_some() {
             for byte in &chunk[..count] {
@@ -256,14 +372,21 @@ fn drain(
                         };
                         let _ = send.send(value);
                     }
-                    if !overflow && let Some(closed) = &closed {
+                    if !overflow && let Some((cleaning, closed)) = &closed {
                         #[derive(serde::Deserialize)]
                         #[serde(deny_unknown_fields)]
                         struct Closed {
                             native_backend_closed: u32,
+                            nonce: uuid::Uuid,
                         }
-                        if serde_json::from_slice::<Closed>(&line).is_ok_and(|value| value.native_backend_closed == 1) {
-                            closed.store(true, Ordering::Release);
+                        if let Ok(value) = serde_json::from_slice::<Closed>(&line)
+                            && value.native_backend_closed == 1
+                        {
+                            if *cleaning.lock().map_err(|_| Error::StateUnavailable)? == Some(value.nonce) {
+                                closed.store(true, Ordering::Release);
+                            } else {
+                                failure.get_or_insert(Error::CleanupUncertain);
+                            }
                         }
                     }
                     line.clear();
@@ -279,6 +402,7 @@ fn drain(
     if let Some(send) = ready {
         let _ = send.send(Err(Error::Failed));
     }
+    failure.map_or(Ok(()), Err)
 }
 
 fn code(error: Error) -> &'static str {
@@ -289,5 +413,57 @@ fn code(error: Error) -> &'static str {
         Error::Failed => "app_process_failed",
         Error::Timeout => "app_process_timeout",
         Error::CleanupUncertain => "app_process_cleanup_uncertain",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buffered_pre_cleanup_ack_cannot_become_valid_at_the_read_parse_boundary() {
+        struct Boundary<'a> {
+            bytes: std::io::Cursor<Vec<u8>>,
+            nonce: &'a Mutex<Option<uuid::Uuid>>,
+            fresh: uuid::Uuid,
+        }
+        impl Read for Boundary<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let count = self.bytes.read(buffer)?;
+                // Switch phase after bytes enter the reader, before the caller parses this record.
+                *self.nonce.lock().unwrap() = Some(self.fresh);
+                Ok(count)
+            }
+        }
+        let old = uuid::Uuid::new_v4();
+        let nonce = Mutex::new(None);
+        let closed = AtomicBool::new(false);
+        let input = Boundary {
+            bytes: std::io::Cursor::new(format!("{{\"native_backend_closed\":1,\"nonce\":\"{old}\"}}\n").into_bytes()),
+            nonce: &nonce,
+            fresh: uuid::Uuid::new_v4(),
+        };
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let log = Mutex::new((file.reopen().unwrap(), 0));
+        assert_eq!(
+            drain(input, &log, None, Some((&nonce, &closed))),
+            Err(Error::CleanupUncertain)
+        );
+        assert!(!closed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn failed_log_write_drains_output_and_never_acknowledges_retention() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let log = Mutex::new((std::fs::File::open(file.path()).unwrap(), 0));
+        let bytes = vec![b'x'; 16_384];
+        let mut input = std::io::Cursor::new(bytes);
+        assert_eq!(drain(&mut input, &log, None, None), Err(Error::StateUnavailable));
+        assert_eq!(input.position(), 16_384);
+        assert_eq!(log.lock().unwrap().1, 0);
+        let readers = Readers::new();
+        readers.send.send(Err(Error::StateUnavailable)).unwrap();
+        let readers = Readers { started: 1, ..readers };
+        assert_eq!(readers.finish(), Err(Error::StateUnavailable));
     }
 }
