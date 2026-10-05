@@ -1,0 +1,168 @@
+//! Control flow against a synthetic receiver over loopback TLS.
+use crate::{
+    CastClient, DEFAULT_MEDIA_RECEIVER, Error, MediaLoad, MediaStatus, StreamType,
+    client::{NS_CONNECTION, NS_HEARTBEAT, PLATFORM_RECEIVER},
+    media::NS_MEDIA,
+    proto::{self, CastMessage, Payload},
+    receiver::NS_RECEIVER,
+};
+use rustls::{
+    ServerConfig, ServerConnection, StreamOwned,
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+};
+use serde_json::{Value, json};
+use std::{
+    io::{Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
+    sync::Arc,
+    thread::JoinHandle,
+    time::Duration,
+};
+
+type ServerStream = StreamOwned<ServerConnection, TcpStream>;
+
+fn listen() -> (SocketAddr, TcpListener, Arc<ServerConfig>) {
+    let certified = rcgen::generate_simple_self_signed(vec!["receiver".to_owned()]).unwrap();
+    let cert = CertificateDer::from(certified.cert.der().to_vec());
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.signing_key.serialize_der()));
+    let config = ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    (listener.local_addr().unwrap(), listener, Arc::new(config))
+}
+
+fn accept(listener: &TcpListener, config: Arc<ServerConfig>) -> ServerStream {
+    let (socket, _) = listener.accept().unwrap();
+    socket.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    StreamOwned::new(ServerConnection::new(config).unwrap(), socket)
+}
+
+fn send(stream: &mut ServerStream, source: &str, namespace: &str, payload: &Value) {
+    let frame = CastMessage::text(source, "sender-0", namespace, payload.to_string())
+        .encode_frame()
+        .unwrap();
+    stream.write_all(&frame).unwrap();
+    stream.flush().unwrap();
+}
+
+fn reply(request: &Value, mut payload: Value) -> Value {
+    payload["requestId"] = request["requestId"].clone();
+    payload
+}
+
+fn app_status(running: bool) -> Value {
+    let applications = if running {
+        json!([{
+            "appId": DEFAULT_MEDIA_RECEIVER,
+            "displayName": "Default Media Receiver",
+            "sessionId": "session-1",
+            "transportId": "transport-1",
+            "namespaces": [{"name": NS_MEDIA}]
+        }])
+    } else {
+        json!([])
+    };
+    json!({"type": "RECEIVER_STATUS", "status": {"applications": applications, "volume": {"level": 0.5}}})
+}
+
+/// Serves one sender and returns `namespace destination type` for every message it saw.
+fn receiver(listener: TcpListener, config: Arc<ServerConfig>) -> JoinHandle<Vec<String>> {
+    std::thread::spawn(move || {
+        let mut stream = accept(&listener, config);
+        let mut log = Vec::new();
+        let mut inbound = Vec::new();
+        let mut chunk = [0; 4096];
+        loop {
+            let read = stream.read(&mut chunk).unwrap();
+            if read == 0 {
+                return log;
+            }
+            inbound.extend_from_slice(&chunk[..read]);
+            for message in proto::drain_frames(&mut inbound).unwrap() {
+                let Payload::Text(text) = &message.payload else {
+                    panic!("binary payload");
+                };
+                let request: Value = serde_json::from_str(text).unwrap();
+                let kind = request["type"].as_str().unwrap_or_default().to_owned();
+                log.push(format!("{} {} {kind}", message.namespace, message.destination));
+                let to = message.destination.as_str();
+                match (message.namespace.as_str(), kind.as_str()) {
+                    (NS_RECEIVER, "GET_STATUS" | "STOP") => {
+                        send(&mut stream, to, NS_RECEIVER, &reply(&request, app_status(false)));
+                    }
+                    (NS_RECEIVER, "LAUNCH") => send(&mut stream, to, NS_RECEIVER, &reply(&request, app_status(true))),
+                    (NS_MEDIA, "LOAD") => {
+                        assert_eq!(request["media"]["streamType"], "LIVE");
+                        let loaded = json!({"type": "MEDIA_STATUS", "status": [{"mediaSessionId": 9, "playerState": "BUFFERING"}]});
+                        send(&mut stream, to, NS_MEDIA, &reply(&request, loaded));
+                        let playing = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "PLAYING"}]});
+                        send(&mut stream, to, NS_MEDIA, &playing);
+                        send(&mut stream, PLATFORM_RECEIVER, NS_HEARTBEAT, &json!({"type": "PING"}));
+                    }
+                    (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => return log,
+                    _ => {}
+                }
+            }
+        }
+    })
+}
+
+#[test]
+fn launches_loads_and_follows_media_status() {
+    let (address, listener, config) = listen();
+    let server = receiver(listener, config);
+    let client = CastClient::connect(address).unwrap();
+    assert!(client.receiver_status().unwrap().applications.is_empty());
+    let app = client.launch(DEFAULT_MEDIA_RECEIVER).unwrap();
+    assert_eq!(app.transport_id, "transport-1");
+    let mut media = client.media(&app);
+    let loaded = media
+        .load(&MediaLoad {
+            url: "http://192.0.2.1/live.m3u8".to_owned(),
+            content_type: "application/x-mpegurl".to_owned(),
+            stream_type: StreamType::Live,
+            ..MediaLoad::default()
+        })
+        .unwrap();
+    assert_eq!(
+        (loaded.media_session_id, loaded.player_state.as_str()),
+        (9, "BUFFERING")
+    );
+    let event = client.next_event(Duration::from_secs(5)).unwrap().unwrap();
+    assert_eq!(MediaStatus::from_event(&event)[0].player_state, "PLAYING");
+    client.stop_application(&app.session_id).unwrap();
+    drop(client);
+
+    let log = server.join().unwrap();
+    for expected in [
+        format!("{NS_CONNECTION} receiver-0 CONNECT"),
+        format!("{NS_CONNECTION} transport-1 CONNECT"),
+        format!("{NS_MEDIA} transport-1 LOAD"),
+        format!("{NS_HEARTBEAT} receiver-0 PONG"),
+        format!("{NS_CONNECTION} transport-1 CLOSE"),
+        format!("{NS_CONNECTION} receiver-0 CLOSE"),
+    ] {
+        assert!(log.contains(&expected), "missing {expected:?} in {log:#?}");
+    }
+}
+
+#[test]
+fn reports_closed_when_receiver_disconnects() {
+    let (address, listener, config) = listen();
+    let server = std::thread::spawn(move || {
+        let mut stream = accept(&listener, config);
+        let mut chunk = [0; 4096];
+        // Complete the handshake and read CONNECT, then hang up.
+        let _ = stream.read(&mut chunk);
+        stream.conn.send_close_notify();
+        let _ = stream.flush();
+    });
+    let client = CastClient::connect(address).unwrap();
+    server.join().unwrap();
+    assert!(matches!(client.receiver_status(), Err(Error::Closed | Error::Io(_))));
+    assert!(!client.is_open());
+}
