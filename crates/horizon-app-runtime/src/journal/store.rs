@@ -11,6 +11,10 @@ const MAX_BYTES: u64 = 8 * 1024 * 1024;
 pub(super) struct Store {
     directory: File,
     registry: File,
+    #[cfg(unix)]
+    parent: File,
+    #[cfg(unix)]
+    basename: std::ffi::OsString,
     namespace: String,
 }
 impl Store {
@@ -37,8 +41,18 @@ impl Store {
             Err(error) => return Err(error),
         };
         after_registry();
-        let directory = private_child(&parent, filename)?;
-        let lock = open_file(&directory, "journal.lock", true)?;
+        let directory = if expected.is_some() {
+            existing_child(&parent, filename).map_err(|_| Error::JournalInvalid)?
+        } else {
+            private_child(&parent, filename)?
+        };
+        let lock = open_file(&directory, "journal.lock", expected.is_none()).map_err(|error| {
+            if expected.is_some() {
+                Error::JournalInvalid
+            } else {
+                error
+            }
+        })?;
         lock.lock().map_err(|_| Error::JournalUnavailable)?;
         if let Some(expected) = expected {
             check_marker(&directory, &lock)?;
@@ -67,11 +81,44 @@ impl Store {
         Ok(Self {
             directory,
             registry,
+            #[cfg(unix)]
+            parent,
+            #[cfg(unix)]
+            basename: filename.to_owned(),
             namespace,
         })
     }
+    fn check_location(&self) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use rustix::fs::{Mode, OFlags};
+            for (name, held) in [
+                (self.basename.as_os_str(), &self.directory),
+                (std::ffi::OsStr::new(".native-journal-registry"), &self.registry),
+            ] {
+                let observed = File::from(
+                    rustix::fs::openat(
+                        &self.parent,
+                        name,
+                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                        Mode::empty(),
+                    )
+                    .map_err(|_| Error::JournalInvalid)?,
+                );
+                if file_identity(&observed)? != file_identity(held)? {
+                    return Err(Error::JournalInvalid);
+                }
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            Err(Error::JournalInvalid)
+        }
+    }
     pub(super) fn access<T>(&self, write: bool, operation: impl FnOnce(&mut Ledger) -> Result<T>) -> Result<T> {
-        let lock = open_file(&self.directory, "journal.lock", true)?;
+        self.check_location()?;
+        let lock = open_file(&self.directory, "journal.lock", false).map_err(|_| Error::JournalInvalid)?;
         lock.lock().map_err(|_| Error::JournalUnavailable)?;
         check_marker(&self.directory, &lock)?;
         let marker = open_file(&self.registry, &self.namespace, false).map_err(|_| Error::JournalInvalid)?;
@@ -94,6 +141,7 @@ impl Store {
         };
         validate(&ledger)?;
         let result = operation(&mut ledger)?;
+        self.check_location()?;
         if !write {
             return Ok(result);
         }
@@ -282,7 +330,6 @@ fn private_directory(path: &Path) -> Result<File> {
 #[cfg(unix)]
 fn private_child(parent: &File, name: &std::ffi::OsStr) -> Result<File> {
     use rustix::fs::{Mode, OFlags};
-    use std::os::unix::fs::MetadataExt;
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let open = || rustix::fs::openat(parent, name, flags, Mode::empty());
     let child = match open() {
@@ -302,12 +349,37 @@ fn private_child(parent: &File, name: &std::ffi::OsStr) -> Result<File> {
         }
         Err(_) => return Err(Error::JournalUnavailable),
     };
-    let child = File::from(child);
+    validate_private_child(File::from(child))
+}
+
+#[cfg(unix)]
+fn existing_child(parent: &File, name: &std::ffi::OsStr) -> Result<File> {
+    use rustix::fs::{Mode, OFlags};
+    let child = File::from(
+        rustix::fs::openat(
+            parent,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|_| Error::JournalUnavailable)?,
+    );
+    validate_private_child(child)
+}
+
+#[cfg(unix)]
+fn validate_private_child(child: File) -> Result<File> {
+    use std::os::unix::fs::MetadataExt;
     let metadata = child.metadata().map_err(|_| Error::JournalUnavailable)?;
     if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o077 != 0 {
         return Err(Error::JournalUnavailable);
     }
     Ok(child)
+}
+
+#[cfg(not(unix))]
+fn existing_child(_parent: &File, _name: &std::ffi::OsStr) -> Result<File> {
+    Err(Error::JournalUnavailable)
 }
 
 #[cfg(not(unix))]

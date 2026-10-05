@@ -128,7 +128,7 @@ fn relocation_during_first_open_keeps_namespace_and_retention_registry_together(
         Store::open(&moved.join("namespace")),
         Err(Error::JournalInvalid)
     ));
-    assert!(!moved.join("namespace/journal.json").exists());
+    assert!(!moved.join("namespace").exists());
 }
 
 #[test]
@@ -555,7 +555,7 @@ fn missing_or_replaced_namespace_cannot_forget_reservations() {
     drop(first);
     std::fs::rename(&state, folder.path().join("saved")).unwrap();
     assert!(matches!(Store::open(&state), Err(Error::JournalInvalid)));
-    std::fs::remove_dir_all(&state).unwrap();
+    assert!(!state.exists());
     std::fs::rename(folder.path().join("saved"), &state).unwrap();
     let restored = journal(&state, 'a');
     assert_eq!(restored.status(owner, operation.id).unwrap().phase, Phase::Allocating);
@@ -583,7 +583,7 @@ fn equivalent_paths_and_relocated_registry_cannot_forget_owned_reservations() {
     for equivalent in [state.clone(), moved.join(".").join("browserstack")] {
         assert!(matches!(Store::open(&equivalent), Err(Error::JournalInvalid)));
     }
-    std::fs::remove_dir_all(&state).unwrap();
+    assert!(!state.exists());
     std::fs::rename(moved.join("saved"), &state).unwrap();
     let restored = journal(&moved.join(".").join("browserstack"), 'a');
     assert_eq!(restored.status(owner, operation.id).unwrap().phase, Phase::Allocating);
@@ -609,4 +609,94 @@ fn open_test_lock(state: &Path) -> std::fs::File {
         .write(true)
         .open(state.join("journal.lock"))
         .unwrap()
+}
+
+#[test]
+fn live_namespace_or_registry_rename_blocks_access_without_creating_replacement_state() {
+    for name in ["state", ".native-journal-registry"] {
+        let folder = canonical_temp();
+        let state = folder.path().join("state");
+        let owner = Uuid::new_v4();
+        let live = journal(&state, 'a');
+        let operation = live
+            .start(owner, folder.path(), Kind::Session, Duration::from_secs(30))
+            .unwrap();
+        let source = folder.path().join(name);
+        let moved = folder.path().join("moved");
+        std::fs::rename(&source, &moved).unwrap();
+        assert_eq!(live.status(owner, operation.id).err(), Some(Error::JournalInvalid));
+        assert_eq!(
+            live.reserve(owner, operation.id, || panic!("moved namespace admitted capacity")),
+            Err(Error::JournalInvalid)
+        );
+        assert!(!source.exists());
+        std::fs::rename(&moved, &source).unwrap();
+        assert_eq!(live.status(owner, operation.id).unwrap().phase, Phase::Preparing);
+    }
+}
+#[test]
+fn namespace_renamed_during_capacity_observation_cannot_publish_a_reservation() {
+    let folder = canonical_temp();
+    let state = folder.path().join("state");
+    let moved = folder.path().join("moved");
+    let owner = Uuid::new_v4();
+    let live = journal(&state, 'a');
+    let operation = live
+        .start(owner, folder.path(), Kind::Session, Duration::from_secs(30))
+        .unwrap();
+    assert_eq!(
+        live.reserve(owner, operation.id, || {
+            std::fs::rename(&state, &moved).unwrap();
+            quota()
+        }),
+        Err(Error::JournalInvalid)
+    );
+    std::fs::rename(&moved, &state).unwrap();
+    assert_eq!(live.status(owner, operation.id).unwrap().phase, Phase::Preparing);
+    assert!(
+        live.store
+            .access(false, |ledger| Ok(ledger.records[&operation.id].slot.is_none()))
+            .unwrap()
+    );
+}
+
+#[test]
+fn retained_registry_never_creates_a_replacement_namespace_or_lock() {
+    use std::os::unix::fs::PermissionsExt;
+    let folder = canonical_temp();
+    let state = folder.path().join("namespace");
+    drop(journal(&state, 'a'));
+    let saved = folder.path().join("saved");
+    std::fs::rename(&state, &saved).unwrap();
+    assert!(matches!(Store::open(&state), Err(Error::JournalInvalid)));
+    assert!(!state.exists());
+    std::fs::create_dir(&state).unwrap();
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(matches!(Store::open(&state), Err(Error::JournalInvalid)));
+    assert_eq!(std::fs::read_dir(&state).unwrap().count(), 0);
+    std::fs::remove_dir(&state).unwrap();
+    std::fs::rename(&saved, &state).unwrap();
+    drop(journal(&state, 'a'));
+}
+
+#[test]
+fn live_missing_namespace_lock_cannot_be_recreated_by_status_or_admission() {
+    let folder = canonical_temp();
+    let state = folder.path().join("namespace");
+    let live = journal(&state, 'a');
+    let owner = Uuid::new_v4();
+    let operation = live
+        .start(owner, folder.path(), Kind::Session, Duration::from_secs(30))
+        .unwrap();
+    let lock = state.join("journal.lock");
+    let saved = folder.path().join("saved-lock");
+    std::fs::rename(&lock, &saved).unwrap();
+    assert_eq!(live.status(owner, operation.id).err(), Some(Error::JournalInvalid));
+    assert_eq!(
+        live.reserve(owner, operation.id, || panic!("missing lock admitted capacity")),
+        Err(Error::JournalInvalid)
+    );
+    assert!(!lock.exists());
+    std::fs::rename(&saved, &lock).unwrap();
+    assert_eq!(live.status(owner, operation.id).unwrap().phase, Phase::Preparing);
 }
