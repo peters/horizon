@@ -71,7 +71,13 @@ fn app_status(running: bool) -> Value {
 
 /// Serves one sender and returns `namespace destination type` for every message it saw.
 fn receiver(listener: TcpListener, config: Arc<ServerConfig>) -> JoinHandle<Vec<String>> {
+    receiver_with(listener, config, false)
+}
+
+/// Like [`receiver`], with the media receiver optionally already running.
+fn receiver_with(listener: TcpListener, config: Arc<ServerConfig>, running: bool) -> JoinHandle<Vec<String>> {
     std::thread::spawn(move || {
+        let mut running = running;
         let mut stream = accept(&listener, config);
         let mut log = Vec::new();
         let mut inbound = Vec::new();
@@ -91,10 +97,14 @@ fn receiver(listener: TcpListener, config: Arc<ServerConfig>) -> JoinHandle<Vec<
                 log.push(format!("{} {} {kind}", message.namespace, message.destination));
                 let to = message.destination.as_str();
                 match (message.namespace.as_str(), kind.as_str()) {
-                    (NS_RECEIVER, "GET_STATUS" | "STOP") => {
-                        send(&mut stream, to, NS_RECEIVER, &reply(&request, app_status(false)));
+                    (NS_RECEIVER, "GET_STATUS" | "STOP" | "LAUNCH") => {
+                        running = match kind.as_str() {
+                            "LAUNCH" => true,
+                            "STOP" => false,
+                            _ => running,
+                        };
+                        send(&mut stream, to, NS_RECEIVER, &reply(&request, app_status(running)));
                     }
-                    (NS_RECEIVER, "LAUNCH") => send(&mut stream, to, NS_RECEIVER, &reply(&request, app_status(true))),
                     (NS_MEDIA, "LOAD") => {
                         assert_eq!(request["media"]["streamType"], "LIVE");
                         let loaded = json!({"type": "MEDIA_STATUS", "status": [{"mediaSessionId": 9, "playerState": "BUFFERING"}]});
@@ -143,11 +153,28 @@ fn launches_loads_and_follows_media_status() {
         format!("{NS_CONNECTION} transport-1 CONNECT"),
         format!("{NS_MEDIA} transport-1 LOAD"),
         format!("{NS_HEARTBEAT} receiver-0 PONG"),
+        format!("{NS_RECEIVER} receiver-0 LAUNCH"),
         format!("{NS_CONNECTION} transport-1 CLOSE"),
         format!("{NS_CONNECTION} receiver-0 CLOSE"),
     ] {
         assert!(log.contains(&expected), "missing {expected:?} in {log:#?}");
     }
+}
+
+#[test]
+fn launch_joins_a_running_application_instead_of_restarting_it() {
+    let (address, listener, config) = listen();
+    let server = receiver_with(listener, config, true);
+    let client = CastClient::connect(address).unwrap();
+    let app = client.launch(DEFAULT_MEDIA_RECEIVER).unwrap();
+    assert_eq!(app.session_id, "session-1");
+    drop(client);
+    let log = server.join().unwrap();
+    assert!(!log.contains(&format!("{NS_RECEIVER} receiver-0 LAUNCH")), "{log:#?}");
+    assert!(
+        log.contains(&format!("{NS_CONNECTION} transport-1 CONNECT")),
+        "{log:#?}"
+    );
 }
 
 #[test]

@@ -85,6 +85,12 @@ impl CastClient {
     /// # Errors
     /// Returns [`Error::Rejected`] if the receiver refuses the launch.
     pub fn launch(&self, app_id: &str) -> Result<Application> {
+        // Some TV receivers restart an application on a repeated LAUNCH, which
+        // ends the session the reply names. Join a running one instead.
+        if let Some(app) = self.receiver_status()?.application(app_id).cloned() {
+            self.connect_virtual(&app.transport_id)?;
+            return Ok(app);
+        }
         let reply = self.request_within(
             PLATFORM_RECEIVER,
             NS_RECEIVER,
