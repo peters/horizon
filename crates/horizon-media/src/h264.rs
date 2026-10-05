@@ -1,6 +1,6 @@
 //! H.264 bitstream helpers: NAL unit types, Annex B and AVCC framing, and an
 //! incremental Annex B reader that groups NAL units into access units.
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 pub const NAL_SLICE: u8 = 1;
 pub const NAL_IDR: u8 = 5;
@@ -141,9 +141,10 @@ impl AccessUnit {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Unit {
-    /// A PPS together with the most recent SPS.
+    /// A PPS together with the most recent SPS. The SPS is shared, so many
+    /// PPS after one large SPS do not copy it.
     ParameterSets {
-        sps: Vec<u8>,
+        sps: Arc<[u8]>,
         pps: Vec<u8>,
     },
     AccessUnit(AccessUnit),
@@ -156,7 +157,7 @@ pub struct AnnexBReader {
     pending: Vec<u8>,
     access: Vec<Vec<u8>>,
     access_bytes: usize,
-    sps: Vec<u8>,
+    sps: Arc<[u8]>,
     limit: usize,
 }
 
@@ -174,7 +175,7 @@ impl AnnexBReader {
             pending: Vec::new(),
             access: Vec::new(),
             access_bytes: 0,
-            sps: Vec::new(),
+            sps: Arc::from(&[][..]),
             limit,
         }
     }
@@ -242,7 +243,7 @@ impl AnnexBReader {
         }
         match nal_type(&nal).unwrap_or(0) {
             NAL_AUD => self.complete_access(units),
-            NAL_SPS => self.sps = nal,
+            NAL_SPS => self.sps = nal.into(),
             NAL_PPS => units.push(Unit::ParameterSets {
                 sps: self.sps.clone(),
                 pps: nal,
@@ -347,7 +348,7 @@ mod tests {
         assert_eq!(
             units[0],
             Unit::ParameterSets {
-                sps: SPS.to_vec(),
+                sps: SPS.into(),
                 pps: PPS.to_vec()
             }
         );
@@ -470,5 +471,24 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn parameter_sets_share_one_sps() {
+        let mut data = vec![0, 0, 1, 0x67, 1, 2, 3];
+        for _ in 0..4 {
+            data.extend_from_slice(&[0, 0, 1, 0x68, 9]);
+        }
+        data.extend_from_slice(&[0, 0, 1, 0x09, 0xf0]);
+        let units = AnnexBReader::default().push(&data).unwrap();
+        let sps: Vec<&Arc<[u8]>> = units
+            .iter()
+            .filter_map(|unit| match unit {
+                Unit::ParameterSets { sps, .. } => Some(sps),
+                Unit::AccessUnit(_) => None,
+            })
+            .collect();
+        assert_eq!(sps.len(), 4);
+        assert!(sps.windows(2).all(|pair| Arc::ptr_eq(pair[0], pair[1])));
     }
 }

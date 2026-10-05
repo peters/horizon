@@ -12,7 +12,7 @@ fn access_units(data: &[u8]) -> Result<Vec<(Vec<u8>, bool)>, String> {
         return Err("no access unit delimiters found; encode with aud=1".to_owned());
     }
     let mut reader = AnnexBReader::default();
-    let (mut sps, mut pps) = (Vec::new(), Vec::new());
+    let (mut sps, mut pps): (std::sync::Arc<[u8]>, Vec<u8>) = (std::sync::Arc::from(&[][..]), Vec::new());
     let mut access_units = Vec::new();
     // Convert each batch as it completes, so only the rebuilt units accumulate.
     let mut collect = |units: Vec<Unit>| {
