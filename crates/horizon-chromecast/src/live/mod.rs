@@ -8,7 +8,7 @@ mod ts;
 pub use h264::avcc_to_annexb;
 
 use crate::{
-    CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaLoad, MediaStatus, Result, StreamType,
+    Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaLoad, MediaStatus, Result, StreamType,
     client::NS_CONNECTION, receiver::NS_RECEIVER,
 };
 use hls::Segmenter;
@@ -209,7 +209,7 @@ impl Session {
             }
             // The application can close or be replaced before LOAD; then leave it be.
             if let Some(event) = client.next_event(BUFFER_POLL)?
-                && !self.follow(&event, &app.session_id, &app.transport_id, NO_MEDIA_SESSION)?
+                && !self.follow_confirmed(&client, &event, &app, NO_MEDIA_SESSION)?
             {
                 return Ok(());
             }
@@ -245,7 +245,7 @@ impl Session {
                 self.set(LiveState::Buffering);
             }
             outcome = match client.next_event(EVENT_POLL)? {
-                Some(event) => self.follow(&event, &app.session_id, &app.transport_id, loaded.media_session_id),
+                Some(event) => self.follow_confirmed(&client, &event, &app, loaded.media_session_id),
                 None => Ok(true),
             };
         };
@@ -255,6 +255,27 @@ impl Session {
     }
 
     /// Applies one receiver event; `Ok(false)` means the session is over.
+    /// [`Self::follow`], except that a receiver status without our application
+    /// is confirmed with a fresh status first: an older notification can still
+    /// be queued from before the launch reply.
+    fn follow_confirmed(
+        &self,
+        client: &CastClient,
+        event: &Event,
+        app: &Application,
+        media_session_id: i64,
+    ) -> Result<bool> {
+        let going_on = self.follow(event, &app.session_id, &app.transport_id, media_session_id)?;
+        if going_on || event.namespace != NS_RECEIVER {
+            return Ok(going_on);
+        }
+        let current = client.receiver_status()?;
+        Ok(current
+            .applications
+            .iter()
+            .any(|running| running.session_id == app.session_id))
+    }
+
     pub(crate) fn follow(
         &self,
         event: &Event,

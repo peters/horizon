@@ -108,6 +108,14 @@ fn receiver_with(listener: TcpListener, config: Arc<ServerConfig>, running: bool
                 log.push(format!("{} {} {kind}", message.namespace, message.destination));
                 let to = message.destination.as_str();
                 match (message.namespace.as_str(), kind.as_str()) {
+                    (NS_RECEIVER, "LAUNCH") if !running => {
+                        // A status notice sent before the launch completed can
+                        // reach the sender ahead of the LAUNCH reply.
+                        let stale = json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {"applications": [], "volume": {"level": 0.5}}});
+                        send(&mut stream, PLATFORM_RECEIVER, NS_RECEIVER, &stale);
+                        running = true;
+                        send(&mut stream, to, NS_RECEIVER, &reply(&request, app_status(running)));
+                    }
                     (NS_RECEIVER, "GET_STATUS" | "STOP" | "LAUNCH") => {
                         running = match kind.as_str() {
                             "LAUNCH" => true,
@@ -378,5 +386,80 @@ fn live_session_ends_on_bare_idle_and_on_a_newer_load_but_not_on_the_replaced_it
     assert!(
         !replaced.follow(&event, "session-1", "transport-1", 9).unwrap(),
         "another sender loaded over us"
+    );
+}
+
+#[test]
+fn live_cast_ends_without_stop_when_a_confirmed_takeover_replaces_the_application() {
+    let other = json!({"type": "RECEIVER_STATUS", "status": {"applications": [{
+        "appId": "OTHER", "displayName": "Other", "sessionId": "session-2", "transportId": "transport-2", "namespaces": []
+    }]}});
+    let (address, listener, config) = listen();
+    let server = std::thread::spawn(move || {
+        let mut stream = accept(&listener, config);
+        let (mut log, mut inbound, mut chunk, mut launched) = (Vec::new(), Vec::new(), [0; 4096], false);
+        loop {
+            let read = stream.read(&mut chunk).unwrap_or(0);
+            if read == 0 {
+                return log;
+            }
+            inbound.extend_from_slice(&chunk[..read]);
+            for message in proto::drain_frames(&mut inbound).unwrap() {
+                let Payload::Text(text) = &message.payload else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(text).unwrap();
+                let kind = request["type"].as_str().unwrap_or_default().to_owned();
+                log.push(format!("{} {} {kind}", message.namespace, message.destination));
+                match (message.namespace.as_str(), kind.as_str()) {
+                    (NS_RECEIVER, "GET_STATUS") if launched => {
+                        send(
+                            &mut stream,
+                            PLATFORM_RECEIVER,
+                            NS_RECEIVER,
+                            &reply(&request, other.clone()),
+                        );
+                    }
+                    (NS_RECEIVER, "GET_STATUS") => {
+                        send(
+                            &mut stream,
+                            PLATFORM_RECEIVER,
+                            NS_RECEIVER,
+                            &reply(&request, app_status(false)),
+                        );
+                    }
+                    (NS_RECEIVER, "LAUNCH") => {
+                        launched = true;
+                        send(
+                            &mut stream,
+                            PLATFORM_RECEIVER,
+                            NS_RECEIVER,
+                            &reply(&request, app_status(true)),
+                        );
+                        let mut notice = other.clone();
+                        notice["requestId"] = 0.into();
+                        send(&mut stream, PLATFORM_RECEIVER, NS_RECEIVER, &notice);
+                    }
+                    (NS_CONNECTION, "CLOSE") if message.destination == PLATFORM_RECEIVER => return log,
+                    _ => {}
+                }
+            }
+        }
+    });
+    let live = LiveCast::start(address, LiveOptions::default()).unwrap();
+    for _ in 0..100 {
+        if live.state() == LiveState::Ended {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let state = live.state();
+    drop(live);
+    let log = server.join().unwrap();
+    assert_eq!(state, LiveState::Ended, "{log:#?}");
+    assert!(
+        !log.iter()
+            .any(|line| line.ends_with(" STOP") || line.ends_with(" LOAD")),
+        "{log:#?}"
     );
 }
