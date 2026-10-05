@@ -76,9 +76,9 @@ pub struct LiveOptions {
     /// Target segment length; segments are cut on the first keyframe after it.
     /// Progressive streams ask for a keyframe this often so receivers can join.
     pub segment: Duration,
-    /// Completed segments kept for the receiver.
+    /// Completed segments kept for the receiver (HLS only).
     pub window: usize,
-    /// Completed segments required before the receiver is asked to play.
+    /// Completed segments required before the receiver is asked to play (HLS only).
     pub preroll: usize,
     pub title: String,
 }
@@ -103,6 +103,10 @@ impl LiveOptions {
         if self.segment.is_zero() {
             return Err(Error::InvalidOptions("segment duration must be positive"));
         }
+        // The progressive stream has no playlist: window and pre-roll are HLS only.
+        if self.transport == Transport::Progressive {
+            return Ok(());
+        }
         if self.preroll == 0 {
             return Err(Error::InvalidOptions("pre-roll must be at least one segment"));
         }
@@ -110,10 +114,9 @@ impl LiveOptions {
             return Err(Error::InvalidOptions("window must hold the pre-roll segments"));
         }
         // A live playlist must keep at least three target durations (RFC 8216
-        // section 6.2.2); segments can close at 90% of `segment`. The
-        // progressive stream has no playlist.
+        // section 6.2.2); segments can close at 90% of `segment`.
         let kept_ms = self.segment.as_millis() * 9 / 10 * u128::try_from(self.window).unwrap_or(u128::MAX);
-        if self.transport == Transport::Hls && kept_ms < u128::from(hls::target_seconds(self.segment)) * 3 * 1000 {
+        if kept_ms < u128::from(hls::target_seconds(self.segment)) * 3 * 1000 {
             return Err(Error::InvalidOptions(
                 "window must hold at least three target durations",
             ));

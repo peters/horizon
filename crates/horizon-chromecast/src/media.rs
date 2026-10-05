@@ -118,8 +118,12 @@ impl MediaController<'_> {
 
     /// Plays faster or slower than real time; receivers accept about 0.5–2.
     /// # Errors
-    /// Returns an error if nothing is loaded or the receiver refuses.
+    /// Returns an error for a rate that is not positive and finite, if nothing
+    /// is loaded, or if the receiver refuses.
     pub fn set_playback_rate(&self, rate: f64) -> Result<MediaStatus> {
+        if !rate.is_finite() || rate <= 0.0 {
+            return Err(Error::Protocol("playback rate must be positive and finite"));
+        }
         let id = self
             .media_session_id
             .ok_or(Error::Protocol("no media session is loaded"))?;

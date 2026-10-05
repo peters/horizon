@@ -360,10 +360,12 @@ fn live_cast_rejects_options_that_could_never_play() {
             ..LiveOptions::default()
         },
         LiveOptions {
+            transport: Transport::Hls,
             preroll: 0,
             ..LiveOptions::default()
         },
         LiveOptions {
+            transport: Transport::Hls,
             window: 2,
             preroll: 3,
             ..LiveOptions::default()
