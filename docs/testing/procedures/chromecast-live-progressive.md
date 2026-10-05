@@ -42,10 +42,10 @@ ends when the receiver or another sender stops it.
 
    Result: The directory contains `Cargo.toml`.
 
-2. Make a test file with one keyframe each 0.5 seconds:
+2. Make a test file with one keyframe each 0.5 seconds and no B-frames:
 
    ```bash
-   ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30 -t 120 -c:v libx264 -g 15 -bsf:v h264_metadata=aud=insert -f h264 live-test.h264
+   ffmpeg -f lavfi -i testsrc=size=1280x720:rate=30 -t 120 -c:v libx264 -g 15 -bf 0 -bsf:v h264_metadata=aud=insert -f h264 live-test.h264
    ```
 
    Result: The file `live-test.h264` exists.
@@ -84,7 +84,7 @@ ends when the receiver or another sender stops it.
 
    Result: The playback on the receiver is at normal speed.
 
-2. Compare the time counter in the test picture with the stopwatch.
+2. Compare the seconds counter in the test picture with the stopwatch.
 
    Result: The difference is 1 second or less.
 
