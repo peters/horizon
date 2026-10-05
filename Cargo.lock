@@ -2275,6 +2275,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-app-process"
+version = "0.2.7"
+dependencies = [
+ "horizon-app-testing",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-app-provider"
 version = "0.2.7"
 dependencies = [

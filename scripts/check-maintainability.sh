@@ -7,6 +7,8 @@ ALLOW_PATTERN='#\[allow\(clippy::too_many_lines\)\]'
 SOURCE_DIRS=(
   "$ROOT_DIR/crates/horizon-app-runtime/src"
   "$ROOT_DIR/crates/horizon-app-provider/src"
+
+  "$ROOT_DIR/crates/horizon-app-process/src"
   "$ROOT_DIR/crates/horizon-app-testing/src"
   "$ROOT_DIR/crates/horizon-device/src"
   "$ROOT_DIR/crates/horizon-browser-protocol/src"

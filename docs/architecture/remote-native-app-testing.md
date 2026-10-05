@@ -218,3 +218,19 @@ have stopped and their task-owned worktree has been removed. A missing, malforme
 or premature acknowledgement retains cleanup uncertainty; helper exit alone is
 insufficient. Diagnostics remain private and are capped at 4 MiB while draining
 the complete child output.
+
+## Guarded build and backend commands
+
+The trusted host launches the bundled `horizon-app-process --guard` executable with a private request on stdin. The guardian creates anchored private state and acknowledges an armed intent before the parent journals its operation and allows execution. Authorized contract commands are argv arrays, with no shell interpolation; their environment contains only declared build prerequisites and the private backend directory/cancellation protocol. Parent credential variables are excluded.
+
+A separate guardian survives abrupt calling-host death and stops its owned foreground process group when the parent pipe closes. Startup and whole-process lifetime are bounded; malformed backend readiness fails closed. Normal completion, cancellation and failure drain private stdout/stderr (at most4MiB), synchronize diagnostics and atomically record cleanup before sending a terminal typed event. Group signalling retains the waitable leader; failures and unproven termination stay uncertain. Linux zombie-only descendants cannot execute and do not prevent a confirmed stop.
+
+This process leaf requires Unix. Commands that detach descendants into other groups need an explicitly qualified foreground helper that handles those descendants and cancellation; the YouPark helper follows that boundary. Surviving-guardian cleanup is tested separately from full startup reconciliation. Unexpected guardian failure, backend worktree/database retirement, remote session/upload recovery and the complete MCP/CLI/live-panel run remain host integration work.
+
+The managed backend protocol requires a second newline-delimited stdout record,
+`{"native_backend_closed":1}`, only after the helper has confirmed that its nested
+process groups have stopped and its task-owned worktree has been removed. Missing,
+malformed or premature cleanup acknowledgement must retain an uncertain operation;
+helper exit alone is insufficient. Helper diagnostics are private and capped at
+4 MiB while the complete child output is drained. Failed partial worktree creation
+also requires confirmed removal before acknowledgement.

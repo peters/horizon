@@ -19,6 +19,13 @@ back into large multi-purpose modules.
 - `tunnel` captures a checksum-pinned binary, passes the key in a private config file, restricts the child environment and loopback ports, and bounds process-group cleanup. Exit observation retains the leader identity until signalling finishes.
 - Artifact and tunnel execution are currently Unix-only; other platforms fail closed. The in-process guardian is not crash reconciliation. Durable host journaling, startup reconciliation, global quota scheduling and UI/MCP dispatch belong in later host-runtime increments.
 
+### `horizon-app-process`
+
+- `client` owns a private guardian lease and bounded typed event reader. The declared command starts only after the parent durably journals its opaque operation and guardian PID.
+- `guard` executes argv without shell interpolation, retains group-leader identity through signalling, bounds lifetime/cancellation and final output draining, and acknowledges cleanup only after owned-group termination and private log synchronization.
+- `storage` anchors every directory component and private atomic receipt write without following links. Diagnostics are bounded and private; provider credential environment is excluded.
+- Execution is Unix-only. Detached descendants outside the owned group require a qualified helper that handles its own nested groups and cancellation pipe. A surviving guardian handles host death through EOF; this increment does not implement startup reconciliation after guardian failure or whole native-device orchestration.
+
 ### `horizon-app-testing`
 
 - `contract` validates the project declaration, bounds paths and resolves declared loopback-port templates.

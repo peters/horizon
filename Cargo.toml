@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/horizon-app-process",
     "crates/horizon-app-testing",
     "crates/horizon-app-provider",
     "crates/horizon-app-runtime",
@@ -42,6 +43,8 @@ struct_excessive_bools = "allow"
 
 [workspace.dependencies]
 horizon-app-runtime = { path = "crates/horizon-app-runtime", version = "0.2.7" }
+
+horizon-app-process = { path = "crates/horizon-app-process", version = "0.2.7" }
 quick-xml = "0.42.0"
 horizon-app-provider = { path = "crates/horizon-app-provider", version = "0.2.7" }
 horizon-app-testing = { path = "crates/horizon-app-testing", version = "0.2.7" }
