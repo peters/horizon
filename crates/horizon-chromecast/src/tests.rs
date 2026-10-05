@@ -464,9 +464,18 @@ fn live_cast_ends_without_stop_when_a_confirmed_takeover_replaces_the_applicatio
     );
 }
 
-/// A receiver that queues a bare IDLE ahead of a PLAYING LOAD reply. With
-/// `unload`, it later reports that no media is loaded.
-fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, unload: bool) -> JoinHandle<Vec<String>> {
+/// What the synthetic receiver does after a PLAYING LOAD reply.
+#[derive(Clone, Copy, PartialEq)]
+enum AfterLoad {
+    KeepPlaying,
+    /// Reports that no media is loaded.
+    Unload,
+    /// Sends a bare IDLE; a fresh status then reports a playback error.
+    Error,
+}
+
+/// A receiver that queues a bare IDLE ahead of a PLAYING LOAD reply.
+fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, after: AfterLoad) -> JoinHandle<Vec<String>> {
     std::thread::spawn(move || {
         let mut stream = accept(&listener, config);
         let (mut log, mut inbound, mut chunk) = (Vec::new(), Vec::new(), [0; 4096]);
@@ -519,14 +528,23 @@ fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, unload: b
                         let status = json!({"type": "MEDIA_STATUS", "status": playing});
                         send(&mut stream, to, NS_MEDIA, &reply(&request, status));
                         loaded = true;
-                        if unload {
+                        if after == AfterLoad::Error {
+                            send(&mut stream, to, NS_MEDIA, &idle);
+                        }
+                        if after == AfterLoad::Unload {
                             let empty = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": []});
                             send(&mut stream, to, NS_MEDIA, &empty);
                             loaded = false;
                         }
                     }
                     (NS_MEDIA, "GET_STATUS") => {
-                        let current = if loaded { playing } else { json!([]) };
+                        let current = match (loaded, after) {
+                            (true, AfterLoad::Error) => {
+                                json!([{"mediaSessionId": 9, "playerState": "IDLE", "idleReason": "ERROR"}])
+                            }
+                            (true, _) => playing,
+                            (false, _) => json!([]),
+                        };
                         let status = json!({"type": "MEDIA_STATUS", "status": current});
                         send(&mut stream, to, NS_MEDIA, &reply(&request, status));
                     }
@@ -559,14 +577,14 @@ fn cast_against(server: JoinHandle<Vec<String>>, address: SocketAddr) -> (LiveSt
 #[test]
 fn a_stale_idle_queued_before_a_playing_load_reply_does_not_end_the_cast() {
     let (address, listener, config) = listen();
-    let (state, log) = cast_against(ordering_receiver(listener, config, false), address);
+    let (state, log) = cast_against(ordering_receiver(listener, config, AfterLoad::KeepPlaying), address);
     assert_eq!(state, LiveState::Playing, "{log:#?}");
 }
 
 #[test]
 fn a_confirmed_unload_after_playing_ends_the_cast_without_stop() {
     let (address, listener, config) = listen();
-    let (state, log) = cast_against(ordering_receiver(listener, config, true), address);
+    let (state, log) = cast_against(ordering_receiver(listener, config, AfterLoad::Unload), address);
     assert_eq!(state, LiveState::Ended, "{log:#?}");
     assert!(log.contains(&format!("{NS_MEDIA} transport-1 GET_STATUS")), "{log:#?}");
     assert!(!log.iter().any(|line| line.ends_with(" STOP")), "{log:#?}");
@@ -582,4 +600,11 @@ fn live_options_must_keep_three_target_durations() {
         ..LiveOptions::default()
     };
     assert!(matches!(LiveCast::start(address, short), Err(Error::InvalidOptions(_))));
+}
+
+#[test]
+fn a_confirmed_playback_error_fails_the_cast() {
+    let (address, listener, config) = listen();
+    let (state, log) = cast_against(ordering_receiver(listener, config, AfterLoad::Error), address);
+    assert!(matches!(state, LiveState::Failed(_)), "{state:?} {log:#?}");
 }

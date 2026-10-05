@@ -25,6 +25,9 @@ pub(crate) struct Segmenter {
     current_start: Option<Duration>,
     next_sequence: u64,
     segments: VecDeque<Segment>,
+    /// Segments that left the playlist but may still be fetched by a receiver
+    /// holding an older playlist (RFC 8216 section 6.2.2); one more window.
+    expired: VecDeque<Segment>,
     origin: Option<Duration>,
     /// Latest accepted timestamp; PCR may never move backwards.
     last_pts: Option<Duration>,
@@ -46,6 +49,7 @@ impl Segmenter {
             current_start: None,
             next_sequence: 0,
             segments: VecDeque::new(),
+            expired: VecDeque::new(),
             origin: None,
             last_pts: None,
             sps: None,
@@ -168,6 +172,7 @@ impl Segmenter {
     pub(crate) fn segment(&self, sequence: u64) -> Option<Arc<[u8]>> {
         self.segments
             .iter()
+            .chain(&self.expired)
             .find(|segment| segment.sequence == sequence)
             .map(|segment| segment.data.clone())
     }
@@ -209,8 +214,15 @@ impl Segmenter {
         });
         self.next_sequence += 1;
         while self.segments.len() > self.window {
-            if self.segments.pop_front().is_some_and(|segment| segment.discontinuity) {
+            let Some(evicted) = self.segments.pop_front() else {
+                break;
+            };
+            if evicted.discontinuity {
                 self.discontinuity_sequence += 1;
+            }
+            self.expired.push_back(evicted);
+            while self.expired.len() > self.window {
+                self.expired.pop_front();
             }
         }
     }
@@ -285,7 +297,7 @@ mod tests {
         assert!(playlist.contains("#EXT-X-MEDIA-SEQUENCE:2\n"), "{playlist}");
         assert!(playlist.contains("#EXTINF:1.000,\nseg4.ts\n"), "{playlist}");
         assert!(!playlist.contains("seg5.ts"), "open segment is not listed");
-        assert!(segmenter.segment(1).is_none());
+        assert!(segmenter.segment(1).is_some(), "a just-evicted segment stays fetchable");
         let data = segmenter.segment(4).unwrap();
         assert_eq!(data.len() % super::super::ts::PACKET_SIZE, 0);
         assert_eq!(data[0], 0x47);
@@ -461,5 +473,16 @@ mod tests {
         }
         assert_eq!(segmenter.ready_segments(), 3, "{}", segmenter.playlist());
         assert!(segmenter.playlist().contains("#EXT-X-TARGETDURATION:2\n"));
+    }
+
+    #[test]
+    fn evicted_segments_expire_after_one_more_window() {
+        let mut segmenter = Segmenter::new(Duration::from_secs(1), 3);
+        feed(&mut segmenter, 10);
+        assert!(segmenter.playlist().contains("#EXT-X-MEDIA-SEQUENCE:6\n"));
+        for sequence in 3..=8 {
+            assert!(segmenter.segment(sequence).is_some(), "segment {sequence}");
+        }
+        assert!(segmenter.segment(2).is_none());
     }
 }

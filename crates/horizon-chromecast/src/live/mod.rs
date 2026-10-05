@@ -287,9 +287,11 @@ impl Session {
         if event.namespace == NS_MEDIA && media_session_id != NO_MEDIA_SESSION {
             // Replies and notifications arrive on separate queues, so a media
             // update can be older than the state already applied: confirm.
-            let current = client.media(app).status()?;
-            return Ok(current
-                .is_some_and(|status| status.media_session_id == media_session_id && status.player_state != "IDLE"));
+            // The reply is not delivered again as an event, so apply it here.
+            return match client.media(app).status()? {
+                Some(status) if status.media_session_id == media_session_id => self.apply(&status, None),
+                _ => Ok(false),
+            };
         }
         Ok(false)
     }
