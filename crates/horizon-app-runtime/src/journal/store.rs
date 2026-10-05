@@ -18,6 +18,7 @@ impl Store {
         use sha2::{Digest, Sha256};
         use std::fmt::Write as _;
         let parent = path.parent().ok_or(Error::JournalUnavailable)?;
+        let _parent = private_directory(parent)?;
         let registry = private_directory(&parent.join(".native-journal-registry"))?;
         let registry_lock = open_file(&registry, "journal.lock", true)?;
         registry_lock.lock().map_err(|_| Error::JournalUnavailable)?;

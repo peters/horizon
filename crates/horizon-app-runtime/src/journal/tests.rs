@@ -10,7 +10,11 @@ impl CanonicalTemp {
     }
 }
 fn canonical_temp() -> CanonicalTemp {
-    let directory = tempfile::tempdir().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
     let path = directory.path().canonicalize().unwrap();
     CanonicalTemp {
         _directory: directory,
@@ -75,6 +79,27 @@ fn restart_preserves_owned_intent_and_never_serializes_provider_ids_to_status() 
     reopened.confirm_released(owner, operation.id).unwrap();
     reopened.retire(owner, operation.id).unwrap();
     assert!(reopened.pending(owner).unwrap().is_empty());
+}
+
+#[test]
+fn shared_state_parent_is_refused_before_creating_registry_or_namespace() {
+    use std::os::unix::fs::PermissionsExt;
+    let folder = canonical_temp();
+    let parent = folder.path().join("shared");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(matches!(
+        Store::open(&parent.join("namespace")),
+        Err(Error::JournalUnavailable)
+    ));
+    assert!(std::fs::read_dir(&parent).unwrap().next().is_none());
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(Store::open(&parent.join("namespace")).is_ok());
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        Store::open(&parent.join("namespace")),
+        Err(Error::JournalUnavailable)
+    ));
 }
 
 #[test]

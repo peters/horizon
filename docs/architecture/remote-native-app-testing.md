@@ -212,3 +212,12 @@ Journal lock markers also bind the original filesystem device/inode. Copying ide
 lock bytes into a replacement file cannot create another account lock. In-place host-root
 relocation preserves identity; copying state onto another filesystem remains a reconciliation
 hold. Prototype markers from older unmerged revisions are refused rather than reset.
+
+This route requires private owned state roots on filesystems whose recorded
+device/inode identities remain stable over the qualified host restart. A remount
+or reboot that changes either identity blocks initialization, status and automatic
+journal recovery while preserving all reservations and resources. Do not rewrite
+markers or discard the registry to bypass that hold. Portable storage relocation
+requires a separately authenticated bootstrap identity, fencing of all competing
+actors and a verified migration of every account/workspace marker; that recovery
+route is not implemented by this prerequisite.
