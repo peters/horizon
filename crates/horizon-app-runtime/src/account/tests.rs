@@ -20,7 +20,7 @@ fn capture(user: &str, key: &str, endpoint: &str) -> Account {
         .into_iter()
         .collect::<BTreeMap<_, _>>();
     let profile = RemoteProviderProfile {
-        adapter: RemoteAdapterKind::Webdriver,
+        adapter: RemoteAdapterKind::Browserstack,
         endpoint: ControlEndpoint::parse(endpoint).unwrap(),
         authentication: RemoteAuthentication::Basic {
             username_ref: CredentialReference::from("user"),
@@ -48,6 +48,30 @@ fn capture(user: &str, key: &str, endpoint: &str) -> Account {
         },
     )
     .unwrap()
+}
+
+#[test]
+fn generic_webdriver_cannot_delegate_credentials_to_native_provider_apis() {
+    let profile = RemoteProviderProfile {
+        adapter: RemoteAdapterKind::Webdriver,
+        endpoint: ControlEndpoint::parse("https://hub-cloud.browserstack.com/wd/hub").unwrap(),
+        authentication: RemoteAuthentication::Basic {
+            username_ref: "user".into(),
+            password_ref: "key".into(),
+        },
+        credential_bindings: BTreeMap::new(),
+        limits: RemoteSessionLimits::default(),
+    };
+    let session = SessionCredentialStore::new();
+    let stores = CredentialStores {
+        session: &session,
+        os_keychain: None,
+        environment: None,
+    };
+    assert_eq!(
+        Account::capture(&profile, &stores).err(),
+        Some(Error::CredentialsInvalid)
+    );
 }
 
 #[test]

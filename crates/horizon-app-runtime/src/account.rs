@@ -19,6 +19,7 @@ impl Account {
     /// Uses the same configured stores as browser sessions, with no credential fallback.
     /// Store interaction follows the platform adapter; unattended reads require a noninteractive adapter.
     pub fn capture(profile: &RemoteProviderProfile, stores: &CredentialStores<'_>) -> Result<Self> {
+        horizon_browser::provider_catalog::validate_provider(profile).map_err(|_| Error::CredentialsInvalid)?;
         let authorization = resolve_authorization(profile, stores)
             .map_err(|_| Error::CredentialsUnavailable)?
             .ok_or(Error::CredentialsInvalid)?;
