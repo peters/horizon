@@ -10,6 +10,7 @@ use zeroize::Zeroizing;
 use crate::account::Account;
 use crate::{Error, Result};
 
+pub mod recovery;
 mod store;
 use store::Store;
 
