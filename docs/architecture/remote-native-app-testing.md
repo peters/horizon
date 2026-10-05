@@ -83,7 +83,9 @@ The runtime must distinguish catalog offering, account entitlement, available ca
 
 Each declared Markdown recipe contains human-readable context and one executable YAML fence. Pure prose cannot
 produce a pass. Recipe authors use stable accessibility identifiers, shared across platforms; labels are useful for
-debugging but depend on language. Short-lived refs are session observations, not persistent recipe selectors.
+debugging but depend on language. Short-lived refs are accepted only by interactive actions;
+persisted recipes reject them because they cannot bind a current session snapshot. Endpoint launch
+arguments require an explicit URL scheme; network-path and raw host/port references are rejected.
 
 ```yaml
 device-recipe:

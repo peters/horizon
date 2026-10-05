@@ -151,6 +151,29 @@ impl Recipe {
                 return Err(Error::RecipeInvalid);
             }
             step.action.validate()?;
+            if matches!(
+                &step.action,
+                Action::Tap { target: Target::Ref(_) }
+                    | Action::LongPress {
+                        target: Target::Ref(_),
+                        ..
+                    }
+                    | Action::Type {
+                        target: Target::Ref(_),
+                        ..
+                    }
+                    | Action::Clear { target: Target::Ref(_) }
+                    | Action::Wait {
+                        target: Target::Ref(_),
+                        ..
+                    }
+                    | Action::Assert {
+                        target: Target::Ref(_),
+                        ..
+                    }
+            ) {
+                return Err(Error::RecipeInvalid);
+            }
         }
         Ok(())
     }

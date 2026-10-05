@@ -368,3 +368,47 @@ fn virtual_and_unverified_devices_cannot_qualify_a_real_device_matrix() {
     assert_eq!(offered.len(), 1);
     assert_eq!(offered[0].model, "iPhone 15");
 }
+
+#[test]
+fn endpoint_references_require_an_explicit_validated_scheme() {
+    for endpoint in [
+        "//example.com:8080",
+        " //example.com:8080",
+        "192.168.1.1:8080",
+        "192.168.1.1:8080/path",
+        "127.0.0.1:8080",
+        "[::1]:8080",
+        "\\\\example.com:8080",
+        "/\\example.com:8080",
+        "\\/example.com:8080",
+    ] {
+        let input = AGENTS.replace(
+            "\"http://localhost:{tunnel.port.backend}\"",
+            &serde_json::to_string(endpoint).unwrap(),
+        );
+        assert_eq!(Contract::from_agents(&input).err(), Some(Error::ContractInvalid));
+    }
+    assert!(Contract::from_agents(AGENTS).is_ok());
+}
+
+#[test]
+fn persisted_recipes_reject_snapshot_refs_but_interactive_actions_accept_them() {
+    use horizon_app_testing::recipe::{Action, Target};
+    let action = Action::Tap {
+        target: Target::Ref("n1".into()),
+    };
+    assert!(action.validate().is_ok());
+    for action in ["tap", "long_press", "type", "clear", "wait", "assert"] {
+        let extra = match action {
+            "long_press" => "      duration_millis: 500\n",
+            "type" => "      text: synthetic\n",
+            "wait" => "      state: visible\n      timeout_millis: 1000\n",
+            "assert" => "      state: visible\n",
+            _ => "",
+        };
+        let recipe = format!(
+            "```yaml\ndevice-recipe:\n  version: 1\n  id: smoke\n  steps:\n    - id: step\n      action: {action}\n      target: {{by: ref, value: n1}}\n{extra}```\n"
+        );
+        assert_eq!(Recipe::from_markdown(&recipe).err(), Some(Error::RecipeInvalid));
+    }
+}

@@ -210,6 +210,18 @@ impl Contract {
         }
         let parsed_url = url::Url::parse(&resolved);
         let folded = resolved.trim().to_ascii_lowercase();
+        let authority = folded.split(['/', '?', '#']).next().unwrap_or("");
+        if folded
+            .as_bytes()
+            .get(..2)
+            .is_some_and(|prefix| prefix.iter().all(|byte| b"/\\".contains(byte)))
+            || authority.rsplit_once(':').is_some_and(|(host, port)| {
+                !host.is_empty() && !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        {
+            // Endpoints require an explicit scheme so host/port policy cannot depend on app parsing.
+            return Err(Error::ContractInvalid);
+        }
         if parsed_url.is_ok()
             || resolved.contains("://")
             || ["http:", "https:", "ws:", "wss:", "ftp:"]
