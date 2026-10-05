@@ -32,14 +32,21 @@ impl Default for EncoderConfig {
 }
 
 impl EncoderConfig {
-    /// One keyframe per segment, so segmenters can cut on schedule.
+    /// One keyframe per segment for an HLS segmenter that cuts once 90% of
+    /// `segment` has passed, advertises `max(1 s, round(segment))` as its target
+    /// duration, and drops segments that would print longer than half a second
+    /// beyond it.
     #[must_use]
     pub fn for_segments(segment: Duration) -> Self {
-        // Round up: a shorter interval would land before the segmenter's cut
-        // threshold and push every cut to the following keyframe.
-        let frames = (segment.as_millis() * u128::from(INPUT_FRAME_RATE)).div_ceil(1000);
+        let rate = u128::from(INPUT_FRAME_RATE);
+        // Round up: a shorter interval would land before the cut threshold and
+        // push every cut to the following keyframe.
+        let ideal = (segment.as_millis() * rate).div_ceil(1000);
+        // Never exceed the segment budget, or every segment would be dropped.
+        let target_ms = ((segment.as_millis() + 500) / 1000).max(1) * 1000;
+        let budget = ((target_ms + 499) * rate) / 1000;
         Self {
-            keyframe_interval: u32::try_from(frames.clamp(1, 600)).unwrap_or(600),
+            keyframe_interval: u32::try_from(ideal.min(budget).clamp(1, 600)).unwrap_or(600),
         }
     }
 }
@@ -298,6 +305,14 @@ mod tests {
                 EncoderConfig::for_segments(Duration::from_millis(short)).keyframe_interval,
                 3
             );
+        }
+        // 1.48 s rounds to a 1 s target: 23 frames (1.533 s) would exceed the
+        // 1.4995 s budget, so the interval stays at 22 frames (1.467 s).
+        for (segment, frames) in [(1_480, 22), (1_490, 22), (1_500, 23), (2_000, 30)] {
+            let interval = EncoderConfig::for_segments(Duration::from_millis(segment)).keyframe_interval;
+            assert_eq!(interval, frames, "{segment} ms");
+            // Every keyframe still reaches the 90% cut threshold.
+            assert!(u64::from(interval) * 1000 * 10 >= segment * 9 * u64::from(INPUT_FRAME_RATE));
         }
         assert_eq!(EncoderConfig::for_segments(Duration::ZERO).keyframe_interval, 1);
         assert_eq!(

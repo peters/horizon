@@ -51,7 +51,16 @@ mod tests {
 
     #[test]
     fn encoder_output_fills_segments_that_start_with_parameter_sets() {
-        let options = LiveOptions::default();
+        for segment in [150, 500, 1_000, 1_480, 1_490, 2_000] {
+            fill_segments(Duration::from_millis(segment));
+        }
+    }
+
+    fn fill_segments(segment: Duration) {
+        let options = LiveOptions {
+            segment,
+            ..LiveOptions::default()
+        };
         let interval = EncoderConfig::for_segments(options.segment).keyframe_interval;
         // Nothing listens on the discard port: the control side fails, the stream still fills.
         let live = Arc::new(LiveCast::start("127.0.0.1:9".parse().unwrap(), options).unwrap());
@@ -66,7 +75,7 @@ mod tests {
             sink.send(&unit, frame * index).unwrap();
         }
         let segmenter = super::super::lock(&live.segmenter);
-        assert_eq!(segmenter.ready_segments(), 3);
+        assert_eq!(segmenter.ready_segments(), 3, "{segment:?} segments");
         let segment = segmenter.segment(0).unwrap();
         let sps = segment.windows(5).position(|w| w == [0, 0, 1, 0x67, 0x42]);
         let idr = segment.windows(4).position(|w| w == [0, 0, 1, 0x65]);
