@@ -21,6 +21,8 @@ case "$shard" in
         ;;
     libs)
         run_cargo test --locked --workspace --exclude horizon-ui
+        # The shared-encoder sink is opt-in, so the workspace run does not build it.
+        run_cargo test --locked -p horizon-chromecast --features encoder
         ;;
     speech)
         if [[ "${GITHUB_REF:-}" == "refs/heads/main" && "${HORIZON_CI_CACHE_HIT:-}" != "true" ]]; then

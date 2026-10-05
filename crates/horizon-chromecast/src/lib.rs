@@ -16,6 +16,8 @@ mod tests;
 pub use client::{CastClient, Event};
 #[cfg(feature = "discovery")]
 pub use discovery::{Receiver, discover};
+#[cfg(feature = "encoder")]
+pub use live::LiveCastSink;
 pub use live::{LiveCast, LiveOptions, LiveState, avcc_to_annexb};
 pub use media::{MediaController, MediaLoad, MediaStatus, StreamType};
 pub use receiver::{Application, DEFAULT_MEDIA_RECEIVER, ReceiverStatus, Volume};
@@ -44,6 +46,9 @@ pub enum Error {
     InvalidOptions(&'static str),
     #[error("invalid H.264: {0}")]
     H264(#[from] horizon_media::h264::H264Error),
+    #[cfg(feature = "encoder")]
+    #[error("encoder: {0}")]
+    Encoder(#[from] horizon_media::encoder::PipelineError),
     #[error("receiver rejected the request: {kind}{}", reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default())]
     Rejected { kind: String, reason: Option<String> },
 }

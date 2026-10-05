@@ -44,6 +44,20 @@ pub enum Error {
     Plist(#[from] plist::Error),
 }
 
+impl From<horizon_media::encoder::PipelineError> for Error {
+    fn from(error: horizon_media::encoder::PipelineError) -> Self {
+        use horizon_media::encoder::PipelineError;
+        match error {
+            PipelineError::InputUnavailable | PipelineError::OutputUnavailable | PipelineError::CaptureStalled => {
+                Self::Protocol(error.as_str())
+            }
+            PipelineError::EncoderEnded | PipelineError::WorkerStopped | PipelineError::Diagnosed(_) => {
+                Self::Backend(error.as_str().into())
+            }
+        }
+    }
+}
+
 impl From<horizon_media::encoder::FrameError> for Error {
     fn from(error: horizon_media::encoder::FrameError) -> Self {
         Self::Protocol(error.as_str())
