@@ -189,3 +189,32 @@ tunnel:
 The host starts a distinct backend for each concurrent device. The selected command receives a private operation directory through `HORIZON_APP_BACKEND_DIR`; it keeps diagnostics private and writes exactly one stdout JSON line when the complete synthetic stack is ready: `{"native_backend_ready":1,"port":41935}`. The numeric nonzero port always means host loopback. No host, credentials or other fields are accepted. The child stays alive for its device's lifetime and must clean up its own worktree and processes on termination. Host crash reconciliation is required before this protocol is exposed through agent tools.
 
 Launch values use `http://localhost:{tunnel.port.backend}`. Managed URL ports must occur in the authority as a named template, rather than hard-coded ports or templates in paths. Resolution accepts all and only declared ports, preserves fixed bindings and rejects duplicate or zero ports before opening a restricted tunnel. Builds remain per platform; mutable backend state is per device. This increment validates declarations and readiness only; it does not spawn backends or claim orchestration acceptance.
+
+## Provider artifact and tunnel boundary
+
+`horizon-app-provider` is the host-owned provider leaf. It captures only the contract's declared artifact, rejects symlinks and non-regular files, copies it to a private immutable file and hashes that copy before upload. App handles expose the digest and opaque lease ID; provider tokens stay inside a callback for the trusted native driver. Each cache retains one credential backend for its entire lifetime. Its active leases reuse an unchanged artifact for at most 24 hours. The last lease releases the owned upload; an uncertain deletion retains the lease for reconciliation. Provider retention is separate from this local cache policy.
+
+The tunnel binary must match a trusted host checksum. The access key goes through a private config file, with no host credential environment inherited by the subprocess. Only explicitly declared numeric loopback endpoints and their localhost aliases are passed to `--only`; dashboard and proxy discovery are disabled. The guardian bounds the tunnel lifetime to 30 minutes and terminates its owned process group before dropping private binary/config files. A host callback records intent before spawn and identity immediately after spawn.
+
+Artifact capture and tunnel execution currently require Unix; non-Unix calls fail closed. This library supplies bounded process lifetime and cleanup while its host is alive. The calling host must durably journal uploads and allocations before network mutations and reconcile uncertain outcomes and process leftovers after a crash. The provider leaf alone does not satisfy crash cleanup, quota scheduling, MCP/CLI or live panel acceptance.
+
+## Durable lifecycle boundary
+
+`horizon-app-runtime` captures provider authorization through Horizon's existing configured credential stores. It does not fall back to a different store. Credential reads follow the configured platform adapter; unattended execution requires a qualified noninteractive adapter. A credential change creates a distinct private ownership realm, while all BrowserStack profiles on the same host share one reservation journal. This conservatively coordinates users that share a team quota; unrelated accounts may receive conservative capacity holds until a host policy can identify separate quota pools.
+
+The host records intent before side effects and durably attaches exact session/app IDs afterwards. Agent status includes only opaque operation IDs, phases, deadlines and resource counts. Cross-workspace and cross-credential access is refused. Provider counts alone cannot prove overlap: admission subtracts only exact IDs supplied by fresh running-session evidence, and counts missing owned sessions and pending/uncertain allocations separately. Expiry never silently frees an uncertain reservation. A capacity callback that returns after the deadline cannot admit an expired operation.
+
+Private state rejects symlinks, FIFOs, shared file permissions, duplicate operation keys, inconsistent lifecycle shapes and repeated provider resource IDs. Initialization has a durable marker and lock identity; losing a journal or lock cannot silently create empty state. Atomic snapshot failures remove partial files and preserve the prior committed ledger. Exact-owned cleanup records releasing before dispatch, retains uncertain failures and completes only after the host confirms cleanup.
+
+This increment provides Unix-only durable storage and admission primitives. It does not yet discover uncertain provider outcomes, execute builds, schedule idle/cancellation cleanup, control MCP/CLI sessions or present live panels. Those host integrations remain required for #1255 acceptance.
+
+## Upload lease recovery holds
+
+A lost final app-deletion reply marks its cached asset uncertain before returning the failure. The original lease remains available only for exact cleanup retry; the asset cannot be used for a driver, reused or uploaded again by content until cleanup is confirmed. A reused app handle reports `remaining_seconds` from the original asset acquisition, rather than claiming a fresh 24-hour lifetime. Native plan responses without a team cap normalize that cap to the plan cap; a declared team cap still lowers available capacity.
+
+Managed helpers must emit a second newline-delimited stdout record,
+`{"native_backend_closed":1}`, only after confirming their nested process groups
+have stopped and their task-owned worktree has been removed. A missing, malformed
+or premature acknowledgement retains cleanup uncertainty; helper exit alone is
+insufficient. Diagnostics remain private and are capped at 4 MiB while draining
+the complete child output.

@@ -242,6 +242,7 @@ impl Contract {
     /// # Errors
     /// Host-only resolution requires every declared nonzero port, no extras, and unchanged fixed bindings.
     pub fn resolve_value_with_ports(&self, value: &str, ports: &BTreeMap<String, u16>) -> Result<String> {
+        self.validate_value(value)?;
         if ports.len() != self.tunnel.ports.len() {
             return Err(Error::ContractInvalid);
         }
@@ -256,6 +257,22 @@ impl Contract {
     }
 
     fn validate_value(&self, value: &str) -> Result<()> {
+        for (name, spec) in &self.tunnel.ports {
+            let template = format!("{{tunnel.port.{name}}}");
+            if matches!(spec, Port::Managed(_)) && value.contains(&template) {
+                let authority = value
+                    .split_once("://")
+                    .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or(""));
+                if value.matches(&template).count() != 1
+                    || !(value.starts_with("http://") || value.starts_with("https://"))
+                    || !["localhost", "127.0.0.1", "[::1]"]
+                        .iter()
+                        .any(|host| authority == Some(format!("{host}:{template}").as_str()))
+                {
+                    return Err(Error::ContractInvalid);
+                }
+            }
+        }
         let mut ports = BTreeMap::new();
         let mut used: BTreeSet<u16> = self
             .tunnel

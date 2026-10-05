@@ -378,6 +378,27 @@ fn per_device_managed_ports_require_complete_host_bindings() -> Result<(), Error
             Some(Error::ContractInvalid)
         );
     }
+    let ports = BTreeMap::from([("backend".into(), 41935), ("metrics".into(), 9000)]);
+    assert_eq!(
+        contract
+            .resolve_value_with_ports("http://localhost:41935", &ports)
+            .err(),
+        Some(Error::ContractInvalid)
+    );
+    for value in [
+        "http://localhost:9000/{tunnel.port.backend}",
+        "http://localhost:{tunnel.port.backend}/{tunnel.port.backend}",
+        "backend={tunnel.port.backend}",
+    ] {
+        assert_eq!(
+            contract.resolve_value_with_ports(value, &ports).err(),
+            Some(Error::ContractInvalid)
+        );
+        assert_eq!(
+            Contract::from_agents(&text.replace("http://localhost:{tunnel.port.backend}", value)).err(),
+            Some(Error::ContractInvalid)
+        );
+    }
     Ok(())
 }
 

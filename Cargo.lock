@@ -2275,6 +2275,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-app-provider"
+version = "0.2.7"
+dependencies = [
+ "base64 0.23.1",
+ "horizon-app-testing",
+ "horizon-browser",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ureq",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "horizon-app-runtime"
+version = "0.2.7"
+dependencies = [
+ "horizon-app-provider",
+ "horizon-app-testing",
+ "horizon-browser",
+ "horizon-core",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "horizon-app-testing"
 version = "0.2.7"
 dependencies = [
