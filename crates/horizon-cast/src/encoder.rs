@@ -1,9 +1,8 @@
 mod backend;
 mod diagnostics;
-mod frames;
 pub(crate) use backend::select;
 pub use backend::{EncoderBackend, EncoderSelection};
-pub(crate) use frames::{Frame, FrameInput};
+pub(crate) use horizon_media::encoder::{Frame, FrameInput};
 
 use crate::{
     CastStatus, Error, MirrorSession, Result, VideoFormat,
@@ -57,7 +56,7 @@ pub(crate) fn stream(
     let mut result = Ok(());
     let mut last_frame = Instant::now();
     while !stop.load(Ordering::Relaxed) && !reader.is_finished() {
-        match frames.next() {
+        match frames.next_frame() {
             Ok(frame) => {
                 last_frame = Instant::now();
                 if let Err(error) = frame.write(&mut input, backend.source_frames()) {
