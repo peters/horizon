@@ -5,6 +5,13 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+### `horizon-app-provider`
+
+- `artifact` captures declared app files through anchored non-following opens into immutable private copies, then hashes that copy.
+- `api` holds provider authorization and fixes HTTPS destinations; `cache` retains one credential backend for its entire lifetime and shares uploads only between that cache's active leases.
+- `tunnel` captures a checksum-pinned binary, passes the key in a private config file, restricts the child environment and loopback ports, and bounds process-group cleanup. Exit observation retains the leader identity until signalling finishes.
+- Artifact and tunnel execution are currently Unix-only; other platforms fail closed. The in-process guardian is not crash reconciliation. Durable host journaling, startup reconciliation, global quota scheduling and UI/MCP dispatch belong in later host-runtime increments.
+
 ### `horizon-app-testing`
 
 - `contract` validates the project declaration, bounds paths and resolves declared loopback-port templates.

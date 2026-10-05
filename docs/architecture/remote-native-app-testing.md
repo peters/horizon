@@ -173,3 +173,11 @@ or release must be reconciled by the owning host rather than replayed speculativ
 Reset returns `device_reset_requires_reallocation` for the host to handle by recreating its owned session with the
 same declared app and launch arguments. It does not invoke the removed Appium 3 `/reset` endpoint. Library mock
 coverage does not qualify real-device behavior or reset orchestration.
+
+## Provider artifact and tunnel boundary
+
+`horizon-app-provider` is the host-owned provider leaf. It captures only the contract's declared artifact, rejects symlinks and non-regular files, copies it to a private immutable file and hashes that copy before upload. App handles expose the digest and opaque lease ID; provider tokens stay inside a callback for the trusted native driver. Each cache retains one credential backend for its entire lifetime. Its active leases reuse an unchanged artifact for at most 24 hours. The last lease releases the owned upload; an uncertain deletion retains the lease for reconciliation. Provider retention is separate from this local cache policy.
+
+The tunnel binary must match a trusted host checksum. The access key goes through a private config file, with no host credential environment inherited by the subprocess. Only explicitly declared numeric loopback endpoints and their localhost aliases are passed to `--only`; dashboard and proxy discovery are disabled. The guardian bounds the tunnel lifetime to 30 minutes and terminates its owned process group before dropping private binary/config files. A host callback records intent before spawn and identity immediately after spawn.
+
+Artifact capture and tunnel execution currently require Unix; non-Unix calls fail closed. This library supplies bounded process lifetime and cleanup while its host is alive. The calling host must durably journal uploads and allocations before network mutations and reconcile uncertain outcomes and process leftovers after a crash. The provider leaf alone does not satisfy crash cleanup, quota scheduling, MCP/CLI or live panel acceptance.
