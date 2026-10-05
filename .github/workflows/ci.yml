@@ -318,7 +318,7 @@ jobs:
         run: |
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim
           for target in aarch64-apple-ios aarch64-apple-ios-sim; do
-            cargo build --locked -p horizon-media --target "$target"
+            cargo build --locked -p horizon-media --all-features --target "$target"
             cargo build --locked -p horizon-chromecast --target "$target"
             cargo build --locked -p horizon-chromecast --no-default-features --target "$target"
           done
