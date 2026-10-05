@@ -120,7 +120,8 @@ fn hetzner(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits) {
 /// Drops what was typed over a saved key. Returns whether it was clicked.
 fn keep_saved(ui: &mut Ui) -> bool {
     let mut clicked = false;
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    // A centered row placed straight in the card would fill all the height left in the modal.
+    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
         clicked = ui
             .add(chrome_button("Keep saved key").min_size(vec2(120.0, 28.0)))
             .clicked();
