@@ -40,16 +40,19 @@ class CapabilitiesTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def run_check(self, *args, missing=(), environment=None, reported=None, run=None):
+    def run_check(self, *args, missing=(), environment=None, reported=None, run=None, identities=(10001, 10001)):
         output = io.StringIO()
         def reply(command, **kwargs):
-            return subprocess.CompletedProcess(command, 0, stdout=reported.get(command[0], b''))
-        if run is None and reported is not None:
-            run = reply
+            if command[:1] == ['/usr/bin/id']:
+                value = identities[0 if command[1] == '-u' else 1]
+                return subprocess.CompletedProcess(command, 0, stdout=str(value).encode())
+            if run is not None:
+                return run(command, **kwargs)
+            return subprocess.CompletedProcess(command, 0, stdout=(reported or {}).get(command[0], b''))
         with mock.patch('pathlib.Path', side_effect=self.path), \
                 mock.patch('sys.argv', ['horizon-worker-check', *args]), \
                 mock.patch.dict(os.environ, environment or {}, clear=True), \
-                mock.patch('subprocess.run', side_effect=run) as commands, \
+                mock.patch('subprocess.run', side_effect=reply) as commands, \
                 mock.patch('shutil.which', side_effect=lambda name: None if name in missing else '/bin/' + name), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             try:
@@ -192,7 +195,29 @@ class CapabilitiesTests(unittest.TestCase):
                           ['git', 'lfs', 'version'],
                           ['horizon-worker-supervise', '--idle-stop-contract'],
                           ['horizon-worker-source', '--shallow-contract'],
-                          ['horizon-worker-source', '--lfs-selection-contract']])
+                          ['horizon-worker-source', '--lfs-selection-contract'],
+                          ['/usr/bin/setpriv', '--help'],
+                          ['/usr/bin/id', '-u', 'horizon-agent'],
+                          ['/usr/bin/id', '-g', 'horizon-agent']])
+
+    def test_tailnet_contract_refuses_mismatched_isolation_uid_or_gid(self):
+        for identity in [(0, 10001), (10002, 10001), (10001, 0), (10001, 10002)]:
+            with self.subTest(identity=identity):
+                status, output, _ = self.run_check(identities=identity)
+                self.assertEqual(status, 1)
+                self.assertNotIn('horizon-tailnet-contract=1', output)
+
+    def test_current_helpers_require_valid_isolation_even_without_tailscale(self):
+        for identities, expected in [((10001, 10001), 0), ((10002, 10001), 1), ((10001, 10002), 1)]:
+            with self.subTest(identities=identities):
+                status, output, _ = self.run_check(missing=('tailscale', 'tailscaled'), identities=identities)
+                self.assertEqual(status, expected, output)
+                self.assertNotIn('horizon-tailnet-contract=1', output)
+
+    def test_tailnet_contract_requires_the_privilege_drop_runtime(self):
+        status, output, _ = self.run_check(missing=('/usr/bin/setpriv',))
+        self.assertEqual(status, 1)
+        self.assertNotIn('horizon-tailnet-contract=1', output)
 
     def test_environment_selection_rejects_full_defaults_on_minimal_images(self):
         self.write('/etc/horizon-worker/capabilities.json', {})
@@ -318,7 +343,8 @@ class CapabilitiesTests(unittest.TestCase):
                                       ({'HORIZON_IDLE_STOP_MINUTES': '30'}, False),
                                       # A period the watcher refuses leaves it passive.
                                       (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='5'), False),
-                                      (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='1441'), False)]:
+                                      (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='1441'), False),
+                                      ({'HORIZON_WORKER_SELF_STOP_AVAILABLE': '1', 'HORIZON_IDLE_STOP_MINUTES': '30'}, True)]:
             with mock.patch.dict(os.environ, environment, clear=True):
                 self.configure()
             servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']

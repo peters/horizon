@@ -1,0 +1,394 @@
+#!/usr/bin/python3
+"""Root control lane for persistent cloud networking. Never prints private input."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+STATE = Path('/workspace/.horizon-tailnet')
+RUNTIME = Path('/run/horizon-tailnet')
+PUBLIC = Path('/run/horizon-tailnet-devices')
+USER = 10001
+PROXY = 'socks5h://127.0.0.1:1055'
+CLI = '/usr/local/bin/tailscale'
+DAEMON = '/usr/local/bin/tailscaled'
+SELF = '/usr/local/bin/horizon-worker-tailnet'
+
+
+def private_directory(path):
+    if path.is_symlink():
+        raise ValueError()
+    path.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+    info = path.stat()
+    if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValueError()
+
+
+def call(*args, **kwargs):
+    return subprocess.run([CLI, '--socket=' + str(RUNTIME / 'tailscaled.sock'), *args],
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          timeout=35, check=True, **kwargs).stdout
+
+
+def start():
+    private_directory(RUNTIME)
+    pidfile = RUNTIME / 'supervisor.pid'
+    if pidfile.exists():
+        try:
+            pid, started = pidfile.read_text().split()
+            if Path('/proc', pid, 'stat').read_text().rsplit(') ', 1)[1].split()[19] == started:
+                return
+        except (OSError, IndexError, ValueError):
+            pass
+    process = subprocess.Popen([SELF, 'serve'], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               start_new_session=True, env={'PATH': '/usr/local/bin:/usr/bin:/bin'})
+    started = Path('/proc', str(process.pid), 'stat').read_text().rsplit(') ', 1)[1].split()[19]
+    pidfile.write_text(f'{process.pid} {started}')
+
+
+def serve():
+    private_directory(STATE)
+    private_directory(RUNTIME)
+    # Userspace is provider-independent and does not grant agents NET_ADMIN.
+    while True:
+        child = subprocess.Popen([DAEMON, '--tun=userspace-networking',
+                                  '--state=' + str(STATE / 'tailscaled.state'),
+                                  '--socket=' + str(RUNTIME / 'tailscaled.sock'),
+                                  '--socks5-server=127.0.0.1:1055',
+                                  '--outbound-http-proxy-listen=127.0.0.1:1056'],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, env={'PATH': '/usr/local/bin:/usr/bin:/bin'})
+        def stop(_signal, _frame):
+            child.terminate()
+            child.wait(timeout=5)
+            sys.exit(0)
+        signal.signal(signal.SIGTERM, stop)
+        while child.poll() is None:
+            try:
+                publish_devices()
+            except (OSError, ValueError, subprocess.SubprocessError):
+                pass
+            time.sleep(5)
+        time.sleep(2)
+
+
+def publish_devices():
+    report = json.loads(call('status', '--json'))
+    PUBLIC.mkdir(mode=0o755, exist_ok=True)
+    os.chmod(PUBLIC, 0o755)
+    own = report.get('Self')
+    values = ([own] if own else []) + list((report.get('Peer') or {}).values())
+    devices = [{'name': value.get('DNSName') or value.get('HostName', ''),
+                'addresses': value.get('TailscaleIPs', []), 'online': bool(value.get('Online'))}
+               for value in values]
+    fd, name = tempfile.mkstemp(dir=PUBLIC, prefix='devices-')
+    pending = Path(name)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            json.dump({'devices': devices}, output)
+        os.chmod(pending, 0o644)
+        os.replace(pending, PUBLIC / 'devices.json')
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+def status(wait=False):
+    deadline = time.monotonic() + (5 if wait else 0)
+    while True:
+        result = json.loads(call('status', '--json'))
+        state = result.get('BackendState')
+        if state in {'Running', 'NeedsLogin'}:
+            return state
+        if time.monotonic() >= deadline:
+            raise ValueError()
+        time.sleep(0.1)
+
+
+def prepare_agents():
+    # The mount's top level is root-owned, so an agent cannot replace the private
+    # directory or install startup code. FUSE volumes synthesizing permissive modes fail.
+    workspace = Path('/workspace')
+    info = workspace.lstat()
+    if info.st_uid != 0 or info.st_mode & 0o022 or workspace.is_symlink():
+        raise ValueError()
+    for flag in ['-u', '-g']:
+        identity = subprocess.run(['/usr/bin/id', flag, 'horizon-agent'], check=True, timeout=20,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
+        if identity.strip() != str(USER).encode():
+            raise ValueError('Worker agent identity does not match the isolation launcher')
+    # Do not enroll alongside a pre-existing privileged agent. Stop and resume first.
+    for process in Path('/proc').iterdir():
+        if not process.name.isdecimal():
+            continue
+        try:
+            command = (process / 'cmdline').read_bytes().split(b'\0')
+            if process.stat().st_uid == 0 and any(Path(os.fsdecode(arg)).name in
+                    {'codex', 'claude', 'grok', 'horizon-worker-run'} for arg in command if arg):
+                raise ValueError()
+        except (FileNotFoundError, PermissionError):
+            pass
+    handoff()
+    (RUNTIME / 'agent-isolation').touch(mode=0o600)
+
+
+def configure():
+    request = json.loads(sys.stdin.buffer.read(4097))
+    if set(request) != {'tailnet', 'key'}:
+        raise ValueError()
+    identity, key = request['tailnet'], request['key']
+    if identity is not None and (not isinstance(identity, str) or not re.fullmatch(r'[A-Za-z0-9-]{1,64}', identity)):
+        raise ValueError()
+    if key is not None and (not isinstance(key, str) or not re.fullmatch(r'tskey-auth-[A-Za-z0-9-]{20,245}', key)):
+        raise ValueError()
+    private_directory(STATE)
+    private_directory(RUNTIME)
+    with open(RUNTIME / 'control.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        selected = STATE / 'selection'
+        old = selected.read_text() if selected.exists() else ''
+        if identity is None:
+            if old:
+                start()
+                wait_socket()
+                call('logout')
+                selected.unlink()
+            print('ready')
+            return
+        prepare_agents()
+        start()
+        wait_socket()
+        if old and old != identity:
+            call('logout')
+        backend = status(wait=True)
+        if old == identity and backend == 'Running':
+            print('ready')
+            return
+        # A reconnect timeout is not proof that a persistent identity needs login.
+        if backend != 'NeedsLogin':
+            raise ValueError()
+        if key is None:
+            print('needs_key')
+            return
+        selected.write_text(identity)
+        os.chmod(selected, 0o600)
+        with open(selected, 'rb') as saved:
+            os.fsync(saved.fileno())
+        directory = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        # An anonymous memory file avoids argv/environment/filesystem auth-key exposure.
+        fd = os.memfd_create('tailnet-enrollment', os.MFD_CLOEXEC)
+        try:
+            os.write(fd, key.encode())
+            call('up', '--auth-key=file:/proc/self/fd/' + str(fd), '--accept-dns=false',
+                 '--timeout=30s', pass_fds=(fd,))
+        finally:
+            os.close(fd)
+        if status(wait=True) != 'Running':
+            raise ValueError()
+        publish_devices()
+        print('ready')
+
+
+def wait_socket():
+    deadline = time.monotonic() + 10
+    while not (RUNTIME / 'tailscaled.sock').exists():
+        if time.monotonic() > deadline:
+            raise ValueError()
+        time.sleep(0.1)
+
+
+def own(path, recursive=False):
+    if path.is_symlink():
+        raise ValueError()
+    if path.exists() and (recursive or path.stat().st_uid != USER):
+        subprocess.run(['/usr/bin/chown', *(['-R'] if recursive else []), '--no-dereference',
+                        f'{USER}:{USER}', str(path)], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def handoff():
+    private_directory(STATE)
+    private_directory(RUNTIME)
+    with open(RUNTIME / 'handoff.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        ready = STATE / 'ownership-v1'
+        first = not ready.exists()
+        handoff_paths(first)
+        if first:
+            with ready.open('a') as marker:
+                os.fchmod(marker.fileno(), 0o600)
+                os.fsync(marker.fileno())
+            directory = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+
+
+def handoff_paths(first):
+    # All workspace code and tool services run with the same unprivileged identity.
+    # The mount root and networking directories stay owned by the control lane.
+    folders = ['home', 'agents', 'sessions', 'session-data', 'locks', 'credentials',
+               'checkout', 'worktrees', 'companions', 'siblings', 'source', 'repository.git', '.horizon']
+    files = ['agent-mcp.json', 'capabilities.json', 'siblings.json', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log', 'device.json',
+             'shared-checkout.status', 'shared-checkout.log']
+    roots = [Path('/workspace', name) for name in folders + files]
+    for root in roots:
+        if root.is_symlink():
+            raise ValueError()
+        if root.name in folders:
+            root.mkdir(exist_ok=True)
+        if root.name in {'agent-mcp.json', 'device.json', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log'}:
+            root.touch(exist_ok=True)
+        own(root, recursive=first)
+    credentials = Path('/run/horizon-credentials')
+    if credentials.is_symlink():
+        raise ValueError()
+    credentials.mkdir(mode=0o700, exist_ok=True)
+    own(credentials, recursive=first)
+
+
+def stage(alias):
+    if os.geteuid() != 0 or not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', alias):
+        raise ValueError()
+    for path in [STATE, STATE / 'uploads', STATE / 'uploads' / alias]:
+        private_directory(path)
+    print(STATE / 'uploads' / alias)
+
+
+def copy_uploads(files):
+    if os.geteuid() != USER:
+        raise ValueError()
+    for descriptor, destination in files:
+        target = Path('/workspace', destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=target.parent)
+        try:
+            with os.fdopen(descriptor, 'rb') as source, os.fdopen(fd, 'wb') as pending:
+                shutil.copyfileobj(source, pending)
+                pending.flush()
+                os.fsync(pending.fileno())
+            os.replace(name, target)
+            directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            Path(name).unlink(missing_ok=True)
+
+
+def handoff_uploads(arguments):
+    # Only the upload consumer opens its completed input; other panel launches
+    # must not consume a concurrent SCP transfer. Agent-owned paths are written
+    # exclusively after dropping privilege, using inherited read-only descriptors.
+    sources = [(Path('/workspace/siblings.json'), '.horizon/siblings.json')]
+    program = Path(arguments[0]).name
+    name = 'horizon-transfer.pack' if program == 'horizon-worker-import' else 'horizon-source.tar'
+    if program == 'horizon-worker-import' or program == 'horizon-worker-source' and arguments[1:2] == ['import']:
+        if '--sibling' in arguments:
+            alias = arguments[arguments.index('--sibling') + 1]
+            if not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', alias):
+                raise ValueError()
+            sources.append((STATE / 'uploads' / alias / name, f'siblings/{alias}/{name}'))
+        else:
+            sources.append((Path('/workspace', name), 'source/transfers/' + name))
+    opened = []
+    try:
+        for source, destination in sources:
+            try:
+                fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                continue
+            opened.append((fd, source, destination))
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError()
+        if opened:
+            subprocess.run(['/usr/bin/setpriv', '--reuid=' + str(USER), '--regid=' + str(USER),
+                            '--clear-groups', '--no-new-privs', '--bounding-set=-all', '--',
+                            SELF, 'copy-uploads', json.dumps([(fd, dest) for fd, _, dest in opened])],
+                           pass_fds=tuple(fd for fd, _, _ in opened), stdin=subprocess.DEVNULL,
+                           check=True, env={'PATH': '/usr/local/bin:/usr/bin:/bin'})
+            for _, source, _ in opened:
+                source.unlink(missing_ok=True)
+    finally:
+        for fd, _, _ in opened:
+            os.close(fd)
+
+
+def agent(arguments):
+    # Tailnet-enabled agents share the network, never the controller privilege.
+    if os.geteuid() != 0:
+        raise ValueError()
+    worktree = Path.cwd().resolve()
+    if not worktree.is_relative_to('/workspace'):
+        worktree = Path('/workspace')
+        os.chdir(worktree)
+    if worktree.is_relative_to(STATE):
+        raise ValueError()
+    handoff()
+    with open(RUNTIME / 'upload.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        handoff_uploads(arguments)
+    environment = dict(os.environ)
+    environment['HORIZON_UNPRIVILEGED'] = '1'
+    environment['HORIZON_WORKER_SELF_STOP_AVAILABLE'] = '1' if environment.get('RUNPOD_POD_ID') and environment.get('RUNPOD_API_KEY') else '0'
+    environment['HOME'] = '/workspace/home'
+    for name in list(environment):
+        if name.startswith(('TS_', 'TAILSCALE_')) or name == 'RUNPOD_API_KEY':
+            environment.pop(name)
+    if (STATE / 'selection').exists():
+        environment.update(ALL_PROXY=PROXY, all_proxy=PROXY,
+                           HTTP_PROXY='http://127.0.0.1:1056', HTTPS_PROXY='http://127.0.0.1:1056',
+                           http_proxy='http://127.0.0.1:1056', https_proxy='http://127.0.0.1:1056',
+                           NO_PROXY='localhost,127.0.0.1,::1', no_proxy='localhost,127.0.0.1,::1')
+    os.execve('/usr/bin/setpriv', ['setpriv', '--reuid=' + str(USER), '--regid=' + str(USER),
+                                 '--clear-groups', '--no-new-privs', '--bounding-set=-all', '--', *arguments], environment)
+
+
+def main():
+    if sys.argv[1:] == ['configure']:
+        configure()
+    elif len(sys.argv) == 3 and sys.argv[1] == 'stage':
+        stage(sys.argv[2])
+    elif len(sys.argv) == 3 and sys.argv[1] == 'copy-uploads':
+        copy_uploads(json.loads(sys.argv[2]))
+    elif sys.argv[1:] == ['isolate']:
+        private_directory(RUNTIME)
+        prepare_agents()
+        agent(['/usr/bin/true'])
+    elif sys.argv[1:] == ['resume']:
+        if (STATE / 'selection').exists():
+            private_directory(RUNTIME)
+            (RUNTIME / 'agent-isolation').touch(mode=0o600)
+            start()
+    elif sys.argv[1:] == ['serve']:
+        serve()
+    elif sys.argv[1:] == ['status']:
+        # No credential or daemon state is returned.
+        print('joined' if (STATE / 'selection').exists() and status() == 'Running' else 'none')
+    elif len(sys.argv) >= 3 and sys.argv[1] == 'agent':
+        agent(sys.argv[2:])
+    else:
+        raise ValueError()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        print('Tailnet operation failed. Check key validity, worker storage permissions and restart privileged sessions.', file=sys.stderr)
+        sys.exit(1)

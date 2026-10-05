@@ -34,11 +34,11 @@ pub struct CastSession {
     status: Arc<Mutex<Progress>>,
     cancellation: Arc<Cancellation>,
     pin: SyncSender<Zeroizing<String>>,
-    frames: SyncSender<Vec<u8>>,
+    frames: SyncSender<encoder::Frame>,
     capture_paused: Arc<AtomicBool>,
     process: Arc<Mutex<Option<Child>>>,
     worker: Option<JoinHandle<()>>,
-    expected_bytes: usize,
+    format: VideoFormat,
     pairing_saved: Arc<AtomicBool>,
     encoding: Arc<Mutex<Option<EncoderSelection>>>,
 }
@@ -102,7 +102,6 @@ impl CastSession {
                 _ => CastStatus::Stopped,
             };
         })?;
-        let (width, height) = format.dimensions();
         Ok(Self {
             status,
             cancellation,
@@ -111,7 +110,7 @@ impl CastSession {
             capture_paused,
             process,
             worker: Some(worker),
-            expected_bytes: usize::from(width) * usize::from(height) * 4,
+            format,
             pairing_saved,
             encoding,
         })
@@ -129,6 +128,23 @@ impl CastSession {
     #[must_use]
     pub fn encoding(&self) -> Option<EncoderSelection> {
         lock(&self.encoding).clone()
+    }
+    /// Whether the selected backend scales validated source crops on the GPU.
+    #[must_use]
+    pub fn uses_source_frames(&self) -> bool {
+        lock(&self.encoding)
+            .as_ref()
+            .is_some_and(|selection| selection.backend.source_frames())
+    }
+    /// Whether a raw crop can fit the output canvas with nonzero even CUDA dimensions.
+    /// Hosts may letterbox unsupported crops before submitting the fixed canvas.
+    #[must_use]
+    pub const fn supports_source_dimensions(width: usize, height: usize, canvas: (usize, usize)) -> bool {
+        encoder::Frame::supports_source_dimensions(width, height)
+            && canvas.0 >= 2
+            && canvas.1 >= 2
+            && width.saturating_mul(canvas.1) / height >= 2
+            && height.saturating_mul(canvas.0) / width >= 2
     }
     /// Whether this worker saved a new pairing since the host last checked.
     #[must_use]
@@ -160,13 +176,32 @@ impl CastSession {
     /// # Errors
     /// Rejects a frame whose dimensions do not match the selected format.
     pub fn submit(&self, rgba: Vec<u8>) -> Result<()> {
-        if rgba.len() != self.expected_bytes {
+        let (width, height) = self.format.dimensions();
+        self.submit_source(width, height, rgba)
+    }
+    /// Submit a validated crop to the selected source-scaling backend, or a fixed canvas to CPU scaling.
+    /// # Errors
+    /// Rejects malformed/unbounded crops and source-sized frames when the selected backend cannot scale them.
+    pub fn submit_source(&self, width: u16, height: u16, rgba: Vec<u8>) -> Result<()> {
+        let (output_width, output_height) = self.format.dimensions();
+        let source_frames = self.uses_source_frames();
+        if !source_frames && (width, height) != (output_width, output_height) {
             return Err(Error::Protocol("invalid RGBA frame size"));
         }
+        if source_frames
+            && !Self::supports_source_dimensions(
+                usize::from(width),
+                usize::from(height),
+                (usize::from(output_width), usize::from(output_height)),
+            )
+        {
+            return Err(Error::Protocol("source dimensions cannot fit the selected canvas"));
+        }
+        let frame = encoder::Frame::new(width, height, rgba)?;
         if self.capture_paused.load(Ordering::Relaxed) {
             return Ok(());
         }
-        match self.frames.try_send(rgba) {
+        match self.frames.try_send(frame) {
             Ok(()) | Err(mpsc::TrySendError::Full(_)) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => Err(Error::Protocol("casting worker ended")),
         }

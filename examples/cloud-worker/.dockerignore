@@ -1,6 +1,7 @@
 *
 !Dockerfile
 !Dockerfile.gpu
+!horizon-worker-tailnet
 !horizon-worker-start
 !horizon-worker-check
 !horizon-worker-configure

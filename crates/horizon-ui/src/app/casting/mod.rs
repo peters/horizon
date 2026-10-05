@@ -1,6 +1,7 @@
 mod capture;
 mod controls;
 mod notifications;
+mod popup;
 mod requests;
 mod scaling;
 
@@ -14,6 +15,7 @@ use std::{
 
 #[derive(Default)]
 pub(super) struct CastState {
+    application_approval: horizon_core::browser::manifest::cast::ApplicationCaptureApproval,
     pub(super) pairing_directory: std::path::PathBuf,
     paired_receivers: Vec<PairedDevice>,
     paired_refresh: Option<mpsc::Receiver<Result<Vec<PairedDevice>, String>>>,
@@ -29,6 +31,7 @@ pub(super) struct CastState {
     notice: Option<String>,
     notification: Option<String>,
     last_capture: Option<Instant>,
+    root_geometry: Option<capture::RootGeometry>,
 }
 struct Session {
     generation: Instant,
@@ -40,14 +43,18 @@ struct Session {
     worker: CastSession,
     scaling: Option<scaling::Scaler>,
     failure_notified: bool,
+    agent_controlled: bool,
 }
 struct Picker {
+    anchor: horizon_core::PanelId,
     workspace: WorkspaceId,
     source: CastSource,
     receiver: Option<String>,
     orientation: CastOrientation,
     resolution: CastResolution,
     pin: zeroize::Zeroizing<String>,
+    position: Option<egui::Pos2>,
+    binding: Option<popup::SessionBinding>,
 }
 impl CastState {
     pub(super) fn new(pairing_directory: std::path::PathBuf) -> Self {
@@ -112,6 +119,7 @@ impl CastState {
     }
     pub(super) fn reset_for_session_switch(&mut self) {
         self.stop_all();
+        self.application_approval.revoke();
         self.retiring.append(&mut self.sessions);
         self.discovery = None;
         self.discovery_error = None;
@@ -120,6 +128,7 @@ impl CastState {
         self.notice = None;
         self.notification = None;
         self.last_capture = None;
+        self.root_geometry = None;
         self.refresh_pairings();
     }
     pub(super) fn finished(&self) -> bool {
@@ -292,6 +301,7 @@ mod tests {
             worker,
             scaling: Some(scaling::Scaler::new((1280, 720), || {}).expect("scaler")),
             failure_notified: false,
+            agent_controlled: false,
         });
         app.casting.reset_for_session_switch();
         assert!(app.casting.sessions.is_empty());
@@ -336,6 +346,7 @@ mod tests {
             worker,
             scaling: Some(scaling::Scaler::new((8, 8), || {}).expect("scaler")),
             failure_notified: false,
+            agent_controlled: false,
         });
         app.casting.poll();
         assert!(app.casting.sessions[0].scaling.is_none());

@@ -38,6 +38,13 @@ pub(super) struct CloudPrototype {
     creation_holds: Vec<String>,
 }
 
+#[cfg(feature = "cloud-workspaces")]
+impl CloudPrototype {
+    pub(super) fn reload_tailnets(&mut self, editor: super::tailnets::State) {
+        self.production.tailnets.reload_after(editor);
+    }
+}
+
 impl CloudPrototype {
     pub(super) fn creation_open(&self) -> bool {
         self.production.creating || self.production.setup.open
@@ -72,6 +79,7 @@ impl HorizonApp {
                             self.transcript_root.as_deref(),
                         ) {
                             Ok(board) => {
+                                self.reset_native_file_input();
                                 self.board = board;
                                 self.cloud_prototype.groups = snapshot.groups;
                                 self.cloud_prototype.groups.restore_visibility(&mut self.board);

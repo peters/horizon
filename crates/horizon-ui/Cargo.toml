@@ -47,6 +47,7 @@ serde_yaml.workspace = true
 serde_json.workspace = true
 toml_edit.workspace = true
 tempfile.workspace = true
+png.workspace = true
 alacritty_terminal.workspace = true
 egui_commonmark.workspace = true
 arboard.workspace = true
@@ -64,6 +65,7 @@ rusqlite.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb.workspace = true
 wl-clipboard-rs.workspace = true
+smithay-clipboard = "0.7.3"
 horizon-wayland.workspace = true
 
 horizon-cast.workspace = true

@@ -51,6 +51,8 @@ impl SelfStop {
 /// Optional worker features the checker reports beside the required markers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkerContract {
+    /// Root-only enrollment with unprivileged agent sessions.
+    pub tailnet: bool,
     /// `horizon-worker-session --relaunch` can replace a session process lost in a
     /// container reset, in its existing worktree. Older images report such sessions lost.
     pub session_restart: bool,
@@ -74,6 +76,7 @@ pub struct WorkerContract {
 impl WorkerContract {
     pub(super) fn reported(output: &str) -> Self {
         Self {
+            tailnet: reports(output, "horizon-tailnet-contract=1"),
             session_restart: reports(output, SESSION_RESTART_MARKER),
             container_started: output
                 .lines()

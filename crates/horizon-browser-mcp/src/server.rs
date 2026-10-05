@@ -57,7 +57,7 @@ impl HorizonBrowserMcp {
 impl HorizonBrowserMcp {
     #[tool(
         name = "cast",
-        description = "Cast only a Horizon panel or workspace from the calling agent's workspace to a discovered modern Apple TV. Linux only. Discover is asynchronous: poll status for results. One session per TV; separate TVs may cast concurrently. Sources lists stable source IDs. Paired lists remembered TVs, including offline devices, without keys. Forget deletes one receiver's saved pairing and is refused while that TV has an active session. Start reuses saved pairing; poll status and immediately notify the user when state is pin_required, then submit their onscreen code with pair. If saved pairing is rejected, explicitly forget it before starting a fresh pairing. Landscape and portrait are selected at start. Set resolution to 720p, 1080p (default), or 4k; status reports the selected resolution. Higher resolution cannot restore detail absent from the visible source. Stop is receiver-specific and idempotent. Socket transmission does not prove TV display. No desktop or arbitrary application capture."
+        description = "Cast a Horizon panel or workspace from the calling agent's workspace, or the main Horizon window, to a discovered modern Apple TV. Linux only. Discover is asynchronous: poll status for results. One session per TV; separate TVs may cast concurrently. Sources lists typed sources and requires_user_approval. The application source shares the main window and its own dialogs, excluding the desktop and detached windows. A workspace agent can start it only after the person grants that workspace access in the Cast picker; agents cannot grant themselves access. The grant is volatile and revocable. Revoke stops agent-controlled application casts. Paired lists remembered TVs, including offline devices, without keys. Forget deletes one receiver's saved pairing and is refused while that TV has an active session. Start reuses saved pairing; poll status and immediately notify the user when state is pin_required, then submit their onscreen code with pair. If saved pairing is rejected, explicitly forget it before starting a fresh pairing. Landscape and portrait are selected at start. Set resolution to 720p, 1080p (default), or 4k; status reports the selected resolution. Higher resolution cannot restore detail absent from the visible source. Stop is receiver-specific and idempotent. Socket transmission does not prove TV display. No desktop or arbitrary application capture."
     )]
     async fn cast(
         &self,
@@ -71,13 +71,33 @@ impl HorizonBrowserMcp {
     }
     #[tool(
         name = "device_panel",
-        description = "Manage native Device viewers in the calling agent's current Horizon workspace; they are read-only for agents (a person may turn Interact on in the UI, no operation can). Operations: create(endpoint,identity?,ssh?), list, inspect(panel_id), visibility(panel_id,visible), reveal(panel_id), reconnect(panel_id), close(panel_id). Optional identity contains creator-supplied machine_name, hostname, numeric ip_addresses and tailscale_name, not verified identity. Optional ssh {host,user?,port?} reaches endpoint on that host's loopback through an SSH tunnel (ssh -W) using the Horizon machine's own SSH configuration and keys; the host must already be trusted in known_hosts, and never pass credentials, key paths or ssh options. Inspect/list report ssh for tunnelled viewers. Inspect/list return identity and server details (name and desktop_size); server details are last-observed when disconnected and cleared on reconnect. Endpoints must be explicit numeric loopback addresses with nonzero ports. Create returns a stable id immediately, not proof of a live image: inspect connection, image_received, image_displayed and frame_sequence. Viewers that are not drawn (hidden, off canvas, behind a fullscreen panel) keep receiving and keep uploading about once a second, so image_received and frame_sequence stay live evidence while image_displayed is false; received_frame_sequence counts worker image updates independently of those uploads. Both reset on reconnect; neither is a heartbeat, so an unchanged desktop is not a connection failure. A viewer displayed earlier in this connection (last_displayed_age_millis present) that now reports not_rendered with exclusion outside_canvas was navigated away from by the person: keep testing and recording, do not pause, and do not reveal just to advance counters. Visible means host presentation state; image_displayed describes the latest completed UI frame. New hosts return diagnostics with decoded frames, sampling pause, frame ages and presentation reason. Static frames alone never prove a stalled stream. Reveal brings an owned viewer into view without reconnecting or stealing keyboard focus, then answers once the host has drawn the connected image after the reveal (image_displayed true), or after at most three seconds with the observation explaining why not (presentation and diagnostics.host.exclusion); stopped or disconnected viewers answer at once. In the reveal answer image_displayed is true only for a draw after the reveal applied; presentation still describes the latest pass. A host that runs no UI frames cannot draw the viewer and answers when the bound expires. A drawn image proves presentation, not motion. Do not ask a human to verify visibility. Reconnect explicitly acquires an unowned/restored viewer; another owner's viewer cannot be mutated. Close releases only the owned viewer connection and never terminates its target. Restores never reconnect automatically. Requires a supporting Horizon host; host response is bounded to 15 seconds. Native input is separate, through explicitly configured standalone device CLI/MCP targets."
+        description = "Manage native Device viewers in the calling agent's current Horizon workspace; they are read-only for agents (a person may turn Interact on in the UI, no operation can). Operations: create(endpoint,identity?,ssh?), list, inspect(panel_id), visibility(panel_id,visible), reveal(panel_id), reconnect(panel_id), screenshot(panel_id,copy_to_clipboard?), close(panel_id). Screenshot returns a private PNG of the full connected desktop, excluding local crop/scale controls, with dimensions; copy_to_clipboard defaults false and clipboard_requested reports native host dispatch only. The latest eight exports survive until panel close or normal host exit. Screenshots do not change visibility, focus, canvas or Interact; disconnected/stopped/no-frame viewers refuse capture. Optional identity contains creator-supplied machine_name, hostname, numeric ip_addresses and tailscale_name, not verified identity. Optional ssh {host,user?,port?} reaches endpoint on that host's loopback through an SSH tunnel (ssh -W) using the Horizon machine's own SSH configuration and keys; the host must already be trusted in known_hosts, and never pass credentials, key paths or ssh options. Inspect/list report ssh for tunnelled viewers. Inspect/list return identity and server details (name and desktop_size); server details are last-observed when disconnected and cleared on reconnect. Endpoints must be explicit numeric loopback addresses with nonzero ports. Create returns a stable id immediately, not proof of a live image: inspect connection, image_received, image_displayed and frame_sequence. Viewers that are not drawn (hidden, off canvas, behind a fullscreen panel) keep receiving and keep uploading about once a second, so image_received and frame_sequence stay live evidence while image_displayed is false; received_frame_sequence counts worker image updates independently of those uploads. Both reset on reconnect; neither is a heartbeat, so an unchanged desktop is not a connection failure. A viewer displayed earlier in this connection (last_displayed_age_millis present) that now reports not_rendered with exclusion outside_canvas was navigated away from by the person: keep testing and recording, do not pause, and do not reveal just to advance counters. Visible means host presentation state; image_displayed describes the latest completed UI frame. New hosts return diagnostics with decoded frames, sampling pause, frame ages and presentation reason. Static frames alone never prove a stalled stream. Reveal is for first presentation only: once this viewer has presented a non-discarded image, it returns navigation_preserved without changing visibility, fullscreen, focus or canvas, including after reconnect or ownership transfer. Restored viewers also return navigation_preserved when prior display history is unavailable: reconnect grants transport ownership, never navigation permission. Continue background testing and inspect; use the UI to return to the viewer. Never close/recreate a viewer to bypass this protection. The first Reveal brings an owned viewer into view without reconnecting or stealing keyboard focus, then answers once the host has drawn the connected image after the reveal (image_displayed true), or after at most three seconds with the observation explaining why not (presentation and diagnostics.host.exclusion); stopped or disconnected viewers answer at once. In the reveal answer image_displayed is true only for a draw after the reveal applied; presentation still describes the latest pass. A host that runs no UI frames cannot draw the viewer and answers when the bound expires. A drawn image proves presentation, not motion. Do not ask a human to verify visibility. Reconnect explicitly acquires an unowned/restored viewer; another owner's viewer cannot be mutated. Close releases only the owned viewer connection and never terminates its target. Restores never reconnect automatically. Requires a supporting Horizon host; host response is bounded to 15 seconds. Native input is separate, through explicitly configured standalone device CLI/MCP targets."
     )]
     async fn device_panel(
         &self,
-        Parameters(input): Parameters<horizon_browser_control::manifest::device::Operation>,
+        Parameters(input): Parameters<horizon_browser_control::manifest::device::DevicePanelInput>,
     ) -> Result<Json<horizon_browser_control::manifest::device::Outcome>, String> {
-        self.controller.device_panel(input).await.map(Json)
+        self.controller.device_panel(input.into_operation()).await.map(Json)
+    }
+
+    #[tool(
+        name = "browser_screenshot",
+        description = "Capture the latest decoded viewport pixels of a ready browser panel in the calling agent's Horizon workspace. Returns a private PNG path and its original dimensions; this is a retained frame, not a fresh navigation or a full-page screenshot. Optional copy_to_clipboard (default false) also requests an image copy on the Horizon host clipboard; clipboard_requested reports dispatch, not OS acknowledgement. Requires a live Horizon host, not a standalone browser. Acquires or renews the caller's browser claim and rechecks it at host dispatch and result delivery. Refuses another live owner, active human steering and pending handoff. Does not change focus, viewport, visibility or canvas. Keep sensitive screenshots private. The latest eight exports per panel survive until panel close or host exit."
+    )]
+    async fn browser_screenshot(
+        &self,
+        Parameters(input): Parameters<horizon_browser_control::manifest::device::ScreenshotInput>,
+    ) -> Result<Json<horizon_browser_control::manifest::device::Screenshot>, String> {
+        use horizon_browser_control::manifest::device::{Operation, Outcome};
+        match self
+            .controller
+            .device_panel(Operation::BrowserScreenshot { input })
+            .await?
+        {
+            Outcome::Screenshot { capture } => Ok(Json(capture)),
+            Outcome::Failed { code, message } => Err(format!("{code}: {message}")),
+            _ => Err("host returned an unexpected screenshot result".into()),
+        }
     }
 
     #[tool(
@@ -123,7 +143,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "cloud_companion_ensure_ready",
-        description = "Explicitly start a companion cloud the owner checked on the source cloud's card: reuse it when running, resume it when stopped (on Hetzner, resuming creates a new server on the retained workspace volume), and verify SSH access and its repository environment. Agents cannot create a companion that has no cloud yet: the owner creates it with New cloud and checks it first. A checked cloud that was never started answers confirmation_required; start it from its card. Returns an operation_id and phase at once; poll cloud_companion_operation with it and the same cloud and alias until done is true; when resend is true, nothing is running the operation, so send the same request again to continue it. Repeated or concurrent requests for the same companion share one operation and never start a second worker. Deleted, deleting, lost or changed companions are refused, and an uncertain earlier operation is reconciled, never repeated. The companion's own companions are not started. Requires the running Horizon that owns the source cloud; nothing starts without it."
+        description = "Choose an optional saved tailnet ID from cloud_companions when provisioning a new cloud; use tailnet=none for no network, omit it to preserve the selection. Provisioned clouds retain their network. Never pass an auth key. Explicitly start a companion cloud the owner checked on the source cloud's card: reuse it when running, resume it when stopped (on Hetzner, resuming creates a new server on the retained workspace volume), and verify SSH access and its repository environment. Agents cannot create a companion that has no cloud yet: the owner creates it with New cloud and checks it first. A checked cloud that was never started answers confirmation_required; start it from its card. Returns an operation_id and phase at once; poll cloud_companion_operation with it and the same cloud and alias until done is true; when resend is true, nothing is running the operation, so send the same request again to continue it. Repeated or concurrent requests for the same companion share one operation and never start a second worker. Deleted, deleting, lost or changed companions are refused, and an uncertain earlier operation is reconciled, never repeated. The companion's own companions are not started. Requires the running Horizon that owns the source cloud; nothing starts without it."
     )]
     async fn cloud_companion_ensure_ready(
         &self,
@@ -726,6 +746,20 @@ mod tests {
     use crate::model::WaitState;
 
     #[test]
+    fn public_device_input_rejects_internal_browser_commands() {
+        use horizon_browser_control::manifest::device::{DevicePanelInput, Operation};
+        let internal = serde_json::json!({"operation":"browser_screenshot", "panel_id":"panel"});
+        assert!(serde_json::from_value::<DevicePanelInput>(internal.clone()).is_err());
+        // The private host queue can still deserialize its own command.
+        assert!(serde_json::from_value::<Operation>(internal).is_ok());
+        let native = serde_json::json!({"operation":"screenshot", "panel_id":"panel", "copy_to_clipboard":true});
+        assert!(matches!(
+            serde_json::from_value::<DevicePanelInput>(native).unwrap().into_operation(),
+            Operation::Screenshot { input } if input.copy_to_clipboard
+        ));
+    }
+
+    #[test]
     fn evaluation_bounds_follow_the_protocol_contract() {
         assert_eq!(
             bounded_evaluation_timeout(None),
@@ -771,6 +805,7 @@ mod tests {
                 "browser_query",
                 "browser_remote_allocations",
                 "browser_resize",
+                "browser_screenshot",
                 "browser_snapshot",
                 "browser_video",
                 "browser_visibility",

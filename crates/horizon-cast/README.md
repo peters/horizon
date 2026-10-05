@@ -29,16 +29,33 @@ frames sent, not frames displayed by the TV. Frame queues are bounded; a source 
 stops delivering frames for three seconds fails and releases its encoder.
 
 Optional Linux acceleration uses `cargo build -p horizon-ui --release --features cast-nvenc`
-(or `--features nvenc` for this crate). It probes FFmpeg's `h264_nvenc` with the
-requested dimensions before starting video, then uses its ultra-low-latency mode
-and native RGBA input so NVIDIA performs pixel conversion. A failed or timed-out
-probe falls back to `libx264` without changing resolution. Cancellation kills the
-probe; receiver ownership remains held throughout. UI/MCP status reports
-`encoder` and `encoder_fallback`. No GPU dependencies or build-time CUDA toolkit
+(or `--features nvenc` for this crate). A bounded probe first qualifies source-sized
+PAM input, NV12 conversion, CUDA scaling and NVENC at the requested output size.
+Each cropped frame carries its dimensions, allowing panel resize/zoom without
+restarting the receiver. CUDA preserves aspect ratio; padding stays opaque black.
+Capture/cropping, NV12 conversion and final padding remain on CPU. Scaling is
+downloaded before padding and NVENC upload; this is not a zero-copy pipeline.
+
+If CUDA scaling is unavailable, a second bounded probe qualifies native RGBA
+NVENC with CPU scaling. If neither hardware path works, `libx264` handles encoding.
+Neither fallback changes resolution. Cancellation kills the probe; receiver
+ownership remains held throughout. Crate selection and benchmark results expose
+the actual scaler (`cuda` or `cpu`). Horizon submits source crops when CUDA is
+selected, preserving capture isolation and density checks. UI Details and shared
+MCP/CLI status report the encoder, scaler and fallback reason.
+No GPU dependencies or build-time CUDA toolkit
 are added. This first adapter uses the existing FFmpeg subprocess; direct
 `moq-nvenc` integration remains deferred until a safe upload/configuration API is
-available. Capture and aspect-preserving scaling still run on the CPU, and
-15 fps remains the configured capture limit.
+available. The configured capture limit remains 15 fps. `submit` accepts the
+fixed output canvas on any backend; hosts may use `uses_source_frames` and
+`submit_source` to avoid CPU scaling only when CUDA was actually selected.
+Source crops must be nonempty RGBA, at most 8192 pixels per side and 16 megapixels
+in total, with both fitted canvas axes at least two pixels before even rounding.
+`supports_source_dimensions` checks these bounds for a particular output canvas.
+Queues remain bounded to one incoming frame; pause repeats the last
+validated crop with its original dimensions. Hosts should letterbox larger or
+extremely thin crops on CPU before submitting a fixed canvas, preserving source support and output
+resolution; the selected encoder's CUDA filter remains active for that canvas.
 
 Horizon exposes the same operations through its Cast picker and `cast` MCP tool:
 `discover`, `sources`, `status`, `start`, `pair`, `stop`, `paired`, and `forget`.
@@ -83,3 +100,9 @@ The interactive `pair` example reads the current PIN from stdin. Do not place
 real PINs in command arguments, logs, source files or test fixtures. Receiver
 information and network endpoints are private evidence. Sustained physical-TV
 playback and latency must be checked separately before shipping.
+
+For repeatable CPU, memory and GPU optimization experiments, start with
+[`auto/cast/program.md`](../../auto/cast/program.md). Its canonical benchmark
+uses this crate's optimized `cast_bench` example and an independent authenticated
+loopback receiver, checks decoded frames and image quality, and retains resource
+measurements and fingerprints. It never discovers a TV or reads saved pairings.

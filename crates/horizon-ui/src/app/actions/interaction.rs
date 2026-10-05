@@ -214,8 +214,18 @@ impl HorizonApp {
                 )
             });
         let panel_geometry = self.visible_panel_geometry_for_canvas_view(canvas_rect, visible_workspace);
+        #[cfg(target_os = "linux")]
+        let pointer_over_cast_controls = ctx.viewport_id() == egui::ViewportId::ROOT
+            && pointer_position.is_some_and(|position| {
+                self.cast_control_screen_rects(ctx)
+                    .iter()
+                    .any(|rect| rect.contains(position))
+            });
+        #[cfg(not(target_os = "linux"))]
+        let pointer_over_cast_controls = false;
         let pointer_in_canvas = pointer_position.is_some_and(|position| {
             canvas_rect.contains(position)
+                && !pointer_over_cast_controls
                 && !(visible_workspace.is_none()
                     && self
                         .work_resume_overlay_rect(ctx)

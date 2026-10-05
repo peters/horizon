@@ -71,7 +71,7 @@ pub(super) fn handle_terminal_pointer_input(
     if interaction.body.clicked() {
         interaction.body.request_focus();
     }
-    if is_active_panel && ui.input(|input| input.key_pressed(Key::Tab)) {
+    if terminal_may_claim_tab(ui, interaction, is_active_panel) {
         interaction.body.request_focus();
     }
 
@@ -167,6 +167,14 @@ pub(super) fn handle_terminal_pointer_input(
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
     }
+}
+
+fn terminal_may_claim_tab(ui: &egui::Ui, interaction: &TerminalInteraction, is_active_panel: bool) -> bool {
+    is_active_panel
+        && ui.input(|input| input.key_pressed(Key::Tab))
+        && ui
+            .memory(egui::Memory::focused)
+            .is_none_or(|focused| focused == interaction.body.id)
 }
 
 fn update_active_selection_after_scrollback(

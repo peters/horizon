@@ -4,6 +4,10 @@
 # Retry:    horizon-worker-session --retry-shared-checkout
 # Prepare:  horizon-worker-session --shared --prepare-only SESSION AGENT REVISION
 set -euo pipefail
+if [ "$(id -u)" = 0 ] && [ -f /run/horizon-tailnet/agent-isolation ]; then
+    cd /workspace
+    exec horizon-worker-tailnet agent /usr/local/bin/horizon-worker-session "$@"
+fi
 umask 077
 # A failing flush on the attach path means the workspace storage refused earlier writes, so
 # stop with the reason instead of ending the connection with a bare error. No process was
@@ -26,6 +30,7 @@ flush() {
     sync -f "$1" || flush_failed "$1"
 }
 shared_state=/workspace/shared-checkout-state
+if [ "${HORIZON_UNPRIVILEGED:-}" = 1 ]; then shared_state=/workspace/.horizon/shared-checkout-state; fi
 if [ "${1:-}" = --retry-shared-checkout ]; then
     [ "$#" -eq 1 ] || exit 2
     # Under the checkout lock no preparation is running, so the next attach resumes it.
@@ -136,7 +141,7 @@ start_preparation() {
         [ "$(cat "$state/revision")" = "$revision" ] || { echo 'Shared checkout binding mismatch' >&2; exit 3; }
         same_layout "$state" || { echo 'Shared checkout layout mismatch' >&2; exit 3; }
         echo 'Resuming the interrupted shared checkout preparation.' >&2
-    elif [ -e "$root" ]; then
+    elif [ -e "$root" ] && { [ "${HORIZON_UNPRIVILEGED:-}" != 1 ] || [ -n "$(ls -A "$root")" ]; }; then
         echo 'Shared checkout exists but was not prepared by Horizon. No files were reset.' >&2; exit 3
     else
         mkdir "$state"
@@ -294,7 +299,9 @@ if "$prepare_only"; then
     # that refuses writes fails this step with its reason instead of a panel later.
     # A fresh file of its own (mktemp never reuses or follows an existing name), removed by the exit
     # trap whatever ends the run, so an interrupted probe leaves nothing behind.
-    probe="$(mktemp /workspace/.horizon-write-probe.XXXXXX)" || flush_failed /workspace/.horizon-write-probe
+    probe_root=/workspace
+    if [ "${HORIZON_UNPRIVILEGED:-}" = 1 ]; then probe_root=/workspace/sessions; fi
+    probe="$(mktemp "$probe_root/.horizon-write-probe.XXXXXX")" || flush_failed "$probe_root/.horizon-write-probe"
     { dd if=/dev/zero of="$probe" bs=1M count=64 conv=fsync status=none && sync -f "$probe"; } \
         || flush_failed "$probe"
     rm -f "$probe"
@@ -312,7 +319,9 @@ else
     printf '%s\n' "$agent" > "$staging/agent"
     printf '%s\n' "$revision" > "$staging/revision"
     if "$shared"; then touch "$staging/shared-checkout"; fi
-    if [ -f /workspace/siblings.json ]; then
+    manifest=/workspace/siblings.json
+    if [ "${HORIZON_UNPRIVILEGED:-}" = 1 ]; then manifest=/workspace/.horizon/siblings.json; fi
+    if [ -f "$manifest" ]; then
         horizon-worker-siblings show > "$staging/siblings.json"
         listing="$(horizon-worker-siblings layout "$staging/siblings.json")"
         [ -n "$listing" ] || rm "$staging/siblings.json"

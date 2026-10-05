@@ -259,6 +259,16 @@ try:
                            ('--lfs-selection-contract', 'horizon-source-lfs-selection-contract=1')):
         if source_helper_declares(option, marker):
             print(marker)
+    if shutil.which('horizon-worker-tailnet'):
+        require('/usr/bin/setpriv')
+        probe(['/usr/bin/setpriv', '--help'])
+        for flag in ['-u', '-g']:
+            identity = subprocess.run(['/usr/bin/id', flag, 'horizon-agent'], check=True, timeout=20,
+                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
+            if identity.strip() != b'10001':
+                raise ValueError('Worker agent identity does not match the isolation launcher')
+        if shutil.which('tailscale') and shutil.which('tailscaled'):
+            print('horizon-tailnet-contract=1')
     # Session restart: horizon-worker-session --relaunch replaces a lost process in its worktree.
     print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n'
           'horizon-session-restart-contract=1\nhorizon-shared-checkout-contract=1\nhorizon-prepare-checkout-contract=1')

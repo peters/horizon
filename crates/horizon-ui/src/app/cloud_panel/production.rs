@@ -58,6 +58,8 @@ const BILLING: cloud_runtime::billing::Fetch = |_, _, _, _| Err(cloud_runtime::b
 #[derive(Default)]
 pub(super) struct Production {
     close: close::State,
+    pub(in crate::app) tailnets: crate::app::tailnets::State,
+    tailnet: Option<String>,
     pub(super) setup: setup::State,
     pub creating: bool,
     launch: launch::State,

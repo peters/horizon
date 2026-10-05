@@ -10,6 +10,8 @@ if [[ ${HORIZON_WORKER_STARTUP+x} ]]; then
     printf '%s\n' "$PUBLIC_KEY" > "$root/authorized_keys"
     chmod 600 "$root/authorized_keys"
     unset PUBLIC_KEY
+    horizon-worker-tailnet isolate
+    horizon-worker-tailnet resume
     cat > "$root/sshd_config" <<'CONFIG'
 Port 22
 HostKey /run/sshd/horizon-allocation/ssh-host-key
@@ -29,6 +31,8 @@ chmod 700 /run/sshd/horizon-host-keys
 printf '%s\n' "$PUBLIC_KEY" > /run/sshd/horizon-authorized-keys
 chmod 600 /run/sshd/horizon-authorized-keys
 unset PUBLIC_KEY
+horizon-worker-tailnet isolate
+horizon-worker-tailnet resume
 # Agent login state and host keys stay on the worker volume.
 for kind in ed25519 rsa; do
     key="/workspace/ssh_host_${kind}_key"

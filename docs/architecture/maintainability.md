@@ -636,6 +636,14 @@ tested offline.
 `deployment` orchestrates one deploy and still owns registry binding, provisioning,
 ready bookkeeping, initial state and replacement commits; the other steps have leaves.
 `sizing` applies CPU, memory and machine settings until a worker is requested;
+`tailnet` configures the root-owned worker networking lane before agent sessions start.
+`horizon-cloud::tailnet` shares nonsecret catalog/selection persistence and write-only
+OS credential bindings. Its private `bindings` module journals nonsecret before/after
+metadata and uses fresh credential generations; recovery rolls back an unpublished
+key or retires the old published generation. Settings refresh retries recovery.
+The public catalog retains names/IDs only. Reading a saved key belongs solely to the private host
+`cloud_runtime::tailnet::keychain` adapter, which supplies the pinned deployment
+transport. No public callback, CLI or MCP operation can receive stored key bytes.
 `image` prepares the worker image and checks its contract before allocation;
 `source` validates and packs the committed source before allocation and transfers
 it to the ready worker; `git_credentials` and `agent_credentials` install or clear
@@ -918,6 +926,15 @@ user requests; the core adapter bounds lost-status waiting and surfaces uncertai
 Saved conversation deletion is implemented in `runtime_state/agent_sessions/deletion.rs`: provider removal, identity validation and process-wide reservation guards remain in core. Its identity, batch and staging regressions live in the colocated `deletion/tests/` tree. The modal session picker collects selection/confirmation actions and requests throttled catalog scans while open; its option cache invalidates on scan completion, provider/panel scope changes and process-wide deletion reservation revisions; `app/panels/session_deletion.rs` manages its background worker, bounded reports and result persistence, with presentation and worker regressions in `session_deletion/tests/`.
 
 Saved-conversation deletion worker ownership and recovery-notice presentation live in `app/panels/session_deletion/worker.rs`; profile-scoped immutable notice storage belongs to `session_store/deletion_notice.rs` in core. Shutdown joins destructive workers before process exit.
+### Panel screenshots
+
+Panel screenshot encoding, bounded private export retention and clipboard dispatch
+live in `horizon-ui::screenshot`. Browser and Device widgets expose their retained
+source pixels; `app::device_requests` validates workspace, host and ownership before
+using the same capture path for MCP requests. Copy buttons acquire pixels only on
+click. Browser rendering resets preserve exports, while panel close and explicit
+host exit remove them.
+
 ### Linux casting
 
 Long-term identities live in private per-device files managed by `horizon-cast::PairingStore`, separate from YAML and temporary PINs. Its file lease spans authentication, streaming and teardown; forgetting uses the same lease. Settings Remote Devices and MCP paired/forget share the host casting state, including busy checks and metadata refresh. The settings leaf module only renders metadata and collects actions.
@@ -927,7 +944,10 @@ and video, per-receiver reservations, and the bounded encoder worker. It has no
 core or UI dependency. `horizon-browser-control::manifest::cast` defines the
 workspace-scoped request/result contract; the existing UI request pump claims
 it even without a presented frame. `horizon-ui::app::casting` separates source
-validation and capture, picker rendering, and host request handling. UI and MCP
+validation and capture, picker rendering, and host request handling. The focused
+`casting::popup` module owns transient placement and exact-session close bindings.
+Picker/menu overlap pauses only the affected source; request and asynchronous
+frame delivery both recheck coverage. UI and MCP
 share those operations. Session switches cancel and discard cast bindings;
 shutdown cancels workers before the host exits. Capture remains limited to
 fully visible, unobscured regions of the main Horizon render target. The bounded

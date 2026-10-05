@@ -345,6 +345,8 @@ impl HorizonApp {
             if drawer_shown {
                 let teasers = teasers(group, runtime, &status, occupancy);
                 let context = drawer::Context {
+                    tailnets: &mut production.tailnets,
+                    root: self.cloud_prototype.root.as_deref(),
                     group,
                     launch,
                     board: &self.board,

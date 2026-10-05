@@ -23,24 +23,34 @@ freshness. Use the bounded recovery procedure in scripts/device-smoke/README.md.
    Distinguish decoded frames from texture uploads. Inspection must not consume
    the pending image. Check observation timestamp, connection generation, frame
    ages and presentation reason. Create/Reveal are not live-image proof.
-3. Pan the viewer off canvas, then inspect. Sampling must report paused and
-   presentation not_rendered without claiming a dead transport. Reveal once;
-   verify pan/fit, displayed pixels and advancing frames without a new connection
-   generation. Record the flow at 4K and decode representative video frames.
-4. Repeat for hidden viewers, collapsed workspaces/cloud groups and fullscreen.
+3. With a fresh viewer that has never presented an image, reveal once; verify
+   pan/fit, displayed pixels and advancing frames without a new connection
+   generation. Pan it off canvas, then inspect: reception and bounded uploads
+   continue while presentation is not_rendered. A second Reveal must return
+   navigation_preserved without moving the canvas or changing focus. Continue
+   testing in the background and record/decode the flow.
+4. Use a fresh, never-presented viewer for each hidden, collapsed-workspace/
+   cloud-group and fullscreen first-presentation scenario.
    Reveal may change presentation but must preserve the keyboard-focus panel and
    active workspace, including when they belong to another workspace. Confirm
    subsequent panel creation still uses the previous active workspace.
-5. Detach the viewer workspace and move its viewer off its own canvas. Reveal
+5. Detach a fresh, never-presented viewer workspace and move its viewer off
+   its own canvas. Its first Reveal
    must change that detached canvas, preserve the root canvas and issue no OS
    Focus command. Verify actual decoded image presentation and repeat after
-   resize/fit. A retained frame or unchanged static desktop is not motion proof.
+   resize/fit using UI navigation. After presentation, agent Reveal must return
+   navigation_preserved without changing either canvas. A retained frame or unchanged static desktop is not motion proof.
 6. Stop only the task-owned VNC server. Confirm disconnect reporting; use one
    justified reconnect after restoring it. Its generation changes and old pixels
-   must not count as a new received/displayed frame. Never loop reconnects.
+   must not count as a new received/displayed frame. Reveal must still return
+   navigation_preserved if that viewer was presented before reconnect. Never
+   loop reconnects.
 7. Another agent cannot Reveal, hide, close or reconnect an owned viewer. Other
    workspaces remain inaccessible. A restored viewer requires explicit ownership
-   acquisition through Reconnect; Reveal never acquires it implicitly.
+   acquisition through Reconnect; Reveal never acquires it implicitly. Save and
+   restore a viewer, acquire it from an empty UI cache, and require Reveal to
+   return navigation_preserved without changing the saved canvas. Unknown past
+   presentation is never permission to navigate.
 8. Legacy host observations lacking diagnostics still deserialize. Unsupported
    Reveal reports a host limitation; it never triggers private-file fallback,
    manual confirmation or replacement of the user's running Horizon.

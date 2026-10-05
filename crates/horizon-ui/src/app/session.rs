@@ -175,6 +175,7 @@ impl HorizonApp {
     }
 
     pub(super) fn apply_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
+        self.reset_native_file_input();
         self.arranged_panel_drag = None;
         self.window_config = runtime_state.window_or(&self.template_config.window).clone();
         self.detached_workspaces = runtime_state
@@ -439,6 +440,7 @@ impl HorizonApp {
     }
 
     fn restore_startup_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
+        self.reset_native_file_input();
         // Restore browser panels with the *current* browser config: a
         // persisted state predating the `browser` field carries none, and
         // `--config <path>` users' settings must always win.

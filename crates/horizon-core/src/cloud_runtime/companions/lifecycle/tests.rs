@@ -1,6 +1,7 @@
 use super::super::{Declaration, Scope, Selection, Target};
 use super::*;
 mod recovery;
+mod tailnets;
 use crate::cloud_runtime::{CreateState, Stage, state::Deployment};
 use intent::{Decision, Origin};
 

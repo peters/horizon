@@ -121,6 +121,10 @@ impl HorizonApp {
                 "Previous repository check is still stopping; retry shortly",
             ));
         }
+        let cloud_id = cloud_runtime::new_id();
+        let tailnet = form.tailnet.clone();
+        let tailnet_root = self.cloud_prototype.root.clone();
+        let selection_cloud = cloud_id.clone();
         let permit = WorkPermit(busy);
         let cancel = cloud_runtime::Cancellation::default();
         let (sender, receiver) = channel();
@@ -132,7 +136,7 @@ impl HorizonApp {
             title: form.title.trim().to_owned(),
             launch: CloudLaunch {
                 deployment_started: false,
-                id: cloud_runtime::new_id(),
+                id: cloud_id,
                 revision: String::new(),
                 profile_name: form.selected_profile.clone(),
                 profile,
@@ -143,7 +147,13 @@ impl HorizonApp {
         self.cloud_prototype.error = None;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = resolve(&repository, &revision, &reviewed, &cancel);
+            let result = resolve(&repository, &revision, &reviewed, &cancel).and_then(|resolved| {
+                if let Some(tailnet) = tailnet {
+                    let root = tailnet_root.ok_or(cloud_runtime::Error::Invalid("Missing cloud settings"))?;
+                    cloud_runtime::tailnet::select(&root, &selection_cloud, Some(&tailnet))?;
+                }
+                Ok(resolved)
+            });
             drop(permit);
             let _ = sender.send(result);
             ctx.request_repaint();

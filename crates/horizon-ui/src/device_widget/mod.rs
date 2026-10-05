@@ -27,9 +27,13 @@ pub(super) const BACKGROUND_UPLOAD_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
 pub(crate) struct DeviceUiState {
+    pub(crate) screenshots: crate::screenshot::Screenshots,
     pub(crate) owner: Option<String>,
     pub(crate) host: host::HostState,
     image: ImageDisplay,
+    /// A real image was presented during this viewer's lifetime. Reconnecting
+    /// resets transport evidence, but must not grant another canvas takeover.
+    presented_once: bool,
     initialized: bool,
     rendered: bool,
     previous_rendered: bool,
@@ -68,6 +72,26 @@ struct ImageDisplay {
 }
 
 impl DeviceUiState {
+    pub(crate) fn screenshot_image(&mut self) -> Result<ColorImage, String> {
+        if let Some(observation) = self.session.as_ref().map(Session::observation) {
+            if let Some(status) = observation.status {
+                self.status = status;
+            }
+            self.image.received_sequence = observation.received_frame_sequence;
+        }
+        if !matches!(self.status, Status::Connected) {
+            return Err("Device viewer is not connected".into());
+        }
+        self.session
+            .as_ref()
+            .and_then(Session::latest_full)
+            .ok_or_else(|| "Device viewer has not received a desktop frame".into())
+    }
+
+    pub(crate) fn presented_once(&self) -> bool {
+        self.presented_once
+    }
+
     pub(crate) fn was_rendered(&self) -> bool {
         self.rendered
     }
@@ -160,6 +184,7 @@ impl DeviceUiState {
     /// display evidence for inspection or a held reveal.
     fn commit_pass(&mut self) {
         self.image.previous_displayed = self.image.displayed && !self.host.last_pass_discarded();
+        self.presented_once |= self.image.previous_displayed;
         self.previous_rendered = self.rendered;
     }
 
@@ -172,6 +197,11 @@ impl DeviceUiState {
             }
         }
         self.absorb_updates(ui.ctx());
+        let mut screenshots = std::mem::take(&mut self.screenshots);
+        screenshots.copy_button(ui, interactive && matches!(self.status, Status::Connected), || {
+            self.screenshot_image()
+        });
+        self.screenshots = screenshots;
         if self.desktop.is_none()
             && let Some(source) = &self.source
         {

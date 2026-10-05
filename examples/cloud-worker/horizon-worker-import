@@ -2,11 +2,16 @@
 # Primary: horizon-worker-import REVISION
 # Sibling: horizon-worker-import REVISION --sibling ALIAS
 set -euo pipefail
+if [ "$(id -u)" = 0 ] && [ -f /run/horizon-tailnet/agent-isolation ]; then
+    cd /workspace
+    exec horizon-worker-tailnet agent /usr/local/bin/horizon-worker-import "$@"
+fi
 umask 077
 revision="${1:?revision required}"
 [[ "$revision" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || exit 2
 repository=/workspace/repository.git
 pack=/workspace/horizon-transfer.pack
+if [ "${HORIZON_UNPRIVILEGED:-}" = 1 ]; then pack=/workspace/source/transfers/horizon-transfer.pack; fi
 sibling=
 if [ "$#" = 3 ] && [ "$2" = --sibling ]; then
     [[ "$3" =~ ^[a-z][a-z0-9_-]{0,63}$ ]] || exit 2
@@ -21,7 +26,7 @@ exec 9>/workspace/import.lock
 flock 9
 format=sha1
 if [ "${#revision}" = 64 ]; then format=sha256; fi
-if [ ! -d "$repository" ]; then mkdir -p "${repository%/*}"; git init --bare -q --object-format="$format" "$repository" >/dev/null; fi
+if [ ! -f "$repository/HEAD" ]; then mkdir -p "${repository%/*}"; git init --bare -q --object-format="$format" "$repository" >/dev/null; fi
 [ "$(git --git-dir="$repository" rev-parse --show-object-format)" = "$format" ] || { echo 'Cloud object format mismatch' >&2; exit 3; }
 # The global lfs.storage names the primary's store; a sibling hydrates only from its own.
 if [ -n "$sibling" ]; then git --git-dir="$repository" config lfs.storage "$sibling/source/lfs"; fi

@@ -11,10 +11,14 @@ struct Input {
     image: Arc<egui::ColorImage>,
     rect: egui::Rect,
     pixels_per_point: f32,
+    source_frame: bool,
 }
 pub(super) struct ScaledFrame {
     pub(super) rect: egui::Rect,
+    pub(super) pixels_per_point: f32,
     pub(super) rgba: Vec<u8>,
+    pub(super) width: u16,
+    pub(super) height: u16,
 }
 pub(super) struct Scaler {
     input: Option<SyncSender<Input>>,
@@ -31,9 +35,26 @@ impl Scaler {
                 if crop.width() == 0 || crop.height() == 0 {
                     continue;
                 }
+                let source_frame = input.source_frame
+                    && horizon_cast::CastSession::supports_source_dimensions(crop.width(), crop.height(), dimensions);
+                let size = if source_frame {
+                    crop.size
+                } else {
+                    [dimensions.0, dimensions.1]
+                };
+                let (Ok(width), Ok(height)) = (u16::try_from(size[0]), u16::try_from(size[1])) else {
+                    continue;
+                };
                 let frame = ScaledFrame {
                     rect: input.rect,
-                    rgba: letterbox(&crop, dimensions),
+                    pixels_per_point: input.pixels_per_point,
+                    rgba: if source_frame {
+                        crop.pixels.iter().flat_map(egui::Color32::to_array).collect()
+                    } else {
+                        letterbox(&crop, dimensions)
+                    },
+                    width,
+                    height,
                 };
                 match scaled.try_send(frame) {
                     Ok(()) => repaint(),
@@ -48,12 +69,19 @@ impl Scaler {
             worker: Some(worker),
         })
     }
-    pub(super) fn submit(&self, image: Arc<egui::ColorImage>, rect: egui::Rect, pixels_per_point: f32) {
+    pub(super) fn submit(
+        &self,
+        image: Arc<egui::ColorImage>,
+        rect: egui::Rect,
+        pixels_per_point: f32,
+        source_frame: bool,
+    ) {
         if let Some(input) = &self.input {
             let _ = input.try_send(Input {
                 image,
                 rect,
                 pixels_per_point,
+                source_frame,
             });
         }
     }
@@ -113,12 +141,13 @@ mod tests {
         let mut image = egui::ColorImage::filled([6, 4], egui::Color32::BLUE);
         image[(2, 1)] = egui::Color32::RED;
         image[(3, 1)] = egui::Color32::GREEN;
-        scaler.submit(Arc::new(image), rect, 1.0);
+        scaler.submit(Arc::new(image), rect, 1.0, false);
         let frame = scaler
             .output
             .recv_timeout(std::time::Duration::from_secs(1))
             .expect("scaled frame");
         assert_eq!(frame.rect, rect);
+        assert_eq!(frame.pixels_per_point.to_bits(), 1.0_f32.to_bits());
         assert_eq!(frame.rgba.len(), 8 * 8 * 4);
         assert_eq!(&frame.rgba[..8 * 2 * 4], &[0, 0, 0, 255].repeat(16));
         assert_eq!(&frame.rgba[8 * 2 * 4..8 * 2 * 4 + 4], &egui::Color32::RED.to_array());
@@ -147,6 +176,7 @@ mod tests {
             Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::RED)),
             rect,
             1.0,
+            false,
         );
         notified
             .recv_timeout(std::time::Duration::from_secs(1))
@@ -154,5 +184,78 @@ mod tests {
         let frame = scaler.take().expect("frame available at wake");
         assert_eq!(frame.rect, rect);
         assert_eq!(frame.rgba, egui::Color32::RED.to_array().repeat(64));
+    }
+
+    #[test]
+    fn gpu_input_crops_only_the_source_and_preserves_odd_dimensions() {
+        let scaler = Scaler::new((1280, 720), || {}).expect("scaler");
+        let rect = egui::Rect::from_min_size(egui::pos2(2.0, 1.0), egui::vec2(3.0, 1.0));
+        let mut image = egui::ColorImage::filled([7, 4], egui::Color32::BLUE);
+        image[(2, 1)] = egui::Color32::RED;
+        image[(3, 1)] = egui::Color32::GREEN;
+        image[(4, 1)] = egui::Color32::WHITE;
+        scaler.submit(Arc::new(image), rect, 1.0, true);
+        let frame = scaler
+            .output
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("source crop");
+        assert_eq!((frame.width, frame.height), (3, 1));
+        assert_eq!(
+            frame.rgba,
+            [egui::Color32::RED, egui::Color32::GREEN, egui::Color32::WHITE]
+                .into_iter()
+                .flat_map(|color| color.to_array())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(frame.rect, rect);
+    }
+    #[test]
+    fn oversized_gpu_crops_use_the_fixed_canvas_without_raw_source_allocation() {
+        let scaler = Scaler::new((8, 8), || {}).expect("scaler");
+        let image = egui::ColorImage::filled([8200, 2], egui::Color32::RED);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(8200.0, 2.0));
+        scaler.submit(Arc::new(image.clone()), rect, 1.0, true);
+        let frame = scaler
+            .output
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("fixed canvas");
+        assert_eq!((frame.width, frame.height), (8, 8));
+        assert_eq!(frame.rgba, letterbox(&image, (8, 8)));
+    }
+
+    #[test]
+    fn thin_gpu_crops_use_the_selected_canvas_instead_of_failing_the_encoder() {
+        for size in [[8192_u16, 4], [4, 8192]] {
+            let scaler = Scaler::new((1280, 720), || {}).expect("scaler");
+            let image = egui::ColorImage::filled(size.map(usize::from), egui::Color32::RED);
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(f32::from(size[0]), f32::from(size[1])));
+            scaler.submit(Arc::new(image.clone()), rect, 1.0, true);
+            let frame = scaler
+                .output
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("canvas fallback");
+            assert_eq!((frame.width, frame.height), (1280, 720));
+            assert_eq!(frame.rgba, letterbox(&image, (1280, 720)));
+        }
+    }
+
+    #[test]
+    fn gpu_crop_preserves_density_and_excludes_adjacent_pixels() {
+        let scaler = Scaler::new((1280, 720), || {}).expect("scaler");
+        let rect = egui::Rect::from_min_size(egui::pos2(2.0, 1.0), egui::vec2(3.0, 1.0));
+        let mut image = egui::ColorImage::filled([14, 8], egui::Color32::BLUE);
+        for y in 2..4 {
+            for x in 4..10 {
+                image[(x, y)] = egui::Color32::RED;
+            }
+        }
+        scaler.submit(Arc::new(image), rect, 2.0, true);
+        let frame = scaler
+            .output
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("density crop");
+        assert_eq!((frame.width, frame.height), (6, 2));
+        assert_eq!(frame.pixels_per_point.to_bits(), 2.0_f32.to_bits());
+        assert_eq!(frame.rgba, egui::Color32::RED.to_array().repeat(12));
     }
 }

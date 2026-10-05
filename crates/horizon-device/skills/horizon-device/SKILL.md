@@ -71,9 +71,15 @@ Recover only the task-owned viewer, with at most one visibility request when
 hidden and one reconnect when stopped or disconnected. Inspect again after each
 request; do not reconnect a healthy connection merely because its image is not
 displayed. Do not close/recreate viewers in a loop. Retain the attempt budget
-across retries for the same incident. A connected, visible, unpresented viewer
-requires `operation: "reveal"` on hosts advertising it. Reveal an owned viewer
-at most once; it changes the viewport without reconnecting and answers once the
+across retries for the same incident. For a viewer that has never presented an image, a connected, visible,
+unpresented viewer requires `operation: "reveal"` on hosts advertising it.
+Current hosts return `navigation_preserved` once this viewer has presented a
+non-discarded image, including after reconnect or ownership transfer. Restored
+viewers also preserve the saved canvas when their previous display history is
+unavailable; reconnect grants transport ownership, never navigation permission. Keep
+background testing, recording and inspection running; use the UI to return to
+the viewer when needed. Never close/recreate it to bypass this protection.
+Reveal an owned viewer at most once; it changes the viewport without reconnecting and answers once the
 host has drawn the viewer, or after at most three seconds with the presentation
 reason and host exclusion that kept it off screen (a host running no UI frames
 cannot draw it and answers when that bound expires). In the reveal answer,

@@ -435,7 +435,9 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         false
     } else if form.profiles.is_some() {
         profiles::field(ui, form);
-        ui.add_space(8.0);
+        ui.add_space(12.0);
+        form.tailnets.choice(ui, &mut form.tailnet);
+        ui.add_space(12.0);
         machine(ui, form)
     } else {
         false
@@ -577,6 +579,7 @@ fn submit_reason_given(form: &Production, blocked: Option<&'static str>) -> Opti
         form.title.trim().is_empty(),
         form.profiles.is_none() && !form.launch.loading(),
     ) {
+        (false, false) if blocked.is_none() && !form.tailnets.ready() => Some("Load tailnet settings before starting."),
         (false, false) => blocked,
         (true, false) => Some("Enter a cloud title to start this cloud."),
         (false, true) => Some("Read the repository profile before starting."),
@@ -599,4 +602,5 @@ fn can_submit_given(form: &Production, blocked: Option<&'static str>) -> bool {
         && form.launch.watch.is_none()
         && !form.launch.siblings.blocks_launch()
         && blocked.is_none()
+        && form.tailnets.ready()
 }

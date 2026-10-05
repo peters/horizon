@@ -286,7 +286,17 @@ impl Live<'_> {
         match decision {
             Decision::Refuse(_) => Ok(Phase::Refused),
             Decision::Provision => Ok(Phase::ConfirmationRequired),
-            Decision::Reuse | Decision::VerifyAccess => Ok(Phase::Ready),
+            Decision::Reuse | Decision::VerifyAccess => {
+                if horizon_cloud::tailnet::Selection::load(store.root())
+                    .map_err(|_| Error::Json)?
+                    .tailnet
+                    .is_some()
+                {
+                    self.reconnect(store, observe)
+                } else {
+                    Ok(Phase::Ready)
+                }
+            }
             Decision::AlreadyStopped => {
                 // A workerless prepared record has nothing to stop; marking it would
                 // strand a Hetzner resume whose fence is already cleared.

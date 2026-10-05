@@ -11,11 +11,15 @@ ARG HORIZON_BROWSERSTACK=false
 # Only final stripped helpers belong in bin/. Unselected helpers stay in this stage.
 COPY bin/horizon-cloud-worker bin/horizon-browser bin/horizon-device /input/
 RUN node -e 'const fs=require("fs"); const out="/output/usr/local/bin"; fs.mkdirSync(out,{recursive:true}); const copy=n=>fs.copyFileSync("/input/"+n,out+"/"+n); copy("horizon-cloud-worker"); if(process.env.HORIZON_BROWSERS || process.env.HORIZON_BROWSERSTACK==="true")copy("horizon-browser"); if(process.env.HORIZON_DESKTOP==="true")copy("horizon-device"); fs.mkdirSync("/output/etc/horizon-worker",{recursive:true});fs.writeFileSync("/output/etc/horizon-worker/capabilities.json",JSON.stringify({agents:process.env.HORIZON_AGENTS.split(",").filter(Boolean),browsers:process.env.HORIZON_BROWSERS.split(",").filter(Boolean),desktop:process.env.HORIZON_DESKTOP==="true",...(process.env.HORIZON_BROWSERSTACK==="true"?{browserstack:{targets:[],local_ports:[]}}:{})}));'
+FROM tailscale/tailscale:v1.102.5@sha256:c507f3a2a6ab1cabd8d809b98edeb41edbd5c3fb6ad9632ffd098b4c7d0b4065 AS tailscale-runtime
 FROM ${BASE_IMAGE}
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server tmux git git-lfs gh rsync ca-certificates curl python3 tini util-linux \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=tailscale-runtime /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
+RUN groupadd --gid 10001 horizon-agent \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /bin/bash horizon-agent
 COPY --from=agent-runtime /output/ /
 ARG HORIZON_DESKTOP=false
 RUN if [ "$HORIZON_DESKTOP" = true ]; then apt-get update \
@@ -57,7 +61,8 @@ RUN case ",$HORIZON_AGENTS," in *,claude,*) npm install -g "@anthropic-ai/claude
 # horizon-worker-check requires each selected agent to report its recorded version.
 RUN mkdir -p /etc/horizon-worker && python3 -c 'import json, pathlib; root = pathlib.Path("/usr/local/lib/node_modules"); packages = {"codex": "@openai/codex", "claude": "@anthropic-ai/claude-code", "grok": "@xai-official/grok"}; versions = {agent: json.loads((root / name / "package.json").read_text())["version"] for agent, name in packages.items() if (root / name / "package.json").is_file()}; pathlib.Path("/etc/horizon-worker/agent-versions.json").write_text(json.dumps(versions, sort_keys=True) + "\n")'
 COPY --from=selected /output/ /
-COPY horizon-worker-start \
+COPY horizon-worker-tailnet \
+    horizon-worker-start \
     horizon-worker-check \
     horizon-worker-configure \
     horizon-worker-supervise \

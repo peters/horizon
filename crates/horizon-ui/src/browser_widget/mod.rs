@@ -36,6 +36,7 @@ use std::{sync::Arc, time::Duration};
 #[allow(clippy::struct_excessive_bools)] // independent per-concern panel flags
 #[derive(Default)]
 pub struct BrowserUiState {
+    pub(crate) screenshots: crate::screenshot::Screenshots,
     /// Backend whose session owns every cache below. A backend switch creates
     /// a new browser at its default viewport, so stale geometry must never
     /// suppress the replacement session's first `SetViewport` command.
@@ -94,6 +95,13 @@ pub struct BrowserUiState {
 }
 
 impl BrowserUiState {
+    pub(crate) fn reset_rendering(&mut self) {
+        *self = Self {
+            screenshots: std::mem::take(&mut self.screenshots),
+            ..Self::default()
+        };
+    }
+
     /// Deferred canvas clicks occupy their own frame and must not form a page multi-click.
     pub(crate) fn clear_click_history(&mut self) {
         self.last_click = None;
@@ -115,6 +123,7 @@ impl BrowserUiState {
         }
         *self = Self {
             active_backend: Some(backend),
+            screenshots: std::mem::take(&mut self.screenshots),
             ..Self::default()
         };
         true
@@ -229,7 +238,7 @@ impl<'a> BrowserView<'a> {
                 // per-session input/render cache so this frame immediately
                 // resends the panel's real viewport and cannot carry a held
                 // button or key into the replacement session.
-                *state = BrowserUiState::default();
+                state.reset_rendering();
             }
             // A fixed viewport (a remote device) never converges on the
             // panel's size: the frame is letterboxed and scaled instead, so
@@ -573,6 +582,35 @@ mod tests {
             pointer_viewport_state(false, Some([390.0, 844.0]), Some((1280, 800)), (1280, 800)),
             PointerViewportState::AwaitingFrame
         ));
+    }
+
+    #[test]
+    fn screenshots_survive_first_presentation_backend_switch_retry_and_theme_reset() {
+        let ctx = egui::Context::default();
+        let mut state = BrowserUiState::default();
+        let capture = state
+            .screenshots
+            .export(
+                &ctx,
+                "panel".into(),
+                egui::ColorImage::filled([2, 1], egui::Color32::RED),
+                false,
+            )
+            .unwrap();
+        state.synchronize_backend(BackendKind::ChromiumCdp);
+        assert!(capture.path.exists());
+        state.synchronize_backend(BackendKind::FirefoxBidi);
+        assert!(capture.path.exists());
+        // Retry clears the old session's rendering state before the replacement presents.
+        state.reset_rendering();
+        assert!(capture.path.exists());
+        assert!(state.active_backend.is_none());
+        state.synchronize_backend(BackendKind::ChromiumCdp);
+        // Theme changes use the same preserving reset.
+        state.reset_rendering();
+        assert!(capture.path.exists());
+        drop(state);
+        assert!(!capture.path.exists());
     }
 
     #[test]

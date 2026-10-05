@@ -57,3 +57,5 @@ impl Environment {
         }
     }
 }
+
+pub mod tailnet;

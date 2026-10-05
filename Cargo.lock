@@ -2396,17 +2396,23 @@ dependencies = [
 name = "horizon-cloud"
 version = "0.2.7"
 dependencies = [
+ "apple-native-keyring-store",
  "base64 0.23.1",
  "ed25519-dalek",
+ "keyring-core",
  "ring",
  "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.21",
  "time",
  "unicode-general-category",
  "ureq",
+ "uuid",
+ "windows-native-keyring-store",
+ "zbus-secret-service-keyring-store",
  "zeroize",
 ]
 
@@ -2559,10 +2565,12 @@ dependencies = [
  "horizon-core",
  "horizon-cursor",
  "horizon-wayland",
+ "png",
  "profiling",
  "rusqlite",
  "serde_json",
  "serde_yaml",
+ "smithay-clipboard",
  "surge-core",
  "tempfile",
  "thiserror 2.0.21",
@@ -2583,9 +2591,12 @@ dependencies = [
 name = "horizon-wayland"
 version = "0.2.7"
 dependencies = [
+ "image",
  "raw-window-handle",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "url",
  "wayland-client",
  "wayland-protocols",
  "wayland-server",
@@ -2854,6 +2865,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -5317,10 +5330,9 @@ dependencies = [
 [[package]]
 name = "smithay-clipboard"
 version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71704c03f739f7745053bde45fa203a46c58d25bc5c4efba1d9a60e9dba81226"
 dependencies = [
  "libc",
+ "rustix 1.1.5",
  "smithay-client-toolkit 0.20.0",
  "wayland-backend",
 ]

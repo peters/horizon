@@ -3,7 +3,7 @@
 A cloud is one remote development container. New shell and agent panels share its
 Git checkout; branches and additional worktrees are created manually. Browser and
 Device panels share that cloud's runtime.
-Only RunPod provisions workers. Daytona and Fly.io appear in labelled design
+RunPod and Hetzner provision workers. Daytona and Fly.io appear in labelled design
 fixtures.
 
 Cloud deployment and lifecycle control currently require a Unix host with supported
@@ -12,6 +12,48 @@ provider mutation until durable directory updates are implemented; ordinary loca
 sessions and preserved cloud metadata remain available. The standalone provider
 crate remains portable. Windows cloud durability is tracked in #823; native Device
 platform qualification remains separately tracked in #741.
+
+## Tailnets (auth-key MVP)
+
+**Settings → Tailnets** stores named Tailscale auth keys in the machine's OS
+credential store. Names and opaque IDs are the only saved catalog metadata; keys
+are never returned by CLI/MCP, loaded back into the form, or included in project
+configuration. Add multiple networks, replace a key, or remove a saved binding.
+Use a preauthorized, non-ephemeral key; reuse requires a reusable key.
+
+Choose **None** or a saved network in **New cloud** before provisioning. A cloud
+retains that choice after allocation, including stop/resume. Removing a binding
+does not move its existing clouds to another network. Remote Hosts are outside
+this MVP. OAuth enrollment, API-based administration and Remote Hosts are
+follow-ups to #1166.
+
+`cloud_companions` lists saved network names/IDs. `cloud_companion_ensure_ready` accepts an
+optional `tailnet`: a listed ID or `"none"`. This is a
+provisioning choice, subject to the existing owner/grant and first-allocation
+confirmation gates. Identical retries retain their original choice; a changed
+retry or changing a provisioned cloud is refused. Never pass an auth key to a
+tool. Omitting `tailnet` retains the saved choice.
+
+The stock worker includes pinned Tailscale binaries and persistent userspace
+networking. Its root control lane receives the key through private pinned SSH
+stdin and passes it to enrollment through an anonymous memory file. It never
+saves the auth key. Node state and the administrative socket are root-only;
+workspace code, agents, browsers and desktop services run as UID 10001 without
+capabilities or privilege escalation. The cloud volume retains node identity
+across worker restarts. Provider volumes that cannot enforce ownership/modes are
+refused. Custom images must advertise `horizon-tailnet-contract=1` before a
+selected-network cloud can be allocated; **None** remains compatible with older
+images.
+
+Agents discover ACL-visible devices in
+`/run/horizon-tailnet-devices/devices.json` (names, addresses and online state
+only). HTTP/HTTPS and SOCKS proxy environment variables provide outbound access;
+TCP tools without proxy support need an explicit SOCKS proxy. This is not a
+kernel VPN interface and does not add inbound services or route access beyond
+Tailscale policy. The daemon continues independently of the controller, with
+state on the cloud's persistent volume. The newer signed project-session runtime
+currently refuses a tailnet until its own unprivileged runtime is qualified;
+the ordinary cloud panel's shell/agent runtime uses the isolated launcher.
 
 ## Companion declarations
 

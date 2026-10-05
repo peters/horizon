@@ -14,7 +14,7 @@ use super::{
 };
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
-/// Native viewer lifecycle only. Input belongs to the standalone device API.
+/// Host coordination commands. Input belongs to the standalone device API.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 #[schemars(extend("type" = "object"))]
@@ -35,6 +35,17 @@ pub enum Operation {
     Inspect {
         panel_id: String,
     },
+    /// Capture the latest connected desktop frame without changing navigation or input.
+    Screenshot {
+        #[serde(flatten)]
+        input: ScreenshotInput,
+    },
+    /// Browser captures share the host request pump, including when the UI is offscreen.
+    #[schemars(skip)]
+    BrowserScreenshot {
+        #[serde(flatten)]
+        input: ScreenshotInput,
+    },
     Visibility {
         panel_id: String,
         visible: bool,
@@ -50,6 +61,51 @@ pub enum Operation {
     Close {
         panel_id: String,
     },
+}
+
+/// Public native Device input. Internal host commands cannot be deserialized here.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(extend("type" = "object"))]
+pub struct DevicePanelInput(Operation);
+
+impl DevicePanelInput {
+    #[must_use]
+    pub fn into_operation(self) -> Operation {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for DevicePanelInput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let operation = Operation::deserialize(deserializer)?;
+        if matches!(operation, Operation::BrowserScreenshot { .. }) {
+            return Err(serde::de::Error::custom(
+                "Use the browser_screenshot tool for browser captures",
+            ));
+        }
+        Ok(Self(operation))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScreenshotInput {
+    pub panel_id: String,
+    /// Also request an image copy on the Horizon host's clipboard. Defaults to false.
+    #[serde(default)]
+    pub copy_to_clipboard: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Screenshot {
+    pub panel_id: String,
+    /// Private PNG, retained until panel close or eight subsequent captures on this panel.
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    /// The host queued a native clipboard image copy; this is not an OS acknowledgement.
+    pub clipboard_requested: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -261,6 +317,7 @@ pub struct ImageEvidence {
 #[schemars(extend("type" = "object"))]
 pub enum Outcome {
     Panels { panels: Vec<PanelState> },
+    Screenshot { capture: Screenshot },
     Closed { panel_id: String },
     Failed { code: String, message: String },
 }

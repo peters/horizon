@@ -8,6 +8,35 @@ use std::time::{Duration, Instant};
 
 const CAPTURE_INTERVAL: Duration = Duration::from_millis(67);
 
+#[derive(Clone, Copy)]
+pub(super) struct RootGeometry {
+    rect: Rect,
+    pixels_per_point: u32,
+    changed_at: Instant,
+}
+impl RootGeometry {
+    fn observe(previous: Option<Self>, rect: Rect, pixels_per_point: f32, now: Instant) -> Self {
+        let pixels_per_point = pixels_per_point.to_bits();
+        if let Some(previous) = previous
+            && previous.rect == rect
+            && previous.pixels_per_point == pixels_per_point
+        {
+            previous
+        } else {
+            Self {
+                rect,
+                pixels_per_point,
+                changed_at: now,
+            }
+        }
+    }
+    fn settled(self, rect: Rect, pixels_per_point: f32, now: Instant) -> bool {
+        self.rect == rect
+            && self.pixels_per_point == pixels_per_point.to_bits()
+            && now.saturating_duration_since(self.changed_at) >= CAPTURE_INTERVAL
+    }
+}
+
 #[derive(Clone, Debug)]
 struct CaptureTicket {
     pixels_per_point: f32,
@@ -36,12 +65,19 @@ impl HorizonApp {
             self.casting
                 .notify("Casting stopped because its source is no longer visible".into());
         }
-        self.consume_cast_images(ctx);
+        self.casting.root_geometry = Some(RootGeometry::observe(
+            self.casting.root_geometry,
+            ctx.content_rect(),
+            ctx.pixels_per_point(),
+            Instant::now(),
+        ));
         self.render_cast_controls(ctx);
-        let controls_visible = self.cast_controls_visible(ctx);
+        self.consume_cast_images(ctx);
         for session in &self.casting.sessions {
             session.worker.set_capture_paused(
-                controls_visible || !self.cast_geometry_settled(session.workspace, &session.source, ctx),
+                self.cast_source_rect(session.workspace, &session.source, ctx)
+                    .is_ok_and(|rect| self.cast_controls_cover(rect, ctx))
+                    || !self.cast_geometry_settled(session.workspace, &session.source, ctx),
             );
         }
         let active = !self.casting.finished();
@@ -67,7 +103,7 @@ impl HorizonApp {
                     if !self.cast_geometry_settled(session.workspace, &session.source, ctx) {
                         continue;
                     }
-                    if !controls_visible {
+                    if !self.cast_controls_cover(rect, ctx) {
                         regions.push((session.receiver_id.clone(), session.generation, rect));
                     }
                 }
@@ -95,6 +131,24 @@ impl HorizonApp {
         source: &CastSource,
         ctx: &Context,
     ) -> Result<Rect, String> {
+        if matches!(source, CastSource::Application { .. }) {
+            if self.board.workspace(workspace).is_none() {
+                return Err("The casting workspace is no longer available".into());
+            }
+            if ctx.viewport_id() != ViewportId::ROOT
+                || ctx.input(|input| input.viewport().minimized.unwrap_or(false))
+                || self.startup_chooser.is_some()
+                || self.shutdown_progress.is_some()
+            {
+                return Err("The main Horizon window is unavailable".into());
+            }
+            let rect = ctx.content_rect();
+            return if rect.is_finite() && rect.width() >= 4.0 && rect.height() >= 4.0 {
+                Ok(rect)
+            } else {
+                Err("The main Horizon window has no drawable area".into())
+            };
+        }
         #[cfg(feature = "cloud-workspaces")]
         if self.cloud_prototype.fullscreen.is_some() {
             return Err("Return to the main canvas before casting".into());
@@ -107,6 +161,7 @@ impl HorizonApp {
             return Err("Source must be visible in the main Horizon window".into());
         }
         let selected: Vec<_> = match source {
+            CastSource::Application {} => return Err("Invalid application capture context".into()),
             CastSource::Panel { id } => self
                 .board
                 .panels
@@ -186,6 +241,12 @@ impl HorizonApp {
         Ok(rect)
     }
     fn cast_geometry_settled(&self, workspace: WorkspaceId, source: &CastSource, ctx: &Context) -> bool {
+        if matches!(source, CastSource::Application { .. }) {
+            return self.cast_source_rect(workspace, source, ctx).is_ok()
+                && self.casting.root_geometry.is_some_and(|geometry| {
+                    geometry.settled(ctx.content_rect(), ctx.pixels_per_point(), Instant::now())
+                });
+        }
         self.board
             .panels
             .iter()
@@ -194,6 +255,7 @@ impl HorizonApp {
                     && match source {
                         CastSource::Panel { id } => panel.local_id == *id,
                         CastSource::Workspace { .. } => true,
+                        CastSource::Application {} => false,
                     }
             })
             .all(|panel| {
@@ -203,21 +265,36 @@ impl HorizonApp {
                 })
             })
     }
-    fn cast_controls_visible(&self, ctx: &Context) -> bool {
-        self.casting.picker.is_some()
-            || ctx.memory(|memory| {
-                memory
-                    .areas()
-                    .visible_layer_ids()
-                    .into_iter()
-                    .any(|layer| self.is_cast_control_layer(layer))
-            })
+    pub(super) fn cast_controls_cover(&self, rect: Rect, ctx: &Context) -> bool {
+        let shadow = super::popup::control_shadow_margin(ctx);
+        ctx.memory(|memory| {
+            memory
+                .areas()
+                .visible_layer_ids()
+                .into_iter()
+                .filter(|layer| {
+                    self.is_cast_control_layer(*layer)
+                        || memory.areas().parent_layer(*layer) == Some(cast_picker_layer())
+                })
+                .any(|layer| {
+                    memory.area_rect(layer.id).is_some_and(|area| {
+                        let transform = memory.to_global.get(&layer).copied().unwrap_or_default();
+                        (transform * (area + shadow)).intersects(rect)
+                    })
+                })
+        })
     }
-    fn is_cast_control_layer(&self, layer: LayerId) -> bool {
+    pub(super) fn is_cast_control_layer(&self, layer: LayerId) -> bool {
         layer == cast_picker_layer() || self.casting.control_menus.is_some_and(|menus| menus.contains(&layer))
     }
     fn cast_obscured(&self, source: &CastSource, rect: Rect, ctx: &Context) -> bool {
-        if self.host_content_dialog_open() || self.pending_session_switch.is_some() {
+        if self.pending_session_switch.is_some() {
+            return true;
+        }
+        if matches!(source, CastSource::Application { .. }) {
+            return false;
+        }
+        if self.host_content_dialog_open() {
             return true;
         }
         ctx.memory(|memory| {
@@ -229,6 +306,7 @@ impl HorizonApp {
                     return false;
                 }
                 let selected = self.board.panels.iter().filter(|panel| match source {
+                    CastSource::Application {} => false,
                     CastSource::Panel { id } => panel.local_id == *id,
                     CastSource::Workspace { id } => self
                         .board
@@ -249,25 +327,26 @@ impl HorizonApp {
         })
     }
     fn consume_cast_images(&mut self, ctx: &Context) {
-        if self.cast_controls_visible(ctx)
-            || !self
-                .casting
-                .sessions
-                .iter()
-                .any(|session| matches!(session.worker.status(), CastStatus::Streaming { .. }))
+        if !self
+            .casting
+            .sessions
+            .iter()
+            .any(|session| matches!(session.worker.status(), CastStatus::Streaming { .. }))
         {
             return;
         }
         for session in &self.casting.sessions {
             if let Some(frame) = session.scaling.as_ref().and_then(super::scaling::Scaler::take)
                 && matches!(session.worker.status(), CastStatus::Streaming { .. })
+                && frame.pixels_per_point.to_bits() == ctx.pixels_per_point().to_bits()
                 && self
                     .cast_source_rect(session.workspace, &session.source, ctx)
                     .is_ok_and(|rect| rect == frame.rect)
                 && self.cast_geometry_settled(session.workspace, &session.source, ctx)
+                && !self.cast_controls_cover(frame.rect, ctx)
                 && !self.cast_obscured(&session.source, frame.rect, ctx)
             {
-                let _ = session.worker.submit(frame.rgba);
+                let _ = session.worker.submit_source(frame.width, frame.height, frame.rgba);
             }
         }
         let events = ctx.input(|input| input.events.clone());
@@ -290,6 +369,9 @@ impl HorizonApp {
             else {
                 continue;
             };
+            if ticket.pixels_per_point.to_bits() != ctx.pixels_per_point().to_bits() {
+                continue;
+            }
             let (Ok(width), Ok(height)) = (u16::try_from(image.width()), u16::try_from(image.height())) else {
                 continue;
             };
@@ -314,6 +396,7 @@ impl HorizonApp {
                 };
                 if current != *rect
                     || !self.cast_geometry_settled(session.workspace, &session.source, ctx)
+                    || self.cast_controls_cover(current, ctx)
                     || self.cast_obscured(&session.source, current, ctx)
                 {
                     continue;
@@ -323,7 +406,12 @@ impl HorizonApp {
                     continue;
                 }
                 if let Some(scaling) = &session.scaling {
-                    scaling.submit(image.clone(), *rect, ticket.pixels_per_point);
+                    scaling.submit(
+                        image.clone(),
+                        *rect,
+                        ticket.pixels_per_point,
+                        session.worker.uses_source_frames(),
+                    );
                 }
             }
         }
@@ -352,6 +440,74 @@ mod tests {
     };
     use crate::test_egui::DiscardTextures;
     use horizon_core::{RuntimeState, StartupDecision};
+
+    #[test]
+    fn application_capture_uses_the_root_window_and_includes_its_dialogs() {
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState {
+                workspaces: vec![editor_workspace_state("root source", [0.0, 0.0])],
+                ..RuntimeState::default()
+            }),
+        });
+        let workspace = app.board.workspaces[0].id;
+        for size in [[1600.0, 1000.0], [800.0, 1200.0]] {
+            let _ = ctx
+                .run_ui(raw_input(size, None), |ui| {
+                    let rect = app
+                        .cast_source_rect(workspace, &CastSource::Application {}, ui.ctx())
+                        .expect("root source");
+                    assert_eq!(
+                        rect,
+                        Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0], size[1]))
+                    );
+                    egui::Window::new("Synthetic dialog").show(ui.ctx(), |ui| {
+                        ui.label("Part of this window");
+                    });
+                    assert!(!app.cast_obscured(&CastSource::Application {}, rect, ui.ctx()));
+                    app.casting.root_geometry = Some(RootGeometry::observe(
+                        None,
+                        rect,
+                        ui.ctx().pixels_per_point(),
+                        Instant::now()
+                            .checked_sub(CAPTURE_INTERVAL)
+                            .expect("capture interval fits"),
+                    ));
+                    assert!(app.cast_geometry_settled(workspace, &CastSource::Application {}, ui.ctx()));
+                    assert!(app.cast_obscured(&CastSource::Panel { id: "synthetic".into() }, rect, ui.ctx()));
+                })
+                .discard_textures();
+        }
+        let mut minimized = raw_input([800.0, 1200.0], None);
+        minimized.viewports.entry(ViewportId::ROOT).or_default().minimized = Some(true);
+        let _ = ctx
+            .run_ui(minimized, |ui| {
+                assert!(
+                    app.cast_source_rect(workspace, &CastSource::Application {}, ui.ctx())
+                        .is_err()
+                );
+            })
+            .discard_textures();
+    }
+
+    #[test]
+    fn sustained_root_resize_and_density_changes_keep_capture_frozen_until_settled() {
+        let start = Instant::now();
+        let mut geometry = None;
+        // Five seconds of changing bounds must not expose the encoder's three-second idle timeout.
+        for step in 0_u16..=100 {
+            let now = start + Duration::from_millis(u64::from(step) * 50);
+            let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0 + f32::from(step), 1000.0));
+            let current = RootGeometry::observe(geometry, rect, 1.0, now);
+            assert!(!current.settled(rect, 1.0, now));
+            geometry = Some(current);
+        }
+        let current = geometry.expect("observed root");
+        assert!(current.settled(current.rect, 1.0, start + Duration::from_secs(6)));
+        let density_changed = RootGeometry::observe(Some(current), current.rect, 2.0, start + Duration::from_secs(6));
+        assert!(!density_changed.settled(current.rect, 2.0, start + Duration::from_secs(6)));
+        assert!(!current.settled(current.rect, 2.0, start + Duration::from_secs(7)));
+        assert!(density_changed.settled(current.rect, 2.0, start + Duration::from_secs(7)));
+    }
 
     #[test]
     fn slightly_late_ui_frames_preserve_the_capture_cadence() {
@@ -455,7 +611,53 @@ mod tests {
     }
 
     #[test]
-    fn cast_controls_freeze_capture_but_other_overlays_remain_private() {
+    fn cast_controls_shadow_alone_pauses_a_source() {
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        crate::theme::apply(&ctx, horizon_core::AppearanceTheme::Dark);
+        for menu in [false, true] {
+            let layer = if menu {
+                LayerId::new(Order::Foreground, Id::new("cast_shadow_menu"))
+            } else {
+                cast_picker_layer()
+            };
+            if menu {
+                app.casting.control_menus = Some([layer; 2]);
+            }
+            for _ in 0..3 {
+                let _ = ctx
+                    .run_ui(raw_input([1600.0, 1000.0], None), |ui| {
+                        egui::Area::new(layer.id)
+                            .order(layer.order)
+                            .fixed_pos(egui::pos2(400.0, 300.0))
+                            .show(ui.ctx(), |ui| {
+                                let frame = if menu {
+                                    egui::Frame::popup(ui.style())
+                                } else {
+                                    egui::Frame::window(ui.style())
+                                };
+                                frame.show(ui, |ui| {
+                                    ui.allocate_space(egui::vec2(200.0, 100.0));
+                                });
+                            });
+                    })
+                    .discard_textures();
+            }
+            let area = ctx.memory(|memory| memory.area_rect(layer.id)).expect("control area");
+            let strip = Rect::from_min_size(
+                egui::pos2(area.center().x, area.bottom() + if menu { 15.0 } else { 20.0 }),
+                egui::vec2(2.0, 2.0),
+            );
+            assert!(!area.intersects(strip));
+            assert!(app.cast_controls_cover(strip, &ctx), "shadow pixels must stay private");
+            let distant = strip.translate(egui::vec2(0.0, 40.0));
+            assert!(!app.cast_controls_cover(distant, &ctx));
+        }
+    }
+
+    #[test]
+    fn cast_controls_pause_only_covered_sources_and_other_overlays_remain_private() {
         let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
             runtime_state: Box::new(RuntimeState::default()),
         });
@@ -489,12 +691,13 @@ mod tests {
                                 ui.allocate_space(region.size());
                             });
                     }
-                    assert!(app.cast_controls_visible(ui.ctx()));
+                    assert!(app.cast_controls_cover(region, ui.ctx()));
+                    assert!(!app.cast_controls_cover(region.translate(egui::vec2(700.0, 0.0)), ui.ctx()));
                     assert_eq!(app.cast_obscured(&source, region, ui.ctx()), other_overlay);
                 })
                 .discard_textures();
             // egui has discarded sublayers but retained prior-frame areas.
-            assert!(app.cast_controls_visible(&ctx));
+            assert!(app.cast_controls_cover(region, &ctx));
             assert_eq!(app.cast_obscured(&source, region, &ctx), other_overlay);
         }
     }

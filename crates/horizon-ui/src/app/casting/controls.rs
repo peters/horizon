@@ -1,8 +1,24 @@
 use super::{super::HorizonApp, Picker};
+use crate::theme;
 use egui::{Context, Id, Order, Pos2, Rect, Sense, Stroke, Vec2};
 use horizon_core::browser::manifest::cast::{CastOperation, CastOrientation, CastResolution, CastSource};
 
 impl HorizonApp {
+    pub(in crate::app) fn cast_control_screen_rects(&self, ctx: &Context) -> Vec<Rect> {
+        if !self.casting.picker_open() {
+            return Vec::new();
+        }
+        ctx.memory(|memory| {
+            memory
+                .areas()
+                .visible_layer_ids()
+                .into_iter()
+                .filter(|layer| self.is_cast_control_layer(*layer))
+                .filter_map(|layer| memory.area_rect(layer.id))
+                .collect()
+        })
+    }
+
     pub(super) fn render_cast_controls(&mut self, ctx: &Context) {
         if self.startup_chooser.is_some() || self.shutdown_progress.is_some() {
             return;
@@ -12,96 +28,91 @@ impl HorizonApp {
         let Some(mut picker) = self.casting.picker.take() else {
             return;
         };
+        let canvas = self.canvas_rect(ctx);
+        let source_rect = self.cast_source_rect(picker.workspace, &picker.source, ctx).ok();
+        let source = source_rect
+            .or_else(|| self.panel_screen_rects.get(&picker.anchor).copied())
+            .unwrap_or(canvas);
+        let source = self
+            .panel_screen_rects
+            .get(&picker.anchor)
+            .map_or(source, |anchor| source.union(*anchor));
+        let position = *picker.position.get_or_insert_with(|| {
+            super::popup::initial_position(
+                canvas,
+                source,
+                egui::vec2(300.0, 380.0),
+                super::popup::control_shadow_margin(ctx),
+            )
+        });
         let snapshot = self.cast_snapshot(picker.workspace, ctx);
         let mut open = true;
         let mut action = None;
-        let mut close_after = false;
-        let window = egui::Window::new("Cast")
-            .id(Id::new("cast_picker"))
-            .order(Order::Foreground)
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .default_width(320.0)
-            .default_pos(egui::pos2(
-                (self.canvas_rect(ctx).right() - 340.0).max(self.canvas_rect(ctx).left() + 12.0),
-                self.canvas_rect(ctx).top() + 40.0,
-            ))
-            .show(ctx, |ui| {
-                let menu_ids = render_selection(ui, &mut picker, &snapshot, &mut action);
-                self.casting.control_menus =
-                    Some(menu_ids.map(|id| egui::LayerId::new(Order::Foreground, id.with("popup"))));
-                let current = snapshot
-                    .sessions
-                    .iter()
-                    .find(|session| Some(&session.receiver_id) == picker.receiver.as_ref());
-                if let Some(session) = current {
-                    ui.label(match session.state.as_str() {
-                        "pin_required" => "Waiting for TV code",
-                        "connecting" => "Connecting…",
-                        "starting" => "Starting…",
-                        "streaming" => "Casting · image frozen while controls are open",
-                        "stopping" => "Stopping…",
-                        "stopped" => "Stopped",
-                        _ => "Could not cast",
-                    });
-                    render_encoder_status(ui, session);
-                    if let Some(error) = &session.error {
-                        ui.colored_label(ui.visuals().error_fg_color, error);
-                    }
-                    if session.state == "pin_required" {
-                        ui.label("Enter the code shown on your TV");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut *picker.pin)
-                                .password(true)
-                                .char_limit(4),
-                        );
-                        if ui.button("Pair").clicked() {
-                            action = Some(CastOperation::Pair {
-                                receiver_id: session.receiver_id.clone(),
-                                pin: picker.pin.to_string(),
-                            });
-                            close_after = true;
-                        }
-                    }
-                    if !matches!(session.state.as_str(), "stopped" | "failed") && ui.button("Stop casting").clicked() {
-                        action = Some(CastOperation::Stop {
-                            receiver_id: session.receiver_id.clone(),
-                        });
-                    }
-                }
-                let busy = current.is_some_and(|session| !matches!(session.state.as_str(), "stopped" | "failed"));
-                let start_ready = picker.receiver.is_some() && !busy && !self.casting.pairing_loading();
-                if ui
-                    .add_enabled(start_ready, egui::Button::new("Start casting"))
-                    .clicked()
-                    && let Some(receiver) = &picker.receiver
-                {
-                    picker.pin = zeroize::Zeroizing::new(String::new());
-                    close_after = snapshot.paired_receivers.iter().any(|paired| &paired.id == receiver);
-                    action = Some(CastOperation::Start {
-                        receiver_id: receiver.clone(),
-                        source: picker.source.clone(),
-                        orientation: picker.orientation,
-                        resolution: picker.resolution,
-                    });
-                }
-                if let Some(notice) = &self.casting.notice {
-                    ui.colored_label(ui.visuals().error_fg_color, notice);
-                }
-            });
-        if let Some(window) = window
-            && !egui::Popup::is_any_open(ctx)
-        {
-            ctx.move_to_top(window.response.layer_id);
+        let previous_receiver = picker.receiver.clone();
+        let mut close_requested = false;
+        let mut dismiss_after = false;
+        let mut approved = self.application_cast_approved(picker.workspace);
+        let mut approval_changed = false;
+        let window = picker_window(ctx, canvas, position, &mut open).show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
+            render_picker_header(ui, &mut close_requested);
+            ui.add_space(6.0);
+            let menu_ids = render_selection(ui, &mut picker, &snapshot, &mut action);
+            if matches!(picker.source, CastSource::Application { .. }) {
+                render_application_hint(ui);
+                approval_changed = ui.checkbox(&mut approved, "Allow this workspace's agents").changed();
+            }
+            self.casting.control_menus =
+                Some(menu_ids.map(|id| egui::LayerId::new(Order::Foreground, id.with("popup"))));
+            render_session_actions(ui, &mut picker, &snapshot, self.casting.pairing_loading(), &mut action);
+            if source_rect.is_some_and(|rect| self.cast_controls_cover(rect, ctx))
+                && snapshot.sessions.iter().any(|session| {
+                    Some(&session.receiver_id) == picker.receiver.as_ref() && session.state == "streaming"
+                })
+            {
+                ui.label(
+                    egui::RichText::new("Picture paused: move controls away from the source.")
+                        .size(11.0)
+                        .color(theme::FG_SOFT()),
+                );
+            }
+            if let Some(notice) = &self.casting.notice {
+                ui.colored_label(ui.visuals().error_fg_color, notice);
+            }
+        });
+        if let Some(window) = window {
+            picker.position = Some(window.response.rect.min);
+            if !egui::Popup::is_any_open(ctx) {
+                ctx.move_to_top(window.response.layer_id);
+                close_requested |= ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            }
         }
-        if let Some(action) = action
-            && !self.apply_cast_control(picker.workspace, &action, ctx)
-        {
-            close_after = false;
+        if previous_receiver != picker.receiver {
+            self.casting.bind_picker(&mut picker);
         }
-        if open && !close_after {
+        if approval_changed {
+            self.set_application_cast_approval(picker.workspace, approved);
+        }
+        if let Some(action) = action {
+            let bind_after = matches!(action, CastOperation::Start { .. });
+            let paired = picker
+                .receiver
+                .as_ref()
+                .is_some_and(|receiver| snapshot.paired_receivers.iter().any(|device| device.id == *receiver));
+            if self.apply_cast_control(picker.workspace, &action, ctx) {
+                if bind_after {
+                    self.casting.bind_picker(&mut picker);
+                }
+                dismiss_after = super::popup::hide_after_action(&picker.source, &action, paired);
+            }
+        }
+        if open && !close_requested && !dismiss_after {
             self.casting.picker = Some(picker);
+        } else if close_requested || !open {
+            self.casting.stop_picker_session(&picker, ctx);
+        } else {
+            self.casting.dismiss_picker(ctx);
         }
     }
     fn apply_cast_control(
@@ -110,7 +121,7 @@ impl HorizonApp {
         action: &CastOperation,
         ctx: &Context,
     ) -> bool {
-        let outcome = self.cast_operation(workspace, action, ctx);
+        let outcome = self.cast_user_operation(workspace, action, ctx);
         if let Some(error) = outcome.error {
             self.casting.notify(error);
             false
@@ -120,7 +131,7 @@ impl HorizonApp {
         }
     }
     fn render_cast_icons(&mut self, ctx: &Context) {
-        if !self.host_dialog_open() && self.casting.picker.is_none() {
+        if !self.host_dialog_open() {
             for panel in &self.board.panels {
                 let Some(&rect) = self.panel_screen_rects.get(&panel.id) else {
                     continue;
@@ -131,7 +142,7 @@ impl HorizonApp {
                     continue;
                 }
                 let scale = self.canvas_view.zoom;
-                let position = Pos2::new(rect.right() - 80.0 * scale, rect.top() + 7.0 * scale);
+                let position = cast_icon_rect(rect, scale).min;
                 let order = if self.board.focused == Some(id) {
                     Order::Foreground
                 } else {
@@ -145,23 +156,24 @@ impl HorizonApp {
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cast panel or workspace")
                         });
+                        let selected = self.casting.picker.as_ref().is_some_and(|picker| picker.anchor == id);
                         let active = self
                             .casting
                             .sessions
                             .iter()
                             .any(|session| session.workspace == workspace && !session.worker.finished());
-                        let color = if active {
+                        let color = if active || selected {
                             ui.visuals().selection.stroke.color
                         } else if response.hovered() {
                             ui.visuals().strong_text_color()
                         } else {
                             ui.visuals().weak_text_color()
                         };
-                        if response.hovered() || active {
+                        if response.hovered() || active || selected {
                             ui.painter().rect_filled(
                                 button.expand(3.0 * scale),
                                 5.0 * scale,
-                                color.gamma_multiply(if active { 0.14 } else { 0.08 }),
+                                color.gamma_multiply(if active || selected { 0.14 } else { 0.08 }),
                             );
                         }
                         paint_cast_icon(ui.painter(), button, color);
@@ -176,6 +188,11 @@ impl HorizonApp {
                     response.response.layer_id,
                 );
                 if response.inner.clicked() {
+                    if self.casting.picker.as_ref().is_some_and(|picker| picker.anchor == id) {
+                        self.casting.close_picker(ctx);
+                        continue;
+                    }
+                    self.casting.close_picker(ctx);
                     let session = self
                         .casting
                         .sessions
@@ -190,20 +207,65 @@ impl HorizonApp {
                                 .find(|session| session.workspace == workspace)
                         });
                     self.casting.picker = Some(Picker {
+                        anchor: id,
                         workspace,
-                        source: CastSource::Panel {
-                            id: panel.local_id.clone(),
-                        },
+                        source: session.map_or_else(
+                            || CastSource::Panel {
+                                id: panel.local_id.clone(),
+                            },
+                            |session| session.source.clone(),
+                        ),
                         receiver: session.map(|session| session.receiver_id.clone()),
                         orientation: session.map_or(CastOrientation::Landscape, |session| session.orientation),
                         resolution: session.map_or(CastResolution::default(), |session| session.resolution),
                         pin: zeroize::Zeroizing::new(String::new()),
+                        position: None,
+                        binding: session.map(super::popup::SessionBinding::from_session),
                     });
                     self.casting.discover();
                 }
             }
         }
     }
+}
+
+fn render_application_hint(ui: &mut egui::Ui) {
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new("Shares the main window and its dialogs. Controls hide when sharing the whole window.")
+                .size(11.0)
+                .color(theme::FG_SOFT()),
+        )
+        .wrap(),
+    );
+}
+
+fn picker_window<'a>(ctx: &Context, canvas: Rect, position: Pos2, open: &'a mut bool) -> egui::Window<'a> {
+    egui::Window::new("Cast")
+        .id(Id::new("cast_picker"))
+        .order(Order::Foreground)
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .title_bar(false)
+        .frame(
+            egui::Frame::window(&ctx.global_style())
+                .inner_margin(14)
+                .corner_radius(12),
+        )
+        .min_width(264.0)
+        .max_width(264.0)
+        .default_width(264.0)
+        .movable(true)
+        .current_pos(position)
+        .constrain_to(canvas)
+}
+
+fn cast_icon_rect(panel: Rect, scale: f32) -> Rect {
+    Rect::from_min_size(
+        Pos2::new(panel.right() - 80.0 * scale, panel.top() + 7.0 * scale),
+        Vec2::splat(20.0 * scale),
+    )
 }
 
 fn paint_cast_icon(painter: &egui::Painter, rect: Rect, color: egui::Color32) {
@@ -247,9 +309,167 @@ fn render_encoder_status(ui: &mut egui::Ui, session: &horizon_core::browser::man
             "Encoder: CPU"
         });
     }
+    if let Some(scaler) = &session.scaler {
+        ui.label(if scaler == "cuda" {
+            "Scaling: CUDA (CPU preparation)"
+        } else {
+            "Scaling: CPU"
+        });
+    }
     if let Some(reason) = &session.encoder_fallback {
         ui.label(reason);
     }
+}
+
+fn render_session_actions(
+    ui: &mut egui::Ui,
+    picker: &mut Picker,
+    snapshot: &horizon_core::browser::manifest::cast::CastOutcome,
+    pairing_loading: bool,
+    action: &mut Option<CastOperation>,
+) {
+    let current = snapshot
+        .sessions
+        .iter()
+        .find(|session| Some(&session.receiver_id) == picker.receiver.as_ref());
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(4.0);
+    if let Some(session) = current {
+        render_session_status(ui, session);
+
+        if let Some(error) = &session.error {
+            ui.add(egui::Label::new(egui::RichText::new(error).color(theme::PALETTE_RED())).wrap());
+        }
+        if session.encoder.is_some() {
+            ui.collapsing("Details", |ui| render_encoder_status(ui, session));
+        }
+    }
+    let busy = current.is_some_and(|session| !matches!(session.state.as_str(), "stopped" | "failed"));
+    if let Some(session) = current.filter(|session| session.state == "pin_required") {
+        ui.label(
+            egui::RichText::new("Enter the code shown on your TV")
+                .size(12.0)
+                .color(theme::FG_SOFT()),
+        );
+        ui.add_sized(
+            [ui.available_width(), 32.0],
+            egui::TextEdit::singleline(&mut *picker.pin)
+                .password(true)
+                .char_limit(4)
+                .hint_text("TV code"),
+        );
+        if primary_button(
+            ui,
+            "Pair and cast",
+            picker.pin.len() == 4 && picker.pin.bytes().all(|byte| byte.is_ascii_digit()),
+        )
+        .clicked()
+        {
+            *action = Some(CastOperation::Pair {
+                receiver_id: session.receiver_id.clone(),
+                pin: picker.pin.to_string(),
+            });
+        }
+        if ui.small_button("Cancel pairing").clicked() {
+            *action = Some(CastOperation::Stop {
+                receiver_id: session.receiver_id.clone(),
+            });
+        }
+    } else if busy {
+        if let Some(session) = current
+            && ui
+                .add_sized([ui.available_width(), 34.0], egui::Button::new("Stop casting"))
+                .clicked()
+        {
+            *action = Some(CastOperation::Stop {
+                receiver_id: session.receiver_id.clone(),
+            });
+        }
+    } else {
+        let ready = !pairing_loading
+            && snapshot
+                .receivers
+                .iter()
+                .any(|receiver| Some(&receiver.id) == picker.receiver.as_ref());
+        if primary_button(ui, "Start casting", ready).clicked()
+            && let Some(receiver) = &picker.receiver
+        {
+            picker.pin = zeroize::Zeroizing::new(String::new());
+            *action = Some(CastOperation::Start {
+                receiver_id: receiver.clone(),
+                source: picker.source.clone(),
+                orientation: picker.orientation,
+                resolution: picker.resolution,
+            });
+        }
+    }
+}
+
+fn render_picker_header(ui: &mut egui::Ui, close: &mut bool) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+        paint_cast_icon(ui.painter(), rect, theme::ACCENT());
+        ui.label(egui::RichText::new("Cast").size(16.0).strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let response = ui.add(egui::Button::new("×").frame(false));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close cast controls"));
+            if response.clicked() {
+                *close = true;
+            }
+        });
+    });
+}
+
+fn primary_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    let button = egui::Button::new((
+        egui::Atom::grow(),
+        egui::RichText::new(text).strong().color(theme::BG()),
+        egui::Atom::grow(),
+    ))
+    .fill(theme::ACCENT())
+    .min_size(egui::vec2(ui.available_width(), 34.0));
+    ui.add_enabled(enabled, button)
+}
+
+fn render_session_status(ui: &mut egui::Ui, session: &horizon_core::browser::manifest::cast::CastSessionInfo) {
+    let (text, color) = match session.state.as_str() {
+        "streaming" => ("Casting", theme::PALETTE_GREEN()),
+        "pin_required" => ("Pair your TV", theme::ACCENT()),
+        "connecting" => ("Connecting…", theme::ACCENT()),
+        "starting" => ("Starting…", theme::ACCENT()),
+        "stopping" => ("Stopping…", theme::FG_SOFT()),
+        "stopped" => ("Ready to cast", theme::FG_SOFT()),
+        _ => ("Could not cast", theme::PALETTE_RED()),
+    };
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+        ui.painter().circle_filled(rect.center(), 3.0, color);
+        ui.label(egui::RichText::new(text).color(color).size(12.0));
+    });
+}
+
+fn field_label(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).size(11.0).color(theme::FG_SOFT()));
+}
+
+fn segments<T: Copy + PartialEq>(ui: &mut egui::Ui, value: &mut T, choices: &[(T, &str)]) {
+    let count: f32 = choices.iter().map(|_| 1.0_f32).sum();
+    let width = (ui.available_width() - (count - 1.0) * 4.0) / count;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for &(choice, label) in choices {
+            if ui
+                .add_sized(
+                    [width, 28.0],
+                    egui::Button::new(label).selected(*value == choice).corner_radius(6),
+                )
+                .clicked()
+            {
+                *value = choice;
+            }
+        }
+    });
 }
 
 fn render_selection(
@@ -258,40 +478,61 @@ fn render_selection(
     snapshot: &horizon_core::browser::manifest::cast::CastOutcome,
     action: &mut Option<CastOperation>,
 ) -> [Id; 2] {
-    ui.label("Resolution");
-    ui.horizontal(|ui| {
-        for (resolution, label) in [
-            (CastResolution::Hd720, "720p"),
-            (CastResolution::FullHd1080, "1080p"),
-            (CastResolution::Uhd4k, "4K"),
-        ] {
-            ui.selectable_value(&mut picker.resolution, resolution, label);
-        }
-    });
-    ui.add_space(8.0);
+    let current = snapshot
+        .sessions
+        .iter()
+        .find(|session| Some(&session.receiver_id) == picker.receiver.as_ref());
+    let busy = current.is_some_and(|session| !matches!(session.state.as_str(), "stopped" | "failed"));
+    if let Some(session) = current.filter(|_| busy) {
+        picker.source = session.source.clone();
+        picker.orientation = session.orientation;
+        picker.resolution = session.resolution;
+    }
     let parent_layer = ui.layer_id();
-    ui.label("Source");
-    let source = egui::ComboBox::from_id_salt("cast_source")
-        .selected_text(
-            snapshot
-                .sources
-                .iter()
-                .find(|source| source.source == picker.source)
-                .map_or("Select source", |source| source.name.as_str()),
-        )
-        .show_ui(ui, |ui| {
-            ui.ctx().set_sublayer(parent_layer, ui.layer_id());
-            for source in &snapshot.sources {
-                ui.selectable_value(&mut picker.source, source.source.clone(), &source.name);
+    field_label(ui, "Source");
+    let source = ui
+        .add_enabled_ui(!busy, |ui| {
+            egui::ComboBox::from_id_salt("cast_source")
+                .width(ui.available_width())
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                .selected_text(
+                    snapshot
+                        .sources
+                        .iter()
+                        .find(|source| source.source == picker.source)
+                        .map_or("Select source", |source| source.name.as_str()),
+                )
+                .show_ui(ui, |ui| {
+                    ui.ctx().set_sublayer(parent_layer, ui.layer_id());
+                    for source in &snapshot.sources {
+                        ui.selectable_value(&mut picker.source, source.source.clone(), &source.name);
+                    }
+                })
+        })
+        .inner;
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        field_label(ui, "Apple TV");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if snapshot.discovering {
+                ui.add(egui::Spinner::new().size(12.0));
+            } else if ui
+                .add(egui::Button::new(egui::RichText::new("Refresh").size(11.0)).frame(false))
+                .clicked()
+            {
+                *action = Some(CastOperation::Discover);
             }
         });
-    ui.add_space(8.0);
-    ui.label("Apple TV");
+    });
+    let previous_receiver = picker.receiver.clone();
     let receiver = egui::ComboBox::from_id_salt("cast_receiver")
+        .width(ui.available_width())
+        .wrap_mode(egui::TextWrapMode::Truncate)
         .selected_text(
             snapshot
                 .receivers
                 .iter()
+                .chain(&snapshot.paired_receivers)
                 .find(|receiver| Some(&receiver.id) == picker.receiver.as_ref())
                 .map_or("Select Apple TV", |receiver| receiver.name.as_str()),
         )
@@ -301,20 +542,46 @@ fn render_selection(
                 ui.selectable_value(&mut picker.receiver, Some(receiver.id.clone()), &receiver.name);
             }
         });
-    if snapshot.discovering {
-        ui.spinner();
-    } else if ui.small_button("Refresh TVs").clicked() {
-        *action = Some(CastOperation::Discover);
+    if previous_receiver != picker.receiver {
+        picker.pin = zeroize::Zeroizing::new(String::new());
     }
-    ui.horizontal(|ui| {
-        ui.selectable_value(&mut picker.orientation, CastOrientation::Landscape, "Landscape");
-        ui.selectable_value(&mut picker.orientation, CastOrientation::Portrait, "Portrait");
+    if snapshot.receivers.is_empty() && !snapshot.discovering {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new("No TVs found. Check the network, then refresh.")
+                    .size(11.0)
+                    .color(theme::FG_SOFT()),
+            )
+            .wrap(),
+        );
+    }
+    ui.add_space(4.0);
+    ui.add_enabled_ui(!busy, |ui| {
+        field_label(ui, "Quality");
+        segments(
+            ui,
+            &mut picker.resolution,
+            &[
+                (CastResolution::Hd720, "720p"),
+                (CastResolution::FullHd1080, "1080p"),
+                (CastResolution::Uhd4k, "4K"),
+            ],
+        );
+        segments(
+            ui,
+            &mut picker.orientation,
+            &[
+                (CastOrientation::Landscape, "Landscape"),
+                (CastOrientation::Portrait, "Portrait"),
+            ],
+        );
     });
     [source.response.id, receiver.response.id]
 }
 
 #[cfg(test)]
 mod tests {
+    mod docking;
     use super::*;
     use crate::test_egui::DiscardTextures;
     use horizon_core::{
@@ -362,12 +629,15 @@ mod tests {
     fn receiver_menu_stays_above_picker_after_window_is_raised() {
         let ctx = Context::default();
         let mut picker = Picker {
+            anchor: horizon_core::PanelId(1),
             workspace: WorkspaceId(1),
             source: CastSource::Panel { id: "synthetic".into() },
             receiver: None,
             orientation: CastOrientation::Landscape,
             resolution: CastResolution::default(),
             pin: zeroize::Zeroizing::new(String::new()),
+            position: None,
+            binding: None,
         };
         let snapshot = CastOutcome {
             receivers: vec![CastReceiver {

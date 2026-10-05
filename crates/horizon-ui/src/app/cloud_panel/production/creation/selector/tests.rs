@@ -84,6 +84,7 @@ fn preferences() -> Preferences {
 fn form(profile: &str) -> Production {
     let mut form = Production {
         title: "Selector fixture".into(),
+        tailnets: crate::app::tailnets::State::loaded_fixture(),
         profiles: Some(CloudConfig::parse(CONFIG).unwrap()),
         selected_profile: profile.into(),
         ..Production::default()
