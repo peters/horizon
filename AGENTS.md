@@ -2,6 +2,24 @@
 
 > **Source of truth** for all contributors and AI agents working on this project.
 
+<!-- company-products:begin -->
+## Company and products
+
+`horizon` is not a Finter Mobility repository, but it runs the agents, browser panels and device panels that all of them use, so it must know which repos need each other. The shared map lives in the private `fintermobilityas/company` repo, checked out as `~/github/company`; treat `docs/products.json` there as the source when deciding which companion repos to open, check or brief together:
+
+- What every repo does and how they connect: `../company/docs/products.md` (machine-readable: `../company/docs/products.json`).
+- This repo's page: `../company/docs/products/horizon.md`.
+- Shared maintenance rules (Dependabot, .NET, MongoDB, PRs, native packages, rollout order): `../company/AGENTS.md`.
+- Companion lookups: for a repo X, its companions are the `edges` in `products.json` where `from` or `to` is X; `check_together: true` means a change to that contract must be verified in both repos (format: `docs/products.schema.json`, `schema_version` 1).
+
+Companions of `horizon`:
+
+- Uses: `company` (shared maintenance procedures); `finter-kunnskap` (horizon-finter skill); `surge` (surge-core).
+- Used by: `anpr.classification` (Horizon browser_* / device_panel MCP tools); `desktop-migration` (Horizon browser_* / device_panel MCP tools); `jetpack-migration` (Horizon browser_* / device_panel MCP tools); `nativesdk` (Horizon browser_* / device_panel MCP tools); `vagpass.se` (Horizon browser_* / device_panel MCP tools); `youpark.mobile.native` (Horizon browser_* / device_panel MCP tools); `youpark.no` (Horizon browser_* / device_panel MCP tools, Horizon cloud image pins); `youpayv2` (Horizon browser_* / device_panel MCP tools).
+
+When you change a contract shared with a companion (API, package, model files, fixtures, deploy order), check that repo too and update `../company/docs/products.json` if the link itself changes.
+<!-- company-products:end -->
+
 ## Quick Start
 
 An AI agent given these instructions should be able to go from zero to a running Horizon binary.
