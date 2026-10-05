@@ -133,6 +133,9 @@ fn receiver_with(listener: TcpListener, config: Arc<ServerConfig>, running: bool
                         send(&mut stream, PLATFORM_RECEIVER, NS_RECEIVER, &volume);
                         let playing = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "PLAYING"}]});
                         send(&mut stream, to, NS_MEDIA, &playing);
+                        // TVs interleave short BUFFERING reports while playback advances.
+                        let blip = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "BUFFERING"}]});
+                        send(&mut stream, to, NS_MEDIA, &blip);
                         send(&mut stream, PLATFORM_RECEIVER, NS_HEARTBEAT, &json!({"type": "PING"}));
                     }
                     (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => return log,
@@ -243,6 +246,12 @@ fn live_cast_loads_the_served_playlist_and_tracks_playback() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(live.state(), LiveState::Playing);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        live.state(),
+        LiveState::Playing,
+        "a brief BUFFERING report must not flap the state"
+    );
     live.stop();
     assert_eq!(live.state(), LiveState::Ended);
     let log = server.join().unwrap();

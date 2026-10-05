@@ -15,17 +15,22 @@ use hls::Segmenter;
 use http::HttpServer;
 use serde_json::Value;
 use std::{
+    cell::Cell,
     net::SocketAddr,
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const BUFFER_POLL: Duration = Duration::from_millis(50);
 const EVENT_POLL: Duration = Duration::from_millis(250);
+/// TV receivers report a brief BUFFERING between PLAYING updates every few
+/// seconds while playback advances in real time. Only report buffering when no
+/// PLAYING status arrived for this long.
+const STALL_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub struct LiveOptions {
@@ -88,6 +93,7 @@ impl LiveCast {
                 segmenter: segmenter.clone(),
                 state: state.clone(),
                 stop: stop.clone(),
+                last_playing: Cell::new(None),
             };
             std::thread::Builder::new()
                 .name("chromecast-live".to_owned())
@@ -147,6 +153,7 @@ struct Session {
     segmenter: Arc<Mutex<Segmenter>>,
     state: Arc<Mutex<LiveState>>,
     stop: Arc<AtomicBool>,
+    last_playing: Cell<Option<Instant>>,
 }
 
 impl Session {
@@ -184,6 +191,9 @@ impl Session {
             if self.stopped() {
                 break Ok(());
             }
+            if !self.recently_playing() && lock(&self.state).eq(&LiveState::Playing) {
+                self.set(LiveState::Buffering);
+            }
             let Some(event) = client.next_event(EVENT_POLL)? else {
                 continue;
             };
@@ -213,8 +223,11 @@ impl Session {
         }
         for status in MediaStatus::from_event(event) {
             match (status.player_state.as_str(), status.idle_reason.as_deref()) {
-                ("PLAYING", _) => self.set(LiveState::Playing),
-                ("BUFFERING" | "LOADING", _) => self.set(LiveState::Buffering),
+                ("PLAYING", _) => {
+                    self.last_playing.set(Some(Instant::now()));
+                    self.set(LiveState::Playing);
+                }
+                ("BUFFERING" | "LOADING", _) if !self.recently_playing() => self.set(LiveState::Buffering),
                 ("IDLE", Some("ERROR")) => {
                     return Err(Error::Rejected {
                         kind: "MEDIA_ERROR".to_owned(),
@@ -226,6 +239,10 @@ impl Session {
             }
         }
         Ok(true)
+    }
+
+    fn recently_playing(&self) -> bool {
+        self.last_playing.get().is_some_and(|at| at.elapsed() < STALL_GRACE)
     }
 
     fn set(&self, state: LiveState) {
