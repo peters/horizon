@@ -197,7 +197,7 @@ GPU profile requires GPU capacity; a CPU result cannot qualify that lane.
 ### Pull Request Scope
 
 - Deliver one independently testable outcome per PR. Split multi-part issues, refactoring, migrations, and cleanup into serial PRs.
-- Stop and request explicit user approval before a PR changes more than 10 source or test files, changes more than 1,500 non-generated source or test lines (additions plus deletions), or spans multiple independent subsystems. Temporary smoke-test plans do not count toward these limits.
+- Stop and request explicit user approval before a PR changes more than 10 source or test files, changes more than 1,500 non-generated source or test lines (additions plus deletions), or spans multiple independent subsystems. Test procedures and reports under `docs/testing/` do not count toward these limits.
 - Migrate only the call sites required by the acceptance criteria. Treat similar pre-existing code as follow-up work.
 - Fix only problems that the PR introduces or worsens, acceptance-criteria violations, security or data-loss risks, and merge blockers in the same PR.
 - Keep local and agent self-review findings local and deduplicated. Do not publish automated self-review findings unless the user explicitly requests them; this does not replace the repository-mandated independent review below.
@@ -306,8 +306,10 @@ authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
 - CI runs the whole test suite on Linux, macOS and Windows; do not skip failing tests in the Windows job. When a test genuinely needs a Unix shell, PTY semantics or Unix paths, mark it `#[cfg_attr(windows, ignore = "<reason>")]`, or `#[cfg(unix)]` with a comment stating the reason when it cannot compile on Windows. Fix a real Windows bug instead, or file an issue for it.
 - For UI/layout changes, verify with a live screenshot after launch and after resize/fit interactions; build success alone is not sufficient
 - Unless release-specific behavior is the thing under test, prefer `target/debug/horizon` for smoke testing so iteration stays fast while validating UI and interaction correctness
-- For any UI-related change, always create an extensive temporary smoke-test plan under `docs/testing/` that another agent or machine can execute without extra context. Cover baseline behavior, primary flows, edge cases, persistence/migration, and visual regressions.
-- Temporary smoke-test plans are validation artifacts, not permanent docs. Delete them after the UI validation pass is complete unless the user explicitly asks to keep them.
+- Every new feature and every UI-related change needs a test procedure in ASD-STE100 Simplified Technical English. Add a new procedure under `docs/testing/procedures/` from [the template](docs/testing/procedures/TEMPLATE.md), or update the existing procedure for that feature. Another agent or machine must be able to do it without extra context. Cover baseline behavior, primary flows, edge cases, persistence/migration, and visual regressions.
+- Follow [the STE rules](docs/style/ste-rules.md) and [the technical names](docs/style/technical-names.md). Put a `CAUTION` before each step that rents compute, deletes data, sends a secret or changes access.
+- Procedures are permanent. Record each run as a report under `docs/testing/reports/` from [the report template](docs/testing/reports/TEMPLATE.md) when the run must be kept; otherwise put the results in the PR. Do not delete a procedure after validation. Move a procedure for a removed feature to `docs/archive/`.
+- Older plans directly under `docs/testing/` are not yet STE. Convert a plan to a procedure when you change its feature. [Issue #1265](https://github.com/peters/horizon/issues/1265) tracks the remaining gaps.
 
 ### Isolated UI Testing Through Horizon Native VNC
 
@@ -327,8 +329,8 @@ authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
 
 Multi-machine validation (e.g. macOS/Metal on one box, Linux/CUDA on another) is coordinated **through PR comments**, so agents on different machines can hand work to each other asynchronously:
 
-- The implementing agent opens the PR, adds a smoke-test plan under `docs/testing/`, and posts a comment:
-  `SMOKE-TEST REQUEST <machine/os> — plan: docs/testing/<file>.md — scope: <which lanes>`
+- The implementing agent opens the PR, adds or updates the STE procedure under `docs/testing/procedures/`, and posts a comment:
+  `SMOKE-TEST REQUEST <machine/os> — plan: docs/testing/procedures/<file>.md — scope: <which lanes>`
 - The executing agent on the target machine checks out the PR branch, runs its lane of the plan, **fixes what it can and pushes those commits to the PR branch**, then replies with a report:
 
   ```
