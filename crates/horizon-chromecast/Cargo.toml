@@ -12,14 +12,13 @@ description = "Google Cast sender: receiver discovery, Cast v2 control and live 
 default = ["discovery"]
 # Multicast DNS browsing. Hosts that discover receivers through a platform
 # service (for example Bonjour on iOS) can disable it.
-discovery = ["dep:mdns-sd"]
+discovery = ["horizon-media/discovery"]
 
 [lints]
 workspace = true
 
 [dependencies]
 horizon-media.workspace = true
-mdns-sd = { workspace = true, optional = true }
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true

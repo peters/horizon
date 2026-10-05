@@ -1,10 +1,8 @@
 use crate::{Error, Result};
-use mdns_sd::{ServiceDaemon, ServiceEvent};
-use std::{
-    collections::BTreeMap,
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
+use horizon_media::discovery;
+use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
+
+const SERVICE: &str = "_airplay._tcp.local.";
 
 #[derive(Clone, Debug)]
 pub struct Receiver {
@@ -17,54 +15,29 @@ pub struct Receiver {
 /// # Errors
 /// Returns a discovery error if multicast service discovery cannot start.
 pub fn discover() -> Result<Vec<Receiver>> {
-    let daemon = ServiceDaemon::new().map_err(|e| Error::Backend(e.to_string()))?;
-    let result = (|| {
-        let events = daemon
-            .browse("_airplay._tcp.local.")
-            .map_err(|e| Error::Backend(e.to_string()))?;
-        let deadline = Instant::now() + Duration::from_secs(3);
-        let mut receivers = BTreeMap::new();
-        while let Some(wait) = deadline.checked_duration_since(Instant::now()) {
-            let Ok(event) = events.recv_timeout(wait) else {
-                break;
-            };
-            if let ServiceEvent::ServiceResolved(info) = event {
-                if !info
-                    .get_property_val_str("model")
-                    .is_some_and(|model| model.starts_with("AppleTV"))
-                    || !info.get_property_val_str("features").is_some_and(modern_timing)
-                {
-                    continue;
-                }
-                let Some(id) = info.get_property_val_str("deviceid") else {
-                    continue;
-                };
-                // IPv4 matches the initial Linux LAN MVP; no unscoped link-local IPv6.
-                let Some(ip) = info.get_addresses_v4().into_iter().min() else {
-                    continue;
-                };
-                if info.port == 0 {
-                    continue;
-                }
-                let name = info
-                    .fullname
-                    .strip_suffix("._airplay._tcp.local.")
-                    .unwrap_or(&info.fullname)
-                    .to_owned();
-                receivers.insert(
-                    id.to_owned(),
-                    Receiver {
-                        id: id.to_owned(),
-                        name,
-                        address: SocketAddr::new(ip.into(), info.port),
-                    },
-                );
-            }
+    let services = discovery::browse(SERVICE, Duration::from_secs(3)).map_err(|e| Error::Backend(e.to_string()))?;
+    let mut receivers = BTreeMap::new();
+    for service in services {
+        if !service
+            .property("model")
+            .is_some_and(|model| model.starts_with("AppleTV"))
+            || !service.property("features").is_some_and(modern_timing)
+        {
+            continue;
         }
-        Ok(receivers.into_values().collect())
-    })();
-    let _ = daemon.shutdown();
-    result
+        let Some(id) = service.property("deviceid") else {
+            continue;
+        };
+        receivers.insert(
+            id.to_owned(),
+            Receiver {
+                id: id.to_owned(),
+                name: service.instance().to_owned(),
+                address: service.address,
+            },
+        );
+    }
+    Ok(receivers.into_values().collect())
 }
 
 fn modern_timing(features: &str) -> bool {

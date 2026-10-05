@@ -6,7 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-description = "Media helpers shared by the casting transports: H.264 bitstream handling"
+description = "Media helpers shared by the casting transports: H.264 bitstream handling and mDNS browsing"
+
+[features]
+default = []
+# Multicast DNS browsing for receiver discovery.
+discovery = ["dep:mdns-sd"]
 
 [lints]
 workspace = true
+
+[dependencies]
+mdns-sd = { workspace = true, optional = true }

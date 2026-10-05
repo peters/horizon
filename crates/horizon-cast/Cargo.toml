@@ -16,7 +16,7 @@ nvenc = []
 workspace = true
 
 [dependencies]
-horizon-media.workspace = true
+horizon-media = { workspace = true, features = ["discovery"] }
 ring.workspace = true
 crypto-bigint.workspace = true
 plist.workspace = true
@@ -24,7 +24,6 @@ thiserror.workspace = true
 zeroize.workspace = true
 uuid.workspace = true
 
-mdns-sd.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

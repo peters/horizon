@@ -1,10 +1,6 @@
 use crate::{Error, Result};
-use mdns_sd::{ServiceDaemon, ServiceEvent};
-use std::{
-    collections::BTreeMap,
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
+use horizon_media::discovery;
+use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 const SERVICE: &str = "_googlecast._tcp.local.";
 const CAPABILITY_VIDEO_OUT: u32 = 1 << 0;
@@ -24,49 +20,24 @@ pub struct Receiver {
 /// # Errors
 /// Returns a discovery error if multicast service discovery cannot start.
 pub fn discover(duration: Duration) -> Result<Vec<Receiver>> {
-    let daemon = ServiceDaemon::new().map_err(|e| Error::Discovery(e.to_string()))?;
-    let result = (|| {
-        let events = daemon.browse(SERVICE).map_err(|e| Error::Discovery(e.to_string()))?;
-        let deadline = Instant::now()
-            .checked_add(duration)
-            .ok_or_else(|| Error::Discovery("discovery duration is too long".to_owned()))?;
-        let mut receivers = BTreeMap::new();
-        while let Some(wait) = deadline.checked_duration_since(Instant::now()) {
-            let Ok(event) = events.recv_timeout(wait) else {
-                break;
-            };
-            let ServiceEvent::ServiceResolved(info) = event else {
-                continue;
-            };
-            let Some(id) = info.get_property_val_str("id") else {
-                continue;
-            };
-            // IPv4 only: link-local IPv6 needs a scope id the caller cannot use.
-            let Some(ip) = info.get_addresses_v4().into_iter().min() else {
-                continue;
-            };
-            if info.port == 0 {
-                continue;
-            }
-            let name = info.get_property_val_str("fn").map_or_else(
-                || info.fullname.trim_end_matches(SERVICE).trim_end_matches('.').to_owned(),
-                str::to_owned,
-            );
-            receivers.insert(
-                id.to_owned(),
-                Receiver {
-                    id: id.to_owned(),
-                    name,
-                    model: info.get_property_val_str("md").unwrap_or_default().to_owned(),
-                    address: SocketAddr::new(ip.into(), info.port),
-                    video: info.get_property_val_str("ca").is_some_and(shows_video),
-                },
-            );
-        }
-        Ok(receivers.into_values().collect())
-    })();
-    let _ = daemon.shutdown();
-    result
+    let services = discovery::browse(SERVICE, duration).map_err(|e| Error::Discovery(e.to_string()))?;
+    let mut receivers = BTreeMap::new();
+    for service in services {
+        let Some(id) = service.property("id") else {
+            continue;
+        };
+        receivers.insert(
+            id.to_owned(),
+            Receiver {
+                id: id.to_owned(),
+                name: service.property("fn").unwrap_or(service.instance()).to_owned(),
+                model: service.property("md").unwrap_or_default().to_owned(),
+                address: service.address,
+                video: service.property("ca").is_some_and(shows_video),
+            },
+        );
+    }
+    Ok(receivers.into_values().collect())
 }
 
 fn shows_video(capabilities: &str) -> bool {

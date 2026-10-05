@@ -2440,7 +2440,6 @@ version = "0.2.7"
 dependencies = [
  "crypto-bigint",
  "horizon-media",
- "mdns-sd",
  "plist",
  "ring",
  "tempfile",
@@ -2454,7 +2453,6 @@ name = "horizon-chromecast"
 version = "0.2.7"
 dependencies = [
  "horizon-media",
- "mdns-sd",
  "rcgen",
  "rustls",
  "serde",
@@ -2615,6 +2613,9 @@ dependencies = [
 [[package]]
 name = "horizon-media"
 version = "0.2.7"
+dependencies = [
+ "mdns-sd",
+]
 
 [[package]]
 name = "horizon-process-time"
