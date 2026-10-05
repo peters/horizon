@@ -656,7 +656,12 @@ fn cast_against(server: JoinHandle<Vec<String>>, address: SocketAddr) -> (LiveSt
 }
 
 fn cast_for(server: JoinHandle<Vec<String>>, address: SocketAddr, run: Duration) -> (LiveState, Vec<String>) {
-    let live = LiveCast::start(address, LiveOptions::default()).unwrap();
+    // These bare access units carry no SPS, which the progressive stream needs.
+    let options = LiveOptions {
+        transport: Transport::Hls,
+        ..LiveOptions::default()
+    };
+    let live = LiveCast::start(address, options).unwrap();
     for frame in 0..30u64 {
         let pts = Duration::from_millis(frame * 100);
         let keyframe = live.wants_keyframe(pts);
