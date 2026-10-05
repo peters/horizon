@@ -184,7 +184,7 @@ impl HorizonApp {
                 ui.set_min_width(ui.available_width());
 
                 for workspace in workspace_data {
-                    self.render_sidebar_workspace(ui, workspace, workspace_data, actions, &mut drag_state);
+                    self.render_sidebar_workspace(ui, workspace, actions, &mut drag_state);
                 }
             });
 
@@ -239,7 +239,6 @@ impl HorizonApp {
         &mut self,
         ui: &mut egui::Ui,
         workspace: &WorkspaceSidebarEntry,
-        workspace_data: &[WorkspaceSidebarEntry],
         actions: &mut SidebarActions,
         drag_state: &mut SidebarWorkspaceDragState,
     ) {
@@ -295,7 +294,7 @@ impl HorizonApp {
         if sidebar_workspace_shows_panels(workspace.is_active, accordion) {
             ui.add_space(2.0);
             for panel in &workspace.panels {
-                self.render_sidebar_panel(ui, workspace, workspace_data, panel, actions);
+                self.render_sidebar_panel(ui, workspace, panel, actions);
             }
         }
         ui.add_space(8.0);
@@ -442,7 +441,6 @@ impl HorizonApp {
         &mut self,
         ui: &mut egui::Ui,
         workspace: &WorkspaceSidebarEntry,
-        workspace_data: &[WorkspaceSidebarEntry],
         panel: &SidebarPanelEntry,
         actions: &mut SidebarActions,
     ) {
@@ -525,7 +523,7 @@ impl HorizonApp {
             actions.pan_to_panel = Some(panel.id);
         }
 
-        self.show_sidebar_panel_context_menu(&row_response, workspace, workspace_data, panel.id, panel.kind, actions);
+        self.show_sidebar_panel_context_menu(&row_response, workspace, panel.id, panel.kind, actions);
         ui.add_space(1.0);
     }
 
@@ -533,38 +531,19 @@ impl HorizonApp {
         &mut self,
         response: &egui::Response,
         workspace: &WorkspaceSidebarEntry,
-        workspace_data: &[WorkspaceSidebarEntry],
         panel_id: PanelId,
         kind: horizon_core::PanelKind,
         actions: &mut SidebarActions,
     ) {
-        response.context_menu(|ui| {
+        let popup = egui::Popup::context_menu(response)
+            .kind(egui::PopupKind::Tooltip)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
+        let shown = popup.show(|ui| {
             ui.set_min_width(160.0);
-            ui.label(
-                egui::RichText::new("Move to Workspace")
-                    .size(11.0)
-                    .color(theme::FG_DIM()),
-            );
-            #[cfg(feature = "cloud-workspaces")]
-            let can_move = !self.cloud_prototype.groups.contains_panel(&self.board, panel_id);
-            #[cfg(not(feature = "cloud-workspaces"))]
-            let can_move = true;
-            for other_workspace in workspace_data {
-                if other_workspace.id == workspace.id {
-                    continue;
-                }
-                let text = egui::RichText::new(&other_workspace.name)
-                    .size(12.0)
-                    .color(theme::FG_SOFT());
-                if ui
-                    .add_enabled(can_move, Button::new(text).frame(false))
-                    .on_disabled_hover_text("This panel belongs to its cloud environment.")
-                    .clicked()
-                {
-                    self.board.assign_panel_to_workspace(panel_id, other_workspace.id);
-                    self.mark_runtime_dirty();
-                    ui.close();
-                }
+            if let Some(destination) = self.show_workspace_destination(ui, response, panel_id, workspace.id) {
+                self.board.assign_panel_to_workspace(panel_id, destination);
+                self.mark_runtime_dirty();
             }
 
             ui.separator();
@@ -595,6 +574,11 @@ impl HorizonApp {
                 ui.close();
             }
         });
+        if shown.is_some() {
+            response
+                .ctx
+                .memory_mut(|memory| memory.areas_mut().set_sublayer(response.layer_id, popup_layer));
+        }
     }
 
     fn apply_sidebar_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
