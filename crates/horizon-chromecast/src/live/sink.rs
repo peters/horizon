@@ -51,7 +51,7 @@ mod tests {
 
     #[test]
     fn encoder_output_fills_segments_that_start_with_parameter_sets() {
-        for segment in [150, 500, 1_000, 1_480, 1_490, 2_000] {
+        for segment in [150, 500, 1_000, 1_480, 1_490, 2_000, 45_000, 60_000] {
             fill_segments(Duration::from_millis(segment));
         }
     }

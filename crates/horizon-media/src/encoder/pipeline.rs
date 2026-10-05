@@ -46,7 +46,7 @@ impl EncoderConfig {
         let target_ms = ((segment.as_millis() + 500) / 1000).max(1) * 1000;
         let budget = ((target_ms + 499) * rate) / 1000;
         Self {
-            keyframe_interval: u32::try_from(ideal.min(budget).clamp(1, 600)).unwrap_or(600),
+            keyframe_interval: u32::try_from(ideal.min(budget).max(1)).unwrap_or(u32::MAX),
         }
     }
 }
@@ -308,7 +308,14 @@ mod tests {
         }
         // 1.48 s rounds to a 1 s target: 23 frames (1.533 s) would exceed the
         // 1.4995 s budget, so the interval stays at 22 frames (1.467 s).
-        for (segment, frames) in [(1_480, 22), (1_490, 22), (1_500, 23), (2_000, 30)] {
+        for (segment, frames) in [
+            (1_480, 22),
+            (1_490, 22),
+            (1_500, 23),
+            (2_000, 30),
+            (45_000, 675),
+            (60_000, 900),
+        ] {
             let interval = EncoderConfig::for_segments(Duration::from_millis(segment)).keyframe_interval;
             assert_eq!(interval, frames, "{segment} ms");
             // Every keyframe still reaches the 90% cut threshold.
@@ -317,7 +324,7 @@ mod tests {
         assert_eq!(EncoderConfig::for_segments(Duration::ZERO).keyframe_interval, 1);
         assert_eq!(
             EncoderConfig::for_segments(Duration::from_secs(3600)).keyframe_interval,
-            600
+            54_000
         );
     }
 }
