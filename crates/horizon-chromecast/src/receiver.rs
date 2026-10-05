@@ -109,14 +109,16 @@ impl CastClient {
                 return Err(Error::Timeout("LAUNCH".to_owned()));
             }
             std::thread::sleep(LAUNCH_POLL_INTERVAL.min(remaining));
-            let reply = self.request_within(
-                PLATFORM_RECEIVER,
-                NS_RECEIVER,
-                json!({"type": "GET_STATUS"}),
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .max(LAUNCH_POLL_INTERVAL),
-            )?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::Timeout("LAUNCH".to_owned()));
+            }
+            let reply = self
+                .request_within(PLATFORM_RECEIVER, NS_RECEIVER, json!({"type": "GET_STATUS"}), remaining)
+                .map_err(|error| match error {
+                    Error::Timeout(_) => Error::Timeout("LAUNCH".to_owned()),
+                    other => other,
+                })?;
             status = ReceiverStatus::from_reply(&reply)?;
         };
         self.connect_virtual(&app.transport_id)?;
