@@ -222,3 +222,18 @@ bounded, run under the account lock and require exclusive host execution ownersh
 for the workspace; they must never recursively access the journal. References are
 neither Debug nor serializable. This callback is a recovery primitive, not startup
 reconciliation of processes/tunnels or an MCP host implementation.
+
+### Exclusive native workspace execution
+
+The host holds `journal::execution::Workspace` for its entire actor, including concurrent
+lanes. CLI, MCP and live panels must share that actor rather than open competing actors.
+Its kernel lease is cross-process and releases when the actor exits or is killed; a
+retained registry binding prevents missing/replaced lease files from resetting ownership.
+Workspace UUID and canonical root come from host state, never tool parameters. Root
+changes and pending resources in another credential realm refuse new execution.
+
+After restart, retained pending operations block admission until bounded exact-owned
+cleanup has completed under this lease and `finish_reconciliation` succeeds. A released
+kernel lease is not evidence that provider resources or worker processes were cleaned.
+This prerequisite does not yet wire the shared actor, public MCP tools or full startup
+reconciliation; complete host-state loss still requires retained bootstrap identity.

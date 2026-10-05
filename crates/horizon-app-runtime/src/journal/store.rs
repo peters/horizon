@@ -6,6 +6,8 @@ use std::path::Path;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+pub(super) mod execution;
+
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(super) struct Store {

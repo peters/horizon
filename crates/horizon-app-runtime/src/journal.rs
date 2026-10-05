@@ -10,6 +10,7 @@ use zeroize::Zeroizing;
 use crate::account::Account;
 use crate::{Error, Result};
 
+pub mod execution;
 pub mod recovery;
 mod store;
 use store::Store;
@@ -149,10 +150,10 @@ impl Journal {
         if owner.is_nil() || lifetime.is_zero() || lifetime > Duration::from_mins(30) {
             return Err(Error::OperationInvalid);
         }
-        let root = root.canonicalize().map_err(|_| Error::OperationInvalid)?;
-        if !root.is_dir() {
+        if root.canonicalize().map_err(|_| Error::OperationInvalid)? != root || !root.is_dir() {
             return Err(Error::OperationInvalid);
         }
+        let root = root.to_owned();
         self.edit(|ledger| {
             if ledger.records.len() >= MAX_OPERATIONS {
                 return Err(Error::JournalUnavailable);
