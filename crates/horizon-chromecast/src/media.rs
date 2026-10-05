@@ -116,6 +116,16 @@ impl MediaController<'_> {
         self.command("STOP")
     }
 
+    /// Plays faster or slower than real time; receivers accept about 0.5–2.
+    /// # Errors
+    /// Returns an error if nothing is loaded or the receiver refuses.
+    pub fn set_playback_rate(&self, rate: f64) -> Result<MediaStatus> {
+        let id = self
+            .media_session_id
+            .ok_or(Error::Protocol("no media session is loaded"))?;
+        first_status(&self.request(json!({"type": "SET_PLAYBACK_RATE", "mediaSessionId": id, "playbackRate": rate}))?)
+    }
+
     /// Current media status, or `None` when nothing is loaded.
     /// # Errors
     /// Returns an error if the receiver does not answer.

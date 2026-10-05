@@ -16,7 +16,7 @@ mod tests;
 pub use client::{CastClient, Event};
 #[cfg(feature = "discovery")]
 pub use discovery::{Receiver, discover};
-pub use live::{LiveCast, LiveOptions, LiveState, avcc_to_annexb};
+pub use live::{LiveCast, LiveOptions, LiveState, Transport, avcc_to_annexb};
 pub use media::{MediaController, MediaLoad, MediaStatus, StreamType};
 pub use receiver::{Application, DEFAULT_MEDIA_RECEIVER, ReceiverStatus, Volume};
 

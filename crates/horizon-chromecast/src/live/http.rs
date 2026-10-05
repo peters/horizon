@@ -1,6 +1,6 @@
 //! Minimal HTTP server that hands the playlist and segments to the
 //! receiver. Paths carry a random token so other LAN hosts cannot guess them.
-use super::hls::Segmenter;
+use super::{hls::Segmenter, progressive::Stream};
 use crate::Result;
 use std::{
     hash::{BuildHasher, RandomState},
@@ -19,6 +19,14 @@ const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_CONNECTIONS: usize = 8;
 const MAX_REQUEST: usize = 8 * 1024;
 
+/// What the server hands out: an HLS playlist with segments, or one endless
+/// fragmented MP4 response per connection.
+#[derive(Clone)]
+pub(crate) enum Source {
+    Hls(Arc<Mutex<Segmenter>>),
+    Progressive(Arc<Stream>),
+}
+
 pub(crate) struct HttpServer {
     port: u16,
     token: String,
@@ -27,7 +35,7 @@ pub(crate) struct HttpServer {
 }
 
 impl HttpServer {
-    pub(crate) fn start(segments: Arc<Mutex<Segmenter>>) -> Result<Self> {
+    pub(crate) fn start(source: Source) -> Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
@@ -37,7 +45,7 @@ impl HttpServer {
             let (stop, token) = (stop.clone(), token.clone());
             std::thread::Builder::new()
                 .name("chromecast-http".to_owned())
-                .spawn(move || accept_loop(&listener, &segments, &token, &stop))?
+                .spawn(move || accept_loop(&listener, &source, &token, &stop))?
         };
         Ok(Self {
             port,
@@ -65,7 +73,7 @@ impl Drop for HttpServer {
     }
 }
 
-fn accept_loop(listener: &TcpListener, segments: &Arc<Mutex<Segmenter>>, token: &str, stop: &AtomicBool) {
+fn accept_loop(listener: &TcpListener, source: &Source, token: &str, stop: &AtomicBool) {
     let active = Arc::new(AtomicUsize::new(0));
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
@@ -74,11 +82,11 @@ fn accept_loop(listener: &TcpListener, segments: &Arc<Mutex<Segmenter>>, token: 
                     active.fetch_sub(1, Ordering::AcqRel);
                     continue;
                 }
-                let (segments, token, slot) = (segments.clone(), token.to_owned(), active.clone());
+                let (source, token, slot) = (source.clone(), token.to_owned(), active.clone());
                 let spawned = std::thread::Builder::new()
                     .name("chromecast-http-conn".to_owned())
                     .spawn(move || {
-                        if let Err(error) = serve(socket, &segments, &token) {
+                        if let Err(error) = serve(socket, &source, &token) {
                             tracing::debug!(%error, %peer, "chromecast HTTP request failed");
                         }
                         slot.fetch_sub(1, Ordering::AcqRel);
@@ -98,7 +106,7 @@ fn accept_loop(listener: &TcpListener, segments: &Arc<Mutex<Segmenter>>, token: 
     }
 }
 
-fn serve(mut socket: TcpStream, segments: &Mutex<Segmenter>, token: &str) -> std::io::Result<()> {
+fn serve(mut socket: TcpStream, source: &Source, token: &str) -> std::io::Result<()> {
     // Accepted sockets inherit non-blocking mode on some platforms.
     socket.set_nonblocking(false)?;
     socket.set_write_timeout(Some(IO_TIMEOUT))?;
@@ -121,6 +129,12 @@ fn serve(mut socket: TcpStream, segments: &Mutex<Segmenter>, token: &str) -> std
     let line = String::from_utf8_lossy(&request);
     let mut words = line.split_whitespace();
     let (method, path) = (words.next().unwrap_or_default(), words.next().unwrap_or_default());
+    if let Source::Progressive(stream) = source {
+        return serve_progressive(socket, stream, method, path, token);
+    }
+    let Source::Hls(segments) = source else {
+        return Ok(());
+    };
     let response = route(method, path, token, segments);
     socket.write_all(&response.head())?;
     if method == "GET"
@@ -129,6 +143,42 @@ fn serve(mut socket: TcpStream, segments: &Mutex<Segmenter>, token: &str) -> std
         socket.write_all(&body)?;
     }
     socket.flush()
+}
+
+/// Streams `live.mp4` until the receiver disconnects or the cast stops.
+fn serve_progressive(
+    mut socket: TcpStream,
+    stream: &Stream,
+    method: &str,
+    path: &str,
+    token: &str,
+) -> std::io::Result<()> {
+    let expected = format!("/{token}/live.mp4");
+    let subscription = (path == expected && matches!(method, "GET" | "HEAD"))
+        .then(|| stream.subscribe())
+        .flatten();
+    let Some(subscription) = subscription else {
+        let status = if method == "OPTIONS" {
+            "204 No Content"
+        } else {
+            "404 Not Found"
+        };
+        socket.write_all(&Response::empty(status).head())?;
+        return socket.flush();
+    };
+    socket.write_all(&streaming_head().into_bytes())?;
+    if method == "HEAD" {
+        return socket.flush();
+    }
+    socket.set_nodelay(true)?;
+    stream.write_to(&mut socket, subscription)
+}
+
+fn streaming_head() -> String {
+    "HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nCache-Control: no-cache\r\n\
+     Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: *\r\n\
+     Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\nConnection: close\r\n\r\n"
+        .to_owned()
 }
 
 struct Response {
@@ -226,7 +276,7 @@ mod tests {
                 );
             }
         }
-        let server = HttpServer::start(segmenter).unwrap();
+        let server = HttpServer::start(Source::Hls(segmenter)).unwrap();
         let prefix = format!("/{}", server.token());
         let playlist = get(server.port(), &format!("{prefix}/live.m3u8"));
         assert!(playlist.starts_with("HTTP/1.1 200 OK\r\n"), "{playlist}");
