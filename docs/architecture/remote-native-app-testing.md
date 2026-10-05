@@ -212,3 +212,13 @@ Journal lock markers also bind the original filesystem device/inode. Copying ide
 lock bytes into a replacement file cannot create another account lock. In-place host-root
 relocation preserves identity; copying state onto another filesystem remains a reconciliation
 hold. Prototype markers from older unmerged revisions are refused rather than reset.
+## Exact-owned recovery callbacks
+
+The journal's private `recover_owned` callback durably holds uncertainty before
+observing provider outcomes or cleaning exact recorded resources. Positive matched
+upload/session evidence may be adopted; missing matches never authorize replay or
+capacity reuse. Confirmed cleanup clears resources and reservations. Callbacks are
+bounded, run under the account lock and require exclusive host execution ownership
+for the workspace; they must never recursively access the journal. References are
+neither Debug nor serializable. This callback is a recovery primitive, not startup
+reconciliation of processes/tunnels or an MCP host implementation.

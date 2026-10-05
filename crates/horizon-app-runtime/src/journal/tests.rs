@@ -1,15 +1,15 @@
 use super::*;
 
-struct CanonicalTemp {
+pub(super) struct CanonicalTemp {
     _directory: tempfile::TempDir,
     path: PathBuf,
 }
 impl CanonicalTemp {
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.path
     }
 }
-fn canonical_temp() -> CanonicalTemp {
+pub(super) fn canonical_temp() -> CanonicalTemp {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().canonicalize().unwrap();
     CanonicalTemp {
@@ -18,14 +18,14 @@ fn canonical_temp() -> CanonicalTemp {
     }
 }
 
-fn journal(path: &Path, realm: char) -> Journal {
+pub(super) fn journal(path: &Path, realm: char) -> Journal {
     Journal {
         store: Store::open(path).unwrap(),
         realm: realm.to_string().repeat(64),
     }
 }
 
-fn quota() -> Result<Capacity> {
+pub(super) fn quota() -> Result<Capacity> {
     Capacity::observed(
         Quota {
             parallel_sessions_max_allowed: 2,
