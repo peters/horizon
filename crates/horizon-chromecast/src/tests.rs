@@ -290,7 +290,7 @@ fn cast_live(transport: Transport, settle: Duration) -> Vec<String> {
     let mut live = LiveCast::start(address, options).unwrap();
     assert!(live.url().starts_with("http://127.0.0.1:"));
     let pushing = AtomicBool::new(true);
-    std::thread::scope(|scope| {
+    let states = std::thread::scope(|scope| {
         scope.spawn(|| {
             let mut frame = 0u64;
             while pushing.load(Ordering::Relaxed) {
@@ -307,15 +307,19 @@ fn cast_live(transport: Transport, settle: Duration) -> Vec<String> {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        assert_eq!(live.state(), LiveState::Playing);
+        let reached = live.state();
         std::thread::sleep(Duration::from_millis(300).max(settle));
-        assert_eq!(
-            live.state(),
-            LiveState::Playing,
-            "a brief BUFFERING report must not flap the state"
-        );
+        let settled = live.state();
+        // Stop the producer before asserting, or a failure would leave the scope waiting on it.
         pushing.store(false, Ordering::Relaxed);
+        (reached, settled)
     });
+    assert_eq!(states.0, LiveState::Playing);
+    assert_eq!(
+        states.1,
+        LiveState::Playing,
+        "a brief BUFFERING report must not flap the state"
+    );
     live.stop();
     assert_eq!(live.state(), LiveState::Ended);
     let log = server.join().unwrap();

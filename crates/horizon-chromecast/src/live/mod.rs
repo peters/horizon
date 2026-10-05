@@ -52,6 +52,10 @@ const CATCH_UP_ABOVE: f64 = 1.0;
 const TARGET_LAG: f64 = 0.4;
 const CATCH_UP_RATE: f64 = 1.5;
 const LAG_CHECK: Duration = Duration::from_secs(2);
+/// Attempts to return to normal speed before the session fails, so a receiver
+/// is never left running fast.
+const RESTORE_ATTEMPTS: u8 = 3;
+const RESTORE_RETRY: Duration = Duration::from_millis(500);
 const CONNECT_ATTEMPTS: u32 = 3;
 const CONNECT_RETRY: Duration = Duration::from_secs(2);
 
@@ -272,8 +276,9 @@ pub(crate) struct Session {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum CatchUp {
     Watching,
-    /// Playing fast until this instant.
-    Until(Instant),
+    /// Playing fast until this instant; then returning to normal speed, with
+    /// the failed attempts so far.
+    Until(Instant, u8),
     /// The receiver refused a playback rate; leave it at normal speed.
     Unsupported,
 }
@@ -338,7 +343,9 @@ impl Session {
             if !matches!(outcome, Ok(true)) {
                 continue;
             }
-            self.keep_up(&media);
+            if let Err(error) = self.keep_up(&media) {
+                break Err(error);
+            }
             outcome = match client.next_event(EVENT_POLL)? {
                 Some(event) => self.follow_confirmed(&client, &event, &app, loaded.media_session_id),
                 None => Ok(true),
@@ -522,41 +529,43 @@ impl Session {
 
     /// Progressive receivers start with a few seconds of buffer. Measure how
     /// far playback trails the newest frame and briefly play faster to trim it.
-    fn keep_up(&self, media: &MediaController<'_>) {
+    /// # Errors
+    /// Fails when playback cannot be returned to normal speed.
+    fn keep_up(&self, media: &MediaController<'_>) -> Result<()> {
         let Sink::Progressive(stream) = &self.sink else {
-            return;
+            return Ok(());
         };
         let now = Instant::now();
         match self.catch_up.get() {
-            CatchUp::Until(until) if now >= until => {
+            CatchUp::Until(until, failures) if now >= until => {
                 let restored = media.set_playback_rate(1.0);
-                self.catch_up.set(if restored.is_ok() {
-                    CatchUp::Watching
-                } else {
-                    CatchUp::Unsupported
-                });
+                let Some(next) = after_restore(restored.is_ok(), failures, now) else {
+                    return restored.map(|_| ());
+                };
+                self.catch_up.set(next);
                 self.next_lag_check.set(now + LAG_CHECK);
-                return;
+                return Ok(());
             }
-            CatchUp::Until(_) | CatchUp::Unsupported => return,
+            CatchUp::Until(..) | CatchUp::Unsupported => return Ok(()),
             CatchUp::Watching => {}
         }
         if !self.started.get() || now < self.next_lag_check.get() || *lock(&self.state) != LiveState::Playing {
-            return;
+            return Ok(());
         }
         self.next_lag_check.set(now + LAG_CHECK);
         let (Some(newest), Ok(Some(status))) = (stream.newest_media_time(), media.status()) else {
-            return;
+            return Ok(());
         };
         let lag = newest - status.current_time;
         if lag > CATCH_UP_ABOVE && status.player_state == "PLAYING" {
             tracing::debug!(lag, "speeding up live playback to catch up");
             let catch_up = Duration::from_secs_f64((lag - TARGET_LAG) / (CATCH_UP_RATE - 1.0));
             self.catch_up.set(match media.set_playback_rate(CATCH_UP_RATE) {
-                Ok(_) => CatchUp::Until(now + catch_up),
+                Ok(_) => CatchUp::Until(now + catch_up, 0),
                 Err(_) => CatchUp::Unsupported,
             });
         }
+        Ok(())
     }
 
     /// Playing, but the receiver has reported buffering for longer than the grace period.
@@ -577,6 +586,18 @@ impl Session {
     }
 }
 
+/// What follows an attempt to return to normal speed: watching again, another
+/// attempt shortly, or `None` when the session must fail.
+fn after_restore(restored: bool, failures: u8, now: Instant) -> Option<CatchUp> {
+    if restored {
+        Some(CatchUp::Watching)
+    } else if failures + 1 >= RESTORE_ATTEMPTS {
+        None
+    } else {
+        Some(CatchUp::Until(now + RESTORE_RETRY, failures + 1))
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -594,5 +615,25 @@ pub(crate) fn test_session() -> Session {
         started: Cell::new(false),
         catch_up: Cell::new(CatchUp::Watching),
         next_lag_check: Cell::new(Instant::now()),
+    }
+}
+
+#[cfg(test)]
+mod catch_up_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_return_to_normal_speed_is_retried_and_then_fails_the_session() {
+        let now = Instant::now();
+        assert_eq!(after_restore(true, 2, now), Some(CatchUp::Watching));
+        assert_eq!(
+            after_restore(false, 0, now),
+            Some(CatchUp::Until(now + RESTORE_RETRY, 1))
+        );
+        assert_eq!(
+            after_restore(false, 1, now),
+            Some(CatchUp::Until(now + RESTORE_RETRY, 2))
+        );
+        assert_eq!(after_restore(false, RESTORE_ATTEMPTS - 1, now), None);
     }
 }

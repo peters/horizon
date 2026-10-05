@@ -201,8 +201,9 @@ pub(crate) fn sps_dimensions(sps: &[u8]) -> Option<(u32, u32)> {
     }
     bits.ue()?; // max_num_ref_frames
     bits.skip(1)?; // gaps_in_frame_num_value_allowed_flag
-    let width_mbs = bits.ue()? + 1;
-    let height_map_units = bits.ue()? + 1;
+    // Exp-Golomb fields can be near u32::MAX in malformed data: every step is checked.
+    let width_mbs = bits.ue()?.checked_add(1)?;
+    let height_map_units = bits.ue()?.checked_add(1)?;
     let frame_mbs_only = bits.read(1)?;
     if frame_mbs_only == 0 {
         bits.skip(1)?;
@@ -217,11 +218,14 @@ pub(crate) fn sps_dimensions(sps: &[u8]) -> Option<(u32, u32)> {
             // Monochrome (0) and 4:4:4 (3) crop in whole luma samples.
             _ => (1, 2 - frame_mbs_only),
         };
-        crop_x = unit_x * (left + right);
-        crop_y = unit_y * (top + bottom);
+        crop_x = left.checked_add(right)?.checked_mul(unit_x)?;
+        crop_y = top.checked_add(bottom)?.checked_mul(unit_y)?;
     }
-    let width = (width_mbs * 16).checked_sub(crop_x)?;
-    let height = ((2 - frame_mbs_only) * height_map_units * 16).checked_sub(crop_y)?;
+    let width = width_mbs.checked_mul(16)?.checked_sub(crop_x)?;
+    let height = height_map_units
+        .checked_mul(16)?
+        .checked_mul(2 - frame_mbs_only)?
+        .checked_sub(crop_y)?;
     Some((width, height))
 }
 
@@ -323,6 +327,14 @@ mod tests {
     fn parses_sps_dimensions_with_cropping() {
         assert_eq!(sps_dimensions(&SPS_720P), Some((1280, 720)));
         assert_eq!(sps_dimensions(&[0x67, 0x64]), None);
+    }
+
+    #[test]
+    fn oversized_sps_dimensions_are_rejected_without_overflow() {
+        // Baseline SPS whose pic_width_in_mbs_minus1 is 536_870_910: 16 times
+        // the width in macroblocks does not fit in 32 bits.
+        let sps = [0x67, 66, 0, 30, 0xdc, 0x00, 0x00, 0x00, 0x1f, 0xff, 0xff, 0xff, 0xe8];
+        assert_eq!(sps_dimensions(&sps), None);
     }
 
     #[test]

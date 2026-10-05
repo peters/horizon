@@ -15,7 +15,8 @@ use std::{
 
 /// Frames a connection may fall behind before it is dropped (~4 s at 30 fps).
 const SUBSCRIBER_BACKLOG: usize = 120;
-/// A GOP longer than this many frames is not kept for late joiners.
+/// A GOP longer than this many frames is not kept for late joiners: they
+/// wait for the next keyframe instead.
 const MAX_GOP_FRAMES: usize = 600;
 const RECV_POLL: Duration = Duration::from_millis(500);
 /// Used for the last frame before a pause, when no later timestamp exists yet.
@@ -102,8 +103,13 @@ impl Stream {
             state.gop.clear();
             state.last_keyframe = Some(pts);
         }
-        if state.gop.len() < MAX_GOP_FRAMES {
+        // An incomplete GOP would hand late joiners frames that depend on
+        // ones never sent, so past the cap there is no backlog until the next
+        // keyframe. Existing connections keep receiving every frame.
+        if keyframe || (!state.gop.is_empty() && state.gop.len() < MAX_GOP_FRAMES) {
             state.gop.push(sample.clone());
+        } else {
+            state.gop.clear();
         }
         // A connection that cannot keep up is dropped rather than buffered.
         state.subscribers.retain(|subscriber| {
@@ -129,9 +135,13 @@ impl Stream {
         state.init.is_some() && !state.gop.is_empty()
     }
 
+    /// `None` until a connection can start from a keyframe.
     pub(crate) fn subscribe(&self) -> Option<Subscription> {
         let mut state = self.lock();
         let init = state.init.clone()?;
+        if state.gop.is_empty() {
+            return None;
+        }
         let (sender, feed) = mpsc::sync_channel(SUBSCRIBER_BACKLOG);
         state.subscribers.push(sender);
         Some(Subscription {
@@ -179,7 +189,12 @@ impl Stream {
                 continue;
             }
             let start = *base.get_or_insert_with(|| {
-                self.playback_base.store(next.pts, Ordering::Release);
+                // Writers can start out of order; only a newer base may win.
+                let _ = self
+                    .playback_base
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                        (current == NO_BASE || next.pts > current).then_some(next.pts)
+                    });
                 next.pts
             });
             // Hold one frame so its duration is known exactly.
@@ -289,5 +304,53 @@ mod tests {
         let before = stream.lock().gop.len();
         stream.push(&unit(false), frame(3), false);
         assert_eq!(stream.lock().gop.len(), before);
+    }
+
+    #[test]
+    fn a_gop_past_the_cap_has_no_late_join_backlog_until_the_next_keyframe() {
+        let stream = Stream::new(Duration::from_secs(60));
+        stream.push(&unit(true), frame(0), true);
+        let existing = stream.subscribe().unwrap();
+        let cap = u32::try_from(MAX_GOP_FRAMES).unwrap();
+        for index in 1..=cap {
+            stream.push(&unit(false), frame(index), false);
+            // Keep the existing connection's feed drained.
+            while existing.feed.try_recv().is_ok() {}
+        }
+        assert!(!stream.ready());
+        assert!(stream.subscribe().is_none(), "no broken prefix for late joiners");
+        assert_eq!(
+            stream.lock().subscribers.len(),
+            1,
+            "existing connections keep their feed"
+        );
+        stream.push(&unit(true), frame(cap + 1), true);
+        assert!(stream.ready());
+        assert!(stream.subscribe().unwrap().backlog[0].keyframe);
+    }
+
+    #[test]
+    fn the_playback_base_only_moves_forward() {
+        let stream = Stream::new(Duration::from_millis(500));
+        for index in 0..20 {
+            stream.push(&unit(index % 15 == 0), frame(index), index % 15 == 0);
+        }
+        let newer = stream.subscribe().unwrap();
+        stream.lock().subscribers.clear();
+        stream.write_to(&mut Vec::new(), newer).unwrap();
+        let base = stream.playback_base.load(Ordering::Acquire);
+        assert_ne!(base, NO_BASE);
+        // A slower writer that starts from an older frame must not move it back.
+        let older = Subscription {
+            init: stream.lock().init.clone().unwrap(),
+            backlog: vec![Arc::new(Sample {
+                data: vec![0, 0, 0, 1, 0x65],
+                pts: 0,
+                keyframe: true,
+            })],
+            feed: mpsc::sync_channel(1).1,
+        };
+        stream.write_to(&mut Vec::new(), older).unwrap();
+        assert_eq!(stream.playback_base.load(Ordering::Acquire), base);
     }
 }
