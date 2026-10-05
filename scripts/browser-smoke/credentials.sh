@@ -23,5 +23,5 @@ fi
 : "${DBUS_SESSION_BUS_ADDRESS:?private bus required}"
 export HORIZON_CREDENTIAL_TEST_BUS="$DBUS_SESSION_BUS_ADDRESS"
 cargo test --locked -p horizon-core --lib \
-    remote_browser_credential::tests::native_keyring::credentials_survive_secret_service_restart \
-    -- --ignored --exact
+    remote_browser_credential::tests::native_keyring:: \
+    -- --ignored --test-threads=1

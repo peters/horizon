@@ -121,6 +121,12 @@ impl RemoteCredentialStore for KeyringCredentialStore {
     }
 
     fn with_secret(&self, locator: &CredentialLocator, sink: &mut dyn SecretSink) -> Result<(), RemoteCredentialError> {
+        // The generic Linux backend unlocks search matches before reading them.
+        // Direct GetSecret fails closed if the item locks after SearchItems.
+        #[cfg(target_os = "linux")]
+        if self.reopen.is_some() {
+            return platform::read_secret(&Self::user(locator)?, sink);
+        }
         let value = Zeroizing::new(self.entry(locator)?.get_secret().map_err(|error| map_error(&error))?);
         sink.accept(&value)
     }
@@ -193,7 +199,7 @@ mod platform {
 
     use secret_service::{EncryptionType, blocking::SecretService};
 
-    use super::{Arc, CredentialStore, KEYRING_SERVICE, RemoteCredentialError, map_error};
+    use super::{Arc, CredentialStore, KEYRING_SERVICE, RemoteCredentialError, SecretSink, Zeroizing, map_error};
 
     pub(super) fn open() -> Result<Arc<CredentialStore>, RemoteCredentialError> {
         zbus_secret_service_keyring_store::Store::new()
@@ -219,12 +225,29 @@ mod platform {
         }
     }
 
+    pub(super) fn read_secret(user: &str, sink: &mut dyn SecretSink) -> Result<(), RemoteCredentialError> {
+        let service = SecretService::connect(EncryptionType::Dh).map_err(|error| map_service_error(&error))?;
+        let found = service
+            .search_items(HashMap::from([("service", KEYRING_SERVICE), ("username", user)]))
+            .map_err(|error| map_service_error(&error))?;
+        if !found.locked.is_empty() {
+            return Err(RemoteCredentialError::Locked);
+        }
+        let mut items = found.unlocked.into_iter();
+        let item = items.next().ok_or(RemoteCredentialError::Missing)?;
+        if items.next().is_some() {
+            return Err(RemoteCredentialError::Platform { kind: "ambiguous" });
+        }
+        let value = Zeroizing::new(item.get_secret().map_err(|error| map_service_error(&error))?);
+        sink.accept(&value)
+    }
+
     fn map_service_error(error: &secret_service::Error) -> RemoteCredentialError {
         match error {
             secret_service::Error::Locked => RemoteCredentialError::Locked,
             secret_service::Error::Unavailable => RemoteCredentialError::StoreUnavailable,
             _ => {
-                tracing::warn!("Secret Service presence probe failed");
+                tracing::warn!("Secret Service operation failed");
                 RemoteCredentialError::Platform { kind: "secret_service" }
             }
         }
