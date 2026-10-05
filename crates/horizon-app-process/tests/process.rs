@@ -2,6 +2,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -181,17 +182,23 @@ fn malformed_readiness_and_deadline_fail_without_public_process_diagnostics() {
 fn losing_parent_pipe_stops_backend_and_records_completion() {
     let root = private_temp().unwrap();
     let state = private_temp().unwrap();
+    let errors = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(state.path().join("guardian-error.log"))
+        .unwrap();
     // Exercise the real guardian protocol without a client Drop/close callback.
     let mut guardian = Command::new(worker())
         .arg("--guard")
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(errors))
         .spawn()
         .unwrap();
     let mut input = guardian.stdin.take().unwrap();
-    let spec = serde_json::json!({"operation":uuid::Uuid::new_v4(), "root":root.path(), "state":state.path(), "argv":backend(), "environment":{"PATH":"/usr/bin:/bin"}, "kind":"backend", "startup_seconds":2, "lifetime_seconds":10});
+    let spec = serde_json::json!({"operation":uuid::Uuid::new_v4(), "root":root.path(), "state":state.path(), "argv":backend(), "environment":{"PATH":std::env::var("PATH").unwrap()}, "kind":"backend", "startup_seconds":2, "lifetime_seconds":10});
     writeln!(input, "{spec}").unwrap();
     let mut output = BufReader::new(guardian.stdout.take().unwrap());
     let mut line = String::new();
@@ -206,7 +213,20 @@ fn losing_parent_pipe_stops_backend_and_records_completion() {
     ));
     line.clear();
     output.read_line(&mut line).unwrap();
-    let Event::Ready { port } = serde_json::from_str::<Event>(&line).unwrap() else {
+    let event = serde_json::from_str::<Event>(&line).unwrap_or_else(|error| {
+        use std::io::Read as _;
+        let mut diagnostics = Vec::new();
+        for name in ["guardian-error.log", "output.log", "process.json"] {
+            if let Ok(file) = std::fs::File::open(state.path().join(name)) {
+                let _ = file.take(4096).read_to_end(&mut diagnostics);
+            }
+        }
+        panic!(
+            "guardian readiness failed: {error}; private synthetic diagnostics: {}",
+            String::from_utf8_lossy(&diagnostics)
+        );
+    });
+    let Event::Ready { port } = event else {
         panic!("not ready");
     };
     drop(input); // exactly the EOF produced by abrupt host death
