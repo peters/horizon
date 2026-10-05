@@ -13,7 +13,6 @@ use crate::artifact::Artifact;
 use crate::{Error, Result};
 
 const API: &str = "https://api-cloud.browserstack.com";
-const HUB: &str = "https://hub-cloud.browserstack.com";
 const MAX_RESPONSE: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -63,6 +62,7 @@ impl UploadedApp {
 /// Uses only the machine-configured `BrowserStack` origin; project files cannot select a credential destination.
 pub struct BrowserStack {
     authorization: Zeroizing<String>,
+    hub: String,
     agent: ureq::Agent,
 }
 
@@ -70,7 +70,7 @@ impl BrowserStack {
     /// # Errors
     /// Requires a trusted `BrowserStack` hub origin and printable Basic authorization from the host resolver.
     pub fn new(origin: &str, authorization: Zeroizing<String>) -> Result<Self> {
-        if origin != HUB && origin != "https://hub.browserstack.com" {
+        if !horizon_browser::provider_usage::UsageAdapter::Browserstack.authorizes_origin(origin) {
             return Err(Error::ProviderRejected);
         }
         let encoded = authorization.strip_prefix("Basic ").ok_or(Error::ProviderRejected)?;
@@ -98,6 +98,7 @@ impl BrowserStack {
             .build();
         Ok(Self {
             authorization,
+            hub: origin.to_owned(),
             agent: ureq::Agent::new_with_config(config),
         })
     }
@@ -164,7 +165,7 @@ impl BrowserStack {
         let authorization =
             RemoteAuthorizationHeader::new(self.authorization.to_string()).map_err(|_| Error::ProviderRejected)?;
         Ok(Arc::new(
-            RemoteHttpClient::new(&format!("{HUB}/wd/hub"), Some(authorization))
+            RemoteHttpClient::new(&format!("{}/wd/hub", self.hub), Some(authorization))
                 .map_err(|_| Error::ProviderRejected)?,
         ))
     }
@@ -267,6 +268,20 @@ mod tests {
     }
 
     #[test]
+    fn configured_regional_hubs_remain_bound_to_the_driver() {
+        for region in ["cloud", "apse", "aps", "euw", "use", "usw"] {
+            let hub = format!("https://hub-{region}.browserstack.com");
+            let auth = Zeroizing::new(format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode("synthetic:synthetic")
+            ));
+            let provider = BrowserStack::new(&hub, auth).unwrap();
+            assert_eq!(provider.hub, hub);
+            assert!(provider.driver().is_ok());
+        }
+    }
+
+    #[test]
     fn invalid_credentials_and_provider_app_references_return_only_constant_errors() {
         for auth in [
             "Bearer synthetic-secret",
@@ -275,7 +290,7 @@ mod tests {
             "Basic OnNlY3JldA==",
         ] {
             assert_eq!(
-                BrowserStack::new(HUB, Zeroizing::new(auth.into())).err(),
+                BrowserStack::new("https://hub-cloud.browserstack.com", Zeroizing::new(auth.into())).err(),
                 Some(Error::ProviderRejected)
             );
         }
