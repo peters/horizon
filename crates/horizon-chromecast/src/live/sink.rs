@@ -46,7 +46,7 @@ impl AccessUnitSink for LiveCastSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::LiveOptions;
+    use crate::{LiveOptions, Transport};
     use horizon_media::encoder::{EncoderConfig, INPUT_FRAME_RATE};
 
     #[test]
@@ -58,6 +58,7 @@ mod tests {
 
     fn fill_segments(segment: Duration) {
         let options = LiveOptions {
+            transport: Transport::Hls,
             segment,
             // Enough segments to keep three target durations even at 150 ms.
             window: 30,
@@ -76,7 +77,10 @@ mod tests {
             };
             sink.send(&unit, frame * index).unwrap();
         }
-        let segmenter = super::super::lock(&live.segmenter);
+        let super::super::Sink::Hls(segmenter) = &live.sink else {
+            unreachable!("HLS options make an HLS sink");
+        };
+        let segmenter = super::super::lock(segmenter);
         assert_eq!(segmenter.ready_segments(), 3, "{segment:?} segments");
         let segment = segmenter.segment(0).unwrap();
         let sps = segment.windows(5).position(|w| w == [0, 0, 1, 0x67, 0x42]);

@@ -1,7 +1,10 @@
 //! Live H.264 casting: the host pushes encoded access units, this module
-//! serves them as HLS and keeps the Default Media Receiver playing them.
+//! serves them on the LAN and keeps the Default Media Receiver playing them,
+//! either as one progressive fragmented MP4 stream (low latency) or as HLS.
 mod hls;
 mod http;
+mod mp4;
+mod progressive;
 #[cfg(feature = "encoder")]
 mod sink;
 mod ts;
@@ -21,11 +24,12 @@ pub fn avcc_to_annexb(sample: &[u8], length_size: usize, parameter_sets: &[&[u8]
 pub use sink::LiveCastSink;
 
 use crate::{
-    Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaLoad, MediaStatus, Result, StreamType,
-    client::NS_CONNECTION, media::NS_MEDIA, receiver::NS_RECEIVER,
+    Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaController, MediaLoad, MediaStatus, Result,
+    StreamType, client::NS_CONNECTION, media::NS_MEDIA, receiver::NS_RECEIVER,
 };
 use hls::Segmenter;
-use http::HttpServer;
+use http::{HttpServer, Source};
+use progressive::Stream;
 use serde_json::Value;
 use std::{
     cell::Cell,
@@ -46,14 +50,39 @@ const EVENT_POLL: Duration = Duration::from_millis(250);
 /// seconds while playback advances in real time. Only report buffering once a
 /// BUFFERING report has gone this long without a PLAYING one after it.
 pub(crate) const STALL_GRACE: Duration = Duration::from_secs(5);
+/// Progressive playback starts a few seconds behind; above this the session
+/// speeds playback up until it is back near `TARGET_LAG`.
+const CATCH_UP_ABOVE: f64 = 1.0;
+const TARGET_LAG: f64 = 0.4;
+const CATCH_UP_RATE: f64 = 1.5;
+const LAG_CHECK: Duration = Duration::from_secs(2);
+/// Attempts to return to normal speed before the session fails, so a receiver
+/// is never left running fast.
+const RESTORE_ATTEMPTS: u8 = 3;
+const RESTORE_RETRY: Duration = Duration::from_millis(500);
+const CONNECT_ATTEMPTS: u32 = 3;
+const CONNECT_RETRY: Duration = Duration::from_secs(2);
+
+/// How the stream reaches the receiver.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Transport {
+    /// One endless fragmented MP4 response; about half a second behind live
+    /// once the session has caught up.
+    #[default]
+    Progressive,
+    /// Rolling HLS of MPEG-TS segments; about three seconds behind live.
+    Hls,
+}
 
 #[derive(Clone, Debug)]
 pub struct LiveOptions {
+    pub transport: Transport,
     /// Target segment length; segments are cut on the first keyframe after it.
+    /// Progressive streams ask for a keyframe this often so receivers can join.
     pub segment: Duration,
-    /// Completed segments kept for the receiver.
+    /// Completed segments kept for the receiver (HLS only).
     pub window: usize,
-    /// Completed segments required before the receiver is asked to play.
+    /// Completed segments required before the receiver is asked to play (HLS only).
     pub preroll: usize,
     pub title: String,
 }
@@ -64,6 +93,7 @@ impl Default for LiveOptions {
     /// that delay plus a refresh, or the receiver asks for segments already gone.
     fn default() -> Self {
         Self {
+            transport: Transport::default(),
             segment: Duration::from_millis(500),
             window: 10,
             preroll: 2,
@@ -76,6 +106,10 @@ impl LiveOptions {
     fn validate(&self) -> Result<()> {
         if self.segment.is_zero() {
             return Err(Error::InvalidOptions("segment duration must be positive"));
+        }
+        // The progressive stream has no playlist: window and pre-roll are HLS only.
+        if self.transport == Transport::Progressive {
+            return Ok(());
         }
         if self.preroll == 0 {
             return Err(Error::InvalidOptions("pre-roll must be at least one segment"));
@@ -105,8 +139,38 @@ pub enum LiveState {
     Failed(String),
 }
 
+/// Where pushed access units go.
+#[derive(Clone)]
+enum Sink {
+    Hls(Arc<Mutex<Segmenter>>),
+    Progressive(Arc<Stream>),
+}
+
+impl Sink {
+    fn new(options: &LiveOptions) -> Self {
+        match options.transport {
+            Transport::Hls => Self::Hls(Arc::new(Mutex::new(Segmenter::new(options.segment, options.window)))),
+            Transport::Progressive => Self::Progressive(Arc::new(Stream::new(options.segment))),
+        }
+    }
+
+    fn source(&self) -> Source {
+        match self {
+            Self::Hls(segmenter) => Source::Hls(segmenter.clone()),
+            Self::Progressive(stream) => Source::Progressive(stream.clone()),
+        }
+    }
+
+    fn file(&self) -> &'static str {
+        match self {
+            Self::Hls(_) => "live.m3u8",
+            Self::Progressive(_) => "live.mp4",
+        }
+    }
+}
+
 pub struct LiveCast {
-    segmenter: Arc<Mutex<Segmenter>>,
+    sink: Sink,
     state: Arc<Mutex<LiveState>>,
     stop: Arc<AtomicBool>,
     control: Option<JoinHandle<()>>,
@@ -123,9 +187,9 @@ impl LiveCast {
     pub fn start(receiver: SocketAddr, options: LiveOptions) -> Result<Self> {
         options.validate()?;
         let local = http::route_address(receiver)?;
-        let segmenter = Arc::new(Mutex::new(Segmenter::new(options.segment, options.window)));
-        let server = HttpServer::start(segmenter.clone())?;
-        let url = format!("http://{local}:{}/{}/live.m3u8", server.port(), server.token());
+        let sink = Sink::new(&options);
+        let server = HttpServer::start(sink.source())?;
+        let url = format!("http://{local}:{}/{}/{}", server.port(), server.token(), sink.file());
         let state = Arc::new(Mutex::new(LiveState::Connecting));
         let stop = Arc::new(AtomicBool::new(false));
         let control = {
@@ -133,18 +197,20 @@ impl LiveCast {
                 receiver,
                 url: url.clone(),
                 options,
-                segmenter: segmenter.clone(),
+                sink: sink.clone(),
                 state: state.clone(),
                 stop: stop.clone(),
                 buffering_since: Cell::new(None),
                 started: Cell::new(false),
+                catch_up: Cell::new(CatchUp::Watching),
+                next_lag_check: Cell::new(Instant::now()),
             };
             std::thread::Builder::new()
                 .name("chromecast-live".to_owned())
                 .spawn(move || session.run())?
         };
         Ok(Self {
-            segmenter,
+            sink,
             state,
             stop,
             control: Some(control),
@@ -157,13 +223,19 @@ impl LiveCast {
     /// in presentation order (no B-frames): units whose timestamp goes
     /// backwards are dropped, since segments carry no separate decode time.
     pub fn push_annexb(&self, annexb: &[u8], pts: Duration, keyframe: bool) {
-        lock(&self.segmenter).push(annexb, pts, keyframe);
+        match &self.sink {
+            Sink::Hls(segmenter) => lock(segmenter).push(annexb, pts, keyframe),
+            Sink::Progressive(stream) => stream.push(annexb, pts, keyframe),
+        }
     }
 
     /// True when the next frame should be a keyframe so the open segment can close.
     #[must_use]
     pub fn wants_keyframe(&self, pts: Duration) -> bool {
-        lock(&self.segmenter).wants_keyframe(pts)
+        match &self.sink {
+            Sink::Hls(segmenter) => lock(segmenter).wants_keyframe(pts),
+            Sink::Progressive(stream) => stream.wants_keyframe(pts),
+        }
     }
 
     #[must_use]
@@ -171,7 +243,7 @@ impl LiveCast {
         lock(&self.state).clone()
     }
 
-    /// Playlist URL handed to the receiver.
+    /// Stream URL handed to the receiver.
     #[must_use]
     pub fn url(&self) -> &str {
         &self.url
@@ -182,6 +254,9 @@ impl LiveCast {
         self.stop.store(true, Ordering::Release);
         if let Some(control) = self.control.take() {
             let _ = control.join();
+        }
+        if let Sink::Progressive(stream) = &self.sink {
+            stream.close();
         }
     }
 }
@@ -196,12 +271,24 @@ pub(crate) struct Session {
     receiver: SocketAddr,
     url: String,
     options: LiveOptions,
-    segmenter: Arc<Mutex<Segmenter>>,
+    sink: Sink,
     state: Arc<Mutex<LiveState>>,
     stop: Arc<AtomicBool>,
     buffering_since: Cell<Option<Instant>>,
     /// Our media session has reported PLAYING at least once.
     started: Cell<bool>,
+    catch_up: Cell<CatchUp>,
+    next_lag_check: Cell<Instant>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CatchUp {
+    Watching,
+    /// Playing fast until this instant; then returning to normal speed, with
+    /// the failed attempts so far.
+    Until(Instant, u8),
+    /// The receiver refused a playback rate; leave it at normal speed.
+    Unsupported,
 }
 
 impl Session {
@@ -217,10 +304,12 @@ impl Session {
     }
 
     fn cast(&self) -> Result<()> {
-        let client = CastClient::connect(self.receiver)?;
+        let Some(client) = self.connect()? else {
+            return Ok(());
+        };
         let app = client.launch(DEFAULT_MEDIA_RECEIVER)?;
         self.set(LiveState::Buffering);
-        while lock(&self.segmenter).ready_segments() < self.options.preroll {
+        while !self.ready_to_load() {
             if self.stopped() {
                 let _ = client.stop_application(&app.session_id);
                 return Ok(());
@@ -235,14 +324,8 @@ impl Session {
                 return Ok(());
             }
         }
-        let load = client.media(&app).load(&MediaLoad {
-            url: self.url.clone(),
-            content_type: "application/x-mpegurl".to_owned(),
-            stream_type: StreamType::Live,
-            title: Some(self.options.title.clone()),
-            hls_segment_format: Some("ts".to_owned()),
-            hls_video_segment_format: Some("mpeg2_ts".to_owned()),
-        });
+        let mut media = client.media(&app);
+        let load = media.load(&self.media_load());
         let loaded = match load {
             Ok(status) => status,
             Err(error) => {
@@ -269,6 +352,9 @@ impl Session {
             };
             if !matches!(outcome, Ok(true)) {
                 continue;
+            }
+            if let Err(error) = self.keep_up(&media) {
+                break Err(error);
             }
             outcome = match client.next_event(EVENT_POLL)? {
                 Some(event) => self.follow_confirmed(&client, &event, &app, loaded.media_session_id),
@@ -416,6 +502,95 @@ impl Session {
         Ok(true)
     }
 
+    /// The first connection can fail while the host OS asks for local network
+    /// access, or while a TV wakes its network; retry I/O failures briefly.
+    /// `None` when the cast was stopped while waiting to retry.
+    fn connect(&self) -> Result<Option<CastClient>> {
+        let mut attempt = 1;
+        loop {
+            match CastClient::connect(self.receiver) {
+                Err(Error::Io(error)) if attempt < CONNECT_ATTEMPTS && !self.stopped() => {
+                    tracing::debug!(%error, attempt, "retrying the receiver connection");
+                    std::thread::sleep(CONNECT_RETRY);
+                    if self.stopped() {
+                        return Ok(None);
+                    }
+                    attempt += 1;
+                }
+                result => return result.map(Some),
+            }
+        }
+    }
+
+    fn ready_to_load(&self) -> bool {
+        match &self.sink {
+            Sink::Hls(segmenter) => lock(segmenter).ready_segments() >= self.options.preroll,
+            Sink::Progressive(stream) => stream.ready(),
+        }
+    }
+
+    fn media_load(&self) -> MediaLoad {
+        let hls = matches!(self.sink, Sink::Hls(_));
+        MediaLoad {
+            url: self.url.clone(),
+            content_type: if hls { "application/x-mpegurl" } else { "video/mp4" }.to_owned(),
+            stream_type: StreamType::Live,
+            title: Some(self.options.title.clone()),
+            hls_segment_format: hls.then(|| "ts".to_owned()),
+            hls_video_segment_format: hls.then(|| "mpeg2_ts".to_owned()),
+        }
+    }
+
+    /// Progressive receivers start with a few seconds of buffer. Measure how
+    /// far playback trails the newest frame and briefly play faster to trim it.
+    /// # Errors
+    /// Fails when playback cannot be returned to normal speed.
+    fn keep_up(&self, media: &MediaController<'_>) -> Result<()> {
+        let Sink::Progressive(stream) = &self.sink else {
+            return Ok(());
+        };
+        let now = Instant::now();
+        match self.catch_up.get() {
+            CatchUp::Until(until, failures) if now >= until => {
+                let restored = media.set_playback_rate(1.0);
+                let Some(next) = after_restore(restored.is_ok(), failures, now) else {
+                    return restored.map(|_| ());
+                };
+                self.catch_up.set(next);
+                self.next_lag_check.set(now + LAG_CHECK);
+                return Ok(());
+            }
+            CatchUp::Until(..) | CatchUp::Unsupported => return Ok(()),
+            CatchUp::Watching => {}
+        }
+        if !self.started.get() || now < self.next_lag_check.get() || *lock(&self.state) != LiveState::Playing {
+            return Ok(());
+        }
+        self.next_lag_check.set(now + LAG_CHECK);
+        let (Some(newest), Ok(Some(status))) = (stream.newest_media_time(), media.status()) else {
+            return Ok(());
+        };
+        let lag = newest - status.current_time;
+        if lag > CATCH_UP_ABOVE && status.player_state == "PLAYING" {
+            // The receiver reports the time: ignore one too far off to represent.
+            let Some(until) = Duration::try_from_secs_f64((lag - TARGET_LAG) / (CATCH_UP_RATE - 1.0))
+                .ok()
+                .and_then(|catch_up| now.checked_add(catch_up))
+            else {
+                return Ok(());
+            };
+            tracing::debug!(lag, "speeding up live playback to catch up");
+            self.catch_up.set(match media.set_playback_rate(CATCH_UP_RATE) {
+                Ok(_) => CatchUp::Until(until, 0),
+                // Only an explicit refusal proves the rate was not applied.
+                Err(Error::Rejected { .. }) => CatchUp::Unsupported,
+                // The rate may have applied before the reply was lost: restore now.
+                Err(_) => CatchUp::Until(now, 0),
+            });
+        }
+        Ok(())
+    }
+
     /// Playing, but the receiver has reported buffering for longer than the grace period.
     fn stalled(&self) -> bool {
         *lock(&self.state) == LiveState::Playing
@@ -434,6 +609,18 @@ impl Session {
     }
 }
 
+/// What follows an attempt to return to normal speed: watching again, another
+/// attempt shortly, or `None` when the session must fail.
+fn after_restore(restored: bool, failures: u8, now: Instant) -> Option<CatchUp> {
+    if restored {
+        Some(CatchUp::Watching)
+    } else if failures + 1 >= RESTORE_ATTEMPTS {
+        None
+    } else {
+        Some(CatchUp::Until(now + RESTORE_RETRY, failures + 1))
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -444,10 +631,32 @@ pub(crate) fn test_session() -> Session {
         receiver: SocketAddr::from(([192, 0, 2, 1], crate::DEFAULT_PORT)),
         url: String::new(),
         options: LiveOptions::default(),
-        segmenter: Arc::new(Mutex::new(Segmenter::new(Duration::from_millis(500), 10))),
+        sink: Sink::Hls(Arc::new(Mutex::new(Segmenter::new(Duration::from_millis(500), 10)))),
         state: Arc::new(Mutex::new(LiveState::Buffering)),
         stop: Arc::new(AtomicBool::new(false)),
         buffering_since: Cell::new(None),
         started: Cell::new(false),
+        catch_up: Cell::new(CatchUp::Watching),
+        next_lag_check: Cell::new(Instant::now()),
+    }
+}
+
+#[cfg(test)]
+mod catch_up_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_return_to_normal_speed_is_retried_and_then_fails_the_session() {
+        let now = Instant::now();
+        assert_eq!(after_restore(true, 2, now), Some(CatchUp::Watching));
+        assert_eq!(
+            after_restore(false, 0, now),
+            Some(CatchUp::Until(now + RESTORE_RETRY, 1))
+        );
+        assert_eq!(
+            after_restore(false, 1, now),
+            Some(CatchUp::Until(now + RESTORE_RETRY, 2))
+        );
+        assert_eq!(after_restore(false, RESTORE_ATTEMPTS - 1, now), None);
     }
 }

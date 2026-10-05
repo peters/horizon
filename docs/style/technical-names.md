@@ -39,6 +39,17 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | Local Network Bridge | The function that lets a worker reach the local network of the PC. | LNB, network share |
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
 
+## Casting
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| receiver | A Google Cast device, for example a TV with Chromecast built-in. | Chromecast (for the device), cast target |
+| sender | An application that starts a cast on a receiver, for example a phone app or the live example. | client |
+| live cast | One `LiveCast` session that streams H.264 from the host to a receiver. | mirror, stream session |
+| transport | How a live cast sends media: progressive (one fragmented MP4 response) or HLS. | protocol, mode |
+| lag | The time between the newest frame on the host and the frame that the receiver shows. | latency, delay |
+| live example | The `horizon-chromecast` example program `live`. | probe, demo |
+
 ## Technical verbs
 
 | Verb | Meaning |

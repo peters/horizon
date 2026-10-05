@@ -1,6 +1,7 @@
 //! Control flow against a synthetic receiver over loopback TLS.
 use crate::{
     CastClient, DEFAULT_MEDIA_RECEIVER, Error, LiveCast, LiveOptions, LiveState, MediaLoad, MediaStatus, StreamType,
+    Transport,
     client::{NS_CONNECTION, NS_HEARTBEAT, PLATFORM_RECEIVER},
     live::STALL_GRACE,
     media::NS_MEDIA,
@@ -15,7 +16,10 @@ use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::JoinHandle,
     time::Duration,
 };
@@ -70,13 +74,22 @@ fn app_status(running: bool) -> Value {
     json!({"type": "RECEIVER_STATUS", "status": {"applications": applications, "volume": {"level": 0.5}}})
 }
 
+/// Fetches `url` until the body shows a playlist or an MP4 header; live MP4
+/// responses never end, so this does not read to the end.
 fn fetch(url: &str) -> String {
     let rest = url.strip_prefix("http://").unwrap();
     let (host, path) = rest.split_at(rest.find('/').unwrap());
     let mut socket = TcpStream::connect(host).unwrap();
+    socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     write!(socket, "GET {path} HTTP/1.1\r\nHost: {host}\r\n\r\n").unwrap();
-    let mut response = String::new();
-    socket.read_to_string(&mut response).unwrap();
+    let mut response = Vec::new();
+    let mut chunk = [0; 4096];
+    while !(response.windows(7).any(|w| w == b"#EXTM3U") || response.windows(4).any(|w| w == b"ftyp")) {
+        let read = socket.read(&mut chunk).unwrap();
+        assert!(read > 0, "response ended early: {}", String::from_utf8_lossy(&response));
+        response.extend_from_slice(&chunk[..read]);
+    }
+    let response = String::from_utf8_lossy(&response).into_owned();
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     response
 }
@@ -131,8 +144,10 @@ fn receiver_with(listener: TcpListener, config: Arc<ServerConfig>, running: bool
                             .as_str()
                             .filter(|u| u.contains("127.0.0.1"))
                         {
-                            assert!(fetch(url).contains("#EXTM3U"));
-                            log.push("fetched playlist".to_owned());
+                            let body = fetch(url);
+                            let kind = request["media"]["contentType"].as_str().unwrap_or_default();
+                            let what = if body.contains("ftyp") { "mp4" } else { "playlist" };
+                            log.push(format!("fetched {kind} {what}"));
                         }
                         let loaded = json!({"type": "MEDIA_STATUS", "status": [{"mediaSessionId": 9, "playerState": "BUFFERING"}]});
                         send(&mut stream, to, NS_MEDIA, &reply(&request, loaded));
@@ -152,6 +167,11 @@ fn receiver_with(listener: TcpListener, config: Arc<ServerConfig>, running: bool
                         let replaced = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 8, "playerState": "IDLE", "idleReason": "INTERRUPTED"}]});
                         send(&mut stream, to, NS_MEDIA, &replaced);
                         send(&mut stream, PLATFORM_RECEIVER, NS_HEARTBEAT, &json!({"type": "PING"}));
+                    }
+                    (NS_MEDIA, "GET_STATUS" | "SET_PLAYBACK_RATE") => {
+                        let rate = request["playbackRate"].as_f64().unwrap_or(1.0);
+                        let status = json!({"type": "MEDIA_STATUS", "status": [{"mediaSessionId": 9, "playerState": "PLAYING", "currentTime": 0.0, "playbackRate": rate}]});
+                        send(&mut stream, to, NS_MEDIA, &reply(&request, status));
                     }
                     (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => return log,
                     _ => {}
@@ -238,40 +258,97 @@ fn reports_closed_when_receiver_disconnects() {
     assert!(!client.is_open());
 }
 
-#[test]
-fn live_cast_loads_the_served_playlist_and_tracks_playback() {
+/// SPS and PPS of an x264 1280x720 stream, so progressive init segments build.
+const SPS: [u8; 24] = [
+    0x67, 0x64, 0x00, 0x1f, 0xac, 0xb2, 0x00, 0xa0, 0x0b, 0x76, 0x02, 0x20, 0x00, 0x00, 0x03, 0x00, 0x20, 0x00, 0x00,
+    0x07, 0x81, 0xe3, 0x06, 0x49,
+];
+const PPS: [u8; 6] = [0x68, 0xeb, 0xc3, 0xcb, 0x22, 0xc0];
+
+fn access_unit(keyframe: bool) -> Vec<u8> {
+    let mut unit = Vec::new();
+    if keyframe {
+        for set in [&SPS[..], &PPS[..]] {
+            unit.extend_from_slice(&[0, 0, 0, 1]);
+            unit.extend_from_slice(set);
+        }
+    }
+    unit.extend_from_slice(&[0, 0, 0, 1, if keyframe { 0x65 } else { 0x41 }, 0x88]);
+    unit
+}
+
+/// Casts with frames pushed ten times faster than real time on a separate
+/// thread, so a receiver stuck at 0 s falls further behind; `settle` keeps
+/// the cast running after PLAYING.
+fn cast_live(transport: Transport, settle: Duration) -> Vec<String> {
     let (address, listener, config) = listen();
     let server = receiver(listener, config);
-    let mut live = LiveCast::start(address, LiveOptions::default()).unwrap();
+    let options = LiveOptions {
+        transport,
+        ..LiveOptions::default()
+    };
+    let mut live = LiveCast::start(address, options).unwrap();
     assert!(live.url().starts_with("http://127.0.0.1:"));
-    for frame in 0..30u64 {
-        let pts = Duration::from_millis(frame * 100);
-        let keyframe = live.wants_keyframe(pts);
-        let unit: &[u8] = if keyframe {
-            &[0, 0, 0, 1, 0x65, 1]
-        } else {
-            &[0, 0, 0, 1, 0x41, 2]
-        };
-        live.push_annexb(unit, pts, keyframe);
-    }
-    for _ in 0..100 {
-        if live.state() == LiveState::Playing {
-            break;
+    let pushing = AtomicBool::new(true);
+    let states = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut frame = 0u64;
+            while pushing.load(Ordering::Relaxed) {
+                let pts = Duration::from_millis(frame * 100);
+                let keyframe = live.wants_keyframe(pts);
+                live.push_annexb(&access_unit(keyframe), pts, keyframe);
+                frame += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        for _ in 0..100 {
+            if live.state() == LiveState::Playing {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert_eq!(live.state(), LiveState::Playing);
-    std::thread::sleep(Duration::from_millis(300));
+        let reached = live.state();
+        std::thread::sleep(Duration::from_millis(300).max(settle));
+        let settled = live.state();
+        // Stop the producer before asserting, or a failure would leave the scope waiting on it.
+        pushing.store(false, Ordering::Relaxed);
+        (reached, settled)
+    });
+    assert_eq!(states.0, LiveState::Playing);
     assert_eq!(
-        live.state(),
+        states.1,
         LiveState::Playing,
         "a brief BUFFERING report must not flap the state"
     );
     live.stop();
     assert_eq!(live.state(), LiveState::Ended);
     let log = server.join().unwrap();
-    assert!(log.contains(&"fetched playlist".to_owned()), "{log:#?}");
     assert!(log.contains(&format!("{NS_RECEIVER} receiver-0 STOP")), "{log:#?}");
+    log
+}
+
+#[test]
+fn live_cast_loads_the_served_playlist_and_tracks_playback() {
+    let log = cast_live(Transport::Hls, Duration::ZERO);
+    assert!(
+        log.contains(&"fetched application/x-mpegurl playlist".to_owned()),
+        "{log:#?}"
+    );
+    assert!(
+        !log.iter().any(|line| line.ends_with("SET_PLAYBACK_RATE")),
+        "HLS never changes the rate"
+    );
+}
+
+#[test]
+fn progressive_cast_streams_mp4_and_catches_up_with_live() {
+    let log = cast_live(Transport::Progressive, Duration::from_millis(2500));
+    assert!(log.contains(&"fetched video/mp4 mp4".to_owned()), "{log:#?}");
+    // Frames keep arriving while the receiver reports 0 s, so it falls behind.
+    assert!(
+        log.contains(&format!("{NS_MEDIA} transport-1 SET_PLAYBACK_RATE")),
+        "{log:#?}"
+    );
 }
 
 #[test]
@@ -283,10 +360,12 @@ fn live_cast_rejects_options_that_could_never_play() {
             ..LiveOptions::default()
         },
         LiveOptions {
+            transport: Transport::Hls,
             preroll: 0,
             ..LiveOptions::default()
         },
         LiveOptions {
+            transport: Transport::Hls,
             window: 2,
             preroll: 3,
             ..LiveOptions::default()
@@ -579,7 +658,12 @@ fn cast_against(server: JoinHandle<Vec<String>>, address: SocketAddr) -> (LiveSt
 }
 
 fn cast_for(server: JoinHandle<Vec<String>>, address: SocketAddr, run: Duration) -> (LiveState, Vec<String>) {
-    let live = LiveCast::start(address, LiveOptions::default()).unwrap();
+    // These bare access units carry no SPS, which the progressive stream needs.
+    let options = LiveOptions {
+        transport: Transport::Hls,
+        ..LiveOptions::default()
+    };
+    let live = LiveCast::start(address, options).unwrap();
     for frame in 0..30u64 {
         let pts = Duration::from_millis(frame * 100);
         let keyframe = live.wants_keyframe(pts);
@@ -616,6 +700,7 @@ fn a_confirmed_unload_after_playing_ends_the_cast_without_stop() {
 fn live_options_must_keep_three_target_durations() {
     let address: SocketAddr = "127.0.0.1:9".parse().unwrap();
     let short = LiveOptions {
+        transport: Transport::Hls,
         segment: Duration::from_secs(1),
         window: 2,
         preroll: 2,
@@ -654,4 +739,34 @@ fn a_buffering_report_queued_before_a_playing_reply_is_not_a_stall() {
 fn avcc_conversion_reports_the_crate_error_type() {
     let result: crate::Result<Vec<u8>> = crate::avcc_to_annexb(&[0, 0, 0, 9, 1], 4, &[]);
     assert!(matches!(result, Err(Error::H264(_))));
+}
+
+#[test]
+fn live_cast_retries_a_receiver_that_is_not_listening_yet() {
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let late = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1200));
+        let (_, _, config) = listen();
+        receiver(TcpListener::bind(address).unwrap(), config).join().unwrap()
+    });
+    let options = LiveOptions {
+        transport: Transport::Hls,
+        ..LiveOptions::default()
+    };
+    let mut live = LiveCast::start(address, options).unwrap();
+    for frame in 0..60u64 {
+        let pts = Duration::from_millis(frame * 100);
+        let keyframe = live.wants_keyframe(pts);
+        live.push_annexb(&access_unit(keyframe), pts, keyframe);
+        if live.state() == LiveState::Playing {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(live.state(), LiveState::Playing);
+    live.stop();
+    let log = late.join().unwrap();
+    assert!(log.contains(&format!("{NS_MEDIA} transport-1 LOAD")), "{log:#?}");
 }

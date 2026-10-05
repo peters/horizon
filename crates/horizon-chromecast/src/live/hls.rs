@@ -239,7 +239,7 @@ pub(super) fn target_seconds(segment: Duration) -> u64 {
 }
 
 /// NAL units of an Annex B buffer, without start codes.
-fn nal_units(annexb: &[u8]) -> impl Iterator<Item = &[u8]> {
+pub(super) fn nal_units(annexb: &[u8]) -> impl Iterator<Item = &[u8]> {
     let mut starts = Vec::new();
     let mut at = 0;
     while at + 3 <= annexb.len() {
