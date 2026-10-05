@@ -297,7 +297,9 @@ impl Session {
     }
 
     fn cast(&self) -> Result<()> {
-        let client = self.connect()?;
+        let Some(client) = self.connect()? else {
+            return Ok(());
+        };
         let app = client.launch(DEFAULT_MEDIA_RECEIVER)?;
         self.set(LiveState::Buffering);
         while !self.ready_to_load() {
@@ -495,16 +497,20 @@ impl Session {
 
     /// The first connection can fail while the host OS asks for local network
     /// access, or while a TV wakes its network; retry I/O failures briefly.
-    fn connect(&self) -> Result<CastClient> {
+    /// `None` when the cast was stopped while waiting to retry.
+    fn connect(&self) -> Result<Option<CastClient>> {
         let mut attempt = 1;
         loop {
             match CastClient::connect(self.receiver) {
                 Err(Error::Io(error)) if attempt < CONNECT_ATTEMPTS && !self.stopped() => {
                     tracing::debug!(%error, attempt, "retrying the receiver connection");
                     std::thread::sleep(CONNECT_RETRY);
+                    if self.stopped() {
+                        return Ok(None);
+                    }
                     attempt += 1;
                 }
-                result => return result,
+                result => return result.map(Some),
             }
         }
     }
@@ -559,11 +565,17 @@ impl Session {
         };
         let lag = newest - status.current_time;
         if lag > CATCH_UP_ABOVE && status.player_state == "PLAYING" {
+            // The receiver reports the time: ignore one too far off to represent.
+            let Ok(catch_up) = Duration::try_from_secs_f64((lag - TARGET_LAG) / (CATCH_UP_RATE - 1.0)) else {
+                return Ok(());
+            };
             tracing::debug!(lag, "speeding up live playback to catch up");
-            let catch_up = Duration::from_secs_f64((lag - TARGET_LAG) / (CATCH_UP_RATE - 1.0));
             self.catch_up.set(match media.set_playback_rate(CATCH_UP_RATE) {
                 Ok(_) => CatchUp::Until(now + catch_up, 0),
-                Err(_) => CatchUp::Unsupported,
+                // Only an explicit refusal proves the rate was not applied.
+                Err(Error::Rejected { .. }) => CatchUp::Unsupported,
+                // The rate may have applied before the reply was lost: restore now.
+                Err(_) => CatchUp::Until(now, 0),
             });
         }
         Ok(())
