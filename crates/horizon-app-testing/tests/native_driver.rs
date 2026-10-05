@@ -4,15 +4,15 @@ use std::time::Duration;
 
 use horizon_app_testing::Error;
 use horizon_app_testing::catalog::Device;
-use horizon_app_testing::contract::{App, Form, Platform};
+use horizon_app_testing::contract::{App, Evidence, Form, Platform};
 use horizon_app_testing::driver::{Launch, NativeDriver};
-use horizon_app_testing::recipe::{Action, State, Target};
+use horizon_app_testing::recipe::{Action, Direction, State, Target};
 use horizon_app_testing::tree::References;
 use horizon_browser::{ClassicTransport, WebDriverHttpError};
 use serde_json::{Value, json};
 
 const IOS_SOURCE: &str = r#"<?xml version="1.0"?><AppiumAUT><XCUIElementTypeApplication name="app" enabled="true" visible="true"><XCUIElementTypeButton name="menu.open" label="Menu" enabled="true" visible="true" x="0" y="10" width="40" height="20"/><XCUIElementTypeSecureTextField name="password" value="synthetic-password" enabled="true" visible="true"/></XCUIElementTypeApplication></AppiumAUT>"#;
-const ANDROID_SOURCE: &str = r#"<hierarchy><node class="android.widget.Button" resource-id="menu.open" content-desc="Menu &amp; navigation" bounds="[0,10][40,30]" enabled="true" displayed="true"/><node class="android.widget.EditText" text="synthetic-password" password="true" enabled="true"/></hierarchy>"#;
+const ANDROID_SOURCE: &str = r#"<hierarchy><node class="android.widget.Button" resource-id="menu.open" content-desc="Menu &amp; navigation" bounds="[0,10][40,30]" enabled="true" displayed="true"/><node class="android.widget.EditText" text="synthetic-password" password="true" clickable="true" enabled="true"/></hierarchy>"#;
 
 #[test]
 fn both_native_sources_normalize_bounds_and_redact_secure_values() -> Result<(), Error> {
@@ -31,6 +31,7 @@ fn both_native_sources_normalize_bounds_and_redact_secure_values() -> Result<(),
             (0.0, 10.0, 40.0, 20.0)
         );
         assert!(!serde_json::to_string(&snapshot).unwrap().contains("synthetic-password"));
+        assert!(snapshot.nodes.iter().any(|node| node.semantic.role == "textbox"));
         assert!(refs.xpath(&Target::Ref(menu.semantic.reference.clone())).is_ok());
     }
     Ok(())
@@ -111,6 +112,9 @@ impl ClassicTransport for Fake {
         if path == "/session" {
             return Ok(json!({"value":{"sessionId":"test-session"}}));
         }
+        if path.ends_with("/window/rect") {
+            return Ok(json!({"value":{"width":400,"height":800}}));
+        }
         if path.ends_with("/source") {
             let reads = self
                 .calls
@@ -172,6 +176,10 @@ impl ClassicTransport for Fake {
 }
 
 fn launch(platform: Platform) -> Result<Launch, Error> {
+    launch_policy(platform, Evidence::default())
+}
+
+fn launch_policy(platform: Platform, evidence: Evidence) -> Result<Launch, Error> {
     Launch::new(
         Device {
             platform,
@@ -189,6 +197,7 @@ fn launch(platform: Platform) -> Result<Launch, Error> {
         "bs://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
         "private-tunnel".into(),
         "run-1".into(),
+        evidence,
     )
 }
 
@@ -396,5 +405,42 @@ fn duplicate_native_ids_cannot_bind_distinct_observations() -> Result<(), Error>
     });
     let mut driver = NativeDriver::allocate(fake, &launch(Platform::Ios)?)?;
     assert_eq!(driver.snapshot().err(), Some(Error::ReferenceExpired));
+    Ok(())
+}
+
+#[test]
+fn recording_opt_out_and_small_scrolls_preserve_declared_behavior() -> Result<(), Error> {
+    let fake = Arc::new(Fake::default());
+    let mut driver = NativeDriver::allocate(
+        fake.clone(),
+        &launch_policy(
+            Platform::Android,
+            Evidence {
+                video: false,
+                screenshots: true,
+                logs_on_failure: false,
+            },
+        )?,
+    )?;
+    for distance in [1, 3] {
+        driver.act(&Action::Scroll {
+            direction: Direction::Up,
+            distance,
+        })?;
+    }
+    driver.close()?;
+    let calls = fake.calls.lock().unwrap();
+    let options = &calls[0].2.as_ref().unwrap()["capabilities"]["alwaysMatch"]["bstack:options"];
+    assert_eq!(options["video"], false);
+    assert_eq!(options["debug"], false);
+    let gestures = calls
+        .iter()
+        .filter(|(method, path, _, _)| method == "POST" && path.ends_with("/actions"));
+    for (call, distance) in gestures.zip([1, 3]) {
+        let actions = &call.2.as_ref().unwrap()["actions"][0]["actions"];
+        let from = actions[0]["y"].as_i64().unwrap();
+        let to = actions[2]["y"].as_i64().unwrap();
+        assert_eq!(to - from, distance);
+    }
     Ok(())
 }
