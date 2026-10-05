@@ -1,9 +1,9 @@
 # Build from an upstream OS or project runtime, never from an old full worker.
 ARG BASE_IMAGE=ubuntu:24.04
-FROM node:22-bookworm-slim AS agent-runtime
+FROM node:26-bookworm-slim AS agent-runtime
 ARG HORIZON_AGENTS=
 RUN node -e 'const fs=require("fs");const out="/output/usr/local/bin";fs.mkdirSync(out,{recursive:true});if(process.env.HORIZON_AGENTS){fs.copyFileSync("/usr/local/bin/node",out+"/node");fs.cpSync("/usr/local/lib/node_modules/npm","/output/usr/local/lib/node_modules/npm",{recursive:true});fs.symlinkSync("../lib/node_modules/npm/bin/npm-cli.js",out+"/npm");fs.symlinkSync("../lib/node_modules/npm/bin/npx-cli.js",out+"/npx");}'
-FROM node:22-bookworm-slim AS selected
+FROM node:26-bookworm-slim AS selected
 ARG HORIZON_AGENTS=
 ARG HORIZON_BROWSERS=
 ARG HORIZON_DESKTOP=false
