@@ -208,6 +208,11 @@ manual recovery; this namespace guard alone cannot detect deletion of all state.
 The configured state path must be canonical. Tests canonicalize platform temporary
 paths so macOS aliases cannot weaken production symlink rejection.
 
+Journal lock markers also bind the original filesystem device/inode. Copying identical
+lock bytes into a replacement file cannot create another account lock. In-place host-root
+relocation preserves identity; copying state onto another filesystem remains a reconciliation
+hold. Prototype markers from older unmerged revisions are refused rather than reset.
+
 ## Exact-owned recovery callbacks
 
 The journal's private `recover_owned` callback durably holds uncertainty before
@@ -218,7 +223,3 @@ bounded, run under the account lock and require exclusive host execution ownersh
 for the workspace; they must never recursively access the journal. References are
 neither Debug nor serializable. This callback is a recovery primitive, not startup
 reconciliation of processes/tunnels or an MCP host implementation.
-Journal lock markers also bind the original filesystem device/inode. Copying identical
-lock bytes into a replacement file cannot create another account lock. In-place host-root
-relocation preserves identity; copying state onto another filesystem remains a reconciliation
-hold. Prototype markers from older unmerged revisions are refused rather than reset.

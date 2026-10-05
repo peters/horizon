@@ -101,6 +101,48 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn matched_allocation_recovery_retains_then_releases_its_exact_reserved_slot() {
+        let folder = canonical_temp();
+        let state = folder.path().join("state");
+        let owner = Uuid::new_v4();
+        let first = journal(&state, 'a');
+        let a = first
+            .start(owner, folder.path(), Kind::Session, Duration::from_secs(30))
+            .unwrap();
+        first.reserve(owner, a.id, quota).unwrap();
+        let b = first
+            .start(owner, folder.path(), Kind::Session, Duration::from_secs(30))
+            .unwrap();
+        first.reserve(owner, b.id, quota).unwrap();
+        drop(first);
+        let reopened = journal(&state, 'a');
+        reopened
+            .recover_owned(owner, a.id, |input| {
+                assert!(matches!(input, Recovery::AllocationIntent { operation } if operation == a.id));
+                Ok(Resolution::Allocated("synthetic_session_0123456789".into()))
+            })
+            .unwrap();
+        assert_eq!(reopened.status(owner, a.id).unwrap().phase, Phase::Active);
+        let c = reopened
+            .start(owner, folder.path(), Kind::Session, Duration::from_secs(30))
+            .unwrap();
+        assert_eq!(reopened.reserve(owner, c.id, quota), Err(Error::CapacityUnavailable));
+        reopened
+            .recover_owned(owner, a.id, |input| {
+                assert!(
+                    matches!(input, Recovery::Allocated { reference } if reference == "synthetic_session_0123456789")
+                );
+                Ok(Resolution::ConfirmedClosed)
+            })
+            .unwrap();
+        let status = reopened.status(owner, a.id).unwrap();
+        assert_eq!(status.phase, Phase::Complete);
+        assert_eq!(status.pending_resources, 0);
+        assert!(reopened.reserve(owner, c.id, quota).is_ok());
+        assert_ne!(reopened.status(owner, b.id).unwrap().phase, Phase::Complete);
+    }
+
+    #[test]
     fn lost_upload_reply_can_be_adopted_and_exactly_released_after_restart() {
         let folder = canonical_temp();
         let path = folder.path().join("state");
