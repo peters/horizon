@@ -10,19 +10,68 @@ const MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(super) struct Store {
     directory: File,
+    registry: File,
+    namespace: String,
 }
 impl Store {
     pub(super) fn open(path: &Path) -> Result<Self> {
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write as _;
+        let parent = path.parent().ok_or(Error::JournalUnavailable)?;
+        let registry = private_directory(&parent.join(".native-journal-registry"))?;
+        let registry_lock = open_file(&registry, "journal.lock", true)?;
+        registry_lock.lock().map_err(|_| Error::JournalUnavailable)?;
+        let digest = Sha256::digest(path.as_os_str().as_encoded_bytes());
+        let namespace = digest.iter().fold(String::from("namespace-"), |mut text, byte| {
+            let _ = write!(text, "{byte:02x}");
+            text
+        });
+        let expected = match open_file(&registry, &namespace, false) {
+            Ok(marker) => Some(small(&marker)?),
+            Err(Error::JournalMissing) => None,
+            Err(error) => return Err(error),
+        };
         let directory = private_directory(path)?;
         let lock = open_file(&directory, "journal.lock", true)?;
         lock.lock().map_err(|_| Error::JournalUnavailable)?;
-        initialize(&directory, &lock)?;
-        Ok(Self { directory })
+        if let Some(expected) = expected {
+            check_marker(&directory, &lock)?;
+            if small(&lock)? != expected {
+                return Err(Error::JournalInvalid);
+            }
+            open_file(&directory, "journal.json", false).map_err(|_| Error::JournalInvalid)?;
+        } else {
+            // A durable reservation precedes initialization. An interrupted first open holds state.
+            let mut marker = open_file(&registry, &namespace, true)?;
+            marker
+                .write_all(b"initializing")
+                .and_then(|()| marker.sync_all())
+                .map_err(|_| Error::JournalUnavailable)?;
+            registry.sync_all().map_err(|_| Error::JournalUnavailable)?;
+            initialize(&directory, &lock)?;
+            let identity = small(&lock)?;
+            marker
+                .rewind()
+                .and_then(|()| marker.set_len(0))
+                .and_then(|()| marker.write_all(&identity))
+                .and_then(|()| marker.sync_all())
+                .map_err(|_| Error::JournalUnavailable)?;
+            registry.sync_all().map_err(|_| Error::JournalUnavailable)?;
+        }
+        Ok(Self {
+            directory,
+            registry,
+            namespace,
+        })
     }
     pub(super) fn access<T>(&self, write: bool, operation: impl FnOnce(&mut Ledger) -> Result<T>) -> Result<T> {
         let lock = open_file(&self.directory, "journal.lock", true)?;
         lock.lock().map_err(|_| Error::JournalUnavailable)?;
         check_marker(&self.directory, &lock)?;
+        let marker = open_file(&self.registry, &self.namespace, false).map_err(|_| Error::JournalInvalid)?;
+        if small(&marker)? != small(&lock)? {
+            return Err(Error::JournalInvalid);
+        }
         let mut ledger = match open_file(&self.directory, "journal.json", false) {
             Ok(file) => {
                 let mut bytes = Zeroizing::new(Vec::new());
@@ -172,6 +221,7 @@ fn private_directory(path: &Path) -> Result<File> {
                     }
                 })
                 .map_err(|_| Error::JournalUnavailable)?;
+                current.sync_all().map_err(|_| Error::JournalUnavailable)?;
                 current = File::from(
                     rustix::fs::openat(
                         &current,

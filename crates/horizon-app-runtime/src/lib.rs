@@ -5,7 +5,7 @@ pub mod journal;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum Error {
-    #[error("app_credentials_unavailable: unlock the configured credential store")]
+    #[error("app_credentials_unavailable: check the configured native credentials and credential store")]
     CredentialsUnavailable,
     #[error("app_credentials_invalid: configure a native BrowserStack provider profile")]
     CredentialsInvalid,

@@ -1,6 +1,24 @@
 use super::*;
 use std::sync::{Arc, Barrier};
 
+struct CanonicalTemp {
+    _directory: tempfile::TempDir,
+    path: PathBuf,
+}
+impl CanonicalTemp {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+fn canonical_temp() -> CanonicalTemp {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().canonicalize().unwrap();
+    CanonicalTemp {
+        _directory: directory,
+        path,
+    }
+}
+
 fn journal(path: &Path, realm: char) -> Journal {
     Journal {
         store: Store::open(path).unwrap(),
@@ -22,7 +40,7 @@ fn quota() -> Result<Capacity> {
 
 #[test]
 fn restart_preserves_owned_intent_and_never_serializes_provider_ids_to_status() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let state = folder.path().join("state");
     let owner = Uuid::new_v4();
     let first = journal(&state, 'a');
@@ -62,7 +80,7 @@ fn restart_preserves_owned_intent_and_never_serializes_provider_ids_to_status() 
 
 #[test]
 fn simultaneous_profiles_share_capacity_without_crossing_credential_ownership() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let state = folder.path().join("state");
     let barrier = Arc::new(Barrier::new(4));
     let workers = (0..4)
@@ -97,7 +115,7 @@ fn simultaneous_profiles_share_capacity_without_crossing_credential_ownership() 
 
 #[test]
 fn remote_visibility_does_not_double_count_owned_allocations_and_uncertainty_holds_capacity() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let journal = journal(&folder.path().join("state"), 'a');
     let owner = Uuid::new_v4();
     let a = journal
@@ -133,7 +151,7 @@ fn remote_visibility_does_not_double_count_owned_allocations_and_uncertainty_hol
 
 #[test]
 fn expired_and_uncertain_reservations_survive_restart_and_block_reallocation() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let state = folder.path().join("state");
     let journal = journal(&state, 'a');
     let owner = Uuid::new_v4();
@@ -173,7 +191,7 @@ fn expired_and_uncertain_reservations_survive_restart_and_block_reallocation() {
 #[test]
 fn journal_rejects_symlinks_fifos_shared_permissions_and_corruption() {
     use std::os::unix::fs::{PermissionsExt, symlink};
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let state = folder.path().join("state");
     let journal = journal(&state, 'a');
     let target = folder.path().join("target");
@@ -204,7 +222,7 @@ fn journal_rejects_symlinks_fifos_shared_permissions_and_corruption() {
 
 #[test]
 fn cleanup_failure_preserves_private_identity_and_never_replays_upload_or_allocation() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let state = folder.path().join("state");
     let journal = journal(&state, 'a');
     let owner = Uuid::new_v4();
@@ -258,7 +276,7 @@ fn cleanup_failure_preserves_private_identity_and_never_replays_upload_or_alloca
 
 #[test]
 fn count_overlap_requires_exact_provider_identity_and_uncertainty_cannot_free_capacity() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let journal = journal(&folder.path().join("state"), 'a');
     let owner = Uuid::new_v4();
     let a = journal
@@ -297,7 +315,7 @@ fn count_overlap_requires_exact_provider_identity_and_uncertainty_cannot_free_ca
 
 #[test]
 fn lost_initialized_state_or_lock_fails_closed_and_failed_snapshot_leaves_no_partial() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let state = folder.path().join("state");
     let journal = journal(&state, 'a');
     let owner = Uuid::new_v4();
@@ -332,7 +350,7 @@ fn lost_initialized_state_or_lock_fails_closed_and_failed_snapshot_leaves_no_par
 
 #[test]
 fn inconsistent_lifecycle_shapes_and_duplicate_provider_ids_block_admission() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let journal = journal(&folder.path().join("state"), 'a');
     let owner = Uuid::new_v4();
     let a = journal
@@ -380,7 +398,7 @@ fn inconsistent_lifecycle_shapes_and_duplicate_provider_ids_block_admission() {
 
 #[test]
 fn inconsistent_on_disk_state_blocks_reads_and_capacity_before_provider_queries() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let state = folder.path().join("state");
     let journal = journal(&state, 'a');
     let owner = Uuid::new_v4();
@@ -404,7 +422,7 @@ fn inconsistent_on_disk_state_blocks_reads_and_capacity_before_provider_queries(
 
 #[test]
 fn duplicate_json_operation_keys_cannot_hide_an_owned_reservation() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let state = folder.path().join("state");
     let journal = journal(&state, 'a');
     let owner = Uuid::new_v4();
@@ -434,7 +452,7 @@ fn duplicate_json_operation_keys_cannot_hide_an_owned_reservation() {
 
 #[test]
 fn slow_capacity_reply_cannot_admit_an_expired_operation() {
-    let folder = tempfile::tempdir().unwrap();
+    let folder = canonical_temp();
     let journal = journal(&folder.path().join("state"), 'a');
     let owner = Uuid::new_v4();
     let a = journal
@@ -452,4 +470,23 @@ fn slow_capacity_reply_cannot_admit_an_expired_operation() {
     let status = journal.status(owner, a.id).unwrap();
     assert_eq!(status.phase, Phase::Preparing);
     assert_eq!(status.pending_resources, 0);
+}
+
+#[test]
+fn missing_or_replaced_namespace_cannot_forget_reservations() {
+    let folder = canonical_temp();
+    let state = folder.path().join("state");
+    let first = journal(&state, 'a');
+    let owner = Uuid::new_v4();
+    let operation = first
+        .start(owner, folder.path(), Kind::Session, Duration::from_secs(30))
+        .unwrap();
+    first.reserve(owner, operation.id, quota).unwrap();
+    drop(first);
+    std::fs::rename(&state, folder.path().join("saved")).unwrap();
+    assert!(matches!(Store::open(&state), Err(Error::JournalInvalid)));
+    std::fs::remove_dir_all(&state).unwrap();
+    std::fs::rename(folder.path().join("saved"), &state).unwrap();
+    let restored = journal(&state, 'a');
+    assert_eq!(restored.status(owner, operation.id).unwrap().phase, Phase::Allocating);
 }

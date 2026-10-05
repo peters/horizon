@@ -195,3 +195,15 @@ This increment provides Unix-only durable storage and admission primitives. It d
 ## Upload lease recovery holds
 
 A lost final app-deletion reply marks its cached asset uncertain before returning the failure. The original lease remains available only for exact cleanup retry; the asset cannot be used for a driver, reused or uploaded again by content until cleanup is confirmed. A reused app handle reports `remaining_seconds` from the original asset acquisition, rather than claiming a fresh 24-hour lifetime. Native plan responses without a team cap normalize that cap to the plan cap; a declared team cap still lowers available capacity.
+
+## Journal namespace retention
+
+A private sibling `.native-journal-registry` retains each namespace's initialization
+identity outside the namespace directory. Initialization durably records its intent
+before creating the ledger; incomplete initialization and missing/replaced namespace
+state fail closed. New directory entries are synchronized through their parents.
+Retain this registry with the host state root. Loss of the entire host state root,
+including the registry, requires a separate retained host bootstrap identity and
+manual recovery; this namespace guard alone cannot detect deletion of all state.
+The configured state path must be canonical. Tests canonicalize platform temporary
+paths so macOS aliases cannot weaken production symlink rejection.
