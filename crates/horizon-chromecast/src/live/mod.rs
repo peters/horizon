@@ -110,9 +110,10 @@ impl LiveOptions {
             return Err(Error::InvalidOptions("window must hold the pre-roll segments"));
         }
         // A live playlist must keep at least three target durations (RFC 8216
-        // section 6.2.2); segments can close at 90% of `segment`.
+        // section 6.2.2); segments can close at 90% of `segment`. The
+        // progressive stream has no playlist.
         let kept_ms = self.segment.as_millis() * 9 / 10 * u128::try_from(self.window).unwrap_or(u128::MAX);
-        if kept_ms < u128::from(hls::target_seconds(self.segment)) * 3 * 1000 {
+        if self.transport == Transport::Hls && kept_ms < u128::from(hls::target_seconds(self.segment)) * 3 * 1000 {
             return Err(Error::InvalidOptions(
                 "window must hold at least three target durations",
             ));

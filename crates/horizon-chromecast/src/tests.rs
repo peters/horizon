@@ -698,6 +698,7 @@ fn a_confirmed_unload_after_playing_ends_the_cast_without_stop() {
 fn live_options_must_keep_three_target_durations() {
     let address: SocketAddr = "127.0.0.1:9".parse().unwrap();
     let short = LiveOptions {
+        transport: Transport::Hls,
         segment: Duration::from_secs(1),
         window: 2,
         preroll: 2,
