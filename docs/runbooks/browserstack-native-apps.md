@@ -63,7 +63,7 @@ after the complete backend/frontend stack and anonymous config are verified. Bin
 that device's declared loopback endpoints into its restricted tunnel and launch settings.
 
 Cancellation or host EOF must stop the owned helper and nested groups. The helper emits
-`{"native_backend_closed":1}` only after confirmed nested cleanup and worktree removal.
+`{"native_backend_closed":1,"nonce":"<same-request-uuid>"}` only after confirmed nested cleanup and worktree removal. The guardian sends a private `{"native_backend_cleanup":1,"nonce":"<fresh-uuid>"}` line before closing heartbeat stdin. Helpers echo that exact nonce after cleanup; a nonce-less or prebuffered completion record cannot confirm cleanup.
 Missing acknowledgement holds uncertainty. Stop one lane without interrupting another;
 continue other devices after a failing recipe step. Private helper logs retain at most
 4 MiB while complete child output is drained.
