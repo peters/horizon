@@ -51,6 +51,18 @@ updates:
         patterns:
           - "x11rb*"
 
+  - package-ecosystem: pip
+    directory: "/auto/cast"
+    schedule:
+      interval: daily
+      time: "04:00"
+
+  - package-ecosystem: docker
+    directory: "/examples/cloud-worker"
+    schedule:
+      interval: daily
+      time: "04:00"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
