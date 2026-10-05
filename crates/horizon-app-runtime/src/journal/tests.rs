@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::{Arc, Barrier};
 
 struct CanonicalTemp {
     _directory: tempfile::TempDir,
@@ -82,27 +81,44 @@ fn restart_preserves_owned_intent_and_never_serializes_provider_ids_to_status() 
 fn simultaneous_profiles_share_capacity_without_crossing_credential_ownership() {
     let folder = canonical_temp();
     let state = folder.path().join("state");
-    let barrier = Arc::new(Barrier::new(4));
+    let (ready_send, ready) = std::sync::mpsc::channel();
     let workers = (0..4)
         .map(|index| {
             let state = state.clone();
             let root = folder.path().to_owned();
-            let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                let journal = journal(&state, if index % 2 == 0 { 'a' } else { 'b' });
-                let owner = Uuid::new_v4();
-                let operation = journal
-                    .start(owner, &root, Kind::Session, Duration::from_secs(30))
-                    .unwrap();
-                barrier.wait();
+            let ready_send = ready_send.clone();
+            let (release, released) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let prepared = (|| {
+                    let journal = Journal {
+                        store: Store::open(&state)?,
+                        realm: if index % 2 == 0 { "a" } else { "b" }.repeat(64),
+                    };
+                    let owner = Uuid::new_v4();
+                    let operation = journal.start(owner, &root, Kind::Session, Duration::from_secs(30))?;
+                    Ok::<_, Error>((journal, owner, operation))
+                })();
+                let _ = ready_send.send(prepared.is_ok());
+                let (journal, owner, operation) = prepared?;
+                if released.recv_timeout(Duration::from_secs(10)) != Ok(true) {
+                    return Err(Error::JournalUnavailable);
+                }
                 journal.reserve(owner, operation.id, quota)
-            })
+            });
+            (release, worker)
         })
         .collect::<Vec<_>>();
-    let outcomes = workers
-        .into_iter()
-        .map(|worker| worker.join().unwrap())
+    let initialization = (0..4)
+        .map(|_| ready.recv_timeout(Duration::from_secs(10)) == Ok(true))
         .collect::<Vec<_>>();
+    let admitted = initialization.iter().all(|ready| *ready);
+    for (release, _) in &workers {
+        let _ = release.send(admitted);
+    }
+    // Join every worker before any assertion can destroy the fixture directory.
+    let outcomes = workers.into_iter().map(|(_, worker)| worker.join()).collect::<Vec<_>>();
+    assert!(admitted, "native journal initialization failed: {outcomes:?}");
+    let outcomes = outcomes.into_iter().map(|result| result.unwrap()).collect::<Vec<_>>();
     assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 2);
     assert_eq!(
         outcomes
