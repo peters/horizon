@@ -20,11 +20,10 @@ pub struct Receiver {
 /// # Errors
 /// Returns a discovery error if multicast service discovery cannot start.
 pub fn discover(duration: Duration) -> Result<Vec<Receiver>> {
-    let services = discovery::browse(SERVICE, duration)?;
     let mut receivers = BTreeMap::new();
-    for service in services {
+    discovery::browse(SERVICE, duration, |service| {
         let Some(id) = service.property("id") else {
-            continue;
+            return;
         };
         receivers.insert(
             id.to_owned(),
@@ -36,7 +35,7 @@ pub fn discover(duration: Duration) -> Result<Vec<Receiver>> {
                 video: service.property("ca").is_some_and(shows_video),
             },
         );
-    }
+    })?;
     Ok(receivers.into_values().collect())
 }
 

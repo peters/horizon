@@ -42,16 +42,21 @@ pub enum DiscoveryError {
 }
 
 /// Browses `service_type` (for example `_googlecast._tcp.local.`) for
-/// `duration` and returns every resolution that has an IPv4 address and a
-/// port, in arrival order. An instance resolved twice appears twice, so callers
-/// apply their own filters first and then keep the latest entry per device;
-/// a later resolution that fails a filter never hides an earlier valid one.
+/// `duration` and hands every resolution with an IPv4 address and a port to
+/// `on_service`, in arrival order. An instance resolved twice is handed over
+/// twice: callers apply their own filters and replace earlier entries for the
+/// same device, so memory stays bounded by the number of devices and a later
+/// resolution that fails a filter never hides an earlier valid one.
 /// Does not connect to the services.
 /// # Errors
 /// Returns [`DiscoveryError::Start`] if the multicast DNS daemon cannot start,
 /// [`DiscoveryError::Browse`] if browsing cannot be registered, and
 /// [`DiscoveryError::DurationTooLong`] if `duration` cannot be represented.
-pub fn browse(service_type: &str, duration: Duration) -> Result<Vec<Service>, DiscoveryError> {
+pub fn browse(
+    service_type: &str,
+    duration: Duration,
+    mut on_service: impl FnMut(Service),
+) -> Result<(), DiscoveryError> {
     let daemon = ServiceDaemon::new().map_err(DiscoveryError::Start)?;
     let result = (|| {
         let events = daemon.browse(service_type).map_err(DiscoveryError::Browse)?;
@@ -59,7 +64,6 @@ pub fn browse(service_type: &str, duration: Duration) -> Result<Vec<Service>, Di
         let deadline = Instant::now()
             .checked_add(duration)
             .ok_or(DiscoveryError::DurationTooLong)?;
-        let mut services = Vec::new();
         while let Some(wait) = deadline.checked_duration_since(Instant::now()) {
             let Ok(event) = events.recv_timeout(wait) else {
                 break;
@@ -79,14 +83,14 @@ pub fn browse(service_type: &str, duration: Duration) -> Result<Vec<Service>, Di
                 .iter()
                 .map(|property| (property.key().to_ascii_lowercase(), property.val_str().to_owned()))
                 .collect();
-            services.push(Service {
+            on_service(Service {
                 instance: instance_name(&info.fullname, service_type).to_owned(),
                 fullname: info.fullname.clone(),
                 address: SocketAddr::new(ip.into(), info.port),
                 properties,
             });
         }
-        Ok(services)
+        Ok(())
     })();
     let _ = daemon.shutdown();
     result
