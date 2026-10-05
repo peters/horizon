@@ -6,7 +6,7 @@ use horizon_app_testing::contract::Platform;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::api::{BrowserStack, UploadedApp};
+use crate::api::{BrowserStack, Decoded, UploadedApp};
 use crate::{Error, Result};
 
 const PAGE: usize = 100;
@@ -29,21 +29,22 @@ impl Budget {
         }
     }
 
-    fn request(&mut self, path: &str, get: &mut impl FnMut(&str, Duration) -> Result<Value>) -> Result<Value> {
+    fn request(&mut self, path: &str, get: &mut impl FnMut(&str, Duration, u64) -> Result<Decoded>) -> Result<Value> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
-        if self.requests == 0 || remaining.is_zero() {
+        if self.requests == 0 || self.bytes == 0 || remaining.is_zero() {
             return Err(Error::ReconcileIncomplete);
         }
         self.requests -= 1;
-        let response = get(path, remaining.min(Duration::from_secs(10)))?;
-        let bytes = serde_json::to_vec(&response)
-            .map_err(|_| Error::ProviderRejected)?
-            .len();
-        self.bytes = self.bytes.checked_sub(bytes).ok_or(Error::ReconcileIncomplete)?;
+        let limit = u64::try_from(self.bytes.min(1024 * 1024)).map_err(|_| Error::ReconcileIncomplete)?;
+        let response = get(path, remaining.min(Duration::from_secs(10)), limit)?;
+        self.bytes = self
+            .bytes
+            .checked_sub(response.bytes)
+            .ok_or(Error::ReconcileIncomplete)?;
         if Instant::now() >= self.deadline {
             return Err(Error::ReconcileIncomplete);
         }
-        Ok(response)
+        Ok(response.value)
     }
 }
 
@@ -167,9 +168,10 @@ impl BrowserStack {
 
     fn session_bounded(&self, budget: &mut Budget, id: &str) -> Result<Session> {
         check_id(id)?;
-        let response = budget.request(&format!("/app-automate/sessions/{id}.json"), &mut |path, timeout| {
-            self.get_bounded(path, timeout, 1024 * 1024)
-        })?;
+        let response = budget.request(
+            &format!("/app-automate/sessions/{id}.json"),
+            &mut |path, timeout, limit| self.get_measured(path, timeout, limit),
+        )?;
         let row = response.get("automation_session").ok_or(Error::ProviderRejected)?;
         if provider_id(row)? != id {
             return Err(Error::ProviderRejected);
@@ -204,13 +206,17 @@ impl BrowserStack {
     }
 
     fn pages(&self, budget: &mut Budget, path: &str) -> Result<Vec<Value>> {
-        pages(budget, path, |path, timeout| {
-            self.get_bounded(path, timeout, 1024 * 1024)
+        pages(budget, path, |path, timeout, limit| {
+            self.get_measured(path, timeout, limit)
         })
     }
 }
 
-fn pages(budget: &mut Budget, path: &str, mut get: impl FnMut(&str, Duration) -> Result<Value>) -> Result<Vec<Value>> {
+fn pages(
+    budget: &mut Budget,
+    path: &str,
+    mut get: impl FnMut(&str, Duration, u64) -> Result<Decoded>,
+) -> Result<Vec<Value>> {
     let mut result = Vec::new();
     let separator = if path.contains('?') { '&' } else { '?' };
     for page in 0..MAX_PAGES {

@@ -2,6 +2,11 @@ use super::*;
 use horizon_app_testing::contract::Form;
 use serde_json::json;
 
+fn decoded(value: Value) -> Result<Decoded> {
+    let bytes = serde_json::to_vec(&value).map_err(|_| Error::ProviderRejected)?.len();
+    Ok(Decoded { value, bytes })
+}
+
 fn app() -> UploadedApp {
     UploadedApp::from_response(&json!({"app_url":"bs://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})).unwrap()
 }
@@ -61,9 +66,9 @@ fn native_evidence_requires_exact_operation_app_and_catalog_target() {
 #[test]
 fn paginated_discovery_preserves_query_and_never_returns_truncated_results() {
     let mut calls = Vec::new();
-    let rows = pages(&mut Budget::new(), "/fixed?status=running", |path, _| {
+    let rows = pages(&mut Budget::new(), "/fixed?status=running", |path, _, _| {
         calls.push(path.to_owned());
-        Ok(if calls.len() == 1 {
+        decoded(if calls.len() == 1 {
             json!(vec![json!({}); PAGE])
         } else {
             json!([])
@@ -80,16 +85,16 @@ fn paginated_discovery_preserves_query_and_never_returns_truncated_results() {
     );
     let mut count = 0;
     assert_eq!(
-        pages(&mut Budget::new(), "/fixed", |_, _| {
+        pages(&mut Budget::new(), "/fixed", |_, _, _| {
             count += 1;
-            Ok(json!(vec![json!({}); PAGE]))
+            decoded(json!(vec![json!({}); PAGE]))
         })
         .err(),
         Some(Error::ReconcileIncomplete)
     );
     assert_eq!(count, MAX_PAGES);
     assert_eq!(
-        pages(&mut Budget::new(), "/fixed", |_, _| Ok(json!(vec![
+        pages(&mut Budget::new(), "/fixed", |_, _, _| decoded(json!(vec![
             json!({});
             PAGE + 1
         ])))
@@ -97,7 +102,10 @@ fn paginated_discovery_preserves_query_and_never_returns_truncated_results() {
         Some(Error::ProviderRejected)
     );
     assert_eq!(
-        pages(&mut Budget::new(), "/fixed", |_, _| Ok(json!({"message":"secret"}))).err(),
+        pages(&mut Budget::new(), "/fixed", |_, _, _| decoded(
+            json!({"message":"secret"})
+        ))
+        .err(),
         Some(Error::ProviderRejected)
     );
 }
@@ -130,16 +138,16 @@ fn nested_scans_share_one_request_row_byte_and_elapsed_budget() {
     budget.requests = 3;
     let mut calls = 0;
     for _ in 0..3 {
-        pages(&mut budget, "/build/sessions", |_, _| {
+        pages(&mut budget, "/build/sessions", |_, _, _| {
             calls += 1;
-            Ok(json!([]))
+            decoded(json!([]))
         })
         .unwrap();
     }
     assert_eq!(
-        pages(&mut budget, "/another/sessions", |_, _| {
+        pages(&mut budget, "/another/sessions", |_, _, _| {
             calls += 1;
-            Ok(json!([]))
+            decoded(json!([]))
         })
         .err(),
         Some(Error::ReconcileIncomplete)
@@ -148,28 +156,34 @@ fn nested_scans_share_one_request_row_byte_and_elapsed_budget() {
     let mut budget = Budget::new();
     budget.rows = 1;
     assert_eq!(
-        pages(&mut budget, "/fixed", |_, _| Ok(json!([{}, {}]))).err(),
+        pages(&mut budget, "/fixed", |_, _, _| decoded(json!([{}, {}]))).err(),
         Some(Error::ReconcileIncomplete)
     );
     let mut budget = Budget::new();
     budget.bytes = 2;
     assert_eq!(
-        pages(&mut budget, "/fixed", |_, _| Ok(json!([{"private":"synthetic"}]))).err(),
+        pages(&mut budget, "/fixed", |_, _, _| decoded(
+            json!([{"private":"synthetic"}])
+        ))
+        .err(),
         Some(Error::ReconcileIncomplete)
     );
     let mut budget = Budget::new();
     budget.deadline = Instant::now();
     assert_eq!(
-        pages(&mut budget, "/fixed", |_, _| panic!("expired discovery performed HTTP")).err(),
+        pages(&mut budget, "/fixed", |_, _, _| panic!(
+            "expired discovery performed HTTP"
+        ))
+        .err(),
         Some(Error::ReconcileIncomplete)
     );
     let mut budget = Budget::new();
     budget.deadline = Instant::now() + Duration::from_millis(10);
     assert_eq!(
-        pages(&mut budget, "/fixed", |_, timeout| {
+        pages(&mut budget, "/fixed", |_, timeout, _| {
             assert!(timeout <= Duration::from_millis(10));
             std::thread::sleep(Duration::from_millis(20));
-            Ok(json!([]))
+            decoded(json!([]))
         })
         .err(),
         Some(Error::ReconcileIncomplete)
@@ -196,4 +210,30 @@ fn unknown_states_and_path_like_provider_ids_fail_closed() {
     check_id(&"a".repeat(40)).unwrap();
     check_id("g072e0ed204cd8b63618478fd6a37c7d7d34869").unwrap();
     check_id("22db03a61227fb42db41e395t97a9ab1d3744462").unwrap();
+}
+
+#[test]
+fn whitespace_padded_http_pages_charge_decoded_bytes_and_limit_each_remaining_read() {
+    let mut body = serde_json::to_vec(&vec![json!({}); PAGE]).unwrap();
+    body.resize(1000 * 1024, b' ');
+    let mut calls = 0;
+    let mut limits = Vec::new();
+    let mut budget = Budget::new();
+    let result = pages(&mut budget, "/fixed", |_, _, limit| {
+        calls += 1;
+        limits.push(limit);
+        let response = ureq::http::Response::builder()
+            .status(200)
+            .body(ureq::Body::builder().data(body.clone()))
+            .unwrap();
+        crate::api::decode_measured(response, limit)
+    });
+    assert!(
+        result.is_err(),
+        "padded discovery must not pass the 8 MiB decoded budget"
+    );
+    assert_eq!(calls, 9);
+    assert_eq!(&limits[..8], &[1024 * 1024; 8]);
+    assert_eq!(limits[8], 192 * 1024);
+    assert_eq!(budget.bytes, 192 * 1024);
 }

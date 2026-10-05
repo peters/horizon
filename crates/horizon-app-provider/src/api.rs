@@ -88,6 +88,11 @@ pub struct BrowserStack {
     agent: ureq::Agent,
 }
 
+pub(crate) struct Decoded {
+    pub(crate) value: Value,
+    pub(crate) bytes: usize,
+}
+
 impl BrowserStack {
     /// # Errors
     /// Requires a trusted `BrowserStack` hub origin and printable Basic authorization from the host resolver.
@@ -221,7 +226,11 @@ impl BrowserStack {
     }
 
     pub(crate) fn get_bounded(&self, path: &str, timeout: Duration, bytes: u64) -> Result<Value> {
-        decode_bounded(
+        self.get_measured(path, timeout, bytes).map(|response| response.value)
+    }
+
+    pub(crate) fn get_measured(&self, path: &str, timeout: Duration, bytes: u64) -> Result<Decoded> {
+        decode_measured(
             self.agent
                 .get(&format!("{API}{path}"))
                 .header("Authorization", self.authorization.as_str())
@@ -239,7 +248,11 @@ fn decode(response: ureq::http::Response<ureq::Body>) -> Result<Value> {
     decode_bounded(response, MAX_RESPONSE)
 }
 
-fn decode_bounded(mut response: ureq::http::Response<ureq::Body>, limit: u64) -> Result<Value> {
+fn decode_bounded(response: ureq::http::Response<ureq::Body>, limit: u64) -> Result<Value> {
+    decode_measured(response, limit).map(|response| response.value)
+}
+
+pub(crate) fn decode_measured(mut response: ureq::http::Response<ureq::Body>, limit: u64) -> Result<Decoded> {
     if !response.status().is_success() {
         return Err(Error::ProviderFailed);
     }
@@ -249,7 +262,10 @@ fn decode_bounded(mut response: ureq::http::Response<ureq::Body>, limit: u64) ->
         .limit(limit)
         .read_to_vec()
         .map_err(|_| Error::ProviderFailed)?;
-    serde_json::from_slice(&bytes).map_err(|_| Error::ProviderRejected)
+    Ok(Decoded {
+        value: serde_json::from_slice(&bytes).map_err(|_| Error::ProviderRejected)?,
+        bytes: bytes.len(),
+    })
 }
 
 #[cfg(test)]
