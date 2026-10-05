@@ -207,3 +207,8 @@ including the registry, requires a separate retained host bootstrap identity and
 manual recovery; this namespace guard alone cannot detect deletion of all state.
 The configured state path must be canonical. Tests canonicalize platform temporary
 paths so macOS aliases cannot weaken production symlink rejection.
+
+Journal lock markers also bind the original filesystem device/inode. Copying identical
+lock bytes into a replacement file cannot create another account lock. In-place host-root
+relocation preserves identity; copying state onto another filesystem remains a reconciliation
+hold. Prototype markers from older unmerged revisions are refused rather than reset.

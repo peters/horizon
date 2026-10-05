@@ -21,7 +21,8 @@ impl Store {
         let registry = private_directory(&parent.join(".native-journal-registry"))?;
         let registry_lock = open_file(&registry, "journal.lock", true)?;
         registry_lock.lock().map_err(|_| Error::JournalUnavailable)?;
-        let digest = Sha256::digest(path.as_os_str().as_encoded_bytes());
+        let filename = path.file_name().ok_or(Error::JournalUnavailable)?;
+        let digest = Sha256::digest(filename.as_encoded_bytes());
         let namespace = digest.iter().fold(String::from("namespace-"), |mut text, byte| {
             let _ = write!(text, "{byte:02x}");
             text
@@ -144,14 +145,41 @@ fn check_marker(directory: &File, lock: &File) -> Result<()> {
     let marker = open_file(directory, "initialized", false).map_err(|_| Error::JournalInvalid)?;
     let expected = small(&marker)?;
     let text = std::str::from_utf8(&expected).map_err(|_| Error::JournalInvalid)?;
-    if text
-        .strip_prefix("native-lock-v1:")
-        .is_none_or(|value| Uuid::parse_str(value).is_err())
-        || small(lock)? != expected
+    let mut fields = text
+        .strip_prefix("native-lock-v2:")
+        .ok_or(Error::JournalInvalid)?
+        .split(':');
+    let nonce = fields
+        .next()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or(Error::JournalInvalid)?;
+    let device = fields
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or(Error::JournalInvalid)?;
+    let inode = fields
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or(Error::JournalInvalid)?;
+    if nonce.is_nil() || fields.next().is_some() || file_identity(lock)? != (device, inode) || small(lock)? != expected
     {
         return Err(Error::JournalInvalid);
     }
     Ok(())
+}
+
+fn file_identity(file: &File) -> Result<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = file.metadata().map_err(|_| Error::JournalUnavailable)?;
+        Ok((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        Err(Error::JournalUnavailable)
+    }
 }
 
 fn initialize(directory: &File, mut lock: &File) -> Result<()> {
@@ -167,7 +195,8 @@ fn initialize(directory: &File, mut lock: &File) -> Result<()> {
             {
                 return Err(Error::JournalInvalid);
             }
-            let marker = format!("native-lock-v1:{}", Uuid::new_v4());
+            let (device, inode) = file_identity(lock)?;
+            let marker = format!("native-lock-v2:{}:{device}:{inode}", Uuid::new_v4());
             lock.write_all(marker.as_bytes())
                 .and_then(|()| lock.sync_all())
                 .map_err(|_| Error::JournalUnavailable)?;
@@ -261,6 +290,15 @@ fn open_file(directory: &File, name: &str, create: bool) -> Result<File> {
     let file = File::from(
         rustix::fs::openat(directory, name, flags, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR).map_err(
             |error| {
+                #[cfg(test)]
+                if create {
+                    let stage = if matches!(name, "journal.lock" | "initialized" | "journal.json") {
+                        name
+                    } else {
+                        "marker"
+                    };
+                    eprintln!("native journal create failed: file={stage} errno={error:?}");
+                }
                 if error == rustix::io::Errno::NOENT {
                     Error::JournalMissing
                 } else {
