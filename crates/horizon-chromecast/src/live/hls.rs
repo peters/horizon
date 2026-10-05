@@ -134,11 +134,7 @@ impl Segmenter {
     /// The constant `#EXT-X-TARGETDURATION`. Receivers hold back about three
     /// targets, so it is not padded: 0.5 s segments advertise 1.
     fn advertised_target(&self) -> u64 {
-        // Round to the playlist's millisecond precision first, as EXTINF does:
-        // 45 frames at 30 fps (1.499999985 s) prints as 1.500 and needs 2.
-        let millis = (self.target.as_nanos() + 500_000) / 1_000_000;
-        let rounded = (millis + 500) / 1000;
-        u64::try_from(rounded).unwrap_or(u64::MAX).max(1)
+        target_seconds(self.target)
     }
 
     /// An open segment may not round above the advertised target or exceed
@@ -218,6 +214,15 @@ impl Segmenter {
             }
         }
     }
+}
+
+/// The `#EXT-X-TARGETDURATION` for `segment`. Rounds to the playlist's
+/// millisecond precision first, as EXTINF does: 45 frames at 30 fps
+/// (1.499999985 s) prints as 1.500 and needs 2.
+pub(super) fn target_seconds(segment: Duration) -> u64 {
+    let millis = (segment.as_nanos() + 500_000) / 1_000_000;
+    let rounded = (millis + 500) / 1000;
+    u64::try_from(rounded).unwrap_or(u64::MAX).max(1)
 }
 
 /// NAL units of an Annex B buffer, without start codes.

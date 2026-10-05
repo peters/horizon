@@ -9,7 +9,7 @@ pub use h264::avcc_to_annexb;
 
 use crate::{
     Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaLoad, MediaStatus, Result, StreamType,
-    client::NS_CONNECTION, receiver::NS_RECEIVER,
+    client::NS_CONNECTION, media::NS_MEDIA, receiver::NS_RECEIVER,
 };
 use hls::Segmenter;
 use http::HttpServer;
@@ -69,6 +69,14 @@ impl LiveOptions {
         }
         if self.window < self.preroll {
             return Err(Error::InvalidOptions("window must hold the pre-roll segments"));
+        }
+        // A live playlist must keep at least three target durations (RFC 8216
+        // section 6.2.2); segments can close at 90% of `segment`.
+        let kept_ms = self.segment.as_millis() * 9 / 10 * u128::try_from(self.window).unwrap_or(u128::MAX);
+        if kept_ms < u128::from(hls::target_seconds(self.segment)) * 3 * 1000 {
+            return Err(Error::InvalidOptions(
+                "window must hold at least three target durations",
+            ));
         }
         Ok(())
     }
@@ -266,14 +274,24 @@ impl Session {
         media_session_id: i64,
     ) -> Result<bool> {
         let going_on = self.follow(event, &app.session_id, &app.transport_id, media_session_id)?;
-        if going_on || event.namespace != NS_RECEIVER {
-            return Ok(going_on);
+        if going_on {
+            return Ok(true);
         }
-        let current = client.receiver_status()?;
-        Ok(current
-            .applications
-            .iter()
-            .any(|running| running.session_id == app.session_id))
+        if event.namespace == NS_RECEIVER {
+            let current = client.receiver_status()?;
+            return Ok(current
+                .applications
+                .iter()
+                .any(|running| running.session_id == app.session_id));
+        }
+        if event.namespace == NS_MEDIA && media_session_id != NO_MEDIA_SESSION {
+            // Replies and notifications arrive on separate queues, so a media
+            // update can be older than the state already applied: confirm.
+            let current = client.media(app).status()?;
+            return Ok(current
+                .is_some_and(|status| status.media_session_id == media_session_id && status.player_state != "IDLE"));
+        }
+        Ok(false)
     }
 
     pub(crate) fn follow(
@@ -295,6 +313,16 @@ impl Session {
             return Ok(!replaced);
         }
         let statuses = MediaStatus::from_event(event);
+        // No media loaded on our transport after playback started: the stream
+        // may have been unloaded (confirmed by the caller).
+        if media_session_id != NO_MEDIA_SESSION
+            && self.started.get()
+            && event.source == transport_id
+            && event.kind() == Some("MEDIA_STATUS")
+            && statuses.is_empty()
+        {
+            return Ok(false);
+        }
         // Media session ids grow per LOAD: an active newer session on our
         // transport means another sender loaded over this cast. It now owns the
         // application, so end without stopping it.

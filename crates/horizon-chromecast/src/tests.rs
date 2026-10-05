@@ -463,3 +463,123 @@ fn live_cast_ends_without_stop_when_a_confirmed_takeover_replaces_the_applicatio
         "{log:#?}"
     );
 }
+
+/// A receiver that queues a bare IDLE ahead of a PLAYING LOAD reply. With
+/// `unload`, it later reports that no media is loaded.
+fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, unload: bool) -> JoinHandle<Vec<String>> {
+    std::thread::spawn(move || {
+        let mut stream = accept(&listener, config);
+        let (mut log, mut inbound, mut chunk) = (Vec::new(), Vec::new(), [0; 4096]);
+        let (mut running, mut loaded) = (false, false);
+        loop {
+            let read = stream.read(&mut chunk).unwrap_or(0);
+            if read == 0 {
+                return log;
+            }
+            inbound.extend_from_slice(&chunk[..read]);
+            for message in proto::drain_frames(&mut inbound).unwrap() {
+                let Payload::Text(text) = &message.payload else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(text).unwrap();
+                let kind = request["type"].as_str().unwrap_or_default().to_owned();
+                log.push(format!("{} {} {kind}", message.namespace, message.destination));
+                let to = message.destination.as_str();
+                let playing = json!([{"mediaSessionId": 9, "playerState": "PLAYING"}]);
+                match (message.namespace.as_str(), kind.as_str()) {
+                    (NS_RECEIVER, "GET_STATUS") => {
+                        send(
+                            &mut stream,
+                            PLATFORM_RECEIVER,
+                            NS_RECEIVER,
+                            &reply(&request, app_status(running)),
+                        );
+                    }
+                    (NS_RECEIVER, "LAUNCH") => {
+                        running = true;
+                        send(
+                            &mut stream,
+                            PLATFORM_RECEIVER,
+                            NS_RECEIVER,
+                            &reply(&request, app_status(true)),
+                        );
+                    }
+                    (NS_RECEIVER, "STOP") => {
+                        running = false;
+                        send(
+                            &mut stream,
+                            PLATFORM_RECEIVER,
+                            NS_RECEIVER,
+                            &reply(&request, app_status(false)),
+                        );
+                    }
+                    (NS_MEDIA, "LOAD") => {
+                        let idle = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "IDLE"}]});
+                        send(&mut stream, to, NS_MEDIA, &idle);
+                        let status = json!({"type": "MEDIA_STATUS", "status": playing});
+                        send(&mut stream, to, NS_MEDIA, &reply(&request, status));
+                        loaded = true;
+                        if unload {
+                            let empty = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": []});
+                            send(&mut stream, to, NS_MEDIA, &empty);
+                            loaded = false;
+                        }
+                    }
+                    (NS_MEDIA, "GET_STATUS") => {
+                        let current = if loaded { playing } else { json!([]) };
+                        let status = json!({"type": "MEDIA_STATUS", "status": current});
+                        send(&mut stream, to, NS_MEDIA, &reply(&request, status));
+                    }
+                    (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => return log,
+                    _ => {}
+                }
+            }
+        }
+    })
+}
+
+fn cast_against(server: JoinHandle<Vec<String>>, address: SocketAddr) -> (LiveState, Vec<String>) {
+    let live = LiveCast::start(address, LiveOptions::default()).unwrap();
+    for frame in 0..30u64 {
+        let pts = Duration::from_millis(frame * 100);
+        let keyframe = live.wants_keyframe(pts);
+        let unit: &[u8] = if keyframe {
+            &[0, 0, 0, 1, 0x65, 1]
+        } else {
+            &[0, 0, 0, 1, 0x41, 2]
+        };
+        live.push_annexb(unit, pts, keyframe);
+    }
+    std::thread::sleep(Duration::from_millis(1500));
+    let state = live.state();
+    drop(live);
+    (state, server.join().unwrap())
+}
+
+#[test]
+fn a_stale_idle_queued_before_a_playing_load_reply_does_not_end_the_cast() {
+    let (address, listener, config) = listen();
+    let (state, log) = cast_against(ordering_receiver(listener, config, false), address);
+    assert_eq!(state, LiveState::Playing, "{log:#?}");
+}
+
+#[test]
+fn a_confirmed_unload_after_playing_ends_the_cast_without_stop() {
+    let (address, listener, config) = listen();
+    let (state, log) = cast_against(ordering_receiver(listener, config, true), address);
+    assert_eq!(state, LiveState::Ended, "{log:#?}");
+    assert!(log.contains(&format!("{NS_MEDIA} transport-1 GET_STATUS")), "{log:#?}");
+    assert!(!log.iter().any(|line| line.ends_with(" STOP")), "{log:#?}");
+}
+
+#[test]
+fn live_options_must_keep_three_target_durations() {
+    let address: SocketAddr = "127.0.0.1:9".parse().unwrap();
+    let short = LiveOptions {
+        segment: Duration::from_secs(1),
+        window: 2,
+        preroll: 2,
+        ..LiveOptions::default()
+    };
+    assert!(matches!(LiveCast::start(address, short), Err(Error::InvalidOptions(_))));
+}

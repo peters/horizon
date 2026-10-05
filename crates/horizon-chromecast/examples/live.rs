@@ -94,11 +94,10 @@ fn run() -> Result<(), String> {
             println!("{:>6.1}s {state:?}", started.elapsed().as_secs_f32());
             last_state = Some(state.clone());
         }
-        if matches!(
-            state,
-            horizon_chromecast::LiveState::Ended | horizon_chromecast::LiveState::Failed(_)
-        ) {
-            break;
+        match state {
+            horizon_chromecast::LiveState::Ended => break,
+            horizon_chromecast::LiveState::Failed(reason) => return Err(reason),
+            _ => {}
         }
     }
     Ok(())
