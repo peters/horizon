@@ -6,9 +6,9 @@ Provider credentials remain machine-local. Project files never select credential
 
 ## Delivery boundary
 
-`horizon-app-testing` currently provides the validated contract, executable recipe model and native catalog resolution.
-This foundation does not allocate devices, execute builds or establish tunnels. Upload, transport, lifecycle,
-host/MCP integration, live panels and orchestration are separate implementation increments. A passing contract test
+`horizon-app-testing` provides the validated contract, executable recipe model, native catalog resolution and
+a native-driver library behind the shared redacted WebDriver transport. The host upload, allocation journal,
+restricted tunnel, MCP integration, live panels and concurrent orchestration are separate implementation increments. A passing contract test
 is not evidence that a real device ran an app.
 
 ## Project contract
@@ -149,3 +149,27 @@ payment returns, push notifications and native sign-in providers require explici
 
 Transport, capacity, tunnel and session failures will add typed codes in their implementation increments.
 Parser and provider response bodies must never be embedded in failure messages.
+
+## Native driver boundary
+
+`NativeDriver` accepts a host transport and privately held app/tunnel references. It sends app capabilities with
+XCUITest or UiAutomator2 and preserves backend launch arguments for explicit relaunch. Android disables ID locator
+autocompletion through the initial settings capability so Compose test tags retain their declared IDs. It never
+sends `browserName`.
+The host must journal allocation before exposing the driver and verify fresh provider device evidence.
+
+Snapshots normalize XCUITest/UiAutomator2 XML into browser-shaped nodes. Secure fields redact name, text and value,
+and suppress identifiers that may contain input. Snapshot refs expire after 30 seconds, observation or mutation.
+Refs bind to distinct Appium element IDs during observation, with a matching second source read. Before dispatch,
+the driver verifies identifying attributes and observed bounds against the bound ID; swapped IDs cannot mutate a
+different control. Identical identities are ambiguous. Later actions never requery a positional XPath. Wrappers
+cannot be acted upon. Source changes, duplicate IDs or element-count mismatches fail the observation.
+
+Waits share one deadline across locator and state requests, including replies processed after the deadline.
+Screenshots require a fully decoded, non-animated PNG within bounded dimensions and memory, including its terminator.
+The library returns typed errors, never raw provider diagnostics. Confirmed close is idempotent; uncertain allocation
+or release must be reconciled by the owning host rather than replayed speculatively.
+
+Reset returns `device_reset_requires_reallocation` for the host to handle by recreating its owned session with the
+same declared app and launch arguments. It does not invoke the removed Appium 3 `/reset` endpoint. Library mock
+coverage does not qualify real-device behavior or reset orchestration.

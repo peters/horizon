@@ -39,6 +39,7 @@ pedantic = { level = "warn", priority = -1 }
 struct_excessive_bools = "allow"
 
 [workspace.dependencies]
+quick-xml = "0.42.0"
 horizon-app-testing = { path = "crates/horizon-app-testing", version = "0.2.7" }
 # Binary property lists and SRP group arithmetic for modern casting.
 plist = "1.10.1"

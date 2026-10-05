@@ -10,6 +10,8 @@ back into large multi-purpose modules.
 - `contract` validates the project declaration, bounds paths and resolves declared loopback-port templates.
 - `catalog` decodes native-device offerings and resolves the complete symbolic matrix before allocation.
 - `recipe` owns executable native actions and their validation. Pure prose is never executable evidence.
+- `tree` parses bounded native XML and binds short-lived references to observed native elements; private identity verification prevents stale or reordered elements from receiving input.
+- `driver` owns classic native Appium transport and capability setup; `driver/actions` translates validated actions. Screenshots are decoded and bounded before returning bytes.
 - Provider transport, credentials, session/tunnel ownership, orchestration and presentation remain separate runtime increments.
 
 Remote-development provisioning, workers, managed SSH views, repository transfer,
