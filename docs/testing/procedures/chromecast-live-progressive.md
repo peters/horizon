@@ -32,6 +32,7 @@ ends when the receiver or another sender stops it.
 - The IP address of the receiver.
 - The owner of the receiver gave permission for this run.
 - A Rust toolchain and `ffmpeg` with `libx264` on the host.
+- A shell that can run the commands in this procedure: Bash, Zsh or PowerShell.
 - A stopwatch.
 - No other sender casts to the receiver.
 
@@ -44,8 +45,7 @@ ends when the receiver or another sender stops it.
 2. Make a test file with one keyframe each 0.5 seconds:
 
    ```bash
-   ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30 -t 120 \
-     -c:v libx264 -g 15 -bsf:v h264_metadata=aud=insert -f h264 live-test.h264
+   ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30 -t 120 -c:v libx264 -g 15 -bsf:v h264_metadata=aud=insert -f h264 live-test.h264
    ```
 
    Result: The file `live-test.h264` exists.
