@@ -5,7 +5,7 @@ use crate::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(crate) const NS_RECEIVER: &str = "urn:x-cast:com.google.cast.receiver";
 
@@ -15,7 +15,6 @@ pub const DEFAULT_MEDIA_RECEIVER: &str = "CC1AD845";
 /// TV platforms can take well over ten seconds to start a web receiver from
 /// their idle screen, and may first ask the viewer to allow the cast.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(45);
-const LAUNCH_POLLS: usize = 10;
 const LAUNCH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -91,6 +90,7 @@ impl CastClient {
             self.connect_virtual(&app.transport_id)?;
             return Ok(app);
         }
+        let deadline = Instant::now() + LAUNCH_TIMEOUT;
         let reply = self.request_within(
             PLATFORM_RECEIVER,
             NS_RECEIVER,
@@ -98,18 +98,27 @@ impl CastClient {
             LAUNCH_TIMEOUT,
         )?;
         let mut status = ReceiverStatus::from_reply(&reply)?;
-        // Some receivers acknowledge LAUNCH before the application reports a transport.
-        for _ in 0..LAUNCH_POLLS {
-            if status.application(app_id).is_some() {
-                break;
+        // Some receivers acknowledge LAUNCH before the application reports a
+        // transport; keep polling within the same launch allowance.
+        let app = loop {
+            if let Some(app) = status.application(app_id) {
+                break app.clone();
             }
-            std::thread::sleep(LAUNCH_POLL_INTERVAL);
-            status = self.receiver_status()?;
-        }
-        let app = status
-            .application(app_id)
-            .cloned()
-            .ok_or(Error::Timeout("LAUNCH".to_owned()))?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::Timeout("LAUNCH".to_owned()));
+            }
+            std::thread::sleep(LAUNCH_POLL_INTERVAL.min(remaining));
+            let reply = self.request_within(
+                PLATFORM_RECEIVER,
+                NS_RECEIVER,
+                json!({"type": "GET_STATUS"}),
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .max(LAUNCH_POLL_INTERVAL),
+            )?;
+            status = ReceiverStatus::from_reply(&reply)?;
+        };
         self.connect_virtual(&app.transport_id)?;
         Ok(app)
     }

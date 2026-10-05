@@ -241,7 +241,8 @@ fn io_loop(
     let mut last_ping = Instant::now();
     let mut last_inbound = Instant::now();
     loop {
-        loop {
+        // At most one backlog per pass, so busy senders cannot starve reads and heartbeats.
+        for _ in 0..COMMAND_BACKLOG {
             match commands.try_recv() {
                 Ok(Command::Send(frame)) => stream.write_all(&frame)?,
                 Ok(Command::Close) | Err(TryRecvError::Disconnected) => return Ok(()),
