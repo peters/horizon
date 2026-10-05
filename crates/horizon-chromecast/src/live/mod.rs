@@ -573,12 +573,15 @@ impl Session {
         let lag = newest - status.current_time;
         if lag > CATCH_UP_ABOVE && status.player_state == "PLAYING" {
             // The receiver reports the time: ignore one too far off to represent.
-            let Ok(catch_up) = Duration::try_from_secs_f64((lag - TARGET_LAG) / (CATCH_UP_RATE - 1.0)) else {
+            let Some(until) = Duration::try_from_secs_f64((lag - TARGET_LAG) / (CATCH_UP_RATE - 1.0))
+                .ok()
+                .and_then(|catch_up| now.checked_add(catch_up))
+            else {
                 return Ok(());
             };
             tracing::debug!(lag, "speeding up live playback to catch up");
             self.catch_up.set(match media.set_playback_rate(CATCH_UP_RATE) {
-                Ok(_) => CatchUp::Until(now + catch_up, 0),
+                Ok(_) => CatchUp::Until(until, 0),
                 // Only an explicit refusal proves the rate was not applied.
                 Err(Error::Rejected { .. }) => CatchUp::Unsupported,
                 // The rate may have applied before the reply was lost: restore now.

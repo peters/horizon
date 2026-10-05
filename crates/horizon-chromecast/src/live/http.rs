@@ -154,10 +154,11 @@ fn serve_progressive(
     token: &str,
 ) -> std::io::Result<()> {
     let expected = format!("/{token}/live.mp4");
-    let subscription = (path == expected && matches!(method, "GET" | "HEAD"))
-        .then(|| stream.subscribe())
-        .flatten();
-    let Some(subscription) = subscription else {
+    let found = path == expected;
+    // A HEAD probe gets headers only: a subscription would linger until a frame push.
+    let head = found && method == "HEAD" && stream.ready();
+    let subscription = (found && method == "GET").then(|| stream.subscribe()).flatten();
+    if !head && subscription.is_none() {
         let status = if method == "OPTIONS" {
             "204 No Content"
         } else {
@@ -165,11 +166,11 @@ fn serve_progressive(
         };
         socket.write_all(&Response::empty(status).head())?;
         return socket.flush();
-    };
-    socket.write_all(&streaming_head().into_bytes())?;
-    if method == "HEAD" {
-        return socket.flush();
     }
+    socket.write_all(&streaming_head().into_bytes())?;
+    let Some(subscription) = subscription else {
+        return socket.flush();
+    };
     socket.set_nodelay(true)?;
     stream.write_to(&mut socket, subscription)
 }
