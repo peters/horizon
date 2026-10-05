@@ -45,4 +45,10 @@ pub enum Error {
     Plist(#[from] plist::Error),
 }
 
+impl From<horizon_media::h264::H264Error> for Error {
+    fn from(error: horizon_media::h264::H264Error) -> Self {
+        Self::Protocol(error.as_str())
+    }
+}
+
 type Result<T> = std::result::Result<T, Error>;

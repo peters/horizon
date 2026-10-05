@@ -1,5 +1,6 @@
 //! Rolling live HLS window of MPEG-TS segments cut on keyframes.
-use super::{h264, ts::TsMuxer};
+use super::ts::TsMuxer;
+use horizon_media::h264;
 use std::{borrow::Cow, collections::VecDeque, fmt::Write as _, sync::Arc, time::Duration};
 
 const CLOCK_HZ: u128 = 90_000;

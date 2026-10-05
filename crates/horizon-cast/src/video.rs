@@ -1,4 +1,5 @@
 use crate::{Error, Result, crypto};
+use horizon_media::h264::{NAL_IDR, NAL_PPS, NAL_SEI, NAL_SLICE, NAL_SPS, nal_type};
 use ring::aead;
 
 /// Packets contain one encoder access unit, never an arbitrary chunk of its byte stream.
@@ -21,7 +22,7 @@ impl VideoPackets {
         })
     }
     pub(crate) fn configuration(&self, sps: &[u8], pps: &[u8]) -> Result<Vec<u8>> {
-        if sps.len() < 4 || sps[0] & 31 != 7 || pps.first().map(|v| v & 31) != Some(8) {
+        if sps.len() < 4 || nal_type(sps) != Some(NAL_SPS) || nal_type(pps) != Some(NAL_PPS) {
             return Err(Error::Protocol("invalid H.264 parameter sets"));
         }
         let sps_len = u16::try_from(sps.len()).map_err(|_| Error::Protocol("SPS too large"))?;
@@ -53,11 +54,11 @@ impl VideoPackets {
         let mut payload = Vec::new();
         let mut keyframe = false;
         for nal in nals {
-            let kind = nal.first().ok_or(Error::Protocol("empty NAL"))? & 31;
-            if !matches!(kind, 1 | 5 | 6) {
+            let kind = nal_type(nal).ok_or(Error::Protocol("empty NAL"))?;
+            if !matches!(kind, NAL_SLICE | NAL_IDR | NAL_SEI) {
                 return Err(Error::Protocol("access unit must contain slices or SEI"));
             }
-            keyframe |= kind == 5;
+            keyframe |= kind == NAL_IDR;
             if nal.len() > 8 * 1024 * 1024 || payload.len() + nal.len() + 4 > 8 * 1024 * 1024 {
                 return Err(Error::Protocol("access unit too large"));
             }

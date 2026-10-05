@@ -16,6 +16,7 @@ nvenc = []
 workspace = true
 
 [dependencies]
+horizon-media.workspace = true
 ring.workspace = true
 crypto-bigint.workspace = true
 plist.workspace = true

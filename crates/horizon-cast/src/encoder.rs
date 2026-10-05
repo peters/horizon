@@ -9,6 +9,7 @@ use crate::{
     CastStatus, Error, MirrorSession, Result, VideoFormat,
     session::{Progress, lock},
 };
+use horizon_media::h264::{AnnexBReader, Unit};
 use std::{
     io::Read,
     process::{Child, Command, Stdio},
@@ -97,10 +98,8 @@ fn consume(
     status: &Mutex<Progress>,
     stop: &AtomicBool,
 ) -> Result<()> {
-    let mut pending = Vec::new();
+    let mut stream = AnnexBReader::default();
     let mut chunk = vec![0; 32768];
-    let mut access = Vec::new();
-    let mut sps = Vec::new();
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
@@ -113,48 +112,14 @@ fn consume(
                 Err(Error::Backend("H.264 encoder ended".into()))
             };
         }
-        pending.extend(&chunk[..count]);
-        if pending.len() > 8 * 1024 * 1024 {
-            return Err(Error::Protocol("encoder NAL exceeds limit"));
-        }
-        while let Some(nal) = take_nal(&mut pending) {
-            let kind = nal.first().copied().unwrap_or(0) & 31;
-            match kind {
-                9 => {
-                    if !access.is_empty() {
-                        mirror.send(&access.iter().map(Vec::as_slice).collect::<Vec<_>>())?;
-                        access.clear();
-                        lock(status).record_transmission();
-                    }
+        for unit in stream.push(&chunk[..count])? {
+            match unit {
+                Unit::ParameterSets { sps, pps } => mirror.configure(&sps, &pps)?,
+                Unit::AccessUnit(access) => {
+                    mirror.send(&access.nal_refs())?;
+                    lock(status).record_transmission();
                 }
-                7 => sps = nal,
-                8 => {
-                    mirror.configure(&sps, &nal)?;
-                }
-                1 | 5 | 6 => access.push(nal),
-                _ => {}
-            }
-            if access.iter().map(Vec::len).sum::<usize>() > 8 * 1024 * 1024 {
-                return Err(Error::Protocol("encoder access unit exceeds limit"));
             }
         }
     }
-}
-fn take_nal(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
-    let first = start_code(buffer, 0)?;
-    let next = start_code(buffer, first.0 + first.1)?;
-    let nal = buffer[first.0 + first.1..next.0].to_vec();
-    buffer.drain(..next.0);
-    Some(nal)
-}
-fn start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
-    for at in from..data.len().saturating_sub(2) {
-        if data.get(at..at + 4) == Some(&[0, 0, 0, 1]) {
-            return Some((at, 4));
-        }
-        if data.get(at..at + 3) == Some(&[0, 0, 1]) {
-            return Some((at, 3));
-        }
-    }
-    None
 }

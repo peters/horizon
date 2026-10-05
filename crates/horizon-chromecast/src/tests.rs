@@ -649,3 +649,9 @@ fn a_buffering_report_queued_before_a_playing_reply_is_not_a_stall() {
     let (state, log) = cast_for(server, address, STALL_GRACE + Duration::from_secs(1));
     assert_eq!(state, LiveState::Playing, "{log:#?}");
 }
+
+#[test]
+fn avcc_conversion_reports_the_crate_error_type() {
+    let result: crate::Result<Vec<u8>> = crate::avcc_to_annexb(&[0, 0, 0, 9, 1], 4, &[]);
+    assert!(matches!(result, Err(Error::H264(_))));
+}

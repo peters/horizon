@@ -1,11 +1,20 @@
 //! Live H.264 casting: the host pushes encoded access units, this module
 //! serves them as HLS and keeps the Default Media Receiver playing them.
-mod h264;
 mod hls;
 mod http;
 mod ts;
 
-pub use h264::avcc_to_annexb;
+/// Converts a length-prefixed (AVCC) sample to Annex B, putting
+/// `parameter_sets` in front of IDR pictures.
+/// # Errors
+/// Returns [`Error::H264`] for an invalid NAL length size or a truncated NAL unit.
+pub fn avcc_to_annexb(sample: &[u8], length_size: usize, parameter_sets: &[&[u8]]) -> Result<Vec<u8>> {
+    Ok(horizon_media::h264::avcc_to_annexb(
+        sample,
+        length_size,
+        parameter_sets,
+    )?)
+}
 
 use crate::{
     Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaLoad, MediaStatus, Result, StreamType,

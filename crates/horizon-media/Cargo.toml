@@ -1,0 +1,12 @@
+[package]
+name = "horizon-media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Media helpers shared by the casting transports: H.264 bitstream handling"
+
+[lints]
+workspace = true

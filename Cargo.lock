@@ -2439,6 +2439,7 @@ name = "horizon-cast"
 version = "0.2.7"
 dependencies = [
  "crypto-bigint",
+ "horizon-media",
  "mdns-sd",
  "plist",
  "ring",
@@ -2452,6 +2453,7 @@ dependencies = [
 name = "horizon-chromecast"
 version = "0.2.7"
 dependencies = [
+ "horizon-media",
  "mdns-sd",
  "rcgen",
  "rustls",
@@ -2609,6 +2611,10 @@ dependencies = [
  "tokio",
  "vnc-rs",
 ]
+
+[[package]]
+name = "horizon-media"
+version = "0.2.7"
 
 [[package]]
 name = "horizon-process-time"
