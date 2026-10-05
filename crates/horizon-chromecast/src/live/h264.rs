@@ -30,7 +30,10 @@ pub fn avcc_to_annexb(sample: &[u8], length_size: usize, parameter_sets: &[&[u8]
     let idr = nals.iter().any(|nal| nal_type(nal) == Some(NAL_IDR));
     let mut out = Vec::with_capacity(sample.len() + 64);
     let parameter_sets = if idr { parameter_sets } else { &[] };
-    for nal in parameter_sets.iter().copied().chain(nals) {
+    // A leading delimiter must stay first, or it would split the access unit.
+    let delimiters = nals.iter().take_while(|nal| nal_type(nal) == Some(NAL_AUD)).count();
+    let (leading, rest) = nals.split_at(delimiters);
+    for nal in leading.iter().chain(parameter_sets).chain(rest).copied() {
         out.extend_from_slice(&START_CODE);
         out.extend_from_slice(nal);
     }
@@ -46,6 +49,26 @@ pub(crate) fn with_delimiter(annexb: &[u8]) -> Vec<u8> {
     }
     out.extend_from_slice(annexb);
     out
+}
+
+/// Byte length of a leading access unit delimiter, including its start code.
+pub(crate) fn leading_delimiter_len(annexb: &[u8]) -> usize {
+    if first_nal(annexb).and_then(nal_type) != Some(NAL_AUD) {
+        return 0;
+    }
+    let after_first = annexb.windows(3).position(|w| w == [0, 0, 1]).map_or(0, |at| at + 3);
+    match annexb[after_first..].windows(3).position(|w| w == [0, 0, 1]) {
+        Some(next) => {
+            let end = after_first + next;
+            // Leave the leading zero of a four-byte start code with the next NAL.
+            if end > after_first && annexb[end - 1] == 0 {
+                end - 1
+            } else {
+                end
+            }
+        }
+        None => annexb.len(),
+    }
 }
 
 fn first_nal(annexb: &[u8]) -> Option<&[u8]> {
@@ -83,5 +106,19 @@ mod tests {
         let delimited = with_delimiter(&unit);
         assert_eq!(&delimited[..6], &ACCESS_UNIT_DELIMITER);
         assert_eq!(with_delimiter(&delimited), delimited);
+    }
+
+    #[test]
+    fn parameter_sets_go_after_a_leading_delimiter() {
+        let sample = [0, 0, 0, 2, 0x09, 0xf0, 0, 0, 0, 2, 0x65, 9];
+        let annexb = avcc_to_annexb(&sample, 4, &[&[0x67, 1], &[0x68, 2]]).unwrap();
+        assert_eq!(
+            annexb,
+            [
+                0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x67, 1, 0, 0, 0, 1, 0x68, 2, 0, 0, 0, 1, 0x65, 9
+            ]
+        );
+        assert_eq!(leading_delimiter_len(&annexb), 6);
+        assert_eq!(leading_delimiter_len(&annexb[6..]), 0);
     }
 }

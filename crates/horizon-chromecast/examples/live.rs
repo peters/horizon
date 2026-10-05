@@ -31,6 +31,9 @@ fn run() -> Result<(), String> {
         .map_err(|_| format!("invalid receiver address {target}"))?;
     let data = std::fs::read(args.next().ok_or(usage)?).map_err(|e| e.to_string())?;
     let fps: u32 = args.next().and_then(|f| f.parse().ok()).unwrap_or(30);
+    if fps == 0 {
+        return Err("fps must be at least 1".to_owned());
+    }
     let units = access_units(&data);
     if units.is_empty() {
         return Err("no access unit delimiters found; encode with aud=1".to_owned());

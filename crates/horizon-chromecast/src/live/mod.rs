@@ -26,6 +26,8 @@ use std::{
 };
 
 const BUFFER_POLL: Duration = Duration::from_millis(50);
+/// Matches no receiver media session: before LOAD only lifecycle events count.
+const NO_MEDIA_SESSION: i64 = -1;
 const EVENT_POLL: Duration = Duration::from_millis(250);
 /// TV receivers report a brief BUFFERING between PLAYING updates every few
 /// seconds while playback advances in real time. Only report buffering once a
@@ -200,7 +202,12 @@ impl Session {
             if !client.is_open() {
                 return Err(Error::Closed);
             }
-            std::thread::sleep(BUFFER_POLL);
+            // The application can close or be replaced before LOAD; then leave it be.
+            if let Some(event) = client.next_event(BUFFER_POLL)?
+                && !self.follow(&event, &app.session_id, &app.transport_id, NO_MEDIA_SESSION)?
+            {
+                return Ok(());
+            }
         }
         let load = client.media(&app).load(&MediaLoad {
             url: self.url.clone(),

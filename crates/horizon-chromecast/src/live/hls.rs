@@ -49,7 +49,7 @@ impl Segmenter {
     pub(crate) fn push(&mut self, annexb: &[u8], pts: Duration, keyframe: bool) {
         let origin = *self.origin.get_or_insert(pts);
         let pts = pts.saturating_sub(origin);
-        let carries_sps = self.remember_parameter_sets(annexb);
+        let carries_both = self.remember_parameter_sets(annexb);
         if let Some(start) = self.current_start
             && self.over_budget(pts.saturating_sub(start))
         {
@@ -69,8 +69,8 @@ impl Segmenter {
             self.current_start = Some(pts);
             self.muxer.write_tables(&mut self.current);
         }
-        // PAT/PMT do not configure the decoder; each segment must carry SPS/PPS.
-        let unit = if starting && !carries_sps {
+        // PAT/PMT do not configure the decoder; each segment must carry SPS and PPS.
+        let unit = if starting && !carries_both {
             Cow::Owned(self.with_parameter_sets(annexb))
         } else {
             Cow::Borrowed(annexb)
@@ -80,29 +80,35 @@ impl Segmenter {
             .write_access_unit(&mut self.current, &h264::with_delimiter(&unit), clock, keyframe);
     }
 
-    /// Caches the latest SPS/PPS; returns whether `annexb` carries an SPS.
+    /// Caches the latest SPS/PPS; returns whether `annexb` carries both.
     fn remember_parameter_sets(&mut self, annexb: &[u8]) -> bool {
-        let mut carries_sps = false;
+        let (mut sps, mut pps) = (false, false);
         for nal in nal_units(annexb) {
             match nal.first().map(|header| header & 0x1f) {
                 Some(NAL_SPS) => {
-                    carries_sps = true;
+                    sps = true;
                     self.sps = Some(nal.to_vec());
                 }
-                Some(NAL_PPS) => self.pps = Some(nal.to_vec()),
+                Some(NAL_PPS) => {
+                    pps = true;
+                    self.pps = Some(nal.to_vec());
+                }
                 _ => {}
             }
         }
-        carries_sps
+        sps && pps
     }
 
+    /// Inserts the cached SPS and PPS, after a leading delimiter if there is one.
     fn with_parameter_sets(&self, annexb: &[u8]) -> Vec<u8> {
+        let delimiter = h264::leading_delimiter_len(annexb);
         let mut out = Vec::with_capacity(annexb.len() + 64);
+        out.extend_from_slice(&annexb[..delimiter]);
         for set in [&self.sps, &self.pps].into_iter().flatten() {
             out.extend_from_slice(&START_CODE);
             out.extend_from_slice(set);
         }
-        out.extend_from_slice(annexb);
+        out.extend_from_slice(&annexb[delimiter..]);
         out
     }
 
@@ -116,7 +122,9 @@ impl Segmenter {
     /// An open segment may not round above the advertised target or exceed
     /// the byte budget.
     fn over_budget(&self, elapsed: Duration) -> bool {
-        let limit = Duration::from_secs(self.advertised_target()) + Duration::from_millis(500);
+        // EXTINF is written with three decimals, so 1.4995 s already prints as
+        // 1.500 and rounds above a target of 1.
+        let limit = Duration::from_secs(self.advertised_target()) + Duration::from_micros(499_500);
         elapsed >= limit || self.current.len() > MAX_OPEN_BYTES
     }
 
@@ -325,5 +333,50 @@ mod tests {
         let data = [0, 0, 0, 1, 0x67, 1, 0, 0, 1, 0x68, 2, 0, 0, 0, 1, 0x65, 3];
         let nals: Vec<&[u8]> = nal_units(&data).collect();
         assert_eq!(nals, [&[0x67, 1][..], &[0x68, 2], &[0x65, 3]]);
+    }
+
+    #[test]
+    fn a_unit_repeating_only_the_sps_still_gets_the_cached_pps() {
+        let mut segmenter = Segmenter::new(Duration::from_secs(1), 4);
+        let headers = [&[0, 0, 0, 1, 0x67, 9][..], &[0, 0, 0, 1, 0x68, 8], IDR].concat();
+        segmenter.push(&headers, Duration::ZERO, true);
+        let sps_only = [&[0, 0, 0, 1, 0x67, 9][..], IDR].concat();
+        segmenter.push(&sps_only, Duration::from_secs(1), true);
+        segmenter.push(IDR, Duration::from_secs(2), true);
+        let second = segmenter.segment(1).unwrap();
+        assert!(
+            second.windows(5).any(|w| w == [0, 0, 1, 0x68, 8]),
+            "segment 1 lacks the PPS"
+        );
+    }
+
+    #[test]
+    fn parameter_sets_follow_a_leading_delimiter() {
+        let mut segmenter = Segmenter::new(Duration::from_secs(1), 4);
+        segmenter.push(&[0, 0, 0, 1, 0x67, 9, 0, 0, 0, 1, 0x68, 8], Duration::ZERO, false);
+        let delimited = [&[0, 0, 0, 1, 0x09, 0xf0][..], IDR].concat();
+        segmenter.push(&delimited, Duration::ZERO, true);
+        let unit = segmenter.with_parameter_sets(&delimited);
+        let types: Vec<u8> = nal_units(&unit).map(|nal| nal[0] & 0x1f).collect();
+        assert_eq!(types, [9, 7, 8, 5]);
+        let delimiters = segmenter
+            .current
+            .windows(5)
+            .filter(|w| *w == [0, 0, 1, 0x09, 0xf0])
+            .count();
+        assert_eq!(delimiters, 1, "one access unit, one delimiter");
+    }
+
+    #[test]
+    fn a_segment_that_would_print_as_one_and_a_half_seconds_is_dropped() {
+        let mut segmenter = Segmenter::new(Duration::from_secs(1), 4);
+        let frame = Duration::from_secs(1) / 30;
+        segmenter.push(IDR, Duration::ZERO, true);
+        for index in 1..45 {
+            segmenter.push(SLICE, frame * index, false);
+        }
+        segmenter.push(IDR, frame * 45, true);
+        assert_eq!(segmenter.ready_segments(), 0, "{}", segmenter.playlist());
+        assert!(!segmenter.playlist().contains("EXTINF:1.500"));
     }
 }

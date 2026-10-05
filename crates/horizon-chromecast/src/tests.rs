@@ -286,3 +286,60 @@ fn live_cast_rejects_options_that_could_never_play() {
         ));
     }
 }
+
+#[test]
+fn live_cast_ends_without_load_when_the_application_closes_during_pre_roll() {
+    let (address, listener, config) = listen();
+    let server = std::thread::spawn(move || {
+        let mut stream = accept(&listener, config);
+        let (mut log, mut inbound, mut chunk) = (Vec::new(), Vec::new(), [0; 4096]);
+        loop {
+            let read = stream.read(&mut chunk).unwrap_or(0);
+            if read == 0 {
+                return log;
+            }
+            inbound.extend_from_slice(&chunk[..read]);
+            for message in proto::drain_frames(&mut inbound).unwrap() {
+                let Payload::Text(text) = &message.payload else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(text).unwrap();
+                let kind = request["type"].as_str().unwrap_or_default().to_owned();
+                log.push(format!("{} {} {kind}", message.namespace, message.destination));
+                match (message.namespace.as_str(), kind.as_str()) {
+                    (NS_RECEIVER, "GET_STATUS") => {
+                        send(
+                            &mut stream,
+                            PLATFORM_RECEIVER,
+                            NS_RECEIVER,
+                            &reply(&request, app_status(false)),
+                        );
+                    }
+                    (NS_RECEIVER, "LAUNCH") => {
+                        send(
+                            &mut stream,
+                            PLATFORM_RECEIVER,
+                            NS_RECEIVER,
+                            &reply(&request, app_status(true)),
+                        );
+                        send(&mut stream, "transport-1", NS_CONNECTION, &json!({"type": "CLOSE"}));
+                    }
+                    (NS_CONNECTION, "CLOSE") if message.destination == PLATFORM_RECEIVER => return log,
+                    _ => {}
+                }
+            }
+        }
+    });
+    let live = LiveCast::start(address, LiveOptions::default()).unwrap();
+    for _ in 0..100 {
+        if live.state() == LiveState::Ended {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(live.state(), LiveState::Ended);
+    drop(live);
+    let log = server.join().unwrap();
+    assert!(!log.iter().any(|line| line.ends_with(" LOAD")), "{log:#?}");
+    assert!(!log.iter().any(|line| line.ends_with(" STOP")), "{log:#?}");
+}
