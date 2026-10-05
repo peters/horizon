@@ -3,7 +3,6 @@ use horizon_core::{PanelId, PanelKind, WorkspaceId};
 
 use crate::app::{HorizonApp, RenameEditAction, util::clamp_panel_size};
 use crate::terminal_widget::viewport_for_available_space;
-use crate::theme;
 
 use super::{PanelCommand, PanelFocusRequest, PanelFrame, PanelSnapshot, PanelUiOutcome, open_session_picker};
 
@@ -160,7 +159,9 @@ impl HorizonApp {
         kind: PanelKind,
         outcome: &mut PanelUiOutcome,
     ) {
-        drag_response.context_menu(|ui| {
+        let popup =
+            egui::Popup::context_menu(drag_response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        popup.show(|ui| {
             ui.set_min_width(180.0);
             if kind == PanelKind::Browser {
                 let supported = self
@@ -180,46 +181,8 @@ impl HorizonApp {
                 }
                 ui.separator();
             }
-            ui.label(
-                egui::RichText::new("Move to Workspace")
-                    .size(11.0)
-                    .color(theme::FG_DIM()),
-            );
-            ui.separator();
-
-            // Look up workspace names lazily — this closure only runs when the
-            // context menu is actually open, so the per-workspace iteration and
-            // formatting cost is not paid on every frame.
-            for workspace in &self.board.workspaces {
-                let workspace_color = theme::workspace_accent(workspace.color_idx);
-                let is_current = current_workspace_id == workspace.id;
-                // The name stays in the theme's text color: some workspace
-                // accents do not hold 4.5:1 for 12 px text on the panel background.
-                let font_id = egui::FontId::new(12.0, egui::FontFamily::Proportional);
-                let mut job = egui::text::LayoutJob::default();
-                job.append(
-                    if is_current { "\u{25cf} " } else { "  " },
-                    0.0,
-                    egui::text::TextFormat {
-                        font_id: font_id.clone(),
-                        color: workspace_color,
-                        ..Default::default()
-                    },
-                );
-                job.append(
-                    &workspace.name,
-                    0.0,
-                    egui::text::TextFormat {
-                        font_id,
-                        color: if is_current { theme::FG() } else { theme::FG_SOFT() },
-                        ..Default::default()
-                    },
-                );
-                let text = egui::WidgetText::LayoutJob(std::sync::Arc::new(job));
-                if ui.add(egui::Button::new(text).frame(false)).clicked() {
-                    outcome.workspace_assignment = Some(workspace.id);
-                    ui.close();
-                }
+            if let Some(workspace) = self.show_workspace_destination(ui, drag_response, panel_id, current_workspace_id) {
+                outcome.workspace_assignment = Some(workspace);
             }
 
             ui.separator();

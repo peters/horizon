@@ -672,6 +672,14 @@ outline).
 - Sidebar rows: 6 px inset, radius 10. Focused row `blend(.., accent, 0.22)`
   alpha 200 plus a 2 px accent edge; active workspace 0.12 alpha 140; hover
   `alpha(PANEL_BG_ALT, 160)`.
+- Panel titlebar and sidebar "Move to Workspace" menus focus a search field
+  once on open. Names filter case-insensitively; a bounded scroll list keeps
+  other menu actions reachable as the workspace count grows. Rows use 12 pt
+  `FG_SOFT` labels, `FG` for the keyboard selection, and workspace-colored dots.
+  The current workspace has a disabled row labeled "(current)". Arrow keys
+  select eligible destinations, Enter moves the panel, and Escape cancels.
+  Long names truncate with a full-name tooltip. Sidebar menus are sublayers
+  above the sidebar chrome, so search fields and results remain clickable.
 
 ## Terminal
 
