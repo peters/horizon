@@ -134,7 +134,10 @@ impl Segmenter {
     /// The constant `#EXT-X-TARGETDURATION`. Receivers hold back about three
     /// targets, so it is not padded: 0.5 s segments advertise 1.
     fn advertised_target(&self) -> u64 {
-        let rounded = (self.target.as_millis() + 500) / 1000;
+        // Round to the playlist's millisecond precision first, as EXTINF does:
+        // 45 frames at 30 fps (1.499999985 s) prints as 1.500 and needs 2.
+        let millis = (self.target.as_nanos() + 500_000) / 1_000_000;
+        let rounded = (millis + 500) / 1000;
         u64::try_from(rounded).unwrap_or(u64::MAX).max(1)
     }
 
@@ -439,5 +442,19 @@ mod tests {
         assert_eq!(segmenter.current.len(), before, "a reordered unit is not muxed");
         segmenter.push(SLICE, Duration::from_millis(160), false);
         assert!(segmenter.current.len() > before);
+    }
+
+    #[test]
+    fn a_target_just_under_a_half_second_boundary_still_publishes() {
+        let frame = Duration::from_secs(1) / 30;
+        let target = frame * 45;
+        let mut segmenter = Segmenter::new(target, 4);
+        assert_eq!(segmenter.advertised_target(), 2);
+        for index in 0..=135u32 {
+            let keyframe = index % 45 == 0;
+            segmenter.push(if keyframe { IDR } else { SLICE }, frame * index, keyframe);
+        }
+        assert_eq!(segmenter.ready_segments(), 3, "{}", segmenter.playlist());
+        assert!(segmenter.playlist().contains("#EXT-X-TARGETDURATION:2\n"));
     }
 }
