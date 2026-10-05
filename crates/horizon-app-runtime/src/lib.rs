@@ -17,6 +17,10 @@ pub enum Error {
     JournalInvalid,
     #[error("app_owner_refused: native resources belong to another workspace or credential realm")]
     OwnershipRefused,
+    #[error("app_execution_busy: another native actor owns this workspace")]
+    ExecutionBusy,
+    #[error("app_reconciliation_required: reconcile retained native work before starting another operation")]
+    ReconciliationRequired,
     #[error("app_capacity_unavailable: native account capacity is reserved or occupied")]
     CapacityUnavailable,
     #[error("app_operation_invalid: the native lifecycle transition is invalid")]
