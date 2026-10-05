@@ -292,6 +292,13 @@ mod tests {
             EncoderConfig::for_segments(Duration::from_millis(500)).keyframe_interval,
             8
         );
+        // Two frames (133 ms) would fall below a 150 ms segment's cut threshold.
+        for short in [150, 160] {
+            assert_eq!(
+                EncoderConfig::for_segments(Duration::from_millis(short)).keyframe_interval,
+                3
+            );
+        }
         assert_eq!(EncoderConfig::for_segments(Duration::ZERO).keyframe_interval, 1);
         assert_eq!(
             EncoderConfig::for_segments(Duration::from_secs(3600)).keyframe_interval,
