@@ -1,11 +1,12 @@
-//! Google Cast sender. Discovers receivers and controls them over Cast v2.
-//! Capture, encoding and UI belong to the host.
+//! Google Cast sender. Discovers receivers, controls them over Cast v2 and
+//! serves live H.264 to them. Capture, encoding and UI belong to the host.
 #![forbid(unsafe_code)]
 
 mod channel;
 mod client;
 #[cfg(feature = "discovery")]
 mod discovery;
+mod live;
 mod media;
 mod proto;
 mod receiver;
@@ -15,6 +16,7 @@ mod tests;
 pub use client::{CastClient, Event};
 #[cfg(feature = "discovery")]
 pub use discovery::{Receiver, discover};
+pub use live::{LiveCast, LiveOptions, LiveState, avcc_to_annexb};
 pub use media::{MediaController, MediaLoad, MediaStatus, StreamType};
 pub use receiver::{Application, DEFAULT_MEDIA_RECEIVER, ReceiverStatus, Volume};
 
@@ -37,6 +39,8 @@ pub enum Error {
     Timeout(String),
     #[error("the receiver connection is closed")]
     Closed,
+    #[error("invalid live options: {0}")]
+    InvalidOptions(&'static str),
     #[error("receiver rejected the request: {kind}{}", reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default())]
     Rejected { kind: String, reason: Option<String> },
 }

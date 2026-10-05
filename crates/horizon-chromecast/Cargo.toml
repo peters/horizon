@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-description = "Google Cast sender: receiver discovery and Cast v2 control"
+description = "Google Cast sender: receiver discovery, Cast v2 control and live H.264 streaming"
 
 [features]
 default = ["discovery"]
