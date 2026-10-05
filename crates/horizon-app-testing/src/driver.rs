@@ -303,7 +303,13 @@ impl NativeDriver {
     fn verify_identity(&self, element: &str, identity: &Identity) -> Result<()> {
         for (key, expected) in &identity.attributes {
             let response = self.request("GET", &format!("/element/{element}/attribute/{key}"), None)?;
-            if response.get("value").and_then(Value::as_str) != Some(expected.as_str()) {
+            let value = response.get("value");
+            let matches = value.and_then(Value::as_str) == Some(expected.as_str())
+                || (key == "password"
+                    && value
+                        .and_then(Value::as_bool)
+                        .is_some_and(|flag| expected == if flag { "true" } else { "false" }));
+            if !matches {
                 return Err(Error::ReferenceExpired);
             }
         }
