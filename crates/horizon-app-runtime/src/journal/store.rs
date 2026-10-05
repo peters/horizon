@@ -283,13 +283,25 @@ fn open_file(directory: &File, name: &str, create: bool) -> Result<File> {
         | rustix::fs::OFlags::CLOEXEC;
     if create {
         flags |= rustix::fs::OFlags::CREATE;
-        if name != "journal.lock" {
-            flags |= rustix::fs::OFlags::EXCL;
-        }
+        flags |= rustix::fs::OFlags::EXCL;
     }
     let file = File::from(
-        rustix::fs::openat(directory, name, flags, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR).map_err(
-            |error| {
+        rustix::fs::openat(directory, name, flags, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
+            .or_else(|error| {
+                // Concurrent non-exclusive O_CREAT can return ENOENT on macOS.
+                // Only the shared lock may already exist; reopen without creating or truncating it.
+                if create && name == "journal.lock" && error == rustix::io::Errno::EXIST {
+                    rustix::fs::openat(
+                        directory,
+                        name,
+                        flags & !(rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL),
+                        rustix::fs::Mode::empty(),
+                    )
+                } else {
+                    Err(error)
+                }
+            })
+            .map_err(|error| {
                 #[cfg(test)]
                 if create {
                     let stage = if matches!(name, "journal.lock" | "initialized" | "journal.json") {
@@ -304,8 +316,7 @@ fn open_file(directory: &File, name: &str, create: bool) -> Result<File> {
                 } else {
                     Error::JournalUnavailable
                 }
-            },
-        )?,
+            })?,
     );
     let metadata = file.metadata().map_err(|_| Error::JournalUnavailable)?;
     if !metadata.is_file()
