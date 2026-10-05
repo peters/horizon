@@ -7,6 +7,15 @@ use crate::theme;
 
 const HANDLE_SCREEN_SIZE: f32 = 32.0;
 
+pub(super) fn drag_delta(response: &Response) -> Vec2 {
+    if response.drag_started() {
+        // A press can share a frame with hover motion that preceded the press.
+        response.total_drag_delta().unwrap_or_default()
+    } else {
+        response.drag_delta()
+    }
+}
+
 fn handle_rect(panel: Rect, zoom: f32) -> Rect {
     let span = (HANDLE_SCREEN_SIZE / zoom)
         .min(panel.width())

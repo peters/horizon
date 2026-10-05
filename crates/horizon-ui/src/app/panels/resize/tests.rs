@@ -44,7 +44,7 @@ fn frame_with_transform(ctx: &Context, transform: TSTransform, interactive: bool
                         .count();
                     result.body_dragged = body.dragged();
                     result.resize_dragged = resize.dragged();
-                    result.delta = resize.drag_delta();
+                    result.delta = drag_delta(&resize);
                     result.stopped = resize.drag_stopped();
                 });
             },
@@ -130,4 +130,21 @@ fn grip_blocks_raw_body_press_during_canvas_pan_and_zoom_change() {
     let press_at = transform * Pos2::new(480.0, 400.0) - Vec2::splat(28.0);
     let press = frame_with_transform(&ctx, transform, true, vec![button(press_at, true)]);
     assert_eq!(press.raw_body_presses, 0);
+}
+
+#[test]
+fn initial_grip_press_does_not_resize_by_motion_before_the_press() {
+    let ctx = Context::default();
+    frame(&ctx, 1.0, true, vec![]);
+    frame(&ctx, 1.0, true, vec![Event::PointerMoved(Pos2::new(100.0, 100.0))]);
+    let start = Pos2::new(452.0, 372.0);
+    let press = frame(&ctx, 1.0, true, vec![Event::PointerMoved(start), button(start, true)]);
+    assert_eq!(press.delta, Vec2::ZERO);
+    let drag = frame(
+        &ctx,
+        1.0,
+        true,
+        vec![Event::PointerMoved(start + Vec2::new(20.0, 12.0))],
+    );
+    assert_eq!(drag.delta, Vec2::new(20.0, 12.0));
 }
