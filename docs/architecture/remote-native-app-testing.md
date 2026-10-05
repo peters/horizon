@@ -173,3 +173,19 @@ or release must be reconciled by the owning host rather than replayed speculativ
 Reset returns `device_reset_requires_reallocation` for the host to handle by recreating its owned session with the
 same declared app and launch arguments. It does not invoke the removed Appium 3 `/reset` endpoint. Library mock
 coverage does not qualify real-device behavior or reset orchestration.
+
+### Managed backend ports
+
+A tunnel port may remain an integer or declare a private foreground backend:
+
+```yaml
+tunnel:
+  ports:
+    backend:
+      start: [python3, scripts/remote-device/backend.py]
+      timeout_seconds: 900
+```
+
+The host starts a distinct backend for each concurrent device. The selected command receives a private operation directory through `HORIZON_APP_BACKEND_DIR`; it keeps diagnostics private and writes exactly one stdout JSON line when the complete synthetic stack is ready: `{"native_backend_ready":1,"port":41935}`. The numeric nonzero port always means host loopback. No host, credentials or other fields are accepted. The child stays alive for its device's lifetime and must clean up its own worktree and processes on termination. Host crash reconciliation is required before this protocol is exposed through agent tools.
+
+Launch values use `http://localhost:{tunnel.port.backend}`. Managed URL ports must occur in the authority as a named template, rather than hard-coded ports or templates in paths. Resolution accepts all and only declared ports, preserves fixed bindings and rejects duplicate or zero ports before opening a restricted tunnel. Builds remain per platform; mutable backend state is per device. This increment validates declarations and readiness only; it does not spawn backends or claim orchestration acceptance.

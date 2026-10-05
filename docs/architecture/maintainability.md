@@ -8,6 +8,7 @@ back into large multi-purpose modules.
 ### `horizon-app-testing`
 
 - `contract` validates the project declaration, bounds paths and resolves declared loopback-port templates.
+- `backend` parses the bounded, value-free managed-backend readiness protocol; it does not spawn children.
 - `catalog` decodes native-device offerings and resolves the complete symbolic matrix before allocation.
 - `recipe` owns executable native actions and their validation. Pure prose is never executable evidence.
 - `tree` parses bounded native XML and binds short-lived references to observed native elements; private identity verification prevents stale or reordered elements from receiving input.

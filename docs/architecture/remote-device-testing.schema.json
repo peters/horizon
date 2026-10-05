@@ -43,6 +43,28 @@
         "artifact"
       ]
     },
+    "Backend": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timeout_seconds": {
+          "description": "Startup budget includes seeding and frontend/backend readiness.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "timeout_seconds"
+      ]
+    },
     "Contract": {
       "type": "object",
       "properties": {
@@ -184,16 +206,27 @@
         "android"
       ]
     },
+    "Port": {
+      "description": "A fixed loopback port or one private foreground backend per device.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        {
+          "$ref": "#/$defs/Backend"
+        }
+      ]
+    },
     "Tunnel": {
       "type": "object",
       "properties": {
         "ports": {
           "type": "object",
           "additionalProperties": {
-            "type": "integer",
-            "format": "uint16",
-            "maximum": 65535,
-            "minimum": 0
+            "$ref": "#/$defs/Port"
           }
         }
       },

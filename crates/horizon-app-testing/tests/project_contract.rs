@@ -351,3 +351,94 @@ fn virtual_and_unverified_devices_cannot_qualify_a_real_device_matrix() {
     assert_eq!(offered.len(), 1);
     assert_eq!(offered[0].model, "iPhone 15");
 }
+
+#[test]
+fn per_device_managed_ports_require_complete_host_bindings() -> Result<(), Error> {
+    use std::collections::BTreeMap;
+    let text = AGENTS.replace(
+        "ports: {backend: 8080}",
+        "ports: {backend: {start: [python3, backend.py], timeout_seconds: 900}, metrics: 9000}",
+    );
+    let contract = Contract::from_agents(&text)?;
+    let value = "http://localhost:{tunnel.port.backend}";
+    assert_eq!(contract.resolve_value(value).err(), Some(Error::ContractInvalid));
+    for (device_port, expected) in [(41935, "http://localhost:41935"), (40303, "http://localhost:40303")] {
+        let ports = BTreeMap::from([("backend".into(), device_port), ("metrics".into(), 9000)]);
+        assert_eq!(contract.resolve_value_with_ports(value, &ports)?, expected);
+    }
+    for ports in [
+        BTreeMap::from([("backend".into(), 41935)]),
+        BTreeMap::from([("backend".into(), 0), ("metrics".into(), 9000)]),
+        BTreeMap::from([("backend".into(), 9000), ("metrics".into(), 9000)]),
+        BTreeMap::from([("backend".into(), 41935), ("metrics".into(), 9001)]),
+        BTreeMap::from([("backend".into(), 41935), ("unexpected".into(), 9000)]),
+    ] {
+        assert_eq!(
+            contract.resolve_value_with_ports(value, &ports).err(),
+            Some(Error::ContractInvalid)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn malformed_managed_backend_declarations_fail_before_any_child_starts() {
+    for spec in [
+        "{start: [], timeout_seconds: 900}",
+        "{start: [python3, backend.py], timeout_seconds: 0}",
+        "{start: [python3, backend.py], timeout_seconds: 1201}",
+        "{start: [python3, backend.py], timeout_seconds: 900, host: example.com}",
+    ] {
+        assert_eq!(
+            Contract::from_agents(&AGENTS.replace("ports: {backend: 8080}", &format!("ports: {{backend: {spec}}}")))
+                .err(),
+            Some(Error::ContractInvalid)
+        );
+    }
+    let text = AGENTS.replace(
+        "ports: {backend: 8080}",
+        "ports: {backend: {start: [python3, backend.py], timeout_seconds: 900}}",
+    );
+    for value in [
+        "http://localhost:1",
+        "http://localhost:1/{tunnel.port.backend}",
+        "http://example.com:{tunnel.port.backend}",
+    ] {
+        assert_eq!(
+            Contract::from_agents(&text.replace("http://localhost:{tunnel.port.backend}", value)).err(),
+            Some(Error::ContractInvalid)
+        );
+    }
+}
+
+#[test]
+fn backend_readiness_rejects_extraneous_or_sensitive_fields() -> Result<(), Error> {
+    use horizon_app_testing::backend::ready_port;
+    assert_eq!(ready_port(br#"{"native_backend_ready":1,"port":41935}"#)?, 41935);
+    for input in [
+        br#"{"native_backend_ready":1,"port":0}"#.as_slice(),
+        br#"{"native_backend_ready":2,"port":41935}"#,
+        br#"{"native_backend_ready":1,"port":41935,"host":"example.com"}"#,
+        br#"{"native_backend_ready":1,"port":41935,"key":"synthetic"}"#,
+        br#"{"native_backend_ready":1,"port":65536}"#,
+        br#"{"native_backend_ready":1,"port":41935,"port":41935}"#,
+        b"private child diagnostic",
+    ] {
+        assert_eq!(ready_port(input).err(), Some(Error::BackendReadyInvalid));
+    }
+    assert_eq!(ready_port(&[b' '; 257]).err(), Some(Error::BackendReadyInvalid));
+    Ok(())
+}
+
+#[test]
+fn published_schema_matches_the_project_contract_wire_types() {
+    let published: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docs/architecture/remote-device-testing.schema.json"
+    ))
+    .unwrap();
+    let actual = serde_json::to_value(horizon_app_testing::contract::schema()).unwrap();
+    assert_eq!(
+        published, actual,
+        "regenerate the documented project schema after wire changes"
+    );
+}

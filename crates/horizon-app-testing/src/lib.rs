@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod backend;
 pub mod catalog;
 pub mod contract;
 pub mod driver;
@@ -8,6 +9,8 @@ pub mod tree;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum Error {
+    #[error("app_backend_ready_invalid: backend readiness must declare one nonzero loopback port")]
+    BackendReadyInvalid,
     #[error("device_contract_missing: no remote-device-testing YAML block was found")]
     ContractMissing,
     #[error("device_contract_invalid: the remote-device-testing contract is invalid")]

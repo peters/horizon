@@ -48,7 +48,23 @@ fn latest() -> String {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Tunnel {
-    pub ports: BTreeMap<String, u16>,
+    pub ports: BTreeMap<String, Port>,
+}
+
+/// A fixed loopback port or one private foreground backend per device.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Port {
+    Fixed(u16),
+    Managed(Backend),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Backend {
+    pub start: Vec<String>,
+    /// Startup budget includes seeding and frontend/backend readiness.
+    pub timeout_seconds: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
@@ -178,15 +194,25 @@ impl Contract {
         }
         let mut ports = BTreeSet::new();
         for (name, port) in &self.tunnel.ports {
-            if !identifier(name) || *port == 0 || !ports.insert(port) {
+            if !identifier(name) {
                 return Err(invalid());
+            }
+            match port {
+                Port::Fixed(port) if *port == 0 || !ports.insert(*port) => return Err(invalid()),
+                Port::Fixed(_) => {}
+                Port::Managed(backend) => {
+                    validate_command(&backend.start)?;
+                    if !(1..=1200).contains(&backend.timeout_seconds) {
+                        return Err(invalid());
+                    }
+                }
             }
         }
         for (name, value) in &self.launch_arguments {
             if !identifier(name) || secret_name(name) || !printable(value, 2048) {
                 return Err(invalid());
             }
-            self.resolve_value(value)?;
+            self.validate_value(value)?;
         }
         let mut recipes = BTreeSet::new();
         for recipe in &self.recipes {
@@ -199,33 +225,107 @@ impl Contract {
     }
 
     /// # Errors
-    /// Templates resolve only declared ports, never arbitrary variables or environment secrets.
+    /// Fixed-port projects can resolve without a managed backend instance.
     pub fn resolve_value(&self, value: &str) -> Result<String> {
-        let mut resolved = value.to_owned();
-        for (name, port) in &self.tunnel.ports {
-            resolved = resolved.replace(&format!("{{tunnel.port.{name}}}"), &port.to_string());
-        }
-        if resolved.contains(['{', '}']) {
+        let ports = self
+            .tunnel
+            .ports
+            .iter()
+            .map(|(name, spec)| match spec {
+                Port::Fixed(port) => Ok((name.clone(), *port)),
+                Port::Managed(_) => Err(Error::ContractInvalid),
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        self.resolve_value_with_ports(value, &ports)
+    }
+
+    /// # Errors
+    /// Host-only resolution requires every declared nonzero port, no extras, and unchanged fixed bindings.
+    pub fn resolve_value_with_ports(&self, value: &str, ports: &BTreeMap<String, u16>) -> Result<String> {
+        if ports.len() != self.tunnel.ports.len() {
             return Err(Error::ContractInvalid);
         }
-        let parsed_url = url::Url::parse(&resolved);
-        if parsed_url.is_ok()
-            || resolved.contains("://")
-            || resolved.trim().to_ascii_lowercase().starts_with("http:")
-            || resolved.trim().to_ascii_lowercase().starts_with("https:")
-        {
-            let url = parsed_url.map_err(|_| Error::ContractInvalid)?;
-            let port = url.port_or_known_default().ok_or(Error::ContractInvalid)?;
-            if !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
-                || !url.username().is_empty()
-                || url.password().is_some()
-                || !self.tunnel.ports.values().any(|declared| *declared == port)
-            {
+        let mut seen = BTreeSet::new();
+        for (name, spec) in &self.tunnel.ports {
+            let port = ports.get(name).ok_or(Error::ContractInvalid)?;
+            if *port == 0 || !seen.insert(*port) || matches!(spec, Port::Fixed(fixed) if fixed != port) {
                 return Err(Error::ContractInvalid);
             }
         }
-        Ok(resolved)
+        resolve(value, ports)
     }
+
+    fn validate_value(&self, value: &str) -> Result<()> {
+        let mut ports = BTreeMap::new();
+        let mut used: BTreeSet<u16> = self
+            .tunnel
+            .ports
+            .values()
+            .filter_map(|port| match port {
+                Port::Fixed(port) => Some(*port),
+                Port::Managed(_) => None,
+            })
+            .collect();
+        for (name, spec) in &self.tunnel.ports {
+            let port = match spec {
+                Port::Fixed(port) => *port,
+                Port::Managed(_) => (1..=u16::MAX)
+                    .find(|port| !used.contains(port))
+                    .ok_or(Error::ContractInvalid)?,
+            };
+            used.insert(port);
+            ports.insert(name.clone(), port);
+        }
+        let resolved = resolve(value, &ports)?;
+        if let Ok(url) = url::Url::parse(&resolved) {
+            let port = url.port_or_known_default().ok_or(Error::ContractInvalid)?;
+            let static_binding = self
+                .tunnel
+                .ports
+                .values()
+                .any(|spec| matches!(spec, Port::Fixed(fixed) if *fixed == port));
+            let managed_template = self.tunnel.ports.iter().any(|(name, spec)| {
+                matches!(spec, Port::Managed(_))
+                    && value.split_once("://").is_some_and(|(_, rest)| {
+                        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+                        ["localhost", "127.0.0.1", "[::1]"]
+                            .iter()
+                            .any(|host| authority == format!("{host}:{{tunnel.port.{name}}}"))
+                    })
+            });
+            if !static_binding && !managed_template {
+                return Err(Error::ContractInvalid);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn resolve(value: &str, ports: &BTreeMap<String, u16>) -> Result<String> {
+    let mut resolved = value.to_owned();
+    for (name, port) in ports {
+        resolved = resolved.replace(&format!("{{tunnel.port.{name}}}"), &port.to_string());
+    }
+    if resolved.contains(['{', '}']) {
+        return Err(Error::ContractInvalid);
+    }
+    let parsed_url = url::Url::parse(&resolved);
+    if parsed_url.is_ok()
+        || resolved.contains("://")
+        || resolved.trim().to_ascii_lowercase().starts_with("http:")
+        || resolved.trim().to_ascii_lowercase().starts_with("https:")
+    {
+        let url = parsed_url.map_err(|_| Error::ContractInvalid)?;
+        let port = url.port_or_known_default().ok_or(Error::ContractInvalid)?;
+        if !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || !ports.values().any(|declared| *declared == port)
+        {
+            return Err(Error::ContractInvalid);
+        }
+    }
+    Ok(resolved)
 }
 
 pub(crate) fn yaml_blocks<'a>(markdown: &'a str, marker: &str) -> Result<Vec<&'a str>> {
