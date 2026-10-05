@@ -127,6 +127,10 @@ fn receiver_with(listener: TcpListener, config: Arc<ServerConfig>, running: bool
                         }
                         let loaded = json!({"type": "MEDIA_STATUS", "status": [{"mediaSessionId": 9, "playerState": "BUFFERING"}]});
                         send(&mut stream, to, NS_MEDIA, &reply(&request, loaded));
+                        // TVs report volume changes without an application list.
+                        let volume =
+                            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {"volume": {"level": 0.1}}});
+                        send(&mut stream, PLATFORM_RECEIVER, NS_RECEIVER, &volume);
                         let playing = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "PLAYING"}]});
                         send(&mut stream, to, NS_MEDIA, &playing);
                         send(&mut stream, PLATFORM_RECEIVER, NS_HEARTBEAT, &json!({"type": "PING"}));
@@ -160,8 +164,11 @@ fn launches_loads_and_follows_media_status() {
         (loaded.media_session_id, loaded.player_state.as_str()),
         (9, "BUFFERING")
     );
-    let event = client.next_event(Duration::from_secs(5)).unwrap().unwrap();
-    assert_eq!(MediaStatus::from_event(&event)[0].player_state, "PLAYING");
+    let playing = std::iter::from_fn(|| client.next_event(Duration::from_secs(5)).unwrap())
+        .flat_map(|event| MediaStatus::from_event(&event))
+        .next()
+        .unwrap();
+    assert_eq!(playing.player_state, "PLAYING");
     client.stop_application(&app.session_id).unwrap();
     drop(client);
 

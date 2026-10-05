@@ -204,10 +204,12 @@ impl Session {
             return Ok(false);
         }
         if event.namespace == NS_RECEIVER && event.kind() == Some("RECEIVER_STATUS") {
-            let ours = event.payload["status"]["applications"]
+            // Volume-only updates omit `applications`; only a listed set without
+            // our session means another sender replaced it.
+            let replaced = event.payload["status"]["applications"]
                 .as_array()
-                .is_some_and(|apps| apps.iter().any(|app| app["sessionId"] == session_id));
-            return Ok(ours);
+                .is_some_and(|apps| !apps.iter().any(|app| app["sessionId"] == session_id));
+            return Ok(!replaced);
         }
         for status in MediaStatus::from_event(event) {
             match (status.player_state.as_str(), status.idle_reason.as_deref()) {
