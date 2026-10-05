@@ -127,7 +127,7 @@ GPU profile requires GPU capacity; a CPU result cannot qualify that lane.
 
 ### Remote Native App Testing
 
-- Start with [the native-app testing contract and architecture](docs/architecture/remote-native-app-testing.md).
+- Start with [the native-app testing contract and architecture](docs/architecture/remote-native-app-testing.md) and [the BrowserStack native-app runbook](docs/runbooks/browserstack-native-apps.md).
 - Use the selected app project's `AGENTS.md` contract and executable synthetic recipes; validate every matrix entry before allocating devices.
 - Native App Automate catalogs and quotas are distinct from browser catalogs and quotas. Browser access is not native-app entitlement evidence.
 - Keep provider credentials and upload/session/tunnel identifiers inside the shared host runtime. Agent interfaces return opaque references and typed errors.
