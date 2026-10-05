@@ -59,6 +59,8 @@ mod tests {
     fn fill_segments(segment: Duration) {
         let options = LiveOptions {
             segment,
+            // Enough segments to keep three target durations even at 150 ms.
+            window: 30,
             ..LiveOptions::default()
         };
         let interval = EncoderConfig::for_segments(options.segment).keyframe_interval;
