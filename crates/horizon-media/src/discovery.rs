@@ -45,14 +45,17 @@ pub enum DiscoveryError {
 /// `duration` and returns the latest resolution of every instance that has an
 /// IPv4 address and a port. Does not connect to the services.
 /// # Errors
-/// Returns an error if multicast service discovery cannot start.
+/// Returns [`DiscoveryError::Start`] if the multicast DNS daemon cannot start,
+/// [`DiscoveryError::Browse`] if browsing cannot be registered, and
+/// [`DiscoveryError::DurationTooLong`] if `duration` cannot be represented.
 pub fn browse(service_type: &str, duration: Duration) -> Result<Vec<Service>, DiscoveryError> {
-    let deadline = Instant::now()
-        .checked_add(duration)
-        .ok_or(DiscoveryError::DurationTooLong)?;
     let daemon = ServiceDaemon::new().map_err(DiscoveryError::Start)?;
     let result = (|| {
         let events = daemon.browse(service_type).map_err(DiscoveryError::Browse)?;
+        // The window starts once browsing is registered, as before the move.
+        let deadline = Instant::now()
+            .checked_add(duration)
+            .ok_or(DiscoveryError::DurationTooLong)?;
         let mut services = Vec::new();
         while let Some(wait) = deadline.checked_duration_since(Instant::now()) {
             let Ok(event) = events.recv_timeout(wait) else {
