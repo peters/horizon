@@ -36,6 +36,7 @@ layout stays compact when a replacement field is open.
 - The [local device smoke fixture](../../../scripts/device-smoke/README.md)
   with `--native-view`.
 - A frozen candidate and its SHA-256.
+- A private evidence directory, `<evidence>`, outside the fixture state.
 - A Device panel that shows a live view of the fixture.
 - No real credentials. The fake key files contain text such as
   `rpa_FAKEKEYFORSMOKE`.
@@ -79,7 +80,16 @@ layout stays compact when a replacement field is open.
 
    Result: The file is in the private home of the fixture.
 
-5. Start a recorder that captures only the fixture display.
+5. Record the SHA-256 of `settings.json` and of the four key files.
+
+   ```sh
+   cd <state>/data/home/.horizon/cloud
+   sha256sum settings.json credentials/* > <evidence>/baseline.sha256
+   ```
+
+   Result: `baseline.sha256` has five lines. Keep it outside the private home.
+
+6. Start a recorder that captures only the fixture display.
 
    Result: The recorder writes frames from the isolated desktop.
 
@@ -141,13 +151,23 @@ layout stays compact when a replacement field is open.
 
 1. Click **Cancel**.
 
-   Result: The dialog closes. The key files and `settings.json` do not change.
+   Result: The dialog closes.
+
+2. Compare the five files with the baseline.
+
+   ```sh
+   cd <state>/data/home/.horizon/cloud
+   sha256sum -c <evidence>/baseline.sha256
+   ```
+
+   Result: Each of the five lines shows `OK`. Record the output in the results.
 
 ## 7. Pass criteria
 
 - In each task, **Keep saved key** is directly below its field.
 - No card shows a large empty area between a field and its button.
 - **Keep saved key** removes the field and shows the masked saved key again.
+- In A05, the comparison shows `OK` for all five files.
 - The recording and the screenshots show only fake keys.
 
 ## 8. Cleanup
