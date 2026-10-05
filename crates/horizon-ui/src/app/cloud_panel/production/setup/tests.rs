@@ -575,3 +575,34 @@ fn a_registry_edit_or_a_lost_credential_holds_the_banner_even_with_a_saved_proof
     assert_eq!(lost.tone, Tone::Attention);
     assert!(lost.cause.contains("pull credential"));
 }
+
+#[test]
+fn keep_saved_key_sits_directly_below_the_replacement_field_on_a_tall_screen() {
+    use crate::app::test_support::raw_input;
+    let temp = tempfile::tempdir().unwrap();
+    let mut first = Draft::load(temp.path()).unwrap();
+    *first.runpod_key = "synthetic-compute".into();
+    first.save().unwrap();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    *draft.runpod_key = "synthetic-replacement".into();
+    let ctx = Context::default();
+    let mut shapes = Vec::new();
+    for _ in 0..2 {
+        let mut output = ctx.run_ui(raw_input([2560.0, 1440.0], None), |ui| {
+            fields::providers(ui, &mut draft, &mut fields::Edits::default());
+        });
+        output.textures_delta.clear();
+        shapes = output.shapes;
+    }
+    let top = |prefix: &str| {
+        shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text.starts_with(prefix) => Some(text.pos.y),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let gap = top("Stored privately") - top("Keep saved key");
+    assert!((0.0..60.0).contains(&gap), "caption is {gap} px below Keep saved key");
+}

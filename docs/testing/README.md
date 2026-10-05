@@ -25,4 +25,5 @@ documents that are not yet STE.
 
 | Procedure | Feature | Cost |
 |---|---|---|
-| [chromecast-live-progressive](procedures/chromecast-live-progressive.md) | Chromecast live cast, progressive transport | None |
+| [chromecast-live-progressive](procedures/chromecast-live-progressive.md) | Chromecast live cast, progressive transport | none |
+| [cloud-settings-replace-key](procedures/cloud-settings-replace-key.md) | Cloud settings saved keys | none |
