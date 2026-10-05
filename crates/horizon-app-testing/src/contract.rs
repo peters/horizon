@@ -264,7 +264,6 @@ impl Contract {
                     .split_once("://")
                     .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or(""));
                 if value.matches(&template).count() != 1
-                    || !(value.starts_with("http://") || value.starts_with("https://"))
                     || !["localhost", "127.0.0.1", "[::1]"]
                         .iter()
                         .any(|host| authority == Some(format!("{host}:{template}").as_str()))
