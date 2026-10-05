@@ -5,6 +5,13 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+### `horizon-app-runtime`
+
+- `account` captures the shared credential resolver into a nonserializable provider lease; changed credentials produce distinct ownership realms.
+- `journal` owns lifecycle transitions, opaque status, exact resource ownership and conservative capacity admission. All local BrowserStack profiles share one reservation namespace because separate users can share a team quota. Only freshly observed exact session IDs establish overlap with provider counts; uncertain or absent resources remain reserved.
+- `journal/store` owns private anchored files, cross-process locking, duplicate-key rejection, atomic snapshots and a durable initialization/lock marker. Missing previously initialized state fails closed. Failed writes remove their private temporary snapshots.
+- This increment is durable lifecycle storage, not an executor. Runtime allocation, provider discovery/reconciliation, idle/cancellation workers, backend/build orchestration and authoritative UI/MCP ownership are subsequent increments. Storage is currently Unix-only and fails closed elsewhere.
+
 ### `horizon-app-provider`
 
 - `artifact` captures declared app files through anchored non-following opens into immutable private copies, then hashes that copy.

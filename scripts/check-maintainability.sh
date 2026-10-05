@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAX_LINES=1000
 ALLOW_PATTERN='#\[allow\(clippy::too_many_lines\)\]'
 SOURCE_DIRS=(
+  "$ROOT_DIR/crates/horizon-app-runtime/src"
   "$ROOT_DIR/crates/horizon-app-provider/src"
   "$ROOT_DIR/crates/horizon-app-testing/src"
   "$ROOT_DIR/crates/horizon-device/src"
