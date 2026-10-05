@@ -42,8 +42,11 @@ pub enum DiscoveryError {
 }
 
 /// Browses `service_type` (for example `_googlecast._tcp.local.`) for
-/// `duration` and returns the latest resolution of every instance that has an
-/// IPv4 address and a port. Does not connect to the services.
+/// `duration` and returns every resolution that has an IPv4 address and a
+/// port, in arrival order. An instance resolved twice appears twice, so callers
+/// apply their own filters first and then keep the latest entry per device;
+/// a later resolution that fails a filter never hides an earlier valid one.
+/// Does not connect to the services.
 /// # Errors
 /// Returns [`DiscoveryError::Start`] if the multicast DNS daemon cannot start,
 /// [`DiscoveryError::Browse`] if browsing cannot be registered, and
@@ -76,27 +79,17 @@ pub fn browse(service_type: &str, duration: Duration) -> Result<Vec<Service>, Di
                 .iter()
                 .map(|property| (property.key().to_ascii_lowercase(), property.val_str().to_owned()))
                 .collect();
-            record(
-                &mut services,
-                Service {
-                    instance: instance_name(&info.fullname, service_type).to_owned(),
-                    fullname: info.fullname.clone(),
-                    address: SocketAddr::new(ip.into(), info.port),
-                    properties,
-                },
-            );
+            services.push(Service {
+                instance: instance_name(&info.fullname, service_type).to_owned(),
+                fullname: info.fullname.clone(),
+                address: SocketAddr::new(ip.into(), info.port),
+                properties,
+            });
         }
         Ok(services)
     })();
     let _ = daemon.shutdown();
     result
-}
-
-/// Keeps one entry per instance, ordered by latest resolution, so callers
-/// that deduplicate by device id keep the freshest address and name.
-fn record(services: &mut Vec<Service>, service: Service) {
-    services.retain(|known| known.fullname != service.fullname);
-    services.push(service);
 }
 
 fn instance_name<'a>(fullname: &'a str, service_type: &str) -> &'a str {
@@ -133,21 +126,5 @@ mod tests {
         assert_eq!(service.property("FN"), Some("Living Room TV"));
         assert_eq!(service.property("md"), None);
         assert_eq!(service.instance(), "TV");
-    }
-
-    #[test]
-    fn latest_resolution_comes_last() {
-        let service = |fullname: &str, port: u16| Service {
-            fullname: fullname.to_owned(),
-            address: SocketAddr::from(([192, 0, 2, 10], port)),
-            instance: String::new(),
-            properties: BTreeMap::new(),
-        };
-        let mut services = Vec::new();
-        record(&mut services, service("b._x._tcp.local.", 1));
-        record(&mut services, service("a._x._tcp.local.", 2));
-        record(&mut services, service("b._x._tcp.local.", 3));
-        let order: Vec<u16> = services.iter().map(|s| s.address.port()).collect();
-        assert_eq!(order, [2, 3]);
     }
 }
