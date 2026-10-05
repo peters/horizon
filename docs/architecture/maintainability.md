@@ -985,3 +985,7 @@ fully visible, unobscured regions of the main Horizon render target. The bounded
 scaling worker wakes the host only after publishing a frame, so submission does
 not wait for the next capture timer. Runtime and measured performance boundaries
 are documented in [Linux casting](../casting.md).
+
+Native process-group observation and shutdown live in `horizon-app-process::group`;
+`guard` coordinates the private protocol and readers. This boundary keeps owned-child
+shutdown available to the tunnel guardian without duplicating signalling policy.

@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 pub mod client;
 #[cfg(unix)]
+mod group;
+#[cfg(unix)]
 mod guard;
 mod storage;
 
