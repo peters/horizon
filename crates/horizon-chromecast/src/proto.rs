@@ -158,6 +158,10 @@ fn take_varint(input: &mut &[u8]) -> Result<u64> {
     for shift in (0..64).step_by(7) {
         let (&byte, rest) = input.split_first().ok_or(Error::Protocol("truncated varint"))?;
         *input = rest;
+        // The tenth byte carries only bit 63; anything larger would be truncated.
+        if shift == 63 && byte > 1 {
+            return Err(Error::Protocol("varint overflows 64 bits"));
+        }
         value |= u64::from(byte & 0x7f) << shift;
         if byte & 0x80 == 0 {
             return Ok(value);
@@ -233,6 +237,10 @@ mod tests {
         assert_eq!(CastMessage::decode(&body).unwrap(), heartbeat());
         assert!(CastMessage::decode(&[0x12, 0x10, b'a']).is_err());
         assert!(CastMessage::decode(&[0x0b]).is_err());
+        let mut overflow = vec![0x08];
+        overflow.extend_from_slice(&[0x80; 9]);
+        overflow.push(0x02);
+        assert!(CastMessage::decode(&overflow).is_err());
         let mut oversized = vec![0xff, 0xff, 0xff, 0xff];
         assert!(drain_frames(&mut oversized).is_err());
     }

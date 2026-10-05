@@ -128,8 +128,12 @@ impl CastClient {
 
     /// Sets the receiver volume, clamped to `0.0..=1.0`.
     /// # Errors
-    /// Returns an error if the receiver refuses or does not answer.
+    /// Returns a protocol error for `NaN`, or an error if the receiver refuses
+    /// or does not answer.
     pub fn set_volume(&self, level: f64) -> Result<ReceiverStatus> {
+        if level.is_nan() {
+            return Err(Error::Protocol("volume level is not a number"));
+        }
         let reply = self.request(
             PLATFORM_RECEIVER,
             NS_RECEIVER,

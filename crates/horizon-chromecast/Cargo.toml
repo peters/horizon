@@ -25,5 +25,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
+[[example]]
+name = "chromecast"
+required-features = ["discovery"]
+
 [dev-dependencies]
 rcgen.workspace = true

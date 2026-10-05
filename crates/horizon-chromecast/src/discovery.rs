@@ -27,7 +27,9 @@ pub fn discover(duration: Duration) -> Result<Vec<Receiver>> {
     let daemon = ServiceDaemon::new().map_err(|e| Error::Discovery(e.to_string()))?;
     let result = (|| {
         let events = daemon.browse(SERVICE).map_err(|e| Error::Discovery(e.to_string()))?;
-        let deadline = Instant::now() + duration;
+        let deadline = Instant::now()
+            .checked_add(duration)
+            .ok_or_else(|| Error::Discovery("discovery duration is too long".to_owned()))?;
         let mut receivers = BTreeMap::new();
         while let Some(wait) = deadline.checked_duration_since(Instant::now()) {
             let Ok(event) = events.recv_timeout(wait) else {

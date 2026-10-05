@@ -168,6 +168,7 @@ fn launch_joins_a_running_application_instead_of_restarting_it() {
     let client = CastClient::connect(address).unwrap();
     let app = client.launch(DEFAULT_MEDIA_RECEIVER).unwrap();
     assert_eq!(app.session_id, "session-1");
+    assert!(matches!(client.set_volume(f64::NAN), Err(Error::Protocol(_))));
     drop(client);
     let log = server.join().unwrap();
     assert!(!log.contains(&format!("{NS_RECEIVER} receiver-0 LAUNCH")), "{log:#?}");
