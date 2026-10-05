@@ -211,6 +211,15 @@ fn open_file(directory: &File, name: &str, create: bool) -> Result<File> {
     let file = File::from(
         rustix::fs::openat(directory, name, flags, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR).map_err(
             |error| {
+                #[cfg(test)]
+                if create {
+                    let stage = if matches!(name, "journal.lock" | "initialized" | "journal.json") {
+                        name
+                    } else {
+                        "marker"
+                    };
+                    eprintln!("native journal create failed: file={stage} errno={error:?}");
+                }
                 if error == rustix::io::Errno::NOENT {
                     Error::JournalMissing
                 } else {
