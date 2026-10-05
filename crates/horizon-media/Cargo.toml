@@ -6,12 +6,17 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-description = "Media helpers shared by the casting transports: H.264 bitstream handling and mDNS browsing"
+description = "Media helpers shared by the casting transports: H.264 bitstream handling, canvas formats, encoder input and mDNS browsing"
 
 [features]
 default = []
 # Multicast DNS browsing for receiver discovery.
 discovery = ["dep:mdns-sd", "dep:thiserror"]
+# Capture frame input, FFmpeg backend selection and diagnostics for the
+# desktop encoder pipeline.
+encoder = []
+# Probe NVENC (and CUDA scaling) on Linux before falling back to libx264.
+nvenc = ["encoder"]
 
 [lints]
 workspace = true

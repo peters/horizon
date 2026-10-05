@@ -1,125 +1,58 @@
-mod backend;
-mod diagnostics;
-mod frames;
-pub(crate) use backend::select;
-pub use backend::{EncoderBackend, EncoderSelection};
-pub(crate) use frames::{Frame, FrameInput};
+pub use horizon_media::encoder::{EncoderBackend, EncoderSelection};
+pub(crate) use horizon_media::encoder::{Frame, FrameInput, select};
 
 use crate::{
     CastStatus, Error, MirrorSession, Result, VideoFormat,
     session::{Progress, lock},
 };
-use horizon_media::h264::{AnnexBReader, Unit};
+use horizon_media::{
+    encoder::{AccessUnitSink, EncoderConfig},
+    h264::AccessUnit,
+};
 use std::{
-    io::Read,
-    process::{Child, Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
-    sync::{Arc, Mutex, mpsc::RecvTimeoutError},
-    thread,
-    time::{Duration, Instant},
+    process::Child,
+    sync::atomic::AtomicBool,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
+/// Feeds the shared encoder pipeline into an authenticated mirror session.
+struct MirrorSink {
+    mirror: MirrorSession,
+    status: Arc<Mutex<Progress>>,
+}
+
+impl AccessUnitSink for MirrorSink {
+    type Error = Error;
+
+    fn started(&mut self) {
+        lock(&self.status).state = CastStatus::Streaming { frames: 0 };
+    }
+
+    fn configure(&mut self, sps: &[u8], pps: &[u8]) -> Result<()> {
+        self.mirror.configure(sps, pps)
+    }
+
+    fn send(&mut self, unit: &AccessUnit, _pts: Duration) -> Result<()> {
+        // The receiver clock, not the input frame time, timestamps mirrored pictures.
+        self.mirror.send(&unit.nal_refs())?;
+        lock(&self.status).record_transmission();
+        Ok(())
+    }
+}
+
 pub(crate) fn stream(
-    mut mirror: MirrorSession,
+    mirror: MirrorSession,
     format: VideoFormat,
-    mut frames: FrameInput,
+    frames: FrameInput,
     status: &Arc<Mutex<Progress>>,
     stop: &Arc<AtomicBool>,
     process: &Arc<Mutex<Option<Child>>>,
     backend: EncoderBackend,
 ) -> Result<()> {
-    let mut child = Command::new("ffmpeg")
-        .args(backend.input_arguments(format))
-        .args(backend.arguments())
-        .args(["-g", "30", "-bf", "0", "-flush_packets", "1", "-f", "h264", "pipe:1"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let diagnostics = child.stderr.take().map(diagnostics::drain);
-    let mut input = child.stdin.take().ok_or(Error::Protocol("encoder input unavailable"))?;
-    let output = child
-        .stdout
-        .take()
-        .ok_or(Error::Protocol("encoder output unavailable"))?;
-    *lock(process) = Some(child);
-    lock(status).state = CastStatus::Streaming { frames: 0 };
-    let state = status.clone();
-    let cancel = stop.clone();
-    let killer = process.clone();
-    let reader = thread::spawn(move || {
-        let result = consume(output, &mut mirror, &state, &cancel);
-        if let Some(child) = lock(&killer).as_mut() {
-            let _ = child.kill();
-        }
-        result
-    });
-    let mut result = Ok(());
-    let mut last_frame = Instant::now();
-    while !stop.load(Ordering::Relaxed) && !reader.is_finished() {
-        match frames.next() {
-            Ok(frame) => {
-                last_frame = Instant::now();
-                if let Err(error) = frame.write(&mut input, backend.source_frames()) {
-                    result = Err(error.into());
-                    break;
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                if frames.stalled(&mut last_frame, Instant::now()) {
-                    result = Err(Error::Protocol("capture stopped producing frames"));
-                    break;
-                }
-            }
-            Err(RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    drop(input);
-    if let Some(child) = lock(process).as_mut() {
-        let _ = child.kill();
-    }
-    let transport = reader
-        .join()
-        .map_err(|_| Error::Backend("video worker stopped unexpectedly".into()))?;
-    let result = result.and(transport);
-    if result.is_err()
-        && let Some(reason) = diagnostics
-            .and_then(|diagnostics| diagnostics.recv_timeout(Duration::from_millis(200)).ok())
-            .flatten()
-    {
-        return Err(Error::Backend(reason.into()));
-    }
-    result
-}
-
-fn consume(
-    mut reader: impl Read,
-    mirror: &mut MirrorSession,
-    status: &Mutex<Progress>,
-    stop: &AtomicBool,
-) -> Result<()> {
-    let mut stream = AnnexBReader::default();
-    let mut chunk = vec![0; 32768];
-    loop {
-        if stop.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        let count = reader.read(&mut chunk)?;
-        if count == 0 {
-            return if stop.load(Ordering::Relaxed) {
-                Ok(())
-            } else {
-                Err(Error::Backend("H.264 encoder ended".into()))
-            };
-        }
-        for unit in stream.push(&chunk[..count])? {
-            match unit {
-                Unit::ParameterSets { sps, pps } => mirror.configure(&sps, &pps)?,
-                Unit::AccessUnit(access) => {
-                    mirror.send(&access.nal_refs())?;
-                    lock(status).record_transmission();
-                }
-            }
-        }
-    }
+    let sink = MirrorSink {
+        mirror,
+        status: status.clone(),
+    };
+    horizon_media::encoder::stream(sink, format, frames, EncoderConfig::default(), stop, process, backend)
 }

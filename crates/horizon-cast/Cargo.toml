@@ -10,13 +10,13 @@ description = "Modern Apple TV mirroring transport"
 
 [features]
 default = []
-nvenc = []
+nvenc = ["horizon-media/nvenc"]
 
 [lints]
 workspace = true
 
 [dependencies]
-horizon-media = { workspace = true, features = ["discovery"] }
+horizon-media = { workspace = true, features = ["discovery", "encoder"] }
 ring.workspace = true
 crypto-bigint.workspace = true
 plist.workspace = true

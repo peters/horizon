@@ -7,7 +7,6 @@ mod credentials;
 mod crypto;
 mod discovery;
 mod encoder;
-mod format;
 mod mirror;
 mod pairing;
 mod session;
@@ -18,7 +17,7 @@ mod video;
 pub use credentials::{PairedDevice, PairingCredentials, PairingStore};
 pub use discovery::{Receiver, discover};
 pub use encoder::{EncoderBackend, EncoderSelection};
-pub use format::{Orientation, Resolution, VideoFormat};
+pub use horizon_media::format::{Orientation, Resolution, VideoFormat};
 pub use mirror::MirrorSession;
 pub use pairing::{PairedReceiver, Pairing};
 pub use session::{CastSession, CastStatus};
@@ -43,6 +42,26 @@ pub enum Error {
     Authentication,
     #[error("invalid binary property list: {0}")]
     Plist(#[from] plist::Error),
+}
+
+impl From<horizon_media::encoder::PipelineError> for Error {
+    fn from(error: horizon_media::encoder::PipelineError) -> Self {
+        use horizon_media::encoder::PipelineError;
+        match error {
+            PipelineError::InputUnavailable | PipelineError::OutputUnavailable | PipelineError::CaptureStalled => {
+                Self::Protocol(error.as_str())
+            }
+            PipelineError::EncoderEnded | PipelineError::WorkerStopped | PipelineError::Diagnosed(_) => {
+                Self::Backend(error.as_str().into())
+            }
+        }
+    }
+}
+
+impl From<horizon_media::encoder::FrameError> for Error {
+    fn from(error: horizon_media::encoder::FrameError) -> Self {
+        Self::Protocol(error.as_str())
+    }
 }
 
 impl From<horizon_media::h264::H264Error> for Error {

@@ -5,6 +5,8 @@ mod hls;
 mod http;
 mod mp4;
 mod progressive;
+#[cfg(feature = "encoder")]
+mod sink;
 mod ts;
 
 /// Converts a length-prefixed (AVCC) sample to Annex B, putting
@@ -18,6 +20,8 @@ pub fn avcc_to_annexb(sample: &[u8], length_size: usize, parameter_sets: &[&[u8]
         parameter_sets,
     )?)
 }
+#[cfg(feature = "encoder")]
+pub use sink::LiveCastSink;
 
 use crate::{
     Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaController, MediaLoad, MediaStatus, Result,

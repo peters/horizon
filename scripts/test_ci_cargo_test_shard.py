@@ -43,7 +43,10 @@ class ShardCommandTests(unittest.TestCase):
         self.assertEqual(ui.stdout.splitlines(), ["cargo test --locked -p horizon-ui"])
         self.assertEqual(
             libs.stdout.splitlines(),
-            ["cargo test --locked --workspace --exclude horizon-ui"],
+            [
+                "cargo test --locked --workspace --exclude horizon-ui",
+                "cargo test --locked -p horizon-chromecast --features encoder",
+            ],
         )
 
     def test_speech_tests_run_on_unix_and_only_build_on_windows(self):
