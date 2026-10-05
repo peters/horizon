@@ -3,7 +3,6 @@
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use std::{
     collections::BTreeMap,
-    fmt,
     net::SocketAddr,
     time::{Duration, Instant},
 };
@@ -19,10 +18,10 @@ pub struct Service {
 }
 
 impl Service {
-    /// TXT record value for `key`.
+    /// TXT record value for `key`. DNS-SD keys are case-insensitive.
     #[must_use]
     pub fn property(&self, key: &str) -> Option<&str> {
-        self.properties.get(key).map(String::as_str)
+        self.properties.get(&key.to_ascii_lowercase()).map(String::as_str)
     }
 
     /// The instance label, without the service type and domain.
@@ -32,16 +31,15 @@ impl Service {
     }
 }
 
-#[derive(Debug)]
-pub struct DiscoveryError(String);
-
-impl fmt::Display for DiscoveryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum DiscoveryError {
+    #[error("could not start multicast DNS: {0}")]
+    Start(#[source] mdns_sd::Error),
+    #[error("could not browse for services: {0}")]
+    Browse(#[source] mdns_sd::Error),
+    #[error("discovery duration is too long")]
+    DurationTooLong,
 }
-
-impl std::error::Error for DiscoveryError {}
 
 /// Browses `service_type` (for example `_googlecast._tcp.local.`) for
 /// `duration` and returns the latest resolution of every instance that has an
@@ -49,11 +47,13 @@ impl std::error::Error for DiscoveryError {}
 /// # Errors
 /// Returns an error if multicast service discovery cannot start.
 pub fn browse(service_type: &str, duration: Duration) -> Result<Vec<Service>, DiscoveryError> {
-    let daemon = ServiceDaemon::new().map_err(|e| DiscoveryError(e.to_string()))?;
+    let deadline = Instant::now()
+        .checked_add(duration)
+        .ok_or(DiscoveryError::DurationTooLong)?;
+    let daemon = ServiceDaemon::new().map_err(DiscoveryError::Start)?;
     let result = (|| {
-        let events = daemon.browse(service_type).map_err(|e| DiscoveryError(e.to_string()))?;
-        let deadline = Instant::now() + duration;
-        let mut services = BTreeMap::new();
+        let events = daemon.browse(service_type).map_err(DiscoveryError::Browse)?;
+        let mut services = Vec::new();
         while let Some(wait) = deadline.checked_duration_since(Instant::now()) {
             let Ok(event) = events.recv_timeout(wait) else {
                 break;
@@ -71,10 +71,10 @@ pub fn browse(service_type: &str, duration: Duration) -> Result<Vec<Service>, Di
             let properties = info
                 .get_properties()
                 .iter()
-                .map(|property| (property.key().to_owned(), property.val_str().to_owned()))
+                .map(|property| (property.key().to_ascii_lowercase(), property.val_str().to_owned()))
                 .collect();
-            services.insert(
-                info.fullname.clone(),
+            record(
+                &mut services,
                 Service {
                     instance: instance_name(&info.fullname, service_type).to_owned(),
                     fullname: info.fullname.clone(),
@@ -83,10 +83,17 @@ pub fn browse(service_type: &str, duration: Duration) -> Result<Vec<Service>, Di
                 },
             );
         }
-        Ok(services.into_values().collect())
+        Ok(services)
     })();
     let _ = daemon.shutdown();
     result
+}
+
+/// Keeps one entry per instance, ordered by latest resolution, so callers
+/// that deduplicate by device id keep the freshest address and name.
+fn record(services: &mut Vec<Service>, service: Service) {
+    services.retain(|known| known.fullname != service.fullname);
+    services.push(service);
 }
 
 fn instance_name<'a>(fullname: &'a str, service_type: &str) -> &'a str {
@@ -120,7 +127,24 @@ mod tests {
             properties: BTreeMap::from([("fn".to_owned(), "Living Room TV".to_owned())]),
         };
         assert_eq!(service.property("fn"), Some("Living Room TV"));
+        assert_eq!(service.property("FN"), Some("Living Room TV"));
         assert_eq!(service.property("md"), None);
         assert_eq!(service.instance(), "TV");
+    }
+
+    #[test]
+    fn latest_resolution_comes_last() {
+        let service = |fullname: &str, port: u16| Service {
+            fullname: fullname.to_owned(),
+            address: SocketAddr::from(([192, 0, 2, 10], port)),
+            instance: String::new(),
+            properties: BTreeMap::new(),
+        };
+        let mut services = Vec::new();
+        record(&mut services, service("b._x._tcp.local.", 1));
+        record(&mut services, service("a._x._tcp.local.", 2));
+        record(&mut services, service("b._x._tcp.local.", 3));
+        let order: Vec<u16> = services.iter().map(|s| s.address.port()).collect();
+        assert_eq!(order, [2, 3]);
     }
 }

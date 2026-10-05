@@ -11,10 +11,11 @@ description = "Media helpers shared by the casting transports: H.264 bitstream h
 [features]
 default = []
 # Multicast DNS browsing for receiver discovery.
-discovery = ["dep:mdns-sd"]
+discovery = ["dep:mdns-sd", "dep:thiserror"]
 
 [lints]
 workspace = true
 
 [dependencies]
 mdns-sd = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }

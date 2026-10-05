@@ -2615,6 +2615,7 @@ name = "horizon-media"
 version = "0.2.7"
 dependencies = [
  "mdns-sd",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

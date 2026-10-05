@@ -1,4 +1,4 @@
-use crate::{Error, Result};
+use crate::Result;
 use horizon_media::discovery;
 use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
@@ -20,7 +20,7 @@ pub struct Receiver {
 /// # Errors
 /// Returns a discovery error if multicast service discovery cannot start.
 pub fn discover(duration: Duration) -> Result<Vec<Receiver>> {
-    let services = discovery::browse(SERVICE, duration).map_err(|e| Error::Discovery(e.to_string()))?;
+    let services = discovery::browse(SERVICE, duration)?;
     let mut receivers = BTreeMap::new();
     for service in services {
         let Some(id) = service.property("id") else {

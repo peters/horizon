@@ -29,8 +29,9 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("cast TLS: {0}")]
     Tls(#[from] rustls::Error),
+    #[cfg(feature = "discovery")]
     #[error("receiver discovery: {0}")]
-    Discovery(String),
+    Discovery(#[from] horizon_media::discovery::DiscoveryError),
     #[error("invalid receiver message: {0}")]
     Protocol(&'static str),
     #[error("invalid receiver JSON: {0}")]
