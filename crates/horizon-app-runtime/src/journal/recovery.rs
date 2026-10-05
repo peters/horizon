@@ -34,6 +34,9 @@ impl Journal {
     ) -> Result<()> {
         let complete = self.edit(|ledger| {
             let record = self.record(ledger, owner, id)?;
+            if !matches!(record.kind, Kind::Upload | Kind::Session) {
+                return Err(Error::OperationInvalid);
+            }
             if record.phase == Phase::Complete {
                 return Ok(true);
             }
@@ -99,6 +102,27 @@ mod tests {
     use super::super::tests::{canonical_temp, journal, quota};
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn unsupported_local_resource_kinds_never_enter_provider_recovery() {
+        let folder = canonical_temp();
+        let journal = journal(&folder.path().join("state"), 'a');
+        let owner = Uuid::new_v4();
+        for kind in [Kind::Run, Kind::Tunnel] {
+            let operation = journal
+                .start(owner, folder.path(), kind, Duration::from_secs(30))
+                .unwrap();
+            let before = journal.status(owner, operation.id).unwrap();
+            assert_eq!(
+                journal.recover_owned(owner, operation.id, |_| panic!("unsupported callback invoked")),
+                Err(Error::OperationInvalid)
+            );
+            let after = journal.status(owner, operation.id).unwrap();
+            assert_eq!(before.phase, after.phase);
+            assert_eq!(before.pending_resources, after.pending_resources);
+            assert_eq!(journal.retire(owner, operation.id), Err(Error::OperationInvalid));
+        }
+    }
 
     #[test]
     fn matched_allocation_recovery_retains_then_releases_its_exact_reserved_slot() {
