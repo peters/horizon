@@ -2,6 +2,7 @@
 use crate::{
     CastClient, DEFAULT_MEDIA_RECEIVER, Error, LiveCast, LiveOptions, LiveState, MediaLoad, MediaStatus, StreamType,
     client::{NS_CONNECTION, NS_HEARTBEAT, PLATFORM_RECEIVER},
+    live::STALL_GRACE,
     media::NS_MEDIA,
     proto::{self, CastMessage, Payload},
     receiver::NS_RECEIVER,
@@ -472,6 +473,11 @@ enum AfterLoad {
     Unload,
     /// Sends a bare IDLE; a fresh status then reports a playback error.
     Error,
+    /// Reports an error for our session while a fresh status shows another
+    /// sender's replacement.
+    ErrorThenReplaced,
+    /// Queues BUFFERING ahead of the PLAYING LOAD reply and then stays quiet.
+    BufferingFirst,
 }
 
 /// A receiver that queues a bare IDLE ahead of a PLAYING LOAD reply.
@@ -523,13 +529,22 @@ fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, after: Af
                         );
                     }
                     (NS_MEDIA, "LOAD") => {
-                        let idle = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "IDLE"}]});
+                        let early = if after == AfterLoad::BufferingFirst {
+                            "BUFFERING"
+                        } else {
+                            "IDLE"
+                        };
+                        let idle = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": early}]});
                         send(&mut stream, to, NS_MEDIA, &idle);
                         let status = json!({"type": "MEDIA_STATUS", "status": playing});
                         send(&mut stream, to, NS_MEDIA, &reply(&request, status));
                         loaded = true;
                         if after == AfterLoad::Error {
                             send(&mut stream, to, NS_MEDIA, &idle);
+                        }
+                        if after == AfterLoad::ErrorThenReplaced {
+                            let error = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "IDLE", "idleReason": "ERROR"}]});
+                            send(&mut stream, to, NS_MEDIA, &error);
                         }
                         if after == AfterLoad::Unload {
                             let empty = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": []});
@@ -541,6 +556,9 @@ fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, after: Af
                         let current = match (loaded, after) {
                             (true, AfterLoad::Error) => {
                                 json!([{"mediaSessionId": 9, "playerState": "IDLE", "idleReason": "ERROR"}])
+                            }
+                            (true, AfterLoad::ErrorThenReplaced) => {
+                                json!([{"mediaSessionId": 10, "playerState": "PLAYING"}])
                             }
                             (true, _) => playing,
                             (false, _) => json!([]),
@@ -557,6 +575,10 @@ fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, after: Af
 }
 
 fn cast_against(server: JoinHandle<Vec<String>>, address: SocketAddr) -> (LiveState, Vec<String>) {
+    cast_for(server, address, Duration::from_millis(1500))
+}
+
+fn cast_for(server: JoinHandle<Vec<String>>, address: SocketAddr, run: Duration) -> (LiveState, Vec<String>) {
     let live = LiveCast::start(address, LiveOptions::default()).unwrap();
     for frame in 0..30u64 {
         let pts = Duration::from_millis(frame * 100);
@@ -568,7 +590,7 @@ fn cast_against(server: JoinHandle<Vec<String>>, address: SocketAddr) -> (LiveSt
         };
         live.push_annexb(unit, pts, keyframe);
     }
-    std::thread::sleep(Duration::from_millis(1500));
+    std::thread::sleep(run);
     let state = live.state();
     drop(live);
     (state, server.join().unwrap())
@@ -607,4 +629,23 @@ fn a_confirmed_playback_error_fails_the_cast() {
     let (address, listener, config) = listen();
     let (state, log) = cast_against(ordering_receiver(listener, config, AfterLoad::Error), address);
     assert!(matches!(state, LiveState::Failed(_)), "{state:?} {log:#?}");
+}
+
+#[test]
+fn a_queued_error_is_confirmed_and_a_replacement_is_left_running() {
+    let (address, listener, config) = listen();
+    let (state, log) = cast_against(
+        ordering_receiver(listener, config, AfterLoad::ErrorThenReplaced),
+        address,
+    );
+    assert_eq!(state, LiveState::Ended, "{log:#?}");
+    assert!(!log.iter().any(|line| line.ends_with(" STOP")), "{log:#?}");
+}
+
+#[test]
+fn a_buffering_report_queued_before_a_playing_reply_is_not_a_stall() {
+    let (address, listener, config) = listen();
+    let server = ordering_receiver(listener, config, AfterLoad::BufferingFirst);
+    let (state, log) = cast_for(server, address, STALL_GRACE + Duration::from_secs(1));
+    assert_eq!(state, LiveState::Playing, "{log:#?}");
 }

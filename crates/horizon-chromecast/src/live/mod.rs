@@ -32,7 +32,7 @@ const EVENT_POLL: Duration = Duration::from_millis(250);
 /// TV receivers report a brief BUFFERING between PLAYING updates every few
 /// seconds while playback advances in real time. Only report buffering once a
 /// BUFFERING report has gone this long without a PLAYING one after it.
-const STALL_GRACE: Duration = Duration::from_secs(5);
+pub(crate) const STALL_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub struct LiveOptions {
@@ -249,8 +249,13 @@ impl Session {
             if self.stopped() {
                 break Ok(());
             }
-            if self.stalled() {
-                self.set(LiveState::Buffering);
+            outcome = if self.stalled() {
+                self.check_stall(&client, &app, loaded.media_session_id)
+            } else {
+                Ok(true)
+            };
+            if !matches!(outcome, Ok(true)) {
+                continue;
             }
             outcome = match client.next_event(EVENT_POLL)? {
                 Some(event) => self.follow_confirmed(&client, &event, &app, loaded.media_session_id),
@@ -273,7 +278,12 @@ impl Session {
         app: &Application,
         media_session_id: i64,
     ) -> Result<bool> {
-        let going_on = self.follow(event, &app.session_id, &app.transport_id, media_session_id)?;
+        let going_on = match self.follow(event, &app.session_id, &app.transport_id, media_session_id) {
+            Ok(going_on) => going_on,
+            // A queued error may predate a replacement load: confirm it too.
+            Err(_) if event.namespace == NS_MEDIA && media_session_id != NO_MEDIA_SESSION => false,
+            Err(error) => return Err(error),
+        };
         if going_on {
             return Ok(true);
         }
@@ -294,6 +304,19 @@ impl Session {
             };
         }
         Ok(false)
+    }
+
+    /// Before reporting a stall, applies a fresh status: the BUFFERING that
+    /// started the timer may have been queued behind a newer PLAYING reply.
+    fn check_stall(&self, client: &CastClient, app: &Application, media_session_id: i64) -> Result<bool> {
+        let going_on = match client.media(app).status()? {
+            Some(status) if status.media_session_id == media_session_id => self.apply(&status, None)?,
+            _ => false,
+        };
+        if going_on && self.stalled() {
+            self.set(LiveState::Buffering);
+        }
+        Ok(going_on)
     }
 
     pub(crate) fn follow(
