@@ -208,10 +208,13 @@ impl Contract {
         if resolved.contains(['{', '}']) {
             return Err(Error::ContractInvalid);
         }
-        if resolved.trim().to_ascii_lowercase().starts_with("http:")
+        let parsed_url = url::Url::parse(&resolved);
+        if parsed_url.is_ok()
+            || resolved.contains("://")
+            || resolved.trim().to_ascii_lowercase().starts_with("http:")
             || resolved.trim().to_ascii_lowercase().starts_with("https:")
         {
-            let url = url::Url::parse(&resolved).map_err(|_| Error::ContractInvalid)?;
+            let url = parsed_url.map_err(|_| Error::ContractInvalid)?;
             let port = url.port_or_known_default().ok_or(Error::ContractInvalid)?;
             if !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
                 || !url.username().is_empty()

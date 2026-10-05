@@ -199,12 +199,12 @@ fn prose_and_invalid_steps_cannot_report_success() {
 }
 
 const DEVICES: &[u8] = br#"[
- {"os":"ios","os_version":"18.0","device":"iPhone 16"},
- {"os":"ios","os_version":"17.0","device":"iPhone 15"},
- {"os":"ios","os_version":"18.1","device":"iPad Pro"},
- {"os":"android","os_version":"15.0","device":"Google Pixel 9"},
- {"os":"android","os_version":"14.0","device":"Google Pixel 8"},
- {"os":"android","os_version":"15.0","device":"Samsung Galaxy Tab S9"}
+ {"realMobile":true,"os":"ios","os_version":"18.0","device":"iPhone 16"},
+ {"realMobile":true,"os":"ios","os_version":"17.0","device":"iPhone 15"},
+ {"realMobile":true,"os":"ios","os_version":"18.1","device":"iPad Pro"},
+ {"realMobile":true,"os":"android","os_version":"15.0","device":"Google Pixel 9"},
+ {"realMobile":true,"os":"android","os_version":"14.0","device":"Google Pixel 8"},
+ {"realMobile":true,"os":"android","os_version":"15.0","device":"Samsung Galaxy Tab S9"}
 ]"#;
 
 #[test]
@@ -240,7 +240,7 @@ fn exact_model_and_minor_os_are_resolved_deterministically() -> Result<(), Error
     };
     assert_eq!(resolve(&[entry], &devices)?[0].device.os_version, "18.1");
     assert_eq!(
-        decode(br#"[{"os":"desktop","os_version":"1","device":"Virtual"}]"#).err(),
+        decode(br#"[{"realMobile":true,"os":"desktop","os_version":"1","device":"Virtual"}]"#).err(),
         Some(Error::CatalogInvalid)
     );
     Ok(())
@@ -250,10 +250,10 @@ fn exact_model_and_minor_os_are_resolved_deterministically() -> Result<(), Error
 fn symbolic_offsets_follow_offered_generations_across_numbering_jumps() -> Result<(), Error> {
     let devices = decode(
         br#"[
-      {"os":"ios","os_version":"27","device":"iPhone 15"},
-      {"os":"ios","os_version":"26","device":"iPhone 15"},
-      {"os":"ios","os_version":"18","device":"iPhone 14"},
-      {"os":"ios","os_version":"17","device":"iPhone 14"}
+      {"realMobile":true,"os":"ios","os_version":"27","device":"iPhone 15"},
+      {"realMobile":true,"os":"ios","os_version":"26","device":"iPhone 15"},
+      {"realMobile":true,"os":"ios","os_version":"18","device":"iPhone 14"},
+      {"realMobile":true,"os":"ios","os_version":"17","device":"iPhone 14"}
     ]"#,
     )?;
     let entry = MatrixEntry {
@@ -317,4 +317,37 @@ fn fieldless_actions_reject_unknown_fields() {
             "{action}"
         );
     }
+}
+
+#[test]
+fn all_launch_urls_obey_the_loopback_policy_and_deep_links_must_parse() {
+    for url in [
+        "ws://example.com:8080",
+        "ws:example.com:8080",
+        "wss:example.com:8080",
+        "ftp:example.com:8080",
+        "custom://external-host:8080",
+        " http:/example.com:8080",
+    ] {
+        assert_eq!(
+            Contract::from_agents(&AGENTS.replace("http://localhost:{tunnel.port.backend}", url)).err(),
+            Some(Error::ContractInvalid)
+        );
+    }
+    let invalid = "```yaml\ndevice-recipe:\n  version: 1\n  id: smoke\n  steps:\n    - id: step\n      action: deep_link\n      url: 'not-a-url://['\n```\n";
+    assert_eq!(Recipe::from_markdown(invalid).err(), Some(Error::RecipeInvalid));
+}
+
+#[test]
+fn virtual_and_unverified_devices_cannot_qualify_a_real_device_matrix() {
+    for row in [
+        r#"[{"os":"ios","os_version":"27","device":"Virtual"}]"#,
+        r#"[{"os":"ios","os_version":"27","device":"Virtual","realMobile":false}]"#,
+    ] {
+        assert_eq!(decode(row.as_bytes()).err(), Some(Error::CatalogInvalid));
+    }
+    let rows=br#"[{"os":"ios","os_version":"27","device":"Virtual","realMobile":false},{"os":"ios","os_version":"27","device":"iPhone 15","realMobile":true}]"#;
+    let offered = decode(rows).unwrap();
+    assert_eq!(offered.len(), 1);
+    assert_eq!(offered[0].model, "iPhone 15");
 }

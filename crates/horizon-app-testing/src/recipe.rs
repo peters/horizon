@@ -196,7 +196,7 @@ impl Action {
                 None
             }
             Self::DeepLink { url } => {
-                if !printable(url, 4096) || !url.contains("://") {
+                if !printable(url, 4096) || !url.contains("://") || url::Url::parse(url).is_err() {
                     return Err(Error::RecipeInvalid);
                 }
                 None

@@ -25,6 +25,8 @@ struct ProviderRow {
     os: String,
     os_version: String,
     device: String,
+    #[serde(rename = "realMobile", alias = "real_mobile")]
+    real_mobile: bool,
 }
 
 /// Decode the App Automate catalog, which is distinct from the browser catalog.
@@ -41,6 +43,9 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Device>> {
     let mut devices = Vec::new();
     let mut seen = BTreeSet::new();
     for row in rows {
+        if !row.real_mobile {
+            continue;
+        }
         let platform = match row.os.to_ascii_lowercase().as_str() {
             "ios" => Platform::Ios,
             "android" => Platform::Android,
@@ -65,6 +70,9 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Device>> {
         }
     }
     devices.sort_by(|a, b| (a.platform, &a.model, &a.os_version).cmp(&(b.platform, &b.model, &b.os_version)));
+    if devices.is_empty() {
+        return Err(Error::CatalogInvalid);
+    }
     Ok(devices)
 }
 

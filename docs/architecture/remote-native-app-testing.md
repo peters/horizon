@@ -55,12 +55,12 @@ the resulting file must remain within the canonical repository; symlink escapes,
 Check paths before a build and again when opening its artifact. Build output is untrusted: provider upload must use
 an already-open verified artifact, never follow a path again after validation.
 
-Only `localhost`, `127.0.0.1` and `::1` launch URLs with declared ports are accepted. Port templates resolve from
+Every URL-valued launch setting, including WebSocket and custom schemes, must use `localhost`, `127.0.0.1` or `::1` with a declared port. Port templates resolve from
 the contract, not the process environment. A port declaration authorizes only that loopback service. Tunnel
 implementations must enforce the port allowlist, avoid general network exposure and avoid combining restricted
 flags with provider options that defeat those restrictions.
 
-The provider field names a machine-configured account. Native discovery uses the App Automate catalog and account
+The provider field names a machine-configured account. Native discovery requires a true physical-device flag (`realMobile`, or `real_mobile` in compatible adapters) and uses the App Automate catalog and account
 quota, separately from browser discovery and browser quota. Discovery is read-only and reserves no device.
 
 ## Matrix resolution
