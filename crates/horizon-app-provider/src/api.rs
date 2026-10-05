@@ -83,9 +83,9 @@ impl UploadedApp {
 
 /// Uses only the machine-configured `BrowserStack` origin; project files cannot select a credential destination.
 pub struct BrowserStack {
-    authorization: Zeroizing<String>,
-    hub: String,
-    agent: ureq::Agent,
+    pub(crate) authorization: Zeroizing<String>,
+    pub(crate) hub: String,
+    pub(crate) agent: ureq::Agent,
 }
 
 pub(crate) struct Decoded {
@@ -238,10 +238,45 @@ impl BrowserStack {
                 .timeout_global(Some(timeout))
                 .build()
                 .call()
-                .map_err(|_| Error::ProviderFailed)?,
+                .map_err(|error| discovery_http_error(&error))?,
             bytes,
         )
     }
+}
+
+fn discovery_http_error(error: &ureq::Error) -> Error {
+    match error {
+        ureq::Error::BodyExceedsLimit(_) | ureq::Error::Timeout(_) => Error::ReconcileIncomplete,
+        _ => Error::ProviderFailed,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Acknowledgement {
+    value: (),
+}
+
+pub(crate) fn quit_acknowledgement(mut response: ureq::http::Response<ureq::Body>) -> Result<()> {
+    let status = response.status().as_u16();
+    let bytes = response
+        .body_mut()
+        .with_config()
+        .limit(1024 * 1024)
+        .read_to_vec()
+        .map_err(|_| Error::ProviderFailed)?;
+    if status == 204 && bytes.is_empty() {
+        return Ok(());
+    }
+    if bytes.iter().copied().find(|byte| !b" \n\r\t".contains(byte)) != Some(b'{') {
+        return Err(Error::ProviderFailed);
+    }
+    let acknowledgement: Acknowledgement = serde_json::from_slice(&bytes).map_err(|_| Error::ProviderFailed)?;
+    let () = acknowledgement.value;
+    if status == 200 {
+        return Ok(());
+    }
+    Err(Error::ProviderFailed)
 }
 
 fn decode(response: ureq::http::Response<ureq::Body>) -> Result<Value> {
@@ -261,7 +296,7 @@ pub(crate) fn decode_measured(mut response: ureq::http::Response<ureq::Body>, li
         .with_config()
         .limit(limit)
         .read_to_vec()
-        .map_err(|_| Error::ProviderFailed)?;
+        .map_err(|error| discovery_http_error(&error))?;
     Ok(Decoded {
         value: serde_json::from_slice(&bytes).map_err(|_| Error::ProviderRejected)?,
         bytes: bytes.len(),
@@ -363,5 +398,48 @@ mod tests {
         let app =
             UploadedApp::from_response(&json!({"app_url":"bs://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})).unwrap();
         assert_eq!(app.use_for_driver(str::len), 45);
+    }
+}
+
+#[cfg(test)]
+mod acknowledgement_tests {
+    use super::*;
+    #[test]
+    fn quit_requires_exact_positive_response() {
+        for (status, body, confirmed) in [
+            (200, r#"{"value":null}"#, true),
+            (204, "", true),
+            (200, "{}", false),
+            (200, "[null]", false),
+            (200, r#"{"value":{"error":"failed"},"value":null}"#, false),
+            (200, r#"{"value":null,"value":null}"#, false),
+            (200, "null", false),
+            (200, r#"{"value":{"error":"unexpected"}}"#, false),
+            (200, r#"{"value":null,"status":13}"#, false),
+            (201, r#"{"value":null}"#, false),
+            (204, "{}", false),
+            (500, r#"{"value":null}"#, false),
+        ] {
+            let response = ureq::http::Response::builder()
+                .status(status)
+                .body(ureq::Body::builder().data(body.as_bytes().to_vec()))
+                .unwrap();
+            assert_eq!(quit_acknowledgement(response).is_ok(), confirmed, "{status} {body}");
+        }
+    }
+    #[test]
+    fn discovery_limits_keep_their_typed_exhaustion() {
+        assert_eq!(
+            discovery_http_error(&ureq::Error::Timeout(ureq::Timeout::Global)),
+            Error::ReconcileIncomplete
+        );
+        assert_eq!(
+            discovery_http_error(&ureq::Error::BodyExceedsLimit(12)),
+            Error::ReconcileIncomplete
+        );
+        assert_eq!(
+            discovery_http_error(&ureq::Error::ConnectionFailed),
+            Error::ProviderFailed
+        );
     }
 }

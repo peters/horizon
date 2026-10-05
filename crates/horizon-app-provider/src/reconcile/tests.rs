@@ -228,12 +228,27 @@ fn whitespace_padded_http_pages_charge_decoded_bytes_and_limit_each_remaining_re
             .unwrap();
         crate::api::decode_measured(response, limit)
     });
-    assert!(
-        result.is_err(),
-        "padded discovery must not pass the 8 MiB decoded budget"
-    );
+    assert_eq!(result.err(), Some(Error::ReconcileIncomplete));
     assert_eq!(calls, 9);
     assert_eq!(&limits[..8], &[1024 * 1024; 8]);
     assert_eq!(limits[8], 192 * 1024);
     assert_eq!(budget.bytes, 192 * 1024);
+}
+
+#[test]
+fn failed_request_at_the_deadline_still_reports_incomplete_discovery() {
+    let mut budget = Budget::new();
+    budget.deadline = Instant::now() + Duration::from_millis(10);
+    assert_eq!(
+        pages(&mut budget, "/fixed", |_, _, _| {
+            std::thread::sleep(Duration::from_millis(20));
+            Err(Error::ProviderFailed)
+        })
+        .err(),
+        Some(Error::ReconcileIncomplete)
+    );
+    assert_eq!(
+        pages(&mut Budget::new(), "/fixed", |_, _, _| Err(Error::ProviderFailed)).err(),
+        Some(Error::ProviderFailed)
+    );
 }

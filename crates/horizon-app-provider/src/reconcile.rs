@@ -36,7 +36,11 @@ impl Budget {
         }
         self.requests -= 1;
         let limit = u64::try_from(self.bytes.min(1024 * 1024)).map_err(|_| Error::ReconcileIncomplete)?;
-        let response = get(path, remaining.min(Duration::from_secs(10)), limit)?;
+        let result = get(path, remaining.min(Duration::from_secs(10)), limit);
+        if Instant::now() >= self.deadline {
+            return Err(Error::ReconcileIncomplete);
+        }
+        let response = result?;
         self.bytes = self
             .bytes
             .checked_sub(response.bytes)
@@ -189,15 +193,16 @@ impl BrowserStack {
         if !self.session(&session.id)?.active()? {
             return Ok(());
         }
-        self.driver()?
-            .request(
-                "DELETE",
-                &format!("/session/{}", session.id),
-                None,
-                Duration::from_secs(30),
-            )
+        let response = self
+            .agent
+            .delete(&format!("{}/wd/hub/session/{}", self.hub, session.id))
+            .header("Authorization", self.authorization.as_str())
+            .config()
+            .timeout_global(Some(Duration::from_secs(30)))
+            .build()
+            .call()
             .map_err(|_| Error::ProviderFailed)?;
-        Ok(())
+        crate::api::quit_acknowledgement(response)
     }
 
     fn sessions(&self, budget: &mut Budget, build: &str) -> Result<Vec<Value>> {
