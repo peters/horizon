@@ -57,6 +57,21 @@ impl Default for LiveOptions {
     }
 }
 
+impl LiveOptions {
+    fn validate(&self) -> Result<()> {
+        if self.segment.is_zero() {
+            return Err(Error::InvalidOptions("segment duration must be positive"));
+        }
+        if self.preroll == 0 {
+            return Err(Error::InvalidOptions("pre-roll must be at least one segment"));
+        }
+        if self.window < self.preroll {
+            return Err(Error::InvalidOptions("window must hold the pre-roll segments"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiveState {
     Connecting,
@@ -80,8 +95,10 @@ impl LiveCast {
     /// Starts serving the stream and connects to `receiver` in the background.
     /// Follow progress through [`LiveCast::state`].
     /// # Errors
-    /// Returns an error if the local HTTP server cannot start.
+    /// Returns [`Error::InvalidOptions`] for unusable options, or an error if
+    /// the local HTTP server cannot start.
     pub fn start(receiver: SocketAddr, options: LiveOptions) -> Result<Self> {
+        options.validate()?;
         let local = http::route_address(receiver)?;
         let segmenter = Arc::new(Mutex::new(Segmenter::new(options.segment, options.window)));
         let server = HttpServer::start(segmenter.clone())?;
@@ -180,31 +197,45 @@ impl Session {
                 let _ = client.stop_application(&app.session_id);
                 return Ok(());
             }
+            if !client.is_open() {
+                return Err(Error::Closed);
+            }
             std::thread::sleep(BUFFER_POLL);
         }
-        let loaded = client.media(&app).load(&MediaLoad {
+        let load = client.media(&app).load(&MediaLoad {
             url: self.url.clone(),
             content_type: "application/x-mpegurl".to_owned(),
             stream_type: StreamType::Live,
             title: Some(self.options.title.clone()),
             hls_segment_format: Some("ts".to_owned()),
             hls_video_segment_format: Some("mpeg2_ts".to_owned()),
-        })?;
+        });
+        let loaded = match load {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = client.stop_application(&app.session_id);
+                return Err(error);
+            }
+        };
+        // The LOAD reply is consumed by its request, so apply its status here.
+        let mut outcome = self.apply(&loaded, None);
         let result = loop {
+            match outcome {
+                Ok(true) => {}
+                // The receiver ended playback or was taken over: leave it alone.
+                Ok(false) => return Ok(()),
+                Err(error) => break Err(error),
+            }
             if self.stopped() {
                 break Ok(());
             }
             if self.stalled() {
                 self.set(LiveState::Buffering);
             }
-            let Some(event) = client.next_event(EVENT_POLL)? else {
-                continue;
+            outcome = match client.next_event(EVENT_POLL)? {
+                Some(event) => self.follow(&event, &app.session_id, &app.transport_id, loaded.media_session_id),
+                None => Ok(true),
             };
-            match self.follow(&event, &app.session_id, &app.transport_id, loaded.media_session_id) {
-                Ok(true) => {}
-                Ok(false) => return Ok(()),
-                Err(error) => break Err(error),
-            }
         };
         // Stopping the application also ends its media session, in one round trip.
         let _ = client.stop_application(&app.session_id);
@@ -228,29 +259,38 @@ impl Session {
         let ours = MediaStatus::from_event(event)
             .into_iter()
             .filter(|status| status.media_session_id == media_session_id);
+        let detail = event.payload.get("status").map(Value::to_string);
         for status in ours {
-            match (status.player_state.as_str(), status.idle_reason.as_deref()) {
-                ("PLAYING", _) => {
-                    self.buffering_since.set(None);
-                    self.set(LiveState::Playing);
-                }
-                ("BUFFERING" | "LOADING", _) => {
-                    if self.buffering_since.get().is_none() {
-                        self.buffering_since.set(Some(Instant::now()));
-                    }
-                    if *lock(&self.state) != LiveState::Playing {
-                        self.set(LiveState::Buffering);
-                    }
-                }
-                ("IDLE", Some("ERROR")) => {
-                    return Err(Error::Rejected {
-                        kind: "MEDIA_ERROR".to_owned(),
-                        reason: event.payload.get("status").map(Value::to_string),
-                    });
-                }
-                ("IDLE", Some(_)) => return Ok(false),
-                _ => {}
+            if !self.apply(&status, detail.clone())? {
+                return Ok(false);
             }
+        }
+        Ok(true)
+    }
+
+    /// Applies one status of our media session; `Ok(false)` means playback ended.
+    fn apply(&self, status: &MediaStatus, detail: Option<String>) -> Result<bool> {
+        match (status.player_state.as_str(), status.idle_reason.as_deref()) {
+            ("PLAYING", _) => {
+                self.buffering_since.set(None);
+                self.set(LiveState::Playing);
+            }
+            ("BUFFERING" | "LOADING", _) => {
+                if self.buffering_since.get().is_none() {
+                    self.buffering_since.set(Some(Instant::now()));
+                }
+                if *lock(&self.state) != LiveState::Playing {
+                    self.set(LiveState::Buffering);
+                }
+            }
+            ("IDLE", Some("ERROR")) => {
+                return Err(Error::Rejected {
+                    kind: "MEDIA_ERROR".to_owned(),
+                    reason: detail.or_else(|| Some("ERROR".to_owned())),
+                });
+            }
+            ("IDLE", Some(_)) => return Ok(false),
+            _ => {}
         }
         Ok(true)
     }

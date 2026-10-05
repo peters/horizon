@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const ACCEPT_POLL: Duration = Duration::from_millis(20);
@@ -74,16 +74,18 @@ fn accept_loop(listener: &TcpListener, segments: &Arc<Mutex<Segmenter>>, token: 
                     active.fetch_sub(1, Ordering::AcqRel);
                     continue;
                 }
-                let (segments, token, active) = (segments.clone(), token.to_owned(), active.clone());
+                let (segments, token, slot) = (segments.clone(), token.to_owned(), active.clone());
                 let spawned = std::thread::Builder::new()
                     .name("chromecast-http-conn".to_owned())
                     .spawn(move || {
                         if let Err(error) = serve(socket, &segments, &token) {
                             tracing::debug!(%error, %peer, "chromecast HTTP request failed");
                         }
-                        active.fetch_sub(1, Ordering::AcqRel);
+                        slot.fetch_sub(1, Ordering::AcqRel);
                     });
                 if spawned.is_err() {
+                    // The closure never ran, so release its slot here.
+                    active.fetch_sub(1, Ordering::AcqRel);
                     tracing::warn!("could not start a chromecast HTTP connection thread");
                 }
             }
@@ -99,11 +101,17 @@ fn accept_loop(listener: &TcpListener, segments: &Arc<Mutex<Segmenter>>, token: 
 fn serve(mut socket: TcpStream, segments: &Mutex<Segmenter>, token: &str) -> std::io::Result<()> {
     // Accepted sockets inherit non-blocking mode on some platforms.
     socket.set_nonblocking(false)?;
-    socket.set_read_timeout(Some(IO_TIMEOUT))?;
     socket.set_write_timeout(Some(IO_TIMEOUT))?;
+    // One deadline for the whole header, so a slow trickle cannot hold a slot.
+    let deadline = Instant::now() + IO_TIMEOUT;
     let mut request = Vec::new();
     let mut chunk = [0; 1024];
     while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        socket.set_read_timeout(Some(remaining))?;
         let read = socket.read(&mut chunk)?;
         if read == 0 || request.len() > MAX_REQUEST {
             return Ok(());

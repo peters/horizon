@@ -1,8 +1,13 @@
 //! Rolling live HLS window of MPEG-TS segments cut on keyframes.
 use super::{h264, ts::TsMuxer};
-use std::{collections::VecDeque, fmt::Write as _, sync::Arc, time::Duration};
+use std::{borrow::Cow, collections::VecDeque, fmt::Write as _, sync::Arc, time::Duration};
 
 const CLOCK_HZ: u128 = 90_000;
+const NAL_SPS: u8 = 7;
+const NAL_PPS: u8 = 8;
+const START_CODE: [u8; 4] = [0, 0, 0, 1];
+/// An open segment larger than this is dropped instead of growing without bound.
+const MAX_OPEN_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) struct Segment {
     pub(crate) sequence: u64,
@@ -19,6 +24,8 @@ pub(crate) struct Segmenter {
     next_sequence: u64,
     segments: VecDeque<Segment>,
     origin: Option<Duration>,
+    sps: Option<Vec<u8>>,
+    pps: Option<Vec<u8>>,
 }
 
 impl Segmenter {
@@ -32,6 +39,8 @@ impl Segmenter {
             next_sequence: 0,
             segments: VecDeque::new(),
             origin: None,
+            sps: None,
+            pps: None,
         }
     }
 
@@ -40,18 +49,75 @@ impl Segmenter {
     pub(crate) fn push(&mut self, annexb: &[u8], pts: Duration, keyframe: bool) {
         let origin = *self.origin.get_or_insert(pts);
         let pts = pts.saturating_sub(origin);
+        let carries_sps = self.remember_parameter_sets(annexb);
+        if let Some(start) = self.current_start
+            && self.over_budget(pts.saturating_sub(start))
+        {
+            // No keyframe arrived in time: drop the open segment rather than
+            // advertise one longer than the target or grow without bound.
+            tracing::debug!("dropping an open HLS segment that outgrew its budget");
+            self.current.clear();
+            self.current_start = None;
+        }
         match self.current_start {
             None if !keyframe => return,
             Some(start) if keyframe && self.due(pts.saturating_sub(start)) => self.finish(pts),
             _ => {}
         }
-        if self.current_start.is_none() {
+        let starting = self.current_start.is_none();
+        if starting {
             self.current_start = Some(pts);
             self.muxer.write_tables(&mut self.current);
         }
+        // PAT/PMT do not configure the decoder; each segment must carry SPS/PPS.
+        let unit = if starting && !carries_sps {
+            Cow::Owned(self.with_parameter_sets(annexb))
+        } else {
+            Cow::Borrowed(annexb)
+        };
         let clock = u64::try_from(pts.as_nanos() * CLOCK_HZ / 1_000_000_000).unwrap_or(u64::MAX);
         self.muxer
-            .write_access_unit(&mut self.current, &h264::with_delimiter(annexb), clock, keyframe);
+            .write_access_unit(&mut self.current, &h264::with_delimiter(&unit), clock, keyframe);
+    }
+
+    /// Caches the latest SPS/PPS; returns whether `annexb` carries an SPS.
+    fn remember_parameter_sets(&mut self, annexb: &[u8]) -> bool {
+        let mut carries_sps = false;
+        for nal in nal_units(annexb) {
+            match nal.first().map(|header| header & 0x1f) {
+                Some(NAL_SPS) => {
+                    carries_sps = true;
+                    self.sps = Some(nal.to_vec());
+                }
+                Some(NAL_PPS) => self.pps = Some(nal.to_vec()),
+                _ => {}
+            }
+        }
+        carries_sps
+    }
+
+    fn with_parameter_sets(&self, annexb: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(annexb.len() + 64);
+        for set in [&self.sps, &self.pps].into_iter().flatten() {
+            out.extend_from_slice(&START_CODE);
+            out.extend_from_slice(set);
+        }
+        out.extend_from_slice(annexb);
+        out
+    }
+
+    /// The constant `#EXT-X-TARGETDURATION`. Receivers hold back about three
+    /// targets, so it is not padded: 0.5 s segments advertise 1.
+    fn advertised_target(&self) -> u64 {
+        let rounded = (self.target.as_millis() + 500) / 1000;
+        u64::try_from(rounded).unwrap_or(u64::MAX).max(1)
+    }
+
+    /// An open segment may not round above the advertised target or exceed
+    /// the byte budget.
+    fn over_budget(&self, elapsed: Duration) -> bool {
+        let limit = Duration::from_secs(self.advertised_target()) + Duration::from_millis(500);
+        elapsed >= limit || self.current.len() > MAX_OPEN_BYTES
     }
 
     /// True once the open segment has reached its target length, so the next
@@ -81,13 +147,8 @@ impl Segmenter {
     }
 
     pub(crate) fn playlist(&self) -> String {
-        let target = self
-            .segments
-            .iter()
-            // HLS compares the rounded EXTINF to the target; ceiling a 1.0000001 s
-            // segment doubled it, and receivers hold back about three targets.
-            .map(|segment| segment.duration.as_secs_f64().round())
-            .fold(self.target.as_secs_f64().round().max(1.0), f64::max);
+        // HLS requires a constant target; every listed segment rounds to at most it.
+        let target = self.advertised_target();
         let first = self
             .segments
             .front()
@@ -120,6 +181,34 @@ impl Segmenter {
             self.segments.pop_front();
         }
     }
+}
+
+/// NAL units of an Annex B buffer, without start codes.
+fn nal_units(annexb: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut starts = Vec::new();
+    let mut at = 0;
+    while at + 3 <= annexb.len() {
+        if annexb[at..at + 3] == [0, 0, 1] {
+            starts.push(at + 3);
+            at += 3;
+        } else {
+            at += 1;
+        }
+    }
+    let ends: Vec<usize> = starts
+        .iter()
+        .skip(1)
+        .map(|&next| {
+            let end = next - 3;
+            // A four-byte start code leaves one zero before the three-byte one.
+            if end > 0 && annexb[end - 1] == 0 { end - 1 } else { end }
+        })
+        .chain(std::iter::once(annexb.len()))
+        .collect();
+    starts
+        .into_iter()
+        .zip(ends)
+        .map(move |(start, end)| &annexb[start..end.max(start)])
 }
 
 #[cfg(test)]
@@ -187,5 +276,54 @@ mod tests {
             segmenter.playlist()
         );
         assert!(segmenter.playlist().contains("#EXTINF:0.500,"));
+    }
+
+    #[test]
+    fn segments_start_with_cached_parameter_sets() {
+        let mut segmenter = Segmenter::new(Duration::from_secs(1), 4);
+        let first = [&[0, 0, 0, 1, 0x67, 9, 9][..], &[0, 0, 0, 1, 0x68, 8], IDR].concat();
+        segmenter.push(&first, Duration::ZERO, true);
+        for second in 1..=3 {
+            segmenter.push(IDR, Duration::from_secs(second), true);
+        }
+        let later = segmenter.segment(2).unwrap();
+        let sps = later.windows(5).position(|w| w == [0, 0, 1, 0x67, 9]);
+        let idr = later.windows(4).position(|w| w == [0, 0, 1, 0x65]);
+        assert!(
+            sps.is_some_and(|sps| idr.is_some_and(|idr| sps < idr)),
+            "segment 2 lacks SPS before IDR"
+        );
+    }
+
+    #[test]
+    fn a_late_keyframe_drops_the_open_segment_instead_of_growing_it() {
+        let mut segmenter = Segmenter::new(Duration::from_millis(500), 6);
+        segmenter.push(IDR, Duration::ZERO, true);
+        for frame in 1..=20u64 {
+            segmenter.push(SLICE, Duration::from_millis(frame * 100), false);
+        }
+        assert!(segmenter.current.is_empty(), "the 2 s open segment was dropped");
+        assert!(segmenter.wants_keyframe(Duration::from_millis(2_000)));
+        segmenter.push(IDR, Duration::from_millis(2_100), true);
+        segmenter.push(IDR, Duration::from_millis(2_600), true);
+        assert_eq!(segmenter.ready_segments(), 1);
+        let playlist = segmenter.playlist();
+        assert!(playlist.contains("#EXT-X-TARGETDURATION:1\n"), "{playlist}");
+        assert!(playlist.contains("#EXTINF:0.500,"), "{playlist}");
+    }
+
+    #[test]
+    fn target_duration_is_constant_and_unpadded() {
+        for (segment, target) in [(500, 1), (1_000, 1), (1_400, 1), (2_000, 2)] {
+            let segmenter = Segmenter::new(Duration::from_millis(segment), 4);
+            assert_eq!(segmenter.advertised_target(), target);
+        }
+    }
+
+    #[test]
+    fn nal_units_split_three_and_four_byte_start_codes() {
+        let data = [0, 0, 0, 1, 0x67, 1, 0, 0, 1, 0x68, 2, 0, 0, 0, 1, 0x65, 3];
+        let nals: Vec<&[u8]> = nal_units(&data).collect();
+        assert_eq!(nals, [&[0x67, 1][..], &[0x68, 2], &[0x65, 3]]);
     }
 }

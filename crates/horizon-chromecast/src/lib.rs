@@ -39,6 +39,8 @@ pub enum Error {
     Timeout(String),
     #[error("the receiver connection is closed")]
     Closed,
+    #[error("invalid live options: {0}")]
+    InvalidOptions(&'static str),
     #[error("receiver rejected the request: {kind}{}", reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default())]
     Rejected { kind: String, reason: Option<String> },
 }

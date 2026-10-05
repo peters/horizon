@@ -261,3 +261,28 @@ fn live_cast_loads_the_served_playlist_and_tracks_playback() {
     assert!(log.contains(&"fetched playlist".to_owned()), "{log:#?}");
     assert!(log.contains(&format!("{NS_RECEIVER} receiver-0 STOP")), "{log:#?}");
 }
+
+#[test]
+fn live_cast_rejects_options_that_could_never_play() {
+    let address: SocketAddr = "127.0.0.1:9".parse().unwrap();
+    for options in [
+        LiveOptions {
+            segment: Duration::ZERO,
+            ..LiveOptions::default()
+        },
+        LiveOptions {
+            preroll: 0,
+            ..LiveOptions::default()
+        },
+        LiveOptions {
+            window: 2,
+            preroll: 3,
+            ..LiveOptions::default()
+        },
+    ] {
+        assert!(matches!(
+            LiveCast::start(address, options),
+            Err(Error::InvalidOptions(_))
+        ));
+    }
+}
