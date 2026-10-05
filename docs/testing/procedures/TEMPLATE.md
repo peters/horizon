@@ -29,8 +29,9 @@ Delete this paragraph in a real procedure.
 
 > **CAUTION:** <COMMAND IN CAPITAL LETTERS.> <The risk in one or two sentences.>
 
-Delete this section only if no step rents compute, deletes data, sends a secret
-or changes access.
+Write a CAUTION for each risk in the
+[safety rules](../../style/ste-rules.md#safety-instructions). Delete this
+section only if none of those risks applies to any step.
 
 ## 4. Equipment and preconditions
 
@@ -70,6 +71,6 @@ Give each task an ID. A report uses the ID to give a result.
 
 ## 9. Record of results
 
-Write each run as a report in `docs/testing/reports/` with
-[the report template](../reports/TEMPLATE.md). Keep private evidence out of the
-repository.
+If the run must be kept, write a report in `docs/testing/reports/` with
+[the report template](../reports/TEMPLATE.md). If not, put the results in the
+pull request. Keep private evidence out of the repository.

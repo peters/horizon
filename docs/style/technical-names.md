@@ -10,7 +10,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 |---|---|---|
 | candidate | The exact Horizon executable under test. A candidate has a commit and a SHA-256. | build under test, binary |
 | frozen candidate | A copy of the candidate in a task-owned directory. Nothing changes it during the test. | — |
-| isolated desktop | A task-owned Xvfb display with its own window manager, D-Bus and private home. | test desktop, sandbox desktop |
+| isolated desktop | A task-owned desktop with its own display, input and private application state. On Linux, it is an Xvfb display with its own window manager and D-Bus. On macOS and Windows, it is a dedicated machine, VM or desktop session. | test desktop, sandbox desktop |
 | fixture | The script that starts the isolated desktop and the candidate. | harness, lab |
 | Device panel | A Horizon panel that shows a VNC desktop. Agents can only read it. | native viewer, Device viewer, VNC viewer |
 | live view | A Device panel that shows the isolated desktop with frames that advance. | — |
