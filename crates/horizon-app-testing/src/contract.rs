@@ -298,13 +298,21 @@ fn secret_name(value: &str) -> bool {
         .chars()
         .filter(char::is_ascii_alphanumeric)
         .collect();
-    if ["auth", "bearer", "cookie", "pwd"].contains(&folded.as_str()) {
+    if ["auth", "bearer", "cookie", "pwd", "jwt", "sshkey", "oauthcode"].contains(&folded.as_str()) {
         return true;
     }
     [
         "secret",
         "token",
         "password",
+        "passphrase",
+        "signingkey",
+        "sessionkey",
+        "encryptionkey",
+        "clientkey",
+        "sshkey",
+        "jwt",
+        "oauthcode",
         "credential",
         "privatekey",
         "apikey",

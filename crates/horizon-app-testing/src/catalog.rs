@@ -55,15 +55,12 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Device>> {
             return Err(Error::CatalogInvalid);
         }
         if seen.insert((platform, row.device.clone(), row.os_version.clone())) {
-            let model = row.device.to_ascii_lowercase();
-            let tablet = model.starts_with("ipad")
-                || model.contains("galaxy tab")
-                || model.contains("pixel tablet")
-                || model.starts_with("nexus 9")
-                || model.starts_with("nexus 10");
+            let Some(form) = device_form(platform, &row.device) else {
+                continue;
+            };
             devices.push(Device {
                 platform,
-                form: if tablet { Form::Tablet } else { Form::Phone },
+                form,
                 model: row.device,
                 os_version: row.os_version,
             });
@@ -74,6 +71,49 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Device>> {
         return Err(Error::CatalogInvalid);
     }
     Ok(devices)
+}
+
+// The provider catalog has no form field. Unknown families cannot prove a requested form.
+fn device_form(platform: Platform, name: &str) -> Option<Form> {
+    let model = name.to_ascii_lowercase();
+    match platform {
+        Platform::Ios if model.starts_with("ipad ") || model == "ipad" => Some(Form::Tablet),
+        Platform::Ios if model.starts_with("iphone ") => Some(Form::Phone),
+        Platform::Ios => None,
+        Platform::Android => {
+            if [
+                "samsung galaxy tab ",
+                "google pixel tablet",
+                "nexus 7",
+                "nexus 9",
+                "nexus 10",
+            ]
+            .iter()
+            .any(|prefix| model.starts_with(prefix))
+            {
+                return Some(Form::Tablet);
+            }
+            // Numeric model families exclude newly introduced tablet/watch product names.
+            [
+                "google pixel ",
+                "samsung galaxy s",
+                "samsung galaxy a",
+                "samsung galaxy note ",
+                "samsung galaxy z fold",
+                "samsung galaxy z flip",
+                "oneplus ",
+                "nexus ",
+            ]
+            .iter()
+            .any(|prefix| {
+                model
+                    .strip_prefix(prefix)
+                    .and_then(|suffix| suffix.as_bytes().first())
+                    .is_some_and(u8::is_ascii_digit)
+            })
+            .then_some(Form::Phone)
+        }
+    }
 }
 
 /// Resolve every entry from one catalog snapshot; never silently omit an unavailable entry.

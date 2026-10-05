@@ -104,7 +104,21 @@ fn contract_failures_never_echo_values() {
 
 #[test]
 fn refuses_credential_aliases_without_echoing_values() {
-    for name in ["AUTH", "auth", "BEARER", "COOKIE", "PWD", "P_W_D"] {
+    for name in [
+        "AUTH",
+        "auth",
+        "BEARER",
+        "COOKIE",
+        "PWD",
+        "P_W_D",
+        "SSH_KEY",
+        "JWT",
+        "OAUTH_CODE",
+        "PASSPHRASE",
+        "SIGNING_KEY",
+        "SESSION_KEY",
+        "CLIENT_KEY",
+    ] {
         let invalid = AGENTS.replace(
             "    BASE_URL: \"http://localhost:{tunnel.port.backend}\"",
             &format!("    {name}: opaque-credential-value"),
@@ -410,5 +424,46 @@ fn persisted_recipes_reject_snapshot_refs_but_interactive_actions_accept_them() 
             "```yaml\ndevice-recipe:\n  version: 1\n  id: smoke\n  steps:\n    - id: step\n      action: {action}\n      target: {{by: ref, value: n1}}\n{extra}```\n"
         );
         assert_eq!(Recipe::from_markdown(&recipe).err(), Some(Error::RecipeInvalid));
+    }
+}
+
+#[test]
+fn unknown_catalog_families_cannot_satisfy_phone_entries() {
+    let catalog = decode(
+        br#"[
+      {"realMobile":true,"os":"android","os_version":"99","device":"NewVendor Tablet 1"},
+      {"realMobile":true,"os":"android","os_version":"99","device":"OnePlus Pad 2"},
+      {"realMobile":true,"os":"android","os_version":"99","device":"Google Pixel Watch 4"},
+      {"realMobile":true,"os":"ios","os_version":"99","device":"New Apple Tablet"},
+      {"realMobile":true,"os":"android","os_version":"15","device":"Google Pixel 9"},
+      {"realMobile":true,"os":"ios","os_version":"27","device":"iPhone 17"}
+    ]"#,
+    )
+    .unwrap();
+    assert_eq!(catalog.len(), 2);
+    assert!(
+        catalog
+            .iter()
+            .all(|device| device.form == horizon_app_testing::contract::Form::Phone)
+    );
+    let contract = Contract::from_agents(AGENTS).unwrap();
+    assert_eq!(
+        resolve(&contract.matrix, &catalog).err(),
+        Some(Error::MatrixUnavailable)
+    );
+    assert_eq!(
+        decode(br#"[{"realMobile":true,"os":"android","os_version":"99","device":"Unknown Tablet"}]"#).err(),
+        Some(Error::CatalogInvalid)
+    );
+}
+
+#[test]
+fn harmless_feature_options_remain_valid() {
+    for name in ["AUTH_ENABLED", "OAUTH_ENABLED", "COOKIE_POLICY", "KEYBOARD_MODE"] {
+        let agents = AGENTS.replace(
+            "    BASE_URL: \"http://localhost:{tunnel.port.backend}\"",
+            &format!("    {name}: enabled"),
+        );
+        Contract::from_agents(&agents).unwrap();
     }
 }
