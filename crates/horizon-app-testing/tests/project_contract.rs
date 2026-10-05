@@ -366,6 +366,15 @@ fn per_device_managed_ports_require_complete_host_bindings() -> Result<(), Error
         let ports = BTreeMap::from([("backend".into(), device_port), ("metrics".into(), 9000)]);
         assert_eq!(contract.resolve_value_with_ports(value, &ports)?, expected);
     }
+    for scheme in ["http", "https", "ws", "wss", "youpark"] {
+        let value = format!("{scheme}://localhost:{{tunnel.port.backend}}/native");
+        let declaration = Contract::from_agents(&text.replace("http://localhost:{tunnel.port.backend}", &value))?;
+        let ports = BTreeMap::from([("backend".into(), 41935), ("metrics".into(), 9000)]);
+        assert_eq!(
+            declaration.resolve_value_with_ports(&value, &ports)?,
+            format!("{scheme}://localhost:41935/native")
+        );
+    }
     for ports in [
         BTreeMap::from([("backend".into(), 41935)]),
         BTreeMap::from([("backend".into(), 0), ("metrics".into(), 9000)]),
