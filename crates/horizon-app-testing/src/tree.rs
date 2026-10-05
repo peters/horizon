@@ -290,6 +290,9 @@ fn node(event: &BytesStart<'_>, version: quick_xml::XmlVersion) -> Result<(Node,
     };
     let ios = tag.starts_with("XCUIElementType");
     let mut identifying = vec![(if ios { "type" } else { "class" }.to_owned(), class.to_owned())];
+    if !ios {
+        identifying.push(("password".to_owned(), if secure { "true" } else { "false" }.to_owned()));
+    }
     let keys: &[&str] = if ios {
         &["name", "label"]
     } else if secure {

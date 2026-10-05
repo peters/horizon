@@ -325,7 +325,7 @@ fn spawn(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn().map_err(|_| Error::TunnelStartFailed)?;
+    let mut child = spawn_executable(&mut command)?;
     if let Err(error) = journal(ProcessRecord {
         id,
         pid: Some(child.id()),
@@ -336,6 +336,21 @@ fn spawn(
         return Err(error);
     }
     Ok((child, config))
+}
+
+fn spawn_executable(command: &mut Command) -> Result<Child> {
+    for attempt in 0..10 {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            // Concurrent fork/exec can briefly inherit a writable staging FD.
+            // ETXTBSY guarantees exec did not begin; retry no other failure.
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 9 => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => return Err(Error::TunnelStartFailed),
+        }
+    }
+    Err(Error::TunnelStartFailed)
 }
 
 fn wait_ready(child: &mut Child) -> Result<()> {
@@ -412,6 +427,41 @@ mod tests {
             .flat_map(|byte| [hex(byte >> 4), hex(byte & 15)])
             .collect::<String>();
         VerifiedBinary::capture(source.path(), &digest).unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn transient_executable_busy_cannot_duplicate_a_tunnel_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let counter = directory.path().join("starts");
+        let binary = script(
+            format!(
+                "#!/bin/sh\nprintf x >> '{}'\necho 'You can now access your local servers'\nexec sleep 60\n",
+                counter.display()
+            )
+            .as_bytes(),
+        );
+        let writable = std::fs::OpenOptions::new().write(true).open(&binary.file).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            drop(writable);
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut tunnel = Tunnel::start(
+            binary,
+            "synthetic-key",
+            vec![LocalPort {
+                address: listener.local_addr().unwrap(),
+                tls: false,
+            }],
+            Uuid::new_v4(),
+            Duration::from_secs(3),
+            |_| Ok(()),
+        )
+        .unwrap();
+        release.join().unwrap();
+        assert_eq!(std::fs::read(counter).unwrap(), b"x");
+        tunnel.close();
     }
 
     #[test]

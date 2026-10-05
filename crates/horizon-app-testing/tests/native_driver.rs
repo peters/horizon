@@ -95,6 +95,7 @@ struct Fake {
     changing_source: bool,
     swapped_elements: bool,
     duplicate_elements: bool,
+    android_pair: bool,
 }
 
 impl ClassicTransport for Fake {
@@ -123,12 +124,25 @@ impl ClassicTransport for Fake {
                 .iter()
                 .filter(|(_, p, _, _)| p.ends_with("/source"))
                 .count();
+            if self.android_pair {
+                return Ok(
+                    json!({"value": "<hierarchy><node class='android.widget.EditText' resource-id='same' content-desc='same' password='true'/><node class='android.widget.EditText' resource-id='same' content-desc='same' password='false' text=''/></hierarchy>"}),
+                );
+            }
             return Ok(
                 json!({"value":if self.changing_source && reads > 1 { IOS_SOURCE.replace("Menu", "Other") } else { IOS_SOURCE.to_owned() }}),
             );
         }
         if path.ends_with("/elements") {
             if body.is_some_and(|v| v["value"] == "//*[not(self::AppiumAUT or self::hierarchy)]") {
+                if self.android_pair {
+                    let ids = if self.swapped_elements {
+                        ["plain-element", "secure-element"]
+                    } else {
+                        ["secure-element", "plain-element"]
+                    };
+                    return Ok(json!({"value":ids.map(|id| json!({"element-6066-11e4-a52e-4f735466cecf":id}))}));
+                }
                 return Ok(json!({"value": [
                     {"element-6066-11e4-a52e-4f735466cecf":"app-element"},
                     {"element-6066-11e4-a52e-4f735466cecf":if self.swapped_elements { "secure-element" } else if self.duplicate_elements {"app-element"} else {"menu-element"}},
@@ -141,6 +155,12 @@ impl ClassicTransport for Fake {
         }
         if path.contains("/attribute/") {
             let key = path.rsplit('/').next().unwrap();
+            if self.android_pair {
+                return Ok(json!({"value":match key {
+                    "class" => json!("android.widget.EditText"), "resource-id" | "content-desc" => json!("same"),
+                    "password" => json!(path.contains("secure-element")), "text" => json!(""), _ => json!(null),
+                }}));
+            }
             let value = match (path.contains("menu-element"), path.contains("secure-element"), key) {
                 (true, _, "type") => "XCUIElementTypeButton",
                 (true, _, "name") => "menu.open",
@@ -441,6 +461,45 @@ fn recording_opt_out_and_small_scrolls_preserve_declared_behavior() -> Result<()
         let from = actions[0]["y"].as_i64().unwrap();
         let to = actions[2]["y"].as_i64().unwrap();
         assert_eq!(to - from, distance);
+    }
+    Ok(())
+}
+
+#[test]
+fn secure_android_refs_cannot_type_into_a_swapped_plain_field() -> Result<(), Error> {
+    for swapped in [false, true] {
+        let fake = Arc::new(Fake {
+            android_pair: true,
+            swapped_elements: swapped,
+            ..Fake::default()
+        });
+        let mut driver = NativeDriver::allocate(fake.clone(), &launch(Platform::Android)?)?;
+        let snapshot = driver.snapshot()?;
+        let result = driver.act(&Action::Type {
+            target: Target::Ref(
+                snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.semantic.role == "textbox" && node.identifier.is_empty())
+                    .unwrap()
+                    .semantic
+                    .reference
+                    .clone(),
+            ),
+            text: "synthetic-sensitive-input".into(),
+        });
+        if swapped {
+            assert_eq!(result.err(), Some(Error::ReferenceExpired));
+            assert!(
+                fake.calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|(method, path, _, _)| method != "POST" || !path.ends_with("/value"))
+            );
+        } else {
+            result?;
+        }
     }
     Ok(())
 }

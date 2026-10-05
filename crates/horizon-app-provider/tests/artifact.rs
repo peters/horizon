@@ -69,10 +69,16 @@ fn artifact_and_ancestor_symlinks_are_rejected_even_inside_the_project() {
 
 #[test]
 fn fifo_artifacts_are_rejected_without_blocking() {
-    use rustix::fs::{CWD, Mode, mkfifoat};
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("build")).unwrap();
-    mkfifoat(CWD, root.path().join("build/App.ipa"), Mode::RUSR | Mode::WUSR).unwrap();
+    assert!(
+        std::process::Command::new("/usr/bin/mkfifo")
+            .args(["-m", "600"])
+            .arg(root.path().join("build/App.ipa"))
+            .status()
+            .unwrap()
+            .success()
+    );
     assert_eq!(
         Artifact::capture(root.path(), &contract(), Platform::Ios).err(),
         Some(Error::ArtifactRejected)
