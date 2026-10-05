@@ -218,3 +218,10 @@ bounded, run under the account lock and require exclusive host execution ownersh
 for the workspace; they must never recursively access the journal. References are
 neither Debug nor serializable. This callback is a recovery primitive, not startup
 reconciliation of processes/tunnels or an MCP host implementation.
+## Provider recovery discovery
+
+The host uses a unique journaled UUID as the upload custom ID and allocation build/session names. `find_upload` and `find_session` require exact intent matches, deduplicate repeated provider rows and refuse multiple distinct results. No match is an observation, never authorization to repeat an uncertain creation. Complete discovery uses one global limit of 64 requests, 6,400 rows, 8 MiB of decoded response content and 30 seconds across nested build/session pagination. Each response is capped at 1 MiB and each request uses the remaining deadline, capped at ten seconds. Exhaustion returns `app_reconcile_incomplete`; truncated observations never free reservations.
+
+Fresh session evidence must identify a native app (null browser and app version marker), the selected physical catalog device/model/OS, exact allocation names and the uploaded app token. Tokens, provider session IDs and all raw metadata remain private. Safe bounded path-segment IDs permit provider alphanumeric, underscore and hyphen forms; upload tokens retain their separate strict grammar.
+
+Provider result statuses `passed` and `failed` can be set while the device still executes, so they remain active for reconciliation. Only infrastructure `done`/`timeout` observations or an acknowledged exact owned WebDriver quit can confirm release. Lost quit replies retain uncertainty. The host journal must establish workspace/credential ownership before invoking private session lookup or release; these provider methods alone are not a public ownership policy or complete crash reconciliation.
