@@ -44,10 +44,13 @@ pub struct LiveOptions {
 }
 
 impl Default for LiveOptions {
+    /// Half-second segments measured about 3 s glass-to-glass on a Google TV
+    /// receiver, against 4 s for one-second segments. The window must cover
+    /// that delay plus a refresh, or the receiver asks for segments already gone.
     fn default() -> Self {
         Self {
-            segment: Duration::from_secs(1),
-            window: 6,
+            segment: Duration::from_millis(500),
+            window: 10,
             preroll: 2,
             title: "Live".to_owned(),
         }

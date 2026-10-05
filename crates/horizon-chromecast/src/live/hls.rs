@@ -84,8 +84,10 @@ impl Segmenter {
         let target = self
             .segments
             .iter()
-            .map(|segment| segment.duration.as_secs_f64().ceil())
-            .fold(self.target.as_secs_f64().ceil(), f64::max);
+            // HLS compares the rounded EXTINF to the target; ceiling a 1.0000001 s
+            // segment doubled it, and receivers hold back about three targets.
+            .map(|segment| segment.duration.as_secs_f64().round())
+            .fold(self.target.as_secs_f64().round().max(1.0), f64::max);
         let first = self
             .segments
             .front()
@@ -169,5 +171,21 @@ mod tests {
             segmenter.push(if keyframe { IDR } else { SLICE }, frame * index, keyframe);
         }
         assert_eq!(segmenter.ready_segments(), 3);
+    }
+
+    #[test]
+    fn target_duration_rounds_instead_of_doubling() {
+        let mut segmenter = Segmenter::new(Duration::from_millis(500), 6);
+        let frame = Duration::from_secs(1) / 30;
+        for index in 0..95u32 {
+            let keyframe = index % 15 == 0;
+            segmenter.push(if keyframe { IDR } else { SLICE }, frame * index, keyframe);
+        }
+        assert!(
+            segmenter.playlist().contains("#EXT-X-TARGETDURATION:1\n"),
+            "{}",
+            segmenter.playlist()
+        );
+        assert!(segmenter.playlist().contains("#EXTINF:0.500,"));
     }
 }
