@@ -1,7 +1,7 @@
 //! Hetzner's catalog, fetched beside the `RunPod` price list when this machine has a
 //! Hetzner binding, for agents' offer requests and the prices sent to workers.
 use super::{ANSWER_MARGIN_MILLIS, Fetched, Job, RETRY_FAILED, finished, spawn};
-use horizon_core::cloud_runtime::prices::{self, HetznerCatalog};
+use horizon_core::cloud_runtime::prices::{self, HetznerCatalog, freshness};
 use std::{
     path::Path,
     time::{Duration, Instant, SystemTime},
@@ -176,6 +176,18 @@ impl State {
         })
     }
 
+    /// The catalog while the dialog may compare with it: current, or gone stale while a
+    /// background refresh for it runs. Failures are reported through [`Self::error`].
+    pub fn comparable(&self) -> Option<&Fetched<Option<HetznerCatalog>>> {
+        self.fetched.as_ref().filter(|fetched| {
+            freshness::comparable(
+                Some(freshness::Answer::since(fetched.at, self.refreshed_after)),
+                FRESH,
+                freshness::Fetch::running(self.job.is_some()),
+            )
+        })
+    }
+
     /// The last catalog fetched, however old, for showing choices while a refresh runs
     /// or after it failed. Decisions that need current prices use [`Self::fresh`].
     pub fn displayed(&self) -> Option<&Fetched<Option<HetznerCatalog>>> {
@@ -309,6 +321,33 @@ mod tests {
             "regions": {"hel1": "EUROPE"},
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn a_background_refresh_keeps_the_last_catalog_comparable_until_it_answers() {
+        let mut state = State::default();
+        assert!(state.comparable().is_none(), "nothing answered yet");
+        // A freshly booted runner may not be able to express an earlier instant.
+        let (Some(answered_at), Some(expired)) = (
+            Instant::now().checked_sub(FRESH + Duration::from_secs(5)),
+            Instant::now().checked_sub(FRESH + freshness::REFRESH_GRACE),
+        ) else {
+            return;
+        };
+        state.fetched = Some(Fetched {
+            value: Some(catalog()),
+            at: answered_at,
+        });
+        assert!(state.comparable().is_none(), "stale with no refresh running");
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        state.job = Some(receiver);
+        assert!(state.comparable().is_some(), "the refresh keeps the last catalog");
+        assert!(state.fresh().is_none(), "agents still wait for a current catalog");
+        state.fetched.as_mut().unwrap().at = expired;
+        assert!(state.comparable().is_none(), "a refresh that takes too long");
+        state.fetched.as_mut().unwrap().at = answered_at;
+        state.refresh();
+        assert!(state.comparable().is_none(), "a manual refresh waits for a new catalog");
     }
 
     #[test]

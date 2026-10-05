@@ -148,6 +148,56 @@ fn refreshing_rankings_does_not_move_filter_controls() {
     assert_eq!(positions(&mut form), before);
 }
 
+#[test]
+fn a_background_refresh_keeps_the_comparison_and_its_layout_until_it_answers() {
+    use horizon_core::cloud_runtime::prices::freshness::REFRESH_GRACE;
+    // Every text and the height it is drawn at, apart from the age of the prices, which
+    // counts up and moves the Refresh button beside it sideways.
+    let layout = |form: &mut Production| {
+        egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(1000.0);
+                section(ui, form);
+            })
+            .discard_textures()
+            .shapes
+            .into_iter()
+            .filter_map(|shape| match shape.shape {
+                egui::epaint::Shape::Text(text) if !text.galley.job.text.starts_with("Updated ") => {
+                    Some((text.galley.job.text.clone(), text.pos.y))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let incomplete =
+        |layout: &[(String, f32)]| layout.iter().any(|(text, _)| text.starts_with("Comparison incomplete"));
+    let mut form = form("cpu");
+    let current = layout(&mut form);
+    assert!(!incomplete(&current) && catalog(&form).unwrap().picks.cheapest.is_some());
+    // A freshly booted runner may not be able to express an earlier instant.
+    let (Some(stale), Some(expired)) = (
+        Instant::now().checked_sub(std::time::Duration::from_secs(20)),
+        Instant::now().checked_sub(super::super::super::prices::FRESH + REFRESH_GRACE),
+    ) else {
+        return;
+    };
+    form.prices.list.as_mut().unwrap().at = stale;
+    assert!(
+        incomplete(&layout(&mut form)),
+        "stale prices with no refresh running are incomplete"
+    );
+    form.prices.runpod_checking();
+    let refreshing = catalog(&form).unwrap();
+    assert!(refreshing.complete && refreshing.picks.cheapest.is_some());
+    assert_eq!(layout(&mut form), current, "nothing moves while the refresh runs");
+    form.prices.list.as_mut().unwrap().at = expired;
+    assert!(
+        incomplete(&layout(&mut form)),
+        "a refresh that takes too long leaves the comparison incomplete"
+    );
+}
+
 /// Draws the selector and its summary once, returning every visible text.
 fn render(form: &mut Production) -> Vec<String> {
     let mut actions = Actions::default();

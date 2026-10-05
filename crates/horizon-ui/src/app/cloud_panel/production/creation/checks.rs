@@ -163,11 +163,14 @@ fn rows(form: &Production) -> Vec<Row> {
     };
     let provider = provider::current(form.provider, profile);
     let (live, error) = match provider.kind {
-        Kind::RunPod => (form.prices.list_is_current(), form.prices.list_error.as_deref()),
+        Kind::RunPod => (
+            form.prices.comparable_list().is_some(),
+            form.prices.list_error.as_deref(),
+        ),
         Kind::Hetzner => (
             form.prices
                 .hetzner
-                .fresh()
+                .comparable()
                 .is_some_and(|fetched| fetched.value.is_some()),
             form.prices.hetzner.error(),
         ),
@@ -526,6 +529,38 @@ mod tests {
         assert_eq!(verdict_given(&form, true), Verdict::Waiting, "nothing answered yet");
         form.checks.problems = Some(vec![problem("Cloud settings", "No key yet.".into())]);
         assert_eq!(verdict_given(&form, true), Verdict::Failed);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_background_price_refresh_keeps_the_account_accepted() {
+        use horizon_core::cloud_runtime::prices::freshness::REFRESH_GRACE;
+        use std::time::{Duration, Instant};
+        let accepted = |form: &Production| {
+            rows(form)
+                .iter()
+                .any(|row| matches!(row, Row::Pass(text) if text == "RunPod account accepted, prices are current"))
+        };
+        let mut form = form_with(Vec::new());
+        loaded(&mut form);
+        form.prices.runpod_answered();
+        assert!(accepted(&form));
+        // A freshly booted runner may not be able to express an earlier instant.
+        let Some(stale) = Instant::now().checked_sub(Duration::from_secs(20)) else {
+            return;
+        };
+        form.prices.list.as_mut().unwrap().at = stale;
+        assert!(!accepted(&form), "stale prices with no refresh running are not current");
+        form.prices.runpod_checking();
+        assert!(accepted(&form), "the refresh keeps the last answer until it answers");
+        assert_eq!(verdict_given(&form, true), Verdict::Ready);
+        if let Some(expired) = Instant::now().checked_sub(super::super::super::prices::FRESH + REFRESH_GRACE) {
+            form.prices.list.as_mut().unwrap().at = expired;
+            assert!(!accepted(&form), "a refresh that takes too long ends the grace");
+            form.prices.list.as_mut().unwrap().at = stale;
+        }
+        form.prices.refresh();
+        assert!(!accepted(&form), "a manual refresh waits for new prices");
     }
 
     #[test]

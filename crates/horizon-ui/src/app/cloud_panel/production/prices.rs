@@ -3,7 +3,7 @@
 use super::machine_size::Size;
 use horizon_core::cloud_runtime::{
     Cancellation,
-    prices::{self, Preferences, PriceList, Profile, SizeAvailability},
+    prices::{self, Preferences, PriceList, Profile, SizeAvailability, freshness},
     settings::Settings,
 };
 use std::{
@@ -147,9 +147,17 @@ impl State {
         self.hetzner.restart();
     }
 
-    /// Whether a price list the provider answered since prices were last asked for is on show.
-    pub fn list_is_current(&self) -> bool {
-        self.list.as_ref().is_some_and(|list| self.current(list.at))
+    /// The price list while the dialog may compare with it: current, or gone stale
+    /// while a background refresh for it runs, for at most [`freshness::REFRESH_GRACE`].
+    /// Agents' offers wait for [`Self::fresh_list`] instead.
+    pub fn comparable_list(&self) -> Option<&Fetched<(PriceList, Preferences)>> {
+        self.list.as_ref().filter(|list| {
+            freshness::comparable(
+                Some(freshness::Answer::since(list.at, self.refreshed_after)),
+                FRESH,
+                freshness::Fetch::running(self.list_job.is_some()),
+            )
+        })
     }
 
     /// Whether the catalog shown is older than [`START_LIMIT`], so it cannot start a cloud.
@@ -214,6 +222,13 @@ impl State {
         list.into_iter()
             .chain(size)
             .map(|at| FRESH.saturating_sub(at.elapsed()))
+            // A refresh that outlasts the grace wakes the dialog to show its prices as stale.
+            .chain(
+                self.list
+                    .as_ref()
+                    .filter(|_| self.list_job.is_some())
+                    .and_then(|list| freshness::grace_left(list.at.elapsed(), FRESH)),
+            )
             // Failed requests wake the idle dialog after the retry pause.
             .chain(
                 self.list_failed_at
@@ -833,7 +848,59 @@ mod tests {
         assert!(state.until_stale(&gpu).is_some());
         let (_tx, rx) = channel();
         state.list_job = Some(rx);
-        assert_eq!(state.until_stale(&gpu), None);
+        let wait = state.until_stale(&gpu).unwrap();
+        assert!(
+            wait > FRESH && wait <= FRESH + freshness::REFRESH_GRACE,
+            "a running refresh wakes the dialog only when its grace ends"
+        );
+    }
+
+    #[test]
+    fn a_background_refresh_keeps_the_last_list_comparable_until_it_answers() {
+        let mut state = State::default();
+        assert!(state.comparable_list().is_none(), "nothing answered yet");
+        let (_first, rx) = channel();
+        state.list_job = Some(rx);
+        assert!(state.comparable_list().is_none(), "the first load is never comparable");
+        state.list_job = None;
+        // A freshly booted runner may not be able to express an earlier instant.
+        let (Some(answered_at), Some(expired)) = (
+            Instant::now().checked_sub(Duration::from_secs(20)),
+            Instant::now().checked_sub(FRESH + freshness::REFRESH_GRACE),
+        ) else {
+            return;
+        };
+        state.accept(Fetched {
+            value: (list(), Preferences::default()),
+            at: answered_at,
+        });
+        assert!(state.comparable_list().is_none(), "stale with no refresh running");
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        assert!(state.comparable_list().is_some(), "the refresh keeps the last list");
+        assert!(state.fresh_list().is_none(), "agents still wait for current offers");
+        state.list.as_mut().unwrap().at = expired;
+        assert!(state.comparable_list().is_none(), "a refresh that takes too long");
+        state.list.as_mut().unwrap().at = answered_at;
+        tx.send(Err("RunPod is unreachable".into())).unwrap();
+        state.poll();
+        assert!(state.comparable_list().is_none(), "a failed refresh");
+        let (_retry, rx) = channel();
+        state.list_job = Some(rx);
+        assert!(
+            state.comparable_list().is_none(),
+            "a retry after a failure waits for new prices"
+        );
+        state.refresh();
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        assert!(
+            state.comparable_list().is_none(),
+            "a manual refresh waits for new prices"
+        );
+        tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+        state.poll();
+        assert!(state.comparable_list().is_some() && state.fresh_list().is_some());
     }
 
     #[test]

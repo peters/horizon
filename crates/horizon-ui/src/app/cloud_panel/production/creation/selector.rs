@@ -85,7 +85,7 @@ impl Catalog {
             offer.estimated_total,
             offer.currency,
             self.currency,
-            form.prices.exchange.fresh(),
+            form.prices.exchange.comparable(),
         )
     }
     /// Best stock among the places the placement allows; `None` where none is allowed.
@@ -167,12 +167,13 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
             offer.estimated_total,
             offer.currency,
             currency,
-            form.prices.exchange.fresh(),
+            form.prices.exchange.comparable(),
         )
     };
-    let complete = (!scope.runpod || form.prices.fresh_list().is_some() && form.prices.list_error.is_none())
-        && (!scope.hetzner || form.prices.hetzner.fresh().is_some() && form.prices.hetzner.error().is_none())
-        && (!interested(&horizon_core::cloud_runtime::provider::HETZNER) || form.prices.hetzner.fresh().is_some())
+    // A background refresh keeps the last comparison until it answers, so the rows do not move.
+    let complete = (!scope.runpod || form.prices.comparable_list().is_some() && form.prices.list_error.is_none())
+        && (!scope.hetzner || form.prices.hetzner.comparable().is_some() && form.prices.hetzner.error().is_none())
+        && (!interested(&horizon_core::cloud_runtime::provider::HETZNER) || form.prices.hetzner.comparable().is_some())
         && offers
             .iter()
             .take(matching)
@@ -371,7 +372,7 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
             ),
         );
     } else if catalog.uses_exchange(form)
-        && let Some(rates) = form.prices.exchange.fresh()
+        && let Some(rates) = form.prices.exchange.comparable()
     {
         widgets::note(
             ui,
