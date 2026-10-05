@@ -6,6 +6,11 @@ use std::{net::SocketAddr, process::ExitCode, time::Duration, time::Instant};
 
 /// Annex B access units, with parameter sets in front of keyframes.
 fn access_units(data: &[u8]) -> Result<Vec<(Vec<u8>, bool)>, String> {
+    // Without delimiters every picture would merge into one access unit.
+    let delimited = data.windows(4).any(|w| w[..3] == [0, 0, 1] && w[3] & 0x1f == 9);
+    if !delimited {
+        return Err("no access unit delimiters found; encode with aud=1".to_owned());
+    }
     let mut reader = AnnexBReader::default();
     let mut units = Vec::new();
     for chunk in data.chunks(32 * 1024) {

@@ -211,6 +211,9 @@ impl AnnexBReader {
     }
 
     fn accept(&mut self, nal: Vec<u8>, units: &mut Vec<Unit>) -> Result<(), H264Error> {
+        if nal.len() > self.limit {
+            return Err(H264Error::NalTooLarge);
+        }
         match nal_type(&nal).unwrap_or(0) {
             NAL_AUD => self.complete_access(units),
             NAL_SPS => self.sps = nal,
@@ -374,6 +377,15 @@ mod tests {
         assert_eq!(leading_delimiter_len(&annexb), 6);
         assert_eq!(leading_delimiter_len(&annexb[6..]), 0);
         assert_eq!(leading_delimiter_len(&[0, 0, 1, 0x09, 0xf0]), 5);
+    }
+
+    #[test]
+    fn a_completed_parameter_set_above_the_limit_is_rejected() {
+        let mut reader = AnnexBReader::new(8);
+        let mut data = vec![0, 0, 1, 0x67];
+        data.extend_from_slice(&[1; 12]);
+        data.extend_from_slice(&[0, 0, 1, 0x09, 0xf0]);
+        assert_eq!(reader.push(&data), Err(H264Error::NalTooLarge));
     }
 
     #[test]
