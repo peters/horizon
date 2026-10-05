@@ -218,3 +218,56 @@ have stopped and their task-owned worktree has been removed. A missing, malforme
 or premature acknowledgement retains cleanup uncertainty; helper exit alone is
 insufficient. Diagnostics remain private and are capped at 4 MiB while draining
 the complete child output.
+
+## Journal namespace retention
+
+A private sibling `.native-journal-registry` retains each namespace's initialization
+identity outside the namespace directory. Initialization durably records its intent
+before creating the ledger; incomplete initialization and missing/replaced namespace
+state fail closed. New directory entries are synchronized through their parents.
+Retain this registry with the host state root. Loss of the entire host state root,
+including the registry, requires a separate retained host bootstrap identity and
+manual recovery; this namespace guard alone cannot detect deletion of all state.
+The configured state path must be canonical. Tests canonicalize platform temporary
+paths so macOS aliases cannot weaken production symlink rejection.
+
+Journal lock markers also bind the original filesystem device/inode. Copying identical
+lock bytes into a replacement file cannot create another account lock. In-place host-root
+relocation preserves identity; copying state onto another filesystem remains a reconciliation
+hold. Prototype markers from older unmerged revisions are refused rather than reset.
+## Exact-owned recovery callbacks
+
+The journal's private `recover_owned` callback durably holds uncertainty before
+observing provider outcomes or cleaning exact recorded resources. Positive matched
+upload/session evidence may be adopted; missing matches never authorize replay or
+capacity reuse. Confirmed cleanup clears resources and reservations. Callbacks are
+bounded, run under the account lock and require exclusive host execution ownership
+for the workspace; they must never recursively access the journal. References are
+neither Debug nor serializable. This callback is a recovery primitive, not startup
+reconciliation of processes/tunnels or an MCP host implementation.
+## Provider recovery discovery
+
+The host uses a unique journaled UUID as the upload custom ID and allocation build/session names. `find_upload` and `find_session` require exact intent matches, deduplicate repeated provider rows and refuse multiple distinct results. No match is an observation, never authorization to repeat an uncertain creation. Complete discovery uses one global limit of 64 requests, 6,400 rows, 8 MiB of decoded response content and 30 seconds across nested build/session pagination. Each response is capped at 1 MiB and each request uses the remaining deadline, capped at ten seconds. Exhaustion returns `app_reconcile_incomplete`; truncated observations never free reservations.
+
+Fresh session evidence must identify a native app (null browser and app version marker), the selected physical catalog device/model/OS, exact allocation names and the uploaded app token. Tokens, provider session IDs and all raw metadata remain private. Safe bounded path-segment IDs permit provider alphanumeric, underscore and hyphen forms; upload tokens retain their separate strict grammar.
+
+Provider result statuses `passed` and `failed` can be set while the device still executes, so they remain active for reconciliation. Only infrastructure `done`/`timeout` observations or an acknowledged exact owned WebDriver quit can confirm release. Lost quit replies retain uncertainty. The host journal must establish workspace/credential ownership before invoking private session lookup or release; these provider methods alone are not a public ownership policy or complete crash reconciliation.
+
+### Exclusive native workspace execution
+
+The host holds `journal::execution::Workspace` for its entire actor, including concurrent
+lanes. CLI, MCP and live panels must share that actor rather than open competing actors.
+Its kernel lease is cross-process and releases when the actor exits or is killed; a
+retained registry binding prevents missing/replaced lease files from resetting ownership.
+Workspace UUID and canonical root come from host state, never tool parameters. Root
+changes and pending resources in another credential realm refuse new execution.
+
+After restart, retained pending operations block admission until bounded exact-owned
+cleanup has completed under this lease and `finish_reconciliation` succeeds. A released
+kernel lease is not evidence that provider resources or worker processes were cleaned.
+This prerequisite does not yet wire the shared actor, public MCP tools or full startup
+reconciliation; complete host-state loss still requires retained bootstrap identity.
+Journal lock markers also bind the original filesystem device/inode. Copying identical
+lock bytes into a replacement file cannot create another account lock. In-place host-root
+relocation preserves identity; copying state onto another filesystem remains a reconciliation
+hold. Prototype markers from older unmerged revisions are refused rather than reset.
