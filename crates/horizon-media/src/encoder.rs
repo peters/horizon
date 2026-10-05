@@ -11,6 +11,8 @@ pub use diagnostics::drain as drain_diagnostics;
 pub use frames::{Frame, FrameError, FrameInput};
 pub use pipeline::{AccessUnitSink, EncoderConfig, INPUT_FRAME_RATE, PipelineError, stream};
 
+/// Ignores poisoning: the guarded value is an optional encoder process handle,
+/// which a panicking holder cannot leave half-updated.
 fn lock<T>(value: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     value.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
