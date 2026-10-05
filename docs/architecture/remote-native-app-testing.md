@@ -237,3 +237,7 @@ cleanup has completed under this lease and `finish_reconciliation` succeeds. A r
 kernel lease is not evidence that provider resources or worker processes were cleaned.
 This prerequisite does not yet wire the shared actor, public MCP tools or full startup
 reconciliation; complete host-state loss still requires retained bootstrap identity.
+Journal lock markers also bind the original filesystem device/inode. Copying identical
+lock bytes into a replacement file cannot create another account lock. In-place host-root
+relocation preserves identity; copying state onto another filesystem remains a reconciliation
+hold. Prototype markers from older unmerged revisions are refused rather than reset.
