@@ -44,7 +44,9 @@ pub(super) fn dispatch(driver: &mut NativeDriver, action: &Action) -> Result<()>
             let distance = (*distance).min(limit / 2);
             let center = Point { x:width / 2,y:height / 2 };
             let mut from = center; let mut to = center;
-            let (start,end) = if positive { (limit/2-distance/2,limit/2+distance/2) } else { (limit/2+distance/2,limit/2-distance/2) };
+            let low = limit/2-distance/2;
+            let high = low+distance;
+            let (start,end) = if positive { (low,high) } else { (high,low) };
             if horizontal { from.x=start;to.x=end; } else { from.y=start;to.y=end; }
             gesture(driver,from,to,600)
         }

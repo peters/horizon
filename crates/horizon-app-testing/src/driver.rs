@@ -7,7 +7,7 @@ use horizon_browser::ClassicTransport;
 use serde_json::{Value, json};
 
 use crate::catalog::Device;
-use crate::contract::{App, Platform, application_id, identifier, printable, version};
+use crate::contract::{App, Evidence, Platform, application_id, identifier, printable, version};
 use crate::recipe::{Action, State, Target};
 use crate::tree::{Identity, References, Snapshot};
 use crate::{Error, Result};
@@ -23,6 +23,7 @@ pub struct Launch {
     provider_app: String,
     tunnel_id: String,
     operation_id: String,
+    evidence: Evidence,
 }
 
 impl Launch {
@@ -36,6 +37,7 @@ impl Launch {
         provider_app: String,
         tunnel_id: String,
         operation_id: String,
+        evidence: Evidence,
     ) -> Result<Self> {
         let app_token = provider_app.strip_prefix("bs://").ok_or(Error::ContractInvalid)?;
         let id = match device.platform {
@@ -63,6 +65,7 @@ impl Launch {
             provider_app,
             tunnel_id,
             operation_id,
+            evidence,
         })
     }
 
@@ -79,7 +82,7 @@ impl Launch {
                 "local": true, "localIdentifier": self.tunnel_id,
                 "buildName": format!("horizon-native-{}", self.operation_id),
                 "sessionName": format!("native-{}", self.operation_id),
-                "video": true, "debug": true,
+                "video": self.evidence.video, "debug": self.evidence.logs_on_failure,
             }
         });
         if ios {

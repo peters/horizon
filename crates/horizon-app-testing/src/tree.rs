@@ -277,10 +277,10 @@ fn node(event: &BytesStart<'_>, version: quick_xml::XmlVersion) -> Result<(Node,
             .find(|v| !v.is_empty())
             .unwrap_or("")
     };
-    let role = if class.contains("Button") || get("clickable") == "true" {
-        "button"
-    } else if class.contains("TextField") || class.contains("EditText") {
+    let role = if class.contains("TextField") || class.contains("EditText") {
         "textbox"
+    } else if class.contains("Button") || get("clickable") == "true" {
+        "button"
     } else if class.contains("Text") {
         "text"
     } else if class.contains("Image") {

@@ -155,7 +155,7 @@ Parser and provider response bodies must never be embedded in failure messages.
 `NativeDriver` accepts a host transport and privately held app/tunnel references. It sends app capabilities with
 XCUITest or UiAutomator2 and preserves backend launch arguments for explicit relaunch. Android disables ID locator
 autocompletion through the initial settings capability so Compose test tags retain their declared IDs. It never
-sends `browserName`.
+sends `browserName`. The host supplies the declared evidence policy at allocation; video and debug-log opt-outs reach provider capabilities before recording starts.
 The host must journal allocation before exposing the driver and verify fresh provider device evidence.
 
 Snapshots normalize XCUITest/UiAutomator2 XML into browser-shaped nodes. Secure fields redact name, text and value,
