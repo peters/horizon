@@ -42,7 +42,7 @@ LABEL org.opencontainers.image.source="https://github.com/peters/horizon" \
 # Smallest base that meets the worker contract, used to check the published layout
 # before it is pushed. It is never published.
 FROM tailscale/tailscale:v1.102.5@sha256:c507f3a2a6ab1cabd8d809b98edeb41edbd5c3fb6ad9632ffd098b4c7d0b4065 AS tailnet-runtime
-FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 AS probe
+FROM ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092 AS probe
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         openssh-server openssh-client tmux git git-lfs gh ca-certificates python3 util-linux \
