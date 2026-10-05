@@ -9,7 +9,12 @@ const SAMPLE_NON_SYNC: u32 = 0x0101_0000;
 const UNITY_MATRIX: [u32; 9] = [0x0001_0000, 0, 0, 0, 0x0001_0000, 0, 0, 0, 0x4000_0000];
 
 /// `ftyp` + `moov` describing one AVC track built from `sps` and `pps`.
+/// `None` when the SPS has no usable dimensions, or a parameter set does not
+/// fit the 16-bit length that `avcC` stores.
 pub(crate) fn init_segment(sps: &[u8], pps: &[u8]) -> Option<Vec<u8>> {
+    if u16::try_from(sps.len()).is_err() || u16::try_from(pps.len()).is_err() {
+        return None;
+    }
     let (width, height) = sps_dimensions(sps)?;
     let (width, height) = (u16::try_from(width).ok()?, u16::try_from(height).ok()?);
     let mut out = Vec::with_capacity(768);
@@ -335,6 +340,16 @@ mod tests {
         // the width in macroblocks does not fit in 32 bits.
         let sps = [0x67, 66, 0, 30, 0xdc, 0x00, 0x00, 0x00, 0x1f, 0xff, 0xff, 0xff, 0xe8];
         assert_eq!(sps_dimensions(&sps), None);
+    }
+
+    #[test]
+    fn parameter_sets_too_long_for_avcc_are_rejected() {
+        let mut sps = SPS_720P.to_vec();
+        sps.resize(usize::from(u16::MAX) + 1, 0);
+        assert!(init_segment(&sps, &PPS_720P).is_none());
+        let mut pps = PPS_720P.to_vec();
+        pps.resize(usize::from(u16::MAX) + 1, 0);
+        assert!(init_segment(&SPS_720P, &pps).is_none());
     }
 
     #[test]
