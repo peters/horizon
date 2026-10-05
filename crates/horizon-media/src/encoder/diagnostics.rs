@@ -1,3 +1,4 @@
+//! Fixed, privacy-safe `ffmpeg` failure categories from encoder stderr.
 use std::{
     io::{ErrorKind, Read},
     sync::mpsc,
@@ -6,7 +7,9 @@ use std::{
 
 const MAX_DIAGNOSTIC_BYTES: usize = 8192;
 
-pub(super) fn drain(mut stderr: impl Read + Send + 'static) -> mpsc::Receiver<Option<&'static str>> {
+/// Drains encoder stderr on a thread and reports one fixed failure category,
+/// never the raw text, which may contain private data.
+pub fn drain(mut stderr: impl Read + Send + 'static) -> mpsc::Receiver<Option<&'static str>> {
     let (send, receive) = mpsc::channel();
     thread::spawn(move || {
         let mut captured = Vec::new();

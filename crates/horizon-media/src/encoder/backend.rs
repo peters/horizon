@@ -1,4 +1,6 @@
-use crate::{VideoFormat, session::lock};
+//! `ffmpeg` H.264 backends and the bounded hardware probe that selects one.
+use super::lock;
+use crate::format::VideoFormat;
 use std::{
     process::{Child, Command, Stdio},
     sync::{
@@ -40,7 +42,9 @@ impl EncoderBackend {
         matches!(self, Self::NvencCuda)
     }
 
-    pub(super) fn input_arguments(self, format: VideoFormat) -> Vec<String> {
+    /// `ffmpeg` input arguments for frames written to the encoder's stdin.
+    #[must_use]
+    pub fn input_arguments(self, format: VideoFormat) -> Vec<String> {
         let (width, height) = format.dimensions();
         let mut arguments: Vec<String> = ["-hide_banner", "-loglevel", "error", "-f"].map(String::from).into();
         if self.source_frames() {
@@ -60,7 +64,9 @@ impl EncoderBackend {
         arguments
     }
 
-    pub(super) fn arguments(self) -> Vec<&'static str> {
+    /// `ffmpeg` codec arguments for this backend.
+    #[must_use]
+    pub fn arguments(self) -> Vec<&'static str> {
         let arguments: &[&str] = match self {
             Self::Software => &[
                 "-c:v",
@@ -116,7 +122,11 @@ impl EncoderBackend {
     }
 }
 
-pub(crate) fn select(format: VideoFormat, stop: &AtomicBool, process: &Arc<Mutex<Option<Child>>>) -> EncoderSelection {
+/// Picks NVENC with CUDA scaling, then NVENC, then libx264, probing each
+/// accelerated backend with a bounded `ffmpeg` run. The probe child is stored in
+/// `process` so the caller can kill it on cancellation.
+#[must_use]
+pub fn select(format: VideoFormat, stop: &AtomicBool, process: &Arc<Mutex<Option<Child>>>) -> EncoderSelection {
     if !cfg!(all(feature = "nvenc", target_os = "linux")) {
         return software(None);
     }

@@ -10,7 +10,7 @@ description = "Modern Apple TV mirroring transport"
 
 [features]
 default = []
-nvenc = []
+nvenc = ["horizon-media/nvenc"]
 
 [lints]
 workspace = true

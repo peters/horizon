@@ -1,8 +1,5 @@
-mod backend;
-mod diagnostics;
-pub(crate) use backend::select;
-pub use backend::{EncoderBackend, EncoderSelection};
-pub(crate) use horizon_media::encoder::{Frame, FrameInput};
+pub use horizon_media::encoder::{EncoderBackend, EncoderSelection};
+pub(crate) use horizon_media::encoder::{Frame, FrameInput, drain_diagnostics, select};
 
 use crate::{
     CastStatus, Error, MirrorSession, Result, VideoFormat,
@@ -35,7 +32,7 @@ pub(crate) fn stream(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let diagnostics = child.stderr.take().map(diagnostics::drain);
+    let diagnostics = child.stderr.take().map(drain_diagnostics);
     let mut input = child.stdin.take().ok_or(Error::Protocol("encoder input unavailable"))?;
     let output = child
         .stdout
