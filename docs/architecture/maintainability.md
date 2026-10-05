@@ -5,6 +5,13 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+### `horizon-app-testing`
+
+- `contract` validates the project declaration, bounds paths and resolves declared loopback-port templates.
+- `catalog` decodes native-device offerings and resolves the complete symbolic matrix before allocation.
+- `recipe` owns executable native actions and their validation. Pure prose is never executable evidence.
+- Provider transport, credentials, session/tunnel ownership, orchestration and presentation remain separate runtime increments.
+
 Remote-development provisioning, workers, managed SSH views, repository transfer,
 and the Remote Environments modal were removed in #693. Ordinary SSH terminals,
 Remote Hosts, Sessions, and remote browser settings remain. Runtime v3 references

@@ -2275,6 +2275,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-app-testing"
+version = "0.2.7"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.21",
+ "url",
+]
+
+[[package]]
 name = "horizon-browser"
 version = "0.2.7"
 dependencies = [

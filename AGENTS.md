@@ -125,6 +125,16 @@ GPU profile requires GPU capacity; a CPU result cannot qualify that lane.
   unsupported cases explicitly. Do not silently defer CLI/MCP support or require
   the settings UI to be open for an agent-facing capability to work.
 
+### Remote Native App Testing
+
+- Start with [the native-app testing contract and architecture](docs/architecture/remote-native-app-testing.md).
+- Use the selected app project's `AGENTS.md` contract and executable synthetic recipes; validate every matrix entry before allocating devices.
+- Native App Automate catalogs and quotas are distinct from browser catalogs and quotas. Browser access is not native-app entitlement evidence.
+- Keep provider credentials and upload/session/tunnel identifiers inside the shared host runtime. Agent interfaces return opaque references and typed errors.
+- Deliver both low-level MCP control and `device_test_run`, backed by the same lifecycle as CLI and live panels. A passing build or contract test is not real-device acceptance.
+- Preserve shared checkouts, build hosts and backend infrastructure. Use task-owned source/build state and synthetic per-run data; document unattended build-host and private client-configuration prerequisites.
+- Document actual provider evidence retention and verified cleanup; provider-generated videos and logs are not local-only evidence.
+
 ### Configuration Changes
 
 - When changing default presets, CLI flags, or any config-related code in `horizon-core/src/config.rs`, always sync the user's local config file (`~/.horizon/config.yaml`) to match
