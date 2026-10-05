@@ -153,3 +153,9 @@ Transport, capacity, tunnel and session failures will add typed codes in their i
 Parser and provider response bodies must never be embedded in failure messages.
 
 Catalog form classification uses explicit iPhone/iPad and Android model-family lists because App Automate's device response does not provide a form field. Unknown families cannot qualify any matrix entry; missing declared coverage fails resolution before allocation. Add a verified family classification before using a new provider model.
+
+The accessibility foundation normalizes bounded native iOS/Android XML into semantic nodes,
+redacts secure field content, and gives observations short-lived session-specific references.
+Identifier/label lookup refuses ambiguity. This layer exposes observed XPath locations for
+inspection only; native mutations additionally require driver-bound element identity checks.
+It does not allocate provider sessions or qualify physical-device interaction.

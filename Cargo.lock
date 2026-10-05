@@ -2278,6 +2278,8 @@ dependencies = [
 name = "horizon-app-testing"
 version = "0.2.7"
 dependencies = [
+ "horizon-browser-protocol",
+ "quick-xml 0.42.0",
  "schemars",
  "serde",
  "serde_json",
@@ -2285,6 +2287,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "url",
+ "uuid",
 ]
 
 [[package]]
