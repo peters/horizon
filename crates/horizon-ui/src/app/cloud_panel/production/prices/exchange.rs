@@ -87,6 +87,14 @@ impl State {
             .flatten()
     }
 
+    /// Until rates whose refresh is running stop counting as current, for waking an idle
+    /// dialog then.
+    pub(super) fn grace_left(&self) -> Option<Duration> {
+        self.at
+            .filter(|_| self.job.is_some())
+            .and_then(|at| freshness::grace_left(at.elapsed(), FRESH))
+    }
+
     pub fn waiting_for_deadline(&self, deadline_in_millis: i64) -> bool {
         self.job.is_some() && deadline_in_millis > ANSWER_MARGIN_MILLIS
     }
@@ -154,6 +162,10 @@ mod tests {
         state.job = Some(receiver);
         assert!(state.comparable().is_some(), "the refresh keeps the last rates");
         assert!(state.fresh().is_none(), "agents still wait for current rates");
+        assert!(
+            state.grace_left().is_some_and(|left| left <= freshness::REFRESH_GRACE),
+            "the dialog wakes when the grace ends"
+        );
         state.refresh();
         assert!(state.comparable().is_none(), "a manual refresh waits for new rates");
     }

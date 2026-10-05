@@ -3,7 +3,7 @@ procedure: new-cloud-catalog-refresh
 feature: New cloud dialog, background price refresh
 platforms: [linux]
 cost: none
-destructive: no
+destructive: yes
 secrets: [RunPod API key in Cloud settings]
 owner: peters
 ---
@@ -61,6 +61,9 @@ refresh runs, only the text **Updated N s ago** and the **Refresh** button chang
 3. In the candidate, open **Cloud settings…**.
 
    Result: The Cloud settings dialog opens.
+
+   > **CAUTION:** PASTE THE KEY ONLY INTO THE CANDIDATE IN THE ISOLATED DESKTOP.
+   > If you paste it in another window, other people or logs can get the key.
 
 4. Paste the RunPod API key.
 
@@ -172,6 +175,9 @@ Give each task an ID. A report uses the ID to give a result.
 3. Stop the fixture with Ctrl+C.
 
    Result: The fixture stops the candidate, the display and the VNC server.
+
+   > **CAUTION:** DELETE ONLY THE DIRECTORY THAT THIS RUN GAVE TO `--state`.
+   > This step deletes the saved key. Other directories can hold data of other people.
 
 4. Delete the directory of the fixture state.
 

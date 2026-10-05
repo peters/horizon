@@ -229,6 +229,8 @@ impl State {
                     .filter(|_| self.list_job.is_some())
                     .and_then(|list| freshness::grace_left(list.at.elapsed(), FRESH)),
             )
+            .chain(self.hetzner.grace_left())
+            .chain(self.exchange.grace_left())
             // Failed requests wake the idle dialog after the retry pause.
             .chain(
                 self.list_failed_at
@@ -852,6 +854,20 @@ mod tests {
         assert!(
             wait > FRESH && wait <= FRESH + freshness::REFRESH_GRACE,
             "a running refresh wakes the dialog only when its grace ends"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_running_hetzner_refresh_wakes_the_dialog_when_its_grace_ends() {
+        let mut state = State::default();
+        let _answer = state.hetzner.pending_fetch();
+        assert_eq!(state.until_stale(&profile()), None, "nothing answered yet");
+        state.hetzner.answered(None);
+        let wait = state.until_stale(&profile()).unwrap();
+        assert!(
+            wait > freshness::REFRESH_GRACE,
+            "the catalog is young, so the end of its grace is far off"
         );
     }
 

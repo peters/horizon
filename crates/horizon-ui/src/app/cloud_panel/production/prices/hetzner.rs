@@ -188,6 +188,15 @@ impl State {
         })
     }
 
+    /// Until a catalog whose refresh is running stops counting as current, for waking an
+    /// idle dialog then.
+    pub(super) fn grace_left(&self) -> Option<Duration> {
+        self.fetched
+            .as_ref()
+            .filter(|_| self.job.is_some())
+            .and_then(|fetched| freshness::grace_left(fetched.at.elapsed(), FRESH))
+    }
+
     /// The last catalog fetched, however old, for showing choices while a refresh runs
     /// or after it failed. Decisions that need current prices use [`Self::fresh`].
     pub fn displayed(&self) -> Option<&Fetched<Option<HetznerCatalog>>> {
@@ -343,6 +352,10 @@ mod tests {
         state.job = Some(receiver);
         assert!(state.comparable().is_some(), "the refresh keeps the last catalog");
         assert!(state.fresh().is_none(), "agents still wait for a current catalog");
+        assert!(
+            state.grace_left().is_some_and(|left| left <= freshness::REFRESH_GRACE),
+            "the dialog wakes when the grace ends"
+        );
         state.fetched.as_mut().unwrap().at = expired;
         assert!(state.comparable().is_none(), "a refresh that takes too long");
         state.fetched.as_mut().unwrap().at = answered_at;
