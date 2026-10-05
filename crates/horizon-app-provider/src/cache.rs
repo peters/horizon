@@ -38,7 +38,8 @@ pub struct AppHandle {
     pub platform: Platform,
     pub sha256: String,
     pub bytes: u64,
-    pub max_age_seconds: u64,
+    /// Remaining lifetime at issue time, not a new retention period for a reused asset.
+    pub remaining_seconds: u64,
 }
 
 struct Asset {
@@ -46,6 +47,7 @@ struct Asset {
     platform: Platform,
     sha256: String,
     acquired: Instant,
+    deletion_uncertain: bool,
 }
 
 /// One host realm/workspace owns this cache. Callers must serialize access through the shared actor.
@@ -76,11 +78,17 @@ impl Cache {
         if self.leases.len() >= 256 {
             return Err(Error::CacheFull);
         }
+        if self.assets.values().any(|asset| {
+            asset.deletion_uncertain && asset.platform == artifact.platform() && asset.sha256 == artifact.sha256()
+        }) {
+            return Err(Error::AppReleaseUncertain);
+        }
         let found = self
             .assets
             .iter()
             .find(|(_, asset)| {
                 asset.platform == artifact.platform()
+                    && !asset.deletion_uncertain
                     && asset.sha256 == artifact.sha256()
                     && asset.acquired.elapsed() < MAX_AGE
             })
@@ -100,6 +108,7 @@ impl Cache {
                     platform: artifact.platform(),
                     sha256: artifact.sha256().to_owned(),
                     acquired: Instant::now(),
+                    deletion_uncertain: false,
                 },
             );
             id
@@ -111,7 +120,9 @@ impl Cache {
             platform: artifact.platform(),
             sha256: artifact.sha256().to_owned(),
             bytes: artifact.bytes(),
-            max_age_seconds: MAX_AGE.as_secs(),
+            remaining_seconds: MAX_AGE
+                .saturating_sub(self.assets.get(&asset_id).ok_or(Error::AppExpired)?.acquired.elapsed())
+                .as_secs(),
         })
     }
 
@@ -126,6 +137,9 @@ impl Cache {
             .get(&handle)
             .and_then(|id| self.assets.get(id))
             .ok_or(Error::AppExpired)?;
+        if asset.deletion_uncertain {
+            return Err(Error::AppReleaseUncertain);
+        }
         if asset.acquired.elapsed() >= MAX_AGE {
             return Err(Error::AppExpired);
         }
@@ -142,7 +156,8 @@ impl Cache {
             return Ok(());
         };
         if self.leases.values().filter(|id| **id == asset_id).count() == 1 {
-            let asset = self.assets.get(&asset_id).ok_or(Error::AppExpired)?;
+            let asset = self.assets.get_mut(&asset_id).ok_or(Error::AppExpired)?;
+            asset.deletion_uncertain = true;
             self.backend.delete(&asset.app)?;
             self.assets.remove(&asset_id);
         }
@@ -253,5 +268,41 @@ mod tests {
         assert_eq!(second.deletes.load(Ordering::SeqCst), 0);
         b.release(owner, b_handle.id).unwrap();
         assert_eq!(second.deletes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn lost_deletion_reply_holds_reuse_and_driver_until_exact_cleanup_is_confirmed() {
+        let owner = Uuid::new_v4();
+        let backend = Arc::new(Fake::default());
+        let mut cache = Cache::new(owner, backend.clone());
+        let handle = cache.upload(owner, &mut artifact(), Uuid::new_v4()).unwrap();
+        backend.fail_delete.store(true, Ordering::SeqCst);
+        assert_eq!(cache.release(owner, handle.id), Err(Error::ProviderFailed));
+        assert_eq!(
+            cache.upload(owner, &mut artifact(), Uuid::new_v4()).err(),
+            Some(Error::AppReleaseUncertain)
+        );
+        assert_eq!(
+            cache.use_for_driver(owner, handle.id, str::len).err(),
+            Some(Error::AppReleaseUncertain)
+        );
+        assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);
+        backend.fail_delete.store(false, Ordering::SeqCst);
+        cache.release(owner, handle.id).unwrap();
+        assert!(cache.assets.is_empty());
+    }
+
+    #[test]
+    fn reused_handle_reports_the_assets_remaining_lifetime() {
+        let owner = Uuid::new_v4();
+        let backend = Arc::new(Fake::default());
+        let mut cache = Cache::new(owner, backend.clone());
+        cache.upload(owner, &mut artifact(), Uuid::new_v4()).unwrap();
+        cache.assets.values_mut().next().unwrap().acquired = Instant::now()
+            .checked_sub(MAX_AGE.checked_sub(Duration::from_secs(3)).unwrap())
+            .unwrap();
+        let reused = cache.upload(owner, &mut artifact(), Uuid::new_v4()).unwrap();
+        assert!(reused.remaining_seconds <= 3);
+        assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);
     }
 }

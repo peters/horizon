@@ -16,11 +16,33 @@ const API: &str = "https://api-cloud.browserstack.com";
 const MAX_RESPONSE: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(from = "ProviderQuota")]
 pub struct Quota {
     pub parallel_sessions_max_allowed: u32,
     pub team_parallel_sessions_max_allowed: u32,
     pub parallel_sessions_running: u32,
     pub queued_sessions: u32,
+}
+
+#[derive(Deserialize)]
+struct ProviderQuota {
+    parallel_sessions_max_allowed: u32,
+    team_parallel_sessions_max_allowed: Option<u32>,
+    parallel_sessions_running: u32,
+    queued_sessions: u32,
+}
+
+impl From<ProviderQuota> for Quota {
+    fn from(value: ProviderQuota) -> Self {
+        Self {
+            parallel_sessions_max_allowed: value.parallel_sessions_max_allowed,
+            team_parallel_sessions_max_allowed: value
+                .team_parallel_sessions_max_allowed
+                .unwrap_or(value.parallel_sessions_max_allowed),
+            parallel_sessions_running: value.parallel_sessions_running,
+            queued_sessions: value.queued_sessions,
+        }
+    }
 }
 
 impl Quota {
@@ -225,6 +247,15 @@ mod tests {
 
     #[test]
     fn native_quota_accounts_for_shared_team_use_and_queue() {
+        for team in [None, Some(2)] {
+            let mut response =
+                json!({"parallel_sessions_max_allowed":4,"parallel_sessions_running":1,"queued_sessions":0});
+            if let Some(team) = team {
+                response["team_parallel_sessions_max_allowed"] = json!(team);
+            }
+            let decoded: Quota = serde_json::from_value(response).unwrap();
+            assert_eq!(decoded.available(), if team.is_some() { 1 } else { 3 });
+        }
         let quota = Quota {
             parallel_sessions_max_allowed: 4,
             team_parallel_sessions_max_allowed: 2,

@@ -19,6 +19,8 @@ pub enum Error {
     OwnershipRefused,
     #[error("app_reference_expired: the uploaded app handle has expired or was released")]
     AppExpired,
+    #[error("app_release_uncertain: reconcile the owned upload deletion before reuse")]
+    AppReleaseUncertain,
     #[error("app_cache_full: release owned native artifacts before uploading more")]
     CacheFull,
     #[error("app_tunnel_binary_rejected: the configured tunnel binary failed checksum validation")]

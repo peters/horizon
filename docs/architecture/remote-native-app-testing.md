@@ -191,3 +191,7 @@ The host records intent before side effects and durably attaches exact session/a
 Private state rejects symlinks, FIFOs, shared file permissions, duplicate operation keys, inconsistent lifecycle shapes and repeated provider resource IDs. Initialization has a durable marker and lock identity; losing a journal or lock cannot silently create empty state. Atomic snapshot failures remove partial files and preserve the prior committed ledger. Exact-owned cleanup records releasing before dispatch, retains uncertain failures and completes only after the host confirms cleanup.
 
 This increment provides Unix-only durable storage and admission primitives. It does not yet discover uncertain provider outcomes, execute builds, schedule idle/cancellation cleanup, control MCP/CLI sessions or present live panels. Those host integrations remain required for #1255 acceptance.
+
+## Upload lease recovery holds
+
+A lost final app-deletion reply marks its cached asset uncertain before returning the failure. The original lease remains available only for exact cleanup retry; the asset cannot be used for a driver, reused or uploaded again by content until cleanup is confirmed. A reused app handle reports `remaining_seconds` from the original asset acquisition, rather than claiming a fresh 24-hour lifetime. Native plan responses without a team cap normalize that cap to the plan cap; a declared team cap still lowers available capacity.
