@@ -193,7 +193,14 @@ impl AnnexBReader {
         // outcome. Bytes before the first start code belong to no NAL.
         let payload = if let Some((at, length)) = start_code(&self.pending, 0) {
             self.pending.drain(..at);
-            self.pending.len() - length
+            // Up to three trailing zeros may begin the next start code.
+            let trailing = self.pending[length..]
+                .iter()
+                .rev()
+                .take(3)
+                .take_while(|&&byte| byte == 0)
+                .count();
+            self.pending.len() - length - trailing
         } else {
             // Keep a possible partial start code.
             let keep = self.pending.len().min(3);
@@ -398,6 +405,15 @@ mod tests {
         let mut split = AnnexBReader::new(8);
         assert!(split.push(&nal).is_ok(), "an 8-byte NAL still waiting for its end");
         assert!(split.push(&[0, 0, 1, 0x09, 0xf0]).is_ok());
+        for split_prefix in [&[0][..], &[0, 0], &[0, 0, 0]] {
+            let mut prefix = AnnexBReader::new(8);
+            assert!(
+                prefix.push(&[&nal[..], split_prefix].concat()).is_ok(),
+                "a split start code is not payload"
+            );
+            let rest: &[u8] = &[0, 0, 1, 0x09, 0xf0][split_prefix.len().min(2)..];
+            assert!(prefix.push(rest).is_ok());
+        }
         let mut whole = AnnexBReader::new(8);
         assert!(whole.push(&[&nal[..], &[0, 0, 1, 0x09, 0xf0]].concat()).is_ok());
         let mut over = AnnexBReader::new(8);

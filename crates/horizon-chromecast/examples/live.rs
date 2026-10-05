@@ -12,21 +12,23 @@ fn access_units(data: &[u8]) -> Result<Vec<(Vec<u8>, bool)>, String> {
         return Err("no access unit delimiters found; encode with aud=1".to_owned());
     }
     let mut reader = AnnexBReader::default();
-    let mut units = Vec::new();
-    for chunk in data.chunks(32 * 1024) {
-        units.extend(reader.push(chunk).map_err(|e| e.to_string())?);
-    }
-    units.extend(reader.finish().map_err(|e| e.to_string())?);
     let (mut sps, mut pps) = (Vec::new(), Vec::new());
     let mut access_units = Vec::new();
-    for unit in units {
-        match unit {
-            Unit::ParameterSets { sps: s, pps: p } => (sps, pps) = (s, p),
-            Unit::AccessUnit(access) => {
-                access_units.push((access.to_annexb(&[&sps, &pps]), access.is_keyframe()));
+    // Convert each batch as it completes, so only the rebuilt units accumulate.
+    let mut collect = |units: Vec<Unit>| {
+        for unit in units {
+            match unit {
+                Unit::ParameterSets { sps: s, pps: p } => (sps, pps) = (s, p),
+                Unit::AccessUnit(access) => {
+                    access_units.push((access.to_annexb(&[&sps, &pps]), access.is_keyframe()));
+                }
             }
         }
+    };
+    for chunk in data.chunks(32 * 1024) {
+        collect(reader.push(chunk).map_err(|e| e.to_string())?);
     }
+    collect(reader.finish().map_err(|e| e.to_string())?);
     Ok(access_units)
 }
 
