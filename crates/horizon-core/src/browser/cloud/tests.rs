@@ -635,3 +635,19 @@ fn another_cloud_viewers_rotation_and_worker_queue_refusal_settle_the_original_r
         }
     }
 }
+
+#[test]
+fn cloud_command_channel_accepts_recording_without_a_local_session() {
+    use super::super::BrowserVideoOperation;
+    let fixture = orientation_fixture();
+    assert!(fixture.panel.session.is_none());
+    assert!(fixture.panel.can_accept_commands());
+    assert!(fixture.panel.try_send(BrowserCommand::Video {
+        operation: BrowserVideoOperation::Start,
+        options: None,
+    }));
+    assert!(matches!(
+        fixture.receiver.try_recv().unwrap(),
+        BrowserCommand::Video { .. }
+    ));
+}

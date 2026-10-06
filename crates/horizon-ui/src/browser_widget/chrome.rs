@@ -262,7 +262,7 @@ fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
 }
 
 fn video_start_button(ui: &mut Ui, hover: &str, browser: &mut BrowserPanelState, interactive: bool) -> bool {
-    let can_record = interactive && browser.status.is_alive();
+    let can_record = interactive && browser.can_accept_commands();
     let response = crate::icon_button::icon_button(ui, can_record, "Record", |painter, rect, _color| {
         crate::icon_button::paint_record(painter, rect, can_record);
     })
@@ -656,14 +656,20 @@ mod tests {
             "the camera stays disabled until a browser frame exists"
         );
 
-        let mut browser = BrowserPanelState::inert();
-        browser.status = BrowserStatus::Ready;
-        let mut state = crate::browser_widget::BrowserUiState::default();
-        let ready = crate::test_egui::accesskit_labels(|ui| {
-            super::show(ui, horizon_core::PanelId(1), &mut browser, &mut state, true);
-        });
-        assert!(!disabled_label(&ready, "Record"));
-        assert!(disabled_label(&ready, "Copy screenshot"));
+        for status in [BrowserStatus::Ready, BrowserStatus::Starting] {
+            let mut browser = BrowserPanelState::inert();
+            let name = format!("{status:?}");
+            browser.status = status;
+            let mut state = crate::browser_widget::BrowserUiState::default();
+            let labels = crate::test_egui::accesskit_labels(|ui| {
+                super::show(ui, horizon_core::PanelId(1), &mut browser, &mut state, true);
+            });
+            assert!(
+                disabled_label(&labels, "Record"),
+                "{name} without a command channel cannot record"
+            );
+            assert!(disabled_label(&labels, "Copy screenshot"));
+        }
 
         let inactive = idle(false);
         assert!(disabled_label(&inactive, "Record"));

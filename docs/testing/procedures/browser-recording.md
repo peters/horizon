@@ -50,19 +50,23 @@ It tests the camera, record, and stop icons, pause and resume, and the completed
 
    Result: The record disc is dim. The camera is dim.
 
-2. Look at the chrome of a live browser before the page has a frame.
+2. Look at the chrome of a browser with a driver, before a page frame.
 
    Result: The record disc is rose. The camera is dim.
 
-3. Open a page that produces a frame.
+3. Select the other browser in the chrome while the first driver is still open.
+
+   Result: The record disc stays dim.
+
+4. Open a page that produces a frame.
 
    Result: The camera is bright.
 
-4. Put the pointer on the camera icon.
+5. Put the pointer on the camera icon.
 
    Result: The hover text names the copy action.
 
-5. Put the pointer on the record icon.
+6. Put the pointer on the record icon.
 
    Result: The hover text names the WebM recording.
 
@@ -152,7 +156,8 @@ Do not run the video smoke script on Windows.
 ## 7. Pass criteria
 
 - The camera is dim until a page frame exists, then bright.
-- The record disc is rose when capture can start. The stop icon replaces it during capture.
+- The record disc is rose when the driver can take a command. It stays dim while the browser has no driver.
+- The stop icon replaces the record disc during capture.
 - Pause and resume keep one file. Playback matches the active time.
 - MCP returns a private WebM file and does not return pixels in the audit.
 
