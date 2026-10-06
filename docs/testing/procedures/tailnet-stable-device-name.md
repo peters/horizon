@@ -66,12 +66,12 @@ address. Thus, cloud B reaches the server, but the public network does not.
 
    Result: The Device panel shows the candidate and the frames advance.
 
-> **CAUTION:** START ONLY THE TWO CLOUDS OF THIS PROCEDURE. Each worker costs
-> money until you delete it. Each enrollment adds a device to the tailnet.
-
 2. In **New cloud…**, select the test tailnet for cloud A on Hetzner.
 
    Result: The dialog shows the test tailnet.
+
+> **CAUTION:** START ONLY CLOUD A. The worker costs money until you delete it.
+> The start sends the test auth key and adds a device to the tailnet.
 
 3. Click **Start cloud**.
 
@@ -80,6 +80,9 @@ address. Thus, cloud B reaches the server, but the public network does not.
 4. In **New cloud…**, select the same tailnet for cloud B.
 
    Result: The dialog shows the test tailnet.
+
+> **CAUTION:** START ONLY CLOUD B. The worker costs money until you delete it.
+> The start sends the test auth key and adds a device to the tailnet.
 
 5. Click **Start cloud**.
 
@@ -182,6 +185,9 @@ address. Thus, cloud B reaches the server, but the public network does not.
 
    Result: The entry for `<name>` is offline.
 
+> **CAUTION:** RESUME ONLY CLOUD A. The worker costs money again until you
+> delete it.
+
 5. On the card of cloud A, click **Resume worker**.
 
    Result: The card shows Ready.
@@ -247,9 +253,6 @@ address. Thus, cloud B reaches the server, but the public network does not.
 
 ## 8. Cleanup
 
-> **CAUTION:** DELETE ONLY THE CLOUDS AND DEVICES IN THE RECORD OF THIS RUN.
-> Other workers, volumes and devices belong to other people.
-
 1. On cloud A, stop the test server.
 
    ```sh
@@ -258,9 +261,15 @@ address. Thus, cloud B reaches the server, but the public network does not.
 
    Result: `curl -s http://127.0.0.1:<port>/nonce` on cloud A fails.
 
+> **CAUTION:** DELETE ONLY CLOUD A OF THIS RUN. Other workers and volumes
+> belong to other people. The delete removes the data of cloud A.
+
 2. Delete cloud A and its storage.
 
    Result: The card of cloud A goes away. The provider shows no server or volume for it.
+
+> **CAUTION:** DELETE ONLY CLOUD B OF THIS RUN. Other workers and volumes
+> belong to other people. The delete removes the data of cloud B.
 
 3. Delete cloud B and its storage.
 
