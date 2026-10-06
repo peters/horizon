@@ -129,7 +129,8 @@ pub struct Offer {
     /// settings; the provider allocates one of them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub flavors: Vec<String>,
-    /// Compute for the expected hours plus the workspace storage for that time.
+    /// Compute for the expected hours plus the workspace storage for that time and, for
+    /// `RunPod`, the container disk.
     pub estimated_total: f64,
     /// The most the worker's compute is billed in a month, where the provider caps it.
     #[serde(skip_serializing_if = "Option::is_none")]
