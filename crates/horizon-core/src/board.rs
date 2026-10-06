@@ -194,15 +194,14 @@ impl Board {
             for panel_state in &workspace_state.panels {
                 let options = panel_restore_options(panel_state, transcript_root, &state.browser);
                 if crate::runtime_state::cloud_groups::managed_member(&state.cloud_groups, &panel_state.local_id) {
-                    board.create_failed_restore_panel(
-                        options,
-                        ws_id,
-                        if cfg!(feature = "cloud-workspaces") {
-                            "Reconnecting cloud; remote processes continue independently"
-                        } else {
-                            "Cloud support is disabled; remote processes continue independently"
-                        },
-                    )?;
+                    let wait = if cfg!(feature = "cloud-workspaces") {
+                        crate::CloudWait::Reconnecting
+                    } else {
+                        crate::CloudWait::Unsupported
+                    };
+                    board.create_panel_with(options, ws_id, |id, workspace, opts| {
+                        Panel::cloud_placeholder(id, workspace, opts, wait)
+                    })?;
                     continue;
                 }
                 if let Err(error) = board.create_panel(options, ws_id) {
