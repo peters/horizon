@@ -150,6 +150,39 @@ class SupervisionTests(unittest.TestCase):
             self.supervisor.wait_until(lambda: True, 'unused')
         self.assertFalse((self.root / 'services.json').exists())
 
+    def test_close_withdraws_the_published_browser_host_instance(self):
+        # A later control service publishes a new value; until then sessions must not get this one.
+        # This control service publishes again while it stops, so only a removal after the stop holds.
+        published = self.root / 'browser-host-instance'
+        ready = self.root / 'control-ready'
+        self.start('control', 'import pathlib, signal, sys, time\n'
+                   'def stop(*_):\n'
+                   '    pathlib.Path(' + repr(str(published)) + ').write_text("late-host\\n")\n'
+                   '    sys.exit(0)\n'
+                   'signal.signal(signal.SIGTERM, stop)\n'
+                   'pathlib.Path(' + repr(str(published)) + ').write_text("earlier-host\\n")\n'
+                   'pathlib.Path(' + repr(str(ready)) + ').touch()\n'
+                   'time.sleep(60)\n')
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertTrue(published.exists())
+        self.supervisor.close()
+        self.assertFalse(published.exists())
+
+    def test_readiness_waits_for_the_published_browser_host_instance(self):
+        published = self.root / 'browser-host-instance'
+        self.start('control', 'import pathlib, time\ntime.sleep(.3)\n'
+                   'pathlib.Path(' + repr(str(published)) + ').write_text("host\\n")\ntime.sleep(60)\n')
+        self.supervisor.await_control()
+        self.assertEqual(published.read_text(), 'host\n')
+
+    def test_a_control_service_that_fails_before_publication_is_reported(self):
+        self.start('control', 'import time\ntime.sleep(.2)\nraise SystemExit(1)\n')
+        with self.assertRaisesRegex(ValueError, 'Required worker service exited: control'):
+            self.supervisor.await_control()
+        self.assertFalse((self.root / 'browser-host-instance').exists())
+
     def test_bootstrap_timeout_checks_real_readiness_without_replacing_services(self):
         child = self.start('xvfb')
         with self.assertRaisesRegex(ValueError, 'display timeout'):
