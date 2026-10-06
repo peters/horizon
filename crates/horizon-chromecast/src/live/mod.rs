@@ -552,6 +552,17 @@ impl Session {
                     playback.sampled = false;
                 }
             }
+            "PAUSED" => {
+                // This reply is not delivered again as an event. Judge the
+                // buffer here, or the pause drops its duration.
+                let lasted = self
+                    .buffering_since
+                    .take()
+                    .map(|since| observed.saturating_duration_since(since));
+                close_ended_buffer(&mut playback.edge, "PAUSED", lasted);
+                playback.sampled = false;
+                playback.edge.settled_for = Duration::ZERO;
+            }
             _ => {
                 self.buffering_since.set(None);
             }
@@ -740,9 +751,9 @@ impl Session {
         let buffering_for = buffering_age(&mut open, status.player_state.as_str(), observed);
         self.buffering_since.set(open);
         let playing = status.player_state == "PLAYING";
-        if playing && let Some(lasted) = lasted {
-            close_buffer(&mut playback.edge, lasted);
-        }
+        // A polled pause is not playing, and `buffering_age` has already
+        // cleared the timer. Judge the episode before the pause discards it.
+        close_ended_buffer(&mut playback.edge, status.player_state.as_str(), lasted);
         // Only a moving picture starts the calm clock. A pause or a buffer must
         // not make the next playing sample count the time it was stopped.
         playback.sampled = playing;
@@ -861,6 +872,16 @@ fn close_buffer(edge: &mut edge::Edge, lasted: Duration) {
     edge.finish_episode(lasted);
     edge.settled_for = Duration::ZERO;
     edge.resume();
+}
+
+/// Judge a buffer that ended by playing or pausing. An open buffering sample
+/// is left alone so a later sample can see the whole episode.
+fn close_ended_buffer(edge: &mut edge::Edge, player_state: &str, lasted: Option<Duration>) {
+    if matches!(player_state, "PLAYING" | "PAUSED")
+        && let Some(lasted) = lasted
+    {
+        close_buffer(edge, lasted);
+    }
 }
 
 /// What to ask the receiver, with the rate we already believe is applied.
@@ -1293,6 +1314,67 @@ mod catch_up_tests {
         );
         assert_eq!(plan.command, Some(1.0));
         assert!((plan.edge.rate - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_paused_rate_reply_judges_the_open_buffer() {
+        let session = test_session();
+        let paused = MediaStatus {
+            media_session_id: 1,
+            player_state: "PAUSED".to_owned(),
+            idle_reason: None,
+            current_time: 1.0,
+        };
+        let mut playback = Playback::new();
+        playback.edge.target = 0.25;
+        playback.edge.floor = 0.25;
+        playback.edge.rate = 1.5;
+        playback.edge.note_buffer(0.30);
+        session.buffering_since.set(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(350))
+                .expect("test clock"),
+        ));
+        session.absorb_rate_status(&mut playback, &paused, Instant::now());
+        assert!(session.buffering_since.get().is_none());
+        assert!((playback.edge.target - 0.25).abs() < 1e-9);
+        assert!((playback.edge.rate - 1.5).abs() < 1e-9);
+
+        playback.edge.note_buffer(0.30);
+        session.buffering_since.set(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(650))
+                .expect("test clock"),
+        ));
+        session.absorb_rate_status(&mut playback, &paused, Instant::now());
+        assert!((playback.edge.target - 0.30).abs() < 1e-9);
+        assert!((playback.edge.rate - 1.5).abs() < 1e-9);
+        assert!(!playback.sampled);
+    }
+
+    #[test]
+    fn a_polled_pause_keeps_the_backoff_the_buffer_earned() {
+        let mut edge = edge::Edge {
+            target: 0.25,
+            floor: 0.25,
+            rate: 1.5,
+            ..edge::Edge::default()
+        };
+        edge.note_buffer(0.30);
+        close_ended_buffer(&mut edge, "PAUSED", Some(Duration::from_millis(650)));
+        let plan = plan_trim(
+            edge,
+            edge::Sample {
+                lag: 0.40,
+                buffering_for: None,
+                elapsed: Duration::from_millis(400),
+            },
+            false,
+        );
+        assert!((plan.edge.target - 0.30).abs() < 1e-9);
+        assert!((plan.edge.floor - 0.30).abs() < 1e-9);
+        assert!((plan.edge.rate - 1.5).abs() < 1e-9);
+        assert_eq!(plan.command, Some(1.0));
     }
 
     #[test]
