@@ -282,13 +282,20 @@ Do these steps in the shell panel of task K5.
 3. Run this command.
 
    ```sh
+   ls -lnd /run/horizon-companions /run/horizon-companions/*/
+   ```
+
+   Result: Each directory has the owner `0`, the group `10001` and the mode `drwxr-x---`.
+
+4. Run this command.
+
+   ```sh
    ls -ln /run/horizon-companions /run/horizon-companions/*/
    ```
 
    Result: Each file has the owner `0`, the group `10001` and the mode `-rw-r-----`.
-   Each directory has the owner `0`, the group `10001` and the mode `drwxr-x---`.
 
-4. Run this command.
+5. Run this command.
 
    ```sh
    touch /run/horizon-companions/config
