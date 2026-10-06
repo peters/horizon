@@ -1,6 +1,6 @@
 ---
 name: horizon-device
-description: Manage Horizon native VNC Device panels and drive isolated local desktops for simulators and native application tests through device_panel and the horizon-device CLI/MCP. Browser pages use horizon-browser.
+description: Manage Horizon native VNC Device panels and drive isolated local desktops for simulators and native application tests through device_panel and the horizon-device CLI/MCP. Device panels work on every platform; driving an isolated desktop works on Linux with X11 only. Browser pages use horizon-browser.
 ---
 
 # Horizon native VNC and device control

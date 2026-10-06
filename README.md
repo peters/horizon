@@ -106,6 +106,15 @@ Once that loop is familiar, the rest is optional: **New** in the sidebar for an 
 
 ---
 
+## More to explore
+
+New here? [First steps](docs/first-steps.md) walks you from install to your first board, agent, browser and cloud.
+
+- **Cloud workspaces** — rent a RunPod or Hetzner worker and get its shell, agent, browser and Device panels on your board. Agents keep working when your laptop sleeps. Linux and macOS. See [Cloud workspaces](docs/cloud-workspaces.md).
+- **Local Network Bridge** — let a cloud reach devices on your home or office network. See [Local Network Bridge](docs/local-network-bridge.md).
+- **Casting** — show a panel, a workspace or the whole window on an Apple TV. Linux only. See [Casting](docs/casting.md).
+- **Agent-driven desktops** — agents click and type in an isolated X11 desktop while you watch it in a Device panel. Linux only. See [Watch an app over VNC](#watch-an-app-over-vnc).
+
 ## Highlights
 
 <table>
@@ -234,6 +243,26 @@ Grab the latest release from [**Releases**](https://github.com/peters/horizon/re
 
 Homebrew and other package-manager installs keep using the package manager's own upgrade flow. Horizon only offers the in-app update prompt for installs created by the Surge installer.
 
+Release builds don't include [speech input](#speech-input-opt-in). Build from source if you want dictation.
+
+The latest release (v0.2.7, August 2026) predates browser panels, Device panels, cloud workspaces and casting. Until the next release, [build from source](#build-from-source) to get them.
+
+### What works where
+
+Horizon runs on Linux, macOS and Windows, but some features are Linux-only today, and Windows has the most gaps:
+
+| | Linux | macOS | Windows |
+|:--|:--|:--|:--|
+| Board, shell, browser and Device panels | ✓ | ✓ | ✓ (shell panels need `SHELL` set) |
+| Coding-agent panels | ✓ | ✓ | untested, needs a POSIX shell in `SHELL` |
+| Safari browser panels | — | ✓ | — |
+| Cloud workspaces | ✓ | ✓ | — |
+| Agent-driven desktops | X11 | — | — |
+| Apple TV casting | ✓ | — | — |
+| Global push-to-talk | X11 | ✓ | — |
+
+The full list, with the reason for each gap, is in [Platform support](docs/platform-support.md).
+
 ### Homebrew
 
 Stable releases are available through the `peters/horizon` tap on macOS and Linux x64:
@@ -269,7 +298,7 @@ winget uninstall Peters.Horizon
 
 ### Snap
 
-Stable releases are also published to the Snap Store on Linux x64 as a classic snap:
+Snap Store publishing is paused for now, so the store may hold an older release. Use another install method for the latest version. The snap is a classic snap for Linux x64:
 
 ```bash
 sudo snap install horizon-ui --classic
@@ -769,7 +798,7 @@ workspaces:
 
 Dictate into a terminal, editor, or browser page. Terminal, Editor, and Browser panels get a mic button in the title bar (Git Changes and Usage do not). A Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus. Editor dictation inserts at the caret.
 
-Speech is a compile-time opt-in because it builds a native C++ inference library. You need **CMake and a C++ compiler**, plus on Linux the ALSA headers (`libasound2-dev` / `alsa-lib-devel`):
+Speech is a compile-time opt-in because it builds a native C++ inference library, so the release downloads and package-manager installs don't include it. You need **CMake and a C++ compiler**, plus on Linux the ALSA headers (`libasound2-dev` / `alsa-lib-devel`):
 
 ```bash
 cargo speech          # alias for: cargo run --release --features speech  (CPU inference; Metal on macOS)

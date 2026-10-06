@@ -33,16 +33,18 @@ Pre-built binaries are attached to GitHub releases. Prefer the latest **non-prer
 | Platform | Asset | Contents |
 |----------|-------|----------|
 | Linux x64 | `horizon-linux-x64.tar.gz` | Single `horizon` binary — extract and make executable |
+| macOS arm64 | `horizon-osx-arm64.tar.gz` | Single `horizon` binary — extract and make executable |
 | macOS x64 | `horizon-osx-x64.tar.gz` | Single `horizon` binary — extract and make executable |
 | Windows x64 | `horizon-windows-x64.exe` | Ready-to-run executable |
 
-No Rust toolchain or system headers are needed for this path.
+No Rust toolchain or system headers are needed for this path. Release binaries are built with the default features, so they have no speech input. Many functions work on Linux only; read [the platform support](docs/platform-support.md) before you promise a function to a user. [First steps](docs/first-steps.md) is the user guide for the first start.
 
 ### Option B — Build from source
 
 #### Prerequisites
 
 - **Rust stable ≥ 1.95** (edition 2024). Install via [rustup](https://rustup.rs) if not present.
+- **Git LFS** for the bundled fonts and assets. The build stops if a font is still an LFS pointer.
 - **Linux only:** the eframe/wgpu rendering stack needs system headers. Install them before `cargo build`:
   - Debian/Ubuntu: `sudo apt install -y build-essential pkg-config libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libgl-dev cmake nasm`
   - Fedora: `sudo dnf install -y gcc pkg-config wayland-devel libxkbcommon-devel vulkan-loader-devel mesa-libGL-devel cmake nasm`
@@ -57,6 +59,8 @@ No Rust toolchain or system headers are needed for this path.
 ```bash
 git clone https://github.com/peters/horizon.git
 cd horizon
+git lfs install
+git lfs pull
 cargo run --release
 ```
 
@@ -291,6 +295,14 @@ Read the complete append-only experiment ledger before proposing a hypothesis.
 Compare same-machine warm baselines, preserve independent decode/quality and
 lifecycle gates, and record every keep/discard with evidence. This loop does not
 authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
+
+### Documentation Standard
+
+- ASD-STE100 Simplified Technical English (STE) is the default language for technical documentation. Write each new or changed document in STE. Follow [the STE rules](docs/style/ste-rules.md) and [the technical names](docs/style/technical-names.md).
+- This rule applies to install and setup guides, runbooks, test procedures, reference documents, plans and epics. It also applies to the body of an epic issue and to the procedure part of a PR body.
+- `README.md` is not in the scope. It is the first text that a user reads, so write it in plain, friendly language. Use the names in the glossary there too. Put procedures and reference text in STE documents under `docs/` and link to them from the README.
+- Code comments, commit messages, quoted tool output and historical documents in `docs/archive/` are not in the scope.
+- If you change part of an older document, write the changed part in STE. Do not convert the full document in an unrelated PR.
 
 ### Dependencies
 
