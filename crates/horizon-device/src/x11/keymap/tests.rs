@@ -50,6 +50,7 @@ fn view3(keysyms: &[u32]) -> Layout<'_> {
         min_keycode: 8,
         keysyms_per_keycode: 3,
         keysyms,
+        modifier_keycodes: &[SHIFT],
     }
 }
 
@@ -58,6 +59,7 @@ fn view(keysyms: &[u32]) -> Layout<'_> {
         min_keycode: 8,
         keysyms_per_keycode: 2,
         keysyms,
+        modifier_keycodes: &[SHIFT],
     }
 }
 
@@ -532,4 +534,57 @@ fn modifier_rows_decide_which_state_bits_block_text_input() {
         Some(ModifierError::Lock),
         "a with Caps_Lock on the second level"
     );
+}
+
+#[test]
+fn modifier_keys_are_never_typed_with_or_mapped() -> Result<(), PlanError> {
+    let keysyms = layout();
+    // The q key and two unused keycodes are in modifier rows, for example Lock.
+    let modifiers = [SHIFT, 26, FIRST_FREE + 3, FIRST_FREE + 4];
+    let layout = Layout {
+        min_keycode: 8,
+        keysyms_per_keycode: 2,
+        keysyms: &keysyms,
+        modifier_keycodes: &modifiers,
+    };
+    let plan = plan(&layout, &[], SHIFTED, "q\u{e000}")?;
+    let keycodes: Vec<u8> = plan
+        .strokes
+        .iter()
+        .map(|stroke| stroke.keycode)
+        .chain(plan.bindings.iter().map(|(keycode, _)| *keycode))
+        .collect();
+    assert!(
+        keycodes.iter().all(|keycode| !modifiers.contains(keycode)),
+        "{keycodes:?}"
+    );
+    assert_eq!(plan.bindings.len(), 2, "q needs a temporary mapping");
+    assert_eq!(
+        super::plan(&layout, &[], SHIFTED, "q\u{e000}\u{e001}").err(),
+        Some(PlanError::Capacity),
+        "only two unused keycodes are outside the modifier rows"
+    );
+
+    // A recorded keycode that another client put in a modifier row is not ours.
+    let mut full = keysyms.clone();
+    apply(
+        &mut full,
+        &[(FIRST_FREE, 0xa0), (FIRST_FREE + 1, 0xa1), (FIRST_FREE + 2, 0xa2)],
+    );
+    apply(&mut full, &[(FIRST_FREE + 3, 0xa3), (FIRST_FREE + 4, 0xa4)]);
+    let record = |keycode: u8, keysym: u32, last_used_ms: u64| Borrowed {
+        keycode,
+        keysym,
+        last_used_ms,
+    };
+    let previous = [record(FIRST_FREE + 2, 0xa2, 50), record(FIRST_FREE + 3, 0xa3, 10)];
+    let layout = Layout {
+        modifier_keycodes: &modifiers,
+        ..view(&full)
+    };
+    assert_eq!(
+        spare_candidate(&layout, &previous).map(|candidate| candidate.keycode),
+        Some(FIRST_FREE + 2)
+    );
+    Ok(())
 }

@@ -7,9 +7,11 @@ use super::keymap;
 pub(super) const LEASE_GUARD_MS: u64 = 1_000;
 
 /// Sends the key events of one stroke through `fake(kind, keycode)`: Shift
-/// press, key press, key release and Shift release. Each release is sent even
-/// when an earlier event failed, because a failed checked request can still
-/// have reached the server. Returns the first error.
+/// press, key press, key release and Shift release. After a failed press, no
+/// further press is sent, so that a rejected Shift press cannot type the
+/// unshifted character. Each release is sent even when an earlier event
+/// failed, because a failed checked request can still have reached the
+/// server. Returns the first error.
 pub(super) fn send<E>(
     keycode: u8,
     shift: Option<u8>,
@@ -23,10 +25,15 @@ pub(super) fn send<E>(
             first = result;
         }
     };
+    let mut pressed = true;
     if let Some(shift) = shift {
-        keep(fake(press, shift));
+        let result = fake(press, shift);
+        pressed = result.is_ok();
+        keep(result);
     }
-    keep(fake(press, keycode));
+    if pressed {
+        keep(fake(press, keycode));
+    }
     keep(fake(release, keycode));
     if let Some(shift) = shift {
         keep(fake(release, shift));
@@ -99,6 +106,21 @@ mod tests {
         assert_eq!(result, Err(PRESS));
         assert_eq!(events, vec![(PRESS, 38), (RELEASE, 38)], "no Shift key");
         assert_eq!(send(38, None, PRESS, RELEASE, |_, _| Ok::<(), ()>(())), Ok(()));
+    }
+
+    #[test]
+    fn a_failed_shift_press_sends_no_key_press() {
+        let mut events = Vec::new();
+        let result = send(38, Some(50), PRESS, RELEASE, |kind, keycode| {
+            events.push((kind, keycode));
+            if (kind, keycode) == (PRESS, 50) {
+                Err("shift")
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(result, Err("shift"));
+        assert_eq!(events, vec![(PRESS, 50), (RELEASE, 38), (RELEASE, 50)]);
     }
 
     #[test]

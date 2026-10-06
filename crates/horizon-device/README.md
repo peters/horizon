@@ -75,6 +75,9 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
   - The server has no XTEST extension.
 - Each other character gets a temporary mapping on an unused keycode. A server
   round trip makes sure that the server applied the mapping before the first key.
+- The tool does not type with a key of the modifier mapping and does not map
+  it, because a press of that key changes the modifier state. This applies to
+  each row: Shift, Lock, Control and Mod1 to Mod5.
 - A temporary mapping stays after the action. Later actions use it again and do
   not change it.
 - The root window property `_HORIZON_DEVICE_KEYMAP` of the display records the
@@ -104,8 +107,9 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
   request stalls for more than 3 seconds (1 second of lease plus the 2-second
   quiet interval) and the process then stops, a later action can change a
   keycode before a slow client reads the key of that request.
-- If a key event request fails, the tool still sends the key release and the
-  Shift release, because the request can have reached the server.
+- If a key event request fails, the tool sends no further key press. It still
+  sends the key release and the Shift release, because the failed request can
+  have reached the server.
 - The X server time wraps after approximately 49 days. Thus, the tool reads a
   recorded time that is more than 11.24 seconds after the X server time as an
   old time, not as a lease.

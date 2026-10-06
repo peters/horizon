@@ -23,17 +23,26 @@ pub(super) const RECLAIM_QUIET: Duration = Duration::from_secs(2);
 /// Keycode 8 becomes evdev code 0, which clients treat as no key.
 const RESERVED_KEYCODE: u8 = 8;
 
-/// The core keyboard mapping as returned by `GetKeyboardMapping`.
+/// The core keyboard mapping as returned by `GetKeyboardMapping`, with the
+/// keycodes of the modifier mapping from `GetModifierMapping`.
 pub(super) struct Layout<'a> {
     pub min_keycode: u8,
     pub keysyms_per_keycode: u8,
     pub keysyms: &'a [u32],
+    /// A key in a modifier row changes the modifier state when it is pressed,
+    /// whatever its keysyms are. The planner never types with such a key and
+    /// never maps it.
+    pub modifier_keycodes: &'a [u8],
 }
 
 impl Layout<'_> {
     fn keycodes(&self) -> impl Iterator<Item = (u8, &[u32])> {
         let width = usize::from(self.keysyms_per_keycode.max(1));
         (self.min_keycode..=u8::MAX).zip(self.keysyms.chunks(width))
+    }
+
+    fn is_modifier(&self, keycode: u8) -> bool {
+        self.modifier_keycodes.contains(&keycode)
     }
 
     fn symbols(&self, keycode: u8) -> &[u32] {
@@ -146,6 +155,7 @@ fn owned(layout: &Layout<'_>, previous: &[Borrowed]) -> Vec<Borrowed> {
         .filter(|record| {
             let symbols = layout.symbols(record.keycode);
             record.keycode != RESERVED_KEYCODE
+                && !layout.is_modifier(record.keycode)
                 && record.keysym != 0
                 && symbols.get(..2) == Some(&[record.keysym, record.keysym][..])
                 && symbols.iter().all(|symbol| *symbol == 0 || *symbol == record.keysym)
@@ -327,6 +337,7 @@ pub(super) fn plan(
         .filter(|(keycode, symbols)| *keycode != RESERVED_KEYCODE && symbols.iter().all(|symbol| *symbol == 0))
         .map(|(keycode, _)| (keycode, None))
         .skip(1)
+        .filter(|(keycode, _)| !layout.is_modifier(*keycode))
         .collect::<Vec<_>>()
         .into_iter()
         .rev();
@@ -379,7 +390,7 @@ pub(super) fn plan(
 fn locate(layout: &Layout<'_>, keyboard: Keyboard, symbol: u32) -> Option<Stroke> {
     [0, 1].into_iter().find_map(|level| {
         layout.keycodes().find_map(|(keycode, symbols)| {
-            if keycode == RESERVED_KEYCODE || symbols.get(level) != Some(&symbol) {
+            if keycode == RESERVED_KEYCODE || layout.is_modifier(keycode) || symbols.get(level) != Some(&symbol) {
                 return None;
             }
             // Caps Lock inverts Shift on a key with a lowercase and an uppercase letter.

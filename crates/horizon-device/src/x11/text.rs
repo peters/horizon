@@ -13,7 +13,7 @@ use x11rb::{
         xkb::{self, ConnectionExt as _},
         xproto::{
             AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, EventMask, GetKeyboardMappingReply,
-            KEY_PRESS_EVENT, KEY_RELEASE_EVENT, PropMode,
+            GetModifierMappingReply, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, PropMode,
         },
         xtest::{self, ConnectionExt as _},
     },
@@ -73,10 +73,12 @@ impl X11 {
         let mut attempts = 0;
         let (plan, server_now, observed_at, keyboard) = loop {
             let mapping = self.keyboard_mapping()?;
-            let keyboard = self.keyboard(&mapping)?;
+            let modifiers = self.modifier_mapping()?;
+            let layout = self.layout(&mapping, &modifiers);
+            let keyboard = self.keyboard(&layout, &modifiers)?;
             let (previous, server_now) = self.read_record(record_atom)?;
             let observed_at = Instant::now();
-            let plan = keymap::plan(&self.layout(&mapping), &previous, keyboard, text).map_err(|e| match e {
+            let plan = keymap::plan(&layout, &previous, keyboard, text).map_err(|e| match e {
                 PlanError::Capacity => DeviceError::Invalid("text exceeds available X11 Unicode key mappings".into()),
                 PlanError::NoKeysym => DeviceError::Invalid("text contains a character without an X11 keysym".into()),
                 PlanError::CapsLock => DeviceError::Unsupported(
@@ -108,8 +110,9 @@ impl X11 {
         let mut attempts = 0;
         let (candidate, mut record, server_now) = loop {
             let mapping = self.keyboard_mapping()?;
+            let modifiers = self.modifier_mapping()?;
             let (record, server_now) = self.read_record(record_atom)?;
-            let Some(candidate) = keymap::spare_candidate(&self.layout(&mapping), &record) else {
+            let Some(candidate) = keymap::spare_candidate(&self.layout(&mapping, &modifiers), &record) else {
                 return Ok(());
             };
             if !wait_until(keymap::quiet_after(candidate.last_used_ms), &mut attempts)? {
@@ -127,7 +130,7 @@ impl X11 {
 
     /// The Shift key and Caps Lock state for `mapping`. Fails with
     /// `unsupported` for a keyboard state that would change the typed keys.
-    fn keyboard(&self, mapping: &GetKeyboardMappingReply) -> Result<Keyboard> {
+    fn keyboard(&self, layout: &Layout<'_>, modifiers: &GetModifierMappingReply) -> Result<Keyboard> {
         let (state, group) = self.keyboard_state()?;
         // Other groups have other levels.
         if group != 0 {
@@ -135,16 +138,10 @@ impl X11 {
                 "X11 text input requires the first keyboard group".into(),
             ));
         }
-        let modifiers = self
-            .connection
-            .get_modifier_mapping()
-            .map_err(unavailable)?
-            .reply()
-            .map_err(unavailable)?;
         let per_row = usize::from(modifiers.keycodes_per_modifier()).max(1);
         let rows: Vec<&[u8]> = modifiers.keycodes.chunks(per_row).collect();
         // A held Shift, Control, Alt or Super key would change each typed key.
-        keymap::keyboard(&self.layout(mapping), &rows, state).map_err(|e| {
+        keymap::keyboard(layout, &rows, state).map_err(|e| {
             DeviceError::Unsupported(match e {
                 ModifierError::Held => "X11 text input requires released modifier keys".into(),
                 ModifierError::Lock => "X11 text input supports Caps Lock but no other Lock modifier".into(),
@@ -197,11 +194,20 @@ impl X11 {
             .map_err(unavailable)
     }
 
-    fn layout<'a>(&self, mapping: &'a GetKeyboardMappingReply) -> Layout<'a> {
+    fn modifier_mapping(&self) -> Result<GetModifierMappingReply> {
+        self.connection
+            .get_modifier_mapping()
+            .map_err(unavailable)?
+            .reply()
+            .map_err(unavailable)
+    }
+
+    fn layout<'a>(&self, mapping: &'a GetKeyboardMappingReply, modifiers: &'a GetModifierMappingReply) -> Layout<'a> {
         Layout {
             min_keycode: self.connection.setup().min_keycode,
             keysyms_per_keycode: mapping.keysyms_per_keycode,
             keysyms: &mapping.keysyms,
+            modifier_keycodes: &modifiers.keycodes,
         }
     }
 
