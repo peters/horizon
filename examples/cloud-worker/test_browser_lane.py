@@ -388,7 +388,7 @@ class BrowserLaneTests(unittest.TestCase):
         call = self.mcp('agent-host')
 
         browser_errors = self.watch_browser_errors()
-        result = call('browser_create', {'backend': 'chromium', 'url': url, 'visible': False, 'timeout_millis': 60000})
+        result = call('browser_create', {'backend': 'chromium', 'visible': False, 'timeout_millis': 60000})
         errors = browser_errors()
         self.assertFalse(result.get('isError'), f'{self.text(result)}; browser errors: {errors}; control log: '
                          f"{(self.root / 'control-agent-host.log').read_text(errors='replace')[-4000:]}")
@@ -403,6 +403,10 @@ class BrowserLaneTests(unittest.TestCase):
             self.assertEqual(status['NoNewPrivs'].strip(), '1', pid)
             self.assertEqual(int(status['CapBnd'], 16), 0, pid)
 
+        # Navigate after the create: a create with a URL answers before its navigation commits,
+        # and a wait that starts in that window is invalidated by the navigation.
+        navigation = self.answer(call('browser_navigate', {'panel_id': panel, 'url': url, 'wait': 'dom_content_loaded'}))
+        self.assertEqual(navigation['state'], 'dom_content_loaded')
         self.answer(call('browser_wait', {'panel_id': panel, 'selector': 'h1', 'state': 'visible'}))
         snapshot = self.answer(call('browser_snapshot', {'panel_id': panel}))
         self.assertEqual(snapshot['title'], 'Lane page')
