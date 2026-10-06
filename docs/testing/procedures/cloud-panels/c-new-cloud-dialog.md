@@ -790,10 +790,10 @@ This task uses the clouds of D01 and D02. Do not start other clouds.
 
    Result: The evidence has the expected place of each cloud.
 
-4. After D01, read the location of the server of `smoke-a` from the Hetzner API.
-
 > **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
 > contains the token. Do not show the file or the request headers.
+
+4. After D01, read the location of the server of `smoke-a` from the Hetzner API.
 
    ```sh
    curl -fsS -H @<run>/hetzner.header https://api.hetzner.cloud/v1/servers/<server-id> | jq -r '.server.datacenter.location.name'

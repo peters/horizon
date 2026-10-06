@@ -44,7 +44,7 @@ child is the frozen candidate.
 
 ## 5. Setup
 
-1. Make the run directory on a disk file system outside `$HOME`.
+1. Make the run directory on a disk file system outside `$HOME` and outside `/tmp`.
 
    ```sh
    mkdir -p <run>/bin <run>/launcher && chmod 700 <run>

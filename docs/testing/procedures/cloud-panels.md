@@ -81,7 +81,7 @@ resource, sends a secret or changes tailnet access.
 
 | Name | Meaning |
 |---|---|
-| `<run>` | The run directory. It is outside `$HOME` and not on a tmpfs with a user quota. |
+| `<run>` | The run directory. It is outside `$HOME` and outside `/tmp`, and it is not on a tmpfs with a user quota. The fixture hides `$HOME` and `/tmp`, so it cannot see `<run>/bin` there. |
 | `<state>` | The state directory of the persistent launcher, `<run>/fixture`. |
 | `<home>` | The real home path. Inside the fixture, the private home of the candidate shows at this path. |
 | `<data-home>` | The host path of the private home, `<state>/data/home`. |
