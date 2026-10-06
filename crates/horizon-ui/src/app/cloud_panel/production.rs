@@ -248,6 +248,8 @@ pub(super) struct Runtime {
     idle_reports: Option<idle::Reports>,
     /// The newest idle record the current operation's watch read.
     last_idle: Option<cloud_runtime::lifecycle::IdleSample>,
+    /// That watch asks the provider; see [`Runtime::idle_confirming`].
+    idle_confirming: bool,
     /// Why the worker stopped, when it stopped without an operation the owner started.
     stop_cause: Option<cloud_runtime::lifecycle::StopCause>,
     /// A failure of a ready or reconnecting cloud, held while the provider check that

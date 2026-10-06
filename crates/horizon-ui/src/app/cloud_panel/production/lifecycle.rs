@@ -185,8 +185,14 @@ impl Runtime {
     pub(super) fn busy(&self) -> bool {
         self.remote_release.is_some()
             || self.resize.busy()
-            || self.recovery_receiver.is_some()
+            || self.checking_provider()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
+    }
+
+    /// A provider check holds, or may hold, the cloud: Check provider, the check of a
+    /// failure, or the idle watch's own check.
+    pub(super) fn checking_provider(&self) -> bool {
+        self.recovery_receiver.is_some() || self.idle_confirming()
     }
 
     fn start_device_release(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {

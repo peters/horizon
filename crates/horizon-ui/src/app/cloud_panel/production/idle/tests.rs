@@ -27,13 +27,13 @@ fn watch_with(cancel: &Cancellation, results: Vec<cloud_runtime::Result<IdleChec
         Duration::ZERO,
         |_| results.borrow_mut().next().unwrap_or(Ok(IdleCheck::NotWatched)),
         || Ok(Some(stopped())),
-        |_| Ok(None),
+        None,
         &|report| {
             reports.borrow_mut().push(match report {
                 Report::Failed(message) => message,
                 Report::Stopped(state, line) => format!("{:?}: {line}", state.map(|state| state.stage)),
                 Report::StoppedOutside(state) => format!("outside: {:?}", state.stage),
-                Report::Checked | Report::Sampled(_) => return true,
+                Report::Checked | Report::Sampled(_) | Report::Confirming | Report::Confirmed => return true,
             });
             true
         },
@@ -104,7 +104,7 @@ fn a_watch_whose_card_stopped_listening_checks_nothing_more() {
             })
         },
         || panic!("nothing to load"),
-        |_| panic!("nothing to confirm"),
+        None,
         // The card listened for the first check only.
         &|report| matches!(report, Report::Checked) && *checks.borrow() == 0,
     );
@@ -120,7 +120,7 @@ fn a_cancelled_watch_checks_nothing() {
         Duration::ZERO,
         |_| panic!("no check after cancellation"),
         || panic!("nothing to load"),
-        |_| panic!("nothing to confirm"),
+        None,
         &|_| panic!("nothing to report"),
     );
 }
@@ -181,7 +181,7 @@ fn a_stop_whose_record_cannot_be_read_back_is_still_reported() {
                 })
             },
             load,
-            |_| panic!("nothing to confirm"),
+            None,
             &|report| {
                 if let Report::Stopped(state, line) = report {
                     reports.borrow_mut().push((state.is_some(), line));
@@ -235,13 +235,13 @@ fn a_stop_left_unfinished_is_shown_even_after_a_busy_reload() {
             stopping.stage = Stage::Stopping;
             Ok(Some(stopping))
         },
-        |_| Ok(None),
+        None,
         &|report| {
             match report {
                 Report::Stopped(state, _) => reports.borrow_mut().push(state.map(|state| state.stage)),
                 Report::Failed(_) => reports.borrow_mut().push(None),
                 Report::StoppedOutside(_) => panic!("Horizon's own stop"),
-                Report::Checked | Report::Sampled(_) => {}
+                Report::Checked | Report::Sampled(_) | Report::Confirming | Report::Confirmed => {}
             }
             true
         },
@@ -265,7 +265,7 @@ fn a_stop_that_began_and_failed_is_shown_for_the_card_to_finish() {
             stopping.stage = Stage::Stopping;
             Ok(Some(stopping))
         },
-        |_| panic!("a stop Horizon began is not checked with the provider"),
+        None,
         &|report| {
             if let Report::Stopped(state, line) = report {
                 reports.borrow_mut().push((state.map(|state| state.stage), line));
@@ -411,18 +411,25 @@ fn a_worker_that_stops_itself_is_read_and_its_stop_confirmed_with_the_provider()
         Duration::ZERO,
         |_| checks.borrow_mut().next().unwrap(),
         || Ok(Some(runpod_stopped())),
-        |_| Ok(Some(runpod_stopped())),
+        Some(&|_| Ok(Some(runpod_stopped()))),
         &|report| {
             match report {
                 Report::Sampled(sample) => reports.borrow_mut().push(format!("idle {:?}", sample.idle)),
                 Report::StoppedOutside(state) => reports.borrow_mut().push(format!("stopped {:?}", state.stage)),
-                Report::Stopped(..) | Report::Failed(_) => panic!("not Horizon's stop, and not a failure"),
+                Report::Stopped(..) | Report::Failed(_) | Report::Confirmed => {
+                    panic!("not Horizon's stop, and not a failure")
+                }
+                Report::Confirming => reports.borrow_mut().push("confirming".into()),
                 Report::Checked => {}
             }
             true
         },
     );
-    assert_eq!(reports.into_inner(), ["idle 1740s", "stopped Stopped"]);
+    assert_eq!(
+        reports.into_inner(),
+        ["idle 1740s", "confirming", "stopped Stopped"],
+        "the card is busy while the provider is asked"
+    );
     assert!(
         cancel.is_cancelled(),
         "the watch ends the presentation of the stopped worker"
@@ -452,7 +459,7 @@ fn a_worker_without_an_idle_record_is_still_read_until_its_stop_is_confirmed() {
         Duration::ZERO,
         |_| checks.borrow_mut().next().unwrap(),
         || Ok(Some(ready())),
-        |_| Ok(Some(runpod_stopped())),
+        Some(&|_| Ok(Some(runpod_stopped()))),
         &|report| {
             if let Report::StoppedOutside(state) = report {
                 reports.borrow_mut().push(state.stage);
@@ -475,7 +482,7 @@ fn a_worker_without_an_idle_record_is_still_read_until_its_stop_is_confirmed() {
             (state.stage, state.stop_requested) = (Stage::Ready, false);
             Ok(Some(state))
         },
-        |_| panic!("nothing to confirm"),
+        None,
         &|_| true,
     );
     assert_eq!(*ended.borrow(), 1);
@@ -501,7 +508,7 @@ fn a_record_held_by_another_operation_skips_the_check_and_keeps_watching() {
             *loads.borrow_mut() += 1;
             Err(Error::Busy)
         },
-        |_| Ok(Some(runpod_stopped())),
+        Some(&|_| Ok(Some(runpod_stopped()))),
         &|report| {
             if let Report::StoppedOutside(state) = report {
                 reports.borrow_mut().push(state.stage);
@@ -532,7 +539,7 @@ fn a_worker_the_provider_does_not_report_stopped_keeps_the_failed_check() {
         Duration::ZERO,
         |_| checks.borrow_mut().next().unwrap(),
         || Ok(None),
-        |_| Err(Error::Invalid("provider unavailable")),
+        Some(&|_| Err(Error::Invalid("provider unavailable"))),
         &|report| {
             if let Report::Failed(message) = report {
                 reports.borrow_mut().push(message);
@@ -610,4 +617,31 @@ fn a_stop_without_idle_evidence_is_shown_as_a_stop_outside_horizon() {
             limit: Duration::from_mins(10)
         })
     );
+}
+
+#[test]
+fn an_idle_watch_asking_the_provider_blocks_lifecycle_actions_until_it_releases_the_cloud() {
+    let (sender, received) = channel();
+    let (_events, deploy) = channel();
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        receiver: Some(deploy),
+        idle_reports: Some(received),
+        state: Some(runpod_stopped()),
+        ..Runtime::default()
+    };
+    assert!(!runtime.busy());
+    sender.send(Report::Confirming).unwrap();
+    runtime.poll_idle();
+    // The card shows Checking provider while Stop, Delete and Rebuild wait.
+    assert!(runtime.busy() && runtime.checking_provider());
+    sender.send(Report::Confirmed).unwrap();
+    runtime.poll_idle();
+    assert!(!runtime.busy() && !runtime.checking_provider());
+    // A watch whose channel is gone holds nothing the card waits for.
+    sender.send(Report::Confirming).unwrap();
+    runtime.poll_idle();
+    drop(sender);
+    runtime.poll_idle();
+    assert!(!runtime.busy());
 }

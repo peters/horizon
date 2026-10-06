@@ -30,6 +30,10 @@ pub(super) enum Report {
     StoppedOutside(Box<Deployment>),
     /// The worker's idle record, read now.
     Sampled(IdleSample),
+    /// The watch asks the provider, and holds the cloud, until `Confirmed`.
+    Confirming,
+    /// The provider check released the cloud without a stop to show.
+    Confirmed,
     /// A check failed; logged once until the failure changes.
     Failed(String),
     /// A check is about to run. Sent only to learn whether the card still listens,
@@ -63,14 +67,17 @@ pub(super) fn watch(
     if !watched(state) {
         return;
     }
+    // Only a worker that can stop without Horizon is confirmed with the provider.
+    let outside = cloud_runtime::lifecycle::may_stop_outside(state);
     let (settings, root, cancel, ctx) = (settings.clone(), root.to_owned(), cancel.clone(), ctx.clone());
     std::thread::spawn(move || {
+        let confirm = |cancel: &Cancellation| cloud_runtime::lifecycle::worker_stopped(&root, &settings, cancel);
         run(
             &cancel,
             CHECK_INTERVAL,
             |cancel| cloud_runtime::lifecycle::idle_check(&root, &settings, cancel),
             || Store::lock(&root).and_then(|store| store.load()),
-            |cancel| cloud_runtime::lifecycle::worker_stopped(&root, &settings, cancel),
+            outside.then_some(&confirm),
             &|report| {
                 let repaint = !matches!(report, Report::Checked | Report::Sampled(_));
                 let delivered = reports.send(report).is_ok();
@@ -83,15 +90,18 @@ pub(super) fn watch(
     });
 }
 
+/// Asks the provider whether the worker stopped without Horizon; the stopped record if so.
+type Confirm<'a> = dyn Fn(&Cancellation) -> cloud_runtime::Result<Option<Deployment>> + 'a;
+
 /// Checks every `interval` until the cloud stops, is no longer watched, or
 /// `report` finds nobody listening. A check that cannot read the worker asks the
-/// provider through `confirm` whether the worker stopped without Horizon.
+/// provider through `confirm`, when given, whether the worker stopped without Horizon.
 fn run(
     cancel: &Cancellation,
     interval: Duration,
     check: impl Fn(&Cancellation) -> cloud_runtime::Result<IdleCheck>,
     load: impl Fn() -> cloud_runtime::Result<Option<Deployment>>,
-    confirm: impl Fn(&Cancellation) -> cloud_runtime::Result<Option<Deployment>>,
+    confirm: Option<&Confirm<'_>>,
     report: &dyn Fn(Report) -> bool,
 ) {
     let mut failed = None;
@@ -172,15 +182,21 @@ fn run(
                 }
                 // A worker that stopped itself cannot be read either. A check the card
                 // started for a failure ends this watch first, and then decides alone.
-                if cancel.is_cancelled() {
-                    return;
-                }
-                if let Ok(Some(state)) = confirm(cancel)
-                    && !cancel.is_cancelled()
-                {
-                    cancel.cancel();
-                    report(Report::StoppedOutside(Box::new(state)));
-                    return;
+                // The card stays busy while this check may hold the cloud.
+                if let Some(confirm) = confirm {
+                    if cancel.is_cancelled() || !report(Report::Confirming) {
+                        return;
+                    }
+                    if let Ok(Some(state)) = confirm(cancel)
+                        && !cancel.is_cancelled()
+                    {
+                        cancel.cancel();
+                        report(Report::StoppedOutside(Box::new(state)));
+                        return;
+                    }
+                    if !report(Report::Confirmed) {
+                        return;
+                    }
                 }
                 let message = format!("Idle check failed: {error}");
                 if failed.as_ref() != Some(&message) && !report(Report::Failed(message.clone())) {
@@ -303,7 +319,14 @@ impl Runtime {
         let (reports, received) = std::sync::mpsc::channel();
         self.idle_reports = Some(received);
         self.last_idle = None;
+        self.idle_confirming = false;
         reports
+    }
+
+    /// The idle watch asks the provider and may hold the cloud. Only while its card
+    /// still listens: a watch whose channel is gone was ended by what dropped it.
+    pub(super) fn idle_confirming(&self) -> bool {
+        self.idle_confirming && self.idle_reports.is_some()
     }
 
     /// Shows a stop the idle watch made as the card shows any finished Stop.
@@ -328,6 +351,8 @@ impl Runtime {
         match report {
             Report::Checked => {}
             Report::Sampled(sample) => self.last_idle = Some(sample),
+            Report::Confirming => self.idle_confirming = true,
+            Report::Confirmed => self.idle_confirming = false,
             Report::Failed(message) => self.push_note(message),
             // Only the watch of the current operation reports here: every new
             // operation replaces or drops the channel, and the watch already ended

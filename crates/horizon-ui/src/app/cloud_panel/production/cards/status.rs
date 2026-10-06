@@ -326,7 +326,7 @@ fn exceptional(runtime: &Runtime) -> Option<Status> {
             ..base
         });
     }
-    runtime.recovery_receiver.is_some().then(|| Status {
+    runtime.checking_provider().then(|| Status {
         tone: Tone::Live,
         verb: "Checking provider".into(),
         numbers: "Confirming the worker's status".into(),
