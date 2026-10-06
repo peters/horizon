@@ -133,7 +133,8 @@ agent identity. Private credential files must never enter source, images or logs
 
 The control service runs as root. It writes its host instance to
 `/run/horizon-worker/browser-host-instance` with owner root and mode 0644. The
-host instance is an identity, not a credential. `horizon-worker-run` gives the
+host instance is an identity, not a credential. The supervisor starts SSH only
+after the control service writes this file. `horizon-worker-run` gives the
 value to each agent in `HORIZON_BROWSER_HOST_INSTANCE`. Agents cannot read the
 browser runtime root of the control service. Thus the browser tools of an agent
 cannot use that root yet ([#1307](https://github.com/peters/horizon/issues/1307)).

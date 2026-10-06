@@ -170,6 +170,19 @@ class SupervisionTests(unittest.TestCase):
         self.supervisor.close()
         self.assertFalse(published.exists())
 
+    def test_readiness_waits_for_the_published_browser_host_instance(self):
+        published = self.root / 'browser-host-instance'
+        self.start('control', 'import pathlib, time\ntime.sleep(.3)\n'
+                   'pathlib.Path(' + repr(str(published)) + ').write_text("host\\n")\ntime.sleep(60)\n')
+        self.supervisor.await_control()
+        self.assertEqual(published.read_text(), 'host\n')
+
+    def test_a_control_service_that_fails_before_publication_is_reported(self):
+        self.start('control', 'import time\ntime.sleep(.2)\nraise SystemExit(1)\n')
+        with self.assertRaisesRegex(ValueError, 'Required worker service exited: control'):
+            self.supervisor.await_control()
+        self.assertFalse((self.root / 'browser-host-instance').exists())
+
     def test_bootstrap_timeout_checks_real_readiness_without_replacing_services(self):
         child = self.start('xvfb')
         with self.assertRaisesRegex(ValueError, 'display timeout'):

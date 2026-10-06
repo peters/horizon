@@ -208,6 +208,12 @@ class Supervisor:
             del self.children['configure']
             del self.identities['configure']
 
+    def await_control(self):
+        # Agent sessions take the control service's browser host instance from this file
+        # (horizon-worker-run), so no session may start before the service publishes it.
+        self.wait_until(lambda: (self.runtime / 'browser-host-instance').exists(),
+                        'Worker control service did not publish its browser host instance')
+
     def publish(self, desktop):
         self.assert_running(configuring=True)
         names = SERVICES | (DESKTOP if desktop else set()) | (OPTIONAL & set(self.children))
@@ -229,6 +235,7 @@ class Supervisor:
             self.wait_until(vnc_ready, 'Worker desktop transport did not become ready')
         self.configure(['horizon-worker-configure'])
         self.start('control', ['horizon-cloud-worker', 'serve'])
+        self.await_control()
         self.start('sshd', ['/usr/sbin/sshd', '-D', '-e'])
         if os.environ.get('HORIZON_IDLE_STOP_MINUTES'):
             self.start('idle', ['horizon-worker-idle'])
