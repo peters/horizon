@@ -21,6 +21,7 @@ on:
       - crates/horizon-process-time/**
       - Cargo.toml
       - Cargo.lock
+      - rust-toolchain.toml
       # The image ships the license and the dependency notices this collector gathers.
       - LICENSE
       - .horizon/collect-helper-notices.py
