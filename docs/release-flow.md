@@ -137,7 +137,7 @@ If a stable release is missing one of those assets, the release App credentials,
 
 ## Cross-Platform Installer And Update Smoke
 
-Before trusting a changed Surge packaging/update flow, run the Windows + macOS local-filesystem smoke plan in [docs/testing/2026-03-24-surge-installer-update-smoke.md](docs/testing/2026-03-24-surge-installer-update-smoke.md). That plan validates:
+Before trusting a changed Surge packaging/update flow, run the [release installer and update procedure](testing/procedures/release-installer-update.md) on Linux, Windows, Apple Silicon macOS, and Intel macOS. The procedure validates:
 
 - installer creation on the target OS
 - headless installer execution into the normal user install root

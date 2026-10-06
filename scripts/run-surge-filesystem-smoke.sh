@@ -520,6 +520,7 @@ schema: 1
 storage:
   provider: filesystem
   bucket: ${store_dir_native}
+  prefix: ${app_id}
 
 apps:
   - id: ${app_id}

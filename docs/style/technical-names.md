@@ -17,6 +17,9 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | lane | One platform or provider path through a procedure, for example "Hetzner lane". | track, leg |
 | run | One execution of a procedure on one candidate. | pass (as a noun), session |
 | evidence | Screenshots, recordings, logs and hashes from a run. Keep private evidence out of the repository. | proof |
+| Surge installer | The program that installs a Horizon release from a Surge package. | — |
+| runtime manifest | The installed `.surge/runtime.yml` file with the release and executable identity. | — |
+| package store | The directory that holds packages and release metadata for a local test. | — |
 
 ## Horizon objects
 
