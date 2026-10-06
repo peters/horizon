@@ -10,13 +10,13 @@ ARG HORIZON_REVISION
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config nasm libssl-dev libxkbcommon-dev git ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
-# RUSTUP_TOOLCHAIN keeps the image's pinned compiler instead of the repository's stable channel.
+# The image bootstraps rustup; the fetched repository's toolchain file selects the build compiler.
 # Debian 12 links the helpers against glibc 2.36, so they run on any base the checker accepts.
 RUN printf '%s\n' "$HORIZON_REVISION" | grep -Eqx '[0-9a-f]{40}' \
         || { echo 'HORIZON_REVISION must be a full 40-character commit' >&2; exit 1; }
 RUN git init -q /src && git -C /src fetch -q --depth 1 https://github.com/peters/horizon.git "$HORIZON_REVISION" \
     && git -C /src -c advice.detachedHead=false checkout -q FETCH_HEAD \
-    && cd /src && GIT_LFS_SKIP_SMUDGE=1 RUSTUP_TOOLCHAIN=1.99.0 CARGO_HOME=/tmp/helper-cargo cargo build --locked --release \
+    && cd /src && GIT_LFS_SKIP_SMUDGE=1 CARGO_HOME=/tmp/helper-cargo cargo build --locked --release \
         -p horizon-cloud-worker -p horizon-browser-cli -p horizon-device --features horizon-device/cli \
     && mkdir -p /output/usr/local/bin /output/usr/local/share/licenses/horizon \
     && install -m 755 -s target/release/horizon-cloud-worker target/release/horizon-browser \
