@@ -141,18 +141,14 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
     if runpod.is_none() && hetzner.is_none() {
         return None;
     }
-    let workers = offers::workers(profile, form.launch.selector.hours, runpod, hetzner);
-    let offers::Workers {
-        offers,
-        matching,
-        places,
-    } = workers;
+    let mut workers = offers::workers(profile, form.launch.selector.hours, runpod, hetzner);
     let interested = |provider| interested(form, profile, provider);
     let scope = Scope::new(form, profile);
     let matching_currency = |currency| {
-        offers
+        workers
+            .offers
             .iter()
-            .take(matching)
+            .take(workers.matching)
             .any(|offer| in_provider_scope(form, offer) && offer.currency == currency)
     };
     let runpod_currency = matching_currency("USD");
@@ -170,6 +166,13 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
             form.prices.exchange.comparable(),
         )
     };
+    // The cloud_offers comparison order, in this dialog's comparison currency.
+    workers.order_by(cost);
+    let offers::Workers {
+        offers,
+        matching,
+        places,
+    } = workers;
     // A background refresh keeps the last comparison until it answers, so the rows do not move.
     let complete = (!scope.runpod || form.prices.comparable_list().is_some() && form.prices.list_error.is_none())
         && (!scope.hetzner || form.prices.hetzner.comparable().is_some() && form.prices.hetzner.error().is_none())

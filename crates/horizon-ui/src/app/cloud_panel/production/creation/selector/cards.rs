@@ -42,6 +42,12 @@ fn price(offer: &Offer) -> String {
     }
 }
 
+/// The estimated total for the run, in the comparison currency, where it is known.
+fn total(catalog: &Catalog, offer: &Offer, form: &Production) -> Option<String> {
+    let total = catalog.total(offer, form)?;
+    Some(format!("≈ {}{total:.3} total", symbol(catalog.currency)))
+}
+
 fn symbol(currency: &str) -> &str {
     match currency {
         "EUR" => "€",
@@ -108,12 +114,8 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
             ui.label(RichText::new(&detail).size(12.5).color(theme::FG_SOFT()));
             ui.add_space(4.0);
             ui.label(RichText::new(price(offer)).size(19.0).strong().color(theme::FG()));
-            if let Some(total) = catalog.total(offer, form) {
-                ui.label(
-                    RichText::new(format!("≈ {}{total:.3} total", symbol(catalog.currency)))
-                        .size(12.0)
-                        .color(theme::FG_SOFT()),
-                );
+            if let Some(total) = total(catalog, offer, form) {
+                ui.label(RichText::new(total).size(12.0).color(theme::FG_SOFT()));
             }
             ui.horizontal(|ui| widgets::pill(ui, stock, color));
         });
@@ -279,19 +281,17 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
         font.clone(),
         stock_color,
     );
-    painter.text(
-        egui::pos2(at(1.0), y),
-        Align2::RIGHT_CENTER,
-        price(offer),
-        font,
-        theme::FG(),
-    );
+    let total = total(catalog, offer, form);
+    paint_price(painter, egui::pos2(at(1.0), y), &price(offer), total.as_deref(), font);
     response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::Button,
             ui.is_enabled(),
             selected,
-            format!("{name}, {detail}, {}, {stock}", price(offer)),
+            match &total {
+                Some(total) => format!("{name}, {detail}, {}, {total}, {stock}", price(offer)),
+                None => format!("{name}, {detail}, {}, {stock}", price(offer)),
+            },
         )
     });
     let response = if let Some(reason) = reason {
@@ -300,6 +300,26 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
         response
     };
     response.clicked()
+}
+
+/// The billed hourly price at the right edge of a row, and under it the estimated total
+/// the list is ordered by.
+fn paint_price(painter: &egui::Painter, right: egui::Pos2, price: &str, total: Option<&str>, font: FontId) {
+    let price_at = if total.is_some() {
+        right - egui::vec2(0.0, 6.0)
+    } else {
+        right
+    };
+    painter.text(price_at, Align2::RIGHT_CENTER, price, font, theme::FG());
+    if let Some(total) = total {
+        painter.text(
+            right + egui::vec2(0.0, 8.0),
+            Align2::RIGHT_CENTER,
+            total,
+            FontId::proportional(10.5),
+            theme::FG_DIM(),
+        );
+    }
 }
 
 fn stock(catalog: &Catalog, index: usize, form: &Production) -> (&'static str, egui::Color32) {

@@ -123,6 +123,31 @@ fn in_stock_only_keeps_unlisted_hetzner_workers_visible_and_eligible_for_picks()
 }
 
 #[test]
+fn the_worker_list_follows_the_converted_total_and_each_row_shows_it() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    tall_frame(&ctx, &mut app);
+    let text = painted(&tall_frame(&ctx, &mut app));
+    let form = &app.cloud_prototype.production;
+    let catalog = selector::catalog(form).unwrap();
+    let matching = &catalog.offers[..catalog.matching];
+    let totals: Vec<f64> = matching
+        .iter()
+        .map(|offer| catalog.total(offer, form).unwrap())
+        .collect();
+    assert!(totals.is_sorted(), "{totals:?}");
+    assert_eq!((matching[0].provider, matching[0].id.as_str()), ("Hetzner", "cx33"));
+    // The list paints the cheapest worker first, with its converted total.
+    let list = &text[text.find("Showing ").unwrap()..];
+    let hetzner = list.find("Hetzner · cx33 · hel1").unwrap();
+    assert!(list.find("RunPod · ").is_none_or(|runpod| hetzner < runpod), "{list}");
+    assert!(list.contains(&format!("≈ ${:.3} total", totals[0])), "{list}");
+}
+
+#[test]
 fn launch_captures_type_location_and_provider_and_runpod_selection_clears_them() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
