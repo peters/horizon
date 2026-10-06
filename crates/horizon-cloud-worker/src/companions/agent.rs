@@ -8,7 +8,13 @@
 //! agent can copy the key, and a copy works until the target revokes the grant.
 use super::{Busy, Runtime, files, path_text, ssh};
 use horizon_cloud_protocol::companion::{Access, Response};
-use std::{collections::BTreeSet, fmt::Write as _, io, path::Path, process::Command};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+    io,
+    path::Path,
+    process::Command,
+};
 
 /// The account that runs agent and shell sessions on an isolated worker.
 pub(super) struct AgentAccount {
@@ -35,7 +41,11 @@ impl Runtime {
             files::remove(&catalog)?;
             return Err(error);
         }
-        files::write_with(&catalog, bytes, SHARED_FILE, self.agent_group())?;
+        if let Err(error) = files::write_with(&catalog, bytes, SHARED_FILE, self.agent_group()) {
+            // The previous catalog can name access that reconciliation just withdrew.
+            files::remove(&catalog)?;
+            return Err(error);
+        }
         // Older helpers kept the catalog in the root-only grant directory.
         files::remove(&self.live.join("companions/catalog.json"))
     }
@@ -48,14 +58,14 @@ impl Runtime {
         let group = self.agent_group();
         files::shared_directory(&self.agent, group)?;
         let mut first_error = None;
-        let mut published = BTreeSet::new();
+        let mut published = BTreeMap::new();
         if let Some(account) = &self.agent_account {
             let mut combined = String::new();
             for path in self.grant_configs()? {
                 match self.publish_grant(&path) {
-                    Ok((grant, config)) => {
+                    Ok((grant, config, files)) => {
                         combined.push_str(&config);
-                        published.insert(grant);
+                        published.insert(grant, files);
                     }
                     Err(error) => {
                         first_error.get_or_insert(error);
@@ -78,16 +88,29 @@ impl Runtime {
         // Withdraw copies only after the combined configuration stopped naming them.
         for entry in std::fs::read_dir(&self.agent)? {
             let entry = entry?;
-            if entry.file_type()?.is_dir() && !published.contains(entry.file_name().to_string_lossy().as_ref()) {
-                files::remove_directory(&entry.path())?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            match published.get(entry.file_name().to_string_lossy().as_ref()) {
+                None => files::remove_directory(&entry.path())?,
+                // A replaced host-key pin stays until the new configuration replaced it.
+                Some(kept) => {
+                    for file in std::fs::read_dir(entry.path())? {
+                        let file = file?;
+                        if !kept.contains(file.file_name().to_string_lossy().as_ref()) {
+                            files::remove(&file.path())?;
+                        }
+                    }
+                }
             }
         }
         first_error.map_or(Ok(()), Err)
     }
 
     /// Copies the files that one grant's configuration at `path` names and returns
-    /// the grant with that configuration rewritten to the copied paths.
-    fn publish_grant(&self, path: &Path) -> io::Result<(String, String)> {
+    /// the grant, that configuration rewritten to the copied paths, and the names
+    /// of the copied files.
+    fn publish_grant(&self, path: &Path) -> io::Result<(String, String, BTreeSet<String>)> {
         let grant = path
             .parent()
             .and_then(Path::file_name)
@@ -129,14 +152,7 @@ impl Runtime {
             Err(error) if error.kind() == io::ErrorKind::NotFound => files::remove(&destination.join(CONNECTION))?,
             Err(error) => return Err(error),
         }
-        // A replaced host-key pin is not left behind.
-        for entry in std::fs::read_dir(&destination)? {
-            let entry = entry?;
-            if !kept.contains(entry.file_name().to_string_lossy().as_ref()) {
-                files::remove(&entry.path())?;
-            }
-        }
-        Ok((grant.to_owned(), rewritten))
+        Ok((grant.to_owned(), rewritten, kept))
     }
 
     /// OpenSSH reads the user file from the passwd home, which the agent account
