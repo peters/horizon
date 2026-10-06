@@ -78,6 +78,34 @@ A first cloud can need these credentials:
 - Horizon has no Mac companion and no iOS Simulator tool. The simulator
   scripts in `horizon-app` are private and are not a Horizon function.
 
+### Platform support
+
+Many functions work on Linux only. `README.md` shows Windows and macOS as equal
+platforms and does not give these limits.
+
+| Function | Linux | macOS | Windows |
+|---|---|---|---|
+| Terminal panels | Yes | Yes | Partial: no `$SHELL` gives `/bin/bash`, no cwd tracking |
+| Agent panels | Yes | Yes | No: start through `$SHELL -ic` (`panel/spawn.rs:517`), #688 closed as not planned |
+| Browser panels: Chromium, Firefox | Yes | Yes | Yes |
+| Browser panels: Safari | No | Yes | No |
+| Device panels (VNC viewer) | Yes | Yes | Yes |
+| `horizon-device` input to an isolated desktop | X11 only | No | No |
+| Clouds, tailnets, Local Network Bridge | Yes | Yes | No: refused (`session_store.rs:550`), tracked in #969 |
+| Apple TV casting | Yes | No | No |
+| Chromecast | Not in the app | Not in the app | Not in the app |
+| Speech in release builds | No | No | No |
+| Global push-to-talk and text injection | X11 only | Yes | No |
+| Native image paste into a terminal | Yes | Partial | Partial |
+| NVENC | Opt-in | No | No |
+| Signed and notarized app | n/a | No step found | n/a |
+
+Other differences:
+
+- The `horizon-device` skill is installed on all platforms. It does not say that it works on Linux with X11 only.
+- `README.md` gives a Snap install, but CI does not build or publish the Snap.
+- On macOS, Horizon does not examine if an agent process is alive. It assumes that it is alive.
+
 ## Why clouds are important
 
 A cloud gives each agent its own disposable machine. The value is as follows:
@@ -126,6 +154,7 @@ A cloud gives each agent its own disposable machine. The value is as follows:
 
 - [ ] **2.1 Welcome board.** On the first start, open a sample workspace. It has
       a terminal, an agent, a browser and a Device panel, each with a **Try it** action.
+      Show only the functions that work on the platform of the user.
 - [ ] **2.2 Function cards.** Add a **What can Horizon do?** view. Show one short
       video for each function: browser control, VNC, iOS Simulator, cloud,
       casting and dictation.
@@ -192,9 +221,32 @@ A cloud gives each agent its own disposable machine. The value is as follows:
       empty states in STE. Use the names in `technical-names.md`. The welcome
       board and the cloud wizard (2.1, 3.2) are the first users.
 
+### Phase 7: The same functions on Windows and macOS
+
+- [ ] **7.1 Agent panels on Windows.** Start an agent without a POSIX shell. Use
+      PowerShell or start the program directly. This is a blocker for a first
+      run on Windows.
+- [ ] **7.2 Clouds on Windows.** Add durable directory updates on Windows. Then
+      remove the refusal. Tracked in #969.
+- [ ] **7.3 Show the platform limits.** Put the matrix above in `README.md`.
+      Show an unavailable function as unavailable in the app, with the reason.
+      Install the `horizon-device` skill only where it works.
+- [ ] **7.4 Isolated desktop on all platforms.** Use the Linux desktop of a cloud
+      as the route for macOS and Windows users. Then add native support where
+      it is possible.
+- [ ] **7.5 Speech on Windows and Wayland.** Run the speech tests on Windows CI.
+      Add push-to-talk and text injection for Windows and for Wayland.
+- [ ] **7.6 Casting on macOS and Windows.** Add a hardware encoder for each
+      platform, for example VideoToolbox on macOS.
+- [ ] **7.7 Sign the macOS app.** Add code signing and notarization to the
+      release. Then macOS does not block the first start.
+- [ ] **7.8 Process check on macOS.** Examine if an agent process is alive on
+      macOS. Do not assume that it is alive.
+
 ## Order
 
-Do Phase 1 first. The doctor command (1.1) gives the data for the installer,
+Do Phase 1 first. Do 7.1, 7.3 and 7.7 in Phase 1 too, because a first run on
+Windows or macOS fails or shows a warning without them. The doctor command (1.1) gives the data for the installer,
 the skills, the welcome board and the cloud wizard. Phases 2, 3 and 4 can then
 start at the same time. Phase 5 needs a Mac for each test run.
 
