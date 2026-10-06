@@ -1,4 +1,5 @@
 //! Owner-invoked grant setup over SSH. Private keys never leave the source worker.
+mod agent;
 mod files;
 mod ssh;
 // Worker grant fixtures use Unix paths and the OpenSSH tools shipped in Linux images.
@@ -19,6 +20,14 @@ struct Runtime {
     ssh_home: PathBuf,
     source_helper: PathBuf,
     workspace_launcher: Option<PathBuf>,
+    /// Root-owned copies that the agent group can read: catalog, alias, key and pin.
+    agent: PathBuf,
+    /// The unprivileged account of an isolated worker. Without one, agents run as root.
+    agent_account: Option<agent::AgentAccount>,
+    /// The system SSH include that selects the agent copy for the agent account.
+    system_include: PathBuf,
+    /// Only root can take the companion lock and read the private grant directories.
+    privileged: bool,
     /// How long an inspection waits for companion setup that holds the lock, as
     /// the owning Horizon's own refresh does for a few seconds.
     probe_wait: Duration,
@@ -67,16 +76,29 @@ pub(super) fn workspace() -> io::Result<()> {
     }
 }
 
+/// Agent sessions read the discovery catalog here; see [`Runtime::agent`].
+pub(crate) const PUBLISHED: &str = "/run/horizon-companions";
+
 fn runtime() -> Runtime {
+    let isolated = Path::new("/run/horizon-tailnet/agent-isolation").exists();
     Runtime {
         workspace: "/workspace".into(),
         live: "/run/sshd".into(),
         // OpenSSH looks up the login's home in passwd, not the agent's HOME override.
         ssh_home: "/root/.ssh".into(),
         source_helper: "/usr/local/bin/horizon-worker-source".into(),
-        workspace_launcher: Path::new("/run/horizon-tailnet/agent-isolation")
-            .exists()
-            .then(|| "/usr/local/bin/horizon-worker-tailnet".into()),
+        workspace_launcher: isolated.then(|| "/usr/local/bin/horizon-worker-tailnet".into()),
+        agent: PUBLISHED.into(),
+        // The isolation launcher runs sessions with exactly this account and group.
+        agent_account: isolated.then(|| agent::AgentAccount {
+            name: "horizon-agent".into(),
+            group: 10001,
+        }),
+        system_include: "/etc/ssh/ssh_config.d/horizon-companions.conf".into(),
+        #[cfg(unix)]
+        privileged: rustix::process::geteuid().is_root(),
+        #[cfg(not(unix))]
+        privileged: true,
         probe_wait: Duration::from_secs(10),
     }
 }
@@ -84,11 +106,7 @@ fn runtime() -> Runtime {
 pub(crate) fn publish_catalog(catalog: &Catalog) -> io::Result<()> {
     catalog.validate().map_err(io::Error::other)?;
     let runtime = runtime();
-    runtime.with_lock(|| {
-        let root = runtime.live.join("companions");
-        files::directory(&root)?;
-        files::write(&root.join("catalog.json"), &serde_json::to_vec(catalog)?)
-    })
+    runtime.with_lock(|| runtime.publish_catalog_locked(&serde_json::to_vec(catalog)?))
 }
 
 pub(crate) fn probe_access(access: &Access) -> io::Result<bool> {
@@ -106,6 +124,9 @@ impl Runtime {
     /// Probes under the companion lock, waiting up to `probe_wait` for setup that holds
     /// it. A lock that stays held fails with `WouldBlock`, which says nothing about SSH.
     fn probe_access(&self, access: &Access, probe: impl FnOnce() -> io::Result<bool>) -> io::Result<bool> {
+        if !self.privileged {
+            return self.probe_published_access(access, probe);
+        }
         self.with_lock_within(self.probe_wait, || {
             let directory = self.key_directory(&access.grant);
             let response: Response = serde_json::from_slice(&std::fs::read(directory.join("connection.json"))?)?;
@@ -182,13 +203,7 @@ impl Runtime {
             }
             Request::Forget { .. } => self.forget(grant),
             Request::Disconnect { .. } => {
-                let directory = self.key_directory(grant);
-                if directory.exists() {
-                    // Keep the identity until target revocation is confirmed by the caller.
-                    files::remove(&directory.join("config"))?;
-                    files::remove(&directory.join("connection.json"))?;
-                }
-                self.update_config()?;
+                self.withdraw(grant)?;
                 Ok(Response::Disconnected)
             }
         }
@@ -221,16 +236,28 @@ impl Runtime {
         files::remove(&prepared)
     }
 
+    /// Removes the grant's alias for root and agent sessions. The identity stays
+    /// until the caller confirms target revocation.
+    fn withdraw(&self, grant: &str) -> io::Result<()> {
+        // The agent copy goes first, so a failed reconciliation cannot keep it.
+        files::remove_directory(&self.agent.join(grant))?;
+        let directory = self.key_directory(grant);
+        if directory.exists() {
+            files::remove(&directory.join("config"))?;
+            files::remove(&directory.join("connection.json"))?;
+        }
+        self.update_config()
+    }
+
     /// Drops a disconnected grant's key directory once the target revoked the key.
     fn forget(&self, grant: &str) -> io::Result<Response> {
         let directory = self.key_directory(grant);
         if directory.join("config").exists() || directory.join("connection.json").exists() {
             return Err(io::Error::other("Disconnect the companion before forgetting its key"));
         }
-        match std::fs::remove_dir_all(&directory) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-            _ => {}
-        }
+        // Disconnect already withdrew the agent copy; this also clears an interrupted one.
+        files::remove_directory(&self.agent.join(grant))?;
+        files::remove_directory(&directory)?;
         Ok(Response::Forgotten)
     }
 

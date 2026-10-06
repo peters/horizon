@@ -36,6 +36,8 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | companion | A second repository that a cloud can use. | sibling repo, linked repo |
 | sibling | A companion on the same worker as the cloud. | same-worker companion |
 | companion cloud | A companion on its own worker. | — |
+| SSH alias | The name `companion-<alias>` that a source worker uses to open SSH to a companion cloud. | host alias |
+| agent user | The account `horizon-agent` (UID 10001) that runs agent and shell panels on a worker. | agent account |
 | Local Network Bridge | The function that lets a worker reach the local network of the PC. | LNB, network share |
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
 | host instance | The identity of the Horizon host process that owns the browsers of an agent. Browser tools use it to find the workspace of the agent. It is not a secret. | host ID |
