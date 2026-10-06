@@ -645,11 +645,15 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The count is the same as in step 1. The PC and `smoke-b` are online.
 
-9. Do T08 step 13 again with a new test server on `smoke-b`.
+9. In the worker shell of `smoke-b`, start a new test server as in T08 step 11.
 
-   Result: The worker reaches `smoke-b` with the same node identity.
+   Result: The server on `smoke-b` listens on `127.0.0.1:18081`.
 
-10. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
+10. Do T08 step 13 again.
+
+    Result: The worker reaches `smoke-b` with the same node identity.
+
+11. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
 
     Result: The server stops. Port 18081 on `smoke-b` is free for T14.
 
