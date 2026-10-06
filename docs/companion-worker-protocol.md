@@ -66,7 +66,12 @@ copies. The agent user can read the copies but cannot change them.
 Before `connect` reports Ready, the source runs the readiness probe a second time
 as the agent user. This probe uses a temporary copy in `<grant>.probe`. That copy
 is not in `config` or in the catalog, and the source removes it after the probe.
-If that probe fails, the source removes the alias and reports an error.
+If a probe fails, `connect` reports an error. A new grant then gets no alias.
+
+Each refresh of the owning Horizon sends `connect` again for a connected grant.
+During this `connect`, the agent user keeps the published alias. The new record
+replaces the alias only after both probes pass. If this `connect` fails, the
+source keeps or restores the previous configuration and record.
 
 The source publishes the copies of a grant only when `connection.json` of the
 grant is a `connected` record for the same alias. `connect` writes this record
@@ -76,7 +81,8 @@ copy that remains.
 
 After `connect` publishes the copies, it resolves the alias as the agent user
 with `ssh -G`. This examines the system include without a connection. If
-`connect` stops after it writes the record, both probes passed for the grant.
+`connect` stops after it writes the record, both probes passed for the new
+configuration.
 The next reconciliation then publishes the grant. A later `connect` or
 `disconnect` replaces or removes it.
 

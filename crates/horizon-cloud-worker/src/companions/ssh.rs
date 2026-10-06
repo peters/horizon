@@ -158,19 +158,15 @@ impl Runtime {
             ssh_alias: ssh_alias.clone(),
             worktree: path_text(&worktree)?.into(),
         };
-        if let Err(error) = self.commit_connection(grant, &config, &response, &command, deadline) {
-            // A failed Connect leaves no alias for root or agents. The original
-            // error explains the refusal; the withdrawal is best effort.
-            let _ = self.withdraw(grant);
-            return Err(error);
-        }
+        self.commit_connection(grant, &config, &response, &command, deadline)?;
         Ok(response)
     }
 
     /// Publishes a probed connection. Agents get the alias only after the
     /// connection record is written: their copies require that record, and their
-    /// readiness probe uses a staged configuration outside the published one. An
-    /// interruption at any step leaves agents without the alias of this grant.
+    /// readiness probe uses a staged copy of `config`. A refresh of a connected
+    /// grant keeps the published alias until the new record replaces it. If the
+    /// refresh fails, the previous connection is restored; a new grant is withdrawn.
     pub(super) fn commit_connection(
         &self,
         grant: &str,
@@ -183,20 +179,47 @@ impl Runtime {
             return Err(io::Error::other("Invalid companion connection"));
         };
         let directory = self.key_directory(grant);
-        // A replaced connection stops being agent-usable before its configuration changes.
-        files::remove(&directory.join("connection.json"))?;
-        files::remove_directory(&self.agent.join(grant))?;
+        let previous = self.committed_connection(grant)?;
+        let remaining = || deadline.saturating_duration_since(Instant::now());
+        let committed = self
+            .verify_agent_access(grant, config, ssh_alias, command, remaining())
+            .and_then(|()| files::write(&directory.join("config"), config.as_bytes()))
+            .and_then(|()| files::write(&directory.join("connection.json"), &serde_json::to_vec(response)?))
+            .and_then(|()| self.update_config())
+            .and_then(|()| self.verify_published_alias(grant, ssh_alias, remaining()));
+        if let Err(error) = committed {
+            // The original error explains the refusal; the recovery is best effort.
+            let restored = previous.map_or(Err(io::ErrorKind::NotFound.into()), |(config, record)| {
+                self.restore_connection(grant, &config, &record)
+            });
+            if restored.is_err() {
+                let _ = self.withdraw(grant);
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// The configuration and the record of a committed connection of `grant`.
+    fn committed_connection(&self, grant: &str) -> io::Result<Option<(String, Vec<u8>)>> {
+        let directory = self.key_directory(grant);
+        let read = |name: &str| match std::fs::read(directory.join(name)) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        };
+        let (Some(config), Some(record)) = (read("config")?, read("connection.json")?) else {
+            return Ok(None);
+        };
+        let config = String::from_utf8(config).map_err(|_| io::Error::other("Invalid companion config"))?;
+        Ok(super::agent::committed(&config, &record).then_some((config, record)))
+    }
+
+    fn restore_connection(&self, grant: &str, config: &str, record: &[u8]) -> io::Result<()> {
+        let directory = self.key_directory(grant);
         files::write(&directory.join("config"), config.as_bytes())?;
-        self.update_config()?;
-        self.verify_agent_access(
-            grant,
-            ssh_alias,
-            command,
-            deadline.saturating_duration_since(Instant::now()),
-        )?;
-        files::write(&directory.join("connection.json"), &serde_json::to_vec(response)?)?;
-        self.publish_agent_access()?;
-        self.verify_published_alias(grant, ssh_alias, deadline.saturating_duration_since(Instant::now()))
+        files::write(&directory.join("connection.json"), record)?;
+        self.update_config()
     }
 
     fn require_available_alias(&self, grant: &str, alias: &str) -> io::Result<()> {

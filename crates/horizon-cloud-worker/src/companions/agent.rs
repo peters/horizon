@@ -134,11 +134,7 @@ impl Runtime {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
-        let connected = match serde_json::from_slice(&record) {
-            Ok(Response::Connected { ssh_alias, .. }) => config.lines().next() == Some(&format!("Host {ssh_alias}")),
-            _ => false,
-        };
-        if !connected {
+        if !committed(&config, &record) {
             return Ok(None);
         }
         let destination = self.agent.join(grant);
@@ -201,12 +197,13 @@ impl Runtime {
 
     /// Runs the readiness command as the agent account through the isolation
     /// launcher, so Ready means that agent sessions can use the alias too. The
-    /// probe reads a staged copy of the grant configuration, not the published
-    /// one, and the staged copy is removed before this returns.
+    /// probe reads a staged copy of the candidate `config`, not the published
+    /// configuration, and the staged copy is removed before this returns.
     /// `timeout` is what remains of the Connect budget after the root probe.
     pub(super) fn verify_agent_access(
         &self,
         grant: &str,
+        config: &str,
         ssh_alias: &str,
         command: &str,
         timeout: Duration,
@@ -221,7 +218,7 @@ impl Runtime {
             ));
         }
         let staged = self.staged_probe(grant);
-        let observed = self.stage_probe(grant, &staged).and_then(|probe| {
+        let observed = self.stage_probe(grant, config, &staged).and_then(|probe| {
             ssh::checked_with_timeout(
                 Command::new(launcher)
                     .args(["agent", "ssh", "-F"])
@@ -262,13 +259,12 @@ impl Runtime {
         }
     }
 
-    /// Copies the root configuration of `grant` to `staged` for the agent probe
+    /// Copies the candidate `config` of `grant` to `staged` for the agent probe
     /// and returns the path of the staged configuration.
-    fn stage_probe(&self, grant: &str, staged: &Path) -> io::Result<PathBuf> {
-        let config = std::fs::read_to_string(self.key_directory(grant).join("config"))?;
+    fn stage_probe(&self, grant: &str, config: &str, staged: &Path) -> io::Result<PathBuf> {
         files::shared_directory(&self.agent, self.agent_group())?;
         files::remove_directory(staged)?;
-        let (rewritten, _) = self.copy_grant(grant, &config, staged)?;
+        let (rewritten, _) = self.copy_grant(grant, config, staged)?;
         let probe = staged.join("config");
         files::write_with(
             &probe,
@@ -306,5 +302,13 @@ impl Runtime {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, Busy));
         }
         result
+    }
+}
+
+/// Whether `record` is a `Connected` record for the alias that `config` names.
+pub(super) fn committed(config: &str, record: &[u8]) -> bool {
+    match serde_json::from_slice(record) {
+        Ok(Response::Connected { ssh_alias, .. }) => config.lines().next() == Some(&format!("Host {ssh_alias}")),
+        _ => false,
     }
 }

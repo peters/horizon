@@ -335,9 +335,8 @@ fn ready_requires_that_the_agent_account_can_use_the_alias() {
         ),
     ));
     let config = prepare(&runtime, "pair", "app", "127.0.0.1");
-    files::write(&runtime.key_directory("pair").join("config"), config.as_bytes()).unwrap();
     let verify = |runtime: &Runtime, alias: &str| {
-        retry_busy(|| runtime.verify_agent_access("pair", alias, COMMAND, Duration::from_secs(30)))
+        retry_busy(|| runtime.verify_agent_access("pair", &config, alias, COMMAND, Duration::from_secs(30)))
     };
     verify(&runtime, "companion-app").unwrap();
     assert!(!staged.exists(), "the staged probe copy is removed after the probe");
@@ -346,13 +345,13 @@ fn ready_requires_that_the_agent_account_can_use_the_alias() {
     // An exhausted Connect budget refuses Ready without waiting.
     assert!(
         runtime
-            .verify_agent_access("pair", "companion-app", COMMAND, Duration::ZERO)
+            .verify_agent_access("pair", &config, "companion-app", COMMAND, Duration::ZERO)
             .is_err()
     );
     runtime.workspace_launcher = Some("/usr/bin/false".into());
     assert!(
         runtime
-            .verify_agent_access("pair", "companion-app", COMMAND, Duration::from_secs(30))
+            .verify_agent_access("pair", &config, "companion-app", COMMAND, Duration::from_secs(30))
             .is_err()
     );
     assert!(
@@ -368,7 +367,7 @@ fn ready_requires_that_the_agent_account_can_use_the_alias() {
     // Workers without isolation have no separate agent account to check.
     runtime.agent_account = None;
     runtime
-        .verify_agent_access("pair", "companion-app", COMMAND, Duration::from_secs(30))
+        .verify_agent_access("pair", &config, "companion-app", COMMAND, Duration::from_secs(30))
         .unwrap();
     runtime
         .verify_published_alias("pair", "companion-app", Duration::from_secs(30))
@@ -416,7 +415,7 @@ fn an_interrupted_connect_never_publishes_its_grant_to_agents() {
     // During the probe, only the staged copy named the alias.
     let saved_agent = snapshot.join("agent");
     let saved_grant = snapshot.join("run/companions/pair");
-    assert!(saved_grant.join("config").exists() && !saved_grant.join("connection.json").exists());
+    assert!(!saved_grant.join("config").exists() && !saved_grant.join("connection.json").exists());
     assert!(!saved_agent.join("pair").exists());
     assert!(
         !std::fs::read_to_string(saved_agent.join("config"))
@@ -436,11 +435,13 @@ fn an_interrupted_connect_never_publishes_its_grant_to_agents() {
         runtime.staged_probe("pair").join("identity").to_str().unwrap()
     );
 
-    // The worker stops after the probe-config write and before connection.json.
+    // The worker stops after the probe-config write and before connection.json:
+    // during the probe, or after the config of the grant replaced the old one.
     for (saved, live) in [(snapshot.join("run"), &runtime.live), (saved_agent, &runtime.agent)] {
         std::fs::remove_dir_all(live).unwrap();
         std::fs::rename(saved, live).unwrap();
     }
+    files::write(&runtime.key_directory("pair").join("config"), config.as_bytes()).unwrap();
     runtime.publish_catalog_locked(b"{}").unwrap();
     assert!(
         !runtime.agent.join("pair").exists(),
@@ -475,6 +476,94 @@ fn an_interrupted_connect_never_publishes_its_grant_to_agents() {
     assert!(!runtime.key_directory("pair").exists());
     assert!(!runtime.agent.join("pair").exists());
     assert!(runtime.agent.join("other/identity").exists());
+}
+
+#[test]
+fn a_refresh_keeps_the_published_alias_and_restores_it_when_the_refresh_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runtime = isolated(root.path());
+    connect(&runtime, "pair", "app", "127.0.0.1");
+    // The probe saves how the agent resolves the alias while the candidate is probed.
+    let system = system_config(&runtime, root.path());
+    let during = root.path().join("during");
+    let fail_probe = root.path().join("fail-probe");
+    let fail_resolve = root.path().join("fail-resolve");
+    runtime.workspace_launcher = Some(launcher(
+        root.path(),
+        &format!(
+            "if [ \"$3\" = -G ]; then [ -e '{fail_resolve}' ] && exit 1; exec ssh -G -F '{system}' \"$4\"; fi\n\
+             ssh -G -F '{system}' \"$5\" > '{during}' || exit 1\n[ -e '{fail_probe}' ] && exit 1\necho true",
+            fail_resolve = fail_resolve.display(),
+            system = system.display(),
+            during = during.display(),
+            fail_probe = fail_probe.display(),
+        ),
+    ));
+    let refresh = |host: &str| {
+        let config = prepare(&runtime, "pair", "app", host);
+        retry_busy(|| {
+            runtime.commit_connection(
+                "pair",
+                &config,
+                &connected("pair", "app"),
+                COMMAND,
+                std::time::Instant::now() + Duration::from_secs(30),
+            )
+        })
+    };
+    let hostname = |resolved: &str| setting(resolved, "hostname").to_owned();
+    let published = || {
+        let directory = runtime.key_directory("pair");
+        (
+            std::fs::read(directory.join("config")).unwrap(),
+            std::fs::read(directory.join("connection.json")).unwrap(),
+            std::fs::read(runtime.agent.join("pair/identity")).unwrap(),
+        )
+    };
+
+    // A refresh keeps the alias usable for agents during the probe.
+    refresh("127.0.0.3").unwrap();
+    assert_eq!(hostname(&std::fs::read_to_string(&during).unwrap()), "127.0.0.1");
+    assert_eq!(hostname(&resolve(&runtime, root.path(), "companion-app")), "127.0.0.3");
+    let before = published();
+
+    // A failed probe on a refresh keeps the old copy and record.
+    std::fs::write(&fail_probe, "").unwrap();
+    assert!(refresh("127.0.0.4").is_err());
+    assert_eq!(hostname(&std::fs::read_to_string(&during).unwrap()), "127.0.0.3");
+    assert_eq!(published(), before);
+    assert_eq!(hostname(&resolve(&runtime, root.path(), "companion-app")), "127.0.0.3");
+    assert!(!runtime.staged_probe("pair").exists());
+
+    // A failure after the new record was written restores the previous connection.
+    std::fs::remove_file(&fail_probe).unwrap();
+    std::fs::write(&fail_resolve, "").unwrap();
+    assert!(refresh("127.0.0.4").is_err());
+    assert_eq!(published(), before);
+    assert_eq!(hostname(&resolve(&runtime, root.path(), "companion-app")), "127.0.0.3");
+
+    // A first Connect that fails publishes nothing and keeps nothing.
+    std::fs::remove_file(&fail_resolve).unwrap();
+    std::fs::write(&fail_probe, "").unwrap();
+    let config = prepare(&runtime, "fresh", "fresh", "127.0.0.5");
+    assert!(
+        retry_busy(|| {
+            runtime.commit_connection(
+                "fresh",
+                &config,
+                &connected("fresh", "fresh"),
+                COMMAND,
+                std::time::Instant::now() + Duration::from_secs(30),
+            )
+        })
+        .is_err()
+    );
+    assert!(!runtime.key_directory("fresh").join("config").exists());
+    assert!(!runtime.agent.join("fresh").exists() && !runtime.staged_probe("fresh").exists());
+    assert_eq!(
+        hostname(&resolve(&runtime, root.path(), "companion-fresh")),
+        "companion-fresh"
+    );
 }
 
 #[test]
