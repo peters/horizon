@@ -1,31 +1,40 @@
-//! Synthetic deploy output for a debug build. Deploy logs live only in memory, so an
-//! isolated viewer has nothing to scroll unless this is asked for. It never runs in a
-//! release build, only on an ephemeral session, and it leaves a session alone when
-//! that session already has a cloud.
-use super::Stage;
+//! Synthetic cloud cards for a debug build. Deploy logs live only in memory, so an
+//! isolated viewer has nothing to scroll unless this is asked for, and an idle stop
+//! needs a real worker and half an hour. It never runs in a release build, only on
+//! an ephemeral session, and it leaves a session alone when that session already
+//! has a cloud.
+use super::{Deployment, Stage, idle::Report};
 use crate::app::HorizonApp;
 use horizon_core::cloud_panel::{CloudConfig, CloudGroup, CloudLaunch};
+use std::time::{Duration, Instant};
 
 const PREVIEW_ISSUE: u32 = 8_800_001;
 
-pub(super) fn seed(app: &mut HorizonApp) {
-    let Ok(raw) = std::env::var("HORIZON_CLOUD_LOG_PREVIEW") else {
-        return;
-    };
-    let Ok(count) = raw.parse::<usize>() else {
-        return;
-    };
-    seed_lines(app, count);
+pub(super) fn seed(app: &mut HorizonApp, ctx: &egui::Context) {
+    if let Some(count) = std::env::var("HORIZON_CLOUD_LOG_PREVIEW")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+    {
+        seed_lines(app, count);
+    }
+    // Seconds until the synthetic worker stops itself.
+    if let Some(seconds) = std::env::var("HORIZON_CLOUD_IDLE_STOP_PREVIEW")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+    {
+        seed_idle_stop(app, Duration::from_secs(seconds), ctx);
+    }
+}
+
+/// A saved session would persist a synthetic cloud, and removal would then refuse
+/// it. A local card has no deployment yet. Any cloud already on the board is left alone.
+fn accepts_preview(app: &HorizonApp) -> bool {
+    app.active_session.as_ref().is_some_and(|session| !session.persistent) && app.cloud_prototype.groups.0.is_empty()
 }
 
 fn seed_lines(app: &mut HorizonApp, count: usize) -> bool {
     let count = count.clamp(1, horizon_core::PANEL_SCROLLBACK_LIMIT);
-    // A saved session would persist this cloud, and removal would then refuse it.
-    if app.active_session.as_ref().is_none_or(|session| session.persistent) {
-        return false;
-    }
-    // A local card has no deployment yet. Any cloud already on the board is left alone.
-    if !app.cloud_prototype.groups.0.is_empty() {
+    if !accepts_preview(app) {
         return false;
     }
     let Some(launch) = preview_launch() else {
@@ -58,6 +67,87 @@ fn seed_lines(app: &mut HorizonApp, count: usize) -> bool {
         ));
     }
     true
+}
+
+/// A ready synthetic `RunPod` cloud with a 30-minute idle stop. Its idle watch reads 29
+/// idle minutes, and after `delay` the provider confirms that the worker stopped
+/// itself, as the watch of a real worker reports it. No provider is asked.
+fn seed_idle_stop(app: &mut HorizonApp, delay: Duration, ctx: &egui::Context) -> bool {
+    if !accepts_preview(app) {
+        return false;
+    }
+    let Some((launch, ready)) = idle_launch() else {
+        return false;
+    };
+    let mut stopped = ready.clone();
+    stopped.stage = Stage::Stopped;
+    stopped.stop_requested = true;
+    if let Some(worker) = &mut stopped.worker {
+        worker.desired_status = "EXITED".into();
+    }
+    let mut group = CloudGroup::new(
+        PREVIEW_ISSUE,
+        "Synthetic idle stop".into(),
+        "synthetic".into(),
+        "/synthetic".into(),
+        // Below the terminals of the isolated fixture's workspace.
+        [40.0, 600.0],
+    );
+    group.size = [1140.0, 420.0];
+    group.remote = Some(launch);
+    app.cloud_prototype.groups.0.push(group);
+    let runtime = app
+        .cloud_prototype
+        .production
+        .runtimes
+        .entry(PREVIEW_ISSUE)
+        .or_default();
+    runtime.progress.stage(Stage::Validate, Instant::now());
+    runtime.progress.stage(Stage::Ready, Instant::now());
+    runtime.stage = Some(Stage::Ready);
+    runtime.state = Some(ready);
+    let (connection, receiver) = std::sync::mpsc::channel();
+    runtime.receiver = Some(receiver);
+    let reports = runtime.listen_idle();
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        // The card stays connected until the stop.
+        let _connection = connection;
+        let _ = reports.send(Report::Sampled(horizon_core::cloud_runtime::lifecycle::IdleSample {
+            idle: Duration::from_mins(29),
+            limit: Duration::from_mins(30),
+            read_at: Instant::now(),
+        }));
+        std::thread::sleep(delay);
+        let _ = reports.send(Report::StoppedOutside(Box::new(stopped)));
+        ctx.request_repaint();
+    });
+    true
+}
+
+fn idle_launch() -> Option<(CloudLaunch, Deployment)> {
+    let config = CloudConfig::parse(
+        "version: 1\ndefault: idle\nprofiles:\n  idle:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 2\n    memory_gb: 4\n    gpu: false\n    idle_stop_minutes: 30\n",
+    )
+    .ok()?;
+    let profile = config.profiles.get("idle")?.clone();
+    let state = serde_json::from_value(serde_json::json!({
+        "version": 1, "cloud_id": "synthetic-idle", "repository": "/synthetic", "revision": "a".repeat(40),
+        "profile": profile, "stage": "Ready", "operation": {"state": "bound", "worker_id": "synthetic1"},
+        "spec": null, "sessions": [], "source_ready": true,
+        "worker": {"id": "synthetic1", "name": "synthetic-idle", "imageName": "example.invalid/worker",
+            "desiredStatus": "RUNNING"}
+    }))
+    .ok()?;
+    let launch = CloudLaunch {
+        deployment_started: true,
+        id: "synthetic-idle".into(),
+        revision: "a".repeat(40),
+        profile_name: "idle".into(),
+        profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
+    };
+    Some((launch, state))
 }
 
 fn preview_launch() -> Option<CloudLaunch> {
@@ -151,7 +241,34 @@ mod tests {
             .expect("saved session");
         app.activate_persistent_session(&session);
         assert!(!seed_lines(&mut app, 400));
+        assert!(!seed_idle_stop(&mut app, Duration::ZERO, &egui::Context::default()));
         assert!(app.cloud_prototype.groups.0.is_empty());
         assert!(app.board.cloud_groups.0.is_empty());
+    }
+
+    #[test]
+    fn the_idle_stop_preview_goes_from_ready_to_stopped_after_its_idle_minutes() {
+        let (_temp, mut app) = test_app();
+        assert!(seed_idle_stop(&mut app, Duration::ZERO, &egui::Context::default()));
+        let runtime = app
+            .cloud_prototype
+            .production
+            .runtimes
+            .get_mut(&PREVIEW_ISSUE)
+            .expect("preview runtime");
+        assert!(runtime.connected_ready());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while runtime.stage != Some(Stage::Stopped) {
+            assert!(Instant::now() < deadline, "the synthetic worker stops");
+            std::thread::sleep(Duration::from_millis(10));
+            runtime.poll_idle();
+        }
+        assert_eq!(
+            runtime.stop_cause,
+            Some(horizon_core::cloud_runtime::lifecycle::StopCause::Idle {
+                limit: Duration::from_mins(30)
+            })
+        );
+        assert!(runtime.error.is_none() && runtime.receiver.is_none());
     }
 }

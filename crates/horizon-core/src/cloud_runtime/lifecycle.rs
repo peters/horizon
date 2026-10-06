@@ -8,7 +8,9 @@ use super::{
 use horizon_cloud::WorkerStatus;
 use std::path::Path;
 
+mod outside;
 mod power;
+pub use outside::{IdleSample, StopCause, may_stop_outside, worker_stopped};
 #[cfg(all(test, unix))]
 use power::Announce;
 pub(in crate::cloud_runtime) use power::{request_resume, request_stop};
@@ -176,10 +178,14 @@ pub(in crate::cloud_runtime) fn stop_locked(
 
 /// # Errors
 /// Reads a Hetzner cloud's idle record and stops the cloud, as Stop does, once it
-/// has been idle for its whole period. `RunPod` workers stop themselves, so any
-/// other cloud reports `NotWatched`.
+/// has been idle for its whole period. A `RunPod` worker stops itself, so its record
+/// is only read: it reports `Active` even when the worker is about to stop. Any
+/// other cloud, and a worker that keeps no record, reports `NotWatched`.
 pub fn idle_check(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<IdleCheck> {
-    super::deployment::hetzner::idle::check(root, settings, cancel)
+    match outside::sample(root, settings, cancel)? {
+        IdleCheck::NotWatched => super::deployment::hetzner::idle::check(root, settings, cancel),
+        sampled => Ok(sampled),
+    }
 }
 
 /// # Errors

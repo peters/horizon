@@ -22,7 +22,12 @@ pub(super) enum Action {
 mod tests;
 
 impl Runtime {
-    fn start_reconciliation(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {
+    pub(super) fn start_reconciliation(
+        &mut self,
+        state_root: std::path::PathBuf,
+        settings: Settings,
+        ctx: &egui::Context,
+    ) {
         if self.receiver.is_some() {
             return;
         }
@@ -55,6 +60,19 @@ impl Runtime {
             )),
         };
         self.recovery_receiver = None;
+        // A check Horizon started for a failure: a confirmed stop replaces the
+        // failure, and anything else shows the failure as it was.
+        if let Some(failure) = self.unexplained_failure.take() {
+            match result {
+                Ok(recovered) if recovered.confirmed_stopped() => self.show_stopped_outside(recovered.state),
+                Ok(recovered) => {
+                    self.state = Some(recovered.state);
+                    self.error = Some(failure);
+                }
+                Err(_) => self.error = Some(failure),
+            }
+            return;
+        }
         match result {
             Ok(recovered) => {
                 // A stopped worker, including one that stopped itself when idle, only needs Resume.

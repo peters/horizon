@@ -2,7 +2,7 @@
 //! header, the steps in its body and the drawer's Overview all read this.
 use super::super::{Runtime, Stage};
 use super::{deleted_or_redeploying, deleting, rebuild};
-use horizon_core::cloud_runtime::{CreateState, diagnosis, progress};
+use horizon_core::cloud_runtime::{CreateState, diagnosis, lifecycle::StopCause, progress};
 use std::time::{Duration, SystemTime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -374,16 +374,19 @@ pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> St
             primary: Some(Primary::ReconcileStop),
             ..base
         },
-        Some(Stage::Stopped) => Status {
-            tone: Tone::Attention,
-            verb: "Stopped".into(),
-            numbers: "Storage kept · billable".into(),
-            tail: super::self_stop::line(runtime.state.as_ref()).unwrap_or_default(),
-            right: panels(occupancy.panels),
-            track: Track::complete(&Stage::ALL, true),
-            primary: Some(Primary::Resume),
-            ..base
-        },
+        Some(Stage::Stopped) => {
+            let (verb, tail) = stopped(runtime);
+            Status {
+                tone: Tone::Attention,
+                verb,
+                numbers: "Storage kept · billable".into(),
+                tail,
+                right: panels(occupancy.panels),
+                track: Track::complete(&Stage::ALL, true),
+                primary: Some(Primary::Resume),
+                ..base
+            }
+        }
         _ if runtime.state.is_some() => Status {
             tone: Tone::Idle,
             verb: "Disconnected".into(),
@@ -471,6 +474,23 @@ fn held(runtime: &Runtime) -> Option<Status> {
             primary: Some(Primary::CheckProvider),
             ..base
         })
+}
+
+/// The verb and tail of a stopped cloud: why it stopped, when Horizon knows. A stop
+/// the owner made, or one from before this Horizon started, names an agent's
+/// request when the worker reported one.
+fn stopped(runtime: &Runtime) -> (String, String) {
+    match runtime.stop_cause {
+        Some(StopCause::Idle { limit }) => (
+            format!("Stopped after {} idle minutes", limit.as_secs() / 60),
+            String::new(),
+        ),
+        Some(StopCause::Unknown) => ("Stopped".into(), "Stopped outside Horizon".into()),
+        None => (
+            "Stopped".into(),
+            super::self_stop::line(runtime.state.as_ref()).unwrap_or_default(),
+        ),
+    }
 }
 
 fn panels(count: usize) -> String {

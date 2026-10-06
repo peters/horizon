@@ -38,6 +38,10 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | companion cloud | A companion on its own worker. | — |
 | Local Network Bridge | The function that lets a worker reach the local network of the PC. | LNB, network share |
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
+| idle period | The value of `idle_stop_minutes` in a profile. | idle timeout, idle limit |
+| idle stop | The stop of a worker after an idle period without agent activity. On RunPod, the worker stops itself. On Hetzner, Horizon stops the cloud. | auto stop, auto-stop |
+| idle record | The file `/run/horizon-worker/idle.json` on a worker. `horizon-worker-idle --report` prints it. | idle report |
+| idle log | The file `/workspace/idle.log` on a worker. The idle watcher writes its lines there. | — |
 
 ## Casting
 

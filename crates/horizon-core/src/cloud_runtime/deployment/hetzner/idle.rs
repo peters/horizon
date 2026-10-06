@@ -29,11 +29,20 @@ pub enum IdleCheck {
     Stopped { idle: Duration },
 }
 
+/// The worker's idle record, as `horizon-worker-idle --report` prints it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Report {
-    idle_seconds: u64,
-    idle_stop_seconds: u64,
+pub(in crate::cloud_runtime) struct Report {
+    pub(in crate::cloud_runtime) idle_seconds: u64,
+    pub(in crate::cloud_runtime) idle_stop_seconds: u64,
+}
+
+impl Report {
+    /// # Errors
+    /// Refuses output that is not one idle record.
+    pub(in crate::cloud_runtime) fn parse(output: &str) -> Result<Self> {
+        serde_json::from_str(output.trim()).map_err(|_| Error::Invalid("The worker's idle record is malformed"))
+    }
 }
 
 /// The running cloud a check reads, as recorded when the check began.
@@ -79,7 +88,7 @@ pub(in crate::cloud_runtime) fn check(root: &Path, settings: &Settings, cancel: 
     check_with(
         root,
         cancel,
-        |worker| read(worker, settings, root, cancel),
+        |worker| read(worker, settings, root, cancel, REPORT_COMMAND),
         || Compute::cleanup(settings),
     )
 }
@@ -94,8 +103,7 @@ pub(super) fn check_with(
     let Some(before) = Store::lock(root)?.load()?.as_ref().and_then(watched) else {
         return Ok(IdleCheck::NotWatched);
     };
-    let report: Report = serde_json::from_str(read(&before.worker)?.trim())
-        .map_err(|_| Error::Invalid("The worker's idle record is malformed"))?;
+    let report = Report::parse(&read(&before.worker)?)?;
     // A worker started with another period would be stopped at the wrong time.
     if report.idle_stop_seconds != before.limit.as_secs() {
         return Err(Error::Invalid(
@@ -121,7 +129,14 @@ pub(super) fn check_with(
     Ok(IdleCheck::Stopped { idle })
 }
 
-fn read(worker: &Worker, settings: &Settings, root: &Path, cancel: &Cancellation) -> Result<String> {
+/// Runs `command`, which prints the idle record, on `worker` over its pinned connection.
+pub(in crate::cloud_runtime) fn read(
+    worker: &Worker,
+    settings: &Settings,
+    root: &Path,
+    cancel: &Cancellation,
+    command: &str,
+) -> Result<String> {
     let connection = Connection::new(worker, settings, root)?;
     Runner {
         cancel,
@@ -130,7 +145,7 @@ fn read(worker: &Worker, settings: &Settings, root: &Path, cancel: &Cancellation
     }
     .run(
         "Reading the worker's idle record",
-        &mut connection.pinned_command(REPORT_COMMAND),
+        &mut connection.pinned_command(command),
         REPORT_TIMEOUT,
     )
 }

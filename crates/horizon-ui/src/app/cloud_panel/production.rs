@@ -246,6 +246,13 @@ pub(super) struct Runtime {
     rebuild: Option<rebuild::Attempt>,
     resize: resize::State,
     idle_reports: Option<idle::Reports>,
+    /// The newest idle record the current operation's watch read.
+    last_idle: Option<cloud_runtime::lifecycle::IdleSample>,
+    /// Why the worker stopped, when it stopped without an operation the owner started.
+    stop_cause: Option<cloud_runtime::lifecycle::StopCause>,
+    /// A failure of a ready or reconnecting cloud, held while the provider check that
+    /// may explain it as a stop runs.
+    unexplained_failure: Option<String>,
     sharing: local_network::Sharing,
     /// The owner's scope for that sharing, kept while it pauses.
     scope: local_network::Editor,
@@ -300,6 +307,31 @@ impl Runtime {
     /// leaves this as it is and only reports why.
     fn connected_ready(&self) -> bool {
         self.receiver.is_some() && self.stage == Some(Stage::Ready)
+    }
+
+    /// Whether the failure just reported can be a stop Horizon did not make: the
+    /// connection to a ready worker was lost, or a reconnect failed while it looked
+    /// for the bound worker, or found it recorded as stopped. A failure after its
+    /// operation was cancelled, as by a stop, is not one.
+    fn failure_may_be_a_stop(&self) -> bool {
+        // The attempt reached Ready; a failed rebuild that reloaded a ready record did not.
+        let lost = self.stage == Some(Stage::Ready) && self.progress.ended_in(Stage::Ready).is_some();
+        let reconnect = self.operation.is_none()
+            && self.rebuild.is_none()
+            && (matches!(self.stage, Some(Stage::Provision | Stage::Readiness))
+                || self.state.as_ref().is_some_and(|state| state.stop_requested));
+        (lost || reconnect)
+            && !self.progress.is_deletion()
+            && !self.resize.busy()
+            && self.recovery_receiver.is_none()
+            && !self
+                .cancel
+                .as_ref()
+                .is_some_and(cloud_runtime::Cancellation::is_cancelled)
+            && self
+                .state
+                .as_ref()
+                .is_some_and(cloud_runtime::lifecycle::may_stop_outside)
     }
 
     /// A line outside any operation's steps: an idle report, a provider check or a device
@@ -408,6 +440,7 @@ impl Runtime {
         // failed no longer names this attempt's failure.
         self.operation = None;
         self.rebuild = None;
+        self.stop_cause = None;
         self.sharing.await_ready();
         let (tx, rx) = channel();
         let cancel = cloud_runtime::Cancellation::default();
@@ -512,6 +545,7 @@ impl HorizonApp {
                         runtime.cancel = None;
                         // A stop can end a rebuild that met it; its steps no longer apply.
                         runtime.rebuild = None;
+                        runtime.stop_cause = None;
                     }
                     Event::Resumed => {
                         runtime.receiver = None;
@@ -555,6 +589,7 @@ impl HorizonApp {
                         runtime.state = Some(*state);
                         runtime.stage = Some(Stage::Ready);
                         runtime.error = None;
+                        runtime.stop_cause = None;
                         finished.push(id);
                     }
                     Event::Failed(error, at) => {
@@ -567,7 +602,7 @@ impl HorizonApp {
             runtime.poll_release_and_repaint(ctx);
         }
         self.follow_cloud_billing(ctx);
-        self.finish_failed_cloud_operations(finished);
+        self.finish_failed_cloud_operations(finished, ctx);
         self.reconcile_sharing(ctx);
         self.finish_closing_clouds(ctx);
         self.reconnect_resumed(resumed, ctx);
@@ -600,14 +635,52 @@ impl HorizonApp {
             runtime.billing.follow(runtime.state.as_ref(), root, BILLING, &repaint);
         }
     }
-    fn finish_failed_cloud_operations(&mut self, finished: Vec<u32>) {
+    fn finish_failed_cloud_operations(&mut self, finished: Vec<u32>, ctx: &egui::Context) {
         for id in finished {
             if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id)
                 && runtime.error.is_some()
             {
+                let explain = runtime.failure_may_be_a_stop();
                 runtime.receiver = None;
-                runtime.cancel = None;
+                if let Some(cancel) = runtime.cancel.take()
+                    && explain
+                {
+                    // The provider check decides; the idle watch of the lost worker ends.
+                    cancel.cancel();
+                    runtime.idle_reports = None;
+                }
+                if explain {
+                    self.check_failure_with_provider(id, ctx);
+                }
             }
+        }
+    }
+
+    /// Asks the provider, before the card shows the failure of cloud `id`, whether it
+    /// is a stop Horizon did not make. The check shows as Checking provider.
+    fn check_failure_with_provider(&mut self, id: u32, ctx: &egui::Context) {
+        let Some(root) = self.cloud_prototype.root.clone() else {
+            return;
+        };
+        let Some(launch) = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.issue == id)
+            .and_then(|group| group.remote.as_ref())
+        else {
+            return;
+        };
+        let (Ok(settings), Ok(state_root)) = (
+            Settings::load(&root.join("settings.json")),
+            cloud_runtime::state::cloud_directory(&root, &launch.id),
+        ) else {
+            return;
+        };
+        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+            runtime.unexplained_failure = runtime.error.take();
+            runtime.start_reconciliation(state_root, settings, ctx);
         }
     }
     fn remove_closed_cloud_browsers(&mut self, removed: Vec<(u32, String)>) {
@@ -713,7 +786,7 @@ impl HorizonApp {
             }
             // A debug build can show a synthetic deploy log. Release builds omit it.
             #[cfg(debug_assertions)]
-            log_preview::seed(self);
+            log_preview::seed(self, ctx);
         }
     }
     /// Reconnects each resumed worker. The reconnect that finishes a resume is still that
