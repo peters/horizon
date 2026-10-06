@@ -562,9 +562,10 @@ Use `smoke-r`.
 
 ## 8. Cleanup
 
-1. Stop the counter of L02 with Ctrl-C in its Shell panel.
+1. Examine the Shell panel of the L02 counter.
 
-   Result: The Shell panel shows a prompt.
+   Result: The counter does not run. The stop in L09 ended its process. If the
+   counter still runs, stop it with Ctrl-C.
 
 2. Make sure that the resource ledger shows each deleted resource as deleted.
 
