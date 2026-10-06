@@ -173,49 +173,58 @@ fixture opens the candidate window at 1480 × 900 pixels.
 
 3. Measure the bottom edge of the dialog.
 
-   Result: You have the reference position for step 8.
+   Result: You have the reference position for step 9.
 
 4. Close the New cloud dialog with **Cancel**.
 
    Result: The dialog closes.
 
-5. Set the candidate window to 800 × 900 pixels. Use the `display` value from
-   the fixture output.
+5. Find the process ID of the candidate.
 
    ```sh
-   DISPLAY=<display> xdotool search --name '^Horizon$' windowsize %1 800 900
+   pgrep -f '^<frozen-candidate> --config'
+   ```
+
+   Result: The command shows one process ID.
+
+6. Set the candidate window to 800 × 900 pixels. Use the `display` value from
+   the fixture output and the process ID from step 5.
+
+   ```sh
+   DISPLAY=<display> xdotool search --pid <candidate-pid> --name '^Horizon$' \
+     windowsize %1 800 900
    ```
 
    Result: The window is 800 pixels wide. The toolbar shows **More** instead of
    **Cloud**.
 
-6. Start a recording of the isolated desktop.
+7. Start a recording of the isolated desktop.
 
    Result: The recorder writes frames.
 
-7. Open **More › Cloud › New cloud…**.
+8. Open **More › Cloud › New cloud…**.
 
    Result: The dialog shows the summary below the worker fields in one column.
 
-8. Measure the bottom edge of the dialog.
+9. Measure the bottom edge of the dialog.
 
    Result: The bottom edge is less than 40 pixels from the reference position.
 
-9. Find the first recorded frame that shows the dialog.
+10. Find the first recorded frame that shows the dialog.
 
-   Result: The frame shows the dialog heading **New cloud**, **Cancel** and the
-   action button.
+    Result: The frame shows the dialog heading **New cloud**, **Cancel** and the
+    action button.
 
-10. Measure the top edge of the dialog in each frame of the next 2 seconds.
+11. Measure the top edge of the dialog in each frame of the next 2 seconds.
 
     Result: The top edge is at the same position in each frame.
 
-11. Scroll the body of the dialog to the bottom.
+12. Scroll the body of the dialog to the bottom.
 
     Result: The summary moves up. The dialog heading **New cloud**, **Cancel**
     and the action button do not move.
 
-12. Stop the recording.
+13. Stop the recording.
 
     Result: The recorder writes the file and stops.
 
