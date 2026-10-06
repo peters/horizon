@@ -1,7 +1,8 @@
 //! One estimated-cost ordering shared by UI, CLI and MCP, retaining billing currency.
-use super::exchange::Rates;
+use super::{Offer, exchange::Rates};
 use serde::Serialize;
 use serde_json::Value;
+use std::cmp::Ordering;
 
 #[derive(Debug, Serialize)]
 pub struct ComparedOffer {
@@ -16,6 +17,42 @@ pub struct Comparison {
     pub exchange_date: Option<String>,
     pub complete: bool,
     pub offers: Vec<ComparedOffer>,
+}
+
+/// Where an offer stands in the estimated-cost order: its comparable total, with an
+/// unknown total last, and then its provider. Sorts using it are stable, so equal
+/// totals keep each provider's own catalog order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rank<'a> {
+    pub total: Option<f64>,
+    pub provider: Option<&'a str>,
+}
+
+impl<'a> Rank<'a> {
+    /// A catalog worker's rank for a comparable `total`.
+    #[must_use]
+    pub fn of(offer: &'a Offer, total: Option<f64>) -> Self {
+        Self {
+            total,
+            provider: Some(offer.provider),
+        }
+    }
+
+    fn of_answer(offer: &'a Value, total: Option<f64>) -> Self {
+        Self {
+            total,
+            provider: offer["provider"].as_str(),
+        }
+    }
+
+    /// The one order the UI, CLI and MCP share.
+    #[must_use]
+    pub fn order(&self, other: &Self) -> Ordering {
+        self.total
+            .unwrap_or(f64::INFINITY)
+            .total_cmp(&other.total.unwrap_or(f64::INFINITY))
+            .then_with(|| self.provider.cmp(&other.provider))
+    }
 }
 
 /// Unsupported or unquoted currencies never acquire a comparable price.
@@ -86,12 +123,7 @@ pub fn append(answer: &mut Value, rates: Option<&Rates>) {
         })
         .collect();
     offers.sort_by(|a, b| {
-        a.estimated_total_usd
-            .unwrap_or(f64::INFINITY)
-            .total_cmp(&b.estimated_total_usd.unwrap_or(f64::INFINITY))
-            .then_with(|| a.offer["provider"].as_str().cmp(&b.offer["provider"].as_str()))
-            .then_with(|| a.offer["id"].as_str().cmp(&b.offer["id"].as_str()))
-            .then_with(|| a.offer["location"].as_str().cmp(&b.offer["location"].as_str()))
+        Rank::of_answer(&a.offer, a.estimated_total_usd).order(&Rank::of_answer(&b.offer, b.estimated_total_usd))
     });
     let comparison = Comparison {
         currency: "USD",

@@ -195,8 +195,10 @@ ranked: `cloud_deploy offers SETTINGS [REQUIREMENTS_JSON]` from this computer, a
 `cloud_offers` tool for agents on its workers once the host sends them the catalog.
 Native Hetzner offers remain in `other_providers`. The additional `comparison`
 orders offers from every configured provider by `estimated_total_usd`, using dated
-ECB reference rates. Check `comparison.complete` before calling its first offer
-the cheapest match; a failed catalog or unavailable conversion makes it false.
+ECB reference rates. If two totals are equal, each provider keeps its own order.
+The **New cloud** worker list uses the same order. Check `comparison.complete`
+before calling its first offer the cheapest match; a failed catalog or
+unavailable conversion makes it false.
 Billing stays in each provider's currency.
 
 - native amounts are euros, net of VAT, and `max_hourly` is read in euros for them;

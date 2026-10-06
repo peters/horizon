@@ -42,6 +42,9 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | idle stop | The stop of a worker after an idle period without agent activity. On RunPod, the worker stops itself. On Hetzner, Horizon stops the cloud. | auto stop, auto-stop |
 | idle record | The file `/run/horizon-worker/idle.json` on a worker. `horizon-worker-idle --report` prints it. | idle report |
 | idle log | The file `/workspace/idle.log` on a worker. The idle watcher writes its lines there. | — |
+| host instance | The identity of the Horizon host process that owns the browsers of an agent. Browser tools use it to find the workspace of the agent. It is not a secret. | host ID |
+| panel picker | The menu of a cloud that opens a new panel, with the title **Add panel**. | panel menu |
+| browser runtime root | The directory in `HORIZON_BROWSER_ROOT` with the private browser state of a host. | browser root |
 
 ## Casting
 
@@ -64,3 +67,11 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | reconcile | Compare the local record with the provider and correct the local record. |
 | squash-merge | Merge a pull request as one commit. |
 | freeze | Copy a candidate to a task-owned directory and record its hash. |
+
+## Video capture
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| WebM | The video file format used for browser and VNC capture. | — |
+| AV1 | The video codec used in a WebM recording. | — |
+| recording | A temporary video file from a panel's decoded image source. | — |

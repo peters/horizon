@@ -285,7 +285,8 @@ impl HorizonApp {
         | Operation::Visibility { panel_id, .. }
         | Operation::Reveal { panel_id }
         | Operation::Reconnect { panel_id }
-        | Operation::Close { panel_id }) = operation
+        | Operation::Close { panel_id }
+        | Operation::Video { panel_id, .. }) = operation
         else {
             return Outcome::failed("invalid_operation", "Expected a panel operation");
         };
@@ -314,6 +315,7 @@ impl HorizonApp {
             );
         }
         match operation {
+            Operation::Video { action, .. } => return state.video(*action),
             Operation::Reconnect { .. } => {
                 state.owner = Some(owner.into());
                 state.reconnect(ctx, &device);
@@ -556,6 +558,53 @@ mod tests {
             host_instance: manifest::host_instance().into(),
             deadline_at_millis: manifest::now_millis() + 10_000,
             operation,
+        }
+    }
+
+    #[test]
+    fn video_requires_same_workspace_and_exact_owner_for_all_actions() {
+        let (_temp, ctx, mut app) = app();
+        let created = one(app.apply_device_request(
+            &request(
+                &app,
+                Operation::Create {
+                    endpoint: "127.0.0.1:1".into(),
+                    identity: None,
+                    ssh: None,
+                },
+            ),
+            &ctx,
+        ));
+        let id = app.board.panel_id_by_local_id(&created.panel_id).unwrap();
+        for action in [
+            device::VideoAction::Start,
+            device::VideoAction::Status,
+            device::VideoAction::Stop,
+        ] {
+            let req = request(
+                &app,
+                Operation::Video {
+                    panel_id: created.panel_id.clone(),
+                    action,
+                },
+            );
+            for owner in [None, Some("another-agent".to_string())] {
+                app.panel_render_caches.device_ui_state.get_mut(&id).unwrap().owner = owner;
+                assert!(
+                    matches!(app.apply_device_request(&req, &ctx), Outcome::Failed { code, .. } if code == "not_owner")
+                );
+            }
+            app.panel_render_caches.device_ui_state.get_mut(&id).unwrap().owner = Some(req.actor.clone());
+            let other = app.board.panels[1].workspace_id;
+            let original = app.board.panel(id).unwrap().workspace_id;
+            app.board.panel_mut(id).unwrap().workspace_id = other;
+            assert!(
+                matches!(app.apply_device_request(&req, &ctx), Outcome::Failed { code, .. } if code == "panel_unavailable")
+            );
+            app.board.panel_mut(id).unwrap().workspace_id = original;
+            assert!(
+                matches!(app.apply_device_request(&req, &ctx), Outcome::Failed { code, .. } if code == "video_unavailable")
+            );
         }
     }
 
