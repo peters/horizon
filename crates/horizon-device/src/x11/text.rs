@@ -45,6 +45,26 @@ fn wait_until(not_before_ms: u64, attempts: &mut u8) -> Result<bool> {
     Ok(true)
 }
 
+/// The Shift key and Caps Lock state for `layout`. Fails with
+/// `unsupported` for a keyboard state that would change the typed keys.
+fn keyboard(layout: &Layout<'_>, modifiers: &GetModifierMappingReply, state: u16, group: u8) -> Result<Keyboard> {
+    // Other groups have other levels.
+    if group != 0 {
+        return Err(DeviceError::Unsupported(
+            "X11 text input requires the first keyboard group".into(),
+        ));
+    }
+    let per_row = usize::from(modifiers.keycodes_per_modifier()).max(1);
+    let rows: Vec<&[u8]> = modifiers.keycodes.chunks(per_row).collect();
+    // A held Shift, Control, Alt or Super key would change each typed key.
+    keymap::keyboard(layout, &rows, state).map_err(|e| {
+        DeviceError::Unsupported(match e {
+            ModifierError::Held => "X11 text input requires released modifier keys".into(),
+            ModifierError::Lock => "X11 text input supports Caps Lock but no other Lock modifier".into(),
+        })
+    })
+}
+
 fn indeterminate(e: impl std::fmt::Display) -> DeviceError {
     DeviceError::Indeterminate(e.to_string())
 }
@@ -74,8 +94,13 @@ impl X11 {
         let (plan, server_now, observed_at, keyboard) = loop {
             let mapping = self.keyboard_mapping()?;
             let modifiers = self.modifier_mapping()?;
-            let layout = self.layout(&mapping, &modifiers);
-            let keyboard = self.keyboard(&layout, &modifiers)?;
+            let (state, group) = self.keyboard_state()?;
+            let typed = self.typed_symbols(state)?;
+            let layout = Layout {
+                typed: typed.as_deref(),
+                ..self.layout(&mapping, &modifiers)
+            };
+            let keyboard = keyboard(&layout, &modifiers, state, group)?;
             let (previous, server_now) = self.read_record(record_atom)?;
             let observed_at = Instant::now();
             let plan = keymap::plan(&layout, &previous, keyboard, text).map_err(|e| match e {
@@ -127,44 +152,11 @@ impl X11 {
         self.write_record(record_atom, &record, server_now).map_err(unavailable)
     }
 
-    /// The Shift key and Caps Lock state for `mapping`. Fails with
-    /// `unsupported` for a keyboard state that would change the typed keys.
-    fn keyboard(&self, layout: &Layout<'_>, modifiers: &GetModifierMappingReply) -> Result<Keyboard> {
-        let (state, group) = self.keyboard_state()?;
-        // Other groups have other levels.
-        if group != 0 {
-            return Err(DeviceError::Unsupported(
-                "X11 text input requires the first keyboard group".into(),
-            ));
-        }
-        let per_row = usize::from(modifiers.keycodes_per_modifier()).max(1);
-        let rows: Vec<&[u8]> = modifiers.keycodes.chunks(per_row).collect();
-        // A held Shift, Control, Alt or Super key would change each typed key.
-        keymap::keyboard(layout, &rows, state).map_err(|e| {
-            DeviceError::Unsupported(match e {
-                ModifierError::Held => "X11 text input requires released modifier keys".into(),
-                ModifierError::Lock => "X11 text input supports Caps Lock but no other Lock modifier".into(),
-            })
-        })
-    }
-
     /// The effective modifier mask and keyboard group. XKB reports the group
     /// only to a client that uses the extension. Without XKB, the core state
     /// holds the group in bits 13 and 14.
     fn keyboard_state(&self) -> Result<(u16, u8)> {
-        if self
-            .connection
-            .extension_information(xkb::X11_EXTENSION_NAME)
-            .map_err(unavailable)?
-            .is_some()
-            && self
-                .connection
-                .xkb_use_extension(1, 0)
-                .map_err(unavailable)?
-                .reply()
-                .map_err(unavailable)?
-                .supported
-        {
+        if self.uses_xkb()? {
             let state = self
                 .connection
                 .xkb_get_state(xkb::ID::USE_CORE_KBD.into())
@@ -207,7 +199,88 @@ impl X11 {
             keysyms_per_keycode: mapping.keysyms_per_keycode,
             keysyms: &mapping.keysyms,
             modifier_keycodes: &modifiers.keycodes,
+            typed: None,
         }
+    }
+
+    /// For each keycode, the keysyms of the first group that the key gives
+    /// without Shift and with Shift in the modifier state `mods`, from the XKB
+    /// key types. `None` without XKB.
+    fn typed_symbols(&self, mods: u16) -> Result<Option<Vec<[u32; 2]>>> {
+        if !self.uses_xkb()? {
+            return Ok(None);
+        }
+        let reply = self
+            .connection
+            .xkb_get_map(
+                xkb::ID::USE_CORE_KBD.into(),
+                xkb::MapPart::KEY_TYPES | xkb::MapPart::KEY_SYMS,
+                xkb::MapPart::from(0_u16),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                xkb::VMod::from(0_u16),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            )
+            .map_err(unavailable)?
+            .reply()
+            .map_err(unavailable)?;
+        let types: Vec<keymap::KeyType> = reply
+            .map
+            .types_rtrn
+            .unwrap_or_default()
+            .iter()
+            .map(|key_type| keymap::KeyType {
+                mods_mask: u16::from(key_type.mods_mask),
+                map: key_type
+                    .map
+                    .iter()
+                    .filter(|entry| entry.active)
+                    .map(|entry| (u16::from(entry.mods_mask), entry.level))
+                    .collect(),
+            })
+            .collect();
+        let mut per_key = vec![[0; 2]; 256];
+        let keys = (reply.first_key_sym..=u8::MAX).zip(reply.map.syms_rtrn.unwrap_or_default());
+        for (keycode, key) in keys {
+            // The first group: `width` keysyms at the start, if the key has a group.
+            let Some(key_type) = types.get(usize::from(key.kt_index[0])) else {
+                continue;
+            };
+            let groups = key.group_info & 0x0f;
+            if groups == 0 {
+                continue;
+            }
+            let width = usize::from(key.width).min(key.syms.len());
+            let syms: Vec<u32> = key.syms[..width].to_vec();
+            per_key[usize::from(keycode)] = keymap::typed_symbols(key_type, &syms, mods);
+        }
+        Ok(Some(per_key))
+    }
+
+    fn uses_xkb(&self) -> Result<bool> {
+        Ok(self
+            .connection
+            .extension_information(xkb::X11_EXTENSION_NAME)
+            .map_err(unavailable)?
+            .is_some()
+            && self
+                .connection
+                .xkb_use_extension(1, 0)
+                .map_err(unavailable)?
+                .reply()
+                .map_err(unavailable)?
+                .supported)
     }
 
     fn record_atom(&self) -> Result<u32> {

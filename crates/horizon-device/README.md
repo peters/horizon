@@ -52,9 +52,14 @@ event. Many clients get the server keymap only after a mapping notification.
 If a keycode changes before a slow client reads its key, that character is lost
 or wrong. Thus, `type` does not change a keycode that a queued key can use:
 
-- A character on the first level or the Shift level of the current keymap uses
-  that key. The tool holds Shift for the Shift level. No mapping is necessary.
-  On a US layout, this applies to `[A-Za-z0-9]` and ASCII punctuation.
+- A character that a key gives without Shift or with Shift uses that key. The
+  tool holds Shift for the Shift level. No mapping is necessary. On a US
+  layout, this applies to `[A-Za-z0-9]` and ASCII punctuation.
+- The tool reads the XKB key type of each key. The key type and the current
+  modifier state (for example Num Lock) decide which keysym a key gives
+  without Shift and with Shift. Without XKB, the tool uses the first two
+  keysyms of the core keymap, and it does not use a key with a keypad keysym,
+  because Num Lock changes its level.
 - The tool holds Shift with a key of the Shift modifier row that has `Shift_L`
   or `Shift_R` on its first level. If no key agrees, a character on the Shift
   level gets a temporary mapping.

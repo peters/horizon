@@ -33,6 +33,46 @@ pub(super) struct Layout<'a> {
     /// whatever its keysyms are. The planner never types with such a key and
     /// never maps it.
     pub modifier_keycodes: &'a [u8],
+    /// For each keycode, the keysyms that the key gives without Shift and with
+    /// Shift in the current modifier state, from its XKB key type. Without
+    /// XKB, the core protocol rules apply to the first two keysyms.
+    pub typed: Option<&'a [[u32; 2]]>,
+}
+
+/// An XKB key type: the modifiers that it reads, and the level for each
+/// combination of them in its active map entries. Other combinations give
+/// the first level.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct KeyType {
+    pub mods_mask: u16,
+    pub map: Vec<(u16, u8)>,
+}
+
+impl KeyType {
+    fn level(&self, mods: u16) -> u8 {
+        let mods = mods & self.mods_mask;
+        self.map
+            .iter()
+            .find(|(entry, _)| *entry == mods)
+            .map_or(0, |(_, level)| *level)
+    }
+}
+
+const SHIFT_MASK: u16 = 1;
+
+/// The keysyms that a key with `key_type` and the first-group keysyms `syms`
+/// gives without Shift and with Shift, in the modifier state `mods`.
+pub(super) fn typed_symbols(key_type: &KeyType, syms: &[u32], mods: u16) -> [u32; 2] {
+    let at = |level: u8| syms.get(usize::from(level)).copied().unwrap_or(0);
+    [
+        at(key_type.level(mods & !SHIFT_MASK)),
+        at(key_type.level(mods | SHIFT_MASK)),
+    ]
+}
+
+/// Keypad keysyms. Without XKB, Num Lock changes the level of such a key.
+fn is_keypad(symbol: u32) -> bool {
+    (0xff80..=0xffbd).contains(&symbol)
 }
 
 impl Layout<'_> {
@@ -43,6 +83,21 @@ impl Layout<'_> {
 
     fn is_modifier(&self, keycode: u8) -> bool {
         self.modifier_keycodes.contains(&keycode)
+    }
+
+    /// The keysym that `keycode` gives without Shift or with Shift, or none
+    /// when the level cannot be established.
+    fn typed_symbol(&self, keycode: u8, shift: bool) -> Option<u32> {
+        let symbol = if let Some(typed) = self.typed {
+            typed.get(usize::from(keycode))?[usize::from(shift)]
+        } else {
+            let symbols = self.symbols(keycode);
+            if symbols.iter().take(2).any(|symbol| is_keypad(*symbol)) {
+                return None;
+            }
+            *symbols.get(usize::from(shift))?
+        };
+        (symbol != 0).then_some(symbol)
     }
 
     fn symbols(&self, keycode: u8) -> &[u32] {
@@ -382,17 +437,19 @@ pub(super) fn plan(
     })
 }
 
-/// Finds `symbol` on the unshifted level first, then on the shifted level.
+/// Finds a key that gives `symbol` without Shift first, then with Shift.
 fn locate(layout: &Layout<'_>, keyboard: Keyboard, symbol: u32) -> Option<Stroke> {
-    [0, 1].into_iter().find_map(|level| {
-        layout.keycodes().find_map(|(keycode, symbols)| {
-            if keycode == RESERVED_KEYCODE || layout.is_modifier(keycode) || symbols.get(level) != Some(&symbol) {
-                return None;
-            }
-            let shift = level == 1;
-            (!shift || keyboard.shift_keycode.is_some()).then_some(Stroke { keycode, shift })
+    [false, true]
+        .into_iter()
+        .filter(|shift| !shift || keyboard.shift_keycode.is_some())
+        .find_map(|shift| {
+            layout.keycodes().find_map(|(keycode, _)| {
+                (keycode != RESERVED_KEYCODE
+                    && !layout.is_modifier(keycode)
+                    && layout.typed_symbol(keycode, shift) == Some(symbol))
+                .then_some(Stroke { keycode, shift })
+            })
         })
-    })
 }
 
 /// A character that a case conversion changes. With Caps Lock on, the key type

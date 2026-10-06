@@ -1,6 +1,6 @@
 use super::{
-    Borrowed, Keyboard, Layout, ModifierError, PlanError, RECLAIM_QUIET, Stroke, TIMELINE_NOW, from_timeline, keyboard,
-    keysym, plan, quiet_after, runs, spare_candidate, to_timeline,
+    Borrowed, KeyType, Keyboard, Layout, ModifierError, PlanError, RECLAIM_QUIET, Stroke, TIMELINE_NOW, from_timeline,
+    keyboard, keysym, plan, quiet_after, runs, spare_candidate, to_timeline, typed_symbols,
 };
 
 const SHIFT: u8 = 50;
@@ -51,6 +51,7 @@ fn view3(keysyms: &[u32]) -> Layout<'_> {
         keysyms_per_keycode: 3,
         keysyms,
         modifier_keycodes: &[SHIFT],
+        typed: None,
     }
 }
 
@@ -60,6 +61,7 @@ fn view(keysyms: &[u32]) -> Layout<'_> {
         keysyms_per_keycode: 2,
         keysyms,
         modifier_keycodes: &[SHIFT],
+        typed: None,
     }
 }
 
@@ -523,6 +525,7 @@ fn modifier_keys_are_never_typed_with_or_mapped() -> Result<(), PlanError> {
         keysyms_per_keycode: 2,
         keysyms: &keysyms,
         modifier_keycodes: &modifiers,
+        typed: None,
     };
     let plan = plan(&layout, &[], SHIFTED, "q\u{e000}")?;
     let keycodes: Vec<u8> = plan
@@ -563,5 +566,93 @@ fn modifier_keys_are_never_typed_with_or_mapped() -> Result<(), PlanError> {
         spare_candidate(&layout, &previous).map(|candidate| candidate.keycode),
         Some(FIRST_FREE + 2)
     );
+    Ok(())
+}
+
+#[test]
+fn xkb_key_types_decide_the_level_for_shift() {
+    let two_level = KeyType {
+        mods_mask: 0x01,
+        map: vec![(0x01, 1)],
+    };
+    assert_eq!(typed_symbols(&two_level, &[0x61, 0x41], 0), [0x61, 0x41]);
+    // Lock is not in the mask of a two-level type.
+    assert_eq!(typed_symbols(&two_level, &[0x61, 0x41], 0x02), [0x61, 0x41]);
+    let one_level = KeyType {
+        mods_mask: 0,
+        map: vec![],
+    };
+    assert_eq!(typed_symbols(&one_level, &[0x61, 0x41], 0), [0x61, 0x61]);
+    // Keypad: Num Lock (Mod2) selects the second level, Shift returns to the first.
+    let keypad = KeyType {
+        mods_mask: 0x11,
+        map: vec![(0x01, 1), (0x10, 1)],
+    };
+    let kp = [0xff9c, 0xffb1]; // KP_End, KP_1
+    assert_eq!(typed_symbols(&keypad, &kp, 0), [0xff9c, 0xffb1]);
+    assert_eq!(typed_symbols(&keypad, &kp, 0x10), [0xffb1, 0xff9c]);
+    assert_eq!(typed_symbols(&two_level, &[0x31], 0), [0x31, 0], "no second keysym");
+}
+
+#[test]
+fn the_planner_types_only_the_keysym_that_the_key_type_gives() -> Result<(), PlanError> {
+    let keysyms = layout();
+    let mut typed = vec![[0_u32; 2]; 256];
+    for (offset, letter) in (b'a'..=b'z').enumerate() {
+        let keycode = 10 + offset;
+        typed[keycode] = [u32::from(letter), u32::from(letter.to_ascii_uppercase())];
+    }
+    // The a key has a type on which Shift does not select the second level.
+    typed[10] = [u32::from(b'a'), u32::from(b'a')];
+    // The minus key gives a keypad digit without Shift in this state.
+    typed[51] = [0xffb1, u32::from(b'_')];
+    let layout = Layout {
+        typed: Some(&typed),
+        ..view(&keysyms)
+    };
+    let plan = plan(&layout, &[], SHIFTED, "aAbB-_")?;
+    let keycode = |character: u8| {
+        plan.bindings
+            .iter()
+            .find(|(_, keysym)| *keysym == u32::from(character))
+            .map(|(keycode, _)| *keycode)
+    };
+    assert_eq!(
+        plan.strokes[..4],
+        [
+            Stroke {
+                keycode: 10,
+                shift: false
+            },
+            Stroke {
+                keycode: keycode(b'A').unwrap_or_default(),
+                shift: false
+            },
+            Stroke {
+                keycode: 11,
+                shift: false
+            },
+            Stroke {
+                keycode: 11,
+                shift: true
+            },
+        ]
+    );
+    assert!(keycode(b'A').is_some(), "A needs a temporary mapping");
+    assert!(keycode(b'-').is_some(), "- needs a temporary mapping");
+    assert_eq!(
+        plan.strokes[5],
+        Stroke {
+            keycode: 51,
+            shift: true
+        }
+    );
+
+    // Without XKB, a key with a keypad keysym is never used: Num Lock changes its level.
+    let mut core = keysyms.clone();
+    core[usize::from(51_u8 - 8) * 2 + 1] = 0xffb1; // [minus, KP_1]
+    let plan = super::plan(&view(&core), &[], SHIFTED, "-")?;
+    assert_eq!(plan.bindings, vec![(FIRST_FREE + 4, u32::from(b'-'))]);
+    assert!(super::plan(&view(&keysyms), &[], SHIFTED, "-")?.bindings.is_empty());
     Ok(())
 }
