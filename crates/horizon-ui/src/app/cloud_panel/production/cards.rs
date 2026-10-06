@@ -142,7 +142,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
         ui.label("Releasing remote devices…");
         return None;
     }
-    if runtime.recovery_receiver.is_some()
+    if runtime.checking_provider()
         || (runtime.receiver.is_none() && runtime.state.as_ref().is_some_and(super::Runtime::needs_provider_check))
     {
         return recovery_actions(ui, runtime);
@@ -358,7 +358,7 @@ fn recovery_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<A
         ui.small("Use an ID supplied by the provider. Horizon verifies that it belongs to this cloud.");
         ui.add(egui::TextEdit::singleline(&mut runtime.recovery_worker_id));
     });
-    if runtime.recovery_receiver.is_some() {
+    if runtime.checking_provider() {
         ui.spinner();
         ui.label("Checking provider…");
         None

@@ -10,7 +10,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const CATALOG: &str = "/run/sshd/companions/catalog.json";
+/// Inside [`crate::companions::PUBLISHED`], which agent sessions can read.
+pub(crate) const CATALOG: &str = "/run/horizon-companions/catalog.json";
 const MAX_CATALOG_BYTES: u64 = 256 * 1024;
 const FRESH_SECONDS: u64 = 60;
 
