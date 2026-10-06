@@ -14,7 +14,8 @@ owner: peters
 
 This procedure makes sure that **Replace** and **Keep saved key** work on each
 saved key in the **Cloud settings…** dialog. It also makes sure that the card
-layout stays compact when a replacement field is open.
+layout stays compact when a replacement field is open. The dialog must not move
+or change size after it opens.
 
 ## 2. Applicability
 
@@ -106,6 +107,22 @@ layout stays compact when a replacement field is open.
    Result: The dialog opens. The RunPod, Hetzner Cloud and Coding agents cards
    show `Key saved`. Each saved key shows **Replace**.
 
+3. Do not move the pointer for 2 seconds.
+
+   Result: The recorder captures the first 2 seconds of the dialog.
+
+4. Find the first recorded frame that shows the dialog.
+
+   Result: The frame shows the title, **Cancel** and **Save settings**.
+
+5. Measure the top edge of the dialog in each frame of the next 2 seconds.
+
+   Result: The top edge is at the same position in each frame.
+
+6. Compare the position of **Replace** on the RunPod card in each frame that shows it.
+
+   Result: **Replace** is at the same position in each frame.
+
 ### 6.2 A02 — Replace and keep the RunPod key
 
 1. Click **Replace** on the RunPod card.
@@ -164,6 +181,8 @@ layout stays compact when a replacement field is open.
 
 ## 7. Pass criteria
 
+- In A01, the dialog and its controls do not move after the first frame that
+  shows the dialog.
 - In each task, **Keep saved key** is directly below its field.
 - No card shows a large empty area between a field and its button.
 - **Keep saved key** removes the field and shows the masked saved key again.

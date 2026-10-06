@@ -606,3 +606,86 @@ fn keep_saved_key_sits_directly_below_the_replacement_field_on_a_tall_screen() {
     let gap = top("Stored privately") - top("Keep saved key");
     assert!((0.0..60.0).contains(&gap), "caption is {gap} px below Keep saved key");
 }
+
+/// Where each named text was drawn, when the frame drew it.
+fn text_positions(output: &egui::FullOutput, labels: &[&str]) -> Vec<Option<egui::Pos2>> {
+    labels
+        .iter()
+        .map(|label| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == *label => Some(text.pos),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn settings_open_at_their_final_size_and_position() {
+    use crate::app::test_support::{raw_input, run_app_frame_with_input};
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.root_viewport_stabilizer = None;
+    let root = temp.path().join("cloud");
+    let mut draft = Draft::load(&root).unwrap();
+    *draft.runpod_key = "synthetic-compute".into();
+    draft.hetzner.enabled = true;
+    *draft.hetzner.token = "synthetic-token".into();
+    draft.save().unwrap();
+    let chrome = ["Cloud settings", "Cancel", "Save settings"];
+    let controls = ["Replace", "Use Hetzner Cloud for CPU clouds"];
+    let mut time = 0.0;
+    // Reopening in a smaller window must not start from the size the dialog had before.
+    for size in [[2560.0, 1440.0], [1280.0, 720.0]] {
+        let mut frame = |app: &mut HorizonApp| {
+            time += 1.0 / 60.0;
+            let mut input = raw_input(size, None);
+            input.time = Some(time);
+            let output = run_app_frame_with_input(&ctx, app, input);
+            let dialog = ctx.memory(|memory| memory.area_rect(Id::new("cloud-accounts")));
+            (
+                text_positions(&output, &chrome),
+                text_positions(&output, &controls),
+                dialog,
+            )
+        };
+        for _ in 0..2 {
+            frame(&mut app);
+        }
+        app.cloud_prototype.root = Some(root.clone());
+        app.open_cloud_accounts(&ctx, false);
+        // Hold the loaded settings back so the first visible frame shows the dialog loading.
+        let (_hold, held) = channel();
+        let loading = app.cloud_prototype.production.setup.receiver.replace(held);
+        // Only the opening frame may measure the dialog without drawing it.
+        let (mut first_chrome, _, mut first) = frame(&mut app);
+        if first_chrome.iter().all(Option::is_none) {
+            (first_chrome, _, first) = frame(&mut app);
+        }
+        assert!(
+            first_chrome.iter().all(Option::is_some),
+            "{size:?}: first visible frame drew {first_chrome:?}"
+        );
+        app.cloud_prototype.production.setup.receiver = loading;
+        wait(&mut app, &ctx);
+        let (_, first_controls, _) = frame(&mut app);
+        assert!(
+            first_controls.iter().all(Option::is_some),
+            "{size:?}: loaded frame drew {first_controls:?}"
+        );
+        for _ in 0..30 {
+            let (later_chrome, later_controls, later) = frame(&mut app);
+            assert_eq!(later, first, "{size:?}: the dialog moved after it opened");
+            assert_eq!(later_chrome, first_chrome, "{size:?}: the title or buttons moved");
+            assert_eq!(later_controls, first_controls, "{size:?}: a card control moved");
+        }
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0], size[1]));
+        let dialog = first.unwrap();
+        assert!(
+            viewport.contains_rect(dialog),
+            "{size:?}: dialog {dialog:?} exceeds {viewport:?}"
+        );
+        app.cancel_cloud_accounts();
+    }
+}

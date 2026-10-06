@@ -13,6 +13,39 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 const SAVED_SECRET_HINT: &str = "••••••••  Saved credential";
 
+/// Space kept between the settings dialog and each window edge.
+const DIALOG_INSET: f32 = 32.0;
+/// The tallest the dialog gets inside its frame; taller content scrolls.
+const DIALOG_MAX_HEIGHT: f32 = 950.0;
+const DIALOG_MARGIN: i8 = 24;
+const DASHBOARD_MIN_HEIGHT: f32 = 100.0;
+const FOOTER_GAP: f32 = 16.0;
+const FOOTER_SEPARATOR: f32 = 6.0;
+const FOOTER_HEIGHT: f32 = 40.0;
+
+/// The settings dialog's height inside its frame, taken from the window alone.
+///
+/// The dialog lays out inside the rectangle it had on the previous frame, so a scroll area
+/// sized by the room left there grows only a little each frame while the centered dialog moves
+/// up to make room. Fixing the height from the window lets the first frame show the final size
+/// and position, whether the settings are still loading or a card later grows.
+fn dialog_height(viewport: egui::Rect) -> f32 {
+    (viewport.height() - 2.0 * (DIALOG_INSET + f32::from(DIALOG_MARGIN))).min(DIALOG_MAX_HEIGHT)
+}
+
+/// Everything [`State::render_footer`] lays out below the dashboard, with its item spacing.
+fn footer_height(ui: &egui::Ui) -> f32 {
+    let spacing = ui.spacing().item_spacing.y;
+    spacing + FOOTER_GAP + FOOTER_SEPARATOR + spacing + FOOTER_HEIGHT
+}
+
+/// Which footer button was clicked this frame.
+#[derive(Default)]
+struct Footer {
+    save: bool,
+    cancel: bool,
+}
+
 /// Everything the settings thread learns when the form opens.
 struct Loaded {
     draft: Draft,
@@ -53,6 +86,8 @@ pub(in crate::app::cloud_panel) struct State {
     error: Option<String>,
     registry_status: Option<String>,
     registry_cancel: Option<horizon_core::cloud_runtime::Cancellation>,
+    /// Whether the dialog has been measured since it opened, in case the window changed size.
+    measured: bool,
 }
 
 impl State {
@@ -107,6 +142,39 @@ impl State {
             }
         }
         registry_action
+    }
+
+    /// The separator and the Save and Cancel row, exactly [`footer_height`] tall.
+    fn render_footer(&self, ui: &mut egui::Ui) -> Footer {
+        ui.add_space(FOOTER_GAP);
+        ui.add(egui::Separator::default().spacing(FOOTER_SEPARATOR));
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), FOOTER_HEIGHT),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                let save = ui
+                    .add_enabled(
+                        self.draft.is_some() && self.receiver.is_none(),
+                        egui::Button::new(if self.continue_creation {
+                            "Save and start"
+                        } else {
+                            "Save settings"
+                        })
+                        .min_size(egui::vec2(148.0, FOOTER_HEIGHT))
+                        .corner_radius(10)
+                        .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35)),
+                    )
+                    .clicked();
+                let cancel = ui
+                    .add_enabled(
+                        self.receiver.is_none(),
+                        egui::Button::new("Cancel").min_size(egui::vec2(80.0, FOOTER_HEIGHT)),
+                    )
+                    .clicked();
+                Footer { save, cancel }
+            },
+        )
+        .inner
     }
 }
 
@@ -278,22 +346,29 @@ impl HorizonApp {
         if !state.open {
             return;
         }
-        let mut save = false;
-        let mut cancel = false;
+        let mut footer = Footer::default();
         let mut registry_action = None;
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let id = Id::new("cloud-accounts");
+        // Measure on the opening frame, before the dialog is drawn, so a size remembered from a
+        // window of another size cannot place the first visible frame.
+        let sizing_pass = !std::mem::replace(&mut state.measured, true);
         let response = egui::Modal::new(id)
-            .area(egui::Modal::default_area(id).order(egui::Order::Tooltip))
+            .area(
+                egui::Modal::default_area(id)
+                    .order(egui::Order::Tooltip)
+                    .sizing_pass(sizing_pass),
+            )
             .frame(
                 egui::Frame::new()
                     .fill(theme::BG_ELEVATED())
                     .stroke(egui::Stroke::new(1.0, theme::BORDER_STRONG()))
                     .corner_radius(16)
-                    .inner_margin(24),
+                    .inner_margin(DIALOG_MARGIN),
             )
             .show(ctx, |ui| {
-                ui.set_width((ctx.content_rect().width() - 64.0).clamp(240.0, 1060.0));
+                ui.set_width((ctx.content_rect().width() - 2.0 * DIALOG_INSET).clamp(240.0, 1060.0));
+                let bottom = ui.cursor().top() + dialog_height(ctx.content_rect());
                 ui.label(
                     RichText::new(if state.continue_creation {
                         "Your first cloud"
@@ -310,51 +385,22 @@ impl HorizonApp {
                         .color(theme::FG_SOFT()),
                 );
                 ui.add_space(16.0);
-                let banner_top = ui.cursor().top();
                 dashboard::readiness_banner(ui, state);
                 ui.add_space(16.0);
-                let banner_height = ui.cursor().top() - banner_top;
+                let dashboard_height = (bottom - ui.cursor().top() - footer_height(ui)).max(DASHBOARD_MIN_HEIGHT);
                 super::super::runtime::solid_scroll_area(ui)
                     .id_salt("cloud-settings-dashboard")
-                    .max_height((ctx.content_rect().height() - 240.0 - banner_height).max(100.0))
+                    .auto_shrink(false)
+                    .min_scrolled_height(dashboard_height)
+                    .max_height(dashboard_height)
                     .show(ui, |ui| {
                         registry_action = state.render_fields(ui);
                     });
-                ui.add_space(16.0);
-                ui.separator();
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), 40.0),
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        save = ui
-                            .add_enabled(
-                                state.draft.is_some() && state.receiver.is_none(),
-                                egui::Button::new(if state.continue_creation {
-                                    "Save and start"
-                                } else {
-                                    "Save settings"
-                                })
-                                .min_size(egui::vec2(148.0, 40.0))
-                                .corner_radius(10)
-                                .fill(theme::blend(
-                                    theme::PANEL_BG_ALT(),
-                                    theme::ACCENT(),
-                                    0.35,
-                                )),
-                            )
-                            .clicked();
-                        cancel = ui
-                            .add_enabled(
-                                state.receiver.is_none(),
-                                egui::Button::new("Cancel").min_size(egui::vec2(80.0, 40.0)),
-                            )
-                            .clicked();
-                    },
-                );
+                footer = state.render_footer(ui);
             });
         ctx.move_to_top(response.response.layer_id);
         // Once Save starts, retain its completion and do not imply cancellation of writes.
-        if (cancel || response.should_close()) && state.receiver.is_none() {
+        if (footer.cancel || response.should_close()) && state.receiver.is_none() {
             self.cancel_cloud_accounts();
             if escape {
                 self.consume_navigation_key(
@@ -365,7 +411,7 @@ impl HorizonApp {
                     ),
                 );
             }
-        } else if save {
+        } else if footer.save {
             self.save_cloud_accounts(ctx);
         } else if let Some(action) = registry_action {
             self.manage_cloud_registry(ctx, action);
