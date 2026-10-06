@@ -218,8 +218,9 @@ def device_name(cloud):
         return None
     label = cloud.lower().replace('_', '-')
     name = NAME_PREFIX + label
-    # A lossy or shortened ID gets a digest of the exact ID, so two clouds cannot share a name.
-    if label != cloud or len(name) > 63 or name.endswith('-'):
+    # A lossy or shortened ID gets a digest of the exact ID, so two clouds cannot share a
+    # name. Every digest name ends with one; a direct name never does, so they never meet.
+    if label != cloud or len(name) > 63 or name.endswith('-') or re.search(r'-[0-9a-f]{8}$', name):
         name = name[:54].rstrip('-') + '-' + hashlib.sha256(cloud.encode()).hexdigest()[:8]
     return name
 

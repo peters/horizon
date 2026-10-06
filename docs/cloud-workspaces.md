@@ -67,7 +67,9 @@ random host name. Thus, the worker gives the device name to Tailscale:
 
 A cloud ID that is not a valid DNS label gets a short digest suffix. Examples are
 an ID with capital letters, underscores, a last hyphen or too many characters.
-Thus, each name is a valid DNS label and is unique to its cloud. Tailscale does
+An ID that ends with a hyphen and 8 hexadecimal characters also gets a suffix.
+Thus, each name is a valid DNS label and is unique to its cloud. A UUID cloud ID
+gets no suffix. Tailscale does
 not change a name that a tailnet administrator set. If a different device has
 the name, Tailscale adds a suffix such as `-1`. All members of the tailnet can
 see the cloud ID in the name. An image with this behavior reports

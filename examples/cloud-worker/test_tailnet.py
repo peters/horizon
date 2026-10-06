@@ -82,6 +82,11 @@ class TailnetTests(unittest.TestCase):
                 self.assertNotIn(name, names.values())
                 names[cloud] = name
         self.assertEqual(names['cloud-a'], 'horizon-cloud-cloud-a')
+        # A direct ID that looks like a digest name takes the digest path too.
+        transformed = worker.device_name('Cloud_A')
+        lookalike = transformed.removeprefix('horizon-cloud-')
+        self.assertNotEqual(worker.device_name(lookalike), transformed)
+        self.assertRegex(worker.device_name(lookalike), r'^horizon-cloud-' + lookalike + '-[0-9a-f]{8}$')
         for cloud in [None, '', 'a b', 'a.b', 'cloud/a', 'a' * 101, 'ä', 'a\n', 7]:
             with self.subTest(cloud=cloud):
                 self.assertIsNone(worker.device_name(cloud))
