@@ -284,7 +284,7 @@ fn answer_calls(queue: &mpsc::Receiver<(u64, Result<Request, String>)>, answers:
     let running = Arc::new(AtomicUsize::new(0));
     for (id, request) in queue {
         let admitted = running
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < MAX_QUEUED).then_some(count + 1)
             })
             .is_ok();

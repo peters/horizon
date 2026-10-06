@@ -109,7 +109,7 @@ fn serve() -> io::Result<()> {
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             if clients
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < 32).then_some(n + 1))
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < 32).then_some(n + 1))
                 .is_err()
             {
                 continue;
