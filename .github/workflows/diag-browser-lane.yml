@@ -1,0 +1,55 @@
+name: Diagnose browser lane
+
+on:
+  push:
+    branches: [diag/browser-lane-ci]
+
+jobs:
+  lane:
+    name: Browser lane (${{ matrix.mode }} ${{ matrix.leg }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { mode: after-shard, leg: 1 }
+          - { mode: fresh, leg: 1 }
+          - { mode: fresh, leg: 2 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-test
+          save-if: false
+      - name: Install video assembler
+        run: bash scripts/install-ci-video-build-tools.sh
+      - name: Environment
+        run: |
+          uname -a; google-chrome --version; readlink -f "$(command -v google-chrome)"
+          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone user.max_user_namespaces || true
+          ls -l /opt/google/chrome/chrome-sandbox; sudo aa-status 2>/dev/null | grep -i -E 'chrome|unpriv' || true
+          ls /etc/apparmor.d | grep -i chrom || true
+          df -h /dev/shm; nproc; free -m
+          systemctl is-active dbus || true; ls -l /run/dbus || true
+      - name: Test shard
+        if: matrix.mode == 'after-shard'
+        env:
+          HORIZON_CI_SHARD: libs
+        run: bash scripts/ci-cargo-test-shard.sh
+      - name: Processes before the lane
+        run: ps -eo pid,user,etimes,pcpu,rss,cmd --sort=-pcpu | cut -c1-200 | head -60
+      - name: Build
+        run: |
+          cargo build --locked -p horizon-cloud-worker -p horizon-browser-cli
+          sudo install -m 0755 .github/diag/chrome-wrapper /usr/local/bin/google-chrome
+      - name: Cloud worker suite once
+        env:
+          HORIZON_TEST_CLOUD_WORKER: ${{ github.workspace }}/target/debug/horizon-cloud-worker
+        run: python3 -B -m unittest discover -s examples/cloud-worker -p 'test_*.py' 2>&1 | tail -30 || true
+      - name: Lane loop
+        env:
+          HORIZON_TEST_CLOUD_WORKER: ${{ github.workspace }}/target/debug/horizon-cloud-worker
+        run: bash .github/diag/loop 30

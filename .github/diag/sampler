@@ -1,0 +1,15 @@
+#!/bin/bash
+# Diagnostic sampler: every 0.5 s, record every agent Chrome process, its threads and their kernel waits.
+while true; do
+  for pid in $(pgrep -u 10001 -f -- '--user-data-dir='); do
+    cmd=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c1-120)
+    echo "$(date +%T.%N) pid=$pid etimes=$(ps -o etimes= -p $pid) cmd=$cmd"
+    case "$cmd" in *--type=*) continue;; esac
+    for t in /proc/$pid/task/*; do
+      printf '  tid=%s comm=%s state=%s wchan=%s syscall=%s\n' "${t##*/}" "$(cat $t/comm 2>/dev/null)" \
+        "$(awk '{print $3}' $t/stat 2>/dev/null)" "$(cat $t/wchan 2>/dev/null)" "$(cut -d' ' -f1-3 $t/syscall 2>/dev/null)"
+    done
+    ls -l /proc/$pid/fd 2>/dev/null | grep -c socket | sed 's/^/  sockets=/'
+  done
+  sleep 0.5
+done

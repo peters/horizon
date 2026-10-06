@@ -1,0 +1,5 @@
+#!/bin/bash
+# Diagnostic wrapper: log the Chrome start time and full stderr with Chrome's own timestamps.
+log=/var/tmp/chrome-diag/$(date +%s.%N)-$$.log
+{ echo "start $(date +%T.%N) uid=$(id -u) args=$*"; grep -E 'NoNewPrivs|CapBnd|Seccomp' /proc/self/status; } > "$log"
+exec /opt/google/chrome/google-chrome "$@" --enable-logging=stderr --v=0 2> >(while IFS= read -r line; do printf '%s %s\n' "$(date +%T.%N)" "$line" >> "$log"; printf '%s\n' "$line" >&2; done)
