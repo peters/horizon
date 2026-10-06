@@ -10,7 +10,10 @@ use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// Linux guardian probes use monotonic polling; other platforms only use bounded waits.
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 use zeroize::Zeroizing;
 
 const SCRIPT: &[u8] = b"#!/usr/bin/python3\nimport json,sys,time\np=sys.argv[sys.argv.index('--config-file')+1]\nkey=json.loads(open(p).read().partition(':')[2].strip())\nassert key=='synthetic-key' and key not in ' '.join(sys.argv)\nassert '--log-file' not in sys.argv\nprint(key+' You can now access your local server',flush=True)\ntime.sleep(60)\n";

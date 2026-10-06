@@ -327,6 +327,8 @@ fn connection(stream: &mut TcpStream, frame: &Mutex<Vec<u8>>, stop: &AtomicBool)
 mod tests {
     use super::*;
     #[test]
+    // The actor fixture uses Unix process guardians and filesystem permissions.
+    #[cfg(unix)]
     fn closing_native_session_disconnects_idle_viewer_without_reopening_registry() {
         let (_fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
         let actor = Arc::new(actor);

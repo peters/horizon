@@ -236,6 +236,10 @@ impl Actor {
         }
         if failed { Err(Error::CleanupUncertain) } else { Ok(()) }
     }
+    pub(crate) fn retain_run_evidence(&self) -> Result<crate::observations::Run<'_>> {
+        self.observations.begin_run()
+    }
+
     pub(crate) fn begin_run(&self) -> Result<std::sync::RwLockWriteGuard<'_, ()>> {
         let run = self.run.try_write().map_err(|_| Error::RunBusy)?;
         if self.stopping.load(std::sync::atomic::Ordering::Acquire) {

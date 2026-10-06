@@ -266,9 +266,15 @@ Other commands retain the normal 15-second limit. Horizon does not retry mutatio
 
 Reports include every allocation handle used by reset steps. Each media entry names
 its allocation. The final provider dashboard link names the final allocation.
-The controller retains at most 32 verified provider references, including both live
-lanes. Earlier references can expire or leave this history; their media entries
-then report an explicit error. A reset does not replace earlier evidence silently.
+The controller normally retains at most 32 verified provider references, including
+both live lanes. During an exclusive validated matrix run, it pins that run's
+references through final media collection, bounded by 1,088 entries: up to 32 prior
+references, 32 initial allocations and 1,024 reset steps. Every exit, including
+cancellation or panic, unpins the entries and trims the history back to 32. This
+retention does not renew resource leases; original expiry timestamps still apply
+after unpinning. References outside the active run can expire or leave this history
+and then report an explicit media error. A reset does not replace earlier evidence
+silently.
 Video finalization polls for up to 30 seconds after closure, within the run deadline.
 A pending video remains an explicit failure after this budget.
 

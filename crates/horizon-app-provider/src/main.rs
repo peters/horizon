@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 fn main() {
     if std::env::args().nth(1).as_deref() != Some("--tunnel-guard") {
         std::process::exit(2);

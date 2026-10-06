@@ -6,6 +6,8 @@ use std::sync::Barrier;
 
 #[derive(Default)]
 struct Fake {
+    screenshots: AtomicUsize,
+    actions: AtomicUsize,
     builds: Mutex<Vec<Platform>>,
     media_calls: Mutex<Vec<(Uuid, horizon_app_provider::media::Kind)>>,
     uploads: Mutex<Vec<Platform>>,
@@ -43,6 +45,7 @@ impl Runtime for Fake {
         Ok(id)
     }
     fn act(&self, session: Uuid, action: &Action) -> Result<Option<Uuid>> {
+        self.actions.fetch_add(1, Ordering::SeqCst);
         if matches!(action, Action::Reset {}) {
             let mut sessions = self.sessions.lock().unwrap();
             let index = sessions.remove(&session).unwrap();
@@ -56,6 +59,7 @@ impl Runtime for Fake {
         Ok(None)
     }
     fn screenshot(&self, _session: Uuid) -> Result<Vec<u8>> {
+        self.screenshots.fetch_add(1, Ordering::SeqCst);
         Ok(b"synthetic-private-png".to_vec())
     }
     fn media(&self, session: Uuid, kind: horizon_app_provider::media::Kind, timeout: Duration) -> Result<Vec<u8>> {
@@ -215,6 +219,8 @@ fn progress_failure_after_one_upload_retires_that_owned_upload() {
 }
 
 #[test]
+// The actor fixture uses Unix process guardians and filesystem permissions.
+#[cfg(unix)]
 fn conservative_provider_overlap_waits_then_allocates_both_owned_sessions() {
     use std::sync::mpsc;
     let (fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
@@ -257,6 +263,8 @@ fn conservative_provider_overlap_waits_then_allocates_both_owned_sessions() {
 }
 
 #[test]
+// The actor fixture uses Unix process guardians and filesystem permissions.
+#[cfg(unix)]
 fn cancelled_admission_does_not_send_another_native_post() {
     let (fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
     let app = actor.upload(Platform::Ios, Duration::from_secs(10)).unwrap();
@@ -455,4 +463,94 @@ fn reset_retains_recordings_for_both_exact_allocations_after_closure() {
         assert_eq!(device.session, device.allocations.last().copied());
     }
     assert_eq!(fake.media_calls.lock().unwrap().len(), 6);
+}
+
+#[test]
+fn screenshot_steps_capture_once_and_report_capture_failure() {
+    for fail_capture in [false, true] {
+        let fake = Fake::default();
+        let recipes = [Recipe {
+            version: 1,
+            id: "screenshot".into(),
+            platforms: None,
+            steps: vec![horizon_app_testing::recipe::Step {
+                id: "frame".into(),
+                action: Action::Screenshot {},
+            }],
+        }];
+        let plan = Plan {
+            targets: targets(),
+            recipes: &recipes,
+            parallel: 2,
+            screenshots: true,
+            video: false,
+            logs_on_failure: false,
+        };
+        let control = Control::new(Duration::from_secs(5)).unwrap();
+        let report = plan
+            .execute(
+                &fake,
+                &control,
+                |session, kind, bytes| {
+                    if fail_capture {
+                        Err(Error::Unavailable)
+                    } else {
+                        capture(session, kind, bytes)
+                    }
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(fake.actions.load(Ordering::SeqCst), 0);
+        assert_eq!(fake.screenshots.load(Ordering::SeqCst), 3);
+        assert!(
+            report
+                .devices
+                .iter()
+                .all(|device| device.cleanup_confirmed && device.steps[0].passed != fail_capture)
+        );
+    }
+}
+
+#[test]
+// The actor fixture uses Unix process guardians and filesystem permissions.
+#[cfg(unix)]
+fn long_reset_run_retains_every_video_and_failure_log_through_finalization() {
+    let (fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
+    let mut recipe = String::from("```yaml\ndevice-recipe:\n  version: 1\n  id: long-reset\n  steps:\n");
+    for index in 0..35 {
+        recipe.push_str(&format!("    - id: reset-{index}\n      action: reset\n"));
+    }
+    recipe.push_str("    - id: late-failure\n      action: assert\n      target: {by: identifier, value: menu.open}\n      state: hidden\n```\n");
+    std::fs::write(fixture.root.path().join("recipe.md"), recipe).unwrap();
+    let report = run(
+        &actor,
+        &Control::new(Duration::from_secs(120)).unwrap(),
+        capture,
+        |_| Ok(()),
+    )
+    .unwrap();
+    let device = &report.devices[0];
+    assert_eq!(device.allocations.len(), 36);
+    assert_eq!(device.steps.len(), 36);
+    assert!(device.steps[..35].iter().all(|step| step.passed));
+    assert!(!device.steps[35].passed);
+    for allocation in &device.allocations {
+        let media: Vec<_> = device.media.iter().filter(|item| item.session == *allocation).collect();
+        assert_eq!(media.len(), 5);
+        assert!(
+            media.iter().all(|item| item.evidence.is_some() && item.error.is_none()),
+            "{:?}",
+            media.iter().map(|item| &item.error).collect::<Vec<_>>()
+        );
+    }
+    assert!(device.cleanup_confirmed);
+    assert!(
+        fixture
+            .workspace
+            .journal()
+            .pending(fixture.workspace.owner())
+            .unwrap()
+            .is_empty()
+    );
 }

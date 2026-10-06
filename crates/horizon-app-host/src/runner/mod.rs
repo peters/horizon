@@ -185,6 +185,7 @@ pub fn run(
     if parallel == 0 {
         return Err(horizon_app_runtime::Error::CapacityUnavailable.into());
     }
+    let _evidence = actor.retain_run_evidence()?;
     if let Some(reset) = &contract.reset {
         command(actor, reset.clone(), control)?;
     }
@@ -411,7 +412,12 @@ impl Plan<'_> {
                         view: None,
                     })?;
                     control.remaining()?;
-                    let action = runtime.act(session, &step.action);
+                    // Screenshot steps use the retained capture below, avoiding a discarded second request.
+                    let action = if matches!(step.action, Action::Screenshot {}) {
+                        Ok(None)
+                    } else {
+                        runtime.act(session, &step.action)
+                    };
                     if matches!(step.action, Action::Reset {}) && action.is_err() {
                         // A replacement may have reached the provider without a returned handle.
                         report.cleanup_confirmed = false;
