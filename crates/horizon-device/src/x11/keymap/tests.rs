@@ -369,24 +369,51 @@ fn caps_lock_inverts_shift_only_for_letter_keys() -> Result<(), PlanError> {
         caps_lock: true,
         ..SHIFTED
     };
-    let plan = plan(&view(&keysyms), &[], locked, "aA_-æ")?;
+    let plan = plan(&view(&keysyms), &[], locked, "aA_-9\u{e000}")?;
     let shifts: Vec<bool> = plan.strokes.iter().map(|stroke| stroke.shift).collect();
-    assert_eq!(shifts, vec![true, false, true, false, false]);
-    assert!(plan.bindings.is_empty());
+    assert_eq!(shifts, vec![true, false, true, false, false, false]);
+    assert_eq!(
+        plan.bindings,
+        vec![(FIRST_FREE + 3, 0x0100_e000)],
+        "a character without case"
+    );
+    // A client can change the case of a letter on a key without a letter pair.
+    assert_eq!(
+        super::plan(&view(&keysyms), &[], locked, "æ").err(),
+        Some(PlanError::CapsLock),
+        "a key with the letter on both levels"
+    );
+    assert_eq!(
+        super::plan(&view(&keysyms), &[], locked, "\u{f8}").err(),
+        Some(PlanError::CapsLock),
+        "a new temporary mapping"
+    );
+    // A Turkish pair is alphabetic for the X server, but it is not a Unicode pair.
+    let mut turkish = keysyms.clone();
+    turkish[usize::from(18_u8 - 8) * 2 + 1] = 0x2a9; // Iabovedot
+    assert_eq!(
+        super::plan(&view(&turkish), &[], locked, "i").err(),
+        Some(PlanError::CapsLock)
+    );
+    assert!(super::plan(&view(&turkish), &[], SHIFTED, "i").is_ok(), "Caps Lock off");
     let unshifted = Keyboard {
         shift_keycode: None,
         caps_lock: true,
     };
-    let plan = super::plan(&view(&keysyms), &[], unshifted, "aA")?;
+    let plan = super::plan(&view(&keysyms), &[], unshifted, "A")?;
     assert_eq!(
-        plan.strokes[1],
+        plan.strokes[0],
         Stroke {
             keycode: 10,
             shift: false
         },
         "Caps Lock alone gives the uppercase letter"
     );
-    assert_eq!(plan.bindings, vec![(FIRST_FREE + 3, u32::from(b'a'))]);
+    assert_eq!(
+        super::plan(&view(&keysyms), &[], unshifted, "a").err(),
+        Some(PlanError::CapsLock),
+        "a lowercase letter needs Shift or a temporary mapping"
+    );
     Ok(())
 }
 
@@ -482,6 +509,27 @@ fn modifier_rows_decide_which_state_bits_block_text_input() {
     keysyms[usize::from(58_u8 - 8) * 2] = 0x61;
     keysyms[usize::from(58_u8 - 8) * 2 + 1] = 0xffe1;
     reserved[0] = vec![58];
-    let rows: Vec<&[u8]> = reserved.iter().map(Vec::as_slice).collect();
-    assert_eq!(keyboard(&view(&keysyms), &rows, 0).map(|k| k.shift_keycode), Ok(None));
+    let row_refs: Vec<&[u8]> = reserved.iter().map(Vec::as_slice).collect();
+    assert_eq!(
+        keyboard(&view(&keysyms), &row_refs, 0).map(|k| k.shift_keycode),
+        Ok(None)
+    );
+    // A key acts with its first level. Num Lock or Caps Lock only on the second
+    // level does not make the key exempt.
+    keysyms[usize::from(59_u8 - 8) * 2] = 0xffe9; // Alt_L
+    keysyms[usize::from(59_u8 - 8) * 2 + 1] = 0xff7f; // Num_Lock
+    keysyms[usize::from(60_u8 - 8) * 2] = 0x61;
+    keysyms[usize::from(60_u8 - 8) * 2 + 1] = 0xffe5; // Caps_Lock
+    let second_level = rows(60, 0, 59);
+    let row_refs: Vec<&[u8]> = second_level.iter().map(Vec::as_slice).collect();
+    assert_eq!(
+        keyboard(&view(&keysyms), &row_refs, 0x10).err(),
+        Some(ModifierError::Held),
+        "Alt_L with Num_Lock on the second level"
+    );
+    assert_eq!(
+        keyboard(&view(&keysyms), &row_refs, 0x02).err(),
+        Some(ModifierError::Lock),
+        "a with Caps_Lock on the second level"
+    );
 }

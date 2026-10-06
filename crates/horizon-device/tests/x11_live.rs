@@ -120,13 +120,22 @@ fn multi_chunk_type_actions_deliver_every_character_once() -> x11_text::TestResu
     let received = type_chunks(&target, &mut client, chunks, lag)?;
     assert_eq!(received, expected, "reassigned temporary mappings");
 
-    // Caps Lock inverts Shift for letter keys only.
+    // Caps Lock inverts Shift for letter keys only. A letter that needs a
+    // temporary mapping is refused, because a client can change its case.
     let both = [KEY_PRESS_EVENT, KEY_RELEASE_EVENT];
     fake_keysym(&client.connection, CAPS_LOCK, &both)?;
-    let caps = vec!["AbC_9-xYz".to_owned(), "æQq".to_owned()];
+    let caps = vec!["AbC_9-xYz".to_owned(), "\u{e000}Qq".to_owned()];
     let received = type_chunks(&target, &mut client, caps.clone(), lag);
+    let letter = Device::connect(&target).and_then(|mut device| {
+        device.act(&ActRequest {
+            geometry: device.screenshot()?.geometry,
+            action: Action::Type { text: "æ".into() },
+        })
+    });
     fake_keysym(&client.connection, CAPS_LOCK, &both)?;
     assert_eq!(received?, caps.concat(), "Caps Lock");
+    assert!(matches!(letter, Err(DeviceError::Unsupported(_))), "{letter:?}");
+    assert_eq!(client.collect_while(lag, || true)?, "", "no key for a refused letter");
 
     // A held modifier would change each key, so text input refuses it before input.
     fake_keysym(&client.connection, SHIFT_L, &[KEY_PRESS_EVENT])?;

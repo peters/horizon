@@ -98,6 +98,9 @@ pub(super) struct Stroke {
 pub(super) enum PlanError {
     NoKeysym,
     Capacity,
+    /// Caps Lock is on, and a letter is not on a key with its lowercase and
+    /// uppercase form. A client can then change the case of the letter.
+    CapsLock,
 }
 
 #[derive(Debug)]
@@ -253,9 +256,11 @@ pub(super) fn keyboard(layout: &Layout<'_>, rows: &[&[u8]], state: u16) -> Resul
             .filter(|keycode| *keycode != 0 && *keycode != RESERVED_KEYCODE)
     };
     // The state bit cannot tell which key of a row is down. Thus, a row is
-    // exempt only when each of its keys is the exempt key.
+    // exempt only when each of its keys is the exempt key. A key is the
+    // exempt key only with the exempt keysym on its first level, because the
+    // key acts with the symbol of its first level.
     let only = |row: usize, keysym: u32| {
-        keycodes(row).next().is_some() && keycodes(row).all(|keycode| layout.symbols(keycode).contains(&keysym))
+        keycodes(row).next().is_some() && keycodes(row).all(|keycode| layout.symbols(keycode).first() == Some(&keysym))
     };
     let active = |row: usize| state & (1_u16 << row) != 0;
     // Shift (0), Control (2) and Mod1 to Mod5 (3 to 7), but not a Num Lock row.
@@ -299,7 +304,14 @@ pub(super) fn plan(
         if located.contains_key(&symbol) || missing.contains(&symbol) {
             continue;
         }
-        match locate(layout, keyboard, symbol) {
+        let stroke = locate(layout, keyboard, symbol);
+        if keyboard.caps_lock
+            && is_cased(character)
+            && !stroke.is_some_and(|stroke| is_letter_pair(layout.symbols(stroke.keycode)))
+        {
+            return Err(PlanError::CapsLock);
+        }
+        match stroke {
             Some(stroke) => {
                 located.insert(symbol, stroke);
             }
@@ -377,6 +389,14 @@ fn locate(layout: &Layout<'_>, keyboard: Keyboard, symbol: u32) -> Option<Stroke
     })
 }
 
+/// A character that a case conversion changes, so Caps Lock can change it.
+fn is_cased(character: char) -> bool {
+    character.to_lowercase().ne(std::iter::once(character)) || character.to_uppercase().ne(std::iter::once(character))
+}
+
+/// A key with a lowercase letter on the first level and its single uppercase
+/// letter on the second level. X servers give such a key the alphabetic key
+/// type, on which Caps Lock selects the uppercase letter.
 fn is_letter_pair(symbols: &[u32]) -> bool {
     let character = |index: usize| {
         symbols

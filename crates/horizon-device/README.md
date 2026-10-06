@@ -59,13 +59,19 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
   or `Shift_R` on its first level. If no key agrees, a character on the Shift
   level gets a temporary mapping.
 - If Caps Lock is on, the tool holds Shift for a lowercase letter and releases
-  it for an uppercase letter. This applies only to keys with a letter pair.
+  it for an uppercase letter. This applies only to keys with a letter pair: a
+  lowercase letter on the first level and its uppercase letter on the second
+  level.
 - In these conditions, the action fails with `unsupported` before input:
   - A keyboard group other than the first is active. The tool reads the
     group and the modifiers from XKB, or from the core state without XKB.
   - A modifier other than Lock and Num Lock is active. A Mod slot counts as
-    Num Lock only if each of its keys is Num Lock in the modifier mapping.
-  - Lock is active, but one of its keys is not Caps Lock, for example Shift Lock.
+    Num Lock only if each of its keys in the modifier mapping has Num Lock on
+    its first level.
+  - Lock is active, but one of its keys does not have Caps Lock on its first
+    level, for example Shift Lock.
+  - Caps Lock is on, and the text has a letter that is not on a key with a
+    letter pair. A client can change the case of such a letter.
   - The server has no XTEST extension.
 - Each other character gets a temporary mapping on an unused keycode. A server
   round trip makes sure that the server applied the mapping before the first key.

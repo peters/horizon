@@ -156,8 +156,9 @@ Give each result the task ID. A report uses the ID to give a result.
 
    Result: All tests pass. The multi-chunk test types 20 synthetic keys of 106
    characters. Its receiver reads each key 600 ms late with the current keymap.
-   The test also types text with Caps Lock on. With a held Shift key, it gets
-   `unsupported` and no key.
+   The test also types text with Caps Lock on. With Caps Lock on, a letter
+   that needs a temporary mapping gets `unsupported` and no key. With a held
+   Shift key, text gets `unsupported` and no key.
 
 2. Run the same command again on the same display.
 
@@ -170,10 +171,13 @@ Give each result the task ID. A report uses the ID to give a result.
 
 ### 6.2 T02 — Rejection before input
 
-1. Send one `type` action with 60 distinct Unicode private use characters.
+1. Send one `type` action with 256 distinct Unicode private use characters.
+   This is the character limit of one action. An X11 keymap has at most 247
+   keycodes for temporary mappings (9 to 255), so 256 distinct characters
+   always exceed the free slots.
 
    ```sh
-   python3 -c "print(''.join(chr(0xE100 + i) for i in range(60)), end='')" | send_type
+   python3 -c "print(''.join(chr(0xE100 + i) for i in range(256)), end='')" | send_type
    ```
 
    Result: The action fails with `invalid_request` and the message
