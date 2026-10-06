@@ -1,17 +1,30 @@
-//! Fragmented MP4 (ISO BMFF) writer for one H.264 track: an initialisation
-//! segment and one `moof`/`mdat` fragment per access unit.
+//! Fragmented MP4 (ISO BMFF) writer for one H.264 track and an optional
+//! AAC-LC track: an initialisation segment and one `moof`/`mdat` fragment per
+//! access unit or audio frame.
+use super::AudioFormat;
 
 /// Media timescale: the 90 kHz clock MPEG transports also use.
 pub(crate) const TIMESCALE: u32 = 90_000;
-const TRACK_ID: u32 = 1;
+pub(crate) const VIDEO_TRACK: u32 = 1;
+pub(crate) const AUDIO_TRACK: u32 = 2;
+/// AAC-LC frames always hold 1024 samples per channel.
+pub(crate) const AAC_FRAME_SAMPLES: u32 = 1024;
+const AAC_SAMPLE_RATES: [u32; 12] = [
+    96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000,
+];
 const SAMPLE_SYNC: u32 = 0x0200_0000;
 const SAMPLE_NON_SYNC: u32 = 0x0101_0000;
 const UNITY_MATRIX: [u32; 9] = [0x0001_0000, 0, 0, 0, 0x0001_0000, 0, 0, 0, 0x4000_0000];
 
-/// `ftyp` + `moov` describing one AVC track built from `sps` and `pps`.
-/// `None` when the SPS has no usable dimensions, or a parameter set does not
-/// fit the 16-bit length that `avcC` stores.
-pub(crate) fn init_segment(sps: &[u8], pps: &[u8]) -> Option<Vec<u8>> {
+/// `ftyp` + `moov` describing one AVC track built from `sps` and `pps`, plus
+/// an AAC-LC track when `audio` is set. `None` when the SPS has no usable
+/// dimensions, a parameter set does not fit the 16-bit length that `avcC`
+/// stores, or the audio format has no AAC configuration.
+pub(crate) fn init_segment(sps: &[u8], pps: &[u8], audio: Option<AudioFormat>) -> Option<Vec<u8>> {
+    let audio_config = match audio {
+        Some(format) => Some((format, audio_specific_config(format)?)),
+        None => None,
+    };
     if u16::try_from(sps.len()).is_err() || u16::try_from(pps.len()).is_err() {
         return None;
     }
@@ -32,11 +45,18 @@ pub(crate) fn init_segment(sps: &[u8], pps: &[u8]) -> Option<Vec<u8>> {
             b.extend_from_slice(&[0; 10]);
             put_u32s(b, &UNITY_MATRIX);
             b.extend_from_slice(&[0; 24]);
-            put_u32s(b, &[TRACK_ID + 1]);
+            put_u32s(
+                b,
+                &[if audio_config.is_some() {
+                    AUDIO_TRACK + 1
+                } else {
+                    VIDEO_TRACK + 1
+                }],
+            );
         });
         boxed(moov, *b"trak", |trak| {
             full_box(trak, *b"tkhd", 0, 3, |b| {
-                put_u32s(b, &[0, 0, TRACK_ID, 0, 0, 0, 0]);
+                put_u32s(b, &[0, 0, VIDEO_TRACK, 0, 0, 0, 0]);
                 b.extend_from_slice(&[0; 8]);
                 put_u32s(b, &UNITY_MATRIX);
                 put_u32s(b, &[u32::from(width) << 16, u32::from(height) << 16]);
@@ -74,15 +94,30 @@ pub(crate) fn init_segment(sps: &[u8], pps: &[u8]) -> Option<Vec<u8>> {
                 });
             });
         });
+        if let Some((format, config)) = audio_config {
+            audio_trak(moov, format, config);
+        }
         boxed(moov, *b"mvex", |mvex| {
-            full_box(mvex, *b"trex", 0, 0, |b| put_u32s(b, &[TRACK_ID, 1, 0, 0, 0]));
+            full_box(mvex, *b"trex", 0, 0, |b| put_u32s(b, &[VIDEO_TRACK, 1, 0, 0, 0]));
+            if audio_config.is_some() {
+                full_box(mvex, *b"trex", 0, 0, |b| put_u32s(b, &[AUDIO_TRACK, 1, 0, 0, 0]));
+            }
         });
     });
     Some(out)
 }
 
-/// One fragment holding one sample: `sample` is AVCC (4-byte NAL lengths).
-pub(crate) fn fragment(sequence: u32, decode_time: u64, duration: u32, sample: &[u8], keyframe: bool) -> Vec<u8> {
+/// One fragment holding one sample of `track`: AVCC (4-byte NAL lengths) for
+/// video, one raw AAC frame for audio. `decode_time` and `duration` are in
+/// the track's timescale.
+pub(crate) fn fragment(
+    track: u32,
+    sequence: u32,
+    decode_time: u64,
+    duration: u32,
+    sample: &[u8],
+    keyframe: bool,
+) -> Vec<u8> {
     let size = u32::try_from(sample.len()).unwrap_or(u32::MAX);
     let flags = if keyframe { SAMPLE_SYNC } else { SAMPLE_NON_SYNC };
     let mut out = Vec::with_capacity(sample.len() + 128);
@@ -90,7 +125,7 @@ pub(crate) fn fragment(sequence: u32, decode_time: u64, duration: u32, sample: &
         full_box(moof, *b"mfhd", 0, 0, |b| put_u32s(b, &[sequence]));
         boxed(moof, *b"traf", |traf| {
             // default-base-is-moof: data offsets count from this moof.
-            full_box(traf, *b"tfhd", 0, 0x02_0000, |b| put_u32s(b, &[TRACK_ID]));
+            full_box(traf, *b"tfhd", 0, 0x02_0000, |b| put_u32s(b, &[track]));
             full_box(traf, *b"tfdt", 1, 0, |b| {
                 b.extend_from_slice(&decode_time.to_be_bytes());
             });
@@ -109,6 +144,85 @@ pub(crate) fn fragment(sequence: u32, decode_time: u64, duration: u32, sample: &
     out.extend_from_slice(b"mdat");
     out.extend_from_slice(sample);
     out
+}
+
+/// Two-byte `AudioSpecificConfig` for AAC-LC (object type 2), or `None` for
+/// a rate without an index or a channel count above stereo.
+pub(crate) fn audio_specific_config(format: AudioFormat) -> Option<[u8; 2]> {
+    let index = AAC_SAMPLE_RATES.iter().position(|&rate| rate == format.sample_rate)?;
+    if !(1..=2).contains(&format.channels) || format.sample_rate > 48_000 {
+        return None;
+    }
+    let bits = 2u16 << 11 | u16::try_from(index).ok()? << 7 | u16::from(format.channels) << 3;
+    Some(bits.to_be_bytes())
+}
+
+fn audio_trak(moov: &mut Vec<u8>, format: AudioFormat, config: [u8; 2]) {
+    boxed(moov, *b"trak", |trak| {
+        full_box(trak, *b"tkhd", 0, 3, |b| {
+            put_u32s(b, &[0, 0, AUDIO_TRACK, 0, 0, 0, 0]);
+            // Layer, alternate group, full volume, reserved.
+            b.extend_from_slice(&[0, 0, 0, 0, 0x01, 0x00, 0, 0]);
+            put_u32s(b, &UNITY_MATRIX);
+            put_u32s(b, &[0, 0]);
+        });
+        boxed(trak, *b"mdia", |mdia| {
+            full_box(mdia, *b"mdhd", 0, 0, |b| {
+                put_u32s(b, &[0, 0, format.sample_rate, 0]);
+                b.extend_from_slice(&[0x55, 0xc4, 0, 0]);
+            });
+            full_box(mdia, *b"hdlr", 0, 0, |b| {
+                put_u32s(b, &[0]);
+                b.extend_from_slice(b"soun");
+                b.extend_from_slice(&[0; 12]);
+                b.extend_from_slice(b"Sound\0");
+            });
+            boxed(mdia, *b"minf", |minf| {
+                full_box(minf, *b"smhd", 0, 0, |b| b.extend_from_slice(&[0; 4]));
+                boxed(minf, *b"dinf", |dinf| {
+                    full_box(dinf, *b"dref", 0, 0, |b| {
+                        put_u32s(b, &[1]);
+                        full_box(b, *b"url ", 0, 1, |_| {});
+                    });
+                });
+                boxed(minf, *b"stbl", |stbl| {
+                    full_box(stbl, *b"stsd", 0, 0, |b| {
+                        put_u32s(b, &[1]);
+                        mp4a(b, format, config);
+                    });
+                    for kind in [*b"stts", *b"stsc", *b"stco"] {
+                        full_box(stbl, kind, 0, 0, |b| put_u32s(b, &[0]));
+                    }
+                    full_box(stbl, *b"stsz", 0, 0, |b| put_u32s(b, &[0, 0]));
+                });
+            });
+        });
+    });
+}
+
+fn mp4a(out: &mut Vec<u8>, format: AudioFormat, config: [u8; 2]) {
+    boxed(out, *b"mp4a", |b| {
+        b.extend_from_slice(&[0; 6]);
+        b.extend_from_slice(&1u16.to_be_bytes());
+        b.extend_from_slice(&[0; 8]);
+        b.extend_from_slice(&u16::from(format.channels).to_be_bytes());
+        b.extend_from_slice(&16u16.to_be_bytes());
+        b.extend_from_slice(&[0; 4]);
+        put_u32s(b, &[format.sample_rate << 16]);
+        full_box(b, *b"esds", 0, 0, |e| {
+            // ES_Descriptor > DecoderConfigDescriptor (MPEG-4 audio, audio
+            // stream) > DecoderSpecificInfo (AudioSpecificConfig), then an
+            // SLConfigDescriptor; each length fits one byte.
+            e.extend_from_slice(&[0x03, 25]);
+            // ES_ID: the audio track id, which fits 16 bits.
+            e.extend_from_slice(&AUDIO_TRACK.to_be_bytes()[2..]);
+            e.push(0);
+            e.extend_from_slice(&[0x04, 17, 0x40, 0x15, 0, 0, 0]);
+            put_u32s(e, &[0, 0]);
+            e.extend_from_slice(&[0x05, 2, config[0], config[1]]);
+            e.extend_from_slice(&[0x06, 1, 0x02]);
+        });
+    });
 }
 
 fn avc1(out: &mut Vec<u8>, width: u16, height: u16, sps: &[u8], pps: &[u8]) {
@@ -346,15 +460,15 @@ mod tests {
     fn parameter_sets_too_long_for_avcc_are_rejected() {
         let mut sps = SPS_720P.to_vec();
         sps.resize(usize::from(u16::MAX) + 1, 0);
-        assert!(init_segment(&sps, &PPS_720P).is_none());
+        assert!(init_segment(&sps, &PPS_720P, None).is_none());
         let mut pps = PPS_720P.to_vec();
         pps.resize(usize::from(u16::MAX) + 1, 0);
-        assert!(init_segment(&SPS_720P, &pps).is_none());
+        assert!(init_segment(&SPS_720P, &pps, None).is_none());
     }
 
     #[test]
     fn init_segment_nests_cleanly() {
-        let init = init_segment(&SPS_720P, &PPS_720P).unwrap();
+        let init = init_segment(&SPS_720P, &PPS_720P, None).unwrap();
         let top = boxes(&init);
         assert_eq!(
             top.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
@@ -372,7 +486,7 @@ mod tests {
     #[test]
     fn fragment_data_offset_points_at_the_sample() {
         let sample = [0, 0, 0, 2, 0x65, 0x88];
-        let frag = fragment(7, 90_000, 3000, &sample, true);
+        let frag = fragment(VIDEO_TRACK, 7, 90_000, 3000, &sample, true);
         let top = boxes(&frag);
         assert_eq!(
             top.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
@@ -383,5 +497,68 @@ mod tests {
         assert_eq!(&frag[offset..], &sample);
         let tfdt = frag.windows(4).position(|w| w == b"tfdt").unwrap() + 8;
         assert_eq!(u64::from_be_bytes(frag[tfdt..tfdt + 8].try_into().unwrap()), 90_000);
+    }
+
+    const STEREO_48K: AudioFormat = AudioFormat {
+        sample_rate: 48_000,
+        channels: 2,
+    };
+
+    #[test]
+    fn audio_specific_config_encodes_aac_lc() {
+        // AAC-LC (2), 48 kHz (index 3), stereo: 00010 0011 0010 000.
+        assert_eq!(audio_specific_config(STEREO_48K), Some([0x11, 0x90]));
+        let mono_44 = AudioFormat {
+            sample_rate: 44_100,
+            channels: 1,
+        };
+        assert_eq!(audio_specific_config(mono_44), Some([0x12, 0x08]));
+        assert_eq!(
+            audio_specific_config(AudioFormat {
+                sample_rate: 47_000,
+                channels: 2
+            }),
+            None
+        );
+        assert_eq!(
+            audio_specific_config(AudioFormat {
+                sample_rate: 48_000,
+                channels: 6
+            }),
+            None
+        );
+        assert_eq!(
+            audio_specific_config(AudioFormat {
+                sample_rate: 96_000,
+                channels: 2
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn init_segment_with_audio_declares_two_tracks() {
+        let init = init_segment(&SPS_720P, &PPS_720P, Some(STEREO_48K)).unwrap();
+        let moov = &init[boxes(&init)[0].1 + 8..];
+        let kinds: Vec<_> = boxes(moov).iter().map(|(kind, _)| *kind).collect();
+        assert_eq!(kinds, [*b"mvhd", *b"trak", *b"trak", *b"mvex"]);
+        for needle in [&b"mp4a"[..], b"esds", b"soun", b"smhd"] {
+            assert!(init.windows(needle.len()).any(|w| w == needle), "missing {needle:?}");
+        }
+        let esds = init.windows(4).position(|w| w == b"esds").unwrap();
+        assert!(init[esds..].windows(4).any(|w| w == [0x05, 2, 0x11, 0x90]));
+        assert_eq!(init.windows(4).filter(|w| *w == b"trex").count(), 2);
+        assert_eq!(boxes(&init[..]).len(), 2);
+    }
+
+    #[test]
+    fn audio_fragments_name_their_track() {
+        let frag = fragment(AUDIO_TRACK, 3, 48_000, AAC_FRAME_SAMPLES, &[0x21, 0x10], true);
+        let tfhd = frag.windows(4).position(|w| w == b"tfhd").unwrap() + 8;
+        assert_eq!(
+            u32::from_be_bytes(frag[tfhd..tfhd + 4].try_into().unwrap()),
+            AUDIO_TRACK
+        );
+        assert!(frag.ends_with(&[0x21, 0x10]));
     }
 }
