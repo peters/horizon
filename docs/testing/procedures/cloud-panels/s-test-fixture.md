@@ -134,10 +134,10 @@ child is the frozen candidate.
 4. In the launcher copy, bind the socket of a rootless Docker daemon into the fixture.
 
    ```text
-   /run/user/<uid>/docker.sock
+   <docker-socket>
    ```
 
-   Result: The fixture can use Docker. The fixture makes `/run/user/<uid>` private,
+   Result: The fixture can use the Docker daemon of this run. The fixture makes `/run/user/<uid>` private,
    so it does not show this socket without a bind. Area B sets `docker_host` to
    this socket.
 

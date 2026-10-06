@@ -44,68 +44,13 @@ provider APIs, that no test server, pod or volume continues to cost money.
 
 ## 5. Setup
 
-1. Find the Hetzner token file in `<data-home>/.horizon/cloud/settings.json` at `hetzner.token_file`.
-
-   Result: You have the token file path. On the host, it starts with `<data-home>`.
-
-2. Make a Hetzner header file with mode `0600` from the token file.
+1. Make sure that the header files and the list scripts of the main setup exist.
 
    ```sh
-   umask 077; { printf 'Authorization: Bearer '; cat <hetzner-token-file>; } > <run>/hetzner.header
+   ls -l <run>/hetzner.header <run>/runpod.header <run>/hetzner-list.sh <run>/runpod-list.sh
    ```
 
-   Result: The header file exists. The token is not in a command argument.
-
-3. Find the RunPod key file in `settings.json` at `runpod_key_file`.
-
-   Result: You have the key file path.
-
-4. Make a RunPod header file with mode `0600` from the key file.
-
-   ```sh
-   umask 077; { printf 'Authorization: Bearer '; cat <runpod-key-file>; } > <run>/runpod.header
-   ```
-
-   Result: The header file exists. The key is not in a command argument.
-
-5. Write a script that reads all pages of one Hetzner list.
-
-   ```sh
-   cat > <run>/hetzner-list.sh <<'EOF'
-   #!/usr/bin/env bash
-   # Usage: hetzner-list.sh servers|volumes|ssh_keys
-   set -euo pipefail
-   kind=$1; page=1
-   while [ "$page" != null ]; do
-     body=$(curl -fsS -H @<run>/hetzner.header "https://api.hetzner.cloud/v1/$kind?per_page=50&page=$page")
-     jq -c --arg k "$kind" '.[$k][] | {id, name}' <<< "$body"
-     page=$(jq -r '.meta.pagination.next_page' <<< "$body")
-   done
-   EOF
-   ```
-
-   Result: The script follows `meta.pagination.next_page` until it is null. An HTTP error stops it.
-
-6. Write a script that reads all pages of one RunPod list.
-
-   ```sh
-   cat > <run>/runpod-list.sh <<'EOF'
-   #!/usr/bin/env bash
-   # Usage: runpod-list.sh pods|network-volumes
-   set -euo pipefail
-   url="https://api.runpod.io/v2/$1"; next=$url
-   while :; do
-     body=$(curl -fsS -H @<run>/runpod.header "$next")
-     jq -c '(if type == "array" then . else (.pods // .networkVolumes // .data // []) end)[] | {id, name}' <<< "$body"
-     more=$(jq -r 'if type == "object" then (.pagination.hasNextPage // false) else false end' <<< "$body")
-     [ "$more" = true ] || break
-     cursor=$(jq -r '.pagination.nextCursor | @uri' <<< "$body")
-     next="$url?cursor=$cursor"
-   done
-   EOF
-   ```
-
-   Result: The script follows `pagination.nextCursor` while `hasNextPage` is true. An HTTP error stops it.
+   Result: The four files exist. The header files have the mode `-rw-------`.
 
 ## 6. Tasks
 
@@ -169,6 +114,9 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
 ### 6.2 X02 — Make sure that Hetzner shows no test resources
 
+> **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
+> contains the token. Do not show the file or the request headers.
+
 1. List the servers of the Hetzner project.
 
    ```sh
@@ -176,6 +124,9 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
    ```
 
    Result: The script reads all pages. The list contains no server ID from the resource ledger.
+
+> **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
+> contains the token. Do not show the file or the request headers.
 
 2. List the volumes of the Hetzner project.
 
@@ -185,6 +136,9 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
    Result: The list contains no volume ID from the resource ledger.
 
+> **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
+> contains the token. Do not show the file or the request headers.
+
 3. List the SSH keys of the Hetzner project.
 
    ```sh
@@ -193,15 +147,26 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
    Result: The list contains no SSH key ID from the resource ledger.
 
-4. Compare the three lists with `<evidence>/hetzner-before.json`.
+> **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
+> contains the token. Do not show the file or the request headers.
 
-   Result: Each resource in the lists was also in the baseline.
+4. Save all Hetzner lists in the format of the baseline.
 
-5. Save the three lists as `<evidence>/hetzner-after.json`.
+   ```sh
+   for k in servers volumes ssh_keys networks; do bash <run>/hetzner-list.sh "$k"; done > <evidence>/hetzner-after.jsonl
+   ```
 
    Result: The evidence shows the final Hetzner state.
 
-### 6.3 X03 — Remove the test tailnet key and record the tailnet nodes
+5. Compare the final Hetzner state with the baseline.
+
+   ```sh
+   diff <(sort <evidence>/hetzner-before.jsonl) <(sort <evidence>/hetzner-after.jsonl)
+   ```
+
+   Result: The only new line is the Hetzner network of Horizon, if the ledger records it as kept.
+
+### 6.3 X03 — Remove the test tailnet key and the test tailnet nodes
 
 1. Open **Settings** and click the **Tailnets** tab.
 
@@ -226,17 +191,29 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
    Result: The console lists the devices of the test tailnet.
 
-5. Find each device whose name agrees with a tailnet line in the resource ledger.
+5. Find each device whose node ID agrees with a tailnet line in the resource ledger.
 
-   Result: You have a list of leftover test nodes.
+   Result: You have the list of leftover test nodes. A node can have a new name
+   after a resume ([issue #1310](https://github.com/peters/horizon/issues/1310)), so use the node ID.
 
-6. Record the name, the last seen time and the state of each leftover test node in the evidence.
+6. Record the node ID, name, last seen time and state of each leftover test node.
 
    Result: The evidence lists the leftover tailnet nodes.
 
-7. Do not delete a device that the resource ledger does not record.
+   > **CAUTION:** REMOVE ONLY THE NODE IDS THAT THE RESOURCE LEDGER RECORDS. Other
+   > devices of the tailnet can belong to other people, and their access stops.
 
-   Result: The other devices of the tailnet do not change.
+7. In the admin console, remove each leftover test node.
+
+   Result: The console does not list the node IDs of the ledger.
+
+8. Mark each tailnet line of the resource ledger as deleted.
+
+   Result: The ledger shows no active tailnet node.
+
+9. Compare the device list with the tailnet baseline of area T.
+
+   Result: The list is the same as the baseline. Each device that the ledger does not record is unchanged.
 
 ### 6.4 X04 — Close the Device panel and stop the fixture
 
@@ -250,13 +227,21 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
 2. Record the owned process IDs from `<state>/lab.json`.
 
-   Result: You have the process IDs of the fixture children.
+   Result: You have the process IDs of the fixture children from the first start.
 
-3. In the terminal of the persistent launcher, press Ctrl-C.
+3. Add the newest candidate child process ID to the list.
+
+   ```sh
+   pstree -p <launcher-pid> | grep -o 'horizon([0-9]*)'
+   ```
+
+   Result: The list also contains the candidate child after the restarts of N05 and L03.
+
+4. In the terminal of the persistent launcher, press Ctrl-C.
 
    Result: The launcher stops Xvfb, D-Bus, the keyring, VNC and the candidate.
 
-4. Look for each owned process ID from step 2.
+5. Look for each process ID from steps 2 and 3.
 
    ```sh
    ps -o pid=,comm= -p <pid-list>
@@ -264,15 +249,18 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
    Result: The output is empty. No fixture child continues.
 
-5. Examine `<state>/target.json`.
+6. Examine `<state>/target.json`.
 
    Result: The file does not exist, or it shows that the target expired.
 
-6. Examine the Horizon of the operator.
+7. Examine the Horizon of the operator.
 
    Result: Its panels and sessions did not change.
 
 ### 6.5 X05 — Make sure that RunPod shows no test resources
+
+> **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
+> contains the key. Do not show the file or the request headers.
 
 1. List the pods of the RunPod account.
 
@@ -281,6 +269,9 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
    ```
 
    Result: The script reads all pages. The list contains no pod ID from the resource ledger.
+
+> **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
+> contains the key. Do not show the file or the request headers.
 
 2. List the network volumes of the RunPod account.
 
@@ -294,13 +285,35 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
    Result: The list contains no template that the run made.
 
-4. Compare the lists with `<evidence>/runpod-before.json`.
+> **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
+> contains the key. Do not show the file or the request headers.
 
-   Result: Each resource in the lists was also in the baseline.
+4. List the registry credentials of the RunPod account.
 
-5. Save the lists as `<evidence>/runpod-after.json`.
+   ```sh
+   bash <run>/runpod-list.sh registries
+   ```
+
+   Result: The list contains no registry credential that the ledger records as active.
+
+> **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
+> contains the key. Do not show the file or the request headers.
+
+5. Save all RunPod lists in the format of the baseline.
+
+   ```sh
+   for k in pods network-volumes registries; do bash <run>/runpod-list.sh "$k"; done > <evidence>/runpod-after.jsonl
+   ```
 
    Result: The evidence shows the final RunPod state.
+
+6. Compare the final RunPod state with the baseline.
+
+   ```sh
+   diff <(sort <evidence>/runpod-before.jsonl) <(sort <evidence>/runpod-after.jsonl)
+   ```
+
+   Result: The output is empty.
 
 ## 7. Pass criteria
 
@@ -309,7 +322,8 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 - The RunPod API shows no pod or network volume from the resource ledger.
 - The provider lists agree with the baselines.
 - The **Tailnets** tab does not list the test tailnet.
-- The evidence lists each leftover tailnet node.
+- The evidence lists each leftover tailnet node, and the admin console no
+  longer lists a node ID from the resource ledger.
 - The fixture children exited, and the target expired.
 
 ## 8. Cleanup

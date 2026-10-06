@@ -360,15 +360,26 @@ Do this task after B02. It needs the synthetic repository.
 
    Result: The card shows **Pull access verified**, the image, the scope and the expiry.
 
-10. Click **Status**.
+   > **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
+   > contains the key. Do not show the file or the request headers.
+
+10. Find the new provider pull credential in the RunPod registry list.
+
+    ```sh
+    bash <run>/runpod-list.sh registries
+    ```
+
+    Result: The list has one new line. Write its ID in the resource ledger as a RunPod registry credential.
+
+11. Click **Status**.
 
     Result: The card shows the generation, the provider state and the last validated image.
 
-11. Record the generation that the card shows.
+12. Record the generation that the card shows.
 
     Result: You have the value for the next steps.
 
-12. Write the status action to `<data-home>/smoke/registry-status.json`.
+13. Write the status action to `<data-home>/smoke/registry-status.json`.
 
     ```json
     {"operation":"status","repository":"ghcr.io/<test-owner>/<image>","generation":"<generation>"}
@@ -376,7 +387,7 @@ Do this task after B02. It needs the synthetic repository.
 
     Result: The file contains no secret.
 
-13. In the fixture terminal, run the status action with the CLI.
+14. In the fixture terminal, run the status action with the CLI.
 
     ```sh
     <run>/bin/cloud_deploy registry <home>/.horizon/cloud/settings.json <home>/smoke/registry-status.json
@@ -384,7 +395,7 @@ Do this task after B02. It needs the synthetic repository.
 
     Result: The output shows the same generation, provider state and image as the card.
 
-14. Write a script that sends the same action to the MCP tool `cloud_registry`.
+15. Write a script that sends the same action to the MCP tool `cloud_registry`.
 
     ```sh
     cat > <data-home>/smoke/bin/registry-mcp.sh <<'EOF'
@@ -402,7 +413,7 @@ Do this task after B02. It needs the synthetic repository.
 
     Result: The script is in `<data-home>/smoke/bin/registry-mcp.sh`.
 
-15. In the fixture terminal, run the script.
+16. In the fixture terminal, run the script.
 
     ```sh
     bash ~/smoke/bin/registry-mcp.sh
@@ -414,43 +425,43 @@ Do this task after B02. It needs the synthetic repository.
     > credential that this run made. A worker that needs it cannot pull its image
     > after a restart.
 
-16. In Cloud settings, click **Revoke pull binding**.
+17. In Cloud settings, click **Revoke pull binding**.
 
     Result: The card shows that the provider pull credential is revoked.
 
-17. Run the CLI status action again.
+18. Run the CLI status action again.
 
     Result: The output shows that the provider pull credential is revoked.
 
     > **CAUTION:** REVOKE ONLY THE GHCR TOKEN THAT THIS RUN MADE. Other tokens of
     > the account can give access to other work.
 
-18. Ask the operator to revoke the GHCR token at GitHub.
+19. Ask the operator to revoke the GHCR token at GitHub.
 
     Result: The token cannot read the image. Horizon does not revoke the token at its issuer.
 
 The `runpod-build` profile needs a second entry with a push credential.
 G02 and L05 use this entry. Keep it until the end of area L.
 
-19. In the **Container registry** card, click **Add image repository**.
+20. In the **Container registry** card, click **Add image repository**.
 
     Result: The card shows **New image repository** and empty fields.
 
-20. Type `<build-repository>` in the **Image repository** field.
+21. Type `<build-repository>` in the **Image repository** field.
 
     Result: The field shows the repository of the build profile.
 
     > **CAUTION:** THE OPERATOR MUST ENTER THE CREDENTIALS. A device `type` action
     > can lose characters, and a recording can show a credential.
 
-21. Let the operator fill the pull fields and the **Publishing credential** fields for `<build-repository>`.
+22. Let the operator fill the pull fields and the **Publishing credential** fields for `<build-repository>`.
 
     Result: The pull fields and the push fields are full. The credentials do not show.
 
     > **CAUTION:** SAVE ONLY CREDENTIALS FOR THE TEST REPOSITORY. Use a read-only
     > pull credential and a push credential for that repository only.
 
-22. Click **Save settings**.
+23. Click **Save settings**.
 
     Result: The card lists `<build-repository>`. The settings file contains only file references.
 
@@ -533,10 +544,22 @@ Do this task after D01. It uses the cloud `smoke-a`.
 
     Result: After **Save settings**, Claude shows **Key saved**.
 
+12. On the card of `smoke-a`, click **Reconnect cloud**.
+
+    Result: The card shows Ready. The reconnect sends the saved key to the worker.
+
+13. In the worker shell, look for the Claude key file.
+
+    ```sh
+    find /workspace -name 'anthropic-api-key*' 2>/dev/null
+    ```
+
+    Result: The output shows one file. E02 can sign in with the key.
+
     > **CAUTION:** REVOKE ONLY THE GITHUB TOKEN THAT THIS RUN MADE. Other tokens of
     > the account can give access to other work.
 
-12. Ask the operator to revoke the GitHub token at GitHub.
+14. Ask the operator to revoke the GitHub token at GitHub.
 
     Result: The token does not give access. Removal from the worker does not revoke it.
 

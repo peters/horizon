@@ -91,6 +91,14 @@ resource, sends a secret or changes tailnet access.
 | `<evidence>` | The private evidence directory. |
 | `<ledger>` | The resource ledger, `<evidence>/resource-ledger.tsv`. |
 | `<uid>` | The numeric user ID of the operator on the host. |
+| `<docker-socket>` | The socket of the rootless Docker daemon of this run, for example `<run>/docker/docker.sock`. |
+| `<display>` | The X display of the fixture, from `display` in `<state>/lab.json`. |
+| `<x>`, `<y>` | Screen coordinates from a fresh screenshot of the fixture. |
+| `<launcher-pid>` | The process ID of the persistent launcher, from `pids` in `<state>/lab.json`. |
+| `<test-owner>` | The GitHub owner of the test account. |
+| `<build-repository>` | A registry repository that the `runpod-build` profile can push to. |
+| `<image>`, `<digest>` | The name and the digest of the private test image for A08, in the GHCR space of `<test-owner>`. |
+| `<root shell>` | A root SSH session on a worker. Start it with the command of E09 step 4 without `true`. |
 
 The [technical names](../../style/technical-names.md) define the terms fixture
 terminal, worker shell, persistent launcher, restart marker and resource ledger.
@@ -125,13 +133,14 @@ change in the report as a deviation.
 6. Write each new provider resource in the resource ledger when the cloud card
    shows its ID. Record the provider, the type, the ID, the cloud title and the
    UTC time.
-7. Give each test a result: pass, fail or blocked. For a fail, open a bug issue
-   and write its link in the report.
-8. Put long commands for the fixture terminal in a script file below
+7. Give each test a result: pass, fail or blocked. An interim report can also
+   use `not run`.
+8. For a fail, open a bug issue and write its link in the report.
+9. Put long commands for the fixture terminal in a script file below
    `<data-home>/smoke/bin`. Then type only the short command that starts the script.
-9. To open the panel picker inside a cloud frame, use a real Ctrl-double-click.
-   Two separate device click actions are not a double-click.
-10. If `cloud_deploy` shows `Another controller owns this cloud operation`, wait
+10. To open the panel picker inside a cloud frame, use a real Ctrl-double-click.
+    Two separate device click actions are not a double-click.
+11. If `cloud_deploy` shows `Another controller owns this cloud operation`, wait
     10 seconds and run the same command again. Do not stop the candidate.
 
 ## 5. Setup
@@ -141,21 +150,92 @@ change in the report as a deviation.
    Result: The candidate runs in the persistent launcher. A Device panel shows a
    live view.
 
-2. Get a read-only list of the servers, volumes and SSH keys in the Hetzner project.
+   > **CAUTION:** ONLY THE OPERATOR WRITES THE HEADER FILES. Each file contains a
+   > provider credential of the test account. Do not show the files.
 
-   Result: You have the Hetzner baseline. Save it as `<evidence>/hetzner-before.json`.
+2. Ask the operator to write two header files with mode `0600` from the credentials of the test accounts.
 
-3. Get a read-only list of the pods, network volumes and templates in the RunPod account.
+   ```text
+   <run>/hetzner.header: Authorization: Bearer <Hetzner token>
+   <run>/runpod.header:  Authorization: Bearer <RunPod key>
+   ```
 
-   Result: You have the RunPod baseline. Save it as `<evidence>/runpod-before.json`.
+   Result: The two files exist. No command argument contains a credential.
 
-4. Make the resource ledger with one header line.
+3. Write a script that reads all pages of one Hetzner list.
+
+   ```sh
+   cat > <run>/hetzner-list.sh <<'EOF'
+   #!/usr/bin/env bash
+   # Usage: hetzner-list.sh servers|volumes|ssh_keys|networks
+   set -euo pipefail
+   kind=$1; page=1
+   while [ "$page" != null ]; do
+     body=$(curl -fsS -H @<run>/hetzner.header "https://api.hetzner.cloud/v1/$kind?per_page=50&page=$page")
+     jq -c --arg k "$kind" '.[$k][] | {kind: $k, id, name}' <<< "$body"
+     page=$(jq -r '.meta.pagination.next_page' <<< "$body")
+   done
+   EOF
+   ```
+
+   Result: The script follows `meta.pagination.next_page` until it is null. An HTTP error stops it.
+
+4. Write a script that reads all pages of one RunPod list.
+
+   ```sh
+   cat > <run>/runpod-list.sh <<'EOF'
+   #!/usr/bin/env bash
+   # Usage: runpod-list.sh pods|network-volumes|registries
+   set -euo pipefail
+   url="https://api.runpod.io/v2/$1"; next=$url
+   while :; do
+     body=$(curl -fsS -H @<run>/runpod.header "$next")
+     jq -c --arg k "$1" '(if type == "array" then . else (.pods // .networkVolumes // .registries // []) end)[] | {kind: $k, id, name}' <<< "$body"
+     more=$(jq -r 'if type == "object" then (.pagination.hasNextPage // false) else false end' <<< "$body")
+     [ "$more" = true ] || break
+     next="$url?cursor=$(jq -r '.pagination.nextCursor | @uri' <<< "$body")"
+   done
+   EOF
+   ```
+
+   Result: The script follows `pagination.nextCursor` while `hasNextPage` is true. An HTTP error stops it.
+
+   > **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
+   > contains the token. Do not show the file or the request headers.
+
+5. Save the Hetzner baseline.
+
+   ```sh
+   for k in servers volumes ssh_keys networks; do bash <run>/hetzner-list.sh "$k"; done > <evidence>/hetzner-before.jsonl
+   ```
+
+   Result: The file has one line for each Hetzner resource before the run.
+
+   > **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
+   > contains the key. Do not show the file or the request headers.
+
+6. Save the RunPod baseline.
+
+   ```sh
+   for k in pods network-volumes registries; do bash <run>/runpod-list.sh "$k"; done > <evidence>/runpod-before.jsonl
+   ```
+
+   Result: The file has one line for each RunPod resource before the run.
+
+7. Make the resource ledger with one header line.
 
    ```sh
    printf 'utc\tprovider\ttype\tid\tcloud\tstate\n' > <evidence>/resource-ledger.tsv
    ```
 
    Result: The resource ledger exists and has no resources.
+
+   > **CAUTION:** ONLY THE OPERATOR SIGNS IN THE LOCAL AGENT. Use a test account.
+   > Do not type a password or a key with a device action.
+
+8. In the fixture, open a local Claude Code panel and let the operator sign it in.
+
+   Result: The agent answers a short request. O01, G07, G08, T12 and T13 use this agent.
 
 ## 6. Tasks
 
@@ -206,9 +286,10 @@ The cleanup of this procedure does X01 to X05.
 
    Result: The provider APIs show no resource from the resource ledger.
 
-2. Compare the provider lists with the baselines from the setup.
+2. Compare the provider lists of X02 and X05 with the baselines from the setup.
 
-   Result: The lists are the same as the baselines.
+   Result: The lists are the same as the baselines. The Hetzner network of
+   Horizon can stay. The resource ledger records it as kept.
 
 3. Remove the copies of the credential files from `<run>`.
 

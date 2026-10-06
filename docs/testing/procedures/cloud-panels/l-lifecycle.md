@@ -336,38 +336,42 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
    Result: The title field shows `smoke-x`.
 
-3. In **Profile**, select `hetzner-idle`.
+3. Type `<repo>` in the repository field and click **Read .horizon/cloud.yml**.
+
+   Result: **Profile** lists the profiles that area B committed.
+
+4. In **Profile**, select `hetzner-idle`.
 
    Result: The summary shows a Hetzner worker.
 
-4. In **Tailnet**, select **None**.
+5. In **Tailnet**, select **None**.
 
    Result: **None** is selected.
 
    > **CAUTION:** THIS STEP RENTS COMPUTE. Hetzner charges money for the server
    > and the volume until somebody deletes them.
 
-5. Click **Start cloud**.
+6. Click **Start cloud**.
 
    Result: The card of `smoke-x` shows **Ready**.
 
-6. Write the server, the volume and the SSH key of `smoke-x` in the resource ledger.
+7. Write the server, the volume and the SSH key of `smoke-x` in the resource ledger.
 
    Result: The ledger has three lines for `smoke-x`.
 
-7. Do not open a panel in `smoke-x`. Keep the candidate open and connected.
+8. Do not open a panel in `smoke-x`. Keep the candidate open and connected.
 
    Result: The worker has no agent output and no CPU load.
 
-8. Wait 15 minutes.
+9. Wait 15 minutes.
 
    Result: The card of `smoke-x` shows **Stopped**.
 
-9. Mark the server of `smoke-x` as deleted in the resource ledger.
+10. Mark the server of `smoke-x` as deleted in the resource ledger.
 
-   Result: The ledger shows the server as deleted and the volume as kept.
+    Result: The ledger shows the server as deleted and the volume as kept.
 
-10. Open the **Manage** tab and click **Check provider**.
+11. Open the **Manage** tab and click **Check provider**.
 
     Result: The card shows **Stopped** and offers **Resume worker**. Nothing
     starts the worker.
@@ -580,7 +584,7 @@ to 9 revoke it while the fixture runs.
 
    Result: The entry shows that the provider pull credential is revoked.
 
-5. Write the status action for `<build-repository>` as in A08 step 12.
+5. Write the status action for `<build-repository>` as in A08 step 13.
 
    Result: `<data-home>/smoke/registry-status.json` names `<build-repository>` and its generation.
 

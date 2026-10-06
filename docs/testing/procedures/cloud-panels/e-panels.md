@@ -114,7 +114,11 @@ real request.
 
    Result: The operator saves the key. Nobody types it with a device action.
 
-5. If the operator entered the key again, open a new Claude Code panel and do step 3 again.
+5. If the operator entered the key again, click **Reconnect cloud** on the card of `smoke-a`.
+
+   Result: The card shows Ready. The reconnect sends the new key to the worker.
+
+6. Open a new Claude Code panel and do step 3 again.
 
    Result: The agent replies `ready`.
 

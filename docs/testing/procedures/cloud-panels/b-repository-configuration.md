@@ -59,7 +59,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 1. If the host uses rootless Docker, set `docker_host` in the cloud settings file.
 
    ```sh
-   f=<data-home>/.horizon/cloud/settings.json; jq '.docker_host = "unix:///run/user/<uid>/docker.sock"' "$f" > "$f.new" && chmod 600 "$f.new" && mv "$f.new" "$f"
+   f=<data-home>/.horizon/cloud/settings.json; jq '.docker_host = "unix://<docker-socket>"' "$f" > "$f.new" && chmod 600 "$f.new" && mv "$f.new" "$f"
    ```
 
    Result: The file contains `docker_host` and keeps the mode `0600`.
@@ -70,7 +70,7 @@ bind of S02 alone does not change the socket that the candidate uses.
    jq -r '.docker_host' <data-home>/.horizon/cloud/settings.json
    ```
 
-   Result: The output is `unix:///run/user/<uid>/docker.sock`.
+   Result: The output is `unix://<docker-socket>`.
 
 3. On the host, make the directories of the synthetic repositories.
 

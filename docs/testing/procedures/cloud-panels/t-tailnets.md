@@ -168,6 +168,8 @@ send TCP traffic to each other over the tailnet.
 
 ### 6.3 T03 — Provision a cloud on the tailnet
 
+D01 starts `smoke-a` on the test tailnet. If D01 did this, do only steps 7 and 8.
+
 1. Open **Cloud › New cloud…** in the workspace of the test.
 
    Result: The New cloud dialog opens.
@@ -176,11 +178,15 @@ send TCP traffic to each other over the tailnet.
 
    Result: The dialog shows the title.
 
-3. Select the Hetzner CPU profile.
+3. Type `<repo>` in the repository field and click **Read .horizon/cloud.yml**.
+
+   Result: **Profile** lists the profiles that area B committed.
+
+4. In **Profile**, select `hetzner-cpu`.
 
    Result: The summary shows a Hetzner worker.
 
-4. Click `Smoke test tailnet` in the **Tailnet** chooser.
+5. Click `Smoke test tailnet` in the **Tailnet** chooser.
 
    Result: The chooser shows **None** and `Smoke test tailnet`. `Smoke test tailnet`
    is selected.
@@ -188,22 +194,20 @@ send TCP traffic to each other over the tailnet.
    > **CAUTION:** THIS STEP RENTS COMPUTE AND JOINS A WORKER TO THE TAILNET. Record
    > the server and the volume in the resource ledger.
 
-5. Click **Start cloud**.
+6. Click **Start cloud**.
 
    Result: The cloud card shows the deployment stages.
 
-6. Wait until the card shows **Ready**.
+7. Wait until the card shows **Ready**.
 
    Result: The card shows **Tailnet**, `Smoke test tailnet` and **Selected at provisioning**.
 
-7. Write the server, the volume, the SSH key and the tailnet node name in the resource ledger.
+8. Write the server, the volume, the SSH key and the tailnet node name in the resource ledger.
 
    Result: The resource ledger contains the four resources of the cloud. The SSH
-   key ID is in `hetzner.json` in the state directory of the cloud.
+   key ID is in `hetzner.json` in the state directory of the cloud. Record the
+   node ID from the admin console of the test tailnet.
 
-8. If D01 started `smoke-a` on the tailnet, do only step 6 and step 7.
-
-   Result: The card of the current `smoke-a` shows the tailnet.
 
 ### 6.4 T04 — Examine the userspace networking of the worker
 
@@ -360,12 +364,41 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
 
 ### 6.8 T08 — Connect from cloud A to cloud B on Hetzner
 
-1. Start `smoke-b` on the test tailnet with the steps 1 to 7 of T03.
+1. Open **Cloud › New cloud…** and wait 3 seconds.
 
-   Result: The card of `smoke-b` shows **Ready** and **Selected at provisioning**.
-   The resource ledger contains its server, volume, SSH key and tailnet node.
+   Result: The New cloud dialog opens and does not move.
 
-2. In the worker shell of `smoke-b`, find the tailnet name and address of the worker.
+2. Type `smoke-b` as the title.
+
+   Result: The dialog shows the title `smoke-b`.
+
+3. Type `<repo>` in the repository field and click **Read .horizon/cloud.yml**.
+
+   Result: **Profile** lists the profiles that area B committed.
+
+4. In **Profile**, select `hetzner-cpu`.
+
+   Result: The summary shows a Hetzner worker.
+
+   > **CAUTION:** SELECT ONLY THE TEST TAILNET. The worker joins the tailnet and
+   > can reach the devices that its policy permits.
+
+5. Click `Smoke test tailnet` in the **Tailnet** chooser.
+
+   Result: `Smoke test tailnet` is selected.
+
+   > **CAUTION:** THIS STEP RENTS COMPUTE AND JOINS A SECOND WORKER TO THE TAILNET.
+   > Hetzner charges money for the server and the volume until area X deletes them.
+
+6. Click **Start cloud**.
+
+   Result: The card of `smoke-b` shows the deployment stages, then **Ready** and **Selected at provisioning**.
+
+7. Write the server, the volume, the SSH key and the tailnet node of `smoke-b` in the resource ledger.
+
+   Result: The ledger contains the four resources of `smoke-b`.
+
+8. In the worker shell of `smoke-b`, find the tailnet name and address of the worker.
 
    ```sh
    jq -r '.devices[0] | .name, .addresses[0]' /run/horizon-tailnet-devices/devices.json
@@ -374,45 +407,45 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
    Result: You have the tailnet name and the IPv4 tailnet address of `smoke-b`.
    The first device in the list is the worker itself.
 
-3. In the worker shell of `smoke-b`, start the test server as in T07 steps 2 and 3.
+9. In the worker shell of `smoke-b`, start the test server as in T07 steps 2 and 3.
 
    Result: The server on `smoke-b` listens on `127.0.0.1:18081`.
 
-4. In the worker shell of `smoke-a`, show the user of the shell.
+10. In the worker shell of `smoke-a`, show the user of the shell.
 
-   ```sh
-   id -un
-   ```
+    ```sh
+    id -un
+    ```
 
-   Result: The output is `horizon-agent`. The next steps use the proxies as the agent user.
+    Result: The output is `horizon-agent`. The next steps use the proxies as the agent user.
 
-5. In the worker shell of `smoke-a`, read the value from `smoke-b` by IP address through the SOCKS5 proxy.
+11. In the worker shell of `smoke-a`, read the value from `smoke-b` by IP address through the SOCKS5 proxy.
 
-   ```sh
-   curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-b-tailnet-address>:18081/nonce
-   ```
+    ```sh
+    curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-b-tailnet-address>:18081/nonce
+    ```
 
-   Result: The output is the same value as the file on `smoke-b`.
+    Result: The output is the same value as the file on `smoke-b`.
 
-6. Read the value from `smoke-b` by tailnet name through the SOCKS5 proxy.
+12. Read the value from `smoke-b` by tailnet name through the SOCKS5 proxy.
 
-   ```sh
-   curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-b-tailnet-name>:18081/nonce
-   ```
+    ```sh
+    curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-b-tailnet-name>:18081/nonce
+    ```
 
-   Result: The output is the same value. The proxy resolves the tailnet name.
+    Result: The output is the same value. The proxy resolves the tailnet name.
 
-7. Read the value from `smoke-b` through the HTTP proxy.
+13. Read the value from `smoke-b` through the HTTP proxy.
 
-   ```sh
-   curl -sS --max-time 20 -x http://127.0.0.1:1056 http://<smoke-b-tailnet-address>:18081/nonce
-   ```
+    ```sh
+    curl -sS --max-time 20 -x http://127.0.0.1:1056 http://<smoke-b-tailnet-address>:18081/nonce
+    ```
 
-   Result: The output is the same value.
+    Result: The output is the same value.
 
-8. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
+14. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
 
-   Result: The server stops.
+    Result: The server stops.
 
 ### 6.9 T09 — Connect from Hetzner to RunPod over the tailnet
 
@@ -510,11 +543,15 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
     Result: The addresses are the same as in step 2. If the name is not the
     same, record the known defect [issue #1310](https://github.com/peters/horizon/issues/1310).
 
-11. In the root shell of `smoke-a`, record the node ID again, as in step 3.
+11. Start a new root shell of `smoke-a` with E09 steps 2 to 4.
+
+    Result: The root shell uses the endpoint of the new server.
+
+12. In the new root shell, record the node ID as in step 3.
 
     Result: The node ID is the same as in step 3.
 
-12. Examine the device list of the test tailnet.
+13. Examine the device list of the test tailnet.
 
     Result: The tailnet shows one node for `smoke-a`, not two.
 
@@ -538,6 +575,9 @@ This task needs a root shell. Use the SSH route of E09 in
    ```
 
    Result: The output shows one process ID.
+
+   > **CAUTION:** KILL THE DAEMON ONLY ON `smoke-a`. The node leaves the tailnet
+   > until the supervisor starts the daemon again.
 
 3. Stop the daemon with a kill signal.
 
@@ -567,7 +607,7 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The count is the same as in step 1. The PC and `smoke-b` are online.
 
-7. Do T08 step 5 again with a new test server on `smoke-b`.
+7. Do T08 step 11 again with a new test server on `smoke-b`.
 
    Result: The worker reaches `smoke-b` with the same node identity.
 

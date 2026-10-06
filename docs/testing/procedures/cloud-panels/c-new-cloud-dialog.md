@@ -70,16 +70,12 @@ runs in the place that the dialog showed.
 
    Result: The file contains `offers`, `other_providers` and `comparison`.
 
-   > **CAUTION:** KEEP THE HETZNER HEADER FILE PRIVATE. It contains the Hetzner
-   > token. A person who gets the token can rent servers in the project.
+3. Make sure that `<run>/hetzner.header` from the main setup exists.
 
-3. Ask the operator to write a header file for the Hetzner API with mode `600`.
+   Result: The file exists and has the mode `-rw-------`. Do not show its content.
 
-   ```text
-   <run>/hetzner.header: Authorization: Bearer <Hetzner token>
-   ```
-
-   Result: The header file exists. Nobody shows its content.
+   > **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
+   > contains the token. Do not show the file or the request headers.
 
 4. Save the Hetzner server types and locations to the evidence.
 
@@ -259,10 +255,36 @@ runs in the place that the dialog showed.
 
    Result: No screenshot shows `Comparison incomplete`. The cards and the list do not move.
 
-4. Record that unit tests cover the block for a catalog that is more than one hour old.
+   > **CAUTION:** KEEP A COPY OF THE RUNPOD KEY FILE AND PUT IT BACK IN STEP 10.
+   > Without the real key, Horizon cannot show RunPod prices or delete RunPod clouds.
 
-   Result: The report says that the stale block was not tested live. The text
-   is `Prices are over an hour old. Refresh them before starting.`
+4. Copy the RunPod key file of the fixture to `<run>/runpod-key.saved` with mode `0600`.
+
+   Result: The copy exists. Do not show its content.
+
+5. Write the synthetic text `rpa_SMOKEINVALIDKEY` to the RunPod key file of the fixture.
+
+   Result: The next refresh of the RunPod prices fails. The dialog keeps the last prices.
+
+6. Click a RunPod row.
+
+   Result: The summary shows the RunPod worker.
+
+7. Keep the dialog open for 61 minutes.
+
+   Result: The dialog shows the age of the prices and the reason of the failed refresh.
+
+8. Examine the action bar.
+
+   Result: **Start cloud** is disabled. The dialog says `Prices are over an hour old. Refresh them before starting.`
+
+9. Click **Cancel**.
+
+   Result: The dialog closes. No cloud starts.
+
+10. Copy `<run>/runpod-key.saved` back to the RunPod key file and delete the copy.
+
+    Result: The key file contains the real key again. A new New cloud dialog shows current RunPod prices.
 
 For a detailed check of the refresh, use the
 [catalog refresh procedure](../new-cloud-catalog-refresh.md).
@@ -767,6 +789,9 @@ This task uses the clouds of D01 and D02. Do not start other clouds.
 
 4. After D01, read the location of the server of `smoke-a` from the Hetzner API.
 
+> **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
+> contains the token. Do not show the file or the request headers.
+
    ```sh
    curl -fsS -H @<run>/hetzner.header https://api.hetzner.cloud/v1/servers/<server-id> | jq -r '.server.datacenter.location.name'
    ```
@@ -810,7 +835,7 @@ This task uses the clouds of D01 and D02. Do not start other clouds.
    > **CAUTION:** DELETE THE HETZNER HEADER FILE ONLY AFTER C31 AND AREA X. Area X
    > uses it to make sure that no server remains.
 
-3. After area X, delete `<run>/hetzner.header`.
+3. Keep `<run>/hetzner.header`. The cleanup of area X deletes it.
 
    Result: No file with the Hetzner token stays in `<run>`.
 

@@ -44,8 +44,8 @@ also makes sure that agents can start and stop a companion cloud through MCP.
   [area B](b-repository-configuration.md). It has the profiles `hetzner-cpu`
   and `runpod-build`. A sibling needs a build profile.
 - `<sib>` contains a committed Git LFS file and a pinned submodule. If it does
-  not, add them as in the [setup of area D](d-deployment.md#5-setup), and commit
-  them before G02.
+  not, run `git -C <sib> lfs install --local`, add them as in the
+  [setup of area D](d-deployment.md#5-setup), and commit them before G02.
 - The committed `.horizon/cloud.yml` of `<repo>` declares the companion `lib`
   with the profile `hetzner-cpu` and the sibling `sib` with the profile
   `runpod-build` and `placement: same_worker`. Area B commits this file.
@@ -143,7 +143,7 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The card lists `sib` with the commit from step 1.
 
-9. Write the pod ID and the network volume ID in the resource ledger.
+9. Write the pod ID, the network volume ID and the new RunPod registry credential in the resource ledger.
 
    Result: The ledger contains the resources of `smoke-sib`.
 
@@ -431,19 +431,15 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
 ### 6.10 G10 — Use the companion tools through a run plan
 
-1. Build the `horizon-browser` CLI in the worktree of S01.
+1. Make sure that `<run>/bin/horizon-browser` is the frozen copy of S01.
 
    ```sh
-   cargo build -p horizon-browser-cli
+   (cd <run>/bin && sha256sum -c --ignore-missing SHA256SUMS)
    ```
 
-   Result: The build finishes without an error.
+   Result: The line for `horizon-browser` shows `OK`. Do not build a new copy.
 
-2. Copy `horizon-browser` to `<run>/bin` and add its SHA-256 to `SHA256SUMS`.
-
-   Result: `SHA256SUMS` contains the CLI.
-
-3. Write a plan file below `<data-home>/smoke/bin`.
+2. Write a plan file below `<data-home>/smoke/bin`.
 
    ```json
    {"version":1,"steps":[{"id":"list","tool":"cloud_companions","arguments":{}}]}
@@ -451,7 +447,7 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The file contains one step.
 
-4. In a fixture terminal in the workspace of `smoke-a`, run the plan.
+3. In a fixture terminal in the workspace of `smoke-a`, run the plan.
 
    ```sh
    <run>/bin/horizon-browser run - < ~/smoke/bin/companions-plan.json
@@ -459,11 +455,11 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The output gives the same companion list as G07 step 2.
 
-5. Add a step with `cloud_companion_ensure_ready` for `smoke-a` and `lib` to the plan.
+4. Add a step with `cloud_companion_ensure_ready` for `smoke-a` and `lib` to the plan.
 
    Result: The plan contains two steps.
 
-6. Run the plan again.
+5. Run the plan again.
 
    Result: The second step gives an `operation_id`. The companion stays Ready.
 
@@ -510,7 +506,7 @@ also makes sure that agents can start and stop a companion cloud through MCP.
    git -C <lib> rev-parse HEAD; git -C <lib> lfs ls-files; git -C <lib> submodule status
    ```
 
-   Result: You have the pinned commit and the content lists of the companion.
+   Result: You have the pinned commit `<lib-commit>` and the content lists of the companion.
 
 2. In the worker shell of `smoke-a`, show the commit of the companion worktree.
 
@@ -547,7 +543,7 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 6. Delete the test branch in the companion worktree.
 
    ```sh
-   ssh companion-lib 'git switch - && git branch -D smoke-g12'
+   ssh companion-lib 'git switch --detach <lib-commit> && git branch -D smoke-g12'
    ```
 
    Result: The test branch is gone. The companion worktree is clean.
