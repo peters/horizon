@@ -251,6 +251,17 @@ pub(super) struct Runtime {
     rebuild: Option<rebuild::Attempt>,
     resize: resize::State,
     idle_reports: Option<idle::Reports>,
+    /// The newest idle record the current operation's watch read.
+    last_idle: Option<cloud_runtime::lifecycle::IdleSample>,
+    /// That watch asks the provider; see [`Runtime::idle_confirming`].
+    idle_confirming: bool,
+    /// Why the worker stopped, when it stopped without an operation the owner started.
+    stop_cause: Option<cloud_runtime::lifecycle::StopCause>,
+    /// A failure of a ready or reconnecting cloud, held while the provider check that
+    /// may explain it as a stop runs.
+    unexplained_failure: Option<String>,
+    /// The failure just reported may be a stop Horizon did not make.
+    failure_needs_check: bool,
     sharing: local_network::Sharing,
     /// The owner's scope for that sharing, kept while it pauses.
     scope: local_network::Editor,
@@ -413,6 +424,7 @@ impl Runtime {
         // failed no longer names this attempt's failure.
         self.operation = None;
         self.rebuild = None;
+        self.stop_cause = None;
         self.sharing.await_ready();
         let (tx, rx) = channel();
         let cancel = cloud_runtime::Cancellation::default();
@@ -450,9 +462,11 @@ impl Runtime {
 
     fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {
         self.poll_remote_release();
+        // The idle watch's newest record, or its own report of the stop, comes before a
+        // provider check that classifies the stop with it.
+        self.poll_idle();
         self.poll_recovery();
         self.poll_resize();
-        self.poll_idle();
         if self.needs_repaint() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         } else if self.current_run_cost(std::time::SystemTime::now()).is_some() {
@@ -517,6 +531,7 @@ impl HorizonApp {
                         runtime.cancel = None;
                         // A stop can end a rebuild that met it; its steps no longer apply.
                         runtime.rebuild = None;
+                        runtime.stop_cause = None;
                     }
                     Event::Resumed => {
                         runtime.receiver = None;
@@ -560,11 +575,11 @@ impl HorizonApp {
                         runtime.state = Some(*state);
                         runtime.stage = Some(Stage::Ready);
                         runtime.error = None;
+                        runtime.stop_cause = None;
                         finished.push(id);
                     }
                     Event::Failed(error, at) => {
-                        runtime.progress.finish(at);
-                        runtime.error = Some(error);
+                        runtime.show_failure(error, at);
                         finished.push(id);
                     }
                 }
@@ -572,7 +587,7 @@ impl HorizonApp {
             runtime.poll_release_and_repaint(ctx);
         }
         self.follow_cloud_billing(ctx);
-        self.finish_failed_cloud_operations(finished);
+        self.finish_failed_cloud_operations(finished, ctx);
         self.reconcile_sharing(ctx);
         self.finish_closing_clouds(ctx);
         self.reconnect_resumed(resumed, ctx);
@@ -606,13 +621,18 @@ impl HorizonApp {
             runtime.billing.follow(runtime.state.as_ref(), root, BILLING, &repaint);
         }
     }
-    fn finish_failed_cloud_operations(&mut self, finished: Vec<u32>) {
+    fn finish_failed_cloud_operations(&mut self, finished: Vec<u32>, ctx: &egui::Context) {
         for id in finished {
             if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id)
                 && runtime.error.is_some()
             {
                 runtime.receiver = None;
-                runtime.cancel = None;
+                let check = std::mem::take(&mut runtime.failure_needs_check) && runtime.recovery_receiver.is_none();
+                if check {
+                    self.check_failure_with_provider(id, ctx);
+                } else {
+                    runtime.cancel = None;
+                }
             }
         }
     }
@@ -719,7 +739,7 @@ impl HorizonApp {
             }
             // A debug build can show a synthetic deploy log. Release builds omit it.
             #[cfg(debug_assertions)]
-            log_preview::seed(self);
+            log_preview::seed(self, ctx);
             #[cfg(debug_assertions)]
             stopped_preview::seed(self, ctx);
         }
@@ -735,7 +755,12 @@ impl HorizonApp {
         }
     }
 
+    /// Waits for a provider check, which may hold the record a deployment reads first.
     fn start_production_deployment(&mut self, id: u32, ctx: &egui::Context) {
+        let runtimes = &self.cloud_prototype.production.runtimes;
+        if runtimes.get(&id).is_some_and(Runtime::checking_provider) {
+            return;
+        }
         if let Some((request, siblings)) = self.prepare_production_deployment(id) {
             self.cloud_prototype
                 .production

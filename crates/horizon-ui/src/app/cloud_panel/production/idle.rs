@@ -1,14 +1,20 @@
-//! Idle stop for clouds whose workers cannot stop themselves (see
-//! `provider::IdleStop::Horizon`): while such a cloud is ready, Horizon reads its
-//! worker's idle record every few minutes and stops the cloud after its idle
-//! period, as Stop does. The watch has its own channel, so a presentation failure
-//! on the released server can never hide the stop.
+//! Idle stop of ready clouds. Where the worker cannot stop itself (see
+//! `provider::IdleStop::Horizon`), Horizon reads its worker's idle record every few
+//! minutes and stops the cloud after its idle period, as Stop does. Where the worker
+//! stops itself (`provider::IdleStop::Worker`), Horizon only reads the record, so that
+//! it can name the idle stop when the worker goes away and the provider confirms
+//! that it stopped. The watch has its own channel, so a presentation failure on the
+//! released server can never hide the stop.
 use super::{Deployment, Runtime, Settings, Stage, Store, cloud_runtime};
-use cloud_runtime::{Cancellation, Error, lifecycle::IdleCheck, provider::IdleStop};
+use cloud_runtime::{
+    Cancellation, Error,
+    lifecycle::{IdleCheck, IdleSample, StopCause},
+    provider::{Description, IdleStop, StoppedCost},
+};
 use std::{
     path::Path,
     sync::mpsc::{Receiver, Sender, TryRecvError},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// How often the idle record is read. The worker rewrites it every minute.
@@ -19,6 +25,15 @@ pub(super) enum Report {
     /// Horizon stopped the cloud, or began to and must be asked to finish; the
     /// saved record, when it could be read back, and the line to log.
     Stopped(Option<Box<Deployment>>, String),
+    /// The worker could not be read, and the provider confirmed that it stopped
+    /// without Horizon: the saved stopped record.
+    StoppedOutside(Box<Deployment>),
+    /// The worker's idle record, read now.
+    Sampled(IdleSample),
+    /// The watch asks the provider, and holds the cloud, until `Confirmed`.
+    Confirming,
+    /// The provider check released the cloud without a stop to show.
+    Confirmed,
     /// A check failed; logged once until the failure changes.
     Failed(String),
     /// A check is about to run. Sent only to learn whether the card still listens,
@@ -29,15 +44,18 @@ pub(super) enum Report {
 
 pub(super) type Reports = Receiver<Report>;
 
-/// Whether Horizon, not the worker, stops this cloud when it is idle.
+/// Whether Horizon reads this cloud's idle record: it has an idle period that
+/// Horizon or the worker itself applies.
 fn watched(state: &Deployment) -> bool {
     state.profile.idle_stop_minutes.is_some()
-        && cloud_runtime::provider::by_id(&state.profile.provider)
-            .is_some_and(|provider| provider.idle_stop == IdleStop::Horizon)
+        && matches!(
+            Description::of(&state.profile).idle_stop,
+            IdleStop::Horizon | IdleStop::Worker
+        )
 }
 
-/// Starts the idle watch of a ready cloud Horizon stops. It ends with `cancel`,
-/// once the cloud is no longer watched, or when its card stops listening.
+/// Starts the idle watch of a ready cloud with an idle period. It ends with
+/// `cancel`, once the cloud is no longer watched, or when its card stops listening.
 pub(super) fn watch(
     state: &Deployment,
     settings: &Settings,
@@ -49,15 +67,19 @@ pub(super) fn watch(
     if !watched(state) {
         return;
     }
+    // Only a worker that can stop without Horizon is confirmed with the provider.
+    let outside = cloud_runtime::lifecycle::may_stop_outside(state);
     let (settings, root, cancel, ctx) = (settings.clone(), root.to_owned(), cancel.clone(), ctx.clone());
     std::thread::spawn(move || {
+        let confirm = |cancel: &Cancellation| cloud_runtime::lifecycle::worker_stopped(&root, &settings, cancel);
         run(
             &cancel,
             CHECK_INTERVAL,
             |cancel| cloud_runtime::lifecycle::idle_check(&root, &settings, cancel),
             || Store::lock(&root).and_then(|store| store.load()),
+            outside.then_some(&confirm),
             &|report| {
-                let repaint = !matches!(report, Report::Checked);
+                let repaint = !matches!(report, Report::Checked | Report::Sampled(_));
                 let delivered = reports.send(report).is_ok();
                 if repaint {
                     ctx.request_repaint();
@@ -68,13 +90,18 @@ pub(super) fn watch(
     });
 }
 
+/// Asks the provider whether the worker stopped without Horizon; the stopped record if so.
+type Confirm<'a> = dyn Fn(&Cancellation) -> cloud_runtime::Result<Option<Deployment>> + 'a;
+
 /// Checks every `interval` until the cloud stops, is no longer watched, or
-/// `report` finds nobody listening.
+/// `report` finds nobody listening. A check that cannot read the worker asks the
+/// provider through `confirm`, when given, whether the worker stopped without Horizon.
 fn run(
     cancel: &Cancellation,
     interval: Duration,
     check: impl Fn(&Cancellation) -> cloud_runtime::Result<IdleCheck>,
     load: impl Fn() -> cloud_runtime::Result<Option<Deployment>>,
+    confirm: Option<&Confirm<'_>>,
     report: &dyn Fn(Report) -> bool,
 ) {
     let mut failed = None;
@@ -87,7 +114,16 @@ fn run(
             return;
         }
         match result {
-            Ok(IdleCheck::Active { .. }) => failed = None,
+            Ok(IdleCheck::Active { idle, limit }) => {
+                failed = None;
+                if !report(Report::Sampled(IdleSample {
+                    idle,
+                    limit,
+                    read_at: Instant::now(),
+                })) {
+                    return;
+                }
+            }
             // Another operation holds the cloud: a skipped check, which neither fails
             // nor clears a failure, so the next check decides.
             Err(Error::Busy) => {}
@@ -96,8 +132,23 @@ fn run(
             Ok(IdleCheck::NotWatched) => {
                 if let Some(state) = stopping(&load, interval) {
                     report(unfinished(state, "the server may still run"));
+                    return;
                 }
-                return;
+                // A ready worker that stops itself but keeps no idle record, as an older
+                // image, is still read: a read that fails asks the provider. A record that
+                // another operation holds is a skipped check, as above.
+                match load() {
+                    Ok(Some(state)) if stops_itself_when_ready(&state) => failed = None,
+                    Err(Error::Busy) => {}
+                    // Another check, as `cloud_deploy reconcile`, recorded the worker's own
+                    // stop first; the card still shows it ready.
+                    Ok(Some(state)) if recorded_outside_stop(&state) => {
+                        cancel.cancel();
+                        report(Report::StoppedOutside(Box::new(state)));
+                        return;
+                    }
+                    _ => return,
+                }
             }
             Ok(IdleCheck::Stopped { idle }) => {
                 // Ends this watch's presentation of the released server itself, so the
@@ -136,6 +187,24 @@ fn run(
                     report(unfinished(state, &error.to_string()));
                     return;
                 }
+                // A worker that stopped itself cannot be read either. A check the card
+                // started for a failure ends this watch first, and then decides alone.
+                // The card stays busy while this check may hold the cloud.
+                if let Some(confirm) = confirm {
+                    if cancel.is_cancelled() || !report(Report::Confirming) {
+                        return;
+                    }
+                    if let Ok(Some(state)) = confirm(cancel)
+                        && !cancel.is_cancelled()
+                    {
+                        cancel.cancel();
+                        report(Report::StoppedOutside(Box::new(state)));
+                        return;
+                    }
+                    if !report(Report::Confirmed) {
+                        return;
+                    }
+                }
                 let message = format!("Idle check failed: {error}");
                 if failed.as_ref() != Some(&message) && !report(Report::Failed(message.clone())) {
                     return;
@@ -144,6 +213,22 @@ fn run(
             }
         }
     }
+}
+
+/// A ready cloud whose worker applies its idle period itself.
+fn stops_itself_when_ready(state: &Deployment) -> bool {
+    Description::of(&state.profile).idle_stop == IdleStop::Worker
+        && state.profile.idle_stop_minutes.is_some()
+        && state.stage == Stage::Ready
+        && !state.stop_requested
+}
+
+/// A stopped record of a worker whose stop keeps it, as a provider check records a
+/// stop that Horizon did not make.
+fn recorded_outside_stop(state: &Deployment) -> bool {
+    Description::of(&state.profile).stopped == StoppedCost::WorkerKept
+        && state.stage == Stage::Stopped
+        && state.stop_requested
 }
 
 /// The saved record when it shows a stop in progress, read with the same retries
@@ -209,6 +294,25 @@ fn unfinished(state: Deployment, reason: &str) -> Report {
     )
 }
 
+/// The line logged for a stop Horizon did not make, which says why when it can.
+fn outside_line(state: &Deployment, cause: StopCause) -> String {
+    let resume = match Description::of(&state.profile).stopped {
+        StoppedCost::WorkerKept => "Resume starts the same worker again.",
+        StoppedCost::ServerDeleted => "Resume creates a new server that attaches the same workspace volume.",
+    };
+    match cause {
+        StopCause::Idle { limit } => format!(
+            "No agent activity for {} minutes, so this worker stopped itself. \
+             The provider confirmed that it is stopped. {resume}",
+            limit.as_secs() / 60
+        ),
+        StopCause::Unknown => format!(
+            "The provider reports that this worker is stopped. Horizon did not stop it; \
+             an agent on the worker or the provider account may have. {resume}"
+        ),
+    }
+}
+
 /// Sleeps for `interval` in short steps; false once `cancel` is cancelled.
 fn wait(cancel: &Cancellation, interval: Duration) -> bool {
     let step = Duration::from_millis(250).min(interval);
@@ -225,11 +329,19 @@ fn wait(cancel: &Cancellation, interval: Duration) -> bool {
 
 impl Runtime {
     /// Listens for the idle watch of the operation starting now; an earlier watch's
-    /// reports are dropped with its channel.
+    /// reports, and the idle record it read, are dropped with its channel.
     pub(super) fn listen_idle(&mut self) -> Sender<Report> {
         let (reports, received) = std::sync::mpsc::channel();
         self.idle_reports = Some(received);
+        self.last_idle = None;
+        self.idle_confirming = false;
         reports
+    }
+
+    /// The idle watch asks the provider and may hold the cloud. Only while its card
+    /// still listens: a watch whose channel is gone was ended by what dropped it.
+    pub(super) fn idle_confirming(&self) -> bool {
+        self.idle_confirming && self.idle_reports.is_some()
     }
 
     /// Shows a stop the idle watch made as the card shows any finished Stop.
@@ -253,33 +365,71 @@ impl Runtime {
     fn show_idle(&mut self, report: Report) {
         match report {
             Report::Checked => {}
+            Report::Sampled(sample) => self.last_idle = Some(sample),
+            Report::Confirming => self.idle_confirming = true,
+            Report::Confirmed => self.idle_confirming = false,
             Report::Failed(message) => self.push_note(message),
             // Only the watch of the current operation reports here: every new
             // operation replaces or drops the channel, and the watch already ended
             // its presentation, whose token is the one this card holds.
             Report::Stopped(state, line) => {
-                self.cancel = None;
-                self.progress.stage(Stage::Stopped, std::time::Instant::now());
-                if let Some(state) = state {
-                    self.stage = Some(state.stage);
-                    self.state = Some(*state);
-                } else {
-                    // Without the saved record, the one shown is marked stopped and its
-                    // released server forgotten, so nothing connects to it.
-                    self.stage = Some(Stage::Stopped);
-                    if let Some(state) = &mut self.state {
-                        state.stage = Stage::Stopped;
-                        state.stop_requested = true;
-                        state.worker = None;
-                    }
-                }
-                self.desktop = None;
-                self.error = None;
-                self.receiver = None;
-                self.idle_reports = None;
-                self.push_note(line);
+                self.show_stopped(state.map(|state| *state), line);
+                // Horizon's own idle stop; a stop it could not finish has no cause yet.
+                self.stop_cause = self
+                    .state
+                    .as_ref()
+                    .filter(|_| self.stage == Some(Stage::Stopped))
+                    .and_then(|state| state.profile.idle_stop_minutes)
+                    .map(|minutes| StopCause::Idle {
+                        limit: Duration::from_secs(u64::from(minutes) * 60),
+                    });
+            }
+            Report::StoppedOutside(state) => self.show_stopped_outside(*state),
+        }
+    }
+
+    /// Shows a stop the provider confirmed and Horizon did not make, with its cause
+    /// as the newest idle record tells it.
+    /// A record that was already stopped before the check, as by an earlier Stop,
+    /// shows as that stop.
+    pub(super) fn show_stopped_outside(&mut self, state: Deployment) {
+        if self.state.as_ref().is_some_and(|shown| shown.stop_requested) {
+            self.show_stopped(
+                Some(state),
+                "The provider confirmed that this worker is stopped. Choose Resume worker to start it again.".into(),
+            );
+            self.stop_cause = None;
+            return;
+        }
+        let cause = StopCause::of(self.last_idle.as_ref(), Instant::now());
+        let line = outside_line(&state, cause);
+        self.show_stopped(Some(state), line);
+        self.stop_cause = Some(cause);
+    }
+
+    fn show_stopped(&mut self, state: Option<Deployment>, line: String) {
+        self.cancel = None;
+        self.progress.stage(Stage::Stopped, Instant::now());
+        if let Some(state) = state {
+            self.stage = Some(state.stage);
+            self.state = Some(state);
+            // The record was just read: a read that found it busy before no longer counts.
+            self.state_unavailable = false;
+        } else {
+            // Without the saved record, the one shown is marked stopped and its
+            // released server forgotten, so nothing connects to it.
+            self.stage = Some(Stage::Stopped);
+            if let Some(state) = &mut self.state {
+                state.stage = Stage::Stopped;
+                state.stop_requested = true;
+                state.worker = None;
             }
         }
+        self.desktop = None;
+        self.error = None;
+        self.receiver = None;
+        self.idle_reports = None;
+        self.push_note(line);
     }
 }
 

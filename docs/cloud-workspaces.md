@@ -664,19 +664,51 @@ attempts that reach readiness inspect fresh provider data; this does not change
 panel eligibility for a cached Ready record when an earlier preflight fails. This capacity check does not itself prove that files
 survive a provider restart; persistence still needs a live recovery test.
 
-Stop ends running processes; storage can remain billable. Idle stop is off unless
-a profile opts in: set `idle_stop_minutes` (10 to 1440) so a dedicated worker stops after that
-long without agent activity. The worker
-counts as active while any agent terminal prints output or its container uses
-at least half a CPU core, so a quiet build keeps it running. On RunPod the worker
-stops itself, even while this computer is offline, using the provider's credential
-scoped to that worker, and never deletes anything. Hetzner gives a worker no
-credential that could stop it, so there Horizon makes the stop, only while it is
-running, and the stop releases the server and keeps the volume as Stop does; see
-[Hetzner idle stop](cloud-hetzner.md#idle-stop). The rest of this section describes RunPod. Choose **Check provider** on the card afterwards: a worker confirmed
-stopped offers Resume like an explicitly stopped one, and nothing resumes it
-automatically. Profiles without the field never stop on their own, and workers
-shared across workspaces and profiles with hosted devices do not support it.
+Stop ends the processes on the worker. The storage can stay billable. Idle stop
+is off by default. To use it, set `idle_stop_minutes` (10 to 1440) in a profile.
+A dedicated worker then stops after that time without agent activity. The worker
+is active while an agent terminal prints output. The worker is also active while
+its container uses half a CPU core or more, so a quiet build keeps it on.
+
+On RunPod, the worker stops itself. It uses a provider credential that applies
+only to that worker. The stop also occurs when this computer is offline. The
+worker never deletes anything. Hetzner gives a worker no credential that can stop
+it. Thus Horizon stops a Hetzner cloud, but only while Horizon runs. That stop
+releases the server and keeps the volume, as Stop does. Refer to
+[Hetzner idle stop](cloud-hetzner.md#idle-stop).
+
+While a RunPod cloud with an idle period is ready, Horizon reads the idle record
+of the worker every two minutes. Horizon does not stop a RunPod worker. Horizon
+uses the record only to find the cause of a stop. For each RunPod cloud, Horizon
+asks the provider for the status of the worker in these conditions:
+
+- Horizon cannot read a ready worker.
+- The connection to a ready worker fails.
+- A reconnect does not find the worker, or finds a record that says stopped.
+
+Horizon does not do this check for a Hetzner cloud. Only Horizon stops a Hetzner
+cloud, so a failure there stays a failure.
+
+During this check, the card shows **Checking provider**. If the provider reports
+that the worker stopped, the card shows a stopped cloud with **Resume worker**.
+It does not show **Operation failed**. The card names the cause as follows:
+
+| Card | Log line | Cause |
+|---|---|---|
+| **Stopped after 30 idle minutes** · **Storage kept · billable** | `No agent activity for 30 minutes, so this worker stopped itself.` | The last idle record showed a complete, or almost complete, idle period. |
+| **Stopped** · **Storage kept · billable** · **Stopped outside Horizon** | `The provider reports that this worker is stopped. Horizon did not stop it; …` | Horizon cannot tell the cause. An agent or the provider account can stop a worker. |
+
+If the provider reports that the worker runs, the card shows the original
+failure. Horizon records a stop that the provider confirms as an ordinary stopped
+cloud. Nothing resumes it automatically. The card keeps the cause until Horizon
+closes. After a restart, Horizon has no idle record. If Horizon finds the stop
+after the restart, the card shows **Stopped outside Horizon**. If the record
+already showed the stop, the card shows **Stopped**. A worker image from before the idle record contract
+(`horizon-idle-report-contract=1`) keeps no idle record. Horizon still finds the
+stop of such a worker, but shows **Stopped outside Horizon**. Rebuild the image to
+show the idle cause. You can also choose **Check provider** at any time. A
+profile without `idle_stop_minutes` never stops by itself. Shared workers and
+profiles with hosted devices do not support idle stop.
 
 On RunPod, the same opt-in lets an agent stop its worker when its task is done, such as when
 its pull request is merged, without this computer. Agents get a

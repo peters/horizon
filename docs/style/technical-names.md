@@ -52,6 +52,10 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | agent user | The account `horizon-agent` (UID 10001) that runs agent and shell panels on a worker. | agent account |
 | Local Network Bridge | The function that lets a worker reach the local network of the PC. | LNB, network share |
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
+| idle period | The value of `idle_stop_minutes` in a profile. | idle timeout, idle limit |
+| idle stop | The stop of a worker after an idle period without agent activity. On RunPod, the worker stops itself. On Hetzner, Horizon stops the cloud. | auto stop, auto-stop |
+| idle record | The file `/run/horizon-worker/idle.json` on a worker. `horizon-worker-idle --report` prints it. | idle report |
+| idle log | The file `/workspace/idle.log` on a worker. The idle watcher writes its lines there. | — |
 | host instance | The identity of the Horizon host process that owns the browsers of an agent. Browser tools use it to find the workspace of the agent. It is not a secret. | host ID |
 | panel picker | The menu of a cloud that opens a new panel, with the title **Add panel**. | panel menu |
 | browser runtime root | The directory in `HORIZON_BROWSER_ROOT` with the private browser state of a host. | browser root |
