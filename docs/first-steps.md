@@ -49,7 +49,19 @@ Release builds use the default features. To get speech, use a source build.
    | macOS x64 | `horizon-osx-x64.tar.gz` |
    | Windows x64 | `horizon-windows-x64.exe` |
 
-3. On Linux and macOS, extract the file that you downloaded. Replace
+3. Download `SHA256SUMS.txt` from the same release to the same directory.
+4. Examine the checksum of the downloaded file. On Linux, type
+   `sha256sum -c --ignore-missing SHA256SUMS.txt`. On macOS, type
+   `shasum -a 256 -c --ignore-missing SHA256SUMS.txt`. On Windows, type
+   `Get-FileHash <file>` in PowerShell and compare the hash with the line for
+   that file in `SHA256SUMS.txt`.
+
+   Result: The command shows `OK` for the file that you downloaded. On
+   Windows, the two hashes are the same.
+
+   If the checksum is not correct, delete the file and do not start it.
+
+5. On Linux and macOS, extract the file that you downloaded. Replace
    `<file>` with its name, for example `horizon-osx-arm64.tar.gz`:
 
    ```bash
@@ -57,14 +69,19 @@ Release builds use the default features. To get speech, use a source build.
    chmod +x horizon
    ```
 
-4. Start Horizon. On Linux and macOS, type `./horizon` in the same directory.
+6. Start Horizon. On Linux and macOS, type `./horizon` in the same directory.
    On Windows, open `horizon-windows-x64.exe`.
 
    Result: Horizon opens an empty board.
 
 If macOS blocks the first start, remove the quarantine attribute from the
-blocked file, then start it again. Replace `<path>` with that file, for example
-`./horizon`:
+blocked file, then start it again.
+
+> **CAUTION:** EXAMINE THE CHECKSUM BEFORE YOU REMOVE THE QUARANTINE ATTRIBUTE.
+> The release is not signed. Without the checksum, macOS cannot tell you that
+> a file is incomplete or replaced.
+
+Replace `<path>` with the blocked file, for example `./horizon`:
 
 ```bash
 xattr -d com.apple.quarantine <path>
@@ -86,16 +103,21 @@ The Surge installer gives the in-app update prompt.
    | macOS x64 | `horizon-installer-osx-x64.bin` |
    | Windows x64 | `horizon-installer-win-x64.exe` |
 
-3. On Linux and macOS, make the installer executable. Replace `<installer>`
+3. Download `SHA256SUMS.txt` from the same release. Examine the checksum of
+   the installer in the same way as in the release binary procedure.
+
+   Result: The command shows `OK` for the installer.
+
+4. On Linux and macOS, make the installer executable. Replace `<installer>`
    with the name of the file that you downloaded:
 
    ```bash
    chmod +x <installer>
    ```
 
-4. Start the installer and follow its steps. On Linux and macOS, type
+5. Start the installer and follow its steps. On Linux and macOS, type
    `./<installer>`. On Windows, open `horizon-installer-win-x64.exe`.
-5. Start Horizon.
+6. Start Horizon.
 
    Result: Horizon opens an empty board. Horizon shows an update prompt when a
    new stable release is available.
