@@ -82,7 +82,10 @@ user gets no alias and no key copy. The next reconciliation removes a temporary
 copy that remains.
 
 After `connect` publishes the copies, it resolves the alias again as the agent
-user with `ssh -G`. This examines the system include without a connection. If
+user with `ssh -G`. This examines the system include without a connection. For a
+new grant, `connect` publishes the alias, the pin and the record first. It copies
+the key only after this check passes, as the last step. If the check fails, the
+agent user did not get the key. A refresh keeps the key copy of the grant. If
 `connect` stops after it writes the record, the probe and the first check passed
 for the new configuration.
 The next reconciliation then publishes the grant. A later `connect` or

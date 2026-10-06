@@ -164,8 +164,9 @@ impl Runtime {
 
     /// Publishes a probed connection. Agents get the alias and the key only after
     /// the connection record is written: their copies require that record, and
-    /// their check before it reads a keyless staged `config`. A refresh of a connected
-    /// grant keeps the published alias until the new record replaces it. If the
+    /// their check before it reads a keyless staged `config`. A new grant gets its
+    /// key copy last, after every check passed. A refresh of a connected grant
+    /// keeps the published alias and key until the new record replaces it. If the
     /// refresh fails, the previous connection is restored; a new grant is withdrawn.
     pub(super) fn commit_connection(
         &self,
@@ -180,12 +181,15 @@ impl Runtime {
         let directory = self.key_directory(grant);
         let previous = self.committed_connection(grant)?;
         let remaining = || deadline.saturating_duration_since(Instant::now());
+        // A new grant never gave agents its key, so a failed check must not either.
+        let keyless = previous.is_none().then_some(grant);
         let committed = self
             .verify_agent_route(grant, config, ssh_alias, remaining())
             .and_then(|()| files::write(&directory.join("config"), config.as_bytes()))
             .and_then(|()| files::write(&directory.join("connection.json"), &serde_json::to_vec(response)?))
-            .and_then(|()| self.update_config())
-            .and_then(|()| self.verify_published_alias(grant, ssh_alias, remaining()));
+            .and_then(|()| self.publish_config(keyless))
+            .and_then(|()| self.verify_published_alias(grant, ssh_alias, remaining()))
+            .and_then(|()| keyless.map_or(Ok(()), |grant| self.publish_agent_key(grant)));
         if let Err(error) = committed {
             // The original error explains the refusal; the recovery is best effort.
             let restored = previous.map_or(Err(io::ErrorKind::NotFound.into()), |(config, record)| {
@@ -240,6 +244,12 @@ impl Runtime {
     }
 
     pub(super) fn update_config(&self) -> io::Result<()> {
+        self.publish_config(None)
+    }
+
+    /// Updates the root configuration and the agent copies; the `keyless` grant
+    /// gets no key copy.
+    fn publish_config(&self, keyless: Option<&str>) -> io::Result<()> {
         files::directory(&self.ssh_home)?;
         let root = self.live.join("companions");
         files::directory(&root)?;
@@ -254,7 +264,7 @@ impl Runtime {
             files::write(&path, format!("{include}{original}").as_bytes())?;
         }
         files::write(&root.join("config"), self.combined_config(None)?.as_bytes())?;
-        self.publish_agent_access()
+        self.publish_agent_access(keyless)
     }
 
     pub(super) fn preview_config(&self, path: &std::path::Path, candidate: &str) -> io::Result<String> {

@@ -27,6 +27,7 @@ pub(super) struct AgentAccount {
 const SHARED_FILE: u32 = 0o640;
 const SYSTEM_FILE: u32 = 0o644;
 const CONNECTION: &str = "connection.json";
+const IDENTITY: &str = "identity";
 
 impl Runtime {
     fn agent_group(&self) -> Option<u32> {
@@ -46,7 +47,7 @@ impl Runtime {
     pub(super) fn publish_catalog_locked(&self, bytes: &[u8]) -> io::Result<()> {
         files::shared_directory(&self.agent, self.agent_group())?;
         let catalog = self.agent.join("catalog.json");
-        if let Err(error) = self.publish_agent_access() {
+        if let Err(error) = self.publish_agent_access(None) {
             files::remove(&catalog)?;
             return Err(error);
         }
@@ -62,8 +63,9 @@ impl Runtime {
     /// Makes the agent copy match the connected grants. A grant without a valid
     /// connection record, or that cannot be copied, loses its copied key, pin and
     /// alias; one failure does not keep a withdrawn grant usable. The first
-    /// failure is reported after the reconciliation.
-    pub(super) fn publish_agent_access(&self) -> io::Result<()> {
+    /// failure is reported after the reconciliation. `keyless` names a grant whose
+    /// first Connect is not finished: it is published without the key copy.
+    pub(super) fn publish_agent_access(&self, keyless: Option<&str>) -> io::Result<()> {
         let group = self.agent_group();
         files::shared_directory(&self.agent, group)?;
         let mut first_error = None;
@@ -71,7 +73,7 @@ impl Runtime {
         if let Some(account) = &self.agent_account {
             let mut combined = String::new();
             for path in self.grant_configs()? {
-                match self.publish_grant(&path) {
+                match self.publish_grant(&path, keyless) {
                     Ok(Some((grant, config, files))) => {
                         combined.push_str(&config);
                         published.insert(grant, files);
@@ -120,8 +122,12 @@ impl Runtime {
     /// Copies the files that one grant's configuration at `path` names and returns
     /// the grant, that configuration rewritten to the copied paths, and the names
     /// of the copied files. A grant whose Connect did not write a connection
-    /// record for this alias is not published.
-    fn publish_grant(&self, path: &Path) -> io::Result<Option<(String, String, BTreeSet<String>)>> {
+    /// record for this alias is not published. The `keyless` grant gets no key copy.
+    fn publish_grant(
+        &self,
+        path: &Path,
+        keyless: Option<&str>,
+    ) -> io::Result<Option<(String, String, BTreeSet<String>)>> {
         let grant = path
             .parent()
             .and_then(Path::file_name)
@@ -138,7 +144,7 @@ impl Runtime {
             return Ok(None);
         }
         let destination = self.agent.join(grant);
-        let (rewritten, mut kept) = self.copy_grant(grant, &config, &destination)?;
+        let (rewritten, mut kept) = self.copy_grant(grant, &config, &destination, keyless == Some(grant))?;
         files::write_with(&destination.join(CONNECTION), &record, SHARED_FILE, self.agent_group())?;
         kept.insert(CONNECTION.to_owned());
         Ok(Some((grant.to_owned(), rewritten, kept)))
@@ -146,10 +152,20 @@ impl Runtime {
 
     /// Copies the key and the pin that `config` names into `destination` and
     /// returns `config` rewritten to the copies and the names of the copies.
-    fn copy_grant(&self, grant: &str, config: &str, destination: &Path) -> io::Result<(String, BTreeSet<String>)> {
+    /// A `keyless` copy has no key.
+    fn copy_grant(
+        &self,
+        grant: &str,
+        config: &str,
+        destination: &Path,
+        keyless: bool,
+    ) -> io::Result<(String, BTreeSet<String>)> {
         let group = self.agent_group();
         let source = self.key_directory(grant);
-        let (rewritten, names) = rewrite_paths(&source, config, destination)?;
+        let (rewritten, mut names) = rewrite_paths(&source, config, destination)?;
+        if keyless {
+            names.remove(IDENTITY);
+        }
         files::shared_directory(destination, group)?;
         for name in &names {
             files::write_with(
@@ -160,6 +176,20 @@ impl Runtime {
             )?;
         }
         Ok((rewritten, names))
+    }
+
+    /// Copies the key of `grant` to agents. This is the last step of a first
+    /// Connect, so a Connect that fails gives agents no key.
+    pub(super) fn publish_agent_key(&self, grant: &str) -> io::Result<()> {
+        if self.agent_account.is_none() {
+            return Ok(());
+        }
+        files::write_with(
+            &self.agent.join(grant).join(IDENTITY),
+            &std::fs::read(self.key_directory(grant).join(IDENTITY))?,
+            SHARED_FILE,
+            self.agent_group(),
+        )
     }
 
     /// OpenSSH reads the user file from the passwd home, which the agent account
@@ -225,7 +255,7 @@ impl Runtime {
         let Some(launcher) = &self.workspace_launcher else {
             return Ok(());
         };
-        let expected = format!("identityfile {}", path_text(&self.agent.join(grant).join("identity"))?);
+        let expected = format!("identityfile {}", path_text(&self.agent.join(grant).join(IDENTITY))?);
         let failed = || io::Error::other("Companion SSH alias does not resolve for agent sessions");
         let resolved = ssh::checked_with_timeout(
             Command::new(launcher).args(["agent", "ssh", "-G"]).args(arguments),

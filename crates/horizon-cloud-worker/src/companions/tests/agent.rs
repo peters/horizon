@@ -544,7 +544,7 @@ fn an_interrupted_connect_never_publishes_its_grant_to_agents() {
         &serde_json::to_vec(&connected("pair", "renamed")).unwrap(),
     )
     .unwrap();
-    runtime.publish_agent_access().unwrap();
+    runtime.publish_agent_access(None).unwrap();
     assert!(!runtime.agent.join("pair").exists());
 
     // Revocation still removes everything of the grant.
@@ -639,6 +639,73 @@ fn a_refresh_keeps_the_published_alias_and_restores_it_when_the_refresh_fails() 
         hostname(&resolve(&runtime, root.path(), "companion-fresh")),
         "companion-fresh"
     );
+}
+
+#[test]
+fn a_first_connect_gives_agents_the_key_only_after_every_check_passed() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runtime = isolated(root.path());
+    let system = system_config(&runtime, root.path());
+    let copy = runtime.agent.join("fresh/identity");
+    // The launcher saves whether agents could read the key copy during the check after publication.
+    let seen = root.path().join("seen");
+    let fail = root.path().join("fail");
+    runtime.workspace_launcher = Some(launcher(
+        root.path(),
+        &format!(
+            "shift\nif [ \"$3\" = -F ]; then exec \"$@\"; fi\n\
+             if [ -e '{copy}' ]; then echo present >> '{seen}'; else echo absent >> '{seen}'; fi\n\
+             [ -e '{fail}' ] && exit 1\nexec ssh -G -F '{system}' \"$3\"",
+            copy = copy.display(),
+            seen = seen.display(),
+            fail = fail.display(),
+            system = system.display(),
+        ),
+    ));
+    let config = prepare(&runtime, "fresh", "fresh", "127.0.0.5");
+    let key = std::fs::read(runtime.key_directory("fresh").join("identity")).unwrap();
+    let commit = || {
+        retry_busy(|| {
+            runtime.commit_connection(
+                "fresh",
+                &config,
+                &connected("fresh", "fresh"),
+                std::time::Instant::now() + Duration::from_secs(30),
+            )
+        })
+    };
+    let last_seen = || {
+        std::fs::read_to_string(&seen)
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap()
+            .to_owned()
+    };
+
+    // A first Connect that fails its last check never gave agents the key.
+    std::fs::write(&fail, "").unwrap();
+    assert!(commit().is_err());
+    assert_eq!(last_seen(), "absent");
+    assert!(files_containing(&runtime.agent, &key).is_empty());
+    assert!(!runtime.agent.join("fresh").exists());
+
+    // A first Connect that passes publishes the key after the check.
+    std::fs::remove_file(&fail).unwrap();
+    commit().unwrap();
+    assert_eq!(last_seen(), "absent");
+    assert_eq!(std::fs::read(&copy).unwrap(), key);
+    assert_eq!(mode(&copy), 0o640);
+    assert_eq!(
+        setting(&resolve(&runtime, root.path(), "companion-fresh"), "identityfile"),
+        copy.to_str().unwrap()
+    );
+
+    // A refresh keeps the published key, also when it fails.
+    std::fs::write(&fail, "").unwrap();
+    assert!(commit().is_err());
+    assert_eq!(last_seen(), "present");
+    assert_eq!(std::fs::read(&copy).unwrap(), key);
 }
 
 #[test]
