@@ -75,8 +75,8 @@ pub use visibility::{
 };
 pub use workspace::{
     AgentIdentity, HOST_INSTANCE_ENV, HostStampOutcome, ManifestWorkspace, OUTSIDE_WORKSPACE_MESSAGE,
-    actor_is_workspace_scoped, host_instance, publish_requested_panel, read_audit_for, read_audit_journal_for,
-    sync_host_state, sync_host_state_in, valid_host_instance,
+    actor_is_workspace_scoped, configure_host_instance, host_instance, publish_requested_panel, read_audit_for,
+    read_audit_journal_for, sync_host_state, sync_host_state_in, valid_host_instance,
 };
 
 /// How long an agent owner heartbeat stays fresh.
