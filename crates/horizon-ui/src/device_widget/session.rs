@@ -96,7 +96,8 @@ pub(super) struct Observation {
 
 pub(super) struct Session {
     updates: Arc<Mutex<Updates>>,
-    latest_full: Arc<Mutex<Option<ColorImage>>>,
+    latest_full: Arc<Mutex<Option<Arc<ColorImage>>>>,
+    recording_live: Arc<std::sync::atomic::AtomicBool>,
     /// Pointer and key events a person sends through Interact; the worker
     /// forwards them ahead of the next refresh.
     input: mpsc::UnboundedSender<X11Event>,
@@ -126,6 +127,8 @@ impl Session {
         let latest_full = Arc::new(Mutex::new(None));
         let state = Arc::clone(&updates);
         let retained = Arc::clone(&latest_full);
+        let recording_live = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let worker_live = Arc::clone(&recording_live);
         let (stop, cancelled) = oneshot::channel();
         let (input, mut input_events) = mpsc::unbounded_channel();
         let thread = std::thread::Builder::new().name("device-view".into()).spawn(move || {
@@ -147,11 +150,13 @@ impl Session {
                 Ok(Err(error)) => Status::Disconnected(error.to_string()),
                 Err(error) => Status::Disconnected(error.to_string()),
             };
+            worker_live.store(false, std::sync::atomic::Ordering::Release);
             publish_status(&state, &ctx, status);
         })?;
         Ok(Self {
             updates,
             latest_full,
+            recording_live,
             input,
             stop: Some(stop),
             thread: Some(thread),
@@ -178,7 +183,23 @@ impl Session {
         self.latest_full
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .as_deref()
+            .cloned()
+    }
+
+    pub(super) fn recording_source(&self) -> impl Fn() -> Option<Arc<ColorImage>> + Send + 'static {
+        let source = Arc::downgrade(&self.latest_full);
+        let live = Arc::clone(&self.recording_live);
+        move || {
+            if !live.load(std::sync::atomic::Ordering::Acquire) {
+                return None;
+            }
+            source
+                .upgrade()?
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }
     }
 
     #[cfg(test)]
@@ -210,7 +231,8 @@ impl Session {
                 desktop: Some(latest_full.size),
                 server_name: None,
             })),
-            latest_full: Arc::new(Mutex::new(Some(latest_full))),
+            latest_full: Arc::new(Mutex::new(Some(Arc::new(latest_full)))),
+            recording_live: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             input,
             stop: None,
             thread: None,
@@ -310,7 +332,7 @@ fn wake_ui(ctx: &Context, drawn: bool, viewport: ViewportId) {
 async fn connection(
     route: DeviceRoute,
     updates: &Mutex<Updates>,
-    latest_full: &Mutex<Option<ColorImage>>,
+    latest_full: &Mutex<Option<Arc<ColorImage>>>,
     ctx: &Context,
     input: &mut mpsc::UnboundedReceiver<X11Event>,
 ) -> Result<(), ViewError> {
@@ -327,7 +349,7 @@ async fn connection(
 async fn stream_desktop(
     client: vnc::VncClient,
     updates: &Mutex<Updates>,
-    latest_full: &Mutex<Option<ColorImage>>,
+    latest_full: &Mutex<Option<Arc<ColorImage>>>,
     ctx: &Context,
     input: &mut mpsc::UnboundedReceiver<X11Event>,
 ) -> Result<(), ViewError> {
@@ -383,7 +405,7 @@ async fn stream_desktop(
         if received_pixels && changed && !framebuffer.size().contains(&0) {
             let full = framebuffer.full_image()?;
             let image = present_image(&full, options)?;
-            *latest_full.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(full);
+            *latest_full.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(full));
             let (drawn, viewport) = {
                 let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Only the latest frame is retained; slow rendering cannot grow

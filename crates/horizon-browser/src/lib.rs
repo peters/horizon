@@ -5,6 +5,9 @@
 //! The crate is UI-independent and keeps protocol, browser-process, input,
 //! and frame ownership outside Horizon's board and persistence model.
 
+mod pixel_video;
+pub use pixel_video::PixelVideoRecorder;
+
 mod audit;
 pub mod cdp;
 mod challenge;
