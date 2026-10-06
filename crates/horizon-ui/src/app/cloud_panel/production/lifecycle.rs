@@ -22,6 +22,39 @@ pub(super) enum Action {
 mod tests;
 
 impl Runtime {
+    /// Shows the failure an operation reported. Whether it may be a stop Horizon did
+    /// not make is decided now, while a resize that failed still shows as running.
+    pub(super) fn show_failure(&mut self, error: String, at: std::time::Instant) {
+        self.progress.finish(at);
+        self.error = Some(error);
+        self.failure_needs_check = self.failure_may_be_a_stop();
+    }
+
+    /// Whether the failure just reported can be a stop Horizon did not make: the
+    /// connection to a ready worker was lost, or a reconnect failed while it looked
+    /// for the bound worker, or found it recorded as stopped. A failure after its
+    /// operation was cancelled, as by a stop, is not one.
+    pub(super) fn failure_may_be_a_stop(&self) -> bool {
+        // The attempt reached Ready; a failed rebuild that reloaded a ready record did not.
+        let lost = self.stage == Some(Stage::Ready) && self.progress.ended_in(Stage::Ready).is_some();
+        let reconnect = self.operation.is_none()
+            && self.rebuild.is_none()
+            && (matches!(self.stage, Some(Stage::Provision | Stage::Readiness))
+                || self.state.as_ref().is_some_and(|state| state.stop_requested));
+        (lost || reconnect)
+            && !self.progress.is_deletion()
+            && !self.resize.busy()
+            && self.recovery_receiver.is_none()
+            && !self
+                .cancel
+                .as_ref()
+                .is_some_and(cloud_runtime::Cancellation::is_cancelled)
+            && self
+                .state
+                .as_ref()
+                .is_some_and(cloud_runtime::lifecycle::may_stop_outside)
+    }
+
     /// Holds the failure just reported and asks the provider whether the worker stopped
     /// without Horizon. The check waits while the idle watch checks the same worker.
     pub(super) fn start_failure_check(
@@ -245,6 +278,34 @@ fn first_deletion_step(state: Option<&cloud_runtime::state::Deployment>) -> Stag
 }
 
 impl HorizonApp {
+    /// Asks the provider, before the card shows the failure of cloud `id`, whether it
+    /// is a stop Horizon did not make. The check shows as Checking provider. Without
+    /// settings the failure shows at once.
+    pub(super) fn check_failure_with_provider(&mut self, id: u32, ctx: &egui::Context) {
+        let Some(root) = self.cloud_prototype.root.clone() else {
+            return;
+        };
+        let Some(launch) = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.issue == id)
+            .and_then(|group| group.remote.as_ref())
+        else {
+            return;
+        };
+        let (Ok(settings), Ok(state_root)) = (
+            Settings::load(&root.join("settings.json")),
+            cloud_runtime::state::cloud_directory(&root, &launch.id),
+        ) else {
+            return;
+        };
+        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+            runtime.start_failure_check(state_root, settings, ctx);
+        }
+    }
+
     pub(super) fn change_production_worker(&mut self, id: u32, action: Action, ctx: &egui::Context) {
         if let Action::Resize(target) = action {
             self.start_production_resize(id, target, ctx);
