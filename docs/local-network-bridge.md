@@ -192,6 +192,10 @@ What each system provides:
 | macOS | yes | yes | yes, from `arp` |
 | Windows | yes | yes | yes, from `arp` |
 
+The Windows row describes the discovery code only. Horizon refuses cloud
+operations on Windows, so you cannot use the bridge from Windows today. See
+[the platform support](platform-support.md).
+
 Discovery from Windows is not fully tested yet, and Windows Firewall can hide
 devices that answer mDNS or SSDP; `local_network_status` tells agents so. A source
 that fails adds a note to the answer instead of failing the whole request.

@@ -39,6 +39,18 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | Local Network Bridge | The function that lets a worker reach the local network of the PC. | LNB, network share |
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
 
+## Install and build
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| release build | A Horizon executable from a GitHub release, Surge, Homebrew or WinGet. It has the default features only. | prebuilt, official build |
+| source build | A Horizon executable that you build with `cargo` from the repository. | local build, dev build |
+| feature | A Cargo feature that adds a function at build time, for example `speech` or `cast-nvenc`. | flag, option |
+| platform | One operating system that Horizon supports: Linux, macOS or Windows. | OS (in text), target |
+| platform support | The list of functions that work on each platform, in `docs/platform-support.md`. | compatibility matrix |
+| welcome board | A planned sample workspace that opens on the first start. | tour, onboarding board |
+| doctor | A planned command that examines this computer and reports what Horizon needs. | health check, diagnostics |
+
 ## Casting
 
 | Name | Meaning | Do not use |

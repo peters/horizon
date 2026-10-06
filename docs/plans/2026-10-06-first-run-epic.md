@@ -1,7 +1,7 @@
 # Epic: Easy first run
 
-Status: proposed, 2026-10-06. This plan uses ASD-STE100 Simplified Technical
-English. See [the STE rules](../style/ste-rules.md).
+Status: proposed, 2026-10-06. Tracked in #1311. This plan uses ASD-STE100
+Simplified Technical English. See [the STE rules](../style/ste-rules.md).
 
 ## Purpose
 
@@ -25,8 +25,8 @@ worker from one board.
   backend load is necessary for automatic GPU builds.
 - No script installs git, Git LFS, rustup, NASM or the system headers for a user.
   `scripts/install-ci-ubuntu-dependencies.sh` refuses to run outside CI.
-- The Quick Start in `AGENTS.md` does not list macOS arm64 and does not tell the
-  reader to run `git lfs pull`. `README.md` lists both.
+- The Quick Start in `AGENTS.md` did not list macOS arm64 and did not tell the
+  reader to run `git lfs pull`. Phase 0 corrects this.
 - The in-app updater works for Surge installs only.
 
 ### Agent support
@@ -40,8 +40,8 @@ worker from one board.
 ### First start
 
 - There is no welcome board, tour or first-run check.
-- `README.md` has 865 lines. It does not mention clouds, casting or the
-  Local Network Bridge.
+- `README.md` has 865 lines. It did not mention clouds, casting or the
+  Local Network Bridge. Phase 0 adds short links to them.
 
 ### Clouds
 
@@ -80,31 +80,12 @@ A first cloud can need these credentials:
 
 ### Platform support
 
-Many functions work on Linux only. `README.md` shows Windows and macOS as equal
-platforms and does not give these limits.
+Many functions work on Linux only, and the README did not say so. On Windows,
+agent panels and clouds do not work. [Platform support](../platform-support.md)
+gives the full list with the code references.
 
-| Function | Linux | macOS | Windows |
-|---|---|---|---|
-| Terminal panels | Yes | Yes | Partial: no `$SHELL` gives `/bin/bash`, no cwd tracking |
-| Agent panels | Yes | Yes | No: start through `$SHELL -ic` (`panel/spawn.rs:517`), #688 closed as not planned |
-| Browser panels: Chromium, Firefox | Yes | Yes | Yes |
-| Browser panels: Safari | No | Yes | No |
-| Device panels (VNC viewer) | Yes | Yes | Yes |
-| `horizon-device` input to an isolated desktop | X11 only | No | No |
-| Clouds, tailnets, Local Network Bridge | Yes | Yes | No: refused (`session_store.rs:550`), tracked in #969 |
-| Apple TV casting | Yes | No | No |
-| Chromecast | Not in the app | Not in the app | Not in the app |
-| Speech in release builds | No | No | No |
-| Global push-to-talk and text injection | X11 only | Yes | No |
-| Native image paste into a terminal | Yes | Partial | Partial |
-| NVENC | Opt-in | No | No |
-| Signed and notarized app | n/a | No step found | n/a |
-
-Other differences:
-
-- The `horizon-device` skill is installed on all platforms. It does not say that it works on Linux with X11 only.
-- `README.md` gives a Snap install, but CI does not build or publish the Snap.
-- On macOS, Horizon does not examine if an agent process is alive. It assumes that it is alive.
+This epic does not plan new platform support. It documents the limits, and it
+makes the first run clear on each platform.
 
 ## Why clouds are important
 
@@ -130,6 +111,23 @@ A cloud gives each agent its own disposable machine. The value is as follows:
 
 ## Work items
 
+### Phase 0: Document what exists
+
+- [x] **0.1 Platform support.** Add `docs/platform-support.md` with the limits of
+      each function on Linux, macOS and Windows, and the code references.
+- [x] **0.2 First steps guide.** Add `docs/first-steps.md` in STE. It tells
+      the user how to install Horizon, use the board and start a first cloud today.
+- [x] **0.3 README.** Add a platform table, a link to the first steps guide, and
+      the functions that the README did not give: clouds, the Local Network
+      Bridge, casting and agent-driven desktops. Tell that release builds have no
+      speech and that the Snap publication is paused.
+- [x] **0.4 Correct the Quick Start.** Add macOS arm64, Git LFS and the platform
+      limits to `AGENTS.md`.
+- [x] **0.5 Skill text.** Tell in the `horizon-device` skill that an isolated
+      desktop works on Linux with X11 only.
+- [x] **0.6 Local Network Bridge.** Tell that the bridge is not available on
+      Windows, because Horizon refuses clouds there.
+
 ### Phase 1: Install in one step
 
 - [ ] **1.1 Doctor command.** Add `horizon doctor` and a `horizon_doctor` MCP
@@ -147,8 +145,7 @@ A cloud gives each agent its own disposable machine. The value is as follows:
 - [ ] **1.5 Setup and update skills.** Add `horizon-setup` and `horizon-update`
       skills. Publish them in a plugin marketplace in this repository. Then an
       agent can install Horizon before Horizon runs.
-- [ ] **1.6 Correct the Quick Start.** Add macOS arm64 and `git lfs pull` to
-      `AGENTS.md`. Use one install source for `README.md` and `AGENTS.md`.
+
 
 ### Phase 2: The first ten minutes
 
@@ -158,10 +155,9 @@ A cloud gives each agent its own disposable machine. The value is as follows:
 - [ ] **2.2 Function cards.** Add a **What can Horizon do?** view. Show one short
       video for each function: browser control, VNC, iOS Simulator, cloud,
       casting and dictation.
-- [ ] **2.3 New README.** Start with the functions and a 60-second video. Move
-      the reference text to `docs/`. Write it in STE.
-- [ ] **2.4 First steps guide.** Add `docs/first-steps.md` in STE, with a test
-      procedure under `docs/testing/procedures/`.
+- [ ] **2.3 Shorter README.** Start with the functions and a 60-second video.
+      Move the reference text to STE documents in `docs/`. Write the README in
+      plain, friendly language. The README is not in STE.
 
 ### Phase 3: The first cloud in ten minutes
 
@@ -200,9 +196,10 @@ A cloud gives each agent its own disposable machine. The value is as follows:
 
 ### Phase 6: Documentation in STE
 
-- [x] **6.1 STE default.** Make STE the default for all documentation in
-      `AGENTS.md` and `docs/style/ste-rules.md`.
-- [ ] **6.2 Glossary.** Add the new names from this epic to
+- [x] **6.1 STE default.** Make STE the default for the technical
+      documentation in `AGENTS.md` and `docs/style/ste-rules.md`. The README is
+      not in the scope.
+- [x] **6.2 Glossary.** Add the install and build names to
       `docs/style/technical-names.md`.
 - [ ] **6.3 Prose lint.** Add Vale with an STE style to CI. Tracked in #1265.
 - [ ] **6.4 UI test procedure for each item.** Each item in Phases 1 to 5 is
@@ -217,38 +214,17 @@ A cloud gives each agent its own disposable machine. The value is as follows:
 - [ ] **6.7 Screenshot for each result.** Give each `Result:` line a reference
       screenshot. A run compares its screenshot with the reference and records
       the difference in the report.
-- [ ] **6.8 STE for UI text.** Write labels, error messages, wizard steps and
-      empty states in STE. Use the names in `technical-names.md`. The welcome
-      board and the cloud wizard (2.1, 3.2) are the first users.
-
-### Phase 7: The same functions on Windows and macOS
-
-- [ ] **7.1 Agent panels on Windows.** Start an agent without a POSIX shell. Use
-      PowerShell or start the program directly. This is a blocker for a first
-      run on Windows.
-- [ ] **7.2 Clouds on Windows.** Add durable directory updates on Windows. Then
-      remove the refusal. Tracked in #969.
-- [ ] **7.3 Show the platform limits.** Put the matrix above in `README.md`.
-      Show an unavailable function as unavailable in the app, with the reason.
-      Install the `horizon-device` skill only where it works.
-- [ ] **7.4 Isolated desktop on all platforms.** Use the Linux desktop of a cloud
-      as the route for macOS and Windows users. Then add native support where
-      it is possible.
-- [ ] **7.5 Speech on Windows and Wayland.** Run the speech tests on Windows CI.
-      Add push-to-talk and text injection for Windows and for Wayland.
-- [ ] **7.6 Casting on macOS and Windows.** Add a hardware encoder for each
-      platform, for example VideoToolbox on macOS.
-- [ ] **7.7 Sign the macOS app.** Add code signing and notarization to the
-      release. Then macOS does not block the first start.
-- [ ] **7.8 Process check on macOS.** Examine if an agent process is alive on
-      macOS. Do not assume that it is alive.
+- [ ] **6.8 The same names in the UI.** Use the names in `technical-names.md`
+      for labels, error messages, wizard steps and empty states. Write them in
+      plain language. The welcome board and the cloud wizard (2.1, 3.2) are the
+      first users.
 
 ## Order
 
-Do Phase 1 first. Do 7.1, 7.3 and 7.7 in Phase 1 too, because a first run on
-Windows or macOS fails or shows a warning without them. The doctor command (1.1) gives the data for the installer,
-the skills, the welcome board and the cloud wizard. Phases 2, 3 and 4 can then
-start at the same time. Phase 5 needs a Mac for each test run.
+Phase 0 is complete in the first PR. Do Phase 1 next. The doctor command (1.1)
+gives the data for the installer, the skills, the welcome board and the cloud
+wizard. Phases 2, 3 and 4 can then start at the same time. Phase 5 needs a Mac
+for each test run. Phase 6 applies to all phases.
 
 ## Risks
 

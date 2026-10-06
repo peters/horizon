@@ -10,7 +10,7 @@ replace the specification. The free specification is available from
 STE is the default for all documentation. It is mandatory for each new or
 changed document of these types:
 
-- `README.md` and the install, setup and onboarding guides.
+- Install, setup and onboarding guides, for example `docs/first-steps.md`.
 - Test procedures in `docs/testing/procedures/`.
 - Test reports in `docs/testing/reports/` (descriptive rules only).
 - Runbooks, for example `scripts/device-smoke/README.md`.
@@ -18,7 +18,9 @@ changed document of these types:
 - Plans in `docs/plans/` and the body of an epic issue.
 - Procedure sections and new rules in `AGENTS.md`.
 
-Code comments, commit messages and quoted tool output are not in the scope. If
+`README.md` is not in the scope. Write it in plain, friendly language for users,
+and link to the STE documents for procedures and reference text. Code comments,
+commit messages and quoted tool output are not in the scope either. If
 you change part of an older document, write the changed part in STE. Do not
 convert historical documents. Move them to `docs/archive/` instead.
 
