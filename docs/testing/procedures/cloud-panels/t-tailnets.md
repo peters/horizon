@@ -149,7 +149,7 @@ send TCP traffic to each other over the tailnet.
 6. Search the settings files for a key.
 
    ```sh
-   grep -rlc tskey <data-home>/.horizon/cloud
+   grep -rl tskey <data-home>/.horizon/cloud
    ```
 
    Result: The output is empty. The key is only in the Secret Service.

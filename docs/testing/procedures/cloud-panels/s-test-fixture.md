@@ -241,7 +241,8 @@ child is the frozen candidate.
 The candidate keeps tailnet auth keys in the Secret Service. The fixture has its
 own D-Bus, so the keyring of the operator is not available. Do steps 1 to 4
 before the first start of the launcher in S02 step 9. The launcher refuses a
-state directory that exists, so a later restart needs a new state directory.
+state directory that exists when it starts. A restart through the restart marker
+keeps the launcher and its state directory, so it needs no new keyring.
 
 1. Make a synthetic password for the keyring of the fixture.
 

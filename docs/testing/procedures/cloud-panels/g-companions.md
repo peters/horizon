@@ -157,6 +157,9 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
 ### 6.3 G03 — Select a companion cloud and use its SSH alias
 
+> **CAUTION:** CHECK A COMPANION ONLY ON A TEST CLOUD. A checked companion gives
+> the source cloud shell access to the target worker.
+
 1. On the card of `smoke-a`, click the checkbox of `lib`.
 
    Result: The row shows **Checking SSH access…**. If two clouds match, the row
@@ -405,6 +408,9 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 13. Clear the checkbox of `lib` on the card of `smoke-a`.
 
     Result: The row shows **Not selected**.
+
+    > **CAUTION:** CHECK A COMPANION ONLY ON A TEST CLOUD. A checked companion
+    > gives the source cloud shell access to the target worker.
 
 14. Click the checkbox of `lib` again.
 
