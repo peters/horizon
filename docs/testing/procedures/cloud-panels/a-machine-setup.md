@@ -226,18 +226,25 @@ setting must open a repair form.
 
 5. For Codex, select **API key** or **Subscription login**, as the test plan tells you.
 
-   Result: The card shows the choice. With **API key**, the operator pastes the Codex key.
+   Result: The card shows the choice.
 
-6. Click **Save settings**.
+   > **CAUTION:** THE OPERATOR PASTES THE AGENT KEY. Do not type the key with a
+   > device action, because characters can change.
+
+6. If Codex uses **API key**, ask the operator to paste the Codex API key.
+
+   Result: The field shows a masked value.
+
+7. Click **Save settings**.
 
    Result: The dialog closes.
 
-7. Open **Cloud › Cloud settings…** again.
+8. Open **Cloud › Cloud settings…** again.
 
    Result: Each agent with **API key** shows **Key saved**. The **Your workspace**
    card shows both agents.
 
-8. Click **Cancel**.
+9. Click **Cancel**.
 
    Result: The dialog closes. E02 and E03 make sure that the keys work.
 
@@ -504,6 +511,9 @@ G02 and L05 use this entry. Keep it until the end of area L.
 
 Do this task after D01. It uses the cloud `smoke-a`.
 
+> **CAUTION:** ONLY THE OPERATOR WRITES THE GITHUB TOKEN. Do not type the token
+> with a device action. Do not show the file.
+
 1. Ask the operator to write the GitHub token to a private file.
 
    ```text
@@ -576,18 +586,26 @@ Do this task after D01. It uses the cloud `smoke-a`.
 
     Result: The output is empty. The reconnect removed the unbound key file.
 
+12. In Cloud settings, select **API key** for Claude again.
+
+    Result: The card shows **Paste API key** below **Claude**.
+
     > **CAUTION:** THE OPERATOR PASTES THE AGENT KEY. Do not type the key with a
     > device action, because characters can change.
 
-12. In Cloud settings, select **API key** for Claude again and ask the operator to paste the key.
+13. Ask the operator to paste the Claude API key.
 
-    Result: After **Save settings**, Claude shows **Key saved**.
+    Result: The field shows a masked value.
 
-13. On the card of `smoke-a`, click **Reconnect cloud**.
+14. Click **Save settings**.
+
+    Result: The dialog closes. Claude shows **Key saved** when the dialog opens again.
+
+15. On the card of `smoke-a`, click **Reconnect cloud**.
 
     Result: The card shows Ready. The reconnect sends the saved key to the worker.
 
-14. In the worker shell, look for the Claude key file.
+16. In the worker shell, look for the Claude key file.
 
     ```sh
     find /workspace -name 'anthropic-api-key*' 2>/dev/null
@@ -598,11 +616,11 @@ Do this task after D01. It uses the cloud `smoke-a`.
     > **CAUTION:** REVOKE ONLY THE GITHUB TOKEN THAT THIS RUN MADE. Other tokens of
     > the account can give access to other work.
 
-15. Ask the operator to revoke the GitHub token at GitHub.
+17. Ask the operator to revoke the GitHub token at GitHub.
 
     Result: The token does not give access. Removal from the worker does not revoke it.
 
-16. Mark the GitHub token as revoked in the resource ledger.
+18. Mark the GitHub token as revoked in the resource ledger.
 
     Result: The ledger shows the token of A09 as revoked.
 

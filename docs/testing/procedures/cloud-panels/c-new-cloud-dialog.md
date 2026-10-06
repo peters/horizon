@@ -31,7 +31,10 @@ runs in the place that the dialog showed.
 ## 3. Safety
 
 > **CAUTION:** DO NOT CLICK **Start cloud** IN THIS AREA. This button rents compute
-> from the provider. Only C31 uses clouds, and areas D01 and D02 start them.
+> from the provider. C31 uses the clouds that D01 and D02 start.
+
+> **CAUTION:** START THE WATCH OF C08 ONLY WITH THE PERMISSION OF THE OPERATOR.
+> The watch starts a cloud and rents compute if stock returns before you stop it.
 
 > **CAUTION:** DO NOT PUT THE PROVIDER KEYS IN SCREENSHOTS, RECORDINGS OR LOGS. A
 > person who gets a key can rent compute on that account.
