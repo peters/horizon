@@ -232,7 +232,7 @@ impl DeviceUiState {
                 }
                 if crate::icon_button::icon_button(ui, true, "Copy video path", crate::icon_button::paint_clipboard)
                     .on_hover_text(
-                        "Private temporary WebM. Save a copy before closing this panel or making four more recordings.",
+                        "Copy video path. Private temporary WebM. Save a copy before closing this panel or making four more recordings.",
                     )
                     .clicked()
                 {

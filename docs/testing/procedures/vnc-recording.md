@@ -54,7 +54,7 @@ It tests access control, background capture, file completion, and temporary stor
 
 2. Change the synthetic content for five seconds.
 3. Click the stop icon.
-4. Wait for the frame count and the clipboard icon. The hover text names the private recording file.
+4. Wait for the frame count and the clipboard icon. The hover text names Copy video path and the private recording file.
 5. Copy the path and play the file.
 
    Result: The file shows the full remote desktop in WebM format without audio.
