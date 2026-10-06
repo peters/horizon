@@ -45,6 +45,35 @@ refused. Custom images must advertise `horizon-tailnet-contract=1` before a
 selected-network cloud can be allocated; **None** remains compatible with older
 images.
 
+Each cloud has one device name in its tailnet for the life of the cloud. The
+name is `horizon-cloud-<cloud ID>`. The provider uses the same name for the
+server or pod of the cloud. Other clouds and agents can use the full name
+`horizon-cloud-<cloud ID>.<tailnet>.ts.net`. The name stays the same after a
+stop and a resume.
+
+Tailscale names a device after its host name, and each new container has a
+random host name. Thus, the worker gives the device name to Tailscale:
+
+- When the container starts, the worker reads the cloud ID from
+  `HORIZON_CLOUD_OPERATION`. It writes the name to a root-only file in
+  `/run/horizon-tailnet`.
+- The first enrollment gives the name to `tailscale up` with `--hostname`.
+- The node state on the cloud volume keeps the name. A resume does not need
+  the auth key again.
+- If the device has a different host name, the next deploy or resume changes it
+  with `tailscale set --hostname`. This applies to a cloud that enrolled with an
+  older image, after a rebuild of its image. If this change fails, the cloud
+  stays in the tailnet with its old name.
+
+A cloud ID that is not a valid DNS label gets a short digest suffix. Examples are
+an ID with capital letters, underscores, a last hyphen or too many characters.
+Thus, each name is a valid DNS label and is unique to its cloud. Tailscale does
+not change a name that a tailnet administrator set. If a different device has
+the name, Tailscale adds a suffix such as `-1`. All members of the tailnet can
+see the cloud ID in the name. An image with this behavior reports
+`horizon-tailnet-contract=2`. An older image keeps the container host name,
+which changes at each resume.
+
 Agents discover ACL-visible devices in
 `/run/horizon-tailnet-devices/devices.json` (names, addresses and online state
 only). HTTP/HTTPS and SOCKS proxy environment variables provide outbound access;

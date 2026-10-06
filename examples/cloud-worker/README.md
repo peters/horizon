@@ -146,7 +146,12 @@ userspace daemon and resumes its persistent node state after worker restart.
 Agents use HTTP/SOCKS proxies and the sanitized device inventory in
 `/run/horizon-tailnet-devices/devices.json`; this image does not require TUN or
 NET_ADMIN. Image qualification reports `horizon-tailnet-contract=1` only when the
-binaries and isolated launcher are installed. See
+binaries and isolated launcher are installed. It also reports
+`horizon-tailnet-contract=2` when `horizon-worker-tailnet --stable-name-contract`
+declares it: the device name is `horizon-cloud-<cloud ID>` for the life of the
+cloud, not the random container host name. `resume` records that name from
+`HORIZON_CLOUD_OPERATION` at container start, and `configure` gives it to
+`tailscale up --hostname` or `tailscale set --hostname`. See
 [cloud tailnets](../../docs/cloud-workspaces.md#tailnets-auth-key-mvp) for scope,
 selection and follow-ups. Root SSH/SCP puts sibling uploads in private staging.
 Only the consuming import opens those inputs with `O_NOFOLLOW`, passes read-only

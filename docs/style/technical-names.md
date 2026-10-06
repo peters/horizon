@@ -17,6 +17,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | lane | One platform or provider path through a procedure, for example "Hetzner lane". | track, leg |
 | run | One execution of a procedure on one candidate. | pass (as a noun), session |
 | evidence | Screenshots, recordings, logs and hashes from a run. Keep private evidence out of the repository. | proof |
+| nonce | A random value that a run makes one time. A reply that contains it is current. | token |
 
 ## Horizon objects
 
@@ -33,6 +34,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | offer | One worker type with a price from a provider catalog. | quote, SKU |
 | tailnet | A Tailscale network that Horizon joins with an auth key. | tailscale network, overlay |
 | auth key | A Tailscale key that starts with `tskey-auth-`. It is a secret. | token, join key |
+| device name | The name of a worker in a tailnet. Other devices use it to reach the worker. | hostname, machine name |
 | companion | A second repository that a cloud can use. | sibling repo, linked repo |
 | sibling | A companion on the same worker as the cloud. | same-worker companion |
 | companion cloud | A companion on its own worker. | — |
