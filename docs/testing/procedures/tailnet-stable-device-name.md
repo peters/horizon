@@ -112,7 +112,7 @@ address. Thus, cloud B reaches the server, but the public network does not.
    python3 -c 'import json; print(json.load(open("/run/horizon-tailnet-devices/devices.json"))["devices"][0])'
    ```
 
-   Result: The name is `horizon-cloud-<ID>.<tailnet>.`. The entry is online.
+   Result: The name is `horizon-cloud-<ID>.<tailnet>.`, with the UUID of the cloud. The entry is online.
 
 4. Record the name without the last dot as `<name>`.
 

@@ -46,10 +46,17 @@ selected-network cloud can be allocated; **None** remains compatible with older
 images.
 
 Each cloud has one device name in its tailnet for the life of the cloud. The
-name is `horizon-cloud-<cloud ID>`. The provider uses the same name for the
-server or pod of the cloud. Other clouds and agents can use the full name
-`horizon-cloud-<cloud ID>.<tailnet>.ts.net`. The name stays the same after a
-stop and a resume.
+worker makes the name from the cloud ID. The name stays the same after a stop
+and a resume. The name has one of two forms:
+
+- A cloud ID of lowercase letters, digits and inner hyphens usually gives
+  `horizon-cloud-<cloud ID>`. A UUID cloud ID, which Horizon makes for each new
+  cloud, always has this form.
+- Other cloud IDs give a digest form. The rules for this form are below.
+
+Other clouds and agents use the full name `<device name>.<tailnet>.ts.net`. To
+find the device name of a worker, read the first entry in its device inventory.
+The provider name of the server or pod can be different from the device name.
 
 Tailscale names a device after its host name, and each new container has a
 random host name. Thus, the worker gives the device name to Tailscale:
@@ -65,12 +72,18 @@ random host name. Thus, the worker gives the device name to Tailscale:
   older image, after a rebuild of its image. If this change fails, the cloud
   stays in the tailnet with its old name.
 
-A cloud ID that is not a valid DNS label gets a digest suffix: 20 hexadecimal
-characters (80 bits) of the SHA-256 of the exact ID. Examples are an ID with
-capital letters, underscores, a last hyphen or too many characters. An ID that
-ends with a hyphen and 20 hexadecimal characters also gets a suffix. Thus, each
-name is a valid DNS label and is unique to its cloud. A UUID cloud ID gets no
-suffix. Tailscale does
+The digest form starts with `horizon-cloud-` and a short form of the cloud ID.
+The worker writes the ID in lowercase and changes each underscore to a hyphen.
+Then it adds a hyphen and 20 hexadecimal characters (80 bits) of the SHA-256 of
+the exact ID. The full name has a maximum of 63 characters. These cloud IDs get
+the digest form:
+
+- An ID with capital letters or underscores.
+- An ID with a last hyphen.
+- An ID that makes a name of more than 63 characters.
+- An ID that ends with a hyphen and 20 hexadecimal characters.
+
+Thus, each name is a valid DNS label and is unique to its cloud. Tailscale does
 not change a name that a tailnet administrator set. If a different device has
 the name, Tailscale adds a suffix such as `-1`. All members of the tailnet can
 see the cloud ID in the name. An image with this behavior reports
