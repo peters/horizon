@@ -1330,7 +1330,15 @@ mod tests {
         assert!(state.continue_pending_relaunch());
         assert!(state.pending_relaunch.is_none());
         assert!(state.session.is_some());
-        assert!(state.can_accept_commands());
+        // The deliberately missing executable closes its receiver asynchronously.
+        // A retained session handle must not keep accepting commands after that exit.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while state.can_accept_commands() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!state.can_accept_commands());
+        assert!(state.session.is_some());
+        assert!(!state.try_send(BrowserCommand::Reload));
         state.request_shutdown();
         if let Some(signal) = state.take_shutdown_signal() {
             assert!(signal.wait(std::time::Duration::from_secs(2)));
