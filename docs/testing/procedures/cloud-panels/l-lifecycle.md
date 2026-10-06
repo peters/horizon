@@ -572,7 +572,7 @@ Use `smoke-r`.
    Result: Each active line in the ledger belongs to a cloud on the board.
 
 L05 is the last task that uses the `<build-repository>` entry of A08. Steps 3
-to 9 revoke it while the fixture runs.
+to 10 revoke it while the fixture runs.
 
 3. Open **Cloud › Cloud settings…** and wait 3 seconds.
 
@@ -597,14 +597,18 @@ to 9 revoke it while the fixture runs.
 
    Result: The output shows that the provider pull credential is revoked.
 
+7. Mark the RunPod registry credential of `<build-repository>` from G02 as deleted in the resource ledger.
+
+   Result: The ledger shows no active registry credential of this run.
+
    > **CAUTION:** REVOKE ONLY THE TWO TOKENS THAT THIS RUN MADE FOR `<build-repository>`.
    > Other tokens of the registry can give access to other work.
 
-7. Ask the operator to revoke the pull token and the push token of `<build-repository>` at the registry.
+8. Ask the operator to revoke the pull token and the push token of `<build-repository>` at the registry.
 
    Result: The tokens no longer give access. Horizon does not revoke a token at its issuer.
 
-8. Show the registry entries in the settings file.
+9. Show the registry entries in the settings file.
 
    ```sh
    jq '[.registries.bindings[]? | .repository]' <data-home>/.horizon/cloud/settings.json
@@ -612,9 +616,9 @@ to 9 revoke it while the fixture runs.
 
    Result: Each listed entry has a revoked pull credential. Record the list in the evidence.
 
-9. Delete `<data-home>/smoke/registry-status.json`.
+10. Delete `<data-home>/smoke/registry-status.json`.
 
-   Result: No registry action file of this run stays in the private home.
+    Result: No registry action file of this run stays in the private home.
 
 Area X deletes the other clouds.
 

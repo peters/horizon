@@ -295,10 +295,10 @@ The cleanup of this procedure does X01 to X05.
    > **CAUTION:** DELETE ONLY THE STATE DIRECTORY OF THIS RUN. It contains the saved
    > provider keys and the private data of the fixture.
 
-3. Delete the state directory of the fixture and the keyring password file.
+3. Delete the fixture state, the keyring password and the saved RunPod key copy of C07.
 
    ```sh
-   rm -r <run>/fixture && rm -f <run>/keyring-password
+   rm -r <run>/fixture && rm -f <run>/keyring-password <run>/runpod-key.saved
    ```
 
    Result: `<run>` contains no credential file. Keep `<evidence>` outside `<run>`.

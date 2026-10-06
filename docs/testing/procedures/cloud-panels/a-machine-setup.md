@@ -80,7 +80,11 @@ setting must open a repair form.
    Result: The **Cloud settings** dialog opens. It shows the **RunPod**,
    **Hetzner Cloud** and **Coding agents** cards.
 
-3. Wait 3 seconds and take a new screenshot.
+3. Take a screenshot at once.
+
+   Result: The first screenshot shows the dialog directly after it opens.
+
+4. Wait 3 seconds and take a second screenshot.
 
    Result: The dialog is at the same position and size as in the first screenshot.
 
@@ -433,35 +437,39 @@ Do this task after B02. It needs the synthetic repository.
 
     Result: The output shows that the provider pull credential is revoked.
 
+19. Mark the RunPod registry credential of step 10 as deleted in the resource ledger.
+
+    Result: The ledger shows no active credential for the A08 repository.
+
     > **CAUTION:** REVOKE ONLY THE GHCR TOKEN THAT THIS RUN MADE. Other tokens of
     > the account can give access to other work.
 
-19. Ask the operator to revoke the GHCR token at GitHub.
+20. Ask the operator to revoke the GHCR token at GitHub.
 
     Result: The token cannot read the image. Horizon does not revoke the token at its issuer.
 
 The `runpod-build` profile needs a second entry with a push credential.
 G02 and L05 use this entry. Keep it until the end of area L.
 
-20. In the **Container registry** card, click **Add image repository**.
+21. In the **Container registry** card, click **Add image repository**.
 
     Result: The card shows **New image repository** and empty fields.
 
-21. Type `<build-repository>` in the **Image repository** field.
+22. Type `<build-repository>` in the **Image repository** field.
 
     Result: The field shows the repository of the build profile.
 
     > **CAUTION:** THE OPERATOR MUST ENTER THE CREDENTIALS. A device `type` action
     > can lose characters, and a recording can show a credential.
 
-22. Let the operator fill the pull fields and the **Publishing credential** fields for `<build-repository>`.
+23. Let the operator fill the pull fields and the **Publishing credential** fields for `<build-repository>`.
 
     Result: The pull fields and the push fields are full. The credentials do not show.
 
     > **CAUTION:** SAVE ONLY CREDENTIALS FOR THE TEST REPOSITORY. Use a read-only
     > pull credential and a push credential for that repository only.
 
-23. Click **Save settings**.
+24. Click **Save settings**.
 
     Result: The card lists `<build-repository>`. The settings file contains only file references.
 

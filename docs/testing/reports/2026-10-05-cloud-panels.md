@@ -167,6 +167,8 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
   not in the final text.
 - A02 and C07 were done again on a later candidate that contains the fixes. A01 was not.
 - The run used other cloud titles than the planned clouds of the procedure.
+- In E02, a device `type` action entered the real agent key. The procedure now
+  requires that the operator enters each real secret.
 - T06 and T07 were not done, and T05 was done only in part, because the PC was not on the test tailnet.
 
 ## 5. Cleanup

@@ -141,7 +141,7 @@ child is the frozen candidate.
    so it does not show this socket without a bind. Area B sets `docker_host` to
    this socket.
 
-5. In the launcher copy, find the restart marker in the branch for a stopped candidate.
+5. In the launcher copy, add a restart branch where the candidate stops, as the [persistent launcher notes](../../cloud-workspaces-mvp-smoke.md#persistent-cloud-launcher-for-restart-scenarios) describe.
 
    Result: If the file `<state>/restart-request` exists, the launcher deletes it
    and starts the candidate again. Xvfb, D-Bus, VNC and the private data continue.
