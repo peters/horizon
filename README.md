@@ -245,6 +245,8 @@ Homebrew and other package-manager installs keep using the package manager's own
 
 Release builds don't include [speech input](#speech-input-opt-in). Build from source if you want dictation.
 
+The latest release (v0.2.7, August 2026) predates browser panels, Device panels, cloud workspaces and casting. Until the next release, [build from source](#build-from-source) to get them.
+
 ### What works where
 
 Horizon runs on Linux, macOS and Windows, but some features are Linux-only today, and Windows has the most gaps:

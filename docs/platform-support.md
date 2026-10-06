@@ -5,6 +5,10 @@ It describes the code on `main` at commit `7c31b9c91`. It does not give a plan.
 Each note gives the code, workflow or document that causes a limit. The
 "Unknown" section lists the items that no test examines.
 
+The latest release, v0.2.7 from 2 August 2026, is older than this code. It
+does not have browser panels, Device panels, clouds, tailnets or casting. The
+tables describe a source build from `main`.
+
 Horizon builds and runs on the three platforms. Many functions work on Linux
 only. If you change the platform support of a function, update this document in
 the same PR.

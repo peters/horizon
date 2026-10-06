@@ -4,6 +4,11 @@ This guide tells you how to install Horizon and use it for the first time. It
 describes Horizon as it is on `main`. Some functions work on Linux only. Read
 [the platform support](platform-support.md) before you start.
 
+The latest release is v0.2.7 from 2 August 2026. The `main` branch is more
+than 800 commits newer. The release does not have browser panels, Device
+panels, clouds, tailnets or casting. Some steps in this guide can also be
+different in the release. To do all procedures in this guide, build from source.
+
 ## What Horizon does
 
 Horizon shows all of your terminals, coding agents, browsers and remote
@@ -13,29 +18,29 @@ board when you close it.
 
 These functions are available:
 
-| Function | What it does | Platforms |
-|---|---|---|
-| Shell panels | A terminal in the workspace directory. | All, with limits on Windows |
-| Agent panels | Claude Code, Codex, Grok and other coding agents in a panel. | Linux and macOS. Not tested on Windows |
-| Browser panels | Chromium, Firefox or Safari on the board. You and an agent use the same page. | All. Safari on macOS only |
-| Device panels | A VNC view of a desktop on this computer or on an SSH host. | All |
-| Agent input to an isolated desktop | An agent clicks and types on an Xvfb desktop for an application test. | Linux with X11 |
-| Remote Hosts | SSH panels for your hosts and Tailscale devices. | Linux and macOS. Not tested on Windows |
-| Clouds | A remote worker with its own shell, agent, browser and Device panels. | Linux and macOS |
-| Casting | A panel, a workspace or the window on an Apple TV. | Linux |
-| Speech | Dictation into terminals, editors and browser pages. | Source build only |
+| Function | What it does | Platforms | In v0.2.7 |
+|---|---|---|---|
+| Shell panels | A terminal in the workspace directory. | All, with limits on Windows | Yes |
+| Agent panels | Claude Code, Codex, Grok and other coding agents in a panel. | Linux and macOS. Not tested on Windows | Yes |
+| Browser panels | Chromium, Firefox or Safari on the board. You and an agent use the same page. | All. Safari on macOS only | No |
+| Device panels | A VNC view of a desktop on this computer or on an SSH host. | All | No |
+| Agent input to an isolated desktop | An agent clicks and types on an Xvfb desktop for an application test. | Linux with X11 | No |
+| Remote Hosts | SSH panels for your hosts and Tailscale devices. | Linux and macOS. Not tested on Windows | Yes |
+| Clouds | A remote worker with its own shell, agent, browser and Device panels. | Linux and macOS | No |
+| Casting | A panel, a workspace or the window on an Apple TV. | Linux | No |
+| Speech | Dictation into terminals, editors and browser pages. | Source build only | Source build only |
 
 ## Select an install route
 
 | Route | Use it when | Speech |
 |---|---|---|
-| Release binary | You want to start quickly. | No |
+| Release binary | You want to start quickly, and v0.2.7 has the functions that you need. | No |
 | Surge installer | You want the in-app update prompt. | No |
 | Homebrew (macOS, Linux x64) | You use Homebrew. | No |
 | WinGet (Windows) | You use WinGet. | No |
-| Source build | You want speech or GPU encoder features. | Yes, with a feature |
+| Source build | You want the functions in this guide, speech or GPU encoder features. | Yes, with a feature |
 
-Release builds use the default features. To get speech, use a source build.
+Release builds use the default features. All release routes install v0.2.7.
 
 ## Install a release binary on Linux or macOS
 
@@ -50,9 +55,9 @@ Release builds use the default features. To get speech, use a source build.
 
 3. Download `SHA256SUMS.txt` from the same release to the same directory.
 
-> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The release is
-> not signed. The checksum is the only check that the file is complete and not
-> replaced.
+> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The checksum
+> finds an incomplete or damaged download. It does not prove who made the
+> file, because the release and `SHA256SUMS.txt` are not signed.
 
 4. If you use Linux, examine the checksum:
 
@@ -112,9 +117,9 @@ A raw binary does not update itself. Download a new release to update it.
 2. Download `horizon-windows-x64.exe`.
 3. Download `SHA256SUMS.txt` from the same release.
 
-> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The release is
-> not signed. The checksum is the only check that the file is complete and not
-> replaced.
+> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The checksum
+> finds an incomplete or damaged download. It does not prove who made the
+> file, because the release and `SHA256SUMS.txt` are not signed.
 
 4. In PowerShell, get the checksum of the file:
 
@@ -149,9 +154,9 @@ The Surge installer gives the in-app update prompt.
 
 3. Download `SHA256SUMS.txt` from the same release to the same directory.
 
-> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The release is
-> not signed. The checksum is the only check that the file is complete and not
-> replaced.
+> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The checksum
+> finds an incomplete or damaged download. It does not prove who made the
+> file, because the release and `SHA256SUMS.txt` are not signed.
 
 4. If you use Linux, examine the checksum:
 
@@ -350,6 +355,8 @@ Bash. No test examines this.
 
 ## Open a browser panel
 
+Browser panels need a source build from `main`.
+
 1. Hold Ctrl and double-click an empty area of the board.
 2. Select **Browser**.
 
@@ -360,13 +367,13 @@ Codex and Grok panels.
 
 ## Open a Device panel
 
-A Device panel needs a VNC target in the configuration. See
+Device panels need a source build from `main`. A Device panel needs a VNC target in the configuration. See
 [Watch an app over VNC](../README.md#watch-an-app-over-vnc).
 
 ## Start a first cloud
 
-Clouds work on Linux and macOS. Read [Cloud workspaces](cloud-workspaces.md)
-for the full setup.
+Clouds work on Linux and macOS, with a source build from `main`. Read
+[Cloud workspaces](cloud-workspaces.md) for the full setup.
 
 > **CAUTION:** STOP OR DELETE EACH CLOUD THAT YOU DO NOT USE. A running worker
 > and a stopped volume continue to cost money.

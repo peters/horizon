@@ -29,6 +29,9 @@ available today.
 - The Quick Start in `AGENTS.md` did not list macOS arm64 and did not tell the
   reader to run `git lfs pull`. Phase 0 corrects this.
 - The in-app updater works for Surge installs only.
+- The latest release, v0.2.7 from 2 August 2026, is more than 800 commits older
+  than `main`. It has no browser panels, Device panels, clouds or casting. A
+  user who installs a release does not get the functions that the README shows.
 
 ### Agent support
 
@@ -149,7 +152,9 @@ A cloud gives each agent its own disposable machine. The value is as follows:
 - [ ] **1.5 Setup and update skills.** Add `horizon-setup` and `horizon-update`
       skills. Publish them in a plugin marketplace in this repository. Then an
       agent can install Horizon before Horizon runs.
-
+- [ ] **1.6 Release the current code.** Publish a new release, or a prerelease
+      channel, from `main`. Then the release routes give the functions in the
+      documentation.
 
 ### Phase 2: The first ten minutes
 
