@@ -1,5 +1,8 @@
 use super::{Confirmation, Event, HorizonApp, Runtime, Settings, Stage, Store, channel, cloud_runtime, deployment};
 
+/// What a provider check reports.
+type RecoveryResult = cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Action {
     Deploy,
@@ -56,25 +59,40 @@ impl Runtime {
     }
 
     /// Holds the failure just reported and asks the provider whether the worker stopped
-    /// without Horizon. The check waits while the idle watch checks the same worker.
+    /// without Horizon.
     pub(super) fn start_failure_check(
         &mut self,
         state_root: std::path::PathBuf,
         settings: Settings,
         ctx: &egui::Context,
     ) {
-        let (tx, rx) = channel();
-        let cancel = cloud_runtime::Cancellation::default();
-        self.unexplained_failure = self.error.take();
-        self.failure_check = Some(cancel.clone());
-        self.recovery_receiver = Some(rx);
+        let tx = self.hold_failure_for_check();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = cloud_runtime::lifecycle::check_lost_worker(&state_root, &settings, &cancel)
-                .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
+            let result = cloud_runtime::lifecycle::check_lost_worker(
+                &state_root,
+                &settings,
+                &cloud_runtime::Cancellation::default(),
+            )
+            .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
             let _ = tx.send(result);
             ctx.request_repaint();
         });
+    }
+
+    /// Holds the failure for the provider check whose result the returned sender
+    /// carries. That check alone decides: the idle watch of the lost worker ends now,
+    /// and a check of its own that already holds the cloud makes this one wait, so no
+    /// provider check holds the cloud once the card shows the result.
+    pub(super) fn hold_failure_for_check(&mut self) -> std::sync::mpsc::Sender<RecoveryResult> {
+        if let Some(watch) = self.cancel.take() {
+            watch.cancel();
+        }
+        self.idle_reports = None;
+        let (tx, rx) = channel();
+        self.unexplained_failure = self.error.take();
+        self.recovery_receiver = Some(rx);
+        tx
     }
 
     fn start_reconciliation(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {
@@ -111,12 +129,8 @@ impl Runtime {
         };
         self.recovery_receiver = None;
         // A check Horizon started for a failure: a confirmed stop replaces the
-        // failure, and anything else shows the failure as it was. A check whose
-        // failure the idle watch already explained only had to release the cloud.
-        if self.failure_check.take().is_some() {
-            let Some(failure) = self.unexplained_failure.take() else {
-                return;
-            };
+        // failure, and anything else shows the failure as it was.
+        if let Some(failure) = self.unexplained_failure.take() {
             match result {
                 Ok(recovered) if recovered.confirmed_stopped() => self.show_stopped_outside(recovered.state),
                 Ok(recovered) => {

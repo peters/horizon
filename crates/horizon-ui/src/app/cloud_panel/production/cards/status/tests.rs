@@ -762,11 +762,7 @@ fn lost_connection() -> (
     assert!(runtime.failure_may_be_a_stop(), "a lost connection is checked");
     // What the card does with the failure before it shows it.
     runtime.receiver = None;
-    runtime.cancel = None;
-    runtime.unexplained_failure = runtime.error.take();
-    runtime.failure_check = Some(cloud_runtime::Cancellation::default());
-    let (tx, rx) = channel();
-    runtime.recovery_receiver = Some(rx);
+    let tx = runtime.hold_failure_for_check();
     (runtime, tx)
 }
 
@@ -918,29 +914,46 @@ fn only_a_failure_that_can_be_a_stop_outside_horizon_is_checked() {
 }
 
 #[test]
-fn the_first_report_of_a_stop_ends_the_other_and_a_known_stop_keeps_its_own_words() {
-    // The idle watch shows the stop before the provider check returns.
-    let (mut runtime, check) = lost_connection();
-    runtime.show_stopped_outside(idle_cloud("Stopped", "EXITED"));
-    assert!(runtime.unexplained_failure.is_none());
+fn the_failure_check_alone_decides_and_a_known_stop_keeps_its_own_words() {
+    // The idle watch of the lost worker ends when the check starts, so it can neither
+    // report the stop a second time nor hold the cloud once the card shows the result.
+    let (sender, received) = channel();
+    let watch = cloud_runtime::Cancellation::default();
+    let (_events, deploy) = channel();
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        receiver: Some(deploy),
+        cancel: Some(watch.clone()),
+        idle_reports: Some(received),
+        state: Some(idle_cloud("Ready", "RUNNING")),
+        error: Some("Local operation timed out".into()),
+        ..Runtime::default()
+    };
+    runtime.receiver = None;
+    let check = runtime.hold_failure_for_check();
+    assert!(watch.is_cancelled() && runtime.cancel.is_none());
     assert!(
-        runtime
-            .failure_check
-            .as_ref()
-            .is_some_and(cloud_runtime::Cancellation::is_cancelled),
-        "the losing check ends early"
+        sender
+            .send(super::super::super::idle::Report::StoppedOutside(Box::new(idle_cloud(
+                "Stopped", "EXITED"
+            ))))
+            .is_err(),
+        "a late report of the ended watch finds nobody listening"
     );
-    assert!(runtime.busy(), "and holds the cloud until it reports");
-    let notes = runtime.logs.len();
-    // The cancelled check ends with an error, which nobody shows.
-    check.send(Err(cloud_runtime::Error::Busy)).unwrap();
+    assert!(runtime.busy(), "lifecycle actions wait for the check");
+    check
+        .send(Ok(checked(idle_cloud("Stopped", "EXITED"), "inactive")))
+        .unwrap();
     runtime.poll_recovery();
-    assert!(!runtime.busy() && runtime.failure_check.is_none());
-    assert_eq!(runtime.logs.len(), notes, "the stop is logged once");
-    assert!(runtime.error.is_none(), "the cancelled check shows no failure");
+    assert!(!runtime.busy() && runtime.error.is_none());
     assert_eq!(
-        of(&runtime, Occupancy::default(), now()).verb,
-        "Stopped after 30 idle minutes"
+        runtime
+            .logs
+            .iter()
+            .filter(|line| line.text.contains("Horizon did not stop it"))
+            .count(),
+        1,
+        "the stop is logged once"
     );
     // A record that Horizon already stopped is not a stop outside Horizon.
     let (mut runtime, check) = lost_connection();

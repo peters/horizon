@@ -169,7 +169,11 @@ fn run(
                     report(unfinished(state, &error.to_string()));
                     return;
                 }
-                // A worker that stopped itself cannot be read either.
+                // A worker that stopped itself cannot be read either. A check the card
+                // started for a failure ends this watch first, and then decides alone.
+                if cancel.is_cancelled() {
+                    return;
+                }
                 if let Ok(Some(state)) = confirm(cancel)
                     && !cancel.is_cancelled()
                 {
@@ -363,12 +367,6 @@ impl Runtime {
     }
 
     fn show_stopped(&mut self, state: Option<Deployment>, line: String) {
-        // A provider check Horizon started for a failure has nothing left to explain. It
-        // ends early, and the card waits for it to release the cloud.
-        if let Some(check) = &self.failure_check {
-            check.cancel();
-            self.unexplained_failure = None;
-        }
         self.cancel = None;
         self.progress.stage(Stage::Stopped, Instant::now());
         if let Some(state) = state {

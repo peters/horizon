@@ -253,9 +253,6 @@ pub(super) struct Runtime {
     /// A failure of a ready or reconnecting cloud, held while the provider check that
     /// may explain it as a stop runs.
     unexplained_failure: Option<String>,
-    /// Cancels that check once the idle watch shows the stop first. The check still
-    /// holds the cloud until it reports, so the card stays busy until then.
-    failure_check: Option<cloud_runtime::Cancellation>,
     /// The failure just reported may be a stop Horizon did not make.
     failure_needs_check: bool,
     sharing: local_network::Sharing,
@@ -622,9 +619,8 @@ impl HorizonApp {
                 && runtime.error.is_some()
             {
                 runtime.receiver = None;
-                if std::mem::take(&mut runtime.failure_needs_check) && runtime.recovery_receiver.is_none() {
-                    // The idle watch keeps its token and channel while the provider check
-                    // runs: either may show the stop first, and a running worker stays watched.
+                let check = std::mem::take(&mut runtime.failure_needs_check) && runtime.recovery_receiver.is_none();
+                if check {
                     self.check_failure_with_provider(id, ctx);
                 } else {
                     runtime.cancel = None;

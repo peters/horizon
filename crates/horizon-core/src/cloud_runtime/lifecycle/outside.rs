@@ -108,9 +108,11 @@ fn check_with(
 ) -> Result<Option<ReconciledDeployment>> {
     for attempt in 0..BUSY_ATTEMPTS {
         if attempt > 0 {
-            cancel.check()?;
             std::thread::sleep(pause);
         }
+        // A cancelled check never takes the cloud, so it cannot hold it from the
+        // check or operation that cancelled it.
+        cancel.check()?;
         let store = match Store::lock(root) {
             Err(Error::Busy) => continue,
             other => other?,
@@ -302,6 +304,13 @@ mod tests {
         let result = stopped_with(temp.path(), &cancelled, reported("EXITED"));
         assert!(matches!(result, Err(Error::Provider(_))), "{result:?}");
         drop(held);
+        // Even with the cloud free, a cancelled check neither takes it nor asks the provider.
+        let unasked = |_: &Store| -> Result<ReconciledDeployment> { panic!("the provider is not asked") };
+        assert!(matches!(
+            stopped_with(temp.path(), &cancelled, unasked),
+            Err(Error::Provider(_))
+        ));
+        assert!(Store::lock(temp.path()).is_ok(), "the cloud stays free");
     }
 
     #[test]
