@@ -77,110 +77,123 @@ accepts a request but before the card shows an ID, for example during the watch 
    diff <(sort <evidence>/hetzner-before.jsonl <evidence>/runpod-before.jsonl) <(sort <evidence>/before-teardown.jsonl)
    ```
 
-   Result: Each new line is a resource of this run.
+   Result: You have the new resources since the setup. Some can belong to other people.
 
-3. Write each new resource that the ledger does not contain in the resource ledger.
+3. For each new resource that the ledger does not contain, find its cloud card or its `smoke-` name.
+
+   Result: A resource that a planned test cloud shows, or that has the name of a
+   planned test cloud, belongs to this run.
+
+4. Write each new resource of this run in the resource ledger.
 
    Result: The ledger contains every provider resource of this run.
 
-4. Examine the card of each planned test cloud on the board.
+5. Record each new resource that you cannot connect to this run in the evidence.
+
+   Result: The evidence lists the resources that this run does not own.
+
+6. Tell the operator about each of these resources.
+
+   Result: The teardown does not delete them. The operator decides what to do with them.
+
+7. Examine the card of each planned test cloud on the board.
 
    Result: You know which cards show a worker, a volume or an operation that waits.
 
-Do steps 5 to 12 for each cloud in the resource ledger that has an active resource.
+Do steps 8 to 15 for each cloud in the resource ledger that has an active resource.
 
-5. On the card of the cloud, click **Delete cloud resources…**.
+8. On the card of the cloud, click **Delete cloud resources…**.
 
    Result: The card asks for confirmation and shows **Delete resources permanently**.
 
    > **CAUTION:** THIS STEP DELETES THE WORKER AND THE VOLUME OF THIS CLOUD. Their
    > files cannot come back.
 
-6. Click **Delete resources permanently**.
+9. Click **Delete resources permanently**.
 
    Result: The card shows **Deleting cloud resources**, then **Deleted**.
 
-7. Examine the storage line of the card.
+10. Examine the storage line of the card.
 
-   Result: The card shows **Workspace storage cleaned up**.
+    Result: The card shows **Workspace storage cleaned up**.
 
-8. If the card shows **Deletion failed**, record the message in the evidence.
+11. If the card shows **Deletion failed**, record the message in the evidence.
 
-   Result: The evidence has the message.
+    Result: The evidence has the message.
 
-9. If the card shows **Deletion failed**, do steps 5 to 7 again.
+12. If the card shows **Deletion failed**, do steps 8 to 10 again.
 
-   Result: The card shows **Deleted**.
+    Result: The card shows **Deleted**.
 
-10. If the card still does not show **Deleted**, stop the teardown of this cloud.
+13. If the card still does not show **Deleted**, stop the teardown of this cloud.
 
     Result: The ledger keeps the resources as active. The card keeps the retry
     action. Open a defect issue and tell the operator that the resources can cost money.
 
-11. If the card shows **Deleted**, mark each resource of the cloud as deleted in the resource ledger.
+14. If the card shows **Deleted**, mark each resource of the cloud as deleted in the resource ledger.
 
     Result: The ledger shows no active resource for this cloud.
 
     > **CAUTION:** REMOVE ONLY A CLOUD THAT SHOWS **DELETED**. Horizon removes the
     > cloud and its panels from the board, and the retry action goes away.
 
-12. If the card shows **Deleted**, click **Remove cloud**.
+15. If the card shows **Deleted**, click **Remove cloud**.
 
     Result: The cloud is not on the board.
 
-13. Find each test cloud that never got a worker, for example `smoke-lib0` from G08.
+16. Find each test cloud that never got a worker, for example `smoke-lib0` from G08.
 
     Result: Its card shows no worker. The ledger has no provider resource for it.
 
     > **CAUTION:** REMOVE ONLY THE TEST CLOUD WITHOUT A WORKER. Horizon removes the
     > cloud and its panels from the board.
 
-14. On the card of that cloud, click **Remove cloud**.
+17. On the card of that cloud, click **Remove cloud**.
 
     Result: The cloud is not on the board.
 
-15. Examine the board.
+18. Examine the board.
 
     Result: The board shows no test cloud.
 
-16. Find each RunPod registry credential that the resource ledger shows as active.
+19. Find each RunPod registry credential that the resource ledger shows as active.
 
     Result: You have the list. A run that stopped before the cleanup of area A or L can leave one.
 
     > **CAUTION:** REVOKE ONLY THE REGISTRY CREDENTIALS THAT THE LEDGER RECORDS. A
     > worker that needs another credential cannot pull its image after a restart.
 
-17. For each listed credential, click **Revoke pull binding** on its entry in **Cloud settings…**.
+20. For each listed credential, click **Revoke pull binding** on its entry in **Cloud settings…**.
 
     Result: Each entry shows that the provider pull credential is revoked.
 
     > **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
     > contains the key. Do not show the file or the request headers.
 
-18. List the registry credentials of the RunPod account.
+21. List the registry credentials of the RunPod account.
 
     ```sh
     bash <run>/runpod-list.sh registries
     ```
 
-    Result: The list contains no ID from step 16.
+    Result: The list contains no ID from step 19.
 
-19. Mark each credential from step 16 as deleted in the resource ledger.
+22. Mark each credential from step 19 as deleted in the resource ledger.
 
     Result: The ledger shows no active RunPod registry credential.
 
-20. Find each issuer token that the resource ledger shows as active.
+23. Find each issuer token that the resource ledger shows as active.
 
     Result: You have the list. A run that stopped before A08, A09 or the cleanup of area L can leave one.
 
     > **CAUTION:** REVOKE ONLY THE ISSUER TOKENS THAT THE LEDGER RECORDS. Other
     > tokens of the accounts can give access to other work.
 
-21. Ask the operator to revoke each listed token at its issuer.
+24. Ask the operator to revoke each listed token at its issuer.
 
     Result: The tokens no longer give access.
 
-22. Mark each of these tokens as revoked in the resource ledger.
+25. Mark each of these tokens as revoked in the resource ledger.
 
     Result: The ledger shows no active issuer token.
 
@@ -236,7 +249,8 @@ Do steps 5 to 12 for each cloud in the resource ledger that has an active resour
    diff <(sort <evidence>/hetzner-before.jsonl) <(sort <evidence>/hetzner-after.jsonl)
    ```
 
-   Result: The only new line is the Hetzner network of Horizon, if the ledger records it as kept.
+   Result: Each new line is a kept Hetzner network of Horizon or a resource that
+   X01 step 5 records as not owned by this run.
 
 ### 6.3 X03 — Remove the test tailnet key and the test tailnet nodes
 
@@ -396,7 +410,7 @@ Do steps 5 to 12 for each cloud in the resource ledger that has an active resour
    diff <(sort <evidence>/runpod-before.jsonl) <(sort <evidence>/runpod-after.jsonl)
    ```
 
-   Result: The output is empty.
+   Result: Each new line is a resource that X01 step 5 records as not owned by this run.
 
 ## 7. Pass criteria
 

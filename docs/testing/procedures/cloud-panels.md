@@ -335,7 +335,16 @@ The cleanup of this procedure does X01 to X05.
 
    Result: `<run>` contains no credential file. Keep `<evidence>` outside `<run>`.
 
-7. Stop the rootless Docker daemon of this run.
+7. Make sure that `<docker-pid>` is still the Docker daemon of this run.
+
+   ```sh
+   ps -o pid=,args= -p <docker-pid>
+   ```
+
+   Result: The command line names `dockerd` and `<docker-data>`. If it does
+   not, do not stop the process. Find the daemon of this run by its data root.
+
+8. Stop the rootless Docker daemon of this run.
 
    ```sh
    kill <docker-pid>
@@ -343,7 +352,7 @@ The cleanup of this procedure does X01 to X05.
 
    Result: The daemon stops its containers and exits.
 
-8. Make sure that the daemon exited.
+9. Make sure that the daemon exited.
 
    ```sh
    ps -o pid=,comm= -p <docker-pid>
@@ -354,13 +363,13 @@ The cleanup of this procedure does X01 to X05.
    > **CAUTION:** DELETE ONLY THE DOCKER DATA ROOT OF THIS RUN. Other Docker data
    > roots can contain images and volumes of other people.
 
-9. Delete the Docker data root and the socket directory of this run.
+10. Delete the Docker data root and the socket directory of this run.
 
-   ```sh
-   rootlesskit rm -rf <docker-data> && rm -rf <run>/docker
-   ```
+    ```sh
+    rootlesskit rm -rf <docker-data> && rm -rf <run>/docker
+    ```
 
-   Result: `<run>` contains no Docker data.
+    Result: `<run>` contains no Docker data.
 
 ## 9. Record of results
 

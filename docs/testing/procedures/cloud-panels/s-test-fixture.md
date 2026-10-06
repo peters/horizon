@@ -159,19 +159,24 @@ child is the frozen candidate.
 
    Result: The launcher copy starts an unlocked keyring with the candidate.
 
-8. Start the persistent launcher with a new state directory.
+8. Look for x11vnc on the host.
+
+   ```sh
+   command -v x11vnc
+   ```
+
+   Result: If the output is empty, the next step needs `--tools <tools-root>`
+   with an unpacked tools root that contains x11vnc.
+
+9. Start the persistent launcher with a new state directory.
 
    ```sh
    python3 <run>/launcher/serve.py --horizon <run>/bin/horizon \
-     --native-view --state <run>/fixture
+     --native-view --state <run>/fixture [--tools <tools-root>]
    ```
 
    Result: The output shows a `vnc_address`. The fixture writes `lab.json` and
-   `target.json` in `<state>`.
-
-9. If x11vnc is not on the host, add `--tools <tools-root>` to the command in step 8.
-
-   Result: The fixture uses x11vnc from the unpacked tools root.
+   `target.json` in `<state>`. If the start fails, use a new state directory for the next start.
 
 ### 6.3 S03 — Show the fixture in a Device panel
 
@@ -235,7 +240,7 @@ child is the frozen candidate.
 
 The candidate keeps tailnet auth keys in the Secret Service. The fixture has its
 own D-Bus, so the keyring of the operator is not available. Do steps 1 to 4
-before the first start of the launcher in S02 step 8. The launcher refuses a
+before the first start of the launcher in S02 step 9. The launcher refuses a
 state directory that exists, so a later restart needs a new state directory.
 
 1. Make a synthetic password for the keyring of the fixture.
