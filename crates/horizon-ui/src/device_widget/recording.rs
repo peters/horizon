@@ -215,7 +215,7 @@ impl DeviceUiState {
             });
             ui.ctx().request_repaint_after(Duration::from_millis(250));
         } else {
-            let can_record = interactive && matches!(self.status, super::session::Status::Connected);
+            let can_record = interactive && self.has_current_desktop_frame();
             if crate::icon_button::icon_button(ui, can_record, "Record video", |painter, rect, _color| {
                 crate::icon_button::paint_record(painter, rect, can_record);
             })

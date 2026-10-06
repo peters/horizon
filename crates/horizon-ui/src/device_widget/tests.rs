@@ -37,35 +37,63 @@ fn click_events(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
     ]
 }
 
+fn toolbar_labels(state: &mut DeviceUiState, interactive: bool) -> Vec<(String, bool)> {
+    let device = fixture_device();
+    crate::test_egui::accesskit_labels(|ui| {
+        state.show(ui, &device, interactive);
+    })
+}
+
+fn icon_disabled(labels: &[(String, bool)], name: &str) -> bool {
+    labels
+        .iter()
+        .find(|(label, _)| label == name)
+        .map_or_else(|| panic!("missing {name} in {labels:?}"), |(_, disabled)| *disabled)
+}
+
+fn ready_viewer() -> DeviceUiState {
+    let image = ColorImage::filled([4, 4], egui::Color32::GREEN);
+    DeviceUiState {
+        initialized: true,
+        status: Status::Connected,
+        session: Some(Session::pending_frame(
+            image.clone(),
+            image,
+            DeviceViewOptions::default(),
+        )),
+        ..DeviceUiState::default()
+    }
+}
+
 #[test]
-fn recording_icon_is_enabled_only_while_connected_and_interactive() {
-    let labels_for = |status, interactive| {
-        let mut state = DeviceUiState {
-            status,
-            ..DeviceUiState::default()
-        };
-        crate::test_egui::accesskit_labels(|ui| {
-            state.recording_controls(ui, interactive);
-        })
+fn desktop_icons_stay_disabled_until_the_current_frame_exists() {
+    let mut stopped = DeviceUiState {
+        initialized: true,
+        status: Status::Stopped,
+        ..DeviceUiState::default()
     };
-    let disconnected = labels_for(super::session::Status::Stopped, true);
-    assert!(
-        disconnected
-            .iter()
-            .any(|(label, disabled)| label == "Record video" && *disabled)
-    );
-    let connected = labels_for(super::session::Status::Connected, true);
-    assert!(
-        connected
-            .iter()
-            .any(|(label, disabled)| label == "Record video" && !disabled)
-    );
-    let inactive = labels_for(super::session::Status::Connected, false);
-    assert!(
-        inactive
-            .iter()
-            .any(|(label, disabled)| label == "Record video" && *disabled)
-    );
+    let stopped_labels = toolbar_labels(&mut stopped, true);
+    assert!(icon_disabled(&stopped_labels, "Copy screenshot"));
+    assert!(icon_disabled(&stopped_labels, "Record video"));
+
+    let mut waiting = DeviceUiState {
+        initialized: true,
+        status: Status::Connected,
+        ..DeviceUiState::default()
+    };
+    let waiting_labels = toolbar_labels(&mut waiting, true);
+    assert!(icon_disabled(&waiting_labels, "Copy screenshot"));
+    assert!(icon_disabled(&waiting_labels, "Record video"));
+
+    let mut ready = ready_viewer();
+    let ready_labels = toolbar_labels(&mut ready, true);
+    assert!(!icon_disabled(&ready_labels, "Copy screenshot"));
+    assert!(!icon_disabled(&ready_labels, "Record video"));
+
+    let mut inactive = ready_viewer();
+    let inactive_labels = toolbar_labels(&mut inactive, false);
+    assert!(icon_disabled(&inactive_labels, "Copy screenshot"));
+    assert!(icon_disabled(&inactive_labels, "Record video"));
 }
 
 fn patterned_desktop() -> ColorImage {

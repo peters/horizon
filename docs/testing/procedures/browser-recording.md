@@ -51,9 +51,13 @@ It tests the camera, record, and stop icons, pause and resume, and the completed
 
 2. Open a page that produces a frame.
 
-   Result: The camera is bright. Its hover text names the copy action.
+   Result: The camera is bright.
 
-3. Put the pointer on the record icon.
+3. Put the pointer on the camera icon.
+
+   Result: The hover text names the copy action.
+
+4. Put the pointer on the record icon.
 
    Result: The hover text names the WebM recording.
 

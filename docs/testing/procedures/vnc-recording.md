@@ -50,19 +50,31 @@ It tests access control, background capture, file completion, and temporary stor
 
 ### VNC-VIDEO-01 — UI capture
 
-1. Click the record icon in the candidate's Device panel. The hover text names the recording limits.
+1. Put the pointer on the record icon.
 
-   Result: The status says **Recording VNC desktop**, and the stop icon is shown.
+   Result: The hover text names the recording limits.
 
-2. Change the synthetic content for five seconds.
-3. Click the stop icon.
-4. Wait for the frame count and the clipboard icon. The hover text names Copy video path and the private recording file.
-5. Copy the path and play the file.
+2. Click the record icon.
+
+   Result: The status says **Recording VNC desktop**. The stop icon is shown.
+
+3. Put the pointer on the stop icon.
+
+   Result: The hover text says **Stop recording**.
+
+4. Change the synthetic content for five seconds.
+5. Click the stop icon.
+6. Wait until the frame count and the clipboard icon are shown.
+7. Put the pointer on the clipboard icon.
+
+   Result: The hover text names Copy video path and the private recording file.
+
+8. Copy the path and play the file.
 
    Result: The file shows the full remote desktop in WebM format without audio.
    Its frames show the changes in the correct order.
 
-6. Start another recording, resize the source, and change the panel's crop and scale.
+9. Start another recording, resize the source, and change the panel's crop and scale.
 
    Result: The recording continues. The panel controls do not crop the recording.
 
@@ -72,9 +84,23 @@ It tests access control, background capture, file completion, and temporary stor
 
    Result: The camera is dim. The record disc is dim.
 
-2. Connect the panel and wait until it shows the desktop.
+2. Connect the panel and look before the first desktop frame is on screen.
 
-   Result: The camera is bright. The record disc is rose. The camera hover text names copying the panel image. The record hover text names the recording limits.
+   Result: The camera is dim. The record disc is dim.
+
+   If the frame is on screen, continue at the next step.
+
+3. Wait until the panel shows the desktop.
+
+   Result: The camera is bright. The record disc is rose.
+
+4. Put the pointer on the camera icon.
+
+   Result: The hover text names the copy action.
+
+5. Put the pointer on the record icon.
+
+   Result: The hover text names the recording limits.
 
 ### VNC-VIDEO-02 — MCP and background capture
 
@@ -147,6 +173,7 @@ It tests access control, background capture, file completion, and temporary stor
 
 ## 7. Pass criteria
 
+- The camera and the record disc are dim until the session has a desktop frame.
 - UI and MCP use the same recorder.
 - Background capture works without panel rendering.
 - Unauthorized operations return no pixels or file paths.

@@ -78,6 +78,7 @@ shell commands, files, or other MCP servers.
   browser panel, and `device_panel` with `operation: screenshot` captures the
   full source desktop of a connected native VNC viewer. The camera icon on a
   browser or Device panel copies the same source pixels directly as an image to the host clipboard.
+  On a Device panel that camera, and the record icon, stay dim until the current session has a desktop frame.
   Native Fit, crop, scale and 1:1 controls do not alter the captured desktop.
   MCP requests accept `panel_id` and optional `copy_to_clipboard` (default false).
   Results return a private PNG `path`, original `width`/`height`, and
