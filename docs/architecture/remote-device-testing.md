@@ -230,6 +230,10 @@ export and explicitly retire owned evidence before the next run. The host does
 not automatically delete retained evidence. Provider recordings also remain on
 BrowserStack under its own retention policy.
 
+Use the terminal report's `report_path` to locate its archive. The archive UUID
+is separate from the run UUID. Keep a private export receipt with the original
+path, destination and file hashes before you retire a completed archive.
+
 Provider downloads have fixed trusted origins, bounded redirects/body sizes and
 one remaining timeout. Credentials never reach video CDNs. Known provider
 secrets and sensitive log lines are removed before private export; other
