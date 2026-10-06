@@ -7,6 +7,7 @@ mod frame;
 mod host;
 mod input;
 mod observation;
+mod recording;
 mod session;
 
 use std::time::Duration;
@@ -27,6 +28,7 @@ pub(super) const BACKGROUND_UPLOAD_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
 pub(crate) struct DeviceUiState {
+    recording: recording::Recording,
     pub(crate) screenshots: crate::screenshot::Screenshots,
     pub(crate) owner: Option<String>,
     pub(crate) host: host::HostState,
@@ -198,8 +200,11 @@ impl DeviceUiState {
         }
         self.absorb_updates(ui.ctx());
         let mut screenshots = std::mem::take(&mut self.screenshots);
-        screenshots.copy_button(ui, interactive && matches!(self.status, Status::Connected), || {
-            self.screenshot_image()
+        ui.horizontal_wrapped(|ui| {
+            screenshots.copy_button(ui, interactive && matches!(self.status, Status::Connected), || {
+                self.screenshot_image()
+            });
+            self.recording_controls(ui, interactive);
         });
         self.screenshots = screenshots;
         if self.desktop.is_none()
@@ -378,6 +383,7 @@ impl DeviceUiState {
     }
 
     pub(crate) fn reconnect(&mut self, ctx: &egui::Context, device: &DevicePanelState) {
+        self.recording.stop();
         self.initialized = true;
         self.connection_generation = self.connection_generation.saturating_add(1);
         self.image = ImageDisplay::default();

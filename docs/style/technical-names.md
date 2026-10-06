@@ -63,3 +63,11 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | reconcile | Compare the local record with the provider and correct the local record. |
 | squash-merge | Merge a pull request as one commit. |
 | freeze | Copy a candidate to a task-owned directory and record its hash. |
+
+## Video capture
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| WebM | The video file format used for browser and VNC capture. | — |
+| AV1 | The video codec used in a WebM recording. | — |
+| recording | A temporary video file from a panel's decoded image source. | — |
