@@ -17,6 +17,16 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | lane | One platform or provider path through a procedure, for example "Hetzner lane". | track, leg |
 | run | One execution of a procedure on one candidate. | pass (as a noun), session |
 | evidence | Screenshots, recordings, logs and hashes from a run. Keep private evidence out of the repository. | proof |
+| persistent launcher | A task-owned copy of the fixture that keeps its saved session. It runs the candidate without `--ephemeral`. | persistent fixture |
+| restart marker | The file `restart-request` in the state directory of the persistent launcher. When the candidate stops, the launcher finds the file and starts the candidate again. | restart flag |
+| fixture terminal | A local terminal panel of the candidate that is not in a cloud. Its commands run inside the fixture. | — |
+| worker shell | A Shell panel of a cloud. Its commands run on the worker. | remote terminal |
+| synthetic repository | A Git repository that a run makes. It contains only test content. | test repo |
+| resource ledger | A private file that records each provider resource that a run makes, with its ID. | inventory (for this file) |
+| operator | The person who runs the procedure and owns the provider accounts. | tester, user |
+| Secret Service | The D-Bus service that keeps the keys of applications on Linux, for example `gnome-keyring-daemon`. | keyring (as a service name) |
+| test tailnet | A tailnet that only tests use. | — |
+| contract marker | A line, for example `horizon-tailnet-contract=1`, that a worker image reports to show a function. | — |
 
 ## Horizon objects
 
@@ -60,3 +70,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | reconcile | Compare the local record with the provider and correct the local record. |
 | squash-merge | Merge a pull request as one commit. |
 | freeze | Copy a candidate to a task-owned directory and record its hash. |
+| bind | Make a host path available at a path inside the fixture. |
+| pin | Record a host key or a commit so that it cannot change. |
+| revoke | Remove the access that a credential gives at the provider or at the worker. |
+| forward | Connect a port on the worker to a device through the Local Network Bridge. |
