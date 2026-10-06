@@ -350,6 +350,37 @@ Do steps 8 to 15 for each cloud in the resource ledger that has an active resour
 
    Result: Its panels and sessions did not change.
 
+8. Look for the state directories of a second fixture from A06 or C03.
+
+   ```sh
+   ls -d <run>/fixture-repair <run>/fixture-unsaved 2>/dev/null
+   ```
+
+   Result: If the output is empty, this task is complete. A run that stopped in A06 or C03 can leave one.
+
+9. For each listed directory, find its Device panel with the `device_panel` operation `list`.
+
+   Result: You have the panel ID of the second fixture, if it has one.
+
+10. Send the `device_panel` operation `close` for that panel ID.
+
+    Result: The Device panel of the second fixture closes.
+
+11. In the terminal of the second launcher, press Ctrl-C.
+
+    Result: The second launcher stops its Xvfb, VNC and candidate.
+
+    > **CAUTION:** DELETE ONLY THE LISTED DIRECTORIES OF THE SECOND FIXTURES. Other
+    > directories can hold data of this run or of other people.
+
+12. Delete each listed directory.
+
+    ```sh
+    rm -r <run>/fixture-repair <run>/fixture-unsaved 2>/dev/null; ls -d <run>/fixture-* 2>/dev/null
+    ```
+
+    Result: The output shows only `<run>/fixture`.
+
 ### 6.5 X05 — Make sure that RunPod shows no test resources
 
 > **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file

@@ -485,11 +485,15 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
 
    Result: The output is the same value as the file on `smoke-r`.
 
-5. If RunPod refuses the tailnet or the connection fails, record the test as blocked.
+5. If the connection fails, record the test as fail with the error.
 
-   Result: The report gives the reason. RunPod is not yet qualified for tailnets.
+   Result: The report gives the error and the issue link.
 
-6. In the worker shell of `smoke-r`, stop the test server with Ctrl-C.
+6. If RunPod refuses the tailnet before the cloud starts, record the test as blocked.
+
+   Result: The report gives the text of the refusal.
+
+7. In the worker shell of `smoke-r`, stop the test server with Ctrl-C.
 
    Result: The server stops.
 
