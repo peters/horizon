@@ -62,6 +62,10 @@ const RESTORE_BUDGET: Duration = Duration::from_millis(750);
 /// Shortest status poll while playback is fast. Below this, a slow receiver
 /// and a lost reply look the same, so a thinner buffer restores at once.
 const MIN_STATUS_WAIT: Duration = Duration::from_millis(250);
+/// After the estimated deadline, a restore retry still waits this long. The
+/// command is already queued; a zero wait fails the session while the
+/// receiver may already have returned to normal speed.
+const ACK_WINDOW: Duration = Duration::from_millis(250);
 /// Attempts to return to normal speed before the session fails, so a receiver
 /// is never left running fast.
 const RESTORE_ATTEMPTS: u8 = 3;
@@ -565,6 +569,10 @@ impl Session {
     fn absorb_rate_status(&self, playback: &mut Playback, status: &MediaStatus, observed: Instant) {
         match status.player_state.as_str() {
             "PLAYING" => {
+                // This reply is not delivered again as an event. A stall that
+                // moved the session to Buffering has to see it here, or the
+                // poll never resumes.
+                self.observe_transport_state("PLAYING");
                 if let Some(since) = self.buffering_since.take() {
                     close_buffer(&mut playback.edge, observed.saturating_duration_since(since));
                     playback.sampled = false;
@@ -738,9 +746,10 @@ impl Session {
         if playback.unsupported {
             return Ok(());
         }
-        if !self.started.get() || *lock(&self.state) != LiveState::Playing {
-            // A stall report stops the poll. A faster rate still has to come down,
-            // or the receiver keeps eating the buffer with no restore deadline.
+        let state = lock(&self.state).clone();
+        if !polls_after_stall(self.started.get(), &state) {
+            // Not playing yet, or the session is already over. A faster rate
+            // still has to come down.
             playback.sampled = false;
             if self.started.get() && fastest(&playback) > 1.0 + 1e-3 {
                 return self.push_rate(media, playback, 1.0, 0);
@@ -748,7 +757,16 @@ impl Session {
             self.playback.set(playback);
             return Ok(());
         }
+        if state != LiveState::Playing {
+            // A stall moved us to Buffering. Keep polling: the next PLAYING
+            // reply is often only the status we ask for, not an event.
+            playback.sampled = false;
+            if fastest(&playback) > 1.0 + 1e-3 {
+                return self.push_rate(media, playback, 1.0, 0);
+            }
+        }
         if now < playback.next_check {
+            self.playback.set(playback);
             return Ok(());
         }
         playback.next_check = now + EDGE_POLL;
@@ -793,6 +811,7 @@ impl Session {
         let buffering_for = buffering_age(&mut open, status.player_state.as_str(), observed);
         self.buffering_since.set(open);
         let playing = status.player_state == "PLAYING";
+        self.observe_transport_state(status.player_state.as_str());
         // A polled pause is not playing, and `buffering_age` has already
         // cleared the timer. Judge the episode before the pause discards it.
         close_ended_buffer(&mut playback.edge, status.player_state.as_str(), lasted);
@@ -861,6 +880,15 @@ impl Session {
     }
 
     /// Playing, but the receiver has reported buffering for longer than the grace period.
+    /// A PLAYING reply, including one that is not replayed as an event, puts
+    /// the session back where the live-edge poll runs.
+    fn observe_transport_state(&self, player_state: &str) {
+        if player_state == "PLAYING" {
+            self.started.set(true);
+            self.set(LiveState::Playing);
+        }
+    }
+
     fn stalled(&self) -> bool {
         *lock(&self.state) == LiveState::Playing
             && self
@@ -973,12 +1001,20 @@ fn command_wait(playback: &Playback, commanded: f64, now: Instant) -> Duration {
         return if restoring { RESTORE_BUDGET } else { MIN_STATUS_WAIT };
     };
     if restoring {
-        return left.min(RESTORE_BUDGET);
+        // `left` is zero once the estimate has passed. Still wait for the
+        // acknowledgement: the command was queued before this timeout.
+        return left.min(RESTORE_BUDGET).max(ACK_WINDOW);
     }
     if left <= RESTORE_BUDGET {
         return Duration::ZERO;
     }
     left.saturating_sub(RESTORE_BUDGET).min(REQUEST_TIMEOUT)
+}
+
+/// Whether the live-edge poll still runs. A stall reports Buffering, and the
+/// recovery often arrives only as a later status reply.
+fn polls_after_stall(started: bool, state: &LiveState) -> bool {
+    started && matches!(state, LiveState::Playing | LiveState::Buffering)
 }
 
 /// How long the polled player has been buffering. Any other state closes the
@@ -1455,6 +1491,82 @@ mod catch_up_tests {
         assert!(restore <= RESTORE_BUDGET);
         assert!(restore < REQUEST_TIMEOUT);
         assert!(wait.saturating_add(restore) <= drain);
+    }
+
+    #[test]
+    fn a_restore_retry_after_the_deadline_still_waits_for_the_ack() {
+        let sampled = Instant::now();
+        let mut playback = paced(1.0, 0.21, sampled);
+        playback.threat = 1.08;
+        let speed = command_wait(&playback, 1.08, sampled);
+        let lost_at = sampled + speed;
+        assert!(!apply_rate_reply(
+            &mut playback,
+            1.08,
+            0,
+            RateAnswer::Unconfirmed,
+            lost_at
+        ));
+        let first = command_wait(&playback, 1.0, lost_at);
+        assert!(first >= ACK_WINDOW);
+        assert!(first <= RESTORE_BUDGET);
+        let retried_at = lost_at + first;
+        assert!(!apply_rate_reply(
+            &mut playback,
+            1.0,
+            0,
+            RateAnswer::Unconfirmed,
+            retried_at
+        ));
+        let second = command_wait(&playback, 1.0, retried_at);
+        assert!(second >= ACK_WINDOW);
+        assert!(second < REQUEST_TIMEOUT);
+        assert!(!apply_rate_reply(
+            &mut playback,
+            1.0,
+            1,
+            RateAnswer::Applied,
+            retried_at + second
+        ));
+        assert!((playback.edge.rate - 1.0).abs() < 1e-9);
+        assert!((playback.threat - 1.0).abs() < 1e-9);
+        assert!(playback.retry.is_none());
+    }
+
+    #[test]
+    fn a_stall_keeps_polling_until_a_playing_reply() {
+        assert!(polls_after_stall(true, &LiveState::Buffering));
+        assert!(polls_after_stall(true, &LiveState::Playing));
+        assert!(!polls_after_stall(false, &LiveState::Buffering));
+        assert!(!polls_after_stall(true, &LiveState::Ended));
+        assert!(!polls_after_stall(true, &LiveState::Failed(String::new())));
+    }
+
+    #[test]
+    fn a_playing_rate_reply_resumes_a_stall() {
+        let session = test_session();
+        session.started.set(true);
+        session.set(LiveState::Buffering);
+        session.buffering_since.set(Some(
+            Instant::now().checked_sub(Duration::from_secs(6)).expect("test clock"),
+        ));
+        let mut playback = Playback::new();
+        playback.edge.note_buffer(0.30);
+        let playing = MediaStatus {
+            media_session_id: 1,
+            player_state: "PLAYING".to_owned(),
+            idle_reason: None,
+            current_time: 1.0,
+        };
+        session.absorb_rate_status(&mut playback, &playing, Instant::now());
+        assert_eq!(*lock(&session.state), LiveState::Playing);
+        assert!(session.started.get());
+        assert!(session.buffering_since.get().is_none());
+        session.set(LiveState::Buffering);
+        session.observe_transport_state("PLAYING");
+        assert_eq!(*lock(&session.state), LiveState::Playing);
+        session.observe_transport_state("BUFFERING");
+        assert_eq!(*lock(&session.state), LiveState::Playing);
     }
 
     #[test]
