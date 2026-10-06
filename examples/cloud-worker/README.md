@@ -137,7 +137,8 @@ isolation launcher, as it starts the desktop services. The stock image starts
 agent isolation (`horizon-worker-tailnet isolate`) before the supervisor. The
 browser tools of an agent and the control service then use one browser runtime
 root, `/workspace/home/.horizon`, with one owner. The cloud browsers also run as
-UID 10001. Root writes nothing in that directory.
+UID 10001. Root writes no browser state in that directory. At worker start, root
+can only change the owner of its entries, as the next paragraphs tell.
 
 The control service makes browsers only for the agent sessions of the worker.
 The actor of the browser tools must be `horizon:cloud-<id>`, and
