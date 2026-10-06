@@ -778,9 +778,11 @@ impl Session {
             playback.sampled = false;
             return self.push_rate(media, playback, 1.0, 0);
         };
-        // Read the source position after the status call returns. A newest
-        // timestamp from before the call compared with the later receiver clock
-        // makes the lag look smaller than it is.
+        // Newest frame before the call. A buffer that opens during the wait
+        // keeps this lag; the timestamp after the reply has moved on with the
+        // source. The lag used for the rate decision is still read afterwards,
+        // or a slow reply makes the receiver look closer than it is.
+        let newest_at_send = stream.newest_media_time();
         let status = media.status_within(wait);
         let newest = stream.newest_media_time();
         let (Some(newest), Ok(Some(status))) = (newest, status) else {
@@ -812,6 +814,9 @@ impl Session {
         self.buffering_since.set(open);
         let playing = status.player_state == "PLAYING";
         self.observe_transport_state(status.player_state.as_str());
+        if !playing && let Some(opening) = note_open_lag(newest_at_send, status.current_time) {
+            playback.edge.note_buffer(opening);
+        }
         // A polled pause is not playing, and `buffering_age` has already
         // cleared the timer. Judge the episode before the pause discards it.
         close_ended_buffer(&mut playback.edge, status.player_state.as_str(), lasted);
@@ -937,23 +942,47 @@ fn note_sample(playback: &mut Playback, playing: bool, observed: Instant) -> Dur
     elapsed
 }
 
+/// Move the lag sample to `now`, subtracting what the current fastest rate
+/// ate since it was taken. The next rate then starts from that remainder.
+fn rebase_lag(playback: &mut Playback, now: Instant) {
+    let Some(lag) = playback.lag.filter(|lag| lag.is_finite()) else {
+        return;
+    };
+    let Some(from) = playback.lag_at else {
+        return;
+    };
+    let rate = fastest(playback);
+    let age = now.saturating_duration_since(from).as_secs_f64();
+    let eaten = if rate > 1.0 + 1e-3 { age * (rate - 1.0) } else { 0.0 };
+    playback.lag = Some(lag - eaten);
+    playback.lag_at = Some(now);
+}
+
 /// Fastest rate that may already be applied, confirmed or only sent.
 fn fastest(playback: &Playback) -> f64 {
     playback.threat.max(playback.edge.rate)
 }
 
-/// When the last lag sample runs out if `fastest` has been applied since it
-/// was taken. `None` when playback is not eating the buffer.
+/// When lag reaches the current target if `fastest` has been applied since
+/// the sample. `None` when playback is not eating the buffer. Stopping at
+/// zero would spend the headroom the target is there to keep.
 fn buffer_gone(playback: &Playback) -> Option<Instant> {
-    let lag = playback.lag.filter(|lag| lag.is_finite() && *lag > 0.0)?;
+    let lag = playback.lag.filter(|lag| lag.is_finite())?;
     let from = playback.lag_at?;
     let rate = fastest(playback);
     if rate <= 1.0 + 1e-3 {
         return None;
     }
-    let secs = lag / (rate - 1.0);
-    if !secs.is_finite() || secs <= 0.0 {
+    let headroom = lag - playback.edge.target;
+    if !headroom.is_finite() {
         return None;
+    }
+    if headroom <= 0.0 {
+        return Some(from);
+    }
+    let secs = headroom / (rate - 1.0);
+    if !secs.is_finite() || secs <= 0.0 {
+        return Some(from);
     }
     // An unbounded lag does not fit in `Duration`. Past the ordinary request
     // timeout the exact instant no longer changes the cap.
@@ -965,7 +994,7 @@ fn buffer_gone(playback: &Playback) -> Option<Instant> {
     from.checked_add(span)
 }
 
-/// Wall time left before the buffer sampled in `playback` is gone.
+/// Wall time left before lag reaches the target.
 fn time_left(playback: &Playback, now: Instant) -> Option<Duration> {
     buffer_gone(playback).map(|gone| gone.saturating_duration_since(now))
 }
@@ -1103,6 +1132,10 @@ fn apply_rate_reply(playback: &mut Playback, commanded: f64, failures: u8, answe
     let restoring = (commanded - 1.0).abs() <= 1e-3;
     match answer {
         RateAnswer::Applied => {
+            // The lag sample was eaten at the previous fastest rate. Rebase it
+            // before recording a slower one, or the next poll treats the whole
+            // wait as if the slower rate had already been applied.
+            rebase_lag(playback, now);
             playback.edge.rate = commanded;
             playback.threat = commanded;
             playback.retry = None;
@@ -1431,20 +1464,27 @@ mod catch_up_tests {
 
     #[test]
     fn a_fast_status_poll_leaves_time_to_restore() {
-        // 0.21 s of lag at 1.08× is gone in about 2.6 s. The poll must end
-        // with the restore budget still unused.
+        // One second of lag at 1.5×, aiming at 0.15 s, leaves 1.7 s. The poll
+        // must end with the restore budget still unused, and with the target
+        // still ahead.
         let now = Instant::now();
-        let fast = paced(1.08, 0.21, now);
+        let mut fast = paced(1.5, 1.0, now);
+        fast.edge.target = 0.15;
         let wait = status_wait(&fast, now).expect("poll");
-        let drain = Duration::from_secs_f64(0.21 / 0.08);
+        let until_target = Duration::from_secs_f64((1.0 - 0.15) / 0.5);
         assert!(wait < REQUEST_TIMEOUT);
-        assert!(wait.saturating_add(RESTORE_BUDGET) <= drain);
+        assert!(wait.saturating_add(RESTORE_BUDGET) <= until_target);
         assert_eq!(status_wait(&paced(1.0, 0.40, now), now), Some(REQUEST_TIMEOUT));
         let mut unknown = Playback::new();
         unknown.edge.rate = 1.08;
         unknown.threat = 1.08;
         assert_eq!(status_wait(&unknown, now), Some(MIN_STATUS_WAIT));
         assert!(status_wait(&paced(1.5, 0.20, now), now).is_none());
+        // 0.21 s at 1.08× with a 0.15 s target is only the restore budget.
+        // Polling would spend the headroom before normal speed is requested.
+        let mut near = paced(1.08, 0.21, now);
+        near.edge.target = 0.15;
+        assert!(status_wait(&near, now).is_none());
         let restore = command_wait(&fast, 1.0, now);
         assert!(restore <= RESTORE_BUDGET);
         assert!(restore < REQUEST_TIMEOUT);
@@ -1452,41 +1492,42 @@ mod catch_up_tests {
 
     #[test]
     fn an_aged_fast_sample_shortens_the_status_poll() {
-        // 500 ms later the same 0.21 s sample has 500 ms less life. A lost
-        // reply plus the restore budget must still finish inside that life.
+        // 500 ms later the same sample has 500 ms less life above the target.
         let sampled = Instant::now();
-        let playback = paced(1.08, 0.21, sampled);
+        let mut playback = paced(1.5, 1.0, sampled);
+        playback.edge.target = 0.15;
         let later = sampled + Duration::from_millis(500);
         let wait = status_wait(&playback, later).expect("poll");
-        let drain = Duration::from_secs_f64(0.21 / 0.08);
+        let until_target = Duration::from_secs_f64((1.0 - 0.15) / 0.5);
         assert!(
             Duration::from_millis(500)
                 .saturating_add(wait)
                 .saturating_add(RESTORE_BUDGET)
-                <= drain
+                <= until_target
         );
     }
 
     #[test]
     fn a_lost_near_edge_speed_up_leaves_time_to_restore() {
         let sampled = Instant::now();
-        let mut playback = paced(1.0, 0.21, sampled);
-        playback.threat = playback.threat.max(1.08);
-        let wait = command_wait(&playback, 1.08, sampled);
-        let drain = Duration::from_secs_f64(0.21 / 0.08);
+        let mut playback = paced(1.0, 1.0, sampled);
+        playback.edge.target = 0.15;
+        playback.threat = playback.threat.max(1.5);
+        let wait = command_wait(&playback, 1.5, sampled);
+        let drain = Duration::from_secs_f64((1.0 - 0.15) / 0.5);
         assert!(wait < REQUEST_TIMEOUT);
         assert!(wait.saturating_add(RESTORE_BUDGET) <= drain);
 
         let lost_at = sampled + wait;
         assert!(!apply_rate_reply(
             &mut playback,
-            1.08,
+            1.5,
             0,
             RateAnswer::Unconfirmed,
             lost_at
         ));
         assert!((playback.edge.rate - 1.0).abs() < 1e-9);
-        assert!((playback.threat - 1.08).abs() < 1e-9);
+        assert!((playback.threat - 1.5).abs() < 1e-9);
         let restore = command_wait(&playback, 1.0, lost_at);
         assert!(restore <= RESTORE_BUDGET);
         assert!(restore < REQUEST_TIMEOUT);
@@ -1531,6 +1572,47 @@ mod catch_up_tests {
         assert!((playback.edge.rate - 1.0).abs() < 1e-9);
         assert!((playback.threat - 1.0).abs() < 1e-9);
         assert!(playback.retry.is_none());
+    }
+
+    #[test]
+    fn a_slower_rate_does_not_rewrite_the_lag_already_eaten() {
+        // 0.90 s at 1.5×, then 1.08× acknowledged a second later. The second
+        // ate 0.50 s, so 0.40 s remains. A poll 250 ms after that has 4.75 s
+        // until empty at 1.08×, and less than that until the 0.15 s target.
+        let sampled = Instant::now();
+        let mut playback = paced(1.5, 0.90, sampled);
+        playback.edge.target = 0.15;
+        let acked = sampled + Duration::from_secs(1);
+        assert!(!apply_rate_reply(&mut playback, 1.08, 0, RateAnswer::Applied, acked));
+        assert!((playback.edge.rate - 1.08).abs() < 1e-9);
+        assert!((playback.threat - 1.08).abs() < 1e-9);
+        let left = playback.lag.expect("rebased");
+        assert!((left - 0.40).abs() < 1e-6);
+        let poll = acked + Duration::from_millis(250);
+        let wait = status_wait(&playback, poll).expect("poll");
+        let true_left = Duration::from_secs_f64(4.75);
+        assert!(wait.saturating_add(RESTORE_BUDGET) <= true_left);
+        assert!(wait < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_late_buffer_reply_keeps_the_opening_lag() {
+        let mut edge = edge::Edge {
+            target: 0.25,
+            floor: 0.15,
+            ..edge::Edge::default()
+        };
+        // Newest frame at the request, minus the stopped receiver clock.
+        let opening = note_open_lag(Some(10.30), 10.0).expect("opening");
+        assert!((opening - 0.30).abs() < 1e-9);
+        edge.note_buffer(opening);
+        let next = edge.step(edge::Sample {
+            lag: 0.90,
+            buffering_for: Some(Duration::from_millis(600)),
+            elapsed: Duration::from_millis(600),
+        });
+        assert!((next.episode_lag.expect("opening kept") - 0.30).abs() < 1e-9);
+        assert!((next.target - 0.30).abs() < 1e-9);
     }
 
     #[test]
