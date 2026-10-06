@@ -417,6 +417,12 @@ Repeated creation is not recovery.
 Unknown or missing ownership causes refusal.
 Reconciliation stops sessions and services before it retires uploads.
 
+Completed provider history retains 32 unreferenced records per owner, ordered by creation time.
+Active controller entries and unfinished cleanup remain protected.
+Local guardian history retains its separate directory-first retirement rule.
+Uncertain records and foreign owners remain unchanged.
+A setup failure reports confirmed cleanup only after its exact cleanup acknowledgement.
+
 Keep the shared journal and registry on the same qualified filesystem.
 The registry records device and inode identities.
 Copied state, changed device numbers or a missing root causes refusal.

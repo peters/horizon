@@ -20,6 +20,7 @@ struct Fake {
     first_two: Option<Barrier>,
     fail_create: Option<Box<dyn Fn(Instant) -> Error + Send + Sync>>,
     failed_creates: AtomicUsize,
+    create_cleanup_confirmed: bool,
 }
 impl Runtime for Fake {
     fn build(&self, platform: Platform, _control: &Control) -> Result<()> {
@@ -30,10 +31,13 @@ impl Runtime for Fake {
         self.uploads.lock().unwrap().push(platform);
         Ok(Uuid::new_v4())
     }
-    fn create(&self, index: usize, _app: Uuid, deadline: Instant) -> Result<Uuid> {
+    fn create(&self, index: usize, _app: Uuid, deadline: Instant) -> Creation {
         if let Some(failure) = &self.fail_create {
             self.failed_creates.fetch_add(1, Ordering::SeqCst);
-            return Err(failure(deadline));
+            return Err(CreationFailure {
+                error: failure(deadline),
+                cleanup_confirmed: self.create_cleanup_confirmed,
+            });
         }
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.maximum.fetch_max(active, Ordering::SeqCst);
@@ -272,7 +276,10 @@ fn cancelled_admission_does_not_send_another_native_post() {
     let app = actor.upload(Platform::Ios, Duration::from_secs(10)).unwrap();
     let control = Control::new(Duration::from_secs(5)).unwrap();
     control.cancel();
-    assert_eq!(allocate(&actor, &control, 0, app.id), Err(Error::Cancelled));
+    assert_eq!(
+        allocate(&actor, &control, 0, app.id).map_err(|failure| failure.error),
+        Err(Error::Cancelled)
+    );
     assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 0);
     actor.release_upload(app.id).unwrap();
 }
@@ -324,9 +331,12 @@ fn deferred_admission_obeys_mid_attempt_cancellation_and_the_original_deadline()
                 }
                 Error::AdmissionDeferred
             })),
+            create_cleanup_confirmed: true,
             ..Fake::default()
         };
-        let error = allocate(&runtime, &control, 0, Uuid::new_v4()).unwrap_err();
+        let failure = allocate(&runtime, &control, 0, Uuid::new_v4()).unwrap_err();
+        assert!(failure.cleanup_confirmed);
+        let error = failure.error;
         assert_eq!(
             error,
             if cancel {
@@ -347,7 +357,7 @@ fn an_uncertain_native_post_is_never_retried_by_the_matrix_runner() {
     };
     let control = Control::new(Duration::from_secs(5)).unwrap();
     assert_eq!(
-        allocate(&runtime, &control, 0, Uuid::new_v4()),
+        allocate(&runtime, &control, 0, Uuid::new_v4()).map_err(|failure| failure.error),
         Err(horizon_app_testing::Error::AllocationUncertain.into())
     );
     assert_eq!(runtime.failed_creates.load(Ordering::SeqCst), 1);
@@ -628,4 +638,81 @@ fn oversized_evidence_run_is_rejected_before_any_resource_operation() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn cleaned_setup_refusal_keeps_the_original_error_and_reports_confirmed_cleanup() {
+    let (fixture, actor) = crate::actor::tests::actor("http://[::1]:{tunnel.port.backend}");
+    let report = run(&actor, &Control::new(Duration::from_secs(30)).unwrap(), capture, |_| {
+        Ok(())
+    })
+    .unwrap();
+    let device = &report.devices[0];
+    assert!(
+        device.error.as_deref().unwrap().contains("tunnel_port_refused"),
+        "{:?} builds {:?}",
+        device.error,
+        report.builds.iter().map(|build| &build.error).collect::<Vec<_>>()
+    );
+    assert!(device.cleanup_confirmed);
+    assert!(device.allocations.is_empty());
+    assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.fake.upload_deletes.load(Ordering::SeqCst), 1);
+    assert!(
+        fixture
+            .workspace
+            .journal()
+            .pending(fixture.workspace.owner())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn creation_cleanup_outcomes_are_reported_without_replaying_failed_creation() {
+    for confirmed in [false, true] {
+        let runtime = Fake {
+            fail_create: Some(Box::new(|_| Error::CleanupUncertain)),
+            create_cleanup_confirmed: confirmed,
+            ..Fake::default()
+        };
+        let recipes = [recipe()];
+        let plan = Plan {
+            targets: targets(),
+            recipes: &recipes,
+            parallel: 2,
+            screenshots: false,
+            video: false,
+            logs_on_failure: false,
+        };
+        let report = plan
+            .execute(
+                &runtime,
+                &Control::new(Duration::from_secs(10)).unwrap(),
+                capture,
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert!(
+            report
+                .devices
+                .iter()
+                .all(|device| device.cleanup_confirmed == confirmed && device.error.is_some())
+        );
+        assert_eq!(runtime.failed_creates.load(Ordering::SeqCst), 3);
+    }
+}
+
+#[test]
+fn uncertain_deferred_creation_is_not_retried_or_reported_as_clean() {
+    let runtime = Fake {
+        fail_create: Some(Box::new(|_| Error::AdmissionDeferred)),
+        ..Fake::default()
+    };
+    let control = Control::new(Duration::from_secs(5)).unwrap();
+    let failure = allocate(&runtime, &control, 0, Uuid::new_v4()).unwrap_err();
+    assert_eq!(failure.error, Error::AdmissionDeferred);
+    assert!(!failure.cleanup_confirmed);
+    assert_eq!(runtime.failed_creates.load(Ordering::SeqCst), 1);
 }

@@ -107,7 +107,7 @@ pub(crate) struct Fake {
     before_driver_return: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     media_calls: AtomicUsize,
     uploads: AtomicUsize,
-    upload_deletes: AtomicUsize,
+    pub(crate) upload_deletes: AtomicUsize,
     lost_upload: AtomicBool,
     after_upload: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     before_capacity: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -878,4 +878,165 @@ fn explicit_host_shutdown_closes_native_resources_while_other_arc_owners_remain(
     ));
     actor.shutdown().unwrap();
     assert_eq!(fixture.fake.transport.deletes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn repeated_provider_admission_retains_bounded_history_and_live_allocations() {
+    let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+    let original = actor.upload(Platform::Ios, Duration::from_mins(30)).unwrap();
+    let session = actor.create(0, original.id, Duration::from_mins(30)).unwrap();
+    for index in 0..520 {
+        std::fs::write(
+            fixture.root.path().join("App.ipa"),
+            format!("PK\x03\x04synthetic-{index}"),
+        )
+        .unwrap();
+        let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
+        actor.release_upload(app.id).unwrap();
+    }
+    actor.prune_completed_provider().unwrap();
+    assert_eq!(fixture.fake.uploads.load(Ordering::SeqCst), 521);
+    assert_eq!(
+        fixture
+            .workspace
+            .journal()
+            .completed(fixture.workspace.owner())
+            .unwrap()
+            .len(),
+        32
+    );
+    assert_eq!(
+        fixture
+            .workspace
+            .journal()
+            .status(fixture.workspace.owner(), session.id)
+            .unwrap()
+            .phase,
+        Phase::Active
+    );
+    assert!(actor.snapshot(session.id).is_ok());
+    actor.close(session.id).unwrap();
+    actor.release_upload(original.id).unwrap();
+}
+
+#[test]
+fn provider_retention_preserves_held_cleanup_foreign_and_uncertain_records() {
+    let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+    let owner = fixture.workspace.owner();
+    let root = fixture.root.path().canonicalize().unwrap();
+    let journal = fixture.workspace.journal();
+    let app = actor.upload(Platform::Ios, Duration::from_secs(120)).unwrap();
+    let session = actor.create(0, app.id, Duration::from_secs(120)).unwrap();
+    // Provider closure is durable, but local cleanup remains pending in this retained lane.
+    journal.confirm_released(owner, session.id).unwrap();
+    {
+        let lane = actor.lane(session.id).unwrap();
+        let mut lane = lane.lock().unwrap();
+        lane.driver.as_mut().unwrap().close().unwrap();
+        lane.cleanup = Cleanup::Acknowledged;
+    }
+    let uncertain = journal
+        .start(owner, &root, Kind::Upload, Duration::from_secs(120))
+        .unwrap();
+    journal.uncertain(owner, uncertain.id).unwrap();
+    let foreign_owner = Uuid::new_v4();
+    let foreign = journal
+        .start(foreign_owner, &root, Kind::Upload, Duration::from_secs(120))
+        .unwrap();
+    journal.confirm_released(foreign_owner, foreign.id).unwrap();
+    for _ in 0..40 {
+        let record = journal
+            .start(owner, &root, Kind::Upload, Duration::from_secs(120))
+            .unwrap();
+        journal.confirm_released(owner, record.id).unwrap();
+    }
+    actor.prune_completed_provider().unwrap();
+    assert_eq!(journal.status(owner, session.id).unwrap().phase, Phase::Complete);
+    assert_eq!(journal.status(owner, uncertain.id).unwrap().phase, Phase::Uncertain);
+    assert_eq!(
+        journal.status(foreign_owner, foreign.id).unwrap().phase,
+        Phase::Complete
+    );
+    actor.close(session.id).unwrap();
+    actor.release_upload(app.id).unwrap();
+    journal.confirm_released(owner, uncertain.id).unwrap();
+}
+
+#[test]
+fn provider_retention_uses_legacy_completed_records_after_actor_restart() {
+    let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+    let contract = actor.contract.clone();
+    let matrix = actor.matrix.clone();
+    drop(actor);
+    let Fixture { workspace, fake, root } = fixture;
+    let owner = workspace.owner();
+    let path = root.path().canonicalize().unwrap();
+    for index in 0..500 {
+        let kind = if index % 2 == 0 { Kind::Upload } else { Kind::Session };
+        let record = workspace
+            .journal()
+            .start(owner, &path, kind, Duration::from_secs(120))
+            .unwrap();
+        workspace.journal().confirm_released(owner, record.id).unwrap();
+    }
+    drop(workspace);
+    let journal = Arc::new(horizon_app_runtime::journal::Journal::open(&path.join("private"), &account()).unwrap());
+    let workspace = Arc::new(Workspace::open(journal, owner, &path).unwrap());
+    let worker = path.join("synthetic-guardian.py");
+    let digest = Sha256::digest(std::fs::read(&worker).unwrap())
+        .iter()
+        .fold(String::new(), |mut text, byte| {
+            let _ = write!(text, "{byte:02x}");
+            text
+        });
+    let local = Arc::new(
+        Local::new(
+            Arc::clone(&workspace),
+            &account(),
+            &path,
+            Configuration {
+                process_worker: worker.clone(),
+                tunnel_worker: worker.clone(),
+                tunnel_binary: worker,
+                tunnel_sha256: digest,
+                state: path.join("local"),
+            },
+        )
+        .unwrap(),
+    );
+    let actor = Actor::from_backend(Arc::clone(&workspace), fake, local, contract, matrix);
+    let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
+    assert_eq!(workspace.journal().completed(owner).unwrap().len(), 32);
+    actor.release_upload(app.id).unwrap();
+}
+
+#[test]
+fn retired_session_tombstones_do_not_remove_verified_media_references() {
+    let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+    let owner = fixture.workspace.owner();
+    let app = actor.upload(Platform::Ios, Duration::from_secs(120)).unwrap();
+    let session = actor.create(0, app.id, Duration::from_secs(120)).unwrap();
+    actor.close(session.id).unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+    let root = fixture.root.path().canonicalize().unwrap();
+    for _ in 0..40 {
+        let record = fixture
+            .workspace
+            .journal()
+            .start(owner, &root, Kind::Session, Duration::from_secs(120))
+            .unwrap();
+        fixture.workspace.journal().confirm_released(owner, record.id).unwrap();
+    }
+    actor.prune_completed_provider().unwrap();
+    assert!(fixture.workspace.journal().status(owner, session.id).is_err());
+    assert!(
+        actor
+            .media_with_timeout(
+                session.id,
+                horizon_app_provider::media::Kind::Video,
+                Duration::from_secs(2)
+            )
+            .is_ok()
+    );
+    actor.release_upload(app.id).unwrap();
 }

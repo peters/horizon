@@ -48,10 +48,17 @@ impl Control {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CreationFailure {
+    error: Error,
+    cleanup_confirmed: bool,
+}
+type Creation = std::result::Result<Uuid, CreationFailure>;
+
 trait Runtime: Sync {
     fn build(&self, platform: Platform, control: &Control) -> Result<()>;
     fn upload(&self, platform: Platform, deadline: Instant) -> Result<Uuid>;
-    fn create(&self, index: usize, app: Uuid, deadline: Instant) -> Result<Uuid>;
+    fn create(&self, index: usize, app: Uuid, deadline: Instant) -> Creation;
     fn act(&self, session: Uuid, action: &Action) -> Result<Option<Uuid>>;
     fn screenshot(&self, session: Uuid) -> Result<Vec<u8>>;
     fn session_link(&self, _session: Uuid, _timeout: Duration) -> Result<String> {
@@ -77,8 +84,12 @@ impl Runtime for Actor {
     fn upload(&self, platform: Platform, deadline: Instant) -> Result<Uuid> {
         Ok(self.upload_until(platform, deadline)?.id)
     }
-    fn create(&self, index: usize, app: Uuid, deadline: Instant) -> Result<Uuid> {
-        Ok(self.create_until(index, app, deadline)?.id)
+    fn create(&self, index: usize, app: Uuid, deadline: Instant) -> Creation {
+        let (result, cleanup_confirmed) = self.create_until_outcome(index, app, deadline);
+        result.map(|session| session.id).map_err(|error| CreationFailure {
+            error,
+            cleanup_confirmed,
+        })
     }
     fn act(&self, session: Uuid, action: &Action) -> Result<Option<Uuid>> {
         if matches!(action, Action::Reset {}) {
@@ -104,12 +115,19 @@ impl Runtime for Actor {
     }
 }
 
-fn allocate(runtime: &impl Runtime, control: &Control, index: usize, app: Uuid) -> Result<Uuid> {
+fn allocate(runtime: &impl Runtime, control: &Control, index: usize, app: Uuid) -> Creation {
+    let clean = |error| CreationFailure {
+        error,
+        cleanup_confirmed: true,
+    };
     loop {
-        control.remaining()?;
+        control.remaining().map_err(clean)?;
         match runtime.create(index, app, control.deadline) {
-            Err(Error::AdmissionDeferred) => {
-                std::thread::sleep(control.remaining()?.min(Duration::from_millis(50)));
+            Err(CreationFailure {
+                error: Error::AdmissionDeferred,
+                cleanup_confirmed: true,
+            }) => {
+                std::thread::sleep(control.remaining().map_err(clean)?.min(Duration::from_millis(50)));
             }
             result => return result,
         }
@@ -364,20 +382,22 @@ impl Plan<'_> {
             provider_session_link: None,
             provider_link_error: None,
         };
-        let mut attempted = false;
-        let created = control.remaining().and_then(|_| {
-            let app = apps.get(&target.device.platform).ok_or(Error::ArtifactUnknown)?;
-            attempted = true;
-            allocate(runtime, control, target.matrix_index, *app)
-        });
+        let created = control
+            .remaining()
+            .and_then(|_| apps.get(&target.device.platform).copied().ok_or(Error::ArtifactUnknown))
+            .map_err(|error| CreationFailure {
+                error,
+                cleanup_confirmed: true,
+            })
+            .and_then(|app| allocate(runtime, control, target.matrix_index, app));
         match created {
             Ok(session) => {
                 report.session = Some(session);
                 report.allocations.push(session);
             }
             Err(error) => {
-                report.error = Some(error.to_string());
-                report.cleanup_confirmed = !attempted;
+                report.error = Some(error.error.to_string());
+                report.cleanup_confirmed = error.cleanup_confirmed;
             }
         }
         let mut owned = OwnedSession {

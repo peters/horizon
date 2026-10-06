@@ -236,6 +236,31 @@ impl Actor {
         }
         if failed { Err(Error::CleanupUncertain) } else { Ok(()) }
     }
+    fn prune_completed_provider(&self) -> Result<()> {
+        let _admission = self.admission.lock().map_err(|_| Error::Unavailable)?;
+        let mut uploads = self.uploads.lock().map_err(|_| Error::Unavailable)?;
+        let mut lanes = self.lanes.lock().map_err(|_| Error::Unavailable)?;
+        uploads.retain(|_, value| {
+            value
+                .try_lock()
+                .map_or(true, |value| value.cleanup != Cleanup::Complete)
+        });
+        lanes.retain(|_, value| {
+            value
+                .try_lock()
+                .map_or(true, |value| value.cleanup != Cleanup::Complete)
+        });
+        let protected = uploads.keys().chain(lanes.keys()).copied().collect::<BTreeSet<_>>();
+        let mut completed = self.workspace.journal().completed(self.workspace.owner())?;
+        completed
+            .retain(|record| matches!(record.kind, Kind::Upload | Kind::Session) && !protected.contains(&record.id));
+        completed.sort_by_key(|record| (record.created_seconds, record.id));
+        for record in completed.iter().take(completed.len().saturating_sub(32)) {
+            self.workspace.journal().retire(self.workspace.owner(), record.id)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn retain_run_evidence(&self) -> Result<crate::observations::Run<'_>> {
         self.observations.begin_run()
     }
@@ -246,6 +271,7 @@ impl Actor {
             return Err(Error::Cancelled);
         }
         self.expire()?;
+        self.prune_completed_provider()?;
         if !self.workspace.journal().pending(self.workspace.owner())?.is_empty() {
             return Err(Error::RunBusy);
         }
@@ -278,6 +304,7 @@ impl Actor {
             let mut artifact =
                 Artifact::capture_directory(&self.workspace.root_directory()?, &self.contract, platform)?;
             self.expire()?;
+            self.prune_completed_provider()?;
             let mut uploads = self.uploads.lock().map_err(|_| Error::Unavailable)?;
             uploads.retain(|_, upload| upload.lock().map_or(true, |upload| upload.cleanup != Cleanup::Complete));
             for upload in uploads.values() {
@@ -416,10 +443,21 @@ impl Actor {
         self.create_until(index, artifact, deadline(lifetime)?)
     }
     pub(crate) fn create_until(&self, index: usize, artifact: Uuid, until: Instant) -> Result<SessionHandle> {
-        self.audit.execute(None, "session_create", || {
+        self.create_until_outcome(index, artifact, until).0
+    }
+    pub(crate) fn create_until_outcome(
+        &self,
+        index: usize,
+        artifact: Uuid,
+        until: Instant,
+    ) -> (Result<SessionHandle>, bool) {
+        let mut cleanup_confirmed = true;
+        let result = self.audit.execute(None, "session_create", || {
+            self.prune_completed_provider()?;
             let app = self.uploaded(artifact)?;
-            self.create_app(index, app, until, false)
-        })
+            self.create_app(index, app, until, false, &mut cleanup_confirmed)
+        });
+        (result, cleanup_confirmed)
     }
     fn create_app(
         &self,
@@ -427,6 +465,7 @@ impl Actor {
         app: Arc<Mutex<Upload>>,
         until: Instant,
         retained: bool,
+        cleanup_confirmed: &mut bool,
     ) -> Result<SessionHandle> {
         let target = self
             .matrix
@@ -436,7 +475,7 @@ impl Actor {
             .device
             .clone();
         let declaration = self.contract.apps.get(&target.platform).ok_or(Error::Unavailable)?;
-        let lane = self.reserve_lane(index, target.platform, app, until, retained)?;
+        let lane = self.reserve_lane(index, target.platform, app, until, retained, cleanup_confirmed)?;
         let mut lane = lane.lock().map_err(|_| Error::Unavailable)?;
         let result = (|| {
             if self.stopping.load(std::sync::atomic::Ordering::Acquire) || lane.cleanup != Cleanup::Active {
@@ -522,10 +561,10 @@ impl Actor {
             if lane.attempted && lane.driver.is_none() {
                 self.workspace.journal().uncertain(self.workspace.owner(), lane.id)?;
             }
-            let cleaned = self.close_lane(&mut lane);
-            if cleaned.is_err() {
+            if self.close_lane(&mut lane).is_err() {
                 return Err(Error::CleanupUncertain);
             }
+            *cleanup_confirmed = true;
         }
         result
     }
@@ -536,6 +575,7 @@ impl Actor {
         app: Arc<Mutex<Upload>>,
         until: Instant,
         retained: bool,
+        cleanup_confirmed: &mut bool,
     ) -> Result<Arc<Mutex<Lane>>> {
         let _admission = self.admission.lock().map_err(|_| Error::Unavailable)?;
         if self.stopping.load(std::sync::atomic::Ordering::Acquire) {
@@ -558,6 +598,7 @@ impl Actor {
         }
         self.durable_active(upload.id, Kind::Upload)?;
         remaining(until)?;
+        *cleanup_confirmed = false;
         let operation = self.workspace.start(Kind::Session, remaining(until)?)?;
         upload.users.insert(operation.id);
         drop(upload);
@@ -580,6 +621,7 @@ impl Actor {
             self.workspace
                 .journal()
                 .confirm_released(self.workspace.owner(), operation.id)?;
+            *cleanup_confirmed = true;
             return Err(if error == horizon_app_runtime::Error::CapacityUnavailable {
                 Error::AdmissionDeferred
             } else {
@@ -803,6 +845,7 @@ impl Actor {
     }
     pub(crate) fn reset_for_run(&self, id: Uuid) -> Result<SessionHandle> {
         self.audit.execute(Some(id), "reset", || {
+            self.prune_completed_provider()?;
             let lane = self.lane(id)?;
             let mut lane = lane.lock().map_err(|_| Error::Unavailable)?;
             self.active(&mut lane)?;
@@ -817,7 +860,7 @@ impl Actor {
                 return Err(error);
             }
             drop(lane);
-            let result = self.create_app(index, Arc::clone(&app), until, true);
+            let result = self.create_app(index, Arc::clone(&app), until, true, &mut false);
             let mut upload = app.lock().map_err(|_| Error::Unavailable)?;
             upload.users.remove(&reset);
             if upload.handles.is_empty() {

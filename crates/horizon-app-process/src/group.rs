@@ -46,10 +46,15 @@ fn terminate_with(
 ) -> Result<()> {
     use rustix::process::Signal;
     let group = pid(child)?;
-    if rustix::process::getpgid(Some(group)).map_err(|_| Error::CleanupUncertain)? != group {
-        return Err(Error::CleanupUncertain);
+    exited(child)?; // Establish retained child ownership before any reusable-PID signalling.
+    match rustix::process::getpgid(Some(group)) {
+        Ok(actual) if actual == group => (),
+        // XNU no longer exposes a zombie's group through getpgid. A fresh positive
+        // WNOWAIT result keeps this exact child PID reserved until group cleanup.
+        #[cfg(target_os = "macos")]
+        Err(rustix::io::Errno::SRCH) if exited(child)? && mac_group::retained_leader(group)? => (),
+        _ => return Err(Error::CleanupUncertain),
     }
-    exited(child)?; // retain the waitable leader before any reusable-PID signalling
     child.stdin.take();
     acknowledge_signal(child, group, signal(group, Signal::TERM))?;
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -170,6 +175,69 @@ mod tests {
         }
         terminate(&mut child).unwrap();
     }
+    #[test]
+    fn an_exited_lone_leader_is_cleaned_before_its_reserved_pid_is_reaped() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !exited(&child).unwrap() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(exited(&child).unwrap());
+        terminate(&mut child).unwrap();
+    }
+
+    #[test]
+    fn an_exited_inherited_group_child_cannot_acknowledge_descendant_cleanup() {
+        use std::io::BufRead;
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "(trap '' TERM; exec sleep 60) & echo $!; exit 0"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut descendant = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut descendant)
+            .unwrap();
+        let descendant = rustix::process::Pid::from_raw(descendant.trim().parse().unwrap()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !exited(&child).unwrap() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let result = terminate_with(&mut child, |_, _| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        // Stop only the test-owned descendant, never its inherited shared group.
+        rustix::process::kill_process(descendant, rustix::process::Signal::KILL).unwrap();
+        child.wait().unwrap();
+        assert_eq!(result, Err(Error::CleanupUncertain));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_reaped_child_cannot_authorize_any_group_signal() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        child.wait().unwrap();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        assert_eq!(
+            terminate_with(&mut child, |_, _| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }),
+            Err(Error::CleanupUncertain)
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
     #[test]
     fn a_normal_child_cannot_authorize_signalling_an_unowned_group() {
         let mut child = Command::new("sleep").arg("60").spawn().unwrap();

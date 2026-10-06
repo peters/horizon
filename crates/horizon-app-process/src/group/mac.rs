@@ -4,7 +4,24 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub(super) fn cannot_execute(group: rustix::process::Pid) -> Result<bool> {
+    let number = group.as_raw_nonzero().get();
+    if let Some(bytes) = rows(number)? {
+        return parse(&bytes, number);
+    }
+    // Empty ps output is not evidence. Require a fresh positive no-group result.
+    match rustix::process::test_kill_process_group(group) {
+        Err(rustix::io::Errno::SRCH) => Ok(true),
+        _ => Err(Error::CleanupUncertain),
+    }
+}
+
+pub(super) fn retained_leader(group: rustix::process::Pid) -> Result<bool> {
     let group = group.as_raw_nonzero().get();
+    let bytes = rows(group)?.ok_or(Error::CleanupUncertain)?;
+    Ok(parse_state(&bytes, group)?.leader_zombie)
+}
+
+fn rows(group: i32) -> Result<Option<Vec<u8>>> {
     let mut child = Command::new("/bin/ps")
         .args(["-g", &group.to_string(), "-o", "pid=,pgid=,stat="])
         .env_clear()
@@ -42,27 +59,30 @@ pub(super) fn cannot_execute(group: rustix::process::Pid) -> Result<bool> {
         .map_err(|_| Error::CleanupUncertain)?
         .map_err(|_| Error::CleanupUncertain)?;
     if !success || bytes.is_empty() {
-        // The last orphan zombie can disappear between kill(0) and ps. Require a fresh
-        // positive no-group observation rather than treating empty/failed ps as proof.
-        return match rustix::process::test_kill_process_group(
-            rustix::process::Pid::from_raw(group).ok_or(Error::CleanupUncertain)?,
-        ) {
-            Err(rustix::io::Errno::SRCH) => Ok(true),
-            _ => Err(Error::CleanupUncertain),
-        };
+        return Ok(None);
     }
     if bytes.len() > 32768 {
         return Err(Error::CleanupUncertain);
     }
-    parse(&bytes, group)
+    Ok(Some(bytes))
+}
+
+struct State {
+    stopped: bool,
+    leader_zombie: bool,
 }
 
 fn parse(bytes: &[u8], group: i32) -> Result<bool> {
+    Ok(parse_state(bytes, group)?.stopped)
+}
+
+fn parse_state(bytes: &[u8], group: i32) -> Result<State> {
     let text = std::str::from_utf8(bytes).map_err(|_| Error::CleanupUncertain)?;
     if text.trim().is_empty() {
         return Err(Error::CleanupUncertain);
     }
     let mut stopped = true;
+    let mut leader_zombie = false;
     for line in text.lines() {
         let fields = line.split_whitespace().collect::<Vec<_>>();
         if fields.len() != 3
@@ -74,14 +94,26 @@ fn parse(bytes: &[u8], group: i32) -> Result<bool> {
         {
             return Err(Error::CleanupUncertain);
         }
-        stopped &= fields[2].starts_with('Z');
+        let zombie = fields[2].starts_with('Z');
+        stopped &= zombie;
+        leader_zombie |= fields[0].parse::<i32>().ok() == Some(group) && zombie;
     }
-    Ok(stopped)
+    Ok(State { stopped, leader_zombie })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zombie_leader_identity_does_not_hide_live_descendants() {
+        let state = parse_state(b"123 123 Z\n124 123 S\n", 123).unwrap();
+        assert!(state.leader_zombie);
+        assert!(!state.stopped);
+        assert!(!parse_state(b"124 123 Z\n", 123).unwrap().leader_zombie);
+        assert!(!parse_state(b"123 123 S\n", 123).unwrap().leader_zombie);
+        assert!(parse_state(b"123 456 Z\n", 123).is_err());
+    }
 
     #[test]
     fn only_positive_zombie_rows_can_acknowledge_the_exact_group() {
