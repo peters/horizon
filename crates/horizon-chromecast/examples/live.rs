@@ -134,7 +134,9 @@ fn run() -> Result<(), String> {
         if let Some(wait) = pts.checked_sub(started.elapsed()) {
             std::thread::sleep(wait);
         }
-        // Audio up to this video frame, so both tracks advance together.
+        // Video first: it sets the stream's time origin, which audio follows.
+        live.push_annexb(unit, pts, *keyframe);
+        // Then audio up to this video frame, so both tracks advance together.
         if let Some(frames) = &audio {
             while aac_frame * next_audio <= pts {
                 let index = usize::try_from(next_audio).map_err(|_| "stream too long")? % frames.len();
@@ -142,7 +144,6 @@ fn run() -> Result<(), String> {
                 next_audio += 1;
             }
         }
-        live.push_annexb(unit, pts, *keyframe);
         let state = live.state();
         if last_state.as_ref() != Some(&state) {
             println!("{:>6.1}s {state:?}", started.elapsed().as_secs_f32());
