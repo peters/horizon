@@ -28,6 +28,13 @@ cloud with agent isolation. It also makes sure of these conditions:
 - Platforms: Linux. Provider: Hetzner or RunPod.
 - The stock worker image starts agent isolation in each cloud. A custom image
   without agent isolation runs agents and the control service as root.
+- Use the browser tools only from an agent panel of the cloud. The control
+  service makes browsers only for the agent sessions in `/workspace/sessions`.
+  A browser MCP with another session ID gets `Browser creation deadline
+  expired`. This is not a failure of the candidate.
+- The test `test_agent_browser_create_starts_a_real_chromium_as_the_agent_lane`
+  in `examples/cloud-worker/test_browser_lane.py` starts a real Chromium as
+  UID 10001 without a cloud. CI runs it. This procedure tests the full worker.
 - This procedure does not test these functions:
   - Remote browsers of a provider, for example BrowserStack.
   - Codex and Grok panels. They use the same browser tools as Claude Code.

@@ -139,6 +139,14 @@ browser tools of an agent and the control service then use one browser runtime
 root, `/workspace/home/.horizon`, with one owner. The cloud browsers also run as
 UID 10001. Root writes nothing in that directory.
 
+The control service makes browsers only for the agent sessions of the worker.
+The actor of the browser tools must be `horizon:cloud-<id>`, and
+`/workspace/sessions/<id>` must be a directory. `horizon-worker-run` sets this
+actor for each agent. For another actor, the control service starts the browser
+but does not give the panel to the actor. Then `browser_create` fails with
+`Browser creation deadline expired` at the end of its timeout, and the control
+service stops the browser.
+
 Earlier images ran the control service as root and left root-owned entries in
 the browser runtime root. At worker start, before any agent runs,
 `horizon-worker-tailnet isolate` examines the directory without following links.

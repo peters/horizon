@@ -4,10 +4,13 @@ On a worker with agent isolation, agent sessions and their browser MCP run as UI
 The two-user tests run the built control service and browser MCP with real ownership, so
 they need root or passwordless sudo, setpriv and the binaries: HORIZON_TEST_CLOUD_WORKER,
 and HORIZON_TEST_BROWSER or a horizon-browser beside it. The CI cloud worker step runs
-after the workspace tests, which build horizon-browser for the browser CLI tests.
+after the workspace tests, which build horizon-browser for the browser CLI tests. The
+real-browser test also needs unshare and Google Chrome or Chromium on the system PATH;
+the CI Ubuntu runner and the worker image have Google Chrome.
 """
 import importlib.machinery
 import importlib.util
+import http.server
 import json
 import os
 from pathlib import Path
@@ -19,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -38,6 +42,11 @@ def built_browser():
 
 
 BROWSER = built_browser()
+# The service and the browser MCP run with this PATH; Chromium must be on it, not only in a snap.
+SYSTEM_PATH = '/usr/local/bin:/usr/bin:/bin'
+CHROMIUM = next(filter(None, (shutil.which(name, path=SYSTEM_PATH) for name in
+                              ('google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'))), None)
+SESSION = 'lane'
 SUPERVISE = runpy.run_path(str(Path(__file__).with_name('horizon-worker-supervise')))
 _loader = importlib.machinery.SourceFileLoader('tailnet_lane', str(Path(__file__).with_name('horizon-worker-tailnet')))
 TAILNET = importlib.util.module_from_spec(importlib.util.spec_from_loader(_loader.name, _loader))
@@ -160,7 +169,7 @@ class BrowserLaneTests(unittest.TestCase):
         for name, source in [('horizon-cloud-worker', WORKER), ('horizon-browser', BROWSER)]:
             shutil.copyfile(source, self.bin / name)
             (self.bin / name).chmod(0o755)
-        self.environment = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': str(self.home),
+        self.environment = {'PATH': SYSTEM_PATH, 'HOME': str(self.home),
                             'HORIZON_BROWSER_ROOT': str(self.browser_root)}
 
     def nested(self):
@@ -172,13 +181,16 @@ class BrowserLaneTests(unittest.TestCase):
         self.assertEqual(nested.returncode, 0, nested.stderr)
         self.assertNotIn('skipped', nested.stderr)
 
-    def serve(self, agent, host):
+    def serve(self, agent, host, workspace=None):
         environment = dict(self.environment, **{SUPERVISE['HOST_INSTANCE_ENV']: host})
         command = [str(self.bin / 'horizon-cloud-worker'), 'serve']
+        command = as_agent(command) if agent else command
+        if workspace:
+            command = self.in_workspace(workspace, command)
         log = (self.root / f'control-{host}.log').open('wb')
         self.addCleanup(log.close)
         # As the supervisor starts it: umask 077, its own session, the agent account with isolation.
-        service = subprocess.Popen(as_agent(command) if agent else command, env=environment, stdout=log,
+        service = subprocess.Popen(command, env=environment, stdout=log,
                                    stderr=subprocess.STDOUT, start_new_session=True,
                                    preexec_fn=lambda: os.umask(0o077))
         self.addCleanup(self.stop, service)
@@ -199,44 +211,103 @@ class BrowserLaneTests(unittest.TestCase):
             self.assertLess(time.monotonic(), deadline, 'the control service did not answer')
             time.sleep(.1)
 
-    def browser_create(self, host):
-        environment = dict(self.environment, HORIZON_BROWSER_ACTOR='horizon:cloud-lane',
+    def in_workspace(self, workspace, command):
+        # The service reads its sessions and capabilities from /workspace. A private mount
+        # namespace shows it this test's workspace; a real /workspace is not changed.
+        if not os.path.isdir('/workspace'):
+            os.mkdir('/workspace', 0o755)
+            self.addCleanup(os.rmdir, '/workspace')
+        return ['unshare', '--mount', '--propagation', 'private', '--', 'sh', '-c',
+                'mount --bind "$0" /workspace && exec "$@"', str(workspace), *command]
+
+    def workspace(self):
+        # As on a worker: the session of the agent and the capabilities of the cloud.
+        workspace = self.root / 'workspace'
+        (workspace / 'sessions' / SESSION).mkdir(parents=True)
+        for path in [workspace, workspace / 'sessions', workspace / 'sessions' / SESSION]:
+            path.chmod(0o755)
+        (workspace / 'capabilities.json').write_text(json.dumps({'agents': ['claude'], 'browsers': ['chromium']}))
+        return workspace
+
+    def mcp(self, host):
+        environment = dict(self.environment, HORIZON_BROWSER_ACTOR=f'horizon:cloud-{SESSION}',
                            HORIZON_BROWSER_HOST_INSTANCE=host)
-        messages = [
-            {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
-             'params': {'protocolVersion': '2025-06-18', 'capabilities': {},
-                        'clientInfo': {'name': 'browser-lane-test', 'version': '1'}}},
-            {'jsonrpc': '2.0', 'method': 'notifications/initialized'},
-            {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
-             'params': {'name': 'browser_create', 'arguments': {'backend': 'firefox', 'visible': False,
-                                                                  'timeout_millis': 5000}}},
-        ]
         mcp = subprocess.Popen(as_agent([str(self.bin / 'horizon-browser'), 'mcp', '--connect']), env=environment,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                start_new_session=True, bufsize=0)
         self.addCleanup(mcp.stdout.close)
         self.addCleanup(mcp.stdin.close)
         self.addCleanup(self.stop, mcp)
-        for message in messages:
+        identifiers = iter(range(1, 1000))
+
+        def send(message):
             mcp.stdin.write((json.dumps(message) + '\n').encode())
-        mcp.stdin.flush()
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            # A silent MCP must not hold the suite past the deadline. The pipe is unbuffered, so
-            # no line waits in a Python buffer that select cannot see; the MCP writes whole lines.
-            readable, _, _ = select.select([mcp.stdout], [], [], max(0, deadline - time.monotonic()))
-            if not readable:
-                break
-            line = mcp.stdout.readline()
-            self.assertTrue(line, 'the browser MCP stopped before it answered')
-            reply = json.loads(line)
-            if reply.get('id') == 2:
-                return reply['result']
-        self.fail('browser_create did not answer')
+            mcp.stdin.flush()
+
+        def request(method, params):
+            identifier = next(identifiers)
+            send({'jsonrpc': '2.0', 'id': identifier, 'method': method, 'params': params})
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                # A silent MCP must not hold the suite past the deadline. The pipe is unbuffered, so
+                # no line waits in a Python buffer that select cannot see; the MCP writes whole lines.
+                readable, _, _ = select.select([mcp.stdout], [], [], max(0, deadline - time.monotonic()))
+                if not readable:
+                    break
+                line = mcp.stdout.readline()
+                self.assertTrue(line, 'the browser MCP stopped before it answered')
+                reply = json.loads(line)
+                if reply.get('id') == identifier:
+                    return reply['result']
+            self.fail(f'{method} did not answer')
+
+        request('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
+                               'clientInfo': {'name': 'browser-lane-test', 'version': '1'}})
+        send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        return lambda tool, arguments: request('tools/call', {'name': tool, 'arguments': arguments})
+
+    def browser_create(self, host):
+        return self.mcp(host)('browser_create', {'backend': 'firefox', 'visible': False, 'timeout_millis': 5000})
 
     @staticmethod
     def text(result):
         return ' '.join(part.get('text', '') for part in result['content'])
+
+    def answer(self, result):
+        self.assertFalse(result.get('isError'), self.text(result))
+        return json.loads(self.text(result))
+
+    def page(self):
+        body = b'<!doctype html><title>Lane page</title><h1>Agent lane</h1>'
+
+        class Page(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Page)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f'http://127.0.0.1:{server.server_address[1]}/'
+
+    def browser_processes(self):
+        # Every browser process of this test: its profile is in the agent's home.
+        processes = {}
+        for entry in Path('/proc').iterdir():
+            try:
+                arguments = (entry / 'cmdline').read_bytes().split(b'\0')
+                status = (entry / 'status').read_text()
+            except (FileNotFoundError, ProcessLookupError, NotADirectoryError, PermissionError):
+                continue
+            if any(argument.startswith(b'--user-data-dir=' + bytes(self.home)) for argument in arguments):
+                processes[int(entry.name)] = dict(line.split(':\t', 1) for line in status.splitlines() if ':\t' in line)
+        return processes
 
     def migrate(self):
         # The worker start handoff of horizon-worker-tailnet, with this test's paths, as root.
@@ -275,6 +346,43 @@ class BrowserLaneTests(unittest.TestCase):
         self.assertTrue(result.get('isError'))
         self.assertIn('browser_start_failed', text)
         self.assertIn('Requested browser is disabled by this cloud profile', text)
+        for path in [self.browser_root, *self.browser_root.rglob('*')]:
+            self.assertEqual(path.lstat().st_uid, AGENT, path)
+
+    @unittest.skipUnless(CHROMIUM, 'needs Google Chrome or Chromium on the system PATH, as on the worker image')
+    @unittest.skipUnless(shutil.which('unshare'), 'needs unshare to show the service its workspace')
+    def test_agent_browser_create_starts_a_real_chromium_as_the_agent_lane(self):
+        if os.geteuid() != 0:
+            return self.nested()
+        url = self.page()
+        service = self.serve(agent=True, host='agent-host', workspace=self.workspace())
+        self.addCleanup(subprocess.run, ['pkill', '-KILL', '-f', '--', f'--user-data-dir={self.home}'], check=False)
+        self.await_answer(service)
+        call = self.mcp('agent-host')
+
+        created = self.answer(call('browser_create', {'backend': 'chromium', 'url': url, 'visible': False,
+                                                      'timeout_millis': 60000}))
+        panel = created['panel']['panel_id']
+        self.assertEqual(created['panel']['owner'], f'horizon:cloud-{SESSION}')
+        processes = self.browser_processes()
+        self.assertTrue(processes, 'no browser process has a profile in the agent home')
+        for pid, status in processes.items():
+            # The same isolation as the service: the agent account, no new privileges, no capabilities.
+            self.assertEqual(status['Uid'].split(), [str(AGENT)] * 4, pid)
+            self.assertEqual(status['NoNewPrivs'].strip(), '1', pid)
+            self.assertEqual(int(status['CapBnd'], 16), 0, pid)
+
+        self.answer(call('browser_wait', {'panel_id': panel, 'selector': 'h1', 'state': 'visible'}))
+        snapshot = self.answer(call('browser_snapshot', {'panel_id': panel}))
+        self.assertEqual(snapshot['title'], 'Lane page')
+        self.assertIn('Agent lane', json.dumps(snapshot['nodes']))
+
+        self.assertTrue(self.answer(call('browser_close', {'panel_id': panel}))['closed'])
+        self.assertEqual(self.answer(call('browser_list', {}))['panels'], [])
+        deadline = time.monotonic() + 30
+        while self.browser_processes():
+            self.assertLess(time.monotonic(), deadline, 'the browser processes did not stop')
+            time.sleep(.2)
         for path in [self.browser_root, *self.browser_root.rglob('*')]:
             self.assertEqual(path.lstat().st_uid, AGENT, path)
 
