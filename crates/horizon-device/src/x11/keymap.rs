@@ -1,0 +1,283 @@
+//! Keystroke planning for X11 text entry.
+//!
+//! X11 clients translate a keycode with the keymap they hold when they process
+//! the event, and many clients (for example xkbcommon users such as winit)
+//! fetch the server keymap only after they read the mapping notification.
+//! A keycode that is remapped or cleared before a slow client reads its last
+//! key event is therefore translated with the wrong mapping, or not at all.
+//!
+//! The planner keeps every keycode a pending event can use stable:
+//! characters on the first two shift levels of the current keymap need no
+//! mapping; temporary mappings stay on their keycodes after an action and later
+//! actions reuse them; a temporary mapping is reassigned only when no unused
+//! keycode remains, least recently used first, after a quiet interval. The
+//! lowest unused keycode is never taken, because the input backend of the other
+//! actions requires one.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
+
+/// Minimum idle time before a temporary mapping may get a different keysym.
+pub(super) const RECLAIM_QUIET: Duration = Duration::from_secs(2);
+
+/// Keycode 8 becomes evdev code 0, which clients treat as no key.
+const RESERVED_KEYCODE: u8 = 8;
+
+/// The core keyboard mapping as returned by `GetKeyboardMapping`.
+pub(super) struct Layout<'a> {
+    pub min_keycode: u8,
+    pub keysyms_per_keycode: u8,
+    pub keysyms: &'a [u32],
+}
+
+impl Layout<'_> {
+    fn keycodes(&self) -> impl Iterator<Item = (u8, &[u32])> {
+        let width = usize::from(self.keysyms_per_keycode.max(1));
+        (self.min_keycode..=u8::MAX).zip(self.keysyms.chunks(width))
+    }
+
+    fn level(&self, keycode: u8, level: usize) -> u32 {
+        self.keycodes()
+            .find(|(code, _)| *code == keycode)
+            .and_then(|(_, symbols)| symbols.get(level).copied())
+            .unwrap_or_default()
+    }
+}
+
+/// A keycode that this tool mapped to one keysym on both shift levels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Borrowed {
+    pub keycode: u8,
+    pub keysym: u32,
+    pub last_used_ms: u64,
+}
+
+impl Borrowed {
+    const WORDS: usize = 4;
+
+    /// Encodes records as `[keycode, keysym, used_ms_high, used_ms_low]` words.
+    pub(super) fn encode(records: &[Self]) -> Vec<u32> {
+        records
+            .iter()
+            .flat_map(|record| {
+                let [high, low] = split_ms(record.last_used_ms);
+                [u32::from(record.keycode), record.keysym, high, low]
+            })
+            .collect()
+    }
+
+    /// Decodes records; malformed words are ignored because the property is advisory.
+    pub(super) fn decode(words: &[u32]) -> Vec<Self> {
+        words
+            .chunks_exact(Self::WORDS)
+            .filter_map(|word| {
+                Some(Self {
+                    keycode: u8::try_from(word[0]).ok()?,
+                    keysym: word[1],
+                    last_used_ms: (u64::from(word[2]) << 32) | u64::from(word[3]),
+                })
+            })
+            .collect()
+    }
+}
+
+fn split_ms(ms: u64) -> [u32; 2] {
+    let high = u32::try_from(ms >> 32).unwrap_or(u32::MAX);
+    let low = u32::try_from(ms & u64::from(u32::MAX)).unwrap_or_default();
+    [high, low]
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Stroke {
+    pub keycode: u8,
+    pub shift: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PlanError {
+    NoKeysym,
+    Capacity,
+}
+
+#[derive(Debug)]
+pub(super) struct Plan {
+    /// One stroke for each character of the text, in order.
+    pub strokes: Vec<Stroke>,
+    /// Keycodes to map before the first stroke, in ascending keycode order.
+    pub bindings: Vec<(u8, u32)>,
+    /// Earliest Unix time in milliseconds at which `bindings` may be applied.
+    pub not_before_ms: u64,
+    borrowed: Vec<Borrowed>,
+    used: BTreeSet<u8>,
+}
+
+impl Plan {
+    /// The borrowed-keycode record after the strokes were sent at `now_ms`.
+    pub(super) fn record(&self, now_ms: u64) -> Vec<Borrowed> {
+        self.borrowed
+            .iter()
+            .map(|record| Borrowed {
+                last_used_ms: if self.used.contains(&record.keycode) {
+                    now_ms
+                } else {
+                    record.last_used_ms
+                },
+                ..*record
+            })
+            .collect()
+    }
+}
+
+pub(super) fn keysym(character: char) -> Option<u32> {
+    let keysym = xkeysym::Keysym::from_char(character);
+    (keysym != xkeysym::Keysym::NoSymbol).then(|| keysym.raw())
+}
+
+/// Plans the strokes for `text` without changing any existing keycode that a
+/// queued event could still use. `shift_keycode` enables second-level keysyms.
+/// The records that still describe the server keymap, one for each keycode.
+/// A record is ours only while the server holds exactly what we mapped.
+fn owned(layout: &Layout<'_>, previous: &[Borrowed]) -> Vec<Borrowed> {
+    let mut borrowed: Vec<Borrowed> = previous
+        .iter()
+        .filter(|record| {
+            record.keycode != RESERVED_KEYCODE
+                && record.keysym != 0
+                && layout.level(record.keycode, 0) == record.keysym
+                && layout.level(record.keycode, 1) == record.keysym
+        })
+        .copied()
+        .collect();
+    borrowed.sort_by_key(|record| record.keycode);
+    borrowed.dedup_by_key(|record| record.keycode);
+    borrowed
+}
+
+/// When no keycode is unused, picks the temporary keycode with the oldest last
+/// use to clear, so that the input backend of the other actions can start.
+pub(super) fn spare_candidate(layout: &Layout<'_>, previous: &[Borrowed]) -> Option<Borrowed> {
+    let unused = layout
+        .keycodes()
+        .any(|(keycode, symbols)| keycode != RESERVED_KEYCODE && symbols.iter().all(|symbol| *symbol == 0));
+    if unused {
+        return None;
+    }
+    owned(layout, previous)
+        .into_iter()
+        .min_by_key(|record| (record.last_used_ms, record.keycode))
+}
+
+/// The earliest Unix time in milliseconds at which a keycode last used at
+/// `last_used_ms` may get a different keysym.
+pub(super) fn quiet_after(last_used_ms: u64) -> u64 {
+    last_used_ms.saturating_add(u64::try_from(RECLAIM_QUIET.as_millis()).unwrap_or(u64::MAX))
+}
+
+pub(super) fn plan(
+    layout: &Layout<'_>,
+    previous: &[Borrowed],
+    shift_keycode: Option<u8>,
+    text: &str,
+) -> Result<Plan, PlanError> {
+    let mut borrowed = owned(layout, previous);
+    let mut located: BTreeMap<u32, Stroke> = BTreeMap::new();
+    let mut missing: Vec<u32> = Vec::new();
+    for character in text.chars() {
+        let symbol = keysym(character).ok_or(PlanError::NoKeysym)?;
+        if located.contains_key(&symbol) || missing.contains(&symbol) {
+            continue;
+        }
+        match locate(layout, shift_keycode, symbol) {
+            Some(stroke) => {
+                located.insert(symbol, stroke);
+            }
+            None => missing.push(symbol),
+        }
+    }
+
+    let needed: BTreeSet<u8> = located.values().map(|stroke| stroke.keycode).collect();
+    // The lowest unused keycode stays unused: the input backend for the other
+    // actions refuses a keymap without one and maps its own keysyms there.
+    let free = layout
+        .keycodes()
+        .filter(|(keycode, symbols)| *keycode != RESERVED_KEYCODE && symbols.iter().all(|symbol| *symbol == 0))
+        .map(|(keycode, _)| (keycode, None))
+        .skip(1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev();
+    let mut reclaimable: Vec<&Borrowed> = borrowed
+        .iter()
+        .filter(|record| !needed.contains(&record.keycode))
+        .collect();
+    reclaimable.sort_by_key(|record| (record.last_used_ms, record.keycode));
+    let mut slots = free.chain(
+        reclaimable
+            .into_iter()
+            .map(|record| (record.keycode, Some(record.last_used_ms))),
+    );
+
+    let mut bindings = Vec::with_capacity(missing.len());
+    let mut not_before_ms = 0;
+    for symbol in missing {
+        let (keycode, last_used_ms) = slots.next().ok_or(PlanError::Capacity)?;
+        if let Some(last_used_ms) = last_used_ms {
+            not_before_ms = not_before_ms.max(quiet_after(last_used_ms));
+        }
+        located.insert(symbol, Stroke { keycode, shift: false });
+        bindings.push((keycode, symbol));
+    }
+    bindings.sort_unstable();
+
+    borrowed.retain(|record| !bindings.iter().any(|(keycode, _)| *keycode == record.keycode));
+    borrowed.extend(bindings.iter().map(|&(keycode, keysym)| Borrowed {
+        keycode,
+        keysym,
+        last_used_ms: 0,
+    }));
+    borrowed.sort_by_key(|record| record.keycode);
+
+    let strokes: Vec<Stroke> = text
+        .chars()
+        .filter_map(|character| keysym(character).and_then(|symbol| located.get(&symbol).copied()))
+        .collect();
+    let used = strokes.iter().map(|stroke| stroke.keycode).collect();
+    Ok(Plan {
+        strokes,
+        bindings,
+        not_before_ms,
+        borrowed,
+        used,
+    })
+}
+
+/// Finds `symbol` on the unshifted level first, then on the shifted level.
+fn locate(layout: &Layout<'_>, shift_keycode: Option<u8>, symbol: u32) -> Option<Stroke> {
+    let on_level = |level: usize| {
+        layout
+            .keycodes()
+            .find(|(keycode, symbols)| *keycode != RESERVED_KEYCODE && symbols.get(level) == Some(&symbol))
+            .map(|(keycode, _)| keycode)
+    };
+    on_level(0).map(|keycode| Stroke { keycode, shift: false }).or_else(|| {
+        shift_keycode?;
+        on_level(1).map(|keycode| Stroke { keycode, shift: true })
+    })
+}
+
+/// Groups bindings into runs of consecutive keycodes for one request each.
+pub(super) fn runs(bindings: &[(u8, u32)]) -> Vec<(u8, Vec<u32>)> {
+    let mut runs: Vec<(u8, Vec<u32>)> = Vec::new();
+    for &(keycode, keysym) in bindings {
+        match runs.last_mut() {
+            Some((first, symbols)) if usize::from(*first) + symbols.len() / 2 == usize::from(keycode) => {
+                symbols.extend([keysym, keysym]);
+            }
+            _ => runs.push((keycode, vec![keysym, keysym])),
+        }
+    }
+    runs
+}
+
+#[cfg(test)]
+mod tests;

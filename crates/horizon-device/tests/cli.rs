@@ -171,6 +171,10 @@ fn mcp_startup_errors_leave_stdout_as_protocol_only() -> Result<(), Box<dyn std:
 }
 
 #[cfg(target_os = "linux")]
+#[path = "support/x11_text.rs"]
+mod x11_text;
+
+#[cfg(target_os = "linux")]
 mod live_mcp {
     use super::*;
     use std::{
@@ -312,40 +316,13 @@ mod live_mcp {
     #[test]
     #[ignore = "requires HORIZON_DEVICE_TEST_TARGET pointing to an owned virtual desktop"]
     fn cli_and_mcp_preserve_unicode_for_a_delayed_receiver() -> Result<()> {
-        use x11rb::protocol::{
-            Event,
-            xproto::{CreateWindowAux, EventMask, InputFocus, WindowClass},
-        };
         let _serialized = exclusive_target();
         let target = std::env::var("HORIZON_DEVICE_TEST_TARGET")?;
         let config: horizon_device::Target = serde_json::from_slice(&std::fs::read(&target)?)?;
         let horizon_device::Endpoint::LocalX11 { display } = &config.endpoint else {
             return Err("requires X11".into());
         };
-        let (connection, screen) = x11rb::connect(Some(display))?;
-        let root = connection.setup().roots[screen].root;
-        let window = connection.generate_id()?;
-        connection
-            .create_window(
-                x11rb::COPY_DEPTH_FROM_PARENT,
-                window,
-                root,
-                0,
-                0,
-                100,
-                100,
-                0,
-                WindowClass::INPUT_OUTPUT,
-                0,
-                &CreateWindowAux::new()
-                    .override_redirect(1)
-                    .event_mask(EventMask::KEY_PRESS),
-            )?
-            .check()?;
-        connection.map_window(window)?.check()?;
-        connection
-            .set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME)?
-            .check()?;
+        let mut receiver = x11_text::Receiver::open(display).map_err(|e| e.to_string())?;
         let expected = "UTF8 æøå🦀 AaZz_09!?";
         for mode in ["cli", "mcp"] {
             let geometry = horizon_device::Device::connect(&config)?.screenshot()?.geometry;
@@ -354,31 +331,17 @@ mod live_mcp {
             let sender = std::thread::spawn(move || -> std::result::Result<(), String> {
                 send_type(mode, &target, &request).map_err(|error| error.to_string())
             });
-            let deadline = Instant::now() + Duration::from_secs(15);
-            let mut received = String::new();
-            while Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(30));
-                while let Some(event) = connection.poll_for_event()? {
-                    if let Event::KeyPress(event) = event {
-                        let mapping = connection.get_keyboard_mapping(event.detail, 1)?.reply()?;
-                        let symbol = mapping.keysyms.first().copied().unwrap_or_default();
-                        let codepoint = if symbol & 0xff00_0000 == 0x0100_0000 {
-                            symbol & 0x00ff_ffff
-                        } else {
-                            symbol
-                        };
-                        received.push(char::from_u32(codepoint).unwrap_or('\u{fffd}'));
-                    }
-                }
-                if sender.is_finished() {
-                    break;
-                }
-            }
+            let received = receiver
+                .collect_while(Duration::from_millis(300), || sender.is_finished())
+                .map_err(|e| e.to_string())?;
             sender
                 .join()
                 .map_err(|_| "text sender panicked")?
                 .map_err(std::io::Error::other)?;
-            assert_eq!(received, expected, "{mode} keeps Unicode mappings alive until consumed");
+            assert_eq!(
+                received, expected,
+                "{mode} keeps every key mapping until a late client reads it"
+            );
         }
         Ok(())
     }

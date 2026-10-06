@@ -2599,6 +2599,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "x11rb 0.14.0",
+ "xkeysym",
 ]
 
 [[package]]

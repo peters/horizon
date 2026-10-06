@@ -44,8 +44,41 @@ scalars and 4096 UTF-8 bytes without NUL, up to four modifiers. X11 text is pace
 at 20 ms per character with a final 100 ms drain interval; split longer text into
 bounded actions and observe the result. Coordinates must fall inside the original surface described by the screenshot geometry.
 Use stdin for entered text to avoid exposing it in process arguments/history.
-Distinct characters needing temporary X11 mappings must fit the currently unused
-keycodes; oversized requests fail before sending input.
+
+### X11 text and keycode mappings
+
+An X11 client translates a key with the keymap that it has when it reads the
+event. Many clients get the server keymap only after a mapping notification.
+If a keycode changes before a slow client reads its key, that character is lost
+or wrong. Thus, `type` does not change a keycode that a queued key can use:
+
+- A character on the first level or the Shift level of the current keymap uses
+  that key. The tool holds Shift for the Shift level. No mapping is necessary.
+  On a US layout, this applies to `[A-Za-z0-9]` and ASCII punctuation.
+- Each other character gets a temporary mapping on an unused keycode. A server
+  round trip makes sure that the server applied the mapping before the first key.
+- A temporary mapping stays after the action. Later actions use it again and do
+  not change it.
+- The root window property `_HORIZON_DEVICE_KEYMAP` of the display records the
+  temporary keycodes and the time of their last use. If a recorded keycode has a
+  different keysym now, the tool does not use the record.
+- The tool does not use the lowest unused keycode. The input library for the
+  other actions does not start without an unused keycode.
+- If no other unused keycode is available, the tool changes the temporary
+  keycode with the oldest last use that the text does not need. Before the
+  change, the tool waits until this keycode is idle for 2 seconds.
+- If the display has no unused keycode, `doctor` and the actions other than
+  `type` clear the temporary keycode with the oldest last use. They wait for
+  the same 2 seconds first.
+
+A client that is more than 2 seconds late can still translate a changed keycode
+incorrectly. The distinct characters that need a mapping must fit in the free
+slots. The free slots are the unused keycodes, less one, and the recorded
+temporary keycodes that the text does not need. If
+they do not fit, or if a character has no X11 keysym, the action fails. It fails
+before a keymap change or input. The tool does not remove temporary mappings
+after an action. They stay until the X server stops. Use only owned, isolated
+displays as targets.
 
 Library consumers need no async runtime:
 
