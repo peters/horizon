@@ -531,6 +531,40 @@ impl Session {
         Ok(true)
     }
 
+    /// A rate command's own status. Correlated replies are not replayed as events.
+    fn absorb_rate_status(&self, playback: &mut Playback, status: &MediaStatus, observed: Instant) {
+        match status.player_state.as_str() {
+            "PLAYING" => {
+                if let Some(since) = self.buffering_since.take() {
+                    close_buffer(&mut playback.edge, observed.saturating_duration_since(since));
+                    playback.sampled = false;
+                } else {
+                    playback.edge.resume();
+                }
+            }
+            "BUFFERING" | "LOADING" => {
+                if self.buffering_since.get().is_none() {
+                    self.buffering_since.set(Some(observed));
+                    if let Some(lag) = self.open_lag(status.current_time) {
+                        playback.edge.note_buffer(lag);
+                    }
+                    playback.edge.settled_for = Duration::ZERO;
+                    playback.sampled = false;
+                }
+            }
+            _ => {
+                self.buffering_since.set(None);
+            }
+        }
+    }
+
+    fn open_lag(&self, current_time: f64) -> Option<f64> {
+        let Sink::Progressive(stream) = &self.sink else {
+            return None;
+        };
+        note_open_lag(stream.newest_media_time(), current_time)
+    }
+
     /// Records the lag at the start of a progressive buffer. Events arrive
     /// before the next poll, and by then new frames have already increased it.
     fn note_buffer_lag(&self, current_time: f64) {
@@ -678,14 +712,15 @@ impl Session {
             return Ok(());
         };
         let lag = newest - status.current_time;
-        // Polled GET_STATUS replies are not receiver events, so the timer has
-        // to move from this status. Anything but buffering closes it.
+        // The status call blocks. Time the buffer from when the reply arrived,
+        // not from when the request was sent, or a slow reply looks like a stall.
+        let observed = Instant::now();
         let lasted = self
             .buffering_since
             .get()
-            .map(|since| now.saturating_duration_since(since));
+            .map(|since| observed.saturating_duration_since(since));
         let mut open = self.buffering_since.get();
-        let buffering_for = buffering_age(&mut open, status.player_state.as_str(), now);
+        let buffering_for = buffering_age(&mut open, status.player_state.as_str(), observed);
         self.buffering_since.set(open);
         let playing = status.player_state == "PLAYING";
         if playing && let Some(lasted) = lasted {
@@ -727,7 +762,12 @@ impl Session {
         now: Instant,
     ) -> Result<()> {
         let (answer, error) = match media.set_playback_rate(rate) {
-            Ok(_) => (RateAnswer::Applied, None),
+            Ok(status) => {
+                // The reply is not delivered again as an event. A PLAYING
+                // status here has to close a short buffer before the next poll.
+                self.absorb_rate_status(&mut playback, &status, Instant::now());
+                (RateAnswer::Applied, None)
+            }
             Err(error @ Error::Rejected { .. }) => (RateAnswer::Refused, Some(error)),
             Err(error) => (RateAnswer::Unconfirmed, Some(error)),
         };
@@ -1028,6 +1068,62 @@ mod catch_up_tests {
         assert_eq!(buffering_age(&mut open, "PAUSED", paused), None);
         assert!(open.is_none());
         assert_eq!(buffering_age(&mut open, "BUFFERING", paused), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_slow_status_reply_does_not_count_the_wait_as_buffering() {
+        let sent = Instant::now();
+        let seen = sent + Duration::from_millis(600);
+        let mut open = None;
+        assert_eq!(buffering_age(&mut open, "BUFFERING", seen), Some(Duration::ZERO));
+        let playing = seen + Duration::from_millis(50);
+        let lasted = playing.saturating_duration_since(open.expect("timer started when seen"));
+        assert!(lasted < Duration::from_millis(500));
+        let mut edge = edge::Edge {
+            target: 0.25,
+            floor: 0.25,
+            rate: 1.08,
+            episode_lag: Some(0.30),
+            ..edge::Edge::default()
+        };
+        close_buffer(&mut edge, lasted);
+        assert!((edge.target - 0.25).abs() < 1e-9);
+        assert!((edge.rate - 1.08).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_restore_reply_that_is_already_playing_closes_a_short_buffer() {
+        let session = test_session();
+        let mut playback = Playback::new();
+        playback.edge.target = 0.25;
+        playback.edge.floor = 0.25;
+        playback.edge.rate = 1.5;
+        playback.edge.note_buffer(0.30);
+        let playing = MediaStatus {
+            media_session_id: 1,
+            player_state: "PLAYING".to_owned(),
+            idle_reason: None,
+            current_time: 1.0,
+        };
+        session.buffering_since.set(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(450))
+                .expect("test clock"),
+        ));
+        session.absorb_rate_status(&mut playback, &playing, Instant::now());
+        assert!(session.buffering_since.get().is_none());
+        assert!((playback.edge.target - 0.25).abs() < 1e-9);
+        assert!((playback.edge.rate - 1.5).abs() < 1e-9);
+
+        session.buffering_since.set(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(650))
+                .expect("test clock"),
+        ));
+        playback.edge.note_buffer(0.30);
+        session.absorb_rate_status(&mut playback, &playing, Instant::now());
+        assert!((playback.edge.target - 0.30).abs() < 1e-9);
+        assert!((playback.edge.rate - 1.5).abs() < 1e-9);
     }
 
     #[test]
