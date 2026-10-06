@@ -96,7 +96,7 @@ fixture terminal.
    Result: The first command lists one LFS file or more. The second command
    shows one pinned submodule.
 
-6. Write a file `uncommitted-sentinel.txt` in `<repo>` and do not commit it.
+6. Write the uncommitted file `uncommitted-sentinel.txt` in `<repo>`.
 
    Result: `git -C <repo> status --short` shows the file as untracked.
 

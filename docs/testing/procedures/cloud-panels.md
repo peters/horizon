@@ -294,11 +294,16 @@ The cleanup of this procedure does X01 to X05.
 
 ## 8. Cleanup
 
-1. Do the tasks of [area X](cloud-panels/x-teardown.md).
+1. If `<run>/runpod-key.saved` exists, copy it back to the RunPod key file of the fixture.
+
+   Result: The fixture has the real RunPod key. Area X can delete RunPod clouds.
+   An interrupted C07 can leave the synthetic key in place.
+
+2. Do the tasks of [area X](cloud-panels/x-teardown.md).
 
    Result: The provider APIs show no resource from the resource ledger.
 
-2. Compare the provider lists of X02 and X05 with the baselines from the setup.
+3. Compare the provider lists of X02 and X05 with the baselines from the setup.
 
    Result: The lists are the same as the baselines. The Hetzner network of
    Horizon can stay. The resource ledger records it as kept.
@@ -306,7 +311,7 @@ The cleanup of this procedure does X01 to X05.
    > **CAUTION:** DELETE ONLY THE STATE DIRECTORY OF THIS RUN. It contains the saved
    > provider keys and the private data of the fixture.
 
-3. Delete the fixture state, the keyring password and the saved RunPod key copy of C07.
+4. Delete the fixture state, the keyring password and the saved RunPod key copy of C07.
 
    ```sh
    rm -r <run>/fixture && rm -f <run>/keyring-password <run>/runpod-key.saved
@@ -314,7 +319,7 @@ The cleanup of this procedure does X01 to X05.
 
    Result: `<run>` contains no credential file. Keep `<evidence>` outside `<run>`.
 
-4. Stop the rootless Docker daemon of this run.
+5. Stop the rootless Docker daemon of this run.
 
    ```sh
    kill <docker-pid>
@@ -322,7 +327,7 @@ The cleanup of this procedure does X01 to X05.
 
    Result: The daemon stops its containers and exits.
 
-5. Make sure that the daemon exited.
+6. Make sure that the daemon exited.
 
    ```sh
    ps -o pid=,comm= -p <docker-pid>
@@ -333,7 +338,7 @@ The cleanup of this procedure does X01 to X05.
    > **CAUTION:** DELETE ONLY THE DOCKER DATA ROOT OF THIS RUN. Other Docker data
    > roots can contain images and volumes of other people.
 
-6. Delete the Docker data root and the socket directory of this run.
+7. Delete the Docker data root and the socket directory of this run.
 
    ```sh
    rootlesskit rm -rf <docker-data> && rm -rf <run>/docker

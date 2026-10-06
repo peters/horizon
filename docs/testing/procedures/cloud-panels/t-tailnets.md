@@ -44,7 +44,7 @@ send TCP traffic to each other over the tailnet.
 - The equipment in the [main procedure](../cloud-panels.md#4-equipment-and-preconditions).
 - The fixture with a Secret Service from S05.
 - The test tailnet. Its auth key is reusable, pre-authorized and not ephemeral.
-- The PC is a device on the test tailnet. Tests T06 and T07 need this.
+- The PC is a device on the test tailnet. Tests T05, T06 and T07 need this.
 - A worker image that reports `horizon-tailnet-contract=1`. Use
   [`check-markers.py`](../../../../examples/cloud-worker/README.md#helpers-from-the-published-artifact)
   in B05 to examine the image.

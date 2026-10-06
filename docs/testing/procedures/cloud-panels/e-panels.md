@@ -122,7 +122,11 @@ real request.
 
    Result: The card shows Ready. The reconnect sends the new key to the worker.
 
-7. Open a new Claude Code panel and do step 4 again.
+7. Open a new Claude Code panel.
+
+   Result: The agent starts.
+
+8. Do step 4 again.
 
    Result: The agent replies `ready`.
 
@@ -284,7 +288,7 @@ real request.
    `known_hosts` and `identity_file`. `known_hosts` is the path of a file, not
    the key text. The output contains no secret.
 
-3. If the output shows `Another controller owns this cloud operation`, wait 10 seconds and do step 2 again.
+3. If the output shows `Another controller owns this cloud operation`, do step 2 again after 10 seconds.
 
    Result: The command gives the JSON. The candidate continues to run.
 

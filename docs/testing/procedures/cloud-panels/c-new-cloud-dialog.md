@@ -87,6 +87,9 @@ runs in the place that the dialog showed.
 
 ## 6. Tasks
 
+The tasks from C04 use an open New cloud dialog for `<home>/smoke/app`. If the
+dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
+
 ### 6.1 C01 — Open New cloud from the panel picker, the toolbar and the overflow menu
 
 1. In a workspace, open the panel picker.
@@ -125,9 +128,13 @@ runs in the place that the dialog showed.
 
    Result: The New cloud dialog opens in one column.
 
-9. Click **Cancel** and set the window back to its first size.
+9. Click **Cancel**.
 
-   Result: The toolbar shows **Cloud** again.
+   Result: The dialog closes. No cloud starts.
+
+10. Set the window back to its first size.
+
+    Result: The toolbar shows **Cloud** again.
 
 ### 6.2 C02 — Refuse a cloud in a detached workspace
 
@@ -344,7 +351,19 @@ runs in the place that the dialog showed.
 
 11. Delete `<run>/runpod-key.saved`.
 
-    Result: The key file contains the real key again. A new New cloud dialog shows current RunPod prices.
+    Result: Only the key file of the fixture contains the RunPod key.
+
+12. Open **Cloud › New cloud…**.
+
+    Result: The New cloud dialog opens.
+
+13. Type `<home>/smoke/app` as the repository.
+
+    Result: The field shows the repository.
+
+14. Click **Read .horizon/cloud.yml**.
+
+    Result: The dialog shows current RunPod prices. C08 uses this dialog.
 
 For a detailed check of the refresh, use the
 [catalog refresh procedure](../new-cloud-catalog-refresh.md).
@@ -393,15 +412,27 @@ For a detailed check of the refresh, use the
 
 ### 6.9 C09 — List None and the saved networks in the tailnet chooser
 
-1. Examine **Tailnet** in the New cloud dialog.
+1. Open **Cloud › New cloud…**.
+
+   Result: The New cloud dialog opens.
+
+2. Type `<home>/smoke/app` as the repository.
+
+   Result: The field shows the repository.
+
+3. Click **Read .horizon/cloud.yml**.
+
+   Result: **Profile** lists the profiles that area B committed.
+
+4. Examine **Tailnet** in the New cloud dialog.
 
    Result: The chooser shows **None** and the name of each saved tailnet.
 
-2. Click the name of the test tailnet.
+5. Click the name of the test tailnet.
 
    Result: The test tailnet is selected.
 
-3. Click **None**.
+6. Click **None**.
 
    Result: **None** is selected. The dialog shows no auth key.
 
@@ -561,20 +592,24 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
 ### 6.17 C17 — Count the rows that the stock filter hides
 
-1. Click **All providers** and clear **In stock only**.
+1. Click **All providers**.
+
+   Result: The list shows the rows of all providers.
+
+2. Clear **In stock only**.
 
    Result: The list shows all rows.
 
-2. Count the rows that show `Out of stock`.
+3. Count the rows that show `Out of stock`.
 
    Result: You have the expected hidden count. Add the unlisted Hetzner rows
    while issue #1302 is open.
 
-3. Select **In stock only**.
+4. Select **In stock only**.
 
    Result: The list line shows `Showing N of M workers`.
 
-4. Calculate `M` minus `N`.
+5. Calculate `M` minus `N`.
 
    Result: The value is the same as the expected hidden count.
 
@@ -834,11 +869,15 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: The dialog shows `GPU workers for the runpod-gpu profile`. No Hetzner row shows.
 
-2. Clear **In stock only** and count the GPU types.
+2. Clear **In stock only**.
+
+   Result: The list also shows sold-out GPU types.
+
+3. Count the GPU types.
 
    Result: You have the count of the dialog.
 
-3. In the fixture terminal, get the GPU offers of the CLI with unavailable types.
+4. In the fixture terminal, get the GPU offers of the CLI with unavailable types.
 
    ```sh
    <run>/bin/cloud_deploy offers <home>/.horizon/cloud/settings.json '{"gpu":true,"include_unavailable":true,"limit":50}' > ~/smoke/offers-gpu.out.json
@@ -846,11 +885,11 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: The file lists the GPU offers. `other_providers` has no Hetzner offer.
 
-4. Compare the count of the dialog with the count of the offers.
+5. Compare the count of the dialog with the count of the offers.
 
    Result: The counts are the same. Record the value.
 
-5. Get the GPU offers for the region Europe.
+6. Get the GPU offers for the region Europe.
 
    ```sh
    <run>/bin/cloud_deploy offers <home>/.horizon/cloud/settings.json '{"gpu":true,"region":"EUROPE","limit":50}' > ~/smoke/offers-gpu-eu.out.json
@@ -858,11 +897,11 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: Each offer names regions with that GPU in stock.
 
-6. Click the chip of the region Europe in the dialog.
+7. Click the chip of the region Europe in the dialog.
 
    Result: The GPU types in stock are the same as in `offers-gpu-eu.out.json`.
 
-7. Record that the stock in the dialog does not use `min_cuda_version`.
+8. Record that the stock in the dialog does not use `min_cuda_version`.
 
    Result: The report says that D03 makes sure of the CUDA minimum.
 

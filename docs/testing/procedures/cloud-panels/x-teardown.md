@@ -112,6 +112,32 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
     Result: The board shows no test cloud.
 
+12. Find each RunPod registry credential that the resource ledger shows as active.
+
+    Result: You have the list. A run that stopped before the cleanup of area A or L can leave one.
+
+    > **CAUTION:** REVOKE ONLY THE REGISTRY CREDENTIALS THAT THE LEDGER RECORDS. A
+    > worker that needs another credential cannot pull its image after a restart.
+
+13. For each listed credential, click **Revoke pull binding** on its entry in **Cloud settings…**.
+
+    Result: Each entry shows that the provider pull credential is revoked.
+
+    > **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
+    > contains the key. Do not show the file or the request headers.
+
+14. List the registry credentials of the RunPod account.
+
+    ```sh
+    bash <run>/runpod-list.sh registries
+    ```
+
+    Result: The list contains no ID from step 12.
+
+15. Mark each credential from step 12 as deleted in the resource ledger.
+
+    Result: The ledger shows no active RunPod registry credential.
+
 ### 6.2 X02 — Make sure that Hetzner shows no test resources
 
 > **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
