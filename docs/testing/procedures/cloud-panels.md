@@ -294,6 +294,19 @@ The cleanup of this procedure does X01 to X05.
 | N — Local Network Bridge | [n-local-network-bridge.md](cloud-panels/n-local-network-bridge.md) | N01–N05 | rents compute |
 | X — Teardown | [x-teardown.md](cloud-panels/x-teardown.md) | X01–X05 | none |
 
+### 6.1 Related procedures
+
+Other procedures test parts of this procedure in more detail. This procedure
+does not repeat their steps. Use them for a run that changes their function.
+
+| Procedure | Tests in this procedure |
+|---|---|
+| [cloud-settings-replace-key](cloud-settings-replace-key.md) | A02 to A05 |
+| [new-cloud-catalog-refresh](new-cloud-catalog-refresh.md) | C07 |
+| [new-cloud-picker](new-cloud-picker.md) | C12 to C30 |
+| [cloud-agent-panel-start](cloud-agent-panel-start.md) | E02 and E03 |
+| [local-network-bridge-agent-access](local-network-bridge-agent-access.md) | N02 and N03 |
+
 ## 7. Pass criteria
 
 - Each test is pass, or it has a linked defect or a recorded block.

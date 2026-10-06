@@ -36,6 +36,8 @@ worker MCP servers and the SSH route.
 
 - The equipment in the [main procedure](../cloud-panels.md#4-equipment-and-preconditions).
 - `smoke-a` shows **Ready**.
+- For a detailed check of the agent start, use the
+  [cloud agent panel start procedure](../cloud-agent-panel-start.md).
 - The image of `smoke-a` contains Claude Code, Codex, a browser and a desktop.
 - Cloud settings select Claude and Codex in **Coding agents** (task A05).
 - The facts in [Cloud workspaces](../../../cloud-workspaces.md#sessions-and-lifecycle).

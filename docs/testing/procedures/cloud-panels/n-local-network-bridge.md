@@ -35,6 +35,8 @@ limits the access and that the bridge is off after a restart of Horizon.
 
 - The equipment in the [main procedure](../cloud-panels.md#4-equipment-and-preconditions).
 - `smoke-a` shows **Ready**. Its worker image contains the bridge helper.
+- For a detailed check of agent access to the bridge, use the
+  [Local Network Bridge agent access procedure](../local-network-bridge-agent-access.md).
 - The PC is on an IPv4 network that is not wider than `/16`.
 - A second device on the local network that the operator owns, with a test HTTP
   service. Record its address as `<device-address>` and its port as `<device-port>`.

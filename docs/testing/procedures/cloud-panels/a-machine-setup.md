@@ -38,6 +38,8 @@ setting must open a repair form.
 ## 4. Equipment and preconditions
 
 - The fixture of [area S](s-test-fixture.md), with a live view.
+- For a detailed check of saved keys, use the
+  [Cloud settings Replace key procedure](../cloud-settings-replace-key.md).
 - The RunPod API key, the Hetzner Cloud API token and the agent API keys. They
   come from the current cloud settings of the operator or the secret store of
   the test account.
