@@ -7,6 +7,8 @@ use std::{
     time::Instant,
 };
 
+mod agents;
+
 const NONCE: &str = "0123456789abcdef0123456789abcdef";
 
 /// Stands in for the owner's proxy behind the bridge socket: it admits `192.168.1.50` and
@@ -190,6 +192,7 @@ fn paths() -> (tempfile::TempDir, Paths) {
     let root = tempfile::Builder::new().prefix("lnw").tempdir_in("/tmp").unwrap();
     let paths = Paths {
         directory: root.path().join("run"),
+        agent: root.path().join("agent.sock"),
     };
     (root, paths)
 }
@@ -237,6 +240,7 @@ fn a_session_serves_status_the_proxy_and_forwards_until_its_input_ends() {
     session.stop();
     assert!(!status(&paths).unwrap().active);
     assert!(!paths.control().exists());
+    assert!(!paths.agent.exists());
     assert!(!paths.bridge(&Nonce::parse(NONCE).unwrap()).exists());
     assert!(
         forward(&paths, "192.168.1.50", 554)
@@ -265,9 +269,11 @@ fn a_live_session_keeps_the_bridge_and_a_dead_one_makes_way() {
     let unanswered = hold::run(&paths, newer, "192.168.1.0/24", io::empty(), io::sink()).unwrap_err();
     assert!(unanswered.to_string().contains("did not answer"), "{unanswered}");
     hang_up.join().unwrap();
-    // A helper killed outright leaves its socket file behind; the next session takes it.
+    // A helper killed outright leaves its socket files behind; the next session takes them.
     std::fs::remove_file(paths.control()).unwrap();
     drop(UnixListener::bind(paths.control()).unwrap());
+    drop(UnixListener::bind(&paths.agent).unwrap());
+    assert!(!status(&paths).unwrap().active);
     let mut next = Session::start(&paths, newer);
     assert_eq!(status(&paths).unwrap().proxy, Some(next.ready.proxy.to_string()));
     next.stop();
@@ -332,13 +338,17 @@ fn preparing_creates_a_private_directory_and_refuses_other_files() {
     assert_eq!(mode & 0o777, 0o700);
     let file = Paths {
         directory: root.path().join("file"),
+        agent: paths.agent.clone(),
     };
     std::fs::write(&file.directory, "").unwrap();
     assert!(prepare(&file).is_err());
+    let system = Paths::system();
     assert_eq!(
-        Paths::system().bridge(&Nonce::parse(NONCE).unwrap()).to_string_lossy(),
+        system.bridge(&Nonce::parse(NONCE).unwrap()).to_string_lossy(),
         Nonce::parse(NONCE).unwrap().bridge_socket()
     );
+    // Agents reach their socket without entering the private directory.
+    assert!(!system.agent.starts_with(&system.directory));
 }
 
 #[test]

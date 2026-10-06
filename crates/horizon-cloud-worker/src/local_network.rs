@@ -4,6 +4,10 @@
 //!
 //! The worker never decides what is reachable: every connection is a SOCKS5 CONNECT that the
 //! owner's Horizon checks against the bridged subnet, and its refusal is what agents see.
+//!
+//! Agents run as their own user, so the helper serves them on a socket that every local user
+//! can connect to and that answers only the agent operations. Its private control socket, in
+//! the root-only directory with the bridge sockets, also takes requests from a newer helper.
 mod forward;
 mod hold;
 mod mcp;
@@ -25,6 +29,8 @@ use std::{
     time::Duration,
 };
 
+/// The socket agents reach the running helper on; only root can create files beside it.
+const AGENT_SOCKET: &str = "/run/horizon-local-network.sock";
 const OFF: &str = "Local Network Bridge is off. Only the owner can turn it on, from this cloud's card in Horizon.";
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Room for a discovery answer on the control socket.
@@ -34,12 +40,14 @@ const MAX_MESSAGE: u64 = 512 * 1024;
 #[derive(Clone, Debug)]
 pub(crate) struct Paths {
     directory: PathBuf,
+    agent: PathBuf,
 }
 
 impl Paths {
     fn system() -> Self {
         Self {
             directory: PathBuf::from(DIRECTORY),
+            agent: PathBuf::from(AGENT_SOCKET),
         }
     }
 
@@ -53,6 +61,12 @@ impl Paths {
 
     fn lock(&self) -> PathBuf {
         self.directory.join("lock")
+    }
+
+    /// Where a socket is made ready before it is moved into place, so it never shows a
+    /// half-set mode.
+    fn staging(&self, name: &str) -> PathBuf {
+        self.directory.join(format!("{name}.new"))
     }
 }
 
@@ -73,7 +87,19 @@ enum Request {
         worker_port: u16,
     },
     /// From a newer session's helper, asking this one to make way if its session was lost.
+    /// Only the private control socket takes it.
     Retire,
+}
+
+impl Request {
+    /// Whether an agent may ask for this on the agent socket. Every new request must be
+    /// decided here.
+    fn for_agents(&self) -> bool {
+        match self {
+            Self::Status | Self::Discover | Self::Probe { .. } | Self::Forward { .. } | Self::Unforward { .. } => true,
+            Self::Retire => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -196,10 +222,23 @@ fn prepare(paths: &Paths) -> io::Result<()> {
     std::fs::set_permissions(&paths.directory, std::fs::Permissions::from_mode(0o700))
 }
 
-/// Asks the running helper; with no helper listening, the bridge is off.
+/// Asks the running helper on the agent socket; with no helper listening, the bridge is off.
 fn exchange(paths: &Paths, request: &Request) -> io::Result<Answer> {
-    let Ok(mut stream) = UnixStream::connect(paths.control()) else {
-        return Ok(Answer::Status(Status::off()));
+    let mut stream = match UnixStream::connect(&paths.agent) {
+        Ok(stream) => stream,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => {
+            return Ok(Answer::Status(Status::off()));
+        }
+        // Anything else, such as a permission problem, must not read as the bridge being off.
+        Err(error) => {
+            return Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "Cannot reach the Local Network Bridge at {}: {error}",
+                    paths.agent.display()
+                ),
+            ));
+        }
     };
     stream.set_read_timeout(Some(CONTROL_TIMEOUT))?;
     stream.set_write_timeout(Some(CONTROL_TIMEOUT))?;
