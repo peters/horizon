@@ -16,8 +16,11 @@ A result of `pending` means that the run did not do the test yet.
 ## 1. Summary
 
 The fixture, the first setup tasks, the repository configuration and most price
-catalog tests passed. One Hetzner CPU cloud on the test tailnet deployed and became
-Ready in the selected location. Three worker picker tests failed. The Claude sign-in
+catalog tests passed. A Hetzner cloud and a RunPod cloud deployed on the test
+tailnet and reached each other. Stop and resume on Hetzner kept the volume data,
+the host key and the tailnet node ID. Three worker picker tests and the tailnet
+name test failed. Two tests from the PC were blocked, because the PC was not on
+the test tailnet. The Claude sign-in
 test failed because the device `type` action changed the typed key. The run did
 not do the other tests yet.
 
@@ -80,9 +83,9 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 | [C30](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | — | — |
 | [C31](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | The Hetzner worker ran in the selected location. The RunPod check waits for D02. | — |
 | [D01](../procedures/cloud-panels/d-deployment.md) | pass | A Hetzner CPU cloud on the test tailnet reached Ready in about 2 minutes. | — |
-| [D02](../procedures/cloud-panels/d-deployment.md) | pending | — | — |
+| [D02](../procedures/cloud-panels/d-deployment.md) | pass | A RunPod CPU cloud on a network volume and the test tailnet became Ready. | — |
 | [D03](../procedures/cloud-panels/d-deployment.md) | pending | — | — |
-| [D04](../procedures/cloud-panels/d-deployment.md) | pending | — | — |
+| [D04](../procedures/cloud-panels/d-deployment.md) | pass | The checkout had the expected commit, no local changes and the agent user as owner. | — |
 | [D05](../procedures/cloud-panels/d-deployment.md) | pass | The timeline on the card matched the stages that the run saw. | — |
 | [E01](../procedures/cloud-panels/e-panels.md) | pending | — | — |
 | [E02](../procedures/cloud-panels/e-panels.md) | fail | The Claude panel started, but sign-in failed. The device `type` action changed the typed key. | [#1301](https://github.com/peters/horizon/issues/1301) |
@@ -92,8 +95,8 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 | [E06](../procedures/cloud-panels/e-panels.md) | pending | — | — |
 | [E07](../procedures/cloud-panels/e-panels.md) | pending | — | — |
 | [E08](../procedures/cloud-panels/e-panels.md) | pending | — | — |
-| [E09](../procedures/cloud-panels/e-panels.md) | pending | — | — |
-| [L01](../procedures/cloud-panels/l-lifecycle.md) | pending | — | — |
+| [E09](../procedures/cloud-panels/e-panels.md) | pass | `cloud_deploy endpoint` gave the endpoint. Root SSH worked with the pinned host key. | — |
+| [L01](../procedures/cloud-panels/l-lifecycle.md) | pass | The stop took 12 seconds and deleted the server. The resume took 89 seconds on a new server. The marker file stayed. | — |
 | [L02](../procedures/cloud-panels/l-lifecycle.md) | pending | — | — |
 | [L03](../procedures/cloud-panels/l-lifecycle.md) | pending | — | — |
 | [L04](../procedures/cloud-panels/l-lifecycle.md) | pending | — | — |
@@ -101,22 +104,22 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 | [L06](../procedures/cloud-panels/l-lifecycle.md) | pending | — | — |
 | [L07](../procedures/cloud-panels/l-lifecycle.md) | pending | — | — |
 | [L08](../procedures/cloud-panels/l-lifecycle.md) | pending | — | — |
-| [L09](../procedures/cloud-panels/l-lifecycle.md) | pending | — | — |
+| [L09](../procedures/cloud-panels/l-lifecycle.md) | pass | The resume made a new server. The volume data and the host key stayed. Pinned SSH worked. | — |
 | [L10](../procedures/cloud-panels/l-lifecycle.md) | pending | — | — |
 | [T01](../procedures/cloud-panels/t-tailnets.md) | pass | A short key kept **Save tailnet** disabled. The settings JSON had no auth key. | — |
 | [T02](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
 | [T03](../procedures/cloud-panels/t-tailnets.md) | pass | The card showed the test tailnet and **Selected at provisioning**. | — |
-| [T04](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
-| [T05](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
-| [T06](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
-| [T07](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
-| [T08](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
-| [T09](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
-| [T10](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
+| [T04](../procedures/cloud-panels/t-tailnets.md) | pass | `tailscaled` ran in userspace mode with the SOCKS5 proxy on `127.0.0.1:1055` and its state on `/workspace`. | — |
+| [T05](../procedures/cloud-panels/t-tailnets.md) | pass | `devices.json` listed the node as online with its tailnet addresses. | — |
+| [T06](../procedures/cloud-panels/t-tailnets.md) | blocked | The run used a separate test tailnet. The PC was not on it. | — |
+| [T07](../procedures/cloud-panels/t-tailnets.md) | blocked | The run used a separate test tailnet. The PC was not on it. | — |
+| [T08](../procedures/cloud-panels/t-tailnets.md) | pass | A random value crossed the tailnet in both directions between two clouds. | — |
+| [T09](../procedures/cloud-panels/t-tailnets.md) | pass | A Hetzner cloud and a RunPod cloud reached each other over the tailnet. This was the first live RunPod tailnet test. | — |
+| [T10](../procedures/cloud-panels/t-tailnets.md) | fail | The node ID and the tailnet IP address stayed, but the tailnet name changed after the resume. | [#1310](https://github.com/peters/horizon/issues/1310) |
 | [T11](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
 | [T12](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
 | [T13](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
-| [T14](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
+| [T14](../procedures/cloud-panels/t-tailnets.md) | pass | The agent user reached the other cloud by tailnet name through SOCKS5 and by IP address through the HTTP proxy. | — |
 | [G01](../procedures/cloud-panels/g-companions.md) | pending | — | — |
 | [G02](../procedures/cloud-panels/g-companions.md) | pending | — | — |
 | [G03](../procedures/cloud-panels/g-companions.md) | pending | — | — |
@@ -153,6 +156,7 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 - [#1303](https://github.com/peters/horizon/issues/1303): the worker list is not in the order of the estimated total across providers.
 - [#1304](https://github.com/peters/horizon/issues/1304): a region chip says that no worker is in stock when no data center can hold the volume.
 - [#1305](https://github.com/peters/horizon/issues/1305): the parser of RunPod stock and the picker search need stronger checks.
+- [#1310](https://github.com/peters/horizon/issues/1310): the tailnet name of a Hetzner cloud changed after a stop and a resume.
 - [#1301](https://github.com/peters/horizon/issues/1301): device `type` actions lost characters at action boundaries. This is a defect of the test tool.
 - [#1296](https://github.com/peters/horizon/issues/1296): a flaky terminal test can stop a CI shard until the time limit.
 
@@ -161,6 +165,8 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 - The procedure was written during the run. The run used the same steps, but
   not in the final text.
 - A02 and C07 were done again on a later candidate that contains the fixes.
+- The run used other cloud titles than the planned clouds of the procedure.
+- T06 and T07 were not done, because the PC was not on the test tailnet.
 
 ## 5. Cleanup
 

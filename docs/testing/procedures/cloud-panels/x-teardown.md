@@ -72,7 +72,7 @@ provider APIs, that no test server, pod or volume continues to cost money.
 
 ### 6.1 X01 — Delete every test cloud through the UI
 
-Do steps 1 to 7 for each cloud in the resource ledger that has an active resource.
+Do steps 1 to 8 for each cloud in the resource ledger that has an active resource.
 
 1. On the card of the cloud, click **Delete cloud resources…**.
 
@@ -95,31 +95,36 @@ Do steps 1 to 7 for each cloud in the resource ledger that has an active resourc
 
 5. If the card shows **Deletion failed**, do steps 1 to 3 again.
 
-   Result: The card shows **Deleted**. A second failure is a defect.
+   Result: The card shows **Deleted**.
 
-6. Mark each resource of the cloud as deleted in the resource ledger.
+6. If the card still does not show **Deleted**, stop the teardown of this cloud.
+
+   Result: The ledger keeps the resources as active. The card keeps the retry
+   action. Open a defect issue and tell the operator that the resources can cost money.
+
+7. If the card shows **Deleted**, mark each resource of the cloud as deleted in the resource ledger.
 
    Result: The ledger shows no active resource for this cloud.
 
-   > **CAUTION:** REMOVE ONLY THE CLOUD OF THIS STEP. Horizon removes the cloud
-   > and its panels from the board.
+   > **CAUTION:** REMOVE ONLY A CLOUD THAT SHOWS **DELETED**. Horizon removes the
+   > cloud and its panels from the board, and the retry action goes away.
 
-7. Click **Remove cloud**.
+8. If the card shows **Deleted**, click **Remove cloud**.
 
    Result: The cloud is not on the board.
 
-8. Find each test cloud that never got a worker, for example `smoke-lib0` from G08.
+9. Find each test cloud that never got a worker, for example `smoke-lib0` from G08.
 
    Result: Its card shows no worker. The ledger has no provider resource for it.
 
    > **CAUTION:** REMOVE ONLY THE TEST CLOUD WITHOUT A WORKER. Horizon removes the
    > cloud and its panels from the board.
 
-9. On the card of that cloud, click **Remove cloud**.
+10. On the card of that cloud, click **Remove cloud**.
 
-   Result: The cloud is not on the board.
+    Result: The cloud is not on the board.
 
-10. Examine the board.
+11. Examine the board.
 
     Result: The board shows no test cloud.
 

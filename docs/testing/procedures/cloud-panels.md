@@ -64,8 +64,10 @@ resource, sends a secret or changes tailnet access.
   - A Hetzner Cloud project that only Horizon uses.
 - Credentials in the current cloud settings of the operator, or in the secret
   store of the test account. Write only references in the evidence.
-- A container registry. A build profile needs push credentials. An image-only
-  profile needs a public image or an image that the pull credential can read.
+- A container registry. A build profile needs push credentials.
+- For each image-only profile, a public worker image that reports all contract
+  markers. Pin the image by digest, for example `<registry>/<image>@sha256:<digest>`.
+  A private image needs a pull credential that can read it.
 - A worker image that reports all contract markers, with
   `horizon-tailnet-contract=1`. The image must contain Claude, Codex, a browser
   and a desktop.
@@ -113,7 +115,7 @@ change in the report as a deviation.
 
 1. Do one test at a time.
 2. Take a fresh screenshot before each click. Do not use old coordinates.
-3. After a dialog opens, wait 2 seconds. Then take a new screenshot before you
+3. After a dialog opens, wait 3 seconds. Then take a new screenshot before you
    click ([issue #1297](https://github.com/peters/horizon/issues/1297)).
 4. The operator enters each real secret. Device `type` actions can lose
    characters at action boundaries
@@ -127,6 +129,10 @@ change in the report as a deviation.
    and write its link in the report.
 8. Put long commands for the fixture terminal in a script file below
    `<data-home>/smoke/bin`. Then type only the short command that starts the script.
+9. To open the panel picker inside a cloud frame, use a real Ctrl-double-click.
+   Two separate device click actions are not a double-click.
+10. If `cloud_deploy` shows `Another controller owns this cloud operation`, wait
+    10 seconds and run the same command again. Do not stop the candidate.
 
 ## 5. Setup
 
@@ -156,20 +162,20 @@ change in the report as a deviation.
 Some tasks need a cloud or a setting from a later area. Do the tasks in this
 order. The L area stops and deletes clouds that the T, G and N areas use.
 
-1. Do S01 to S05.
-2. Do A01 to A05, A07 and A08.
-3. Do B01 to B05, then do A06.
-4. Do C01 to C30. Do not do step 5 of C02 or the task C09 yet.
-5. Do O01 and O03.
-6. Do T01 and T02, then do C09. D01 needs the saved test tailnet.
-7. Do D01 to D05. D01 and D02 select the places that C31 examines.
-8. Do step 5 of C02, then C31, A09 and O02.
-9. Do E01 to E09.
-10. Do T03 to T11 and T14.
-11. Do G01 to G12, then do T12 and T13.
-12. Do N01 to N05.
-13. Do L01 to L10.
-14. Do X01 to X05.
+1. Do A01 to A05, A07 and A08. The setup of this procedure did S01 to S05.
+2. Do B01 to B05, then do A06.
+3. Do C01 to C30. Do not do step 5 of C02 or the task C09 yet.
+4. Do O01 and O03.
+5. Do T01 and T02, then do C09. D01 needs the saved test tailnet.
+6. Do D01 to D05. D01 and D02 select the places that C31 examines.
+7. Do step 5 of C02, then C31, A09 and O02.
+8. Do E01 to E09.
+9. Do T03 to T11 and T14.
+10. Do G01 to G12, then do T12 and T13.
+11. Do N01 to N05.
+12. Do L01 to L10.
+
+The cleanup of this procedure does X01 to X05.
 
 | Area | File | Tests | Cost |
 |---|---|---|---|

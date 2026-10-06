@@ -123,7 +123,7 @@ fixture terminal.
 
    Result: The New cloud dialog opens.
 
-2. Wait 2 seconds and take a new screenshot.
+2. Wait 3 seconds and take a new screenshot.
 
    Result: The dialog does not move.
 
@@ -180,7 +180,7 @@ fixture terminal.
 
 ### 6.2 D02 — Deploy a RunPod CPU cloud on a network volume
 
-1. Open **Cloud › New cloud…** and wait 2 seconds.
+1. Open **Cloud › New cloud…** and wait 3 seconds.
 
    Result: The New cloud dialog opens and does not move.
 
@@ -244,7 +244,7 @@ fixture terminal.
 
 ### 6.3 D03 — Deploy a RunPod GPU cloud with a CUDA minimum
 
-1. Open **Cloud › New cloud…** and wait 2 seconds.
+1. Open **Cloud › New cloud…** and wait 3 seconds.
 
    Result: The New cloud dialog opens and does not move.
 

@@ -503,13 +503,13 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
 ### 6.12 G12 — Compare the companion cloud checkout and use it
 
-1. In `<lib>`, record the commit of `HEAD`.
+1. In `<lib>`, record the commit, the LFS files and the submodules.
 
    ```sh
-   git -C <lib> rev-parse HEAD
+   git -C <lib> rev-parse HEAD; git -C <lib> lfs ls-files; git -C <lib> submodule status
    ```
 
-   Result: You have the pinned commit of the companion.
+   Result: You have the pinned commit and the content lists of the companion.
 
 2. In the worker shell of `smoke-a`, show the commit of the companion worktree.
 
@@ -525,12 +525,12 @@ also makes sure that agents can start and stop a companion cloud through MCP.
    ssh companion-lib 'git lfs ls-files; git submodule status'
    ```
 
-   Result: The values are the same as G11 step 1.
+   Result: The values are the same as the lists of step 1.
 
-4. In the companion worktree, make a commit on a test branch.
+4. In the companion worktree, make a commit on a test branch with a synthetic author.
 
    ```sh
-   ssh companion-lib 'git switch -c smoke-g12 && echo g12 > g12.txt && git add g12.txt && git commit -m g12'
+   ssh companion-lib 'git switch -c smoke-g12 && echo g12 > g12.txt && git add g12.txt && git -c user.name=Smoke -c user.email=smoke@example.invalid commit -m g12'
    ```
 
    Result: The command shows a new commit on `smoke-g12`.

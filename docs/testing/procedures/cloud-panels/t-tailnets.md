@@ -360,19 +360,28 @@ send TCP traffic to each other over the tailnet.
    Result: The card of `smoke-b` shows **Ready** and **Selected at provisioning**.
    The resource ledger contains its server and volume.
 
-2. In the worker shell of `smoke-b`, find the tailnet address of the worker.
+2. In the worker shell of `smoke-b`, find the tailnet name and address of the worker.
 
    ```sh
-   jq -r '.devices[0].addresses[0]' /run/horizon-tailnet-devices/devices.json
+   jq -r '.devices[0] | .name, .addresses[0]' /run/horizon-tailnet-devices/devices.json
    ```
 
-   Result: You have the IPv4 tailnet address of `smoke-b`.
+   Result: You have the tailnet name and the IPv4 tailnet address of `smoke-b`.
+   The first device in the list is the worker itself.
 
 3. In the worker shell of `smoke-b`, start the test server as in T07 steps 2 and 3.
 
    Result: The server on `smoke-b` listens on `127.0.0.1:18081`.
 
-4. In the worker shell of `smoke-a`, read the value from `smoke-b`.
+4. In the worker shell of `smoke-a`, show the user of the shell.
+
+   ```sh
+   id -un
+   ```
+
+   Result: The output is `horizon-agent`. The next steps use the proxies as the agent user.
+
+5. In the worker shell of `smoke-a`, read the value from `smoke-b` by IP address through the SOCKS5 proxy.
 
    ```sh
    curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-b-tailnet-address>:18081/nonce
@@ -380,7 +389,23 @@ send TCP traffic to each other over the tailnet.
 
    Result: The output is the same value as the file on `smoke-b`.
 
-5. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
+6. Read the value from `smoke-b` by tailnet name through the SOCKS5 proxy.
+
+   ```sh
+   curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-b-tailnet-name>:18081/nonce
+   ```
+
+   Result: The output is the same value. The proxy resolves the tailnet name.
+
+7. Read the value from `smoke-b` through the HTTP proxy.
+
+   ```sh
+   curl -sS --max-time 20 -x http://127.0.0.1:1056 http://<smoke-b-tailnet-address>:18081/nonce
+   ```
+
+   Result: The output is the same value.
+
+8. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
 
    Result: The server stops.
 
@@ -432,46 +457,59 @@ send TCP traffic to each other over the tailnet.
 
    Result: The evidence contains the node identity before the stop.
 
+3. In the root shell of `smoke-a` from E09, record the node ID.
+
+   ```sh
+   tailscale --socket=/run/horizon-tailnet/tailscaled.sock status --json | jq -r '.Self.ID'
+   ```
+
+   Result: The evidence contains the node ID before the stop.
+
    > **CAUTION:** STOP ONLY `smoke-a`. On Hetzner, the stop deletes the server and
    > ends all processes on the worker.
 
-3. Click **Stop worker…** on the card of `smoke-a`.
+4. Click **Stop worker…** on the card of `smoke-a`.
 
    Result: The card asks for a second click on **Stop worker**.
 
-4. In the card, click **Stop worker**.
+5. In the card, click **Stop worker**.
 
    Result: The card shows **Stopped**. On Hetzner, Horizon deletes the server and
    keeps the volume.
 
-5. Record the deletion of the server in the resource ledger.
+6. Record the deletion of the server in the resource ledger.
 
    Result: The ledger shows the server of `smoke-a` as deleted.
 
    > **CAUTION:** THIS STEP RENTS COMPUTE. On Hetzner, the next reconnect makes a new
    > server. Record it in the resource ledger.
 
-6. Click **Resume worker**.
+7. Click **Resume worker**.
 
    Result: The card offers **Reconnect cloud**, or it starts the reconnect.
 
-7. If the card shows **Reconnect cloud**, click **Reconnect cloud**.
+8. If the card shows **Reconnect cloud**, click **Reconnect cloud**.
 
    Result: The card shows **Ready**.
 
-8. Write the new server ID in the resource ledger.
+9. Write the new server ID in the resource ledger.
 
    Result: The ledger contains the new server of `smoke-a`.
 
-9. In a new worker shell of `smoke-a`, show the name and the addresses of the worker.
+10. In a new worker shell of `smoke-a`, show the name and the addresses of the worker.
 
-   ```sh
-   jq -c '.devices[0] | {name, addresses}' /run/horizon-tailnet-devices/devices.json
-   ```
+    ```sh
+    jq -c '.devices[0] | {name, addresses}' /run/horizon-tailnet-devices/devices.json
+    ```
 
-   Result: The name and the addresses are the same as in step 2.
+    Result: The addresses are the same as in step 2. If the name is not the
+    same, record the known defect [issue #1310](https://github.com/peters/horizon/issues/1310).
 
-10. Examine the device list of the test tailnet.
+11. In the root shell of `smoke-a`, record the node ID again, as in step 3.
+
+    Result: The node ID is the same as in step 3.
+
+12. Examine the device list of the test tailnet.
 
     Result: The tailnet shows one node for `smoke-a`, not two.
 
@@ -524,7 +562,7 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The count is the same as in step 1. The PC and `smoke-b` are online.
 
-7. Do T08 step 4 again with a new test server on `smoke-b`.
+7. Do T08 step 5 again with a new test server on `smoke-b`.
 
    Result: The worker reaches `smoke-b` with the same node identity.
 
@@ -600,23 +638,31 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The output is the same value as the file on `smoke-b`.
 
-3. In the worker shell of `smoke-a`, read the value through the HTTP proxy.
+3. In the worker shell of `smoke-a`, read the value by tailnet name through the SOCKS5 proxy.
 
    ```sh
-   curl -sS --max-time 20 --proxy http://127.0.0.1:1056 http://<smoke-b-tailnet-address>:18081/nonce
+   curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-b-tailnet-name>:18081/nonce
    ```
 
    Result: The output is the same value.
 
-4. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
+4. In the worker shell of `smoke-a`, read the value through the HTTP proxy.
+
+   ```sh
+   curl -sS --max-time 20 -x http://127.0.0.1:1056 http://<smoke-b-tailnet-address>:18081/nonce
+   ```
+
+   Result: The output is the same value.
+
+5. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
 
    Result: The server stops.
 
-5. In the worker shell of `smoke-a`, start the test server as in T07 steps 2 and 3.
+6. In the worker shell of `smoke-a`, start the test server as in T07 steps 2 and 3.
 
    Result: The server on `smoke-a` listens on `127.0.0.1:18081`.
 
-6. In the worker shell of `smoke-b`, read the value from `smoke-a` through the SOCKS5 proxy.
+7. In the worker shell of `smoke-b`, read the value from `smoke-a` through the SOCKS5 proxy.
 
    ```sh
    curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-a-tailnet-address>:18081/nonce
@@ -624,17 +670,25 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The output is the same value as the file on `smoke-a`.
 
-7. In the worker shell of `smoke-b`, read the value through the HTTP proxy.
+8. In the worker shell of `smoke-b`, read the value by tailnet name through the SOCKS5 proxy.
 
    ```sh
-   curl -sS --max-time 20 --proxy http://127.0.0.1:1056 http://<smoke-a-tailnet-address>:18081/nonce
+   curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-a-tailnet-name>:18081/nonce
    ```
 
    Result: The output is the same value.
 
-8. In the worker shell of `smoke-a`, stop the test server with Ctrl-C.
+9. In the worker shell of `smoke-b`, read the value through the HTTP proxy.
 
-   Result: The server stops.
+   ```sh
+   curl -sS --max-time 20 -x http://127.0.0.1:1056 http://<smoke-a-tailnet-address>:18081/nonce
+   ```
+
+   Result: The output is the same value.
+
+10. In the worker shell of `smoke-a`, stop the test server with Ctrl-C.
+
+    Result: The server stops.
 
 ## 7. Pass criteria
 

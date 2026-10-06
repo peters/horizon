@@ -111,7 +111,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 
 2. Click **New cloud…**.
 
-   Result: The New cloud dialog opens. Wait 2 seconds before the next click.
+   Result: The New cloud dialog opens. Wait 3 seconds before the next click.
 
 3. Type `<home>/smoke/app` as the repository.
 

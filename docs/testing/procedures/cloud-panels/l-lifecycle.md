@@ -72,7 +72,9 @@ Use `smoke-a`.
 
 1. On the card of `smoke-a`, click **Stop worker…**.
 
-   Result: The card asks **Stop this worker?** and shows **Stop worker** and **Keep running**.
+   Result: The card asks for a confirmation and shows **Stop worker** and
+   **Keep running**. On Hetzner, the text says that the server is deleted and
+   that the workspace volume is kept and stays billable.
 
    > **CAUTION:** STOP ONLY `smoke-a`. The processes on the worker stop. On
    > Hetzner, the stop deletes the server and keeps the volume.
@@ -326,7 +328,7 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
 ### 6.7 L07 — Make sure that idle stop works
 
-1. Open **Cloud › New cloud…** and wait 2 seconds.
+1. Open **Cloud › New cloud…** and wait 3 seconds.
 
    Result: The New cloud dialog opens and does not move.
 
@@ -488,11 +490,12 @@ Use `smoke-a`.
 
 11. Do steps 1 and 2 again.
 
-    Result: The fingerprint is not the same as before. Horizon pinned the new host key.
+    Result: The fingerprint is the same as before. The worker restores its host
+    key from `/workspace`, and Horizon pins it for the new server.
 
-12. Connect as in task E09 step 3.
+12. Connect as in task E09 step 4.
 
-    Result: SSH connects with the new pinned host key and shows no prompt.
+    Result: SSH connects with the pinned host key and shows no prompt.
 
 ### 6.10 L10 — Stop and resume a RunPod cloud
 

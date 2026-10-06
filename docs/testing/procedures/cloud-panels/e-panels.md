@@ -54,9 +54,14 @@ worker MCP servers and the SSH route.
 
 ### 6.1 E01 — Open a Shell panel in the shared checkout
 
-1. In the cloud `smoke-a`, open the panel picker.
+1. Hold Ctrl and double-click an empty area inside the cloud frame of `smoke-a`.
 
-   Result: The picker shows **Add panel**.
+   ```sh
+   DISPLAY=<display> xdotool mousemove <x> <y> keydown ctrl click --repeat 2 --delay 80 1 keyup ctrl
+   ```
+
+   Result: The panel picker opens and shows **Add panel**. Two separate device
+   clicks do not open it.
 
 2. Click **Shell**.
 
@@ -86,7 +91,7 @@ Device `type` actions can change a typed key
 form shows as saved can still be wrong. This task examines the sign-in with a
 real request.
 
-1. In the cloud `smoke-a`, open the panel picker and click **Claude Code**.
+1. In `smoke-a`, open the panel picker as in E01 and click **Claude Code**.
 
    Result: A Claude Code panel opens and the agent starts.
 
@@ -115,7 +120,7 @@ real request.
 
 ### 6.3 E03 — Start a Codex panel
 
-1. In the cloud `smoke-a`, open the panel picker and click **Codex**.
+1. In `smoke-a`, open the panel picker as in E01 and click **Codex**.
 
    Result: A Codex panel opens.
 
@@ -138,7 +143,7 @@ real request.
 
 ### 6.4 E04 — Load a page in a Browser panel
 
-1. In the cloud `smoke-a`, open the panel picker and click **Browser**.
+1. In `smoke-a`, open the panel picker as in E01 and click **Browser**.
 
    Result: A Browser panel opens in the cloud.
 
@@ -166,11 +171,11 @@ real request.
 
 ### 6.6 E06 — Open the Editor and Usage panels
 
-1. In the cloud `smoke-a`, open the panel picker and click **Markdown**.
+1. In `smoke-a`, open the panel picker as in E01 and click **Markdown**.
 
    Result: An Editor panel opens in the cloud.
 
-2. Open the panel picker again and click **Usage**.
+2. Open the panel picker again as in E01 and click **Usage**.
 
    Result: A Usage panel opens in the cloud and shows usage data or a clear message.
 
@@ -248,9 +253,14 @@ real request.
    ```
 
    Result: The output is JSON with `host`, `port`, `user`, `host_key_alias`,
-   `known_hosts` and `identity_file`. The output contains no secret.
+   `known_hosts` and `identity_file`. `known_hosts` is the path of a file, not
+   the key text. The output contains no secret.
 
-3. Connect with the values from step 2 and the pinned host key.
+3. If the output shows `Another controller owns this cloud operation`, wait 10 seconds and do step 2 again.
+
+   Result: The command gives the JSON. The candidate continues to run.
+
+4. Connect with the values from step 2 and the pinned host key.
 
    ```sh
    ssh -o StrictHostKeyChecking=yes -o HostKeyAlias="<host_key_alias>" \
@@ -260,7 +270,7 @@ real request.
 
    Result: The command stops with exit code 0. SSH shows no host key prompt.
 
-4. Do step 3 again with an empty file as `UserKnownHostsFile`.
+5. Do step 4 again with an empty file as `UserKnownHostsFile`.
 
    Result: SSH refuses the connection because it has no host key.
 
@@ -281,7 +291,7 @@ real request.
 
    Result: The panels close. The Shell and agent panels stay open for area T.
 
-2. Delete the empty known hosts file of E09 step 4.
+2. Delete the empty known hosts file of E09 step 5.
 
    Result: The file does not exist.
 

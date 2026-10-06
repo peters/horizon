@@ -72,7 +72,7 @@ setting must open a repair form.
    Result: The **Cloud settings** dialog opens. It shows the **RunPod**,
    **Hetzner Cloud** and **Coding agents** cards.
 
-3. Wait 2 seconds and take a new screenshot.
+3. Wait 3 seconds and take a new screenshot.
 
    Result: The dialog is at the same position and size as in the first screenshot.
 
@@ -417,6 +417,31 @@ Do this task after B02. It needs the synthetic repository.
 18. Ask the operator to revoke the GHCR token at GitHub.
 
     Result: The token cannot read the image. Horizon does not revoke the token at its issuer.
+
+The `runpod-build` profile needs a second entry with a push credential.
+G02 and L05 use this entry. Keep it until the end of area L.
+
+19. In the **Container registry** card, click **Add image repository**.
+
+    Result: The card shows **New image repository** and empty fields.
+
+20. Type `<build-repository>` in the **Image repository** field.
+
+    Result: The field shows the repository of the build profile.
+
+    > **CAUTION:** THE OPERATOR MUST ENTER THE CREDENTIALS. A device `type` action
+    > can lose characters, and a recording can show a credential.
+
+21. Let the operator fill the pull fields and the **Publishing credential** fields for `<build-repository>`.
+
+    Result: The pull fields and the push fields are full. The credentials do not show.
+
+    > **CAUTION:** SAVE ONLY CREDENTIALS FOR THE TEST REPOSITORY. Use a read-only
+    > pull credential and a push credential for that repository only.
+
+22. Click **Save settings**.
+
+    Result: The card lists `<build-repository>`. The settings file contains only file references.
 
 ### 6.9 A09 — Send a Git credential to the worker and remove unbound keys
 
