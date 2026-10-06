@@ -14,6 +14,7 @@ use std::{
     io,
     path::Path,
     process::Command,
+    time::Duration,
 };
 
 /// The account that runs agent and shell sessions on an isolated worker.
@@ -174,12 +175,22 @@ impl Runtime {
 
     /// Runs the readiness command as the agent account through the isolation
     /// launcher, so Ready means that agent sessions can use the alias too.
-    pub(super) fn verify_agent_access(&self, ssh_alias: &str, command: &str) -> io::Result<()> {
+    /// `timeout` is what remains of the Connect budget after the root probe.
+    pub(super) fn verify_agent_access(&self, ssh_alias: &str, command: &str, timeout: Duration) -> io::Result<()> {
         let (Some(launcher), Some(_)) = (&self.workspace_launcher, &self.agent_account) else {
             return Ok(());
         };
-        let observed = ssh::checked(Command::new(launcher).args(["agent", "ssh", ssh_alias, command]))
-            .map_err(|error| io::Error::new(error.kind(), "Companion SSH access failed for agent sessions"))?;
+        if timeout.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Companion SSH access for agent sessions was not checked in time",
+            ));
+        }
+        let observed = ssh::checked_with_timeout(
+            Command::new(launcher).args(["agent", "ssh", ssh_alias, command]),
+            timeout,
+        )
+        .map_err(|error| io::Error::new(error.kind(), "Companion SSH access failed for agent sessions"))?;
         if observed.trim() == "true" {
             Ok(())
         } else {

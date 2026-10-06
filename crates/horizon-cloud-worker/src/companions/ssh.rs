@@ -76,6 +76,10 @@ pub(super) fn checked_with_timeout(command: &mut Command, timeout: Duration) -> 
     String::from_utf8(output).map_err(|_| io::Error::other("Invalid companion output"))
 }
 
+/// The root and agent readiness probes together. The controller allows a Connect
+/// request 45 seconds, which also covers its own SSH round trip to the source.
+const CONNECT_PROBES: Duration = Duration::from_secs(35);
+
 /// The published SSH configuration of one grant's alias.
 pub(super) fn alias_config(
     ssh_alias: &str,
@@ -141,6 +145,8 @@ impl Runtime {
         )?;
         let worktree = self.worktree(grant);
         let command = format!("git -C {} rev-parse --is-inside-work-tree", path_text(&worktree)?);
+        // Both readiness probes share one budget inside the controller's Connect deadline.
+        let deadline = Instant::now() + CONNECT_PROBES;
         let observed = checked(Command::new("ssh").arg("-F").arg(&probe).arg(&ssh_alias).arg(&command))?;
         if observed.trim() != "true" {
             return Err(io::Error::other("Companion worktree readiness failed"));
@@ -151,7 +157,10 @@ impl Runtime {
         };
         let published = files::write(&directory.join("config"), config.as_bytes())
             .and_then(|()| self.update_config())
-            .and_then(|()| self.verify_agent_access(&ssh_alias, &command))
+            .and_then(|()| {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                self.verify_agent_access(&ssh_alias, &command, remaining)
+            })
             .and_then(|()| files::write(&directory.join("connection.json"), &serde_json::to_vec(&response)?))
             .and_then(|()| self.publish_agent_access());
         if let Err(error) = published {

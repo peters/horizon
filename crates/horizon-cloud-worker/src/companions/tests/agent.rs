@@ -302,22 +302,34 @@ fn ready_requires_that_the_agent_account_can_use_the_alias() {
     let verify = |runtime: &Runtime, alias: &str| {
         // Another test thread can briefly hold the new script open while it forks.
         for _ in 0..200 {
-            match runtime.verify_agent_access(alias, command) {
+            match runtime.verify_agent_access(alias, command, Duration::from_secs(30)) {
                 Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy => {
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 result => return result,
             }
         }
-        runtime.verify_agent_access(alias, command)
+        runtime.verify_agent_access(alias, command, Duration::from_secs(30))
     };
     verify(&runtime, "companion-app").unwrap();
     assert!(verify(&runtime, "companion-other").is_err());
+    // An exhausted Connect budget refuses Ready without waiting.
+    assert!(
+        runtime
+            .verify_agent_access("companion-app", command, Duration::ZERO)
+            .is_err()
+    );
     runtime.workspace_launcher = Some("/usr/bin/false".into());
-    assert!(runtime.verify_agent_access("companion-app", command).is_err());
+    assert!(
+        runtime
+            .verify_agent_access("companion-app", command, Duration::from_secs(30))
+            .is_err()
+    );
     // Workers without isolation have no separate agent account to check.
     runtime.agent_account = None;
-    runtime.verify_agent_access("companion-app", command).unwrap();
+    runtime
+        .verify_agent_access("companion-app", command, Duration::from_secs(30))
+        .unwrap();
 }
 
 #[test]
