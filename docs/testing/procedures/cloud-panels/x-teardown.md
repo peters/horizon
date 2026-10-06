@@ -286,8 +286,9 @@ Do steps 8 to 15 for each cloud in the resource ledger that has an active resour
 
 6. Find each device whose node ID agrees with a tailnet line in the resource ledger.
 
-   Result: You have the list of leftover test nodes. A node can have a new name
-   after a resume ([issue #1310](https://github.com/peters/horizon/issues/1310)), so use the node ID.
+   Result: You have the list of leftover test nodes. An image without
+   `horizon-tailnet-contract=2` gives a node a new name after a resume
+   ([issue #1310](https://github.com/peters/horizon/issues/1310)), so use the node ID.
 
 7. Record the node ID, name, last seen time and state of each leftover test node.
 

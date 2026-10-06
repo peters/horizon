@@ -20,7 +20,7 @@ catalog tests passed. A Hetzner cloud and a RunPod cloud deployed on the test
 tailnet and reached each other. Stop and resume on Hetzner kept the volume data,
 the host key and the tailnet node ID. The run did not do the other tests yet.
 
-Three worker picker tests and the tailnet name test failed. The Claude sign-in
+Three worker picker tests and the device name test failed. Later pull requests fix the four defects, but a retest is not done yet. The Claude sign-in
 test failed because the device `type` action changed the typed key. A01 failed
 because the Cloud settings dialog moved after it opened. Three tests that need
 the PC were blocked, because the PC was not on the test tailnet.
@@ -67,17 +67,17 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 | [C13](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C14](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C15](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
-| [C16](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | **In stock only** hid Hetzner rows that the provider marks as unlisted. | [#1302](https://github.com/peters/horizon/issues/1302) |
+| [C16](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | **In stock only** hid Hetzner rows that the provider marks as unlisted. #1312 fixes this. A retest is not done yet. | [#1302](https://github.com/peters/horizon/issues/1302) |
 | [C17](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C18](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C19](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C20](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
-| [C21](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | The list showed RunPod rows first, then Hetzner rows. It was not in the order of the estimated total. | [#1303](https://github.com/peters/horizon/issues/1303) |
+| [C21](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | The list showed RunPod rows first, then Hetzner rows. It was not in the order of the estimated total. #1326 fixes this. A retest is not done yet. | [#1303](https://github.com/peters/horizon/issues/1303) |
 | [C22](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C23](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C24](../procedures/cloud-panels/c-new-cloud-dialog.md) | pass | The list showed each data center. Data centers that cannot hold the volume showed **Storage unavailable**. | — |
 | [C25](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
-| [C26](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | A region without storage showed that no worker is in stock, not **Storage unavailable**. | [#1304](https://github.com/peters/horizon/issues/1304) |
+| [C26](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | A region without storage showed that no worker is in stock, not **Storage unavailable**. #1330 fixes this. A retest is not done yet. | [#1304](https://github.com/peters/horizon/issues/1304) |
 | [C27](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C28](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C29](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
@@ -116,11 +116,11 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 | [T07](../procedures/cloud-panels/t-tailnets.md) | blocked | The run used a separate test tailnet. The PC was not on it. | — |
 | [T08](../procedures/cloud-panels/t-tailnets.md) | pass | A random value crossed the tailnet in both directions between two clouds. | — |
 | [T09](../procedures/cloud-panels/t-tailnets.md) | pass | A Hetzner cloud and a RunPod cloud reached each other over the tailnet. This was the first live RunPod tailnet test. | — |
-| [T10](../procedures/cloud-panels/t-tailnets.md) | fail | The node ID and the tailnet IP address stayed, but the tailnet name changed after the resume. | [#1310](https://github.com/peters/horizon/issues/1310) |
+| [T10](../procedures/cloud-panels/t-tailnets.md) | fail | The node ID and the tailnet IP address stayed, but the device name changed after the resume. #1318 fixes this. A retest is not done yet. | [#1310](https://github.com/peters/horizon/issues/1310) |
 | [T11](../procedures/cloud-panels/t-tailnets.md) | not run | — | — |
 | [T12](../procedures/cloud-panels/t-tailnets.md) | not run | — | — |
 | [T13](../procedures/cloud-panels/t-tailnets.md) | not run | — | — |
-| [T14](../procedures/cloud-panels/t-tailnets.md) | pass | The agent user reached the other cloud by tailnet name through SOCKS5 and by IP address through the HTTP proxy. | — |
+| [T14](../procedures/cloud-panels/t-tailnets.md) | pass | The agent user reached the other cloud by device name through SOCKS5 and by IP address through the HTTP proxy. | — |
 | [G01](../procedures/cloud-panels/g-companions.md) | not run | — | — |
 | [G02](../procedures/cloud-panels/g-companions.md) | not run | — | — |
 | [G03](../procedures/cloud-panels/g-companions.md) | not run | — | — |
@@ -153,11 +153,11 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 - [#1293](https://github.com/peters/horizon/issues/1293): a background price refresh showed **Comparison incomplete** and moved the worker list. Fixed by #1295.
 - [#1297](https://github.com/peters/horizon/issues/1297): the Cloud settings dialog moved about 1 second after it opened. Fixed by #1298.
 - [#1299](https://github.com/peters/horizon/issues/1299): the New cloud dialog in one column kept a small scroll area. Fixed by #1300.
-- [#1302](https://github.com/peters/horizon/issues/1302): **In stock only** hides Hetzner offers that the provider marks as unlisted.
-- [#1303](https://github.com/peters/horizon/issues/1303): the worker list is not in the order of the estimated total across providers.
-- [#1304](https://github.com/peters/horizon/issues/1304): a region chip says that no worker is in stock when no data center can hold the volume.
+- [#1302](https://github.com/peters/horizon/issues/1302): **In stock only** hid Hetzner offers that the provider marks as unlisted. Fixed by #1312.
+- [#1303](https://github.com/peters/horizon/issues/1303): the worker list was not in the order of the estimated total across providers. Fixed by #1326.
+- [#1304](https://github.com/peters/horizon/issues/1304): a region chip said that no worker is in stock when no data center can hold the volume. Fixed by #1330.
 - [#1305](https://github.com/peters/horizon/issues/1305): the parser of RunPod stock and the picker search need stronger checks.
-- [#1310](https://github.com/peters/horizon/issues/1310): the tailnet name of a Hetzner cloud changed after a stop and a resume.
+- [#1310](https://github.com/peters/horizon/issues/1310): the device name of a Hetzner cloud changed after a stop and a resume. Fixed by #1318.
 - [#1301](https://github.com/peters/horizon/issues/1301): device `type` actions lost characters at action boundaries. This is a defect of the test tool.
 - [#1296](https://github.com/peters/horizon/issues/1296): a flaky terminal test can stop a CI shard until the time limit.
 

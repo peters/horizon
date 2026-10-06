@@ -19,7 +19,7 @@ setting must open a repair form.
 
 ## 2. Applicability
 
-- Candidate: a debug build of `origin/main`.
+- Candidate: the frozen candidate of [area S](s-test-fixture.md).
 - Platforms: Linux with Xvfb.
 - This area does not test: the sign-in of an agent on a worker. Area E tests it.
 

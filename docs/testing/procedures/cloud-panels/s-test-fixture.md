@@ -18,7 +18,7 @@ child is the frozen candidate.
 
 ## 2. Applicability
 
-- Candidate: a debug build of `origin/main`.
+- Candidate: a debug build of `<candidate-commit>`.
 - Platforms: Linux with Xvfb.
 - This area does not test: a cloud function. The other areas use the fixture
   that this area starts.
@@ -41,7 +41,7 @@ child is the frozen candidate.
 - The [device smoke fixture](../../../../scripts/device-smoke/README.md) and the
   [persistent cloud launcher](../../cloud-workspaces-mvp-smoke.md#persistent-cloud-launcher-for-restart-scenarios)
   notes.
-- A clean worktree of `origin/main`.
+- A clean worktree of the repository.
 
 ## 5. Setup
 
@@ -65,13 +65,13 @@ child is the frozen candidate.
 
 ### 6.1 S01 — Build and freeze the candidate
 
-1. Fetch `origin/main` in the worktree.
+1. Fetch the repository and check out the candidate commit in the worktree.
 
    ```sh
-   git fetch origin && git checkout --detach origin/main
+   git fetch origin && git checkout --detach <candidate-commit>
    ```
 
-   Result: `HEAD` is the newest commit of `origin/main`.
+   Result: `git rev-parse HEAD` shows `<candidate-commit>`.
 
 2. Set a Cargo target directory that only this worktree uses.
 

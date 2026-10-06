@@ -19,7 +19,7 @@ the setup agent and reads local image-only settings. It makes sure that
 
 ## 2. Applicability
 
-- Candidate: a debug build of `origin/main`.
+- Candidate: the frozen candidate of [area S](s-test-fixture.md).
 - Platforms: Linux with Xvfb.
 - This area does not test: a deploy. No step in this area rents compute.
 
@@ -339,8 +339,8 @@ bind of S02 alone does not change the socket that the candidate uses.
 
 4. Record the output of each check in the evidence.
 
-   Result: The evidence shows `horizon-tailnet-contract=1` for the images that
-   the tailnet tests use.
+   Result: The evidence shows `horizon-tailnet-contract=1` and
+   `horizon-tailnet-contract=2` for the images that the tailnet tests use.
 
 ## 7. Pass criteria
 

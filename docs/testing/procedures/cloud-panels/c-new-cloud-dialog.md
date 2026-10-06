@@ -20,7 +20,7 @@ runs in the place that the dialog showed.
 
 ## 2. Applicability
 
-- Candidate: a debug build of `origin/main`.
+- Candidate: the frozen candidate of [area S](s-test-fixture.md).
 - Platforms: Linux with Xvfb. Providers: RunPod and Hetzner.
 - This area does not test: the deploy of a cloud. Area D tests it. C31 uses the
   clouds of D01 and D02.
@@ -807,20 +807,18 @@ changes:
 
 ### 6.26 C26 — Show Storage unavailable for a region without storage
 
-The New cloud picker procedure has no task for C26.
-
 1. Find a region in which no data center holds a standard network volume.
 
    Result: You have the region from the list of C24.
 
-2. Examine the chip of this region.
+2. Do task [C26](../new-cloud-picker.md#615-c26--region-without-storage) of the New cloud picker procedure. Use this region for **Oceania**.
 
-   Result: The chip says **Storage unavailable**. If it says `none in stock`,
-   record the known defect [issue #1304](https://github.com/peters/horizon/issues/1304).
+   Result: The chip of the region says **Storage unavailable** and is disabled.
+   It does not say `none in stock`.
 
 ### 6.27 C27 — Limit the RunPod stock to the region scope
 
-1. Do task [C27](../new-cloud-picker.md#615-c27--region-scope) of the New cloud picker procedure.
+1. Do task [C27](../new-cloud-picker.md#616-c27--region-scope) of the New cloud picker procedure.
 
    Result: The RunPod stock shows the stock in Europe. The Hetzner rows do not change.
 
@@ -838,14 +836,14 @@ The New cloud picker procedure has no task for C26.
 
    Result: The summary shows the RunPod worker and its storage.
 
-2. Do task [C28](../new-cloud-picker.md#616-c28--high-performance-storage) of the New cloud picker procedure.
+2. Do task [C28](../new-cloud-picker.md#617-c28--high-performance-storage) of the New cloud picker procedure.
 
    Result: With **High-performance**, the picks do not show and the storage
    price shows `Price not published`. With **Standard**, the picks show again.
 
 ### 6.29 C29 — Show a known stock for 32 vCPU · 256 GB
 
-1. Do task [C29](../new-cloud-picker.md#617-c29--stock-of-the-largest-size) of the New cloud picker procedure.
+1. Do task [C29](../new-cloud-picker.md#618-c29--stock-of-the-largest-size) of the New cloud picker procedure.
 
    Result: The summary shows `In stock`, `Low stock` or `Out of stock`.
 
@@ -856,7 +854,7 @@ The New cloud picker procedure has no task for C26.
 
 ### 6.30 C30 — Show only RunPod GPU types for a GPU profile
 
-1. Do task [C30](../new-cloud-picker.md#618-c30--gpu-workers) of the New cloud picker procedure.
+1. Do task [C30](../new-cloud-picker.md#619-c30--gpu-workers) of the New cloud picker procedure.
 
    Result: The dialog shows `GPU workers for the runpod-gpu profile`. No Hetzner row shows.
 

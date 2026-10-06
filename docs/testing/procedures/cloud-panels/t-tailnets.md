@@ -45,7 +45,8 @@ send TCP traffic to each other over the tailnet.
 - The fixture with a Secret Service from S05.
 - The test tailnet. Its auth key is reusable, pre-authorized and not ephemeral.
 - The PC is a device on the test tailnet. Tests T05, T06 and T07 need this.
-- A worker image that reports `horizon-tailnet-contract=1`. Use
+- A worker image that reports `horizon-tailnet-contract=1` and
+  `horizon-tailnet-contract=2`. Use
   [`check-markers.py`](../../../../examples/cloud-worker/README.md#helpers-from-the-published-artifact)
   in B05 to examine the image.
 - A worker shell in each cloud of this area. Until the fix for
@@ -413,13 +414,13 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
 
    Result: The ledger contains the four resources of `smoke-b`.
 
-10. In the worker shell of `smoke-b`, find the tailnet name and address of the worker.
+10. In the worker shell of `smoke-b`, find the device name and address of the worker.
 
     ```sh
     jq -r '.devices[0] | .name, .addresses[0]' /run/horizon-tailnet-devices/devices.json
     ```
 
-    Result: You have the tailnet name and the IPv4 tailnet address of `smoke-b`.
+    Result: You have the device name and the IPv4 tailnet address of `smoke-b`.
     The first device in the list is the worker itself.
 
 11. In the worker shell of `smoke-b`, start the test server as in T07 steps 2 and 3.
@@ -442,13 +443,13 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
 
     Result: The output is the same value as the file on `smoke-b`.
 
-14. Read the value from `smoke-b` by tailnet name through the SOCKS5 proxy.
+14. Read the value from `smoke-b` by device name through the SOCKS5 proxy.
 
     ```sh
     curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-b-tailnet-name>:18081/nonce
     ```
 
-    Result: The output is the same value. The proxy resolves the tailnet name.
+    Result: The output is the same value. The proxy resolves the device name.
 
 15. Read the value from `smoke-b` through the HTTP proxy.
 
@@ -559,8 +560,10 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
     jq -c '.devices[0] | {name, addresses}' /run/horizon-tailnet-devices/devices.json
     ```
 
-    Result: The addresses are the same as in step 2. If the name is not the
-    same, record the known defect [issue #1310](https://github.com/peters/horizon/issues/1310).
+    Result: The name and the addresses are the same as in step 2. The fix for
+    [issue #1310](https://github.com/peters/horizon/issues/1310) keeps the
+    device name. The [tailnet stable device name procedure](../tailnet-stable-device-name.md)
+    examines the name in more detail.
 
 11. Start a new root shell of `smoke-a` with E09 steps 2 to 4.
 
@@ -714,7 +717,7 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The output is the same value as the file on `smoke-b`.
 
-3. In the worker shell of `smoke-a`, read the value by tailnet name through the SOCKS5 proxy.
+3. In the worker shell of `smoke-a`, read the value by device name through the SOCKS5 proxy.
 
    ```sh
    curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-b-tailnet-name>:18081/nonce
@@ -746,7 +749,7 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The output is the same value as the file on `smoke-a`.
 
-8. In the worker shell of `smoke-b`, read the value by tailnet name through the SOCKS5 proxy.
+8. In the worker shell of `smoke-b`, read the value by device name through the SOCKS5 proxy.
 
    ```sh
    curl -sS --max-time 20 --socks5-hostname 127.0.0.1:1055 http://<smoke-a-tailnet-name>:18081/nonce

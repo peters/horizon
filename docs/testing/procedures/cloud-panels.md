@@ -18,8 +18,9 @@ report uses to give a result.
 
 ## 2. Applicability
 
-- Candidate: a debug build of `origin/main`. Use it for a full smoke test of
-  cloud panels, and after a change to a cloud function.
+- Candidate: a debug build of one exact commit, `<candidate-commit>`. For a full
+  smoke test, use the newest commit of `origin/main`. For a change to a cloud
+  function, use the head commit of the pull request.
 - Platforms: Linux with Xvfb. Providers: RunPod and Hetzner. Hetzner workers are
   CPU only.
 - This procedure does not test:
@@ -71,7 +72,7 @@ resource, sends a secret or changes tailnet access.
   markers. Pin the image by digest, for example `<registry>/<image>@sha256:<digest>`.
   A private image needs a pull credential that can read it.
 - A worker image that reports all contract markers, with
-  `horizon-tailnet-contract=1`. The image must contain Claude, Codex, a browser
+  `horizon-tailnet-contract=1` and `horizon-tailnet-contract=2`. The image must contain Claude, Codex, a browser
   and a desktop.
 - A test tailnet with a reusable, pre-authorized, non-ephemeral auth key. For the
   tests from PC to cloud, the PC must be on the same tailnet.
@@ -83,6 +84,7 @@ resource, sends a secret or changes tailnet access.
 
 | Name | Meaning |
 |---|---|
+| `<candidate-commit>` | The full SHA of the commit that the run builds. Record it in the report. |
 | `<run>` | The run directory. It is outside `$HOME` and outside `/tmp`, and it is not on a tmpfs with a user quota. The fixture hides `$HOME` and `/tmp`, so it cannot see `<run>/bin` there. |
 | `<state>` | The state directory of the persistent launcher, `<run>/fixture`. |
 | `<home>` | The real home path. Inside the fixture, the private home of the candidate shows at this path. |
@@ -304,9 +306,10 @@ Use these procedures alone for a run that changes their function.
 |---|---|
 | [cloud-settings-replace-key](cloud-settings-replace-key.md) | A01 and A02 |
 | [new-cloud-catalog-refresh](new-cloud-catalog-refresh.md) | C07 |
-| [new-cloud-picker](new-cloud-picker.md) | C12 to C25 and C27 to C30 |
+| [new-cloud-picker](new-cloud-picker.md) | C12 to C30 |
 | [cloud-agent-panel-start](cloud-agent-panel-start.md) | E02 |
 | [local-network-bridge-agent-access](local-network-bridge-agent-access.md) | N02 and N03 |
+| [tailnet-stable-device-name](tailnet-stable-device-name.md) | T10 |
 
 ## 7. Pass criteria
 
