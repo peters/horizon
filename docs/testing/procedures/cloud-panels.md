@@ -129,26 +129,28 @@ change in the report as a deviation.
 
 1. Do one test at a time.
 2. Take a fresh screenshot before each click. Do not use old coordinates.
-3. After a dialog opens, wait 3 seconds. Then take a new screenshot before you
-   click ([issue #1297](https://github.com/peters/horizon/issues/1297)).
-4. The operator enters each real secret. Device `type` actions can lose
+3. After a dialog opens, wait 3 seconds
+   ([issue #1297](https://github.com/peters/horizon/issues/1297)).
+4. Take a new screenshot of the open dialog before you click in it.
+5. The operator enters each real secret. Device `type` actions can lose
    characters at action boundaries
    ([issue #1301](https://github.com/peters/horizon/issues/1301)).
-5. Until the candidate contains the fix for issue #1301, do not type a real
+6. Until the candidate contains the fix for issue #1301, do not type a real
    secret with a device action.
-6. Write each new provider resource in the resource ledger when the cloud card
-   shows its ID. Record the provider, the type, the ID, the cloud title and the
-   UTC time.
-7. Write each issuer token that the run makes in the resource ledger, by name only.
-8. Give each test a result: pass, fail or blocked. An interim report can also
+7. Write each new provider resource in the resource ledger when the cloud card
+   shows its ID. A ledger line contains the provider, the type, the ID, the
+   cloud title and the UTC time.
+8. Write each issuer token that the run makes in the resource ledger, by name only.
+9. Give each test a result: pass, fail or blocked. An interim report can also
    use `not run`.
-9. For a fail, open a bug issue and write its link in the report.
-10. Put long commands for the fixture terminal in a script file below
-    `<data-home>/smoke/bin`. Then type only the short command that starts the script.
-11. To open the panel picker inside a cloud frame, use a real Ctrl-double-click.
+10. For a fail, open a bug issue and write its link in the report.
+11. Put long commands for the fixture terminal in a script file below
+    `<data-home>/smoke/bin`.
+12. In the fixture terminal, type only the short command that starts the script.
+13. To open the panel picker inside a cloud frame, use a real Ctrl-double-click.
     Two separate device click actions are not a double-click.
-12. If `cloud_deploy` shows `Another controller owns this cloud operation`, wait
-    10 seconds and run the same command again. Do not stop the candidate.
+14. If `cloud_deploy` shows `Another controller owns this cloud operation`, run
+    the same command again after 10 seconds. Do not stop the candidate.
 
 ## 5. Setup
 

@@ -10,8 +10,10 @@ issue: https://github.com/peters/horizon/issues/1264
 # Cloud panels test report, 2026-10-05
 
 This report records the first run of the
-[cloud panels test procedure](../procedures/cloud-panels.md). The run continues.
-A result of `not run` means that the run did not do the test yet.
+[cloud panels test procedure](../procedures/cloud-panels.md) on 2026-10-05. It
+is a snapshot. It contains the results until the first retests. Issue #1264
+records the later results and retests of the same run. A result of `not run`
+means that the run did not do the test before this snapshot.
 
 ## 1. Summary
 
@@ -20,10 +22,12 @@ catalog tests passed. A Hetzner cloud and a RunPod cloud deployed on the test
 tailnet and reached each other. Stop and resume on Hetzner kept the volume data,
 the host key and the tailnet node ID. The run did not do the other tests yet.
 
-Three worker picker tests and the device name test failed. Later pull requests fix the four defects, but a retest is not done yet. The Claude sign-in
-test failed because the device `type` action changed the typed key. A01 failed
-because the Cloud settings dialog moved after it opened. Three tests that need
-the PC were blocked, because the PC was not on the test tailnet.
+Three worker picker tests and the device name test failed. Later pull requests
+fix the four defects. Issue #1264 records a pass of C16, C21 and T10 after the
+fixes. The Claude sign-in test failed because the device `type` action changed
+the typed key. A01 failed because the Cloud settings dialog moved after it
+opened. Three tests that need the PC were blocked, because the PC was not on the
+test tailnet.
 
 Two retests used commit `73267151fbc8d1e9ed6433f2b3213fdf021fa8e3`, which contains
 the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
@@ -67,17 +71,17 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 | [C13](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C14](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C15](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
-| [C16](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | **In stock only** hid Hetzner rows that the provider marks as unlisted. #1312 fixes this. A retest is not done yet. | [#1302](https://github.com/peters/horizon/issues/1302) |
+| [C16](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | **In stock only** hid Hetzner rows that the provider marks as unlisted. #1312 fixes this. Issue #1264 records a pass on a later candidate. | [#1302](https://github.com/peters/horizon/issues/1302) |
 | [C17](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C18](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C19](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C20](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
-| [C21](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | The list showed RunPod rows first, then Hetzner rows. It was not in the order of the estimated total. #1326 fixes this. A retest is not done yet. | [#1303](https://github.com/peters/horizon/issues/1303) |
+| [C21](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | The list showed RunPod rows first, then Hetzner rows. It was not in the order of the estimated total. #1326 fixes this. Issue #1264 records a pass on a later candidate. | [#1303](https://github.com/peters/horizon/issues/1303) |
 | [C22](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C23](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C24](../procedures/cloud-panels/c-new-cloud-dialog.md) | pass | The list showed each data center. Data centers that cannot hold the volume showed **Storage unavailable**. | — |
 | [C25](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
-| [C26](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | A region without storage showed that no worker is in stock, not **Storage unavailable**. #1330 fixes this. A retest is not done yet. | [#1304](https://github.com/peters/horizon/issues/1304) |
+| [C26](../procedures/cloud-panels/c-new-cloud-dialog.md) | fail | A region without storage showed that no worker is in stock, not **Storage unavailable**. #1330 fixes this. | [#1304](https://github.com/peters/horizon/issues/1304) |
 | [C27](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C28](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
 | [C29](../procedures/cloud-panels/c-new-cloud-dialog.md) | not run | — | — |
@@ -116,7 +120,7 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 | [T07](../procedures/cloud-panels/t-tailnets.md) | blocked | The run used a separate test tailnet. The PC was not on it. | — |
 | [T08](../procedures/cloud-panels/t-tailnets.md) | pass | A random value crossed the tailnet in both directions between two clouds. | — |
 | [T09](../procedures/cloud-panels/t-tailnets.md) | pass | A Hetzner cloud and a RunPod cloud reached each other over the tailnet. This was the first live RunPod tailnet test. | — |
-| [T10](../procedures/cloud-panels/t-tailnets.md) | fail | The node ID and the tailnet IP address stayed, but the device name changed after the resume. #1318 fixes this. A retest is not done yet. | [#1310](https://github.com/peters/horizon/issues/1310) |
+| [T10](../procedures/cloud-panels/t-tailnets.md) | fail | The node ID and the tailnet IP address stayed, but the device name changed after the resume. #1318 fixes this. Issue #1264 records a pass on a later candidate. | [#1310](https://github.com/peters/horizon/issues/1310) |
 | [T11](../procedures/cloud-panels/t-tailnets.md) | not run | — | — |
 | [T12](../procedures/cloud-panels/t-tailnets.md) | not run | — | — |
 | [T13](../procedures/cloud-panels/t-tailnets.md) | not run | — | — |
