@@ -489,6 +489,31 @@ fn a_worker_without_an_idle_record_is_still_read_until_its_stop_is_confirmed() {
 }
 
 #[test]
+fn a_stop_another_check_recorded_first_is_still_shown() {
+    let cancel = Cancellation::default();
+    let reports = RefCell::new(Vec::new());
+    run(
+        &cancel,
+        Duration::ZERO,
+        // `cloud_deploy reconcile` recorded the worker's own stop before this check.
+        |_| Ok(IdleCheck::NotWatched),
+        || Ok(Some(runpod_stopped())),
+        None,
+        &|report| {
+            if let Report::StoppedOutside(state) = report {
+                reports.borrow_mut().push(state.stage);
+            }
+            true
+        },
+    );
+    assert_eq!(reports.into_inner(), [Stage::Stopped]);
+    assert!(
+        cancel.is_cancelled(),
+        "the watch ends the presentation of the stopped worker"
+    );
+}
+
+#[test]
 fn a_record_held_by_another_operation_skips_the_check_and_keeps_watching() {
     let checks = RefCell::new(
         vec![

@@ -140,6 +140,13 @@ fn run(
                 match load() {
                     Ok(Some(state)) if stops_itself_when_ready(&state) => failed = None,
                     Err(Error::Busy) => {}
+                    // Another check, as `cloud_deploy reconcile`, recorded the worker's own
+                    // stop first; the card still shows it ready.
+                    Ok(Some(state)) if recorded_outside_stop(&state) => {
+                        cancel.cancel();
+                        report(Report::StoppedOutside(Box::new(state)));
+                        return;
+                    }
                     _ => return,
                 }
             }
@@ -214,6 +221,14 @@ fn stops_itself_when_ready(state: &Deployment) -> bool {
         && state.profile.idle_stop_minutes.is_some()
         && state.stage == Stage::Ready
         && !state.stop_requested
+}
+
+/// A stopped record of a worker whose stop keeps it, as a provider check records a
+/// stop that Horizon did not make.
+fn recorded_outside_stop(state: &Deployment) -> bool {
+    Description::of(&state.profile).stopped == StoppedCost::WorkerKept
+        && state.stage == Stage::Stopped
+        && state.stop_requested
 }
 
 /// The saved record when it shows a stop in progress, read with the same retries

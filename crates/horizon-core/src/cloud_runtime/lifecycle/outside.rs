@@ -24,8 +24,11 @@ const REPORT_COMMAND: &str = "[ ! -e /run/horizon-worker/idle.json ] || exec hor
 const WORKER_POLL: Duration = Duration::from_secs(60);
 /// A sample older than this does not tell why a worker stopped.
 const EVIDENCE_AGE: Duration = Duration::from_mins(10);
-/// How often a provider check is tried while another operation holds the cloud.
-const BUSY_ATTEMPTS: u32 = 30;
+/// How often a provider check is tried, a second apart, while another operation
+/// holds the cloud. Longer than the provider check it may wait for: a cancelled check
+/// can still finish its settle and inspect requests, each bounded by the provider's
+/// request timeout.
+const BUSY_ATTEMPTS: u64 = 3 * horizon_cloud::runpod::REQUEST_TIMEOUT.as_secs();
 
 /// The idle record of a running worker, and when Horizon read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
