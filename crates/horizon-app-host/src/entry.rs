@@ -74,7 +74,11 @@ pub fn run_if_requested() -> bool {
 /// Standalone and packaged modes share identical ownership and error behavior.
 pub fn execute(arguments: &[String]) {
     if let Err(error) = run(arguments) {
-        if !arguments.iter().any(|argument| argument == "--run") {
+        if arguments.first().is_some_and(|argument| argument == "--run") {
+            if error != crate::Error::RunFailed {
+                crate::cli::report_error(error);
+            }
+        } else {
             eprintln!("{error}");
         }
         std::process::exit(2);

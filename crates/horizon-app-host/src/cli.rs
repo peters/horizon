@@ -14,6 +14,15 @@ impl Drop for Cancel {
     }
 }
 
+pub(crate) fn report_error(error: Error) {
+    let event = serde_json::json!({"phase":"error","message":error.to_string()});
+    let mut bytes = event.to_string().into_bytes();
+    bytes.push(b'\n');
+    if let Ok(output) = output::Output::new(std::io::stderr()) {
+        let _ = output.terminal(bytes);
+    }
+}
+
 /// # Errors
 /// Progress is NDJSON on stderr; stdout contains only the terminal retained report.
 pub async fn execute(host: Host, lifetime: Duration) -> Result<()> {

@@ -16,6 +16,28 @@ use std::{
     time::{Duration, Instant},
 };
 use uuid::Uuid;
+
+#[test]
+fn cli_setup_failure_reports_a_typed_progress_error_without_private_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let client = temp.path().join("private-client-does-not-exist.json");
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_horizon-native"))
+        .args(["--run", "--client"])
+        .arg(&client)
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty());
+    let event: serde_json::Value = serde_json::from_slice(&result.stderr).unwrap();
+    assert_eq!(event["phase"], "error");
+    assert_eq!(event["message"], horizon_app_host::Error::Unavailable.to_string());
+    assert!(
+        !String::from_utf8(result.stderr)
+            .unwrap()
+            .contains(&client.display().to_string())
+    );
+}
+
 fn account() -> Account {
     let bindings = ["user", "key"]
         .map(|reference| {
