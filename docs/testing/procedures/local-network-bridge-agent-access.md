@@ -57,7 +57,12 @@ the private control socket of the helper, and must not stop the bridge.
 
    Result: You know `<subnet>` and `<router>`, and `<router>` is in `<subnet>`.
 
-2. In the root shell on the worker, define a short command for the agent user.
+2. Record an IPv4 address that is not in `<subnet>`, for example `203.0.113.1`.
+   In this procedure, `<outside>` is this address.
+
+   Result: `<outside>` is not in `<subnet>`.
+
+3. In the root shell on the worker, define a short command for the agent user.
 
    ```sh
    agent() { runuser -u horizon-agent -- env HOME=/workspace/home "$@"; }
@@ -65,7 +70,7 @@ the private control socket of the helper, and must not stop the bridge.
 
    Result: The shell accepts the function.
 
-3. Examine the user that the function uses.
+4. Examine the user that the function uses.
 
    ```sh
    agent id -u
@@ -73,7 +78,7 @@ the private control socket of the helper, and must not stop the bridge.
 
    Result: The output is `10001`.
 
-4. Make sure that **Share local network** is off on the card of the cloud.
+5. Make sure that **Share local network** is off on the card of the cloud.
 
    Result: The card shows the switch in the off position.
 
@@ -175,10 +180,10 @@ the private control socket of the helper, and must not stop the bridge.
 
    Result: The output shows `<router>` and port `80` in `open`.
 
-2. Probe an address outside `<subnet>` as the agent user.
+2. Probe the address `<outside>` as the agent user.
 
    ```sh
-   agent horizon-cloud-worker local-network probe 10.255.255.1 80
+   agent horizon-cloud-worker local-network probe <outside> 80
    ```
 
    Result: The command fails. The message says that the address is outside the
