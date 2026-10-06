@@ -96,6 +96,24 @@ impl ClassicTransport for HttpClient {
     }
 }
 
+pub(super) fn interpret_quit(status: u16, bytes: &[u8]) -> Result<Value, HttpError> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Acknowledgement {
+        value: (),
+    }
+    if status == 204 && bytes.is_empty() {
+        return Ok(serde_json::json!({"value":null}));
+    }
+    let invalid = || HttpError::InvalidResponse("the provider did not confirm exact session release".into());
+    if status != 200 || bytes.iter().copied().find(|byte| !b" \n\r\t".contains(byte)) != Some(b'{') {
+        return Err(invalid());
+    }
+    let acknowledgement: Acknowledgement = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let () = acknowledgement.value;
+    Ok(serde_json::json!({"value":null}))
+}
+
 pub(super) fn evaluation_failure(
     error: &HttpError,
     deadline: &crate::evaluation::EvaluationDeadline,
@@ -250,5 +268,32 @@ mod tests {
             assert!(validate_request_path(path).is_err(), "{path}");
         }
         assert!(validate_request_path("/session/s1/element/a%20b%C3%A9/clear").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod quit_tests {
+    use super::*;
+    #[test]
+    fn exact_release_requires_duplicate_free_positive_acknowledgement() {
+        for (status, bytes, acknowledged) in [
+            (200, r#"{"value":null}"#, true),
+            (204, "", true),
+            (200, "{}", false),
+            (200, "[null]", false),
+            (200, "null", false),
+            (200, r#"{"value":{"error":"failed"}}"#, false),
+            (200, r#"{"value":{"error":"failed"},"value":null}"#, false),
+            (200, r#"{"value":null,"value":null}"#, false),
+            (200, r#"{"value":null,"status":13}"#, false),
+            (201, r#"{"value":null}"#, false),
+            (204, "{}", false),
+        ] {
+            assert_eq!(
+                interpret_quit(status, bytes.as_bytes()).is_ok(),
+                acknowledged,
+                "{status} {bytes}"
+            );
+        }
     }
 }

@@ -1,0 +1,44 @@
+[package]
+name = "horizon-app-host"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared host execution of owned native app sessions"
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+png.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+tokio = { workspace = true, features = ["io-std", "rt-multi-thread", "signal"] }
+horizon-core.workspace = true
+serde_json.workspace = true
+url.workspace = true
+horizon-app-provider.workspace = true
+horizon-app-process.workspace = true
+horizon-app-runtime.workspace = true
+horizon-app-testing.workspace = true
+horizon-browser.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+rmcp = { workspace = true, features = ["client"] }
+tokio = { workspace = true, features = ["io-util"] }
+sha2.workspace = true
+tempfile.workspace = true
+zeroize.workspace = true
+
+[[bin]]
+name = "horizon-native"
+path = "src/main.rs"

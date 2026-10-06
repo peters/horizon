@@ -954,3 +954,16 @@ fully visible, unobscured regions of the main Horizon render target. The bounded
 scaling worker wakes the host only after publishing a frame, so submission does
 not wait for the next capture timer. Runtime and measured performance boundaries
 are documented in [Linux casting](../casting.md).
+
+## Native application testing
+
+`horizon-app-host::actor` owns upload leases, two device lanes, admission and
+expiry for every interface. `runner` executes project recipes through that actor;
+MCP, CLI, the RFB viewer and the packaged headless entry point are adapters.
+`horizon-app-testing` validates project declarations and native element actions;
+`horizon-app-provider` owns BrowserStack uploads, downloads and the restricted
+local tunnel. `horizon-app-process` supplies exact foreground process guardians,
+and `horizon-app-runtime` retains the private account journal and reconciliation.
+The separate process and journal boundaries exist for crash ownership, not to
+create another in-memory session controller. Read [the runbook](remote-device-testing.md)
+for setup, limits and evidence boundaries.

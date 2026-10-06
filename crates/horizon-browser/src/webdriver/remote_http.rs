@@ -173,6 +173,13 @@ impl RemoteHttpClient {
 impl ClassicTransport for RemoteHttpClient {
     fn request(&self, method: &str, path: &str, body: Option<&Value>, timeout: Duration) -> Result<Value, HttpError> {
         let (status, bytes) = self.request_bytes(method, path, body, timeout)?;
+        if method == "DELETE"
+            && path
+                .strip_prefix("/session/")
+                .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+        {
+            return super::transport::interpret_quit(status, &bytes);
+        }
         interpret_body(status, &bytes)
     }
 }

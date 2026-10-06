@@ -143,6 +143,18 @@ GPU profile requires GPU capacity; a CPU result cannot qualify that lane.
   unsupported cases explicitly. Do not silently defer CLI/MCP support or require
   the settings UI to be open for an agent-facing capability to work.
 
+### Native app testing
+
+For iOS/Android App Automate work, read [the native runbook](docs/architecture/remote-device-testing.md)
+and the selected app's and companion backend's `AGENTS.md` first. Use the shared
+`device_test_run`/`app_*` MCP tools or `horizon --native-run`; provider credentials
+stay in Horizon. Build/upload each platform once, keep one isolated synthetic
+backend per lane, and test concurrently up to the fresh native quota and the
+two-lane bound. Use public `device_panel` viewers for live observation and retain
+separate real app-to-loopback, per-step evidence and cleanup proof. Follow the
+runbook's private client setup and exact reconciliation; do not substitute
+browser sessions/quota, shared backend resets or a new owner after uncertainty.
+
 ### Configuration Changes
 
 - When changing default presets, CLI flags, or any config-related code in `horizon-core/src/config.rs`, always sync the user's local config file (`~/.horizon/config.yaml`) to match

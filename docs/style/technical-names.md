@@ -50,6 +50,19 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | lag | The time between the newest frame on the host and the frame that the receiver shows. | latency, delay |
 | live example | The `horizon-chromecast` example program `live`. | probe, demo |
 
+## Native app tests
+
+| Name | Meaning |
+|---|---|
+| App Automate | BrowserStack's service for native apps on physical devices. |
+| native host | The packaged Horizon process that owns native app operations. |
+| client file | Private host configuration with the project, owner and state directory. |
+| matrix | The complete set of declared physical devices and operating systems. |
+| backend | A project's local service with a separate synthetic namespace for each lane. |
+| guardian | A private child process that stops an owned command when its parent exits or its lifetime ends. |
+| upload | An app artifact that the native host owns at the provider. |
+| cleanup receipt | A private record of the result after an owned resource stops. |
+
 ## Technical verbs
 
 | Verb | Meaning |

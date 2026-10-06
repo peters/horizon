@@ -2331,6 +2331,102 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-app-host"
+version = "0.2.7"
+dependencies = [
+ "base64 0.23.1",
+ "horizon-app-process",
+ "horizon-app-provider",
+ "horizon-app-runtime",
+ "horizon-app-testing",
+ "horizon-browser",
+ "horizon-core",
+ "png",
+ "rmcp",
+ "rustix 1.1.5",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "horizon-app-process"
+version = "0.2.7"
+dependencies = [
+ "horizon-app-testing",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "horizon-app-provider"
+version = "0.2.7"
+dependencies = [
+ "base64 0.23.1",
+ "horizon-app-process",
+ "horizon-app-testing",
+ "horizon-browser",
+ "rustix 1.1.5",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ureq",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "horizon-app-runtime"
+version = "0.2.7"
+dependencies = [
+ "horizon-app-provider",
+ "horizon-browser",
+ "horizon-core",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "horizon-app-testing"
+version = "0.2.7"
+dependencies = [
+ "base64 0.23.1",
+ "horizon-browser",
+ "horizon-browser-protocol",
+ "png",
+ "quick-xml 0.42.0",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.21",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-browser"
 version = "0.2.7"
 dependencies = [
@@ -2636,6 +2732,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_commonmark",
+ "horizon-app-host",
  "horizon-browser",
  "horizon-browser-mcp",
  "horizon-cast",
