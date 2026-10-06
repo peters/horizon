@@ -86,7 +86,9 @@ class TailnetTests(unittest.TestCase):
         transformed = worker.device_name('Cloud_A')
         lookalike = transformed.removeprefix('horizon-cloud-')
         self.assertNotEqual(worker.device_name(lookalike), transformed)
-        self.assertRegex(worker.device_name(lookalike), r'^horizon-cloud-' + lookalike + '-[0-9a-f]{8}$')
+        self.assertRegex(worker.device_name(lookalike), r'^horizon-cloud-.*-[0-9a-f]{20}$')
+        # Long IDs that share the shortened prefix differ in an 80-bit digest of the exact ID.
+        self.assertNotEqual(worker.device_name('a' * 50 + '17383'), worker.device_name('a' * 50 + '70295'))
         for cloud in [None, '', 'a b', 'a.b', 'cloud/a', 'a' * 101, 'ä', 'a\n', 7]:
             with self.subTest(cloud=cloud):
                 self.assertIsNone(worker.device_name(cloud))

@@ -218,10 +218,11 @@ def device_name(cloud):
         return None
     label = cloud.lower().replace('_', '-')
     name = NAME_PREFIX + label
-    # A lossy or shortened ID gets a digest of the exact ID, so two clouds cannot share a
-    # name. Every digest name ends with one; a direct name never does, so they never meet.
-    if label != cloud or len(name) > 63 or name.endswith('-') or re.search(r'-[0-9a-f]{8}$', name):
-        name = name[:54].rstrip('-') + '-' + hashlib.sha256(cloud.encode()).hexdigest()[:8]
+    # A lossy or shortened ID gets an 80-bit digest of the exact ID, so two clouds do not
+    # share a name. Every digest name ends with one; a direct name never does, so the two
+    # kinds never meet. A UUID ends with 12 hexadecimal digits and stays direct.
+    if label != cloud or len(name) > 63 or name.endswith('-') or re.search(r'-[0-9a-f]{20}$', name):
+        name = name[:42].rstrip('-') + '-' + hashlib.sha256(cloud.encode()).hexdigest()[:20]
     return name
 
 
@@ -253,6 +254,8 @@ def recorded_name():
 def rename(name):
     # Enrollment keeps the name in the daemon's persistent preferences. This renames a
     # cloud that enrolled with an earlier helper, which used the container host name.
+    # HostName is the name this node reports; an administrator's rename in the tailnet
+    # changes only the machine name that control assigns, which this never overrides.
     # Self.HostName is control's copy, so a repeat within seconds can set it again.
     # A joined cloud stays usable under its old name; a failed rename never fails it.
     if name is None:
