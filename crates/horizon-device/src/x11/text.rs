@@ -81,10 +81,9 @@ impl X11 {
             let plan = keymap::plan(&layout, &previous, keyboard, text).map_err(|e| match e {
                 PlanError::Capacity => DeviceError::Invalid("text exceeds available X11 Unicode key mappings".into()),
                 PlanError::NoKeysym => DeviceError::Invalid("text contains a character without an X11 keysym".into()),
-                PlanError::CapsLock => DeviceError::Unsupported(
-                    "X11 text input with Caps Lock on requires each letter on a key with its lowercase and uppercase form"
-                        .into(),
-                ),
+                PlanError::CapsLock => {
+                    DeviceError::Unsupported("X11 text input with Caps Lock on supports no letter with case".into())
+                }
             })?;
             if !wait_until(plan.not_before_ms, &mut attempts)? {
                 break (plan, server_now, observed_at, keyboard);

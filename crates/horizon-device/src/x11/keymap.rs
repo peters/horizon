@@ -107,8 +107,8 @@ pub(super) struct Stroke {
 pub(super) enum PlanError {
     NoKeysym,
     Capacity,
-    /// Caps Lock is on, and a letter is not on a key with its lowercase and
-    /// uppercase form. A client can then change the case of the letter.
+    /// Caps Lock is on, and the text has a letter with case. The case that a
+    /// client gives depends on the XKB key type, which the planner does not read.
     CapsLock,
 }
 
@@ -314,14 +314,10 @@ pub(super) fn plan(
         if located.contains_key(&symbol) || missing.contains(&symbol) {
             continue;
         }
-        let stroke = locate(layout, keyboard, symbol);
-        if keyboard.caps_lock
-            && is_cased(character)
-            && !stroke.is_some_and(|stroke| is_letter_pair(layout.symbols(stroke.keycode)))
-        {
+        if keyboard.caps_lock && is_cased(character) {
             return Err(PlanError::CapsLock);
         }
-        match stroke {
+        match locate(layout, keyboard, symbol) {
             Some(stroke) => {
                 located.insert(symbol, stroke);
             }
@@ -393,31 +389,18 @@ fn locate(layout: &Layout<'_>, keyboard: Keyboard, symbol: u32) -> Option<Stroke
             if keycode == RESERVED_KEYCODE || layout.is_modifier(keycode) || symbols.get(level) != Some(&symbol) {
                 return None;
             }
-            // Caps Lock inverts Shift on a key with a lowercase and an uppercase letter.
-            let shift = (level == 1) != (keyboard.caps_lock && is_letter_pair(symbols));
+            let shift = level == 1;
             (!shift || keyboard.shift_keycode.is_some()).then_some(Stroke { keycode, shift })
         })
     })
 }
 
-/// A character that a case conversion changes, so Caps Lock can change it.
+/// A character that a case conversion changes. With Caps Lock on, the key type
+/// decides whether a client gives the lowercase or the uppercase form: Lock
+/// selects the level on an alphabetic type, and on another type a client can
+/// convert the keysym to uppercase.
 fn is_cased(character: char) -> bool {
     character.to_lowercase().ne(std::iter::once(character)) || character.to_uppercase().ne(std::iter::once(character))
-}
-
-/// A key with a lowercase letter on the first level and its single uppercase
-/// letter on the second level. X servers give such a key the alphabetic key
-/// type, on which Caps Lock selects the uppercase letter.
-fn is_letter_pair(symbols: &[u32]) -> bool {
-    let character = |index: usize| {
-        symbols
-            .get(index)
-            .and_then(|symbol| xkeysym::Keysym::new(*symbol).key_char())
-    };
-    match (character(0), character(1)) {
-        (Some(lower), Some(upper)) => lower != upper && lower.to_uppercase().eq(std::iter::once(upper)),
-        _ => false,
-    }
 }
 
 /// Groups bindings into runs of consecutive keycodes for one request each.

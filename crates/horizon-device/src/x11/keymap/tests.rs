@@ -364,57 +364,34 @@ fn a_full_keymap_releases_the_least_recently_used_temporary_keycode() {
 }
 
 #[test]
-fn caps_lock_inverts_shift_only_for_letter_keys() -> Result<(), PlanError> {
+fn caps_lock_refuses_letters_and_keeps_other_characters() -> Result<(), PlanError> {
     let mut keysyms = layout();
     apply(&mut keysyms, &[(FIRST_FREE + 4, 0xe6)]);
     let locked = Keyboard {
         caps_lock: true,
         ..SHIFTED
     };
-    let plan = plan(&view(&keysyms), &[], locked, "aA_-9\u{e000}")?;
+    // Characters without case keep their level: Caps Lock does not change them.
+    let plan = plan(&view(&keysyms), &[], locked, "_-9\u{e000}")?;
     let shifts: Vec<bool> = plan.strokes.iter().map(|stroke| stroke.shift).collect();
-    assert_eq!(shifts, vec![true, false, true, false, false, false]);
+    assert_eq!(shifts, vec![true, false, false, false]);
     assert_eq!(
         plan.bindings,
         vec![(FIRST_FREE + 3, 0x0100_e000)],
         "a character without case"
     );
-    // A client can change the case of a letter on a key without a letter pair.
-    assert_eq!(
-        super::plan(&view(&keysyms), &[], locked, "æ").err(),
-        Some(PlanError::CapsLock),
-        "a key with the letter on both levels"
-    );
-    assert_eq!(
-        super::plan(&view(&keysyms), &[], locked, "\u{f8}").err(),
-        Some(PlanError::CapsLock),
-        "a new temporary mapping"
-    );
-    // A Turkish pair is alphabetic for the X server, but it is not a Unicode pair.
-    let mut turkish = keysyms.clone();
-    turkish[usize::from(18_u8 - 8) * 2 + 1] = 0x2a9; // Iabovedot
-    assert_eq!(
-        super::plan(&view(&turkish), &[], locked, "i").err(),
-        Some(PlanError::CapsLock)
-    );
-    assert!(super::plan(&view(&turkish), &[], SHIFTED, "i").is_ok(), "Caps Lock off");
-    let unshifted = Keyboard {
-        shift_keycode: None,
-        caps_lock: true,
-    };
-    let plan = super::plan(&view(&keysyms), &[], unshifted, "A")?;
-    assert_eq!(
-        plan.strokes[0],
-        Stroke {
-            keycode: 10,
-            shift: false
-        },
-        "Caps Lock alone gives the uppercase letter"
-    );
-    assert_eq!(
-        super::plan(&view(&keysyms), &[], unshifted, "a").err(),
-        Some(PlanError::CapsLock),
-        "a lowercase letter needs Shift or a temporary mapping"
+    // The key type, which the planner does not read, decides the case of a
+    // letter: `[a, A]` can be alphabetic or two-level.
+    for letter in ["a", "A", "æ", "\u{f8}", "\u{df}"] {
+        assert_eq!(
+            super::plan(&view(&keysyms), &[], locked, letter).err(),
+            Some(PlanError::CapsLock),
+            "{letter}"
+        );
+    }
+    assert!(
+        super::plan(&view(&keysyms), &[], SHIFTED, "aAæ").is_ok(),
+        "Caps Lock off"
     );
     Ok(())
 }

@@ -156,8 +156,8 @@ Give each result the task ID. A report uses the ID to give a result.
 
    Result: All tests pass. The multi-chunk test types 20 synthetic keys of 106
    characters. Its receiver reads each key 600 ms late with the current keymap.
-   The test also types text with Caps Lock on. With Caps Lock on, a letter
-   that needs a temporary mapping gets `unsupported` and no key. With a held
+   The test also types text without letters with Caps Lock on. With Caps
+   Lock on, text with a letter gets `unsupported` and no key. With a held
    Shift key, text gets `unsupported` and no key.
 
 2. Run the same command again on the same display.
