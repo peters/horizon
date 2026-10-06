@@ -29,7 +29,7 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 > **CAUTION:** CHECK A COMPANION ONLY ON A TEST CLOUD. A checked companion gives
 > the source cloud shell access to the target worker.
 
-> **CAUTION:** RECORD EACH SERVER, POD AND VOLUME IN THE RESOURCE LEDGER. An
+> **CAUTION:** RECORD EACH SERVER, POD, VOLUME AND SSH KEY IN THE RESOURCE LEDGER. An
 > MCP request or a resume can make a new Hetzner server.
 
 ## 4. Equipment and preconditions
@@ -84,9 +84,10 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The companion cloud runs.
 
-7. Write the server ID and the volume ID of `smoke-lib` in the resource ledger.
+7. Write the server, the volume and the SSH key of `smoke-lib` in the resource ledger.
 
-   Result: The ledger contains the resources of `smoke-lib`.
+   Result: The ledger contains the three Hetzner resources of `smoke-lib`. The
+   SSH key ID is in `hetzner.json` in the state directory of the cloud.
 
 ## 6. Tasks
 
@@ -566,6 +567,8 @@ also makes sure that agents can start and stop a companion cloud through MCP.
   is paused.
 
 ## 8. Cleanup
+
+Do this cleanup after T12 and T13. These tasks need the checked companion `lib`.
 
 1. Clear the checkbox of `lib` on the card of `smoke-a`.
 

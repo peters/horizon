@@ -68,6 +68,45 @@ provider APIs, that no test server, pod or volume continues to cost money.
 
    Result: The header file exists. The key is not in a command argument.
 
+5. Write a script that reads all pages of one Hetzner list.
+
+   ```sh
+   cat > <run>/hetzner-list.sh <<'EOF'
+   #!/usr/bin/env bash
+   # Usage: hetzner-list.sh servers|volumes|ssh_keys
+   set -euo pipefail
+   kind=$1; page=1
+   while [ "$page" != null ]; do
+     body=$(curl -fsS -H @<run>/hetzner.header "https://api.hetzner.cloud/v1/$kind?per_page=50&page=$page")
+     jq -c --arg k "$kind" '.[$k][] | {id, name}' <<< "$body"
+     page=$(jq -r '.meta.pagination.next_page' <<< "$body")
+   done
+   EOF
+   ```
+
+   Result: The script follows `meta.pagination.next_page` until it is null. An HTTP error stops it.
+
+6. Write a script that reads all pages of one RunPod list.
+
+   ```sh
+   cat > <run>/runpod-list.sh <<'EOF'
+   #!/usr/bin/env bash
+   # Usage: runpod-list.sh pods|network-volumes
+   set -euo pipefail
+   url="https://api.runpod.io/v2/$1"; next=$url
+   while :; do
+     body=$(curl -fsS -H @<run>/runpod.header "$next")
+     jq -c '(if type == "array" then . else (.pods // .networkVolumes // .data // []) end)[] | {id, name}' <<< "$body"
+     more=$(jq -r 'if type == "object" then (.pagination.hasNextPage // false) else false end' <<< "$body")
+     [ "$more" = true ] || break
+     cursor=$(jq -r '.pagination.nextCursor | @uri' <<< "$body")
+     next="$url?cursor=$cursor"
+   done
+   EOF
+   ```
+
+   Result: The script follows `pagination.nextCursor` while `hasNextPage` is true. An HTTP error stops it.
+
 ## 6. Tasks
 
 ### 6.1 X01 — Delete every test cloud through the UI
@@ -133,15 +172,15 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 1. List the servers of the Hetzner project.
 
    ```sh
-   curl -fsS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/servers' | jq '[.servers[] | {id, name}]'
+   bash <run>/hetzner-list.sh servers
    ```
 
-   Result: The list contains no server ID from the resource ledger.
+   Result: The script reads all pages. The list contains no server ID from the resource ledger.
 
 2. List the volumes of the Hetzner project.
 
    ```sh
-   curl -fsS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/volumes' | jq '[.volumes[] | {id, name}]'
+   bash <run>/hetzner-list.sh volumes
    ```
 
    Result: The list contains no volume ID from the resource ledger.
@@ -149,7 +188,7 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 3. List the SSH keys of the Hetzner project.
 
    ```sh
-   curl -fsS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/ssh_keys' | jq '[.ssh_keys[] | {id, name}]'
+   bash <run>/hetzner-list.sh ssh_keys
    ```
 
    Result: The list contains no SSH key ID from the resource ledger.
@@ -238,15 +277,15 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 1. List the pods of the RunPod account.
 
    ```sh
-   curl -fsS -H @<run>/runpod.header 'https://api.runpod.io/v2/pods' | jq '[.. | objects | select(has("id")) | {id, name}]'
+   bash <run>/runpod-list.sh pods
    ```
 
-   Result: The list contains no pod ID from the resource ledger.
+   Result: The script reads all pages. The list contains no pod ID from the resource ledger.
 
 2. List the network volumes of the RunPod account.
 
    ```sh
-   curl -fsS -H @<run>/runpod.header 'https://api.runpod.io/v2/network-volumes' | jq '[.. | objects | select(has("id")) | {id, name}]'
+   bash <run>/runpod-list.sh network-volumes
    ```
 
    Result: The list contains no network volume ID from the resource ledger.
@@ -278,7 +317,7 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 1. Delete the two header files.
 
    ```sh
-   rm -f <run>/hetzner.header <run>/runpod.header
+   rm -f <run>/hetzner.header <run>/runpod.header <run>/hetzner-list.sh <run>/runpod-list.sh
    ```
 
    Result: No file in `<run>` contains a provider key.

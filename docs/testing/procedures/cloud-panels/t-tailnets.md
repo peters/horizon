@@ -196,9 +196,10 @@ send TCP traffic to each other over the tailnet.
 
    Result: The card shows **Tailnet**, `Smoke test tailnet` and **Selected at provisioning**.
 
-7. Write the server ID and the volume ID in the resource ledger.
+7. Write the server, the volume, the SSH key and the tailnet node name in the resource ledger.
 
-   Result: The resource ledger contains the resources of `smoke-a`.
+   Result: The resource ledger contains the four resources of the cloud. The SSH
+   key ID is in `hetzner.json` in the state directory of the cloud.
 
 8. If D01 started `smoke-a` on the tailnet, do only step 6 and step 7.
 
@@ -362,7 +363,7 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
 1. Start `smoke-b` on the test tailnet with the steps 1 to 7 of T03.
 
    Result: The card of `smoke-b` shows **Ready** and **Selected at provisioning**.
-   The resource ledger contains its server and volume.
+   The resource ledger contains its server, volume, SSH key and tailnet node.
 
 2. In the worker shell of `smoke-b`, find the tailnet name and address of the worker.
 

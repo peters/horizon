@@ -35,6 +35,8 @@ child is the frozen candidate.
 ## 4. Equipment and preconditions
 
 - The equipment in the [main procedure](../cloud-panels.md#4-equipment-and-preconditions).
+- A rootless Docker daemon for this run, with its own data root. The daemon of
+  the operator is permitted only when nothing else uses it.
 - The [device smoke fixture](../../../../scripts/device-smoke/README.md) and the
   [persistent cloud launcher](../../cloud-workspaces-mvp-smoke.md#persistent-cloud-launcher-for-restart-scenarios)
   notes.
@@ -124,7 +126,12 @@ child is the frozen candidate.
 
    Result: Each start of the candidate uses the same configuration.
 
-4. In the launcher copy, bind the Docker socket of the operator into the fixture.
+   > **CAUTION:** BIND ONLY A ROOTLESS DOCKER SOCKET THAT THIS RUN OWNS. A process
+   > in the fixture that can use the socket can read every file that the daemon
+   > can read. Use a rootless daemon with its own data root, and run only the
+   > frozen candidate and synthetic repositories in the fixture.
+
+4. In the launcher copy, bind the socket of a rootless Docker daemon into the fixture.
 
    ```text
    /run/user/<uid>/docker.sock

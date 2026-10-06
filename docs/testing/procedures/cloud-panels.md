@@ -171,7 +171,7 @@ order. The L area stops and deletes clouds that the T, G and N areas use.
 7. Do step 5 of C02, then C31 and A09.
 8. Do E01 to E09, then O02. O02 uses the Claude Code panel of E02.
 9. Do T03 to T11 and T14.
-10. Do G01 to G12, then do T12 and T13.
+10. Do G01 to G12, then do T12 and T13. Then do the cleanup of area G.
 11. Do N01 to N05.
 12. Do L01 to L10.
 

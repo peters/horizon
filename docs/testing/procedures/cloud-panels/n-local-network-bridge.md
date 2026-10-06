@@ -45,10 +45,11 @@ limits the access and that the bridge is off after a restart of Horizon.
 1. On the second device, start a test HTTP server with a random value.
 
    ```sh
-   python3 -c 'import secrets; print(secrets.token_hex(16))' > nonce && python3 -m http.server <device-port>
+   d=$(mktemp -d) && python3 -c 'import secrets; print(secrets.token_hex(16))' > "$d/nonce" && python3 -m http.server <device-port> --directory "$d"
    ```
 
-   Result: The server listens on `<device-port>`. Record the value in the private evidence.
+   Result: The server listens on `<device-port>` and serves only a new temporary
+   directory. Record the value and the directory in the private evidence.
 
 2. On the PC, make a test directory with one synthetic file.
 
@@ -299,6 +300,14 @@ limits the access and that the bridge is off after a restart of Horizon.
 4. Stop the test HTTP server on the second device with Ctrl-C.
 
    Result: The server stops.
+
+5. On the second device, delete the temporary directory of the setup.
+
+   ```sh
+   rm -r <temporary-directory>
+   ```
+
+   Result: The directory and the random value are gone.
 
 ## 9. Record of results
 
