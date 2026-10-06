@@ -6,7 +6,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     io::{ErrorKind, Read, Write},
     net::SocketAddr,
     sync::{
@@ -75,6 +75,9 @@ pub struct CastClient {
     commands: SyncSender<Command>,
     shared: Arc<Shared>,
     events: Mutex<Receiver<Event>>,
+    /// Taken off the channel and put back. `next_event` reads these first so
+    /// a caller can inspect the queue without losing what it does not handle.
+    deferred: Mutex<VecDeque<Event>>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -102,6 +105,7 @@ impl CastClient {
             commands,
             shared,
             events: Mutex::new(events),
+            deferred: Mutex::new(VecDeque::new()),
             worker: Some(worker),
         };
         client.connect_virtual(PLATFORM_RECEIVER)?;
@@ -187,10 +191,39 @@ impl CastClient {
     /// Returns [`Error::Closed`] once the connection has ended and every
     /// queued event has been read.
     pub fn next_event(&self, timeout: Duration) -> Result<Option<Event>> {
+        if let Some(event) = lock(&self.deferred).pop_front() {
+            return Ok(Some(event));
+        }
         match lock(&self.events).recv_timeout(timeout) {
             Ok(event) => Ok(Some(event)),
             Err(RecvTimeoutError::Timeout) => Ok(None),
             Err(RecvTimeoutError::Disconnected) => Err(Error::Closed),
+        }
+    }
+
+    /// Events already queued, without waiting.
+    /// # Errors
+    /// Returns [`Error::Closed`] once the connection has ended and every
+    /// queued event has been read.
+    pub(crate) fn drain_ready(&self) -> Result<Vec<Event>> {
+        let mut queued = Vec::new();
+        loop {
+            match self.next_event(Duration::ZERO) {
+                Ok(Some(event)) => queued.push(event),
+                Ok(None) => return Ok(queued),
+                // The events already taken are still delivered. The next read
+                // reports the closed connection.
+                Err(Error::Closed) if !queued.is_empty() => return Ok(queued),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Puts `events` ahead of anything still queued, keeping their order.
+    pub(crate) fn defer(&self, events: Vec<Event>) {
+        let mut deferred = lock(&self.deferred);
+        for event in events.into_iter().rev() {
+            deferred.push_front(event);
         }
     }
 }
@@ -343,4 +376,65 @@ fn dispatch(
         tracing::warn!(namespace = %event.namespace, "dropping receiver event; host is not draining events");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn notice(source: &str) -> Event {
+        Event {
+            namespace: NS_CONNECTION.to_owned(),
+            source: source.to_owned(),
+            payload: json!({"type": "CLOSE"}),
+            media_time: None,
+            received_at: Instant::now(),
+        }
+    }
+
+    fn bare_client(events: Receiver<Event>, commands: SyncSender<Command>) -> CastClient {
+        CastClient {
+            address: SocketAddr::from(([127, 0, 0, 1], 1)),
+            commands,
+            shared: Arc::new(Shared {
+                pending: Mutex::new(HashMap::new()),
+                connected: Mutex::new(HashSet::new()),
+                next_request: AtomicU64::new(1),
+                open: AtomicBool::new(true),
+                media_clock: Mutex::new(None),
+            }),
+            events: Mutex::new(events),
+            deferred: Mutex::new(VecDeque::new()),
+            worker: None,
+        }
+    }
+
+    #[test]
+    fn deferred_events_stay_ahead_of_the_channel() {
+        let (commands, _commands) = mpsc::sync_channel(4);
+        let (sink, events) = mpsc::sync_channel(4);
+        let client = bare_client(events, commands);
+        let first = notice("first");
+        let second = notice("second");
+        sink.send(second).expect("queue");
+        client.defer(vec![first]);
+        let got = client.drain_ready().expect("drain");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].source, "first");
+        assert_eq!(got[1].source, "second");
+        assert!(client.drain_ready().expect("empty").is_empty());
+    }
+
+    #[test]
+    fn a_closed_queue_still_returns_events_already_taken() {
+        let (commands, _commands) = mpsc::sync_channel(4);
+        let (sink, events) = mpsc::sync_channel(4);
+        let client = bare_client(events, commands);
+        client.defer(vec![notice("kept")]);
+        drop(sink);
+        let got = client.drain_ready().expect("kept");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].source, "kept");
+        assert!(client.drain_ready().is_err());
+    }
 }

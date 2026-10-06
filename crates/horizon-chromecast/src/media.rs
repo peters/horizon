@@ -175,6 +175,11 @@ impl MediaController<'_> {
         self.client
             .request_within(&self.transport_id, NS_MEDIA, payload, timeout)
     }
+
+    #[must_use]
+    pub(crate) fn client(&self) -> &CastClient {
+        self.client
+    }
 }
 
 fn statuses(reply: &Value) -> Result<Vec<MediaStatus>> {
