@@ -19,6 +19,7 @@ It tests the camera, record, and stop icons, pause and resume, and the completed
 
 - Use a current Horizon candidate. The app includes the video encoder.
 - Use Chromium on Linux or Windows, or Chrome on macOS.
+- The video smoke script supports Linux and macOS. On Windows, use the MCP steps in BROWSER-VIDEO-06.
 - Use a local page or a public fixture page.
 - This procedure does not test audio, canvas capture, or Safari.
 - Device panel video is in the VNC recording procedure.
@@ -111,10 +112,23 @@ It tests the camera, record, and stop icons, pause and resume, and the completed
 
 ### BROWSER-VIDEO-06 — MCP
 
-1. Run `python3 scripts/browser-smoke/video_smoke.py --backend chromium --ephemeral`.
-2. Start, read status, pause, resume, and stop through `browser_video`.
+Do not run the video smoke script on Windows.
 
-   Result: The returned path exists. The file starts with the EBML bytes `1A 45 DF A3`.
+1. On Linux or macOS, run `python3 scripts/browser-smoke/video_smoke.py --backend chromium --ephemeral`.
+
+   Result: The script exits 0.
+
+2. On Windows, start through `browser_video` with quality 40, `compression_level` 0, fps 5, and `max_width` 320.
+
+   Result: The status state is `recording`.
+
+3. On Windows, pause, read status, resume, and stop through `browser_video`.
+
+   Result: Pause reports `paused`. Resume encodes more frames. Stop returns a path.
+
+4. On Windows, open the returned file and read `browser_audit` for that panel.
+
+   Result: The file starts with the EBML bytes `1A 45 DF A3`. The audit has a video entry and no page pixels.
 
 ### BROWSER-VIDEO-07 — Backend switch
 
