@@ -86,7 +86,11 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
 - Before the first key, the record gives each keycode of the action a lease
   until the last possible stroke: twice the paced time, plus 1 second. If the
   process stops during the action, a later action still waits for the lease
-  and the quiet interval. A wait is at most 13.24 seconds.
+  and the quiet interval. A lease is at most 11.24 seconds, and a wait is at
+  most 13.24 seconds.
+- The X server time wraps after approximately 49 days. Thus, the tool reads a
+  recorded time that is more than 11.24 seconds after the X server time as an
+  old time, not as a lease.
 
 A client that is more than 2 seconds late can still translate a changed keycode
 incorrectly. The distinct characters that need a mapping must fit in the free
