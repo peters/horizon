@@ -193,6 +193,28 @@ mod tests {
     }
 
     #[test]
+    fn copy_button_keeps_its_name_when_enabled_and_disabled() {
+        let labels = |enabled| {
+            let mut screenshots = Screenshots::default();
+            crate::test_egui::accesskit_labels(|ui| {
+                screenshots.copy_button(ui, enabled, || Err("no image".into()));
+            })
+        };
+        let enabled = labels(true);
+        assert!(
+            enabled
+                .iter()
+                .any(|(label, disabled)| label == "Copy screenshot" && !disabled)
+        );
+        let disabled = labels(false);
+        assert!(
+            disabled
+                .iter()
+                .any(|(label, disabled)| label == "Copy screenshot" && *disabled)
+        );
+    }
+
+    #[test]
     fn explicit_exit_cleanup_removes_files_even_when_ui_state_is_still_alive() {
         let mut screenshots = Screenshots::default();
         let capture = screenshots

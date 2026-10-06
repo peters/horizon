@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn navigation_widget_info_names_glyph_only_controls() {
-        for label in ["Back", "Forward", "Reload", "Record"] {
+        for label in ["Back", "Forward", "Reload"] {
             let info = nav_widget_info(label, true);
             assert_eq!(info.typ, egui::WidgetType::Button);
             assert!(info.enabled);
@@ -626,5 +626,45 @@ mod tests {
         }
 
         assert!(!nav_widget_info("Back", false).enabled);
+    }
+
+    fn disabled_label(labels: &[(String, bool)], name: &str) -> bool {
+        labels
+            .iter()
+            .find(|(label, _)| label == name)
+            .map(|(_, disabled)| *disabled)
+            .unwrap_or_else(|| panic!("missing {name} in {labels:?}"))
+    }
+
+    #[test]
+    fn record_and_camera_icons_keep_accessibility_labels() {
+        let idle = |interactive| {
+            let mut browser = BrowserPanelState::inert();
+            let mut state = crate::browser_widget::BrowserUiState::default();
+            crate::test_egui::accesskit_labels(|ui| {
+                super::show(ui, horizon_core::PanelId(1), &mut browser, &mut state, interactive);
+            })
+        };
+
+        let interactive = idle(true);
+        assert!(!disabled_label(&interactive, "Record"));
+        assert!(
+            disabled_label(&interactive, "Copy screenshot"),
+            "the camera stays disabled until a browser frame exists"
+        );
+
+        let inactive = idle(false);
+        assert!(disabled_label(&inactive, "Record"));
+        assert!(disabled_label(&inactive, "Copy screenshot"));
+
+        let mut browser = BrowserPanelState::inert();
+        let enabled_stop = crate::test_egui::accesskit_labels(|ui| {
+            assert!(!super::video_stop_button(ui, &mut browser, true));
+        });
+        assert!(!disabled_label(&enabled_stop, "Stop recording"));
+        let disabled_stop = crate::test_egui::accesskit_labels(|ui| {
+            assert!(!super::video_stop_button(ui, &mut browser, false));
+        });
+        assert!(disabled_label(&disabled_stop, "Stop recording"));
     }
 }

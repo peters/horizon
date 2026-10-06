@@ -37,6 +37,35 @@ fn click_events(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
     ]
 }
 
+#[test]
+fn recording_icon_is_enabled_only_while_connected_and_interactive() {
+    let labels_for = |status, interactive| {
+        let mut state = DeviceUiState::default();
+        state.status = status;
+        crate::test_egui::accesskit_labels(|ui| {
+            state.recording_controls(ui, interactive);
+        })
+    };
+    let disconnected = labels_for(super::session::Status::Stopped, true);
+    assert!(
+        disconnected
+            .iter()
+            .any(|(label, disabled)| label == "Record video" && *disabled)
+    );
+    let connected = labels_for(super::session::Status::Connected, true);
+    assert!(
+        connected
+            .iter()
+            .any(|(label, disabled)| label == "Record video" && !disabled)
+    );
+    let inactive = labels_for(super::session::Status::Connected, false);
+    assert!(
+        inactive
+            .iter()
+            .any(|(label, disabled)| label == "Record video" && *disabled)
+    );
+}
+
 fn patterned_desktop() -> ColorImage {
     ColorImage::new(
         [8, 4],
