@@ -79,6 +79,9 @@ permission error. It also makes sure of these conditions:
 
    Result: The dialog shows that the provider key is saved.
 
+   > **CAUTION:** PASTE THE CLAUDE API KEY ONLY INTO THE CANDIDATE IN THE
+   > ISOLATED DESKTOP. A person who gets the key can use the agent account.
+
 5. Paste the Claude API key.
 
    Result: The dialog shows that the Claude key is saved.
@@ -206,6 +209,9 @@ Give each task an ID. A report uses the ID to give a result.
 
    Result: The card shows that the worker stopped.
 
+   > **CAUTION:** START ONLY THE WORKER OF THIS RUN. The provider charges money
+   > again from the next step until the cleanup.
+
 2. On the card of the cloud, start the worker again.
 
    Result: The card shows **Ready**.
@@ -249,9 +255,15 @@ Give each task an ID. A report uses the ID to give a result.
 
    Result: The card shows **Delete resources permanently**.
 
+   > **CAUTION:** DELETE ONLY THE RESOURCES OF THIS CLOUD. The worker and the
+   > volume cannot come back after the next step.
+
 2. Click **Delete resources permanently**.
 
    Result: The card shows **Deleted**.
+
+   > **CAUTION:** REMOVE ONLY THE CLOUD OF THIS RUN. Horizon removes the cloud
+   > and its panels from the board.
 
 3. Click **Remove cloud**.
 

@@ -104,6 +104,22 @@ sys.exit(23)
         self.assertIn('has not published its browser host instance', self.stderr)
         self.assertEqual(child['args'], ['--no-leader'], 'the agent still starts')
 
+    @unittest.skipIf(os.geteuid() == 0, 'root reads a file of any mode')
+    def test_unreadable_host_instance_takes_the_missing_path_without_a_shell_error(self):
+        published = self.run_dir / 'browser-host-instance'
+        published.chmod(0)
+        self.addCleanup(published.chmod, 0o644)
+        child = self.launch('grok')
+        self.assertIsNone(child['env']['HORIZON_BROWSER_HOST_INSTANCE'])
+        self.assertIn('has not published its browser host instance', self.stderr)
+        self.assertNotIn('Permission denied', self.stderr)
+
+    def test_empty_host_instance_is_not_exported(self):
+        (self.run_dir / 'browser-host-instance').write_text('')
+        child = self.launch('grok')
+        self.assertIsNone(child['env']['HORIZON_BROWSER_HOST_INSTANCE'])
+        self.assertIn('has not published its browser host instance', self.stderr)
+
     @unittest.skipUnless(os.geteuid() == 0 and shutil.which('setpriv') and shutil.which('chown'),
                          'needs root to run the launcher as the unprivileged worker agent')
     def test_unprivileged_agent_reads_the_value_but_not_root_private_state(self):
