@@ -48,6 +48,8 @@ runs in the place that the dialog showed.
 - For C13, C15 and C24: read access to the provider catalogs. Use the RunPod
   console and the Hetzner Cloud API.
 - `xdotool` on the host, for C01.
+- For C12 to C30: the [New cloud picker procedure](../new-cloud-picker.md) and
+  the local Claude Code panel of the main setup. The agent calls `cloud_offers`.
 - The notes about [the worker choice](../../../cloud-workspaces.md#choosing-a-worker),
   [Hetzner New cloud](../../../cloud-hetzner.md#new-cloud) and
   [Hetzner offers](../../../cloud-hetzner.md#offers).
@@ -485,38 +487,54 @@ For a detailed check of the refresh, use the
 
    Result: The dialog closes. No cloud starts.
 
-The [New cloud picker procedure](../new-cloud-picker.md) gives more detailed
-steps for C12 to C30. Use it for a run that changes the picker.
+Tasks C12 to C30 audit the worker picker. The
+[New cloud picker procedure](../new-cloud-picker.md) gives the detailed steps
+for most of these tasks. This area does not repeat those steps. It adds only the
+checks that compare the dialog with the settings, the provider catalogs and the
+CLI of this run.
+
+When a task tells you to do a task of the New cloud picker procedure, use these
+changes:
+
+- Use the open dialog of this area. Do not do the setup or the cleanup of that
+  procedure.
+- Use `runpod-small` for the profile `small`, `runpod-cpu` for `large` and
+  `runpod-gpu` for `gpu`.
+- Use the Hetzner server types and locations of area A for `cx33`, `cx43`,
+  `cpx42`, `fsn1`, `hel1` and `nbg1`. Use the first location for `fsn1`.
+- Do not use the reference counts or the named workers of that procedure. They
+  apply only to its test account. Use the expected values of this area.
+- Use the local Claude Code panel of the main setup to call `cloud_offers`.
 
 ### 6.12 C12 — Show the full catalog size with In stock only clear
 
-1. Open the dialog with `runpod-small`, **All providers** and **In stock only** clear.
+1. Select `runpod-small` in **Profile**.
+
+   Result: The dialog shows the workers for `runpod-small`.
+
+2. Click **All providers**.
+
+   Result: The list shows the rows of all providers.
+
+3. Do task [C12](../new-cloud-picker.md#61-c12--catalog-size) of the New cloud picker procedure.
 
    Result: The list line shows `Showing N of M workers`.
 
-2. Calculate the expected number of RunPod rows.
-
-   Result: The value is the number of CPU sizes that C13 gives for this profile.
-
-3. Calculate the expected number of Hetzner rows.
-
-   Result: The value is the number of rows that C15 gives for this profile.
-
-4. Compare `M` with the sum of the two values.
+4. Compare `M` with the number of RunPod rows of C13 plus the number of Hetzner rows of C15.
 
    Result: `M` is the same as the sum. With `runpod-small`, no row is below
    requirements, so `N` is the same as `M`.
 
 ### 6.13 C13 — Show the RunPod CPU grid
 
-1. Click **RunPod** with **In stock only** clear.
+1. Do task [C13](../new-cloud-picker.md#62-c13--runpod-size-grid) of the New cloud picker procedure.
 
-   Result: The list shows only RunPod CPU rows.
+   Result: The list shows only RunPod CPU rows. Each row has 2, 4, 8, 16 or 32
+   vCPU, with 2, 4 or 8 GB for each vCPU.
 
 2. Calculate the expected grid.
 
-   Result: RunPod CPU pods take 2, 4, 8, 16 or 32 vCPU, with 2, 4 or 8 GB for each
-   vCPU. With `runpod-small`, the grid has 15 sizes.
+   Result: With `runpod-small`, the grid has 15 sizes.
 
 3. Remove from the grid each size that no flavor can hold with the container disk of the profile.
 
@@ -529,9 +547,9 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
 ### 6.14 C14 — Name only the flavor families that can hold each size
 
-1. Examine the family names on the RunPod rows.
+1. Do task [C14](../new-cloud-picker.md#63-c14--runpod-cpu-flavors) of the New cloud picker procedure.
 
-   Result: Each row names one or more families from the RunPod catalog.
+   Result: Each RunPod row names one or more families from the RunPod catalog.
 
 2. Compare the family of each row with its memory for each vCPU.
 
@@ -553,7 +571,7 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
 ### 6.15 C15 — Show only the configured Hetzner types and locations
 
-1. Click **Hetzner** with **In stock only** clear.
+1. Do task [C15](../new-cloud-picker.md#64-c15--hetzner-allowlist) of the New cloud picker procedure.
 
    Result: The list shows only Hetzner rows. Each row names a server type and a location.
 
@@ -576,108 +594,86 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
 ### 6.16 C16 — Keep the unlisted Hetzner rows under In stock only
 
-1. With **Hetzner** and **In stock only** clear, count the rows with `Unlisted · advisory`.
+1. Do task [C16](../new-cloud-picker.md#65-c16--unlisted-hetzner-offers) of the New cloud picker procedure.
 
-   Result: You have the number of unlisted rows.
+   Result: **In stock only** keeps each row that shows `Unlisted · advisory`.
+   The Hetzner availability flag is advisory.
 
-2. Select **In stock only**.
+2. Compare the number of Hetzner rows with the number of Hetzner rows in C15.
 
-   Result: The Hetzner availability flag is advisory. All Hetzner rows must stay,
-   with their `Unlisted · advisory` label.
-
-3. Count the Hetzner rows again.
-
-   Result: The count is the same as the number of Hetzner rows in C15. If the unlisted rows go
-   away, record the known defect [issue #1302](https://github.com/peters/horizon/issues/1302).
+   Result: The numbers are the same. If the unlisted rows go away, record the
+   known defect [issue #1302](https://github.com/peters/horizon/issues/1302).
 
 ### 6.17 C17 — Count the rows that the stock filter hides
 
-1. Click **All providers**.
+1. Do task [C17](../new-cloud-picker.md#66-c17--hidden-count-of-the-stock-filter) of the New cloud picker procedure.
+
+   Result: The stock filter hides the sold-out RunPod rows.
+
+2. Click **All providers**.
 
    Result: The list shows the rows of all providers.
 
-2. Clear **In stock only**.
+3. Clear **In stock only**.
 
    Result: The list shows all rows.
 
-3. Count the rows that show `Out of stock`.
+4. Count the rows that show `Out of stock`.
 
    Result: You have the expected hidden count. Add the unlisted Hetzner rows
    while issue #1302 is open.
 
-4. Select **In stock only**.
+5. Select **In stock only**.
 
    Result: The list line shows `Showing N of M workers`.
 
-5. Calculate `M` minus `N`.
+6. Calculate `M` minus `N`.
 
    Result: The value is the same as the expected hidden count.
 
 ### 6.18 C18 — Hide and then disable the workers below requirements
 
-1. Select the profile `runpod-cpu` (4 vCPU, 8 GB) with **In stock only** clear.
+1. Do task [C18](../new-cloud-picker.md#67-c18--workers-below-the-requirements) of the New cloud picker procedure.
+
+   Result: You cannot select a row below requirements. Its tooltip gives the reason.
+
+2. Select the profile `runpod-cpu` (4 vCPU, 8 GB).
+
+   Result: The list line shows `K below requirements hidden`.
+
+3. Clear **In stock only**.
 
    Result: The list line shows `Showing N of M workers · K below requirements hidden`.
 
-2. Count the rows of C12 that have fewer than 4 vCPU or less than 8 GB.
+4. Count the rows of C12 that have fewer than 4 vCPU or less than 8 GB.
 
    Result: The count is the same as `K`.
 
-3. Select **Show workers below requirements**.
-
-   Result: The list shows `K` more rows. Each new row shows **Below requirements**
-   and a reason.
-
-4. Click a row that shows **Below requirements**.
-
-   Result: The summary does not change. You cannot select the row.
-
-5. Clear **Show workers below requirements**.
-
-   Result: The rows below requirements are hidden again.
-
-6. Select `runpod-small` again.
+5. Select `runpod-small` again.
 
    Result: The rows below requirements go away.
 
 ### 6.19 C19 — Find the expected rows with the search field
 
-1. Type `16 vCPU` in the search field, with **All providers** and **In stock only** clear.
+1. Do task [C19](../new-cloud-picker.md#68-c19--search) of the New cloud picker procedure, and count the rows for each search.
 
-   Result: The list shows only rows with 16 vCPU.
+   Result: You have the number of rows for `16 vCPU` and for the location.
 
-2. Count the rows of C12 with 16 vCPU.
+2. Compare the number of rows for `16 vCPU` with the number of rows of C12 with 16 vCPU.
 
-   Result: The count is the same as the number of rows in step 1.
+   Result: The numbers are the same.
 
-3. Type the first location from the `hetzner` settings in the search field.
+3. Compare the number of rows for the location with the number of rows of C15 in that location.
 
-   Result: The list shows only the Hetzner rows in that location.
-
-4. Compare the rows with the rows of C15 for that location.
-
-   Result: The rows are the same.
-
-5. Clear the search field.
-
-   Result: The list shows all rows again. The search finds only text in the row
+   Result: The numbers are the same. The search finds only text in the row
    title ([issue #1305](https://github.com/peters/horizon/issues/1305)).
 
 ### 6.20 C20 — Show EUR totals for Hetzner and USD totals for RunPod
 
-1. Click **Hetzner**.
+1. Do task [C20](../new-cloud-picker.md#69-c20--currencies) of the New cloud picker procedure.
 
-   Result: The line above the picks shows `Estimated totals in EUR · provider
-   billing currency retained`. Hetzner prices show in euros.
-
-2. Click **RunPod**.
-
-   Result: The line shows `Estimated totals in USD · provider billing currency
-   retained`. RunPod prices show in US dollars.
-
-3. Click **All providers**.
-
-   Result: The line shows `Estimated totals in USD · ECB rates dated <date>`.
+   Result: Hetzner shows totals in EUR and RunPod shows totals in USD. **All
+   providers** shows `Estimated totals in USD · ECB rates dated <date>`.
 
 ### 6.21 C21 — Sort all providers by the estimated total
 
@@ -693,9 +689,10 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: The dialog shows prices of the same age as the file.
 
-3. With **All providers** and **In stock only** clear, record the order of the rows.
+3. Do task [C21](../new-cloud-picker.md#610-c21--order-by-estimated-total) of the New cloud picker procedure.
 
-   Result: You have the order of the dialog.
+   Result: The rows have the order of their estimated totals. The MCP
+   `comparison` has the same order.
 
 4. Read the order of the `comparison` offers in `offers-small.out.json`.
 
@@ -705,7 +702,11 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: You have the order by estimated total in USD. The cheapest offer is first.
 
-5. Compare the two orders.
+5. Clear **In stock only**.
+
+   Result: The list shows all rows.
+
+6. Compare the order of the rows with the order from step 4.
 
    Result: The rows of the dialog have the same order as `comparison`. If the
    dialog shows all RunPod rows before the Hetzner rows, record the known defect
@@ -713,87 +714,80 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
 ### 6.22 C22 — Pick the cheapest and the most powerful worker
 
-1. Examine `comparison.complete` in `offers-small.out.json`.
+1. Do task [C22](../new-cloud-picker.md#611-c22--picks) of the New cloud picker procedure.
+
+   Result: The **Cheapest** card names the first offer of the MCP `comparison`.
+
+2. Examine `comparison.complete` in `offers-small.out.json`.
 
    Result: The value is `true`. If it is `false`, the dialog does not name a cheapest worker.
 
-2. Compare the **CHEAPEST** card with the first offer in `comparison`.
+3. Compare the **CHEAPEST** card with the first offer in `comparison`.
 
    Result: The card names the same worker.
 
-3. Find the in-stock row that has the most vCPU, with the most memory to decide a tie.
+4. Find the in-stock row that has the most vCPU, with the most memory to decide a tie.
 
    Result: You have the expected most powerful worker. For RunPod CPU, this is
    often `32 vCPU · 256 GB`.
 
-4. Compare the **MOST POWERFUL** card with the expected worker.
+5. Compare the **MOST POWERFUL** card with the expected worker.
 
    Result: The card names the same worker.
 
 ### 6.23 C23 — Calculate the totals for 730 hours
 
-1. Set **Compare for** to `730 hours`.
+1. Do steps 1 to 5 of task [C23](../new-cloud-picker.md#612-c23--totals-for-730-hours) of the New cloud picker procedure.
 
-   Result: The totals change to the totals for one month.
+   Result: The Hetzner total is not more than the capped charges of each UTC
+   calendar month in the run.
 
-2. Select a RunPod row.
+2. Click **RunPod**.
+
+   Result: The cards show totals for 730 hours in US dollars.
+
+3. Select a RunPod row.
 
    Result: The summary shows the RunPod worker.
 
-3. Record its hourly price and its total.
+4. Record its hourly price and its total.
 
    Result: You have the values for the next step.
 
-4. Calculate the RunPod total.
+5. Calculate the RunPod total.
 
-   Result: The value is the hourly price × 730, plus the network volume for one
-   month. The standard volume costs $0.07 for each GB each month.
+   Result: The value is the hourly price × 730, plus the network volume and the
+   container disk for one month.
 
-5. Select a Hetzner row.
+   Note: The standard network volume costs $0.07 and the container disk costs
+   $0.10 for each GB each month.
 
-   Result: The summary shows the Hetzner worker.
+6. Compare the calculated total with the total of the dialog.
 
-6. Record its hourly price, its monthly price and its total.
+   Result: The difference is less than one cent.
 
-   Result: You have the values for the next step.
+7. Do steps 6 and 7 of task C23 of the New cloud picker procedure.
 
-7. Calculate the Hetzner total.
-
-   Result: The value is the smaller of the hourly price × 730 and the monthly
-   cap, plus the volume and the IPv4 address.
-
-8. Compare the calculated totals with the totals of the dialog.
-
-   Result: The difference is less than one cent for each provider, after the ECB rate.
-
-9. Set **Compare for** back to `1 hours`.
-
-   Result: The totals show the value for one hour again.
+   Result: The list shows the rows of all providers. The totals show the value
+   for one hour again.
 
 ### 6.24 C24 — List the data centers and disable those without storage
 
-1. Select a RunPod CPU row.
+1. Do task [C24](../new-cloud-picker.md#613-c24--data-centers) of the New cloud picker procedure.
 
-   Result: The summary shows the RunPod worker.
+   Result: You have the number of data centers and the number with
+   **Storage unavailable**.
 
-2. Open **Data center**.
-
-   Result: The dialog shows **Any data center** and the data centers, grouped by region.
-
-3. Count the data centers and the data centers with **Storage unavailable**.
-
-   Result: You have the two counts.
-
-4. Get the RunPod data centers and their network volume support from the RunPod console.
+2. Get the RunPod data centers and their network volume support from the RunPod console.
 
    Result: You have the expected list. The `data_centers` setting can limit it.
 
-5. Compare the counts with the expected list.
+3. Compare the counts with the expected list.
 
    Result: The dialog lists each allowed data center. A data center with no
    standard network volume shows **Storage unavailable**.
 
-6. Click a data center with **Storage unavailable**.
+4. Click a data center with **Storage unavailable**.
 
    Result: You cannot select it.
 
@@ -803,20 +797,14 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: The summary shows `2 vCPU · 4 GB`.
 
-2. Record the stock on each region chip.
+2. Do task [C25](../new-cloud-picker.md#614-c25--exact-stock-on-the-region-chips) of the New cloud picker procedure. Use the row `32 vCPU · 256 GB`.
 
-   Result: Each chip shows how many of its data centers have this size in stock.
-
-3. Select the RunPod row `32 vCPU · 256 GB`.
-
-   Result: The dialog runs an exact stock check for the new size.
-
-4. Record the stock on each region chip again.
-
-   Result: The chips show the stock for the new size. At least one count changes,
-   or the counts match the RunPod stock for both sizes.
+   Result: The chips show the stock for the new size. At least one count
+   changes, or the counts match the RunPod stock for both sizes.
 
 ### 6.26 C26 — Show Storage unavailable for a region without storage
+
+The New cloud picker procedure has no task for C26.
 
 1. Find a region in which no data center holds a standard network volume.
 
@@ -829,19 +817,15 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
 ### 6.27 C27 — Limit the RunPod stock to the region scope
 
-1. Record the stock of the RunPod rows and the Hetzner rows with **Any data center**.
-
-   Result: You have the reference values.
-
-2. Click the chip of the region Europe.
+1. Do task [C27](../new-cloud-picker.md#615-c27--region-scope) of the New cloud picker procedure.
 
    Result: The RunPod stock shows the stock in Europe. The Hetzner rows do not change.
 
-3. Examine the summary.
+2. Click the chip of the region Europe again.
 
    Result: The summary says `The workspace stays in Europe, and a stopped cloud resumes there.`
 
-4. Click **Any data center**.
+3. Click **Any data center**.
 
    Result: The summary says `Horizon picks a data center with stock.`
 
@@ -851,24 +835,16 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: The summary shows the RunPod worker and its storage.
 
-2. Click **High-performance** in **STORAGE**.
+2. Do task [C28](../new-cloud-picker.md#616-c28--high-performance-storage) of the New cloud picker procedure.
 
-   Result: The data center list changes. It shows only data centers that hold
-   high-performance volumes.
-
-3. Examine the picks and **ESTIMATED COST**.
-
-   Result: The picks do not show. The storage price shows `Price not published`.
-
-4. Click **Standard** in **STORAGE**.
-
-   Result: The data center list and the picks show again.
+   Result: With **High-performance**, the picks do not show and the storage
+   price shows `Price not published`. With **Standard**, the picks show again.
 
 ### 6.29 C29 — Show a known stock for 32 vCPU · 256 GB
 
-1. Select the RunPod row `32 vCPU · 256 GB`.
+1. Do task [C29](../new-cloud-picker.md#617-c29--stock-of-the-largest-size) of the New cloud picker procedure.
 
-   Result: The summary shows `In stock` or `Out of stock`.
+   Result: The summary shows `In stock`, `Low stock` or `Out of stock`.
 
 2. Examine the data center choices.
 
@@ -877,7 +853,7 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
 ### 6.30 C30 — Show only RunPod GPU types for a GPU profile
 
-1. Select the profile `runpod-gpu`.
+1. Do task [C30](../new-cloud-picker.md#618-c30--gpu-workers) of the New cloud picker procedure.
 
    Result: The dialog shows `GPU workers for the runpod-gpu profile`. No Hetzner row shows.
 
@@ -901,19 +877,7 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: The counts are the same. Record the value.
 
-6. Get the GPU offers for the region Europe.
-
-   ```sh
-   <run>/bin/cloud_deploy offers <home>/.horizon/cloud/settings.json '{"gpu":true,"region":"EUROPE","limit":50}' > ~/smoke/offers-gpu-eu.out.json
-   ```
-
-   Result: Each offer names regions with that GPU in stock.
-
-7. Click the chip of the region Europe in the dialog.
-
-   Result: The GPU types in stock are the same as in `offers-gpu-eu.out.json`.
-
-8. Record that the stock in the dialog does not use `min_cuda_version`.
+6. Record that the stock in the dialog does not use `min_cuda_version`.
 
    Result: The report says that D03 makes sure of the CUDA minimum.
 

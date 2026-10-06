@@ -248,7 +248,7 @@ change in the report as a deviation.
 
 9. In the fixture, open a local Claude Code panel and let the operator sign it in.
 
-   Result: The agent answers a short request. O01, G07, G08, T12 and T13 use this agent.
+   Result: The agent answers a short request. C21, C22, C30, O01, G07, G08, T12 and T13 use this agent.
 
 ## 6. Tasks
 
@@ -296,15 +296,16 @@ The cleanup of this procedure does X01 to X05.
 
 ### 6.1 Related procedures
 
-Other procedures test parts of this procedure in more detail. This procedure
-does not repeat their steps. Use them for a run that changes their function.
+Other procedures test parts of this procedure in more detail. Where the tests
+are the same, the area files link to their tasks and do not repeat their steps.
+Use these procedures alone for a run that changes their function.
 
 | Procedure | Tests in this procedure |
 |---|---|
-| [cloud-settings-replace-key](cloud-settings-replace-key.md) | A02 to A05 |
+| [cloud-settings-replace-key](cloud-settings-replace-key.md) | A01 and A02 |
 | [new-cloud-catalog-refresh](new-cloud-catalog-refresh.md) | C07 |
-| [new-cloud-picker](new-cloud-picker.md) | C12 to C30 |
-| [cloud-agent-panel-start](cloud-agent-panel-start.md) | E02 and E03 |
+| [new-cloud-picker](new-cloud-picker.md) | C12 to C25 and C27 to C30 |
+| [cloud-agent-panel-start](cloud-agent-panel-start.md) | E02 |
 | [local-network-bridge-agent-access](local-network-bridge-agent-access.md) | N02 and N03 |
 
 ## 7. Pass criteria

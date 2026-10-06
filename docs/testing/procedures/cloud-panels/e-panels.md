@@ -36,8 +36,8 @@ worker MCP servers and the SSH route.
 
 - The equipment in the [main procedure](../cloud-panels.md#4-equipment-and-preconditions).
 - `smoke-a` shows **Ready**.
-- For a detailed check of the agent start, use the
-  [cloud agent panel start procedure](../cloud-agent-panel-start.md).
+- The [cloud agent panel start procedure](../cloud-agent-panel-start.md). E02
+  uses its task H01.
 - The image of `smoke-a` contains Claude Code, Codex, a browser and a desktop.
 - Cloud settings select Claude and Codex in **Coding agents** (task A05).
 - The facts in [Cloud workspaces](../../../cloud-workspaces.md#sessions-and-lifecycle).
@@ -93,42 +93,26 @@ Device `type` actions can change a typed key
 form shows as saved can still be wrong. This task examines the sign-in with a
 real request.
 
-1. In `smoke-a`, open the panel picker as in E01.
+1. In `smoke-a`, do task [H01](../cloud-agent-panel-start.md#61-h01--start-a-claude-code-panel) of the cloud agent panel start procedure.
 
-   Result: The panel picker opens.
-
-2. Click **Claude Code**.
-
-   Result: A Claude Code panel opens and the agent starts.
-
-3. Examine the first lines of the panel.
-
-   Result: The panel shows no `Permission denied` line and no login prompt.
-
-4. Type a short request to the agent.
-
-   ```text
-   Reply with the word ready.
-   ```
-
-   Result: The agent replies `ready`. The panel shows no `401` error.
+   Result: The agent replies `ready`. The panel shows no login prompt and no `401` error.
 
    > **CAUTION:** ONLY THE OPERATOR ENTERS THE KEY. A device action can change
    > the key, and a screenshot can show it.
 
-5. If the panel shows a `401` error, ask the operator to enter the key again in **Cloud settings…**.
+2. If the panel shows a `401` error, ask the operator to enter the key again in **Cloud settings…**.
 
    Result: The operator saves the key. Nobody types it with a device action.
 
-6. If the operator entered the key again, click **Reconnect cloud** on the card of `smoke-a`.
+3. If the operator entered the key again, click **Reconnect cloud** on the card of `smoke-a`.
 
    Result: The card shows Ready. The reconnect sends the new key to the worker.
 
-7. Open a new Claude Code panel.
+4. Open a new Claude Code panel.
 
    Result: The agent starts.
 
-8. Do step 4 again.
+5. Type the request of step 5 of H01 again.
 
    Result: The agent replies `ready`.
 
