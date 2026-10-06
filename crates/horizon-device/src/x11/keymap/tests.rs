@@ -478,4 +478,10 @@ fn modifier_rows_decide_which_state_bits_block_text_input() {
     assert_eq!(check(&reserved, 0).map(|k| k.shift_keycode), Ok(Some(SHIFT)));
     reserved[0] = vec![57];
     assert_eq!(check(&reserved, 0).map(|k| k.shift_keycode), Ok(None));
+    // A key with Shift_L only on the second level types its first-level symbol.
+    keysyms[usize::from(58_u8 - 8) * 2] = 0x61;
+    keysyms[usize::from(58_u8 - 8) * 2 + 1] = 0xffe1;
+    reserved[0] = vec![58];
+    let rows: Vec<&[u8]> = reserved.iter().map(Vec::as_slice).collect();
+    assert_eq!(keyboard(&view(&keysyms), &rows, 0).map(|k| k.shift_keycode), Ok(None));
 }

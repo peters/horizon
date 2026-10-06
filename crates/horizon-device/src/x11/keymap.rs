@@ -270,12 +270,14 @@ pub(super) fn keyboard(layout: &Layout<'_>, rows: &[&[u8]], state: u16) -> Resul
         return Err(ModifierError::Lock);
     }
     Ok(Keyboard {
-        // Another key in the Shift row would type its own symbol with each stroke.
+        // XTEST presses the key without a modifier, so it types its first-level
+        // symbol. Any other key in the Shift row would type that symbol with
+        // each stroke.
         shift_keycode: keycodes(0).find(|keycode| {
             layout
                 .symbols(*keycode)
-                .iter()
-                .any(|symbol| matches!(symbol, 0xffe1 | 0xffe2))
+                .first()
+                .is_some_and(|symbol| matches!(symbol, 0xffe1 | 0xffe2))
         }),
         caps_lock,
     })

@@ -55,6 +55,9 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
 - A character on the first level or the Shift level of the current keymap uses
   that key. The tool holds Shift for the Shift level. No mapping is necessary.
   On a US layout, this applies to `[A-Za-z0-9]` and ASCII punctuation.
+- The tool holds Shift with a key of the Shift modifier row that has `Shift_L`
+  or `Shift_R` on its first level. If no key agrees, a character on the Shift
+  level gets a temporary mapping.
 - If Caps Lock is on, the tool holds Shift for a lowercase letter and releases
   it for an uppercase letter. This applies only to keys with a letter pair.
 - In these conditions, the action fails with `unsupported` before input:
