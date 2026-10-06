@@ -768,7 +768,17 @@ struct Trim {
 /// a refusal must still see the rate the receiver was already using.
 fn plan_trim(edge: edge::Edge, sample: edge::Sample, playing: bool) -> Trim {
     let previous = edge.rate;
+    let held = edge;
     let mut next = edge.step(sample);
+    // A pause is neither playback nor a buffer. Counting it as calm would
+    // lower the target. Buffering still steps back, and a fast rate is restored.
+    if !playing && sample.buffering_for.is_none() {
+        next.target = held.target;
+        next.floor = held.floor;
+        next.settled_for = Duration::ZERO;
+        next.backed_off = held.backed_off;
+        next.episode_lag = held.episode_lag;
+    }
     let mut requested = next.rate;
     // An open buffer must not keep a faster rate. The stall state stops the
     // poll entirely, and this covers the reports before that.
@@ -1002,5 +1012,24 @@ mod catch_up_tests {
         );
         assert_eq!(plan.command, Some(1.0));
         assert!((plan.edge.rate - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_pause_does_not_lower_the_target() {
+        let edge = edge::Edge {
+            settled_for: Duration::from_millis(3_600),
+            ..edge::Edge::default()
+        };
+        let sample = edge::Sample {
+            lag: 0.41,
+            buffering_for: None,
+            elapsed: Duration::from_millis(400),
+        };
+        let paused = plan_trim(edge, sample, false);
+        assert!((paused.edge.target - 0.40).abs() < 1e-9);
+        assert_eq!(paused.edge.settled_for, Duration::ZERO);
+        assert!(paused.command.is_none());
+        let playing = plan_trim(edge, sample, true);
+        assert!((playing.edge.target - 0.35).abs() < 1e-9);
     }
 }

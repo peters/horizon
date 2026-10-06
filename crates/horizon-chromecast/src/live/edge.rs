@@ -45,6 +45,9 @@ pub(crate) struct Edge {
     pub settled_for: Duration,
     /// The open buffering episode has already stepped the target back.
     pub backed_off: bool,
+    /// Lag when this buffering episode was first seen. Later samples grow while
+    /// frames keep arriving and the receiver clock is stopped.
+    pub episode_lag: Option<f64>,
 }
 
 impl Default for Edge {
@@ -55,6 +58,7 @@ impl Default for Edge {
             rate: 1.0,
             settled_for: Duration::ZERO,
             backed_off: false,
+            episode_lag: None,
         }
     }
 }
@@ -84,6 +88,9 @@ impl Edge {
         // A resumed picture may try the next step. The same episode may not.
         if sample.buffering_for.is_none() {
             self.backed_off = false;
+            self.episode_lag = None;
+        } else if self.episode_lag.is_none() {
+            self.episode_lag = Some(sample.lag);
         }
         if self.stalled(sample) {
             if !self.backed_off {
@@ -122,8 +129,9 @@ impl Edge {
     /// still at the proven lag is the TV's ordinary report, or a startup
     /// buffer, and must not stop the attempt to go closer.
     fn stalled(self, sample: Sample) -> bool {
+        let started_at = self.episode_lag.unwrap_or(sample.lag);
         sample.buffering_for.is_some_and(|since| since >= STALL)
-            && sample.lag < STALL_LAG
+            && started_at < STALL_LAG
             && self.target + f64::EPSILON < PROVEN_LAG
     }
 
@@ -159,6 +167,7 @@ mod tests {
             rate,
             settled_for,
             backed_off: false,
+            episode_lag: None,
         }
     }
 
@@ -271,5 +280,24 @@ mod tests {
         assert_eq!(nonsense, stopped);
         let huge = speeding.step(sample(MAX_LAG + 1.0, None, Duration::from_millis(400)));
         assert_eq!(huge, stopped);
+    }
+
+    #[test]
+    fn a_stall_is_judged_by_the_lag_when_buffering_started() {
+        let close = at(0.30, LIVE_EDGE, 1.0, Duration::ZERO);
+        let begun = close.step(sample(0.35, Some(Duration::ZERO), Duration::from_millis(400)));
+        assert!((begun.target - 0.30).abs() < 1e-9);
+        // The source kept moving, so the lag grew past the cutoff. The episode
+        // still started near the edge.
+        let grown = begun.step(sample(0.90, Some(STALL), Duration::from_millis(500)));
+        assert!((grown.target - 0.35).abs() < 1e-9);
+        assert!((grown.floor - 0.35).abs() < 1e-9);
+
+        // The source stopped too, so the lag stays large. Do not treat that as
+        // a near-edge stall by subtracting the wait.
+        let far = at(0.30, LIVE_EDGE, 1.0, Duration::ZERO);
+        let far_begun = far.step(sample(1.2, Some(Duration::ZERO), Duration::from_millis(400)));
+        let far_held = far_begun.step(sample(1.2, Some(STALL), Duration::from_millis(500)));
+        assert!((far_held.target - 0.30).abs() < 1e-9);
     }
 }
