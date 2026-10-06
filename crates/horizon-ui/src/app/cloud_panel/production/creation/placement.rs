@@ -614,29 +614,34 @@ mod tests {
     #[test]
     fn a_region_without_the_workspace_volume_reads_storage_unavailable() {
         let (eu, oceania) = (center("EU-RO-1", "EUROPE", true), center("OC-AU-1", "OCEANIA", false));
-        let mut sold_out = candidate(&eu, Stock::No);
-        let mut no_volume = candidate(&oceania, Stock::No);
+        let mut no_volume = candidate(&oceania, Stock::Yes);
         no_volume.compatible = false;
-        let regions = regions(&[candidate(&eu, Stock::No), no_volume]);
-        let labels: Vec<(&str, String)> = regions
+        let regions = regions(&[candidate(&eu, Stock::Yes), no_volume]);
+        let labels: Vec<(&str, usize, String)> = regions
             .iter()
-            .map(|region| (region.name.as_str(), region_label(region.in_stock).0))
+            .map(|region| {
+                (
+                    region.name.as_str(),
+                    region.data_centers.len(),
+                    region_label(region.in_stock).0,
+                )
+            })
             .collect();
         assert_eq!(
             labels,
             [
-                ("Europe", "none in stock".to_owned()),
-                ("Oceania", "Storage unavailable".to_owned())
+                ("Europe", 1, "1 in stock".to_owned()),
+                ("Oceania", 0, "Storage unavailable".to_owned())
             ]
         );
-        assert!(regions[1].data_centers.is_empty());
-        // A region without storage adds nothing to the stock of any data center.
-        sold_out.stock = Stock::Yes;
-        let total = super::regions(&[sold_out])
+        // A region without storage adds nothing to the stock of any data center, even
+        // when its incompatible data center reports stock.
+        let total = regions
             .iter()
             .filter_map(|region| region.in_stock)
             .fold(Count::Known(0), Count::with);
         assert_eq!(total, Count::Known(1));
+        assert_eq!(region_label(Some(Count::Known(0))).0, "none in stock");
     }
 
     #[test]
