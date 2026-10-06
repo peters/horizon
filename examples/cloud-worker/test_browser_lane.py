@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import select
 import shutil
 import signal
 import subprocess
@@ -212,7 +213,7 @@ class BrowserLaneTests(unittest.TestCase):
         ]
         mcp = subprocess.Popen(as_agent([str(self.bin / 'horizon-browser'), 'mcp', '--connect']), env=environment,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                               start_new_session=True)
+                               start_new_session=True, bufsize=0)
         self.addCleanup(mcp.stdout.close)
         self.addCleanup(mcp.stdin.close)
         self.addCleanup(self.stop, mcp)
@@ -221,6 +222,11 @@ class BrowserLaneTests(unittest.TestCase):
         mcp.stdin.flush()
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
+            # A silent MCP must not hold the suite past the deadline. The pipe is unbuffered, so
+            # no line waits in a Python buffer that select cannot see; the MCP writes whole lines.
+            readable, _, _ = select.select([mcp.stdout], [], [], max(0, deadline - time.monotonic()))
+            if not readable:
+                break
             line = mcp.stdout.readline()
             self.assertTrue(line, 'the browser MCP stopped before it answered')
             reply = json.loads(line)
