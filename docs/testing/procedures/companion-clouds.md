@@ -386,9 +386,14 @@ Do these steps in the shell panel of task K5.
 
 3. Revert the declaration commit in the source repository.
 
-   Result: The source repository does not declare the companion.
+   Result: The local checkout does not declare the companion.
 
-4. Stop the fixture.
+4. Push the revert to the default branch of the source repository.
+
+   Result: `.horizon/cloud.yml` on the default branch does not declare the
+   companion `service`.
+
+5. Stop the fixture.
 
    Result: The fixture process stops and its Device panel shows no image.
 
