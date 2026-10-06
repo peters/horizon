@@ -94,7 +94,9 @@ ends when the receiver or another sender stops it.
 
 2. Compare the seconds counter in the test picture with the stopwatch.
 
-   Result: The difference is 1 second or less.
+   Result: The difference is 1 second or less. Playback may run fast for a
+   short time while it approaches the live edge, then return to normal speed.
+   After it has played smoothly it may sit closer than half a second.
 
 3. Wait 60 seconds more.
 

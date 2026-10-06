@@ -1,6 +1,7 @@
 //! Live H.264 casting: the host pushes encoded access units, this module
 //! serves them on the LAN and keeps the Default Media Receiver playing them,
 //! either as one progressive fragmented MP4 stream (low latency) or as HLS.
+mod edge;
 mod hls;
 mod http;
 mod mp4;
@@ -50,12 +51,8 @@ const EVENT_POLL: Duration = Duration::from_millis(250);
 /// seconds while playback advances in real time. Only report buffering once a
 /// BUFFERING report has gone this long without a PLAYING one after it.
 pub(crate) const STALL_GRACE: Duration = Duration::from_secs(5);
-/// Progressive playback starts a few seconds behind; above this the session
-/// speeds playback up until it is back near `TARGET_LAG`.
-const CATCH_UP_ABOVE: f64 = 1.0;
-const TARGET_LAG: f64 = 0.4;
-const CATCH_UP_RATE: f64 = 1.5;
-const LAG_CHECK: Duration = Duration::from_secs(2);
+/// How often the live-edge controller looks at the receiver while it plays.
+const EDGE_POLL: Duration = Duration::from_millis(400);
 /// Attempts to return to normal speed before the session fails, so a receiver
 /// is never left running fast.
 const RESTORE_ATTEMPTS: u8 = 3;
@@ -66,8 +63,9 @@ const CONNECT_RETRY: Duration = Duration::from_secs(2);
 /// How the stream reaches the receiver.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Transport {
-    /// One endless fragmented MP4 response; about half a second behind live
-    /// once the session has caught up.
+    /// One endless fragmented MP4 response. The player starts further behind
+    /// the newest frame; playback speeds up until it is about 0.4 s behind,
+    /// then closer, for as long as the picture keeps moving.
     #[default]
     Progressive,
     /// Rolling HLS of MPEG-TS segments; about three seconds behind live.
@@ -224,8 +222,7 @@ impl LiveCast {
                 stop: stop.clone(),
                 buffering_since: Cell::new(None),
                 started: Cell::new(false),
-                catch_up: Cell::new(CatchUp::Watching),
-                next_lag_check: Cell::new(Instant::now()),
+                playback: Cell::new(Playback::new()),
             };
             std::thread::Builder::new()
                 .name("chromecast-live".to_owned())
@@ -308,8 +305,39 @@ pub(crate) struct Session {
     buffering_since: Cell<Option<Instant>>,
     /// Our media session has reported PLAYING at least once.
     started: Cell<bool>,
-    catch_up: Cell<CatchUp>,
-    next_lag_check: Cell<Instant>,
+    playback: Cell<Playback>,
+}
+
+/// Live-edge controller plus a rate command that still has to be confirmed.
+#[derive(Clone, Copy, Debug)]
+struct Playback {
+    edge: edge::Edge,
+    unsupported: bool,
+    retry: Option<Retry>,
+    next_check: Instant,
+    checked: Instant,
+}
+
+/// A playback-rate command to send again at `at`. `failures` counts failed
+/// returns to normal speed.
+#[derive(Clone, Copy, Debug)]
+struct Retry {
+    at: Instant,
+    rate: f64,
+    failures: u8,
+}
+
+impl Playback {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            edge: edge::Edge::default(),
+            unsupported: false,
+            retry: None,
+            next_check: now,
+            checked: now,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -318,8 +346,6 @@ enum CatchUp {
     /// Playing fast until this instant; then returning to normal speed, with
     /// the failed attempts so far.
     Until(Instant, u8),
-    /// The receiver refused a playback rate; leave it at normal speed.
-    Unsupported,
 }
 
 impl Session {
@@ -573,53 +599,127 @@ impl Session {
     }
 
     /// Progressive receivers start with a few seconds of buffer. Measure how
-    /// far playback trails the newest frame and briefly play faster to trim it.
+    /// far playback trails the newest frame and play faster until that lag is
+    /// back at the live-edge target.
     /// # Errors
     /// Fails when playback cannot be returned to normal speed.
     fn keep_up(&self, media: &MediaController<'_>) -> Result<()> {
         let Sink::Progressive(stream) = &self.sink else {
             return Ok(());
         };
-        let now = Instant::now();
-        match self.catch_up.get() {
-            CatchUp::Until(until, failures) if now >= until => {
-                let restored = media.set_playback_rate(1.0);
-                let Some(next) = after_restore(restored.is_ok(), failures, now) else {
-                    return restored.map(|_| ());
-                };
-                self.catch_up.set(next);
-                self.next_lag_check.set(now + LAG_CHECK);
-                return Ok(());
-            }
-            CatchUp::Until(..) | CatchUp::Unsupported => return Ok(()),
-            CatchUp::Watching => {}
-        }
-        if !self.started.get() || now < self.next_lag_check.get() || *lock(&self.state) != LiveState::Playing {
+        let mut playback = self.playback.get();
+        if playback.unsupported {
             return Ok(());
         }
-        self.next_lag_check.set(now + LAG_CHECK);
+        let now = Instant::now();
+        if let Some(retry) = playback.retry {
+            if now < retry.at {
+                return Ok(());
+            }
+            return self.push_rate(media, playback, retry.rate, retry.failures, now);
+        }
+        if !self.started.get() || now < playback.next_check || *lock(&self.state) != LiveState::Playing {
+            return Ok(());
+        }
+        let elapsed = now.saturating_duration_since(playback.checked);
+        playback.checked = now;
+        playback.next_check = now + EDGE_POLL;
         let (Some(newest), Ok(Some(status))) = (stream.newest_media_time(), media.status()) else {
+            self.playback.set(playback);
             return Ok(());
         };
         let lag = newest - status.current_time;
-        if lag > CATCH_UP_ABOVE && status.player_state == "PLAYING" {
-            // The receiver reports the time: ignore one too far off to represent.
-            let Some(until) = Duration::try_from_secs_f64((lag - TARGET_LAG) / (CATCH_UP_RATE - 1.0))
-                .ok()
-                .and_then(|catch_up| now.checked_add(catch_up))
-            else {
-                return Ok(());
-            };
-            tracing::debug!(lag, "speeding up live playback to catch up");
-            self.catch_up.set(match media.set_playback_rate(CATCH_UP_RATE) {
-                Ok(_) => CatchUp::Until(until, 0),
-                // Only an explicit refusal proves the rate was not applied.
-                Err(Error::Rejected { .. }) => CatchUp::Unsupported,
-                // The rate may have applied before the reply was lost: restore now.
-                Err(_) => CatchUp::Until(now, 0),
-            });
+        // A PLAYING reply closes a buffering report even when the queued event
+        // that clears it has not been applied yet.
+        let buffering_for = matches!(status.player_state.as_str(), "BUFFERING" | "LOADING").then(|| {
+            self.buffering_since
+                .get()
+                .map_or(Duration::ZERO, |since| since.elapsed())
+        });
+        let previous = playback.edge.rate;
+        let next = playback.edge.step(edge::Sample {
+            lag,
+            buffering_for,
+            elapsed,
+        });
+        let speed_up = next.rate > previous + 1e-3;
+        let changed = (next.rate - previous).abs() > 1e-3;
+        playback.edge = next;
+        // Do not speed up into an open buffer. Do send the return to normal
+        // speed: that is how a target that was too close lets the buffer rebuild.
+        if !changed || (speed_up && status.player_state != "PLAYING") {
+            if speed_up {
+                playback.edge.rate = previous;
+            }
+            self.playback.set(playback);
+            return Ok(());
         }
-        Ok(())
+        tracing::debug!(lag, rate = next.rate, target = next.target, "trimming live playback");
+        self.push_rate(media, playback, next.rate, 0, now)
+    }
+
+    /// Applies `rate`. An explicit refusal of a faster rate gives up on
+    /// trimming. A lost reply while speeding up is treated as if the rate
+    /// applied, so the next command restores normal speed.
+    /// # Errors
+    /// Fails when playback cannot be returned to normal speed.
+    fn push_rate(
+        &self,
+        media: &MediaController<'_>,
+        mut playback: Playback,
+        rate: f64,
+        failures: u8,
+        now: Instant,
+    ) -> Result<()> {
+        let result = media.set_playback_rate(rate);
+        let restoring = (rate - 1.0).abs() <= 1e-3;
+        match result {
+            Ok(_) => {
+                playback.edge.rate = rate;
+                playback.retry = None;
+                self.playback.set(playback);
+                Ok(())
+            }
+            // Only an explicit refusal proves the faster rate was not applied.
+            Err(Error::Rejected { .. }) if !restoring => {
+                playback.unsupported = true;
+                playback.edge.rate = 1.0;
+                playback.retry = None;
+                self.playback.set(playback);
+                Ok(())
+            }
+            // The rate may have applied before the reply was lost: restore now.
+            Err(_) if !restoring => {
+                playback.retry = Some(Retry {
+                    at: now,
+                    rate: 1.0,
+                    failures: 0,
+                });
+                self.playback.set(playback);
+                Ok(())
+            }
+            Err(error) => match after_restore(false, failures, now) {
+                Some(CatchUp::Until(at, failures)) => {
+                    playback.retry = Some(Retry {
+                        at,
+                        rate: 1.0,
+                        failures,
+                    });
+                    self.playback.set(playback);
+                    Ok(())
+                }
+                Some(CatchUp::Watching) => {
+                    playback.edge.rate = 1.0;
+                    playback.retry = None;
+                    self.playback.set(playback);
+                    Ok(())
+                }
+                None => {
+                    self.playback.set(playback);
+                    Err(error)
+                }
+            },
+        }
     }
 
     /// Playing, but the receiver has reported buffering for longer than the grace period.
@@ -667,8 +767,7 @@ pub(crate) fn test_session() -> Session {
         stop: Arc::new(AtomicBool::new(false)),
         buffering_since: Cell::new(None),
         started: Cell::new(false),
-        catch_up: Cell::new(CatchUp::Watching),
-        next_lag_check: Cell::new(Instant::now()),
+        playback: Cell::new(Playback::new()),
     }
 }
 
