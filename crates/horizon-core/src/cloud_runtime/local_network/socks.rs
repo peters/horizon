@@ -121,7 +121,7 @@ impl Shared {
         let mut allowed = 0;
         let used = self
             .bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 allowed = count.min(BYTE_BUDGET.saturating_sub(used));
                 Some(used + allowed)
             })
@@ -261,7 +261,7 @@ fn accept(listener: &TcpListener, shared: &Arc<Shared>) {
             Ok((socket, _)) => {
                 if shared
                     .active
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
                         (active < MAX_CONNECTIONS).then_some(active + 1)
                     })
                     .is_err()

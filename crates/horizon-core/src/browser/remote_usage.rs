@@ -20,7 +20,7 @@ struct UsageWorkerPermit<'a>(&'a AtomicUsize);
 impl<'a> UsageWorkerPermit<'a> {
     fn acquire(counter: &'a AtomicUsize) -> Option<Self> {
         counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 (count < MAX_USAGE_WORKERS).then(|| count + 1)
             })
             .ok()

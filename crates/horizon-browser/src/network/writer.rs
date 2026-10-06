@@ -156,7 +156,7 @@ fn reserve_queued_bytes(
     loop {
         if metrics
             .queued_bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current
                     .checked_add(record_bytes)
                     .filter(|next| *next <= QUEUE_MAX_BYTES)
