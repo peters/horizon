@@ -131,6 +131,9 @@ Give each task an ID. A report uses the ID to give a result.
 
 ### 6.2 S02 — Resume the worker
 
+> **CAUTION:** THE NEXT STEP STARTS THE WORKER AGAIN. The provider charges money
+> for the compute until the cleanup.
+
 1. On the card, click **Resume worker**.
 
    Result: The panel shows these lines until the cloud is ready:

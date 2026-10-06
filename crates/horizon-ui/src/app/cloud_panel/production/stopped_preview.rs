@@ -33,10 +33,17 @@ fn seed_stopped(app: &mut HorizonApp, delay: Duration, ctx: &egui::Context) -> b
     let Some(workspace_local) = app.board.workspace(workspace).map(|item| item.local_id.clone()) else {
         return false;
     };
+    // The panel is replaced by its placeholder at once; its command only has to exit.
+    let (command, args) = if cfg!(windows) {
+        ("cmd.exe", vec!["/C".to_owned(), "exit".to_owned()])
+    } else {
+        ("/bin/sh", vec!["-c".to_owned(), "exit".to_owned()])
+    };
     let options = || PanelOptions {
         name: Some("Claude".into()),
         kind: PanelKind::Shell,
-        command: Some("/bin/true".into()),
+        command: Some(command.into()),
+        args: args.clone(),
         ..PanelOptions::default()
     };
     let Ok(id) = app.board.create_panel(options(), workspace) else {

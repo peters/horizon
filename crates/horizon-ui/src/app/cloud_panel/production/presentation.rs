@@ -257,14 +257,19 @@ impl HorizonApp {
             if runtime.member_wait == Some(wait) {
                 continue;
             }
-            runtime.member_wait = Some(wait);
+            let mut shown = true;
             for local in &group.panels {
                 if let Some(id) = self.board.panel_id_by_local_id(local)
                     && let Some(panel) = self.board.panel_mut(id)
                     && let Err(error) = panel.show_cloud_wait(wait)
                 {
+                    shown = false;
                     self.cloud_prototype.error = Some(error.to_string());
                 }
+            }
+            // A member that could not change is tried again on the next frame.
+            if shown {
+                runtime.member_wait = Some(wait);
             }
         }
     }
