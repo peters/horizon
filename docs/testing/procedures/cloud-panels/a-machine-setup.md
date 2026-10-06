@@ -542,15 +542,24 @@ Do this task after D01. It uses the cloud `smoke-a`.
 
 ## 8. Cleanup
 
-1. Make sure that the settings file has no Git entry and no registry credential of this run.
+1. Make sure that the settings file has no Git entry of this run.
 
    ```sh
-   jq '{git: .git_credentials, pull: .registry_pull_auth_id}' <data-home>/.horizon/cloud/settings.json
+   jq '.git_credentials' <data-home>/.horizon/cloud/settings.json
    ```
 
-   Result: `git` is null or empty. `pull` is null or a revoked generation.
+   Result: The output is null or empty.
 
-2. Delete `<data-home>/smoke/registry-status.json` and `<data-home>/smoke/bin/registry-mcp.sh`.
+2. Show the registry entries in the settings file.
+
+   ```sh
+   jq '[.registries.bindings[]? | .repository]' <data-home>/.horizon/cloud/settings.json
+   ```
+
+   Result: The list shows `<build-repository>` and the A08 repository. The cleanup of
+   [area L](l-lifecycle.md) revokes the `<build-repository>` entry.
+
+3. Delete `<data-home>/smoke/bin/registry-mcp.sh`.
 
    Result: No test file of this area stays in the private home.
 
