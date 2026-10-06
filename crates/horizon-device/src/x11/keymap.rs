@@ -218,29 +218,31 @@ const NUM_LOCK: u32 = 0xff7f;
 /// (Shift, Lock, Control, Mod1 to Mod5) and the core state mask. Any slot can
 /// hold Alt, Super or Num Lock, so the rows decide which bits are allowed.
 pub(super) fn keyboard(layout: &Layout<'_>, rows: &[&[u8]], state: u16) -> Result<Keyboard, ModifierError> {
-    let has = |row: usize, keysym: u32| {
-        rows.get(row).is_some_and(|keycodes| {
-            keycodes
-                .iter()
-                .any(|keycode| *keycode != 0 && layout.symbols(*keycode).contains(&keysym))
-        })
+    let keycodes = |row: usize| {
+        rows.get(row)
+            .into_iter()
+            .flat_map(|keycodes| keycodes.iter().copied())
+            .filter(|keycode| *keycode != 0 && *keycode != RESERVED_KEYCODE)
+    };
+    // The state bit cannot tell which key of a row is down. Thus, a row is
+    // exempt only when each of its keys is the exempt key.
+    let only = |row: usize, keysym: u32| {
+        keycodes(row).next().is_some() && keycodes(row).all(|keycode| layout.symbols(keycode).contains(&keysym))
     };
     let active = |row: usize| state & (1_u16 << row) != 0;
-    // Shift (0), Control (2) and Mod1 to Mod5 (3 to 7), but not the Num Lock row.
+    // Shift (0), Control (2) and Mod1 to Mod5 (3 to 7), but not a Num Lock row.
     if [0, 2, 3, 4, 5, 6, 7]
         .into_iter()
-        .any(|row| active(row) && !(row >= 3 && has(row, NUM_LOCK)))
+        .any(|row| active(row) && !(row >= 3 && only(row, NUM_LOCK)))
     {
         return Err(ModifierError::Held);
     }
     let caps_lock = active(1);
-    if caps_lock && !has(1, CAPS_LOCK) {
+    if caps_lock && !only(1, CAPS_LOCK) {
         return Err(ModifierError::Lock);
     }
     Ok(Keyboard {
-        shift_keycode: rows
-            .first()
-            .and_then(|keycodes| keycodes.iter().copied().find(|keycode| *keycode != 0)),
+        shift_keycode: keycodes(0).next(),
         caps_lock,
     })
 }

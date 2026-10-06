@@ -443,4 +443,19 @@ fn modifier_rows_decide_which_state_bits_block_text_input() {
     let shift_lock = rows(55, 57, 56);
     assert_eq!(check(&shift_lock, 0x02).err(), Some(ModifierError::Lock));
     assert!(check(&shift_lock, 0).is_ok(), "an inactive Shift Lock is harmless");
+
+    // A row that mixes the exempt key with another key is not exempt.
+    let mut mixed = rows(54, 0, 56);
+    mixed[4].push(57);
+    assert_eq!(check(&mixed, 0x10).err(), Some(ModifierError::Held), "Num Lock and Alt");
+    mixed[1].push(55);
+    assert_eq!(
+        check(&mixed, 0x02).err(),
+        Some(ModifierError::Lock),
+        "Caps Lock and Shift Lock"
+    );
+    // Keycode 8 is never the Shift key.
+    let mut reserved = rows(54, 57, 56);
+    reserved[0] = vec![8, SHIFT];
+    assert_eq!(check(&reserved, 0).map(|k| k.shift_keycode), Ok(Some(SHIFT)));
 }

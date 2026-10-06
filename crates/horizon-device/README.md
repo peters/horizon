@@ -59,9 +59,9 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
   it for an uppercase letter. This applies only to keys with a letter pair.
 - In these conditions, the action fails with `unsupported` before input:
   - A keyboard group other than the first is active.
-  - A modifier other than Lock and Num Lock is active. The modifier mapping of
-    the display tells which slot holds Num Lock.
-  - Lock is active, but its keys do not include Caps Lock, for example Shift Lock.
+  - A modifier other than Lock and Num Lock is active. A Mod slot counts as
+    Num Lock only if each of its keys is Num Lock in the modifier mapping.
+  - Lock is active, but one of its keys is not Caps Lock, for example Shift Lock.
   - The server has no XTEST extension.
 - Each other character gets a temporary mapping on an unused keycode. A server
   round trip makes sure that the server applied the mapping before the first key.
