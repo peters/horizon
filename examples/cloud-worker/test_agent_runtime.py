@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,10 @@ class AgentRuntimeTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.workspace = self.root / 'workspace'
         (self.workspace / 'home/.horizon').mkdir(parents=True)
-        (self.workspace / 'home/.horizon/cloud-host-instance').write_text('test-host\n')
+        # Published by the root control service; its browser runtime root stays private.
+        self.run_dir = self.root / 'run/horizon-worker'
+        self.run_dir.mkdir(parents=True)
+        (self.run_dir / 'browser-host-instance').write_text('test-host\n')
         (self.workspace / 'sessions/test-panel').mkdir(parents=True)
         credentials = self.workspace / 'credentials'
         credentials.mkdir()
@@ -46,7 +50,8 @@ sys.exit(23)
         self.tools = tools
         self.script = self.root / 'horizon-worker-run'
         source = Path(__file__).with_name('horizon-worker-run').read_text()
-        self.script.write_text(source.replace('/workspace', str(self.workspace)))
+        self.script.write_text(source.replace('/workspace', str(self.workspace))
+                               .replace('/run/horizon-worker', str(self.run_dir)))
         self.env = {'PATH': str(tools) + os.pathsep + os.defpath,
                     'CHILD_RECEIPT': str(self.root / 'child.json'), 'HORIZON': 'parent-host'}
 
@@ -56,6 +61,7 @@ sys.exit(23)
                                 text=True, timeout=10, check=True)
         self.assertEqual((self.workspace / 'sessions/test-panel/exit-status').read_text(), '23\n')
         self.assertIn('Session process exited with status 23', result.stdout)
+        self.stderr = result.stderr
         return json.loads((self.root / 'child.json').read_text())
 
     def test_minimal_launch_disables_background_updates_and_preserves_contract(self):
@@ -81,6 +87,56 @@ sys.exit(23)
         self.assertTrue((self.workspace / 'locks').is_dir())
         self.assertEqual(child['path'], self.env['PATH'])
         self.assertIsNone(child['toolkit'])
+
+    def test_host_instance_comes_from_the_published_copy_not_the_private_runtime_root(self):
+        private = self.workspace / 'home/.horizon'
+        (private / 'cloud-host-instance').write_text('private-host\n')
+        private.chmod(0)
+        self.addCleanup(private.chmod, 0o700)
+        child = self.launch('grok', HORIZON_BROWSER_HOST_INSTANCE='inherited-host')
+        self.assertEqual(child['env']['HORIZON_BROWSER_HOST_INSTANCE'], 'test-host')
+        self.assertEqual(self.stderr, '', 'an agent panel starts without errors')
+
+    def test_missing_host_instance_is_reported_and_never_inherited(self):
+        (self.run_dir / 'browser-host-instance').unlink()
+        child = self.launch('grok', HORIZON_BROWSER_HOST_INSTANCE='inherited-host')
+        self.assertIsNone(child['env']['HORIZON_BROWSER_HOST_INSTANCE'])
+        self.assertIn('has not published its browser host instance', self.stderr)
+        self.assertEqual(child['args'], ['--no-leader'], 'the agent still starts')
+
+    @unittest.skipUnless(os.geteuid() == 0 and shutil.which('setpriv') and shutil.which('chown'),
+                         'needs root to run the launcher as the unprivileged worker agent')
+    def test_unprivileged_agent_reads_the_value_but_not_root_private_state(self):
+        # Ownership as on an isolated worker: root keeps the browser runtime root, the
+        # agent owns the rest of the workspace and runs the launcher as UID 10001.
+        private = self.workspace / 'home/.horizon'
+        (private / 'cloud-host-instance').write_text('private-host\n')
+        (private / 'cloud-browser-history').mkdir()
+        os.chmod(private / 'cloud-host-instance', 0o600)
+        self.root.chmod(0o755)
+        (self.root / 'run').chmod(0o755)
+        self.run_dir.chmod(0o755)
+        (self.run_dir / 'browser-host-instance').chmod(0o644)
+        for path in [self.tools, *self.tools.iterdir(), self.script]:
+            path.chmod(0o755)
+        subprocess.run(['chown', '-R', '10001:10001', str(self.workspace)], check=True)
+        subprocess.run(['chown', '-R', '0:0', str(private)], check=True)
+        private.chmod(0o700)
+        receipt = self.root / 'agent'
+        receipt.mkdir()
+        os.chown(receipt, 10001, 10001)
+        environment = dict(self.env, CHILD_RECEIPT=str(receipt / 'child.json'))
+        result = subprocess.run(['setpriv', '--reuid=10001', '--regid=10001', '--clear-groups', '--',
+                                 'bash', str(self.script), 'test-panel', 'grok'],
+                                env=environment, capture_output=True, text=True, timeout=10, check=True)
+        self.assertEqual(result.stderr, '')
+        child = json.loads((receipt / 'child.json').read_text())
+        self.assertEqual(child['env']['HORIZON_BROWSER_HOST_INSTANCE'], 'test-host')
+        for path in [private / 'cloud-host-instance', private / 'cloud-browser-history']:
+            denied = subprocess.run(['setpriv', '--reuid=10001', '--regid=10001', '--clear-groups', '--',
+                                     'ls', str(path)], capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(denied.returncode, 0, path)
+            self.assertIn('Permission denied', denied.stderr)
 
     def claude_config(self):
         return json.loads((self.workspace / 'home/.claude.json').read_text())

@@ -38,6 +38,8 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | companion cloud | A companion on its own worker. | — |
 | Local Network Bridge | The function that lets a worker reach the local network of the PC. | LNB, network share |
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
+| host instance | The identity of the Horizon host process that starts an agent. Browser tools use it to find the workspace of the agent. It is not a secret. | host ID |
+| browser runtime root | The directory in `HORIZON_BROWSER_ROOT` with the private browser state of a host. | browser root |
 
 ## Casting
 
