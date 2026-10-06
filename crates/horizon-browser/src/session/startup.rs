@@ -374,6 +374,7 @@ fn read_disclosure_metadata_from_target(
         link,
         stop_requested,
         session_id,
+        CALL_TIMEOUT,
         "Runtime.enable",
         &serde_json::json!({}),
     )?;
@@ -382,6 +383,7 @@ fn read_disclosure_metadata_from_target(
         link,
         stop_requested,
         session_id,
+        CALL_TIMEOUT,
         "Runtime.evaluate",
         &serde_json::json!({
             "expression": CHROMIUM_USER_AGENT_METADATA_EXPRESSION,
@@ -401,21 +403,30 @@ fn wait_for_disclosure_document(
     timeout: Duration,
 ) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
+    let mut shown = "no document URL".to_string();
     loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "the disclosure target did not show {CHROMIUM_DISCLOSURE_BOOTSTRAP_URL}; last result: {shown}"
+            ));
+        }
+        // Each read gets only the remaining time, so the wait ends at the deadline.
         let location = call_in_target(
             link,
             stop_requested,
             session_id,
+            remaining.min(CALL_TIMEOUT),
             "Runtime.evaluate",
             &serde_json::json!({ "expression": "location.href", "returnByValue": true }),
         );
-        let shown = match &location {
+        shown = match location {
             Ok(result) => result
                 .pointer("/result/value")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("no document URL")
                 .to_string(),
-            Err(error) => error.clone(),
+            Err(error) => error,
         };
         if shown == CHROMIUM_DISCLOSURE_BOOTSTRAP_URL {
             return Ok(());
@@ -423,12 +434,7 @@ fn wait_for_disclosure_document(
         if stop_requested.load(Ordering::Acquire) {
             return Err("browser startup was cancelled".to_string());
         }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "the disclosure target did not show {CHROMIUM_DISCLOSURE_BOOTSTRAP_URL}; last result: {shown}"
-            ));
-        }
-        std::thread::sleep(DISCLOSURE_DOCUMENT_POLL);
+        std::thread::sleep(DISCLOSURE_DOCUMENT_POLL.min(deadline.saturating_duration_since(Instant::now())));
     }
 }
 
@@ -436,10 +442,11 @@ fn call_in_target(
     link: &mut CdpLink,
     stop_requested: &AtomicBool,
     session_id: &str,
+    timeout: Duration,
     method: &str,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    link.call_and_drain_until(CALL_TIMEOUT, method, params, Some(session_id), || {
+    link.call_and_drain_until(timeout, method, params, Some(session_id), || {
         stop_requested.load(Ordering::Acquire)
     })
     .result
@@ -840,6 +847,32 @@ mod disclosure_document_tests {
             commands.last().map(|command| &command["params"]["expression"]),
             Some(&json!(CHROMIUM_USER_AGENT_METADATA_EXPRESSION))
         );
+    }
+
+    #[test]
+    fn a_silent_target_does_not_extend_the_wait_past_its_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+        let address = listener.local_addr().expect("mock address");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept mock");
+            let mut socket = tungstenite::accept(stream).expect("mock handshake");
+            // Read each command and never answer.
+            while let Ok(Message::Text(_)) = socket.read() {}
+        });
+        let mut link = CdpLink::connect(&format!("ws://{address}/")).expect("connect mock");
+        let started = std::time::Instant::now();
+        let result = super::wait_for_disclosure_document(
+            &mut link,
+            &AtomicBool::new(false),
+            "bootstrap",
+            Duration::from_millis(300),
+        );
+        let elapsed = started.elapsed();
+        drop(link);
+        server.join().expect("mock server");
+
+        assert!(result.is_err());
+        assert!(elapsed < Duration::from_secs(2), "the wait took {elapsed:?}");
     }
 
     #[test]
