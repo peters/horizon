@@ -44,8 +44,90 @@ scalars and 4096 UTF-8 bytes without NUL, up to four modifiers. X11 text is pace
 at 20 ms per character with a final 100 ms drain interval; split longer text into
 bounded actions and observe the result. Coordinates must fall inside the original surface described by the screenshot geometry.
 Use stdin for entered text to avoid exposing it in process arguments/history.
-Distinct characters needing temporary X11 mappings must fit the currently unused
-keycodes; oversized requests fail before sending input.
+
+### X11 text and keycode mappings
+
+An X11 client translates a key with the keymap that it has when it reads the
+event. Many clients get the server keymap only after a mapping notification.
+If a keycode changes before a slow client reads its key, that character is lost
+or wrong. Thus, `type` does not change a keycode that a queued key can use:
+
+- A character that a key gives without Shift or with Shift uses that key. The
+  tool holds Shift for the Shift level. No mapping is necessary. On a US
+  layout, this applies to `[A-Za-z0-9]` and ASCII punctuation.
+- The tool reads the XKB key type of each key. The key type and the current
+  modifier state (for example Num Lock) decide which keysym a key gives
+  without Shift and with Shift. Without XKB, the tool uses the first two
+  keysyms of the core keymap, and it does not use a key with a keypad keysym,
+  because Num Lock changes its level.
+- The tool holds Shift with a key of the Shift modifier row that has `Shift_L`
+  or `Shift_R` on its first level. If no key agrees, a character on the Shift
+  level gets a temporary mapping.
+- If Caps Lock is on, characters without case, for example digits and
+  punctuation, use their level as usual.
+- In these conditions, the action fails with `unsupported` before input:
+  - A keyboard group other than the first is active. The tool reads the
+    group and the modifiers from XKB, or from the core state without XKB.
+  - A modifier other than Lock and Num Lock is active. A Mod slot counts as
+    Num Lock only if each of its keys in the modifier mapping has Num Lock on
+    its first level.
+  - Lock is active, but one of its keys does not have Caps Lock on its first
+    level, for example Shift Lock.
+  - Caps Lock is on, and the text has a letter with case. A client can
+    change the case of a keysym that the key type does not select with Lock,
+    so the key type alone does not decide which case the client gives.
+  - The server has no XTEST extension.
+- Each other character gets a temporary mapping on an unused keycode. A server
+  round trip makes sure that the server applied the mapping before the first key.
+- The tool does not type with a key of the modifier mapping and does not map
+  it, because a press of that key changes the modifier state. This applies to
+  each row: Shift, Lock, Control and Mod1 to Mod5.
+- A temporary mapping stays after the action. Later actions use it again and do
+  not change it.
+- The root window property `_HORIZON_DEVICE_KEYMAP` of the display records the
+  temporary keycodes and the time of their last use. The time is the X server
+  time, which does not step with the wall clock and stops during a suspend. If
+  a recorded keycode has a different keysym now, the tool does not use the
+  record.
+- The tool does not use the lowest unused keycode. The input library for the
+  other actions does not start without an unused keycode.
+- If no other unused keycode is available, the tool changes the temporary
+  keycode with the oldest last use that the text does not need. Before the
+  change, the tool waits until this keycode is idle for 2 seconds.
+- If the display has no unused keycode, `doctor` and the actions other than
+  `type` clear the temporary keycode with the oldest last use. They wait for
+  the same 2 seconds first.
+- After a wait, the tool reads the keymap again and chooses again. If it must
+  wait a third time, the action fails with `unavailable` before input.
+- Before the first key, the record gives each keycode of the action a lease
+  until the last possible stroke: twice the paced time, plus 1 second. If the
+  process stops during the action, a later action still waits for the lease
+  and the quiet interval. A lease is at most 11.24 seconds, and a wait is at
+  most 13.24 seconds.
+- If the strokes are slower than the lease expects, for example on a stalled
+  server, the tool reads the X server time before the next stroke. It then
+  writes a new lease for the remaining strokes from that time. It does this
+  when less than 1 second of the lease remains. A residual risk stays: if one
+  request stalls for more than 3 seconds (1 second of lease plus the 2-second
+  quiet interval) and the process then stops, a later action can change a
+  keycode before a slow client reads the key of that request.
+- If a key event request fails, the tool sends no further key press. It still
+  sends the key release and the Shift release, because the failed request can
+  have reached the server.
+- The X server time wraps after approximately 49 days. Thus, the tool reads a
+  recorded time that is more than 11.24 seconds after the X server time as an
+  old time, not as a lease.
+
+A client that is more than 2 seconds late can still translate a changed keycode
+incorrectly. The distinct characters that need a mapping must fit in the free
+slots. The free slots are the unused keycodes, less the lowest unused keycode,
+and the recorded temporary keycodes that the text does not need. No keycode of
+the modifier mapping is a free slot, so a display with unused modifier keycodes
+has fewer free slots. If they do not fit, or if a
+character has no X11 keysym, the action fails with `invalid_request`. It fails
+before a keymap change or input. The tool does not remove temporary mappings
+after an action. They stay until the X server stops or resets. Use only owned,
+isolated displays as targets, with one controller for each display.
 
 Library consumers need no async runtime:
 
