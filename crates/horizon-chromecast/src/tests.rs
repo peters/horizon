@@ -625,20 +625,30 @@ enum AfterLoad {
     PollFirstReplaced,
     RateFirstReplaced,
     LostRateReplaced,
+    LostRateIdleThenReplaced,
+    LostRateIdleDuringRestore,
     MixedNoticeReplaced,
 }
 
 impl AfterLoad {
-    fn progressive(self) -> bool {
+    fn lost_rate(self) -> bool {
         matches!(
             self,
-            Self::PollReplaced
-                | Self::RateReplaced
-                | Self::PollFirstReplaced
-                | Self::RateFirstReplaced
-                | Self::LostRateReplaced
-                | Self::MixedNoticeReplaced
+            Self::LostRateReplaced | Self::LostRateIdleThenReplaced | Self::LostRateIdleDuringRestore
         )
+    }
+
+    fn progressive(self) -> bool {
+        self.lost_rate()
+            || matches!(
+                self,
+                Self::PollReplaced
+                    | Self::RateReplaced
+                    | Self::PollFirstReplaced
+                    | Self::RateFirstReplaced
+                    | Self::LostRateReplaced
+                    | Self::MixedNoticeReplaced
+            )
     }
 
     fn statuses(self, loaded: bool, replaced: bool) -> Value {
@@ -677,12 +687,24 @@ impl AfterLoad {
         send(stream, to, NS_MEDIA, &reply(request, status));
     }
 
-    fn rate_reply(self, stream: &mut ServerStream, to: &str, request: &Value, replaced: &mut bool) {
-        if self == Self::LostRateReplaced {
-            if request["playbackRate"].as_f64().unwrap() > 1.0 {
-                return;
+    fn lost_rate_reply(self, stream: &mut ServerStream, to: &str, request: &Value, replaced: &mut bool) {
+        let takeover = json!({"type":"MEDIA_STATUS", "status":[{"mediaSessionId":10,"playerState":"PLAYING"}]});
+        if request["playbackRate"].as_f64().unwrap() > 1.0 {
+            if self != Self::LostRateReplaced {
+                send(
+                    stream,
+                    to,
+                    NS_MEDIA,
+                    &json!({"type":"MEDIA_STATUS", "status":[{"mediaSessionId":9,"playerState":"IDLE"}]}),
+                );
             }
-            *replaced = true;
+            if self == Self::LostRateIdleThenReplaced {
+                *replaced = true;
+                send(stream, to, NS_MEDIA, &takeover);
+            }
+            return;
+        }
+        if self == Self::LostRateReplaced {
             for _ in 0..2 {
                 send(
                     stream,
@@ -691,13 +713,17 @@ impl AfterLoad {
                     &json!({"type":"RECEIVER_STATUS", "status":{"volume":{"level":0.5}}}),
                 );
             }
-            send(
-                stream,
-                to,
-                NS_MEDIA,
-                &json!({"type":"MEDIA_STATUS", "status":[{"mediaSessionId":10,"playerState":"PLAYING"}]}),
-            );
-            send(stream, to, NS_MEDIA, &reply(request, json!({"type":"INVALID_REQUEST"})));
+        }
+        if !*replaced {
+            *replaced = true;
+            send(stream, to, NS_MEDIA, &takeover);
+        }
+        send(stream, to, NS_MEDIA, &reply(request, json!({"type":"INVALID_REQUEST"})));
+    }
+
+    fn rate_reply(self, stream: &mut ServerStream, to: &str, request: &Value, replaced: &mut bool) {
+        if self.lost_rate() {
+            self.lost_rate_reply(stream, to, request, replaced);
         } else if self == Self::MixedNoticeReplaced {
             send(
                 stream,
@@ -951,7 +977,7 @@ fn progressive_takeover_scenario(after: AfterLoad) {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut frame = 30u64;
     while live.state() != LiveState::Ended && std::time::Instant::now() < deadline {
-        if after != AfterLoad::LostRateReplaced || (live.state() == LiveState::Playing && frame == 30) {
+        if !after.lost_rate() || (live.state() == LiveState::Playing && frame == 30) {
             let pts = Duration::from_millis(frame * 100);
             let keyframe = live.wants_keyframe(pts);
             live.push_annexb(&access_unit(keyframe), pts, keyframe);
@@ -970,10 +996,14 @@ fn progressive_takeover_scenario(after: AfterLoad) {
     ) {
         assert!(log.iter().any(|line| line.ends_with(" SET_PLAYBACK_RATE")), "{log:#?}");
     }
-    if after == AfterLoad::LostRateReplaced {
+    if after.lost_rate() {
         assert_eq!(
             log.iter().filter(|line| line.ends_with(" SET_PLAYBACK_RATE")).count(),
-            2,
+            if after == AfterLoad::LostRateIdleThenReplaced {
+                1
+            } else {
+                2
+            },
             "{log:#?}"
         );
     }
@@ -1135,4 +1165,14 @@ pub(crate) fn delayed_confirmation_receiver(
     client.watch_media_time(|| Some(10.3));
     let app = client.launch(DEFAULT_MEDIA_RECEIVER).unwrap();
     (client, app, server)
+}
+
+#[test]
+fn stale_idle_does_not_hide_takeover_already_in_the_lifecycle_batch() {
+    progressive_takeover_scenario(AfterLoad::LostRateIdleThenReplaced);
+}
+
+#[test]
+fn takeover_during_confirmation_restore_ends_without_retry_exhaustion() {
+    progressive_takeover_scenario(AfterLoad::LostRateIdleDuringRestore);
 }

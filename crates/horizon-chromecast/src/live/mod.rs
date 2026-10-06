@@ -488,9 +488,11 @@ impl Session {
         // STOP is scoped to the original LOAD. An application-wide STOP
         // could stop a replacement loaded between an ownership check and
         // cleanup. Before LOAD there is no media session we can safely stop.
-        if self.reconcile_pending(&client, &app, media_session_id).unwrap_or(true) {
-            let _ = media.stop();
+        if !self.reconcile_pending(&client, &app, media_session_id).unwrap_or(true) {
+            // Ownership loss takes precedence over an older restore error.
+            return Ok(());
         }
+        let _ = media.stop();
         result
     }
 
@@ -498,6 +500,14 @@ impl Session {
     /// or enter cleanup. Ordinary notices must not hide a later takeover.
     fn reconcile_pending(&self, client: &CastClient, app: &Application, media_session_id: i64) -> Result<bool> {
         let notices = client.take_notices(|event| !buffer_notice(event, &app.transport_id, media_session_id))?;
+        // Scan the whole detached batch before any fallible confirmation can
+        // discard the unprocessed tail. A newer active LOAD is definitive.
+        if notices
+            .iter()
+            .any(|event| replacement_notice(event, &app.transport_id, media_session_id))
+        {
+            return Ok(false);
+        }
         for event in notices {
             if !self.follow_confirmed(client, &event, app, media_session_id)? {
                 return Ok(false);
@@ -528,11 +538,7 @@ impl Session {
         }
         // A newer LOAD cannot be a stale status for our original session.
         // Do not send even a restore after another sender owns the transport.
-        if event.source == app.transport_id
-            && MediaStatus::from_event(event)
-                .iter()
-                .any(|status| status.media_session_id > media_session_id && status.player_state != "IDLE")
-        {
+        if replacement_notice(event, &app.transport_id, media_session_id) {
             return Ok(false);
         }
         if matches!(event.namespace.as_str(), NS_RECEIVER | NS_MEDIA)
@@ -1107,6 +1113,9 @@ impl Session {
     fn normal_before_confirmation(&self, client: &CastClient, app: &Application, id: i64) -> Result<bool> {
         let media = client.media_session(app, id);
         loop {
+            if queued_replacement(client, &app.transport_id, id)? {
+                return Ok(false);
+            }
             let mut playback = self.playback.get();
             if fastest(&playback) <= 1.0 + 1e-3 {
                 return Ok(true);
@@ -1118,7 +1127,14 @@ impl Session {
             let wait = begin_rate(&mut playback, 1.0, Instant::now())
                 .ok_or(Error::Protocol("normal speed restore was not admitted"))?;
             let newest = self.source_media_time();
-            let answer = match media.rate_observed(1.0, wait) {
+            let reply = media.rate_observed(1.0, wait);
+            // A takeover can arrive while this command waits, including ahead
+            // of a refusal. Inspect it before retrying or reporting exhaustion.
+            // Leave other notices queued; this path must not confirm recursively.
+            if queued_replacement(client, &app.transport_id, id)? {
+                return Ok(false);
+            }
+            let answer = match reply {
                 Ok((statuses, receipt)) => {
                     let Some(status) = owned_status(&statuses, id) else {
                         return Ok(false);
@@ -1176,6 +1192,23 @@ impl Session {
     fn stopped(&self) -> bool {
         self.stop.load(Ordering::Acquire)
     }
+}
+
+/// A newer active LOAD on the same transport is definitive ownership loss.
+fn replacement_notice(event: &QueuedEvent, transport: &str, id: i64) -> bool {
+    id != NO_MEDIA_SESSION
+        && event.source == transport
+        && MediaStatus::from_event(event)
+            .iter()
+            .any(|status| status.media_session_id > id && status.player_state != "IDLE")
+}
+
+/// Remove only definitive takeover notices, leaving all other lifecycle and
+/// buffer notices available for ordinary processing.
+fn queued_replacement(client: &CastClient, transport: &str, id: i64) -> Result<bool> {
+    client
+        .take_notices(|event| replacement_notice(event, transport, id))
+        .map(|notices| !notices.is_empty())
 }
 
 /// Replacement media can follow our status in the same reply. Check all

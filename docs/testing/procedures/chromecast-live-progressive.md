@@ -33,7 +33,8 @@ use synthetic clocks and a receiver on loopback TLS. They check all target steps
 from 0.4 s to 0.15 s, rate refusal and lost replies, buffer backoff, notification
 ordering, a bounded event queue, and takeover replies that must not send STOP.
 They include replies with more than one media session, and a takeover queued
-before failed rate restores. Mixed-session notifications must remain available
+before failed rate restores, including a stale IDLE ahead of takeover in the
+same batch and takeover arriving during a confirmation restore. Mixed-session notifications must remain available
 for lifecycle handling. Lost speed-ups restore normal speed before lifecycle
 confirmation blocks, retaining any buffer backoff learned during the request.
 Fallback trims account for the age of the lag sample.
