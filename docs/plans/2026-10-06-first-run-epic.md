@@ -77,8 +77,7 @@ A first cloud can need these credentials:
 ### Device control from Linux
 
 - A Device panel can show a Mac desktop through `ssh -W` to a loopback VNC port.
-- Horizon has no Mac companion and no iOS Simulator tool. The simulator
-  scripts in `horizon-app` are private and are not a Horizon function.
+- Horizon has no Mac companion and no iOS Simulator tool.
 
 ### Platform support
 

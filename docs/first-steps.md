@@ -50,16 +50,19 @@ Release builds use the default features. To get speech, use a source build.
    | Windows x64 | `horizon-windows-x64.exe` |
 
 3. Download `SHA256SUMS.txt` from the same release to the same directory.
-4. Examine the checksum of the downloaded file. On Linux, type
-   `sha256sum -c --ignore-missing SHA256SUMS.txt`. On macOS, type
-   `shasum -a 256 -c --ignore-missing SHA256SUMS.txt`. On Windows, type
-   `Get-FileHash <file>` in PowerShell and compare the hash with the line for
-   that file in `SHA256SUMS.txt`.
+4. Examine the checksum of the downloaded file:
+   - On Linux, type `sha256sum -c --ignore-missing SHA256SUMS.txt`.
+   - On macOS, type `shasum -a 256 -c --ignore-missing SHA256SUMS.txt`.
 
-   Result: The command shows `OK` for the file that you downloaded. On
-   Windows, the two hashes are the same.
+   Result: The command shows `OK` for the file that you downloaded.
 
-   If the checksum is not correct, delete the file and do not start it.
+   On Windows, do these two steps:
+   1. In PowerShell, type `Get-FileHash <file>`.
+   2. Compare the hash with the line for that file in `SHA256SUMS.txt`.
+
+   Result: The two hashes are the same.
+
+   If the checksum is not correct, delete the file. Do not start it.
 
 5. On Linux and macOS, extract the file that you downloaded. Replace
    `<file>` with its name, for example `horizon-osx-arm64.tar.gz`:
