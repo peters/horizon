@@ -41,6 +41,9 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | host instance | The identity of the Horizon host process that owns the browsers of an agent. Browser tools use it to find the workspace of the agent. It is not a secret. | host ID |
 | panel picker | The menu of a cloud that opens a new panel, with the title **Add panel**. | panel menu |
 | browser runtime root | The directory in `HORIZON_BROWSER_ROOT` with the private browser state of a host. | browser root |
+| control service | The worker service `horizon-cloud-worker serve`. It hosts the browsers of a cloud. With agent isolation, it runs as UID 10001. | browser service, worker service |
+| agent isolation | The worker mode in which agent panels and workspace services run as UID 10001. The stock worker image starts it. | sandbox |
+| browser tools | The `browser_*` MCP tools of an agent. | browser MCP |
 
 ## Casting
 

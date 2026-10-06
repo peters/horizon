@@ -261,6 +261,23 @@ def handoff_paths(first):
     own(credentials, recursive=first)
 
 
+def handoff_browser_root():
+    # Only at worker start, before any agent runs. With agent isolation the control service
+    # runs as the agent and uses this browser runtime root. Earlier images ran it as root and
+    # left root-owned entries there. An entry that is not a directory, such as an agent's
+    # symlink, is the agent's own: root leaves it alone and never follows it.
+    root = Path('/workspace/home/.horizon')
+    try:
+        if not stat.S_ISDIR(root.lstat().st_mode):
+            return
+    except FileNotFoundError:
+        return
+    for directory, folders, files in os.walk(root):
+        if any(os.lstat(os.path.join(directory, name)).st_uid != USER for name in ['.', *folders, *files]):
+            own(root, recursive=True)
+            return
+
+
 def stage(alias):
     if os.geteuid() != 0 or not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', alias):
         raise ValueError()
@@ -369,6 +386,7 @@ def main():
     elif sys.argv[1:] == ['isolate']:
         private_directory(RUNTIME)
         prepare_agents()
+        handoff_browser_root()
         agent(['/usr/bin/true'])
     elif sys.argv[1:] == ['resume']:
         if (STATE / 'selection').exists():

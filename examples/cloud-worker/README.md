@@ -131,13 +131,35 @@ The browser service and VNC endpoint listen only on worker loopback; presentatio
 uses authenticated SSH. Browser and device MCP processes retain their injected
 agent identity. Private credential files must never enter source, images or logs.
 
-The control service runs as root. It writes its host instance to
-`/run/horizon-worker/browser-host-instance` with owner root and mode 0644. The
-host instance is an identity, not a credential. The supervisor starts SSH only
-after the control service writes this file. `horizon-worker-run` gives the
-value to each agent in `HORIZON_BROWSER_HOST_INSTANCE`. Agents cannot read the
-browser runtime root of the control service. Thus the browser tools of an agent
-cannot use that root yet ([#1307](https://github.com/peters/horizon/issues/1307)).
+The control service, `horizon-cloud-worker serve`, hosts the cloud browsers. On a
+worker with agent isolation, the supervisor starts it as UID 10001 through the
+isolation launcher, as it starts the desktop services. The stock image starts
+agent isolation (`horizon-worker-tailnet isolate`) before the supervisor. The
+browser tools of an agent and the control service then use one browser runtime
+root, `/workspace/home/.horizon`, with one owner. The cloud browsers also run as
+UID 10001. Root writes nothing in that directory.
+
+Earlier images ran the control service as root and left root-owned entries in
+the browser runtime root. At worker start, before any agent runs,
+`horizon-worker-tailnet isolate` examines the directory without following links.
+If an entry has another owner, it gives the directory to UID 10001 with
+`chown -R --no-dereference`. If the path is a symbolic link, root does not change
+it or follow it.
+
+The supervisor gives each control service a new host instance in
+`HORIZON_WORKER_BROWSER_HOST_INSTANCE`. After the service answers on its loopback
+endpoint, the supervisor writes the value to
+`/run/horizon-worker/browser-host-instance`, with owner root and mode 0644. The
+supervisor starts SSH only after this file exists. `horizon-worker-run` gives the
+value to each agent in `HORIZON_BROWSER_HOST_INSTANCE`. The host instance is an
+identity, not a credential.
+
+The control service uses the account of the agents, so an agent can stop it or
+change its browser state. If the control service stops, the supervisor stops all
+worker services. This gives agents no new access to the browsers: the loopback
+endpoint and the remote browser credentials in `/run/horizon-credentials` are already
+open to them. With a selected tailnet, the cloud browsers use the proxy settings
+of the agents.
 
 ## Cloud tailnet contract
 
