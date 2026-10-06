@@ -84,6 +84,45 @@ fn both_providers_are_listed_and_cheapest_chooses_an_exact_hetzner_worker() {
 }
 
 #[test]
+fn in_stock_only_keeps_unlisted_hetzner_workers_visible_and_eligible_for_picks() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    app.cloud_prototype.production.prices.hetzner.answered_with_policy(
+        Some(catalog(false)),
+        &["cx33", "cpx32"],
+        &["hel1"],
+    );
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    let text = painted(&output);
+    assert!(
+        text.contains("In stock only") && text.contains("Unlisted · advisory"),
+        "{text}"
+    );
+    let catalog = selector::catalog(&app.cloud_prototype.production).unwrap();
+    let cheapest = &catalog.offers[catalog.picks.cheapest.unwrap()];
+    assert_eq!(
+        (cheapest.provider, cheapest.id.as_str(), cheapest.availability),
+        ("Hetzner", "cx33", "unlisted")
+    );
+    assert_eq!(selected(&app).id, "cx33");
+    let shown = |text: &str| {
+        text.lines()
+            .find(|line| line.starts_with("Showing "))
+            .map(str::to_owned)
+            .unwrap()
+    };
+    let filtered = shown(&text);
+    // Clearing In stock only reveals no Hetzner worker that the filter hid.
+    click(&ctx, &mut app, label_rect(&output, "In stock only").center());
+    tall_frame(&ctx, &mut app);
+    assert_eq!(shown(&painted(&tall_frame(&ctx, &mut app))), filtered);
+}
+
+#[test]
 fn launch_captures_type_location_and_provider_and_runpod_selection_clears_them() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
