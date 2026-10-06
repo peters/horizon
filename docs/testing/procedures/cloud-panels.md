@@ -92,6 +92,8 @@ resource, sends a secret or changes tailnet access.
 | `<ledger>` | The resource ledger, `<evidence>/resource-ledger.tsv`. |
 | `<uid>` | The numeric user ID of the operator on the host. |
 | `<docker-socket>` | The socket of the rootless Docker daemon of this run, for example `<run>/docker/docker.sock`. |
+| `<docker-data>` | The data root of that daemon, for example `<run>/docker/data`. |
+| `<docker-pid>` | The process ID of that daemon. Record it when the daemon starts. |
 | `<display>` | The X display of the fixture, from `display` in `<state>/lab.json`. |
 | `<x>`, `<y>` | Screen coordinates from a fresh screenshot of the fixture. |
 | `<launcher-pid>` | The process ID of the persistent launcher, from `pids` in `<state>/lab.json`. |
@@ -242,6 +244,9 @@ change in the report as a deviation.
 
 Some tasks need a cloud or a setting from a later area. Do the tasks in this
 order. The L area stops and deletes clouds that the T, G and N areas use.
+When all tasks of an area are complete, do the cleanup section of that area.
+Do the cleanup of area G after T12 and T13. The cleanup of this procedure does
+area X.
 
 1. Do A01 to A05, A07 and A08. The setup of this procedure did S01 to S05.
 2. Do B01 to B05, then do A06.
@@ -302,6 +307,33 @@ The cleanup of this procedure does X01 to X05.
    ```
 
    Result: `<run>` contains no credential file. Keep `<evidence>` outside `<run>`.
+
+4. Stop the rootless Docker daemon of this run.
+
+   ```sh
+   kill <docker-pid>
+   ```
+
+   Result: The daemon stops its containers and exits.
+
+5. Make sure that the daemon exited.
+
+   ```sh
+   ps -o pid=,comm= -p <docker-pid>
+   ```
+
+   Result: The output is empty.
+
+   > **CAUTION:** DELETE ONLY THE DOCKER DATA ROOT OF THIS RUN. Other Docker data
+   > roots can contain images and volumes of other people.
+
+6. Delete the Docker data root and the socket directory of this run.
+
+   ```sh
+   rootlesskit rm -rf <docker-data> && rm -rf <run>/docker
+   ```
+
+   Result: `<run>` contains no Docker data.
 
 ## 9. Record of results
 

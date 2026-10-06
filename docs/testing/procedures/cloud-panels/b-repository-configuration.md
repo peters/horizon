@@ -310,7 +310,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 1. In a worktree of the candidate commit, run the marker check for the CPU worker image.
 
    ```sh
-   python3 examples/cloud-worker/check-markers.py <worker-image>
+   DOCKER_HOST=unix://<docker-socket> python3 examples/cloud-worker/check-markers.py <worker-image>
    ```
 
    Result: The output names no absent marker. If it names a marker, record it.
@@ -318,7 +318,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 2. Run the marker check for the GPU worker image.
 
    ```sh
-   python3 examples/cloud-worker/check-markers.py <gpu-image>
+   DOCKER_HOST=unix://<docker-socket> python3 examples/cloud-worker/check-markers.py <gpu-image>
    ```
 
    Result: The output names no absent marker.
@@ -326,7 +326,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 3. Run the marker check for an older worker image from the registry.
 
    ```sh
-   python3 examples/cloud-worker/check-markers.py <older-worker-image>
+   DOCKER_HOST=unix://<docker-socket> python3 examples/cloud-worker/check-markers.py <older-worker-image>
    ```
 
    Result: The output names each marker that the older image does not report.

@@ -35,8 +35,9 @@ child is the frozen candidate.
 ## 4. Equipment and preconditions
 
 - The equipment in the [main procedure](../cloud-panels.md#4-equipment-and-preconditions).
-- A rootless Docker daemon for this run, with its own data root. The daemon of
-  the operator is permitted only when nothing else uses it.
+- A rootless Docker daemon that only this run uses, with the socket
+  `<docker-socket>`, the data root `<docker-data>` and the process ID
+  `<docker-pid>`. Do not use the Docker daemon of the operator.
 - The [device smoke fixture](../../../../scripts/device-smoke/README.md) and the
   [persistent cloud launcher](../../cloud-workspaces-mvp-smoke.md#persistent-cloud-launcher-for-restart-scenarios)
   notes.
@@ -243,7 +244,8 @@ state directory that exists, so a later restart needs a new state directory.
    head -c 24 /dev/urandom | base64 > <run>/keyring-password && chmod 600 <run>/keyring-password
    ```
 
-   Result: The file contains a random password. It is not a real secret.
+   Result: The file contains a random password. Keep it private. It unlocks the
+   keyring that later holds the test tailnet auth key. The main cleanup deletes it.
 
 2. In the launcher copy, start `gnome-keyring-daemon` after the D-Bus daemon.
 
