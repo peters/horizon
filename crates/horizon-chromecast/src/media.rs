@@ -1,7 +1,11 @@
 //! Media namespace of a launched application: load a URL and control playback.
-use crate::{Application, CastClient, Error, Event, Result, client::rejected};
+use crate::{
+    Application, CastClient, Error, Event, Result,
+    client::{REQUEST_TIMEOUT, rejected},
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use std::time::Duration;
 
 pub(crate) const NS_MEDIA: &str = "urn:x-cast:com.google.cast.media";
 
@@ -121,20 +125,38 @@ impl MediaController<'_> {
     /// Returns an error for a rate that is not positive and finite, if nothing
     /// is loaded, or if the receiver refuses.
     pub fn set_playback_rate(&self, rate: f64) -> Result<MediaStatus> {
+        self.set_playback_rate_within(rate, REQUEST_TIMEOUT)
+    }
+
+    /// [`Self::set_playback_rate`] with a caller-chosen reply timeout.
+    /// # Errors
+    /// Returns an error for a rate that is not positive and finite, if nothing
+    /// is loaded, if the receiver refuses, or if it does not answer in `timeout`.
+    pub fn set_playback_rate_within(&self, rate: f64, timeout: Duration) -> Result<MediaStatus> {
         if !rate.is_finite() || rate <= 0.0 {
             return Err(Error::Protocol("playback rate must be positive and finite"));
         }
         let id = self
             .media_session_id
             .ok_or(Error::Protocol("no media session is loaded"))?;
-        first_status(&self.request(json!({"type": "SET_PLAYBACK_RATE", "mediaSessionId": id, "playbackRate": rate}))?)
+        first_status(&self.request_within(
+            json!({"type": "SET_PLAYBACK_RATE", "mediaSessionId": id, "playbackRate": rate}),
+            timeout,
+        )?)
     }
 
     /// Current media status, or `None` when nothing is loaded.
     /// # Errors
     /// Returns an error if the receiver does not answer.
     pub fn status(&self) -> Result<Option<MediaStatus>> {
-        let reply = self.request(json!({"type": "GET_STATUS"}))?;
+        self.status_within(REQUEST_TIMEOUT)
+    }
+
+    /// [`Self::status`] with a caller-chosen reply timeout.
+    /// # Errors
+    /// Returns an error if the receiver does not answer in `timeout`.
+    pub fn status_within(&self, timeout: Duration) -> Result<Option<MediaStatus>> {
+        let reply = self.request_within(json!({"type": "GET_STATUS"}), timeout)?;
         Ok(statuses(&reply)?.into_iter().next())
     }
 
@@ -146,7 +168,12 @@ impl MediaController<'_> {
     }
 
     fn request(&self, payload: Value) -> Result<Value> {
-        self.client.request(&self.transport_id, NS_MEDIA, payload)
+        self.request_within(payload, REQUEST_TIMEOUT)
+    }
+
+    fn request_within(&self, payload: Value, timeout: Duration) -> Result<Value> {
+        self.client
+            .request_within(&self.transport_id, NS_MEDIA, payload, timeout)
     }
 }
 

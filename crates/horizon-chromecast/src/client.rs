@@ -27,7 +27,7 @@ const POLL: Duration = Duration::from_millis(25);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// Receivers answer every PING, so this much silence means the link is gone.
 const IDLE_LIMIT: Duration = Duration::from_secs(20);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_BACKLOG: usize = 256;
 const EVENT_BACKLOG: usize = 64;
 

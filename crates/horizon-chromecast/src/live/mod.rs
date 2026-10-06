@@ -26,7 +26,10 @@ pub use sink::LiveCastSink;
 
 use crate::{
     Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaController, MediaLoad, MediaStatus, Result,
-    StreamType, client::NS_CONNECTION, media::NS_MEDIA, receiver::NS_RECEIVER,
+    StreamType,
+    client::{NS_CONNECTION, REQUEST_TIMEOUT},
+    media::NS_MEDIA,
+    receiver::NS_RECEIVER,
 };
 use hls::Segmenter;
 use http::{HttpServer, Source};
@@ -53,6 +56,12 @@ const EVENT_POLL: Duration = Duration::from_millis(250);
 pub(crate) const STALL_GRACE: Duration = Duration::from_secs(5);
 /// How often the live-edge controller looks at the receiver while it plays.
 const EDGE_POLL: Duration = Duration::from_millis(400);
+/// Wall time kept for sending normal speed after a status poll while playback
+/// is already fast. A lost reply must not spend this as well.
+const RESTORE_BUDGET: Duration = Duration::from_millis(750);
+/// Shortest status poll while playback is fast. Below this, a slow receiver
+/// and a lost reply look the same, so a thinner buffer restores at once.
+const MIN_STATUS_WAIT: Duration = Duration::from_millis(250);
 /// Attempts to return to normal speed before the session fails, so a receiver
 /// is never left running fast.
 const RESTORE_ATTEMPTS: u8 = 3;
@@ -318,6 +327,8 @@ struct Playback {
     checked: Instant,
     /// `checked` is a real playback sample, not session start or a gap.
     sampled: bool,
+    /// Last finite lag. Bounds the next status poll while playback is fast.
+    lag: Option<f64>,
 }
 
 /// A playback-rate command to send again at `at`. `failures` counts failed
@@ -339,6 +350,7 @@ impl Playback {
             next_check: now,
             checked: now,
             sampled: false,
+            lag: None,
         }
     }
 }
@@ -721,13 +733,19 @@ impl Session {
         if now < playback.next_check {
             return Ok(());
         }
-        let elapsed = calm_elapsed(&playback, now);
-        playback.checked = now;
         playback.next_check = now + EDGE_POLL;
-        // status() blocks. Read the source position after it returns. A newest
+        // GET_STATUS blocks this loop, so a lost reply cannot be told from a
+        // slow one until the timeout. While playback is already fast, stop
+        // waiting in time to send normal speed. A buffer thinner than that
+        // restores without asking.
+        let Some(wait) = status_wait(playback.edge.rate, playback.lag) else {
+            playback.sampled = false;
+            return self.push_rate(media, playback, 1.0, 0, now);
+        };
+        // Read the source position after the status call returns. A newest
         // timestamp from before the call compared with the later receiver clock
         // makes the lag look smaller than it is.
-        let status = media.status();
+        let status = media.status_within(wait);
         let newest = stream.newest_media_time();
         let (Some(newest), Ok(Some(status))) = (newest, status) else {
             // The receiver may already be playing fast. Without a sample there
@@ -740,6 +758,9 @@ impl Session {
             return Ok(());
         };
         let lag = newest - status.current_time;
+        if lag.is_finite() {
+            playback.lag = Some(lag);
+        }
         // The status call blocks. Time the buffer from when the reply arrived,
         // not from when the request was sent, or a slow reply looks like a stall.
         let observed = Instant::now();
@@ -754,9 +775,9 @@ impl Session {
         // A polled pause is not playing, and `buffering_age` has already
         // cleared the timer. Judge the episode before the pause discards it.
         close_ended_buffer(&mut playback.edge, status.player_state.as_str(), lasted);
-        // Only a moving picture starts the calm clock. A pause or a buffer must
-        // not make the next playing sample count the time it was stopped.
-        playback.sampled = playing;
+        // Calm time runs between replies. The wait before the first playing
+        // sample is not calm, and a pause or a buffer must not be either.
+        let elapsed = note_sample(&mut playback, playing, observed);
         let plan = plan_trim(
             playback.edge,
             edge::Sample {
@@ -789,7 +810,8 @@ impl Session {
         failures: u8,
         now: Instant,
     ) -> Result<()> {
-        let (answer, error) = match media.set_playback_rate(rate) {
+        let wait = rate_wait(playback.edge.rate, rate);
+        let (answer, error) = match media.set_playback_rate_within(rate, wait) {
             Ok(status) => {
                 // The reply is not delivered again as an event. A PLAYING
                 // status here has to close a short buffer before the next poll.
@@ -842,6 +864,57 @@ fn calm_elapsed(playback: &Playback, now: Instant) -> Duration {
         now.saturating_duration_since(playback.checked)
     } else {
         Duration::ZERO
+    }
+}
+
+/// Records one observed sample and returns the calm time since the previous
+/// one. `observed` is when the reply arrived, not when the request was sent.
+fn note_sample(playback: &mut Playback, playing: bool, observed: Instant) -> Duration {
+    let elapsed = calm_elapsed(playback, observed);
+    if playing {
+        playback.checked = observed;
+    }
+    playback.sampled = playing;
+    elapsed
+}
+
+/// How long a status poll may block. `None` means the buffer can run out
+/// before a poll and a restore would both finish, so restore immediately.
+fn status_wait(rate: f64, lag: Option<f64>) -> Option<Duration> {
+    if rate <= 1.0 + 1e-3 {
+        return Some(REQUEST_TIMEOUT);
+    }
+    let Some(lag) = lag.filter(|lag| lag.is_finite()) else {
+        return Some(MIN_STATUS_WAIT);
+    };
+    if lag <= 0.0 {
+        return None;
+    }
+    let excess = rate - 1.0;
+    let secs = lag / excess;
+    if !secs.is_finite() || secs <= 0.0 {
+        return None;
+    }
+    // Longer than the ordinary request timeout: the cap below is enough, and
+    // `Duration` cannot represent an unbounded lag.
+    if secs >= REQUEST_TIMEOUT.as_secs_f64() + RESTORE_BUDGET.as_secs_f64() {
+        return Some(REQUEST_TIMEOUT);
+    }
+    let remaining = Duration::from_secs_f64(secs);
+    if remaining <= RESTORE_BUDGET.saturating_add(MIN_STATUS_WAIT) {
+        return None;
+    }
+    Some(remaining.saturating_sub(RESTORE_BUDGET).min(REQUEST_TIMEOUT))
+}
+
+/// A return to normal speed, while a faster rate is already applied, cannot
+/// use the ordinary request timeout. The buffer would be gone first.
+fn rate_wait(applied: f64, commanded: f64) -> Duration {
+    let restoring = (commanded - 1.0).abs() <= 1e-3;
+    if applied > 1.0 + 1e-3 && restoring {
+        RESTORE_BUDGET
+    } else {
+        REQUEST_TIMEOUT
     }
 }
 
@@ -1221,6 +1294,34 @@ mod catch_up_tests {
         let elapsed = calm_elapsed(&playback, after);
         assert!(elapsed >= Duration::from_millis(400));
         assert!(elapsed < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn the_wait_before_the_first_reply_is_not_calm() {
+        let mut playback = Playback::new();
+        let sent = Instant::now();
+        let reply = sent + Duration::from_secs(4);
+        assert_eq!(note_sample(&mut playback, true, reply), Duration::ZERO);
+        assert!(playback.sampled);
+        let next = reply + Duration::from_millis(400);
+        let elapsed = note_sample(&mut playback, true, next);
+        assert!(elapsed >= Duration::from_millis(400));
+        assert!(elapsed < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_fast_status_poll_leaves_time_to_restore() {
+        // 0.21 s of lag at 1.08× is gone in about 2.6 s. The poll must end
+        // with the restore budget still unused.
+        let wait = status_wait(1.08, Some(0.21)).expect("poll");
+        let drain = Duration::from_secs_f64(0.21 / 0.08);
+        assert!(wait < REQUEST_TIMEOUT);
+        assert!(wait.saturating_add(RESTORE_BUDGET) <= drain);
+        assert_eq!(status_wait(1.0, Some(0.40)), Some(REQUEST_TIMEOUT));
+        assert_eq!(status_wait(1.08, None), Some(MIN_STATUS_WAIT));
+        assert!(status_wait(1.5, Some(0.20)).is_none());
+        assert_eq!(rate_wait(1.08, 1.0), RESTORE_BUDGET);
+        assert_eq!(rate_wait(1.0, 1.08), REQUEST_TIMEOUT);
     }
 
     #[test]
