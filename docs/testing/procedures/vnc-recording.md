@@ -17,7 +17,7 @@ It tests access control, background capture, file completion, and temporary stor
 
 ## 2. Applicability
 
-- Use a candidate with the default video-capture feature.
+- Use a current Horizon candidate. The app includes the video encoder.
 - Use synthetic content on an isolated desktop.
 - This procedure does not test audio or browser video.
 - Linux uses the local device fixture. Other platforms need a separate isolated desktop.
@@ -128,9 +128,10 @@ It tests access control, background capture, file completion, and temporary stor
 
    Result: The directory is private and each WebM file has mode 0600.
 
-4. Test a build without video-capture.
+4. Run the standalone browser-library test with `cargo test -p horizon-browser --no-default-features native_recorder_refuses`.
 
-   Result: Start returns a clear unsupported-build failure without an output file.
+   Result: The library refuses recording without an output file. This does not
+   test a Horizon app configuration; the app always includes the encoder.
 
 ## 7. Pass criteria
 

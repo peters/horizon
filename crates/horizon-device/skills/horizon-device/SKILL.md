@@ -165,7 +165,7 @@ asynchronous: poll until `recording.capture.active` and `recording.finalizing`
 are both false, then check `encoder_failed` and `frames_encoded`. The private
 `recording.capture.path` is on the Horizon host, not a download URL. Copy it
 before panel close or four subsequent recordings. Never resume automatically
-or record an unowned viewer. Builds without video-capture refuse start.
+or record an unowned viewer. The Horizon app includes the video encoder.
 On older hosts, use a recorder explicitly scoped to the isolated display;
 `browser_video` is for browser pages. Start before the flow, stop afterward and
 inspect decoded frames. If recording is unavailable or stalls, report the blocked

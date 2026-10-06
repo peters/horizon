@@ -560,8 +560,8 @@ hidden or off canvas. View crop and scale do not affect recording; audio is not
 captured. Status reports the measured effective frame rate and dropped frames;
 encoding may run slower than the target. Recording stops on disconnect, reconnect, panel close, after five
 minutes, or at the encoder's 256 MiB limit. Restoring a session never resumes a
-recording. Default builds include the encoder; builds without video-capture
-return an unsupported-build failure.
+recording. The Horizon app always includes the encoder. The standalone browser
+library separately supports builds without its video-capture feature.
 
 Stop requests background finalization. Poll until `recording.capture.active`
 and `recording.finalizing` are both false. Check `encoder_failed` and

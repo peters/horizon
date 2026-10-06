@@ -96,7 +96,7 @@ pub(super) struct Observation {
 
 pub(super) struct Session {
     updates: Arc<Mutex<Updates>>,
-    latest_full: Arc<Mutex<Option<ColorImage>>>,
+    latest_full: Arc<Mutex<Option<Arc<ColorImage>>>>,
     recording_live: Arc<std::sync::atomic::AtomicBool>,
     /// Pointer and key events a person sends through Interact; the worker
     /// forwards them ahead of the next refresh.
@@ -183,10 +183,11 @@ impl Session {
         self.latest_full
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .as_deref()
+            .cloned()
     }
 
-    pub(super) fn recording_source(&self) -> impl Fn() -> Option<ColorImage> + Send + 'static {
+    pub(super) fn recording_source(&self) -> impl Fn() -> Option<Arc<ColorImage>> + Send + 'static {
         let source = Arc::downgrade(&self.latest_full);
         let live = Arc::clone(&self.recording_live);
         move || {
@@ -230,7 +231,7 @@ impl Session {
                 desktop: Some(latest_full.size),
                 server_name: None,
             })),
-            latest_full: Arc::new(Mutex::new(Some(latest_full))),
+            latest_full: Arc::new(Mutex::new(Some(Arc::new(latest_full)))),
             recording_live: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             input,
             stop: None,
@@ -331,7 +332,7 @@ fn wake_ui(ctx: &Context, drawn: bool, viewport: ViewportId) {
 async fn connection(
     route: DeviceRoute,
     updates: &Mutex<Updates>,
-    latest_full: &Mutex<Option<ColorImage>>,
+    latest_full: &Mutex<Option<Arc<ColorImage>>>,
     ctx: &Context,
     input: &mut mpsc::UnboundedReceiver<X11Event>,
 ) -> Result<(), ViewError> {
@@ -348,7 +349,7 @@ async fn connection(
 async fn stream_desktop(
     client: vnc::VncClient,
     updates: &Mutex<Updates>,
-    latest_full: &Mutex<Option<ColorImage>>,
+    latest_full: &Mutex<Option<Arc<ColorImage>>>,
     ctx: &Context,
     input: &mut mpsc::UnboundedReceiver<X11Event>,
 ) -> Result<(), ViewError> {
@@ -404,7 +405,7 @@ async fn stream_desktop(
         if received_pixels && changed && !framebuffer.size().contains(&0) {
             let full = framebuffer.full_image()?;
             let image = present_image(&full, options)?;
-            *latest_full.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(full);
+            *latest_full.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(full));
             let (drawn, viewport) = {
                 let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Only the latest frame is retained; slow rendering cannot grow

@@ -73,7 +73,7 @@ impl Recording {
     fn start(
         &mut self,
         first: &ColorImage,
-        source: impl Fn() -> Option<ColorImage> + Send + 'static,
+        source: impl Fn() -> Option<Arc<ColorImage>> + Send + 'static,
     ) -> Result<(), String> {
         if self
             .worker
@@ -108,6 +108,7 @@ impl Recording {
             .spawn(move || {
                 let _retained_directory = retained_directory;
                 let started = Instant::now();
+                let mut previous = None;
                 while !signal.load(Ordering::Acquire) && started.elapsed() < MAX_DURATION {
                     if progress.snapshot().is_none_or(|capture| !capture.active) {
                         break;
@@ -115,7 +116,7 @@ impl Recording {
                     let Some(image) = source() else {
                         break;
                     };
-                    if !publish(&frames, &image) {
+                    if !publish_changed(&frames, &mut previous, image) {
                         break;
                     }
                     std::thread::sleep(interval);
@@ -137,6 +138,17 @@ impl Recording {
         self.error = None;
         Ok(())
     }
+}
+
+fn publish_changed(frames: &FrameSlot, previous: &mut Option<Arc<ColorImage>>, image: Arc<ColorImage>) -> bool {
+    if previous.as_ref().is_some_and(|last| Arc::ptr_eq(last, &image)) {
+        return true;
+    }
+    if !publish(frames, &image) {
+        return false;
+    }
+    *previous = Some(image);
+    true
 }
 
 fn publish(frames: &FrameSlot, image: &ColorImage) -> bool {
@@ -242,11 +254,26 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_source_reuses_published_pixels() {
+        let frames = FrameSlot::new();
+        let image = Arc::new(frame());
+        let mut previous = None;
+        assert!(publish_changed(&frames, &mut previous, Arc::clone(&image)));
+        let first = frames.latest().expect("published");
+        for _ in 0..100 {
+            assert!(publish_changed(&frames, &mut previous, Arc::clone(&image)));
+        }
+        assert_eq!(frames.latest().expect("unchanged").seq, first.seq);
+        assert!(publish_changed(&frames, &mut previous, Arc::new(frame())));
+        assert!(frames.latest().expect("new source").seq > first.seq);
+    }
+
+    #[test]
     fn records_and_finalizes_without_ui_frames() {
         let mut recording = Recording::default();
         assert!(recording.status().is_err());
-        recording.start(&frame(), || Some(frame())).expect("start");
-        assert!(recording.start(&frame(), || Some(frame())).is_err());
+        recording.start(&frame(), || Some(Arc::new(frame()))).expect("start");
+        assert!(recording.start(&frame(), || Some(Arc::new(frame()))).is_err());
         std::thread::sleep(Duration::from_millis(350));
         recording.stop();
         let deadline = Instant::now() + Duration::from_secs(20);
