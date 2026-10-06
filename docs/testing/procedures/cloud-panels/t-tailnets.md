@@ -118,6 +118,9 @@ send TCP traffic to each other over the tailnet.
 
 ### 6.2 T02 — Replace, remove and refresh a tailnet
 
+   > **CAUTION:** THE OPERATOR ENTERS THE AUTH KEY OF THE TEST TAILNET ONLY. This
+   > step saves a secret that can join devices to the tailnet.
+
 1. Add a second tailnet with the name `Smoke spare` and the same auth key, as in T01.
 
    Result: The list shows two tailnets.

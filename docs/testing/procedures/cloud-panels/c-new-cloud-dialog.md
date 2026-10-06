@@ -278,7 +278,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
 4. Click **All providers**.
 
-   Result: The cards and the list show only the rows of the chosen provider.
+   Result: The cards and the list show RunPod rows and Hetzner rows again.
 
 5. Clear **In stock only**.
 

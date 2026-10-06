@@ -336,8 +336,8 @@ does not repeat their steps. Use them for a run that changes their function.
 
 5. Compare the provider lists of X02 and X05 with the baselines from the setup.
 
-   Result: The lists are the same as the baselines. The Hetzner network of
-   Horizon can stay. The resource ledger records it as kept.
+   Result: Each difference is a kept Hetzner network of Horizon or a resource
+   that X01 records as not owned by this run.
 
    > **CAUTION:** DELETE ONLY THE STATE DIRECTORY OF THIS RUN. It contains the saved
    > provider keys and the private data of the fixture.

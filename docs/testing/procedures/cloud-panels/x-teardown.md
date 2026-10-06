@@ -452,7 +452,8 @@ Do steps 8 to 15 for each cloud in the resource ledger that has an active resour
 - The board shows no test cloud.
 - The Hetzner API shows no server, volume or SSH key from the resource ledger.
 - The RunPod API shows no pod or network volume from the resource ledger.
-- The provider lists agree with the baselines.
+- Each difference from the provider baselines is a kept Hetzner network of
+  Horizon or a resource that X01 records as not owned by this run.
 - The **Tailnets** tab does not list the test tailnet.
 - The evidence lists each leftover tailnet node, and the admin console no
   longer lists a node ID from the resource ledger.
