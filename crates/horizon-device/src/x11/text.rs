@@ -29,6 +29,25 @@ fn now_ms() -> std::io::Result<u64> {
         .ok_or_else(|| std::io::Error::other("unexpected /proc/uptime format"))
 }
 
+/// Sleeps until the boot clock reaches `not_before_ms`, at most the quiet
+/// interval at a time. Returns false when no wait is necessary, so that the
+/// caller uses its current plan. A caller that must wait a third time gets
+/// `unavailable`, because another client keeps the keymap busy.
+fn wait_until(not_before_ms: u64, attempts: &mut u8) -> Result<bool> {
+    let remaining = not_before_ms.saturating_sub(now_ms().map_err(unavailable)?);
+    if remaining == 0 {
+        return Ok(false);
+    }
+    *attempts += 1;
+    if *attempts > 2 {
+        return Err(DeviceError::Unavailable(
+            "X11 keymap changed during the quiet interval; observe and retry".into(),
+        ));
+    }
+    std::thread::sleep(Duration::from_millis(remaining).min(keymap::RECLAIM_QUIET));
+    Ok(true)
+}
+
 fn indeterminate(e: impl std::fmt::Display) -> DeviceError {
     DeviceError::Indeterminate(e.to_string())
 }
@@ -81,8 +100,6 @@ impl X11 {
                 "X11 text input requires released modifier keys".into(),
             ));
         }
-        let mapping = self.keyboard_mapping()?;
-        let layout = self.layout(&mapping);
         let modifiers = self
             .connection
             .get_modifier_mapping()
@@ -100,11 +117,20 @@ impl X11 {
             caps_lock: u16::from(state) & u16::from(KeyButMask::LOCK) != 0,
         };
         let record_atom = self.record_atom()?;
-        let previous = self.read_record(record_atom)?;
-        let plan = keymap::plan(&layout, &previous, keyboard, text).map_err(|e| match e {
-            PlanError::Capacity => DeviceError::Invalid("text exceeds available X11 Unicode key mappings".into()),
-            PlanError::NoKeysym => DeviceError::Invalid("text contains a character without an X11 keysym".into()),
-        })?;
+        // A reassignment waits for the quiet interval. Plan again after the wait,
+        // because another client can change the keymap in the meantime.
+        let mut attempts = 0;
+        let plan = loop {
+            let mapping = self.keyboard_mapping()?;
+            let previous = self.read_record(record_atom)?;
+            let plan = keymap::plan(&self.layout(&mapping), &previous, keyboard, text).map_err(|e| match e {
+                PlanError::Capacity => DeviceError::Invalid("text exceeds available X11 Unicode key mappings".into()),
+                PlanError::NoKeysym => DeviceError::Invalid("text contains a character without an X11 keysym".into()),
+            })?;
+            if !wait_until(plan.not_before_ms, &mut attempts)? {
+                break plan;
+            }
+        };
         self.apply_bindings(&plan, record_atom)?;
         let typed = self.send_strokes(&plan, keyboard.shift_keycode);
         let recorded = now_ms()
@@ -118,16 +144,19 @@ impl X11 {
     /// unused. The input backend of the other actions refuses to start without
     /// one, for example after another client used the keycode that `type` keeps.
     pub(super) fn ensure_unused_keycode(&self) -> Result<()> {
-        let mapping = self.keyboard_mapping()?;
         let record_atom = self.record_atom()?;
-        let mut record = self.read_record(record_atom)?;
-        let Some(candidate) = keymap::spare_candidate(&self.layout(&mapping), &record) else {
-            return Ok(());
+        // Choose again after the wait, because another client can change the keymap.
+        let mut attempts = 0;
+        let (candidate, mut record) = loop {
+            let mapping = self.keyboard_mapping()?;
+            let record = self.read_record(record_atom)?;
+            let Some(candidate) = keymap::spare_candidate(&self.layout(&mapping), &record) else {
+                return Ok(());
+            };
+            if !wait_until(keymap::quiet_after(candidate.last_used_ms), &mut attempts)? {
+                break (candidate, record);
+            }
         };
-        let wait = Duration::from_millis(
-            keymap::quiet_after(candidate.last_used_ms).saturating_sub(now_ms().map_err(unavailable)?),
-        );
-        std::thread::sleep(wait.min(keymap::RECLAIM_QUIET));
         record.retain(|entry| entry.keycode != candidate.keycode);
         self.connection
             .change_keyboard_mapping(1, candidate.keycode, 2, &[0, 0])
@@ -172,15 +201,26 @@ impl X11 {
             .reply()
             .map_err(unavailable)?;
         let words: Vec<u32> = reply.value32().map(Iterator::collect).unwrap_or_default();
-        Ok(Borrowed::decode(&words))
+        // A time after now comes from another clock, for example before a
+        // reboot of a persistent server. Such a record has no recent use.
+        let now = now_ms().map_err(unavailable)?;
+        Ok(Borrowed::decode(&words)
+            .into_iter()
+            .map(|record| Borrowed {
+                last_used_ms: if record.last_used_ms > now {
+                    0
+                } else {
+                    record.last_used_ms
+                },
+                ..record
+            })
+            .collect())
     }
 
     fn apply_bindings(&self, plan: &Plan, record_atom: u32) -> Result<()> {
         if plan.bindings.is_empty() {
             return Ok(());
         }
-        let wait = Duration::from_millis(plan.not_before_ms.saturating_sub(now_ms().map_err(unavailable)?));
-        std::thread::sleep(wait.min(keymap::RECLAIM_QUIET));
         // Record ownership before the change so a failure cannot leak keycodes.
         self.write_record(record_atom, &plan.record(now_ms().map_err(unavailable)?))
             .map_err(unavailable)?;

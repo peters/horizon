@@ -13,10 +13,11 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that a sequence of `type` actions from
-`horizon-device` gives each character to the application one time. It tests
-text that is too long for one action. You must send this text as several
-actions. The procedure also makes sure that the other actions continue to
-operate after text input uses the spare keycodes.
+`horizon-device` gives each character to the application one time. It sends
+one text as several actions on purpose, as an agent does with long text. The
+boundaries between the actions are the points of failure. The procedure also
+makes sure that the other actions continue to operate after text input uses the
+spare keycodes.
 
 ## 2. Applicability
 

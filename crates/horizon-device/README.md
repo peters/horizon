@@ -76,6 +76,8 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
 - If the display has no unused keycode, `doctor` and the actions other than
   `type` clear the temporary keycode with the oldest last use. They wait for
   the same 2 seconds first.
+- After a wait, the tool reads the keymap again and chooses again. If it must
+  wait a third time, the action fails with `unavailable` before input.
 
 A client that is more than 2 seconds late can still translate a changed keycode
 incorrectly. The distinct characters that need a mapping must fit in the free
