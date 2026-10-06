@@ -1,0 +1,408 @@
+---
+procedure: cloud-panels
+feature: Cloud panels end to end (setup, catalog, deployment, panels, lifecycle, tailnets, companions, offers, Local Network Bridge, teardown)
+platforms: [linux]
+cost: rents compute
+destructive: yes
+secrets: [RunPod API key, Hetzner Cloud API token, coding agent API keys, registry pull and push credentials, GitHub token for Git, test tailnet auth key]
+owner: peters
+---
+
+# Cloud panels test procedure
+
+## 1. Purpose
+
+This procedure makes sure that Horizon cloud panels work from the first setup to
+the last deletion. It covers 113 tests in 12 areas. Each test has an ID that a
+report uses to give a result.
+
+## 2. Applicability
+
+- Candidate: a debug build of one exact commit, `<candidate-commit>`. For a full
+  smoke test, use the newest commit of `origin/main`. For a change to a cloud
+  function, use the head commit of the pull request.
+- Platforms: Linux with Xvfb. Providers: RunPod and Hetzner. Hetzner workers are
+  CPU only.
+- This procedure does not test:
+  - macOS and Windows hosts, and their credential stores.
+  - Daytona and Fly.io. These providers are design fixtures only.
+  - The creation of a cloud from a CLI or MCP tool. Creation is UI only.
+  - The signed project-session runtime with a tailnet. That runtime refuses a
+    tailnet.
+
+## 3. Safety
+
+> **CAUTION:** DELETE EVERY TEST CLOUD AT THE END OF THE RUN. A RunPod network
+> volume and a Hetzner volume cost money when the cloud is stopped. A Hetzner
+> server costs money while it exists.
+
+> **CAUTION:** DELETE ONLY THE RESOURCES THAT THE RESOURCE LEDGER RECORDS. Other
+> workers, volumes and tailnet devices can belong to other people.
+
+> **CAUTION:** USE ONLY A DEDICATED, PRE-AUTHORIZED TEST TAILNET AUTH KEY. Do not
+> put the key in an issue, a log, a screenshot or a file in the repository.
+
+> **CAUTION:** DO NOT PUT A SECRET IN A SCREENSHOT, A RECORDING OR A LOG. A person
+> who gets a provider key can rent compute on that account.
+
+> **CAUTION:** DO NOT CHANGE THE ACL POLICY, THE FIREWALL OR THE TAILSCALE SERVE
+> SETTINGS OF THE PC. Other people use these settings to get access to the PC.
+
+Each area file has a CAUTION before each step that rents compute, deletes a
+resource, sends a secret or changes tailnet access.
+
+## 4. Equipment and preconditions
+
+- A Linux host with the build tools in `AGENTS.md`, Xvfb, Openbox, x11vnc,
+  bubblewrap, `dbus-daemon`, `gnome-keyring-daemon`, `secret-tool`, Python 3,
+  Git, Git LFS, OpenSSH, `jq` and `curl`.
+- A rootless Docker daemon with BuildKit and buildx that only this run uses. Record
+  its socket, data root and process ID. A rootful daemon or the daemon of the
+  operator is not permitted, because the cleanup stops this daemon and deletes its data.
+- A Horizon that runs on the host and can show a Device panel in the workspace
+  of the agent.
+  See the [device smoke fixture](../../../scripts/device-smoke/README.md).
+- Provider accounts that the operator owns:
+  - A RunPod account with no Serverless endpoints.
+  - A Hetzner Cloud project that only Horizon uses.
+- Credentials in the current cloud settings of the operator, or in the secret
+  store of the test account. Write only references in the evidence.
+- A container registry. A build profile needs push credentials.
+- For each image-only profile, a public worker image that reports all contract
+  markers. Pin the image by digest, for example `<registry>/<image>@sha256:<digest>`.
+  A private image needs a pull credential that can read it.
+- A worker image that reports all contract markers, with
+  `horizon-tailnet-contract=1` and `horizon-tailnet-contract=2`. The image must contain Claude, Codex, a browser
+  and a desktop.
+- A test tailnet with a reusable, pre-authorized, non-ephemeral auth key. For the
+  tests from PC to cloud, the PC must be on the same tailnet.
+- A private evidence directory, `<evidence>`, outside the repository.
+- Permission from the operator to rent compute, with a cost limit and a time
+  limit for cleanup.
+
+### 4.1 Names in this procedure
+
+| Name | Meaning |
+|---|---|
+| `<candidate-commit>` | The full SHA of the commit that the run builds. Record it in the report. |
+| `<run>` | The run directory. It is outside `$HOME` and outside `/tmp`, and it is not on a tmpfs with a user quota. The fixture hides `$HOME` and `/tmp`, so it cannot see `<run>/bin` there. |
+| `<state>` | The state directory of the persistent launcher, `<run>/fixture`. |
+| `<home>` | The real home path. Inside the fixture, the private home of the candidate shows at this path. |
+| `<data-home>` | The host path of the private home, `<state>/data/home`. |
+| `<repo>` | The primary synthetic repository, `<home>/smoke/app`. |
+| `<lib>` | The companion synthetic repository, `<home>/smoke/lib`. |
+| `<sib>` | The synthetic repository of the sibling, `<home>/smoke/sib`. |
+| `<evidence>` | The private evidence directory. |
+| `<ledger>` | The resource ledger, `<evidence>/resource-ledger.tsv`. |
+| `<uid>` | The numeric user ID of the operator on the host. |
+| `<docker-socket>` | The socket of the rootless Docker daemon of this run, for example `<run>/docker/docker.sock`. |
+| `<docker-data>` | The data root of that daemon, for example `<run>/docker/data`. |
+| `<docker-pid>` | The process ID of that daemon. Record it when the daemon starts. |
+| `<display>` | The X display of the fixture, from `display` in `<state>/lab.json`. |
+| `<x>`, `<y>` | Screen coordinates from a fresh screenshot of the fixture. |
+| `<launcher-pid>` | The process ID of the persistent launcher, from `pids` in `<state>/lab.json`. |
+| `<test-owner>` | The GitHub owner of the test account. |
+| `<build-repository>` | A registry repository that the `runpod-build` profile can push to. |
+| `<image>`, `<digest>` | The name and the digest of the private test image for A08, in the GHCR space of `<test-owner>`. |
+| `<root shell>` | A root SSH session on a worker. Start it with the command of E09 step 4 without `true`. |
+
+The [technical names](../../style/technical-names.md) define the terms fixture
+terminal, worker shell, persistent launcher, restart marker and resource ledger.
+
+### 4.2 Planned clouds
+
+The tests use these clouds. You can use fewer clouds. If you do, record the
+change in the report as a deviation.
+
+| Cloud title | Provider and profile | Tailnet | Tests |
+|---|---|---|---|
+| `smoke-a` | Hetzner, CPU, image-only | test tailnet | C31, D01, D05, E01–E09, A09, T03–T08, T10–T14, G01–G10, G12, N01–N05, L01–L04, L09, O02 |
+| `smoke-b` | Hetzner, CPU, image-only | test tailnet | T08, T14 |
+| `smoke-r` | RunPod, CPU, network volume | test tailnet | C31, D02, D04, T09, L06, L10 |
+| `smoke-g` | RunPod, GPU | None | D03 |
+| `smoke-sib` | RunPod, CPU, `runpod-build` with the sibling `sib` | None | C10, G02, G11, L05 |
+| `smoke-lib` | Hetzner, CPU, companion repository `<lib>` | None | G01, G03–G10, G12 |
+| `smoke-lib0` | Hetzner, CPU, companion repository `<lib>`, no worker (`smoke-lib1` if a retry is necessary) | None | G08 |
+| `smoke-x` | Hetzner, CPU, image-only, idle stop of 10 minutes | None | L07, L08 |
+
+### 4.3 Rules for each step
+
+1. Do one test at a time.
+2. Take a fresh screenshot before each click. Do not use old coordinates.
+3. After a dialog opens, wait 3 seconds
+   ([issue #1297](https://github.com/peters/horizon/issues/1297)).
+4. Take a new screenshot of the open dialog before you click in it.
+5. The operator enters each real secret. Device `type` actions can lose
+   characters at action boundaries
+   ([issue #1301](https://github.com/peters/horizon/issues/1301)).
+6. Until the candidate contains the fix for issue #1301, do not type a real
+   secret with a device action.
+7. Write each new provider resource in the resource ledger when the cloud card
+   shows its ID. A ledger line contains the provider, the type, the ID, the
+   cloud title and the UTC time.
+8. Write each issuer token that the run makes in the resource ledger, by name only.
+9. Give each test a result: pass, fail or blocked. An interim report can also
+   use `not run`.
+10. For a fail, open a bug issue and write its link in the report.
+11. Put long commands for the fixture terminal in a script file below
+    `<data-home>/smoke/bin`.
+12. In the fixture terminal, type only the short command that starts the script.
+13. To open the panel picker inside a cloud frame, use a real Ctrl-double-click.
+    Two separate device click actions are not a double-click.
+14. If `cloud_deploy` shows `Another controller owns this cloud operation`, run
+    the same command again after 10 seconds. Do not stop the candidate.
+
+## 5. Setup
+
+1. Do the tasks of [area S](cloud-panels/s-test-fixture.md).
+
+   Result: The candidate runs in the persistent launcher. A Device panel shows a
+   live view.
+
+   > **CAUTION:** ONLY THE OPERATOR WRITES THE HEADER FILES. Each file contains a
+   > provider credential of the test account. Do not show the files.
+
+2. Ask the operator to write two header files with mode `0600` from the credentials of the test accounts.
+
+   ```text
+   <run>/hetzner.header: Authorization: Bearer <Hetzner token>
+   <run>/runpod.header:  Authorization: Bearer <RunPod key>
+   ```
+
+   Result: The two files exist. No command argument contains a credential.
+
+3. Write a script that reads all pages of one Hetzner list.
+
+   ```sh
+   cat > <run>/hetzner-list.sh <<'EOF'
+   #!/usr/bin/env bash
+   # Usage: hetzner-list.sh servers|volumes|ssh_keys|networks|server_types [full]
+   set -euo pipefail
+   kind=$1; full=${2:-}; page=1
+   while [ "$page" != null ]; do
+     body=$(curl -fsS -H @<run>/hetzner.header "https://api.hetzner.cloud/v1/$kind?per_page=50&page=$page")
+     jq -c --arg k "$kind" --arg f "$full" '.[$k][] | if $f == "full" then . else {kind: $k, id, name} end' <<< "$body"
+     page=$(jq -r '.meta.pagination.next_page' <<< "$body")
+   done
+   EOF
+   ```
+
+   Result: The script follows `meta.pagination.next_page` until it is null. An HTTP
+   error stops it. With `full`, it writes each complete object.
+
+4. Write a script that reads all pages of one RunPod list.
+
+   ```sh
+   cat > <run>/runpod-list.sh <<'EOF'
+   #!/usr/bin/env bash
+   # Usage: runpod-list.sh pods|network-volumes|registries|templates
+   set -euo pipefail
+   url="https://api.runpod.io/v2/$1"; next=$url
+   while :; do
+     body=$(curl -fsS -H @<run>/runpod.header "$next")
+     jq -c --arg k "$1" '(if type == "array" then . else (.pods // .networkVolumes // .registries // .templates // []) end)[] | {kind: $k, id, name}' <<< "$body"
+     more=$(jq -r 'if type == "object" then (.pagination.hasNextPage // false) else false end' <<< "$body")
+     [ "$more" = true ] || break
+     next="$url?cursor=$(jq -r '.pagination.nextCursor | @uri' <<< "$body")"
+   done
+   EOF
+   ```
+
+   Result: The script follows `pagination.nextCursor` while `hasNextPage` is true. An HTTP error stops it.
+
+   > **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
+   > contains the token. Do not show the file or the request headers.
+
+5. Save the Hetzner baseline.
+
+   ```sh
+   ( set -e; for k in servers volumes ssh_keys networks; do bash <run>/hetzner-list.sh "$k"; done ) > <evidence>/hetzner-before.jsonl
+   ```
+
+   Result: The file has one line for each Hetzner resource before the run.
+   If an API call fails, the command stops with an error. Then do this step again.
+
+   > **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
+   > contains the key. Do not show the file or the request headers.
+
+6. Save the RunPod baseline.
+
+   ```sh
+   ( set -e; for k in pods network-volumes registries templates; do bash <run>/runpod-list.sh "$k"; done ) > <evidence>/runpod-before.jsonl
+   ```
+
+   Result: The file has one line for each RunPod resource before the run.
+   If an API call fails, the command stops with an error. Then do this step again.
+
+7. Make the resource ledger with one header line.
+
+   ```sh
+   printf 'utc\tprovider\ttype\tid\tcloud\tstate\n' > <evidence>/resource-ledger.tsv
+   ```
+
+   Result: The resource ledger exists and has no resources.
+
+8. Write one ledger line for each issuer token that the operator made for this run.
+
+   Result: The ledger names the GHCR pull token of A08, the pull and push tokens
+   of `<build-repository>` and the GitHub token of A09. It contains no token value.
+
+   > **CAUTION:** ONLY THE OPERATOR SIGNS IN THE LOCAL AGENT. Use a test account.
+   > Do not type a password or a key with a device action.
+
+9. In the fixture, open a local Claude Code panel and let the operator sign it in.
+
+   Result: The agent answers a short request. C21, C22, C30, O01, G07, G08, T12 and T13 use this agent.
+
+## 6. Tasks
+
+Some tasks need a cloud or a setting from a later area. Do the tasks in this
+order. The L area stops and deletes clouds that the T, G and N areas use.
+When all tasks of an area are complete, do the cleanup section of that area.
+Do the cleanup of area G after T12 and T13. The cleanup of this procedure does
+area X.
+
+1. Do A01 to A05, A07 and A08. The setup of this procedure did S01 to S05.
+2. Do B01 to B05.
+3. Do A06.
+4. Do C01 to C30. Do not do step 8 of C02 or the task C09 yet.
+5. Do O01 and O03.
+6. Do T01 and T02. D01 needs the saved test tailnet.
+7. Do C09.
+8. Do D01 to D05. D01 and D02 select the places that C31 examines.
+9. Do step 8 of C02.
+10. Do C31 and A09.
+11. Do E01 to E09.
+12. Do O02. O02 uses the Claude Code panel of E02.
+13. Do T03 to T11 and T14.
+14. Do G01 to G12.
+15. Do T12 and T13.
+16. Do the cleanup of area G.
+17. Do N01 to N05.
+18. Do L01 to L10.
+
+The cleanup of this procedure does X01 to X05.
+
+| Area | File | Tests | Cost |
+|---|---|---|---|
+| S — Test fixture | [s-test-fixture.md](cloud-panels/s-test-fixture.md) | S01–S05 | none |
+| A — Machine setup and credentials | [a-machine-setup.md](cloud-panels/a-machine-setup.md) | A01–A09 | A09 rents compute |
+| B — Repository configuration | [b-repository-configuration.md](cloud-panels/b-repository-configuration.md) | B01–B05 | none |
+| C — New cloud dialog | [c-new-cloud-dialog.md](cloud-panels/c-new-cloud-dialog.md) | C01–C31 | C08 if the watch starts a cloud, and C31 |
+| D — Deployment | [d-deployment.md](cloud-panels/d-deployment.md) | D01–D05 | rents compute |
+| E — Panels in a cloud | [e-panels.md](cloud-panels/e-panels.md) | E01–E09 | rents compute |
+| L — Lifecycle | [l-lifecycle.md](cloud-panels/l-lifecycle.md) | L01–L10 | rents compute |
+| T — Tailnets | [t-tailnets.md](cloud-panels/t-tailnets.md) | T01–T14 | T03–T12 and T14 rent compute |
+| G — Companion repositories | [g-companions.md](cloud-panels/g-companions.md) | G01–G12 | rents compute, also G08 if the provider request is faster than the cancel |
+| O — Offers and cost | [o-offers.md](cloud-panels/o-offers.md) | O01–O03 | O02 rents compute |
+| N — Local Network Bridge | [n-local-network-bridge.md](cloud-panels/n-local-network-bridge.md) | N01–N05 | rents compute |
+| X — Teardown | [x-teardown.md](cloud-panels/x-teardown.md) | X01–X05 | none |
+
+### 6.1 Related procedures
+
+Other procedures test parts of this procedure in more detail. Where the tests
+are the same, the area files link to their tasks and do not repeat their steps.
+Use these procedures alone for a run that changes their function.
+
+| Procedure | Tests in this procedure |
+|---|---|
+| [cloud-settings-replace-key](cloud-settings-replace-key.md) | A01 and A02 |
+| [new-cloud-catalog-refresh](new-cloud-catalog-refresh.md) | C07 |
+| [new-cloud-picker](new-cloud-picker.md) | C12 to C30 |
+| [cloud-agent-panel-start](cloud-agent-panel-start.md) | E02 |
+| [local-network-bridge-agent-access](local-network-bridge-agent-access.md) | N02 and N03 |
+| [tailnet-stable-device-name](tailnet-stable-device-name.md) | T10 |
+
+## 7. Pass criteria
+
+- Each test is pass, or it has a linked defect or a recorded block.
+- The candidate child that runs has the same SHA-256 as the frozen candidate.
+- The provider APIs show no server, pod, volume or SSH key from the resource
+  ledger after X02 and X05.
+- No screenshot, recording, log, issue or report shows a secret.
+
+## 8. Cleanup
+
+1. If `<run>/runpod-key.saved` exists, copy it back to the RunPod key file of the fixture.
+
+   Result: The fixture has the real RunPod key. Area X can delete RunPod clouds.
+   An interrupted C07 can leave the synthetic key in place.
+
+2. Do X01, X02, X03 and X05 of [area X](cloud-panels/x-teardown.md).
+
+   Result: The provider APIs show no active resource of the resource ledger.
+
+3. If X02 or X05 shows an active ledger resource, stop here and tell the operator.
+
+   Result: The fixture continues, so the card keeps its retry action.
+
+4. Do X04.
+
+   Result: The fixture and its children stopped, and the target expired.
+
+5. Compare the provider lists of X02 and X05 with the baselines from the setup.
+
+   Result: Each difference is a kept Hetzner network of Horizon or a resource
+   that X01 records as not owned by this run.
+
+6. Do the [cleanup of area X](cloud-panels/x-teardown.md#8-cleanup).
+
+   Result: `<run>` contains no API header file and no list script.
+
+   > **CAUTION:** DELETE ONLY THE STATE DIRECTORY OF THIS RUN. It contains the saved
+   > provider keys and the private data of the fixture.
+
+7. Delete the fixture state, the keyring password and the saved RunPod key copy of C07.
+
+   ```sh
+   rm -r <run>/fixture && rm -f <run>/keyring-password <run>/runpod-key.saved
+   ```
+
+   Result: `<run>` contains no credential file. Keep `<evidence>` outside `<run>`.
+
+8. Make sure that `<docker-pid>` is still the Docker daemon of this run.
+
+   ```sh
+   ps -o pid=,args= -p <docker-pid>
+   ```
+
+   Result: The command line names `dockerd` and `<docker-data>`. If it does
+   not, do not stop the process. Find the daemon of this run by its data root.
+
+9. Stop the rootless Docker daemon of this run.
+
+   ```sh
+   kill <docker-pid>
+   ```
+
+   Result: The daemon stops its containers and exits.
+
+10. Wait a maximum of 60 seconds until the daemon exits.
+
+    ```sh
+    timeout 60 tail --pid=<docker-pid> -f /dev/null; ps -o pid=,comm= -p <docker-pid>
+    ```
+
+    Result: The output is empty. The daemon exited.
+
+11. If the output of step 10 is not empty, stop the cleanup and tell the operator.
+
+    Result: The data root of a daemon that runs stays. Do not do step 12.
+
+    > **CAUTION:** DELETE ONLY THE DOCKER DATA ROOT OF THIS RUN. Other Docker data
+    > roots can contain images and volumes of other people.
+
+12. Delete the Docker data root and the socket directory of this run.
+
+    ```sh
+    rootlesskit rm -rf <docker-data> && rm -rf <run>/docker
+    ```
+
+    Result: `<run>` contains no Docker data.
+
+## 9. Record of results
+
+Write a report in `docs/testing/reports/` with
+[the report template](../reports/TEMPLATE.md). Use the test IDs of the area
+files. Keep private evidence, provider IDs and tailnet addresses out of the
+repository.
