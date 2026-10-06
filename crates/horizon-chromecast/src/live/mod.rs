@@ -389,6 +389,10 @@ impl Session {
         let Some(client) = self.connect()? else {
             return Ok(());
         };
+        if let Sink::Progressive(stream) = &self.sink {
+            let stream = Arc::clone(stream);
+            client.watch_media_time(move || stream.newest_media_time());
+        }
         let app = client.launch(DEFAULT_MEDIA_RECEIVER)?;
         self.set(LiveState::Buffering);
         while !self.ready_to_load() {
@@ -416,7 +420,7 @@ impl Session {
             }
         };
         // The LOAD reply is consumed by its request, so apply its status here.
-        let mut outcome = self.apply(&loaded, None);
+        let mut outcome = self.apply(&loaded, None, None);
         let result = loop {
             match outcome {
                 Ok(true) => {}
@@ -491,8 +495,11 @@ impl Session {
             // Replies and notifications arrive on separate queues, so a media
             // update can be older than the state already applied: confirm.
             // The reply is not delivered again as an event, so apply it here.
+            // The opening lag is the source time from when the event was
+            // queued, not from after this confirming request.
+            let newest = event.media_time.or_else(|| self.source_media_time());
             return match client.media(app).status()? {
-                Some(status) if status.media_session_id == media_session_id => self.apply(&status, None),
+                Some(status) if status.media_session_id == media_session_id => self.apply(&status, None, newest),
                 _ => Ok(false),
             };
         }
@@ -502,8 +509,9 @@ impl Session {
     /// Before reporting a stall, applies a fresh status: the BUFFERING that
     /// started the timer may have been queued behind a newer PLAYING reply.
     fn check_stall(&self, client: &CastClient, app: &Application, media_session_id: i64) -> Result<bool> {
+        let newest = self.source_media_time();
         let going_on = match client.media(app).status()? {
-            Some(status) if status.media_session_id == media_session_id => self.apply(&status, None)?,
+            Some(status) if status.media_session_id == media_session_id => self.apply(&status, None, newest)?,
             _ => false,
         };
         if going_on && self.stalled() {
@@ -558,7 +566,7 @@ impl Session {
             .filter(|status| status.media_session_id == media_session_id);
         let detail = event.payload.get("status").map(Value::to_string);
         for status in ours {
-            if !self.apply(&status, detail.clone())? {
+            if !self.apply(&status, detail.clone(), event.media_time)? {
                 return Ok(false);
             }
         }
@@ -566,7 +574,13 @@ impl Session {
     }
 
     /// A rate command's own status. Correlated replies are not replayed as events.
-    fn absorb_rate_status(&self, playback: &mut Playback, status: &MediaStatus, observed: Instant) {
+    fn absorb_rate_status(
+        &self,
+        playback: &mut Playback,
+        status: &MediaStatus,
+        observed: Instant,
+        newest_at_send: Option<f64>,
+    ) {
         match status.player_state.as_str() {
             "PLAYING" => {
                 // This reply is not delivered again as an event. A stall that
@@ -583,7 +597,7 @@ impl Session {
             "BUFFERING" | "LOADING" => {
                 if self.buffering_since.get().is_none() {
                     self.buffering_since.set(Some(observed));
-                    if let Some(lag) = self.open_lag(status.current_time) {
+                    if let Some(lag) = note_open_lag(newest_at_send, status.current_time) {
                         playback.edge.note_buffer(lag);
                     }
                     playback.edge.settled_for = Duration::ZERO;
@@ -607,20 +621,19 @@ impl Session {
         }
     }
 
-    fn open_lag(&self, current_time: f64) -> Option<f64> {
+    /// Progressive media time now, if this session has that clock.
+    fn source_media_time(&self) -> Option<f64> {
         let Sink::Progressive(stream) = &self.sink else {
             return None;
         };
-        note_open_lag(stream.newest_media_time(), current_time)
+        stream.newest_media_time()
     }
 
-    /// Records the lag at the start of a progressive buffer. Events arrive
-    /// before the next poll, and by then new frames have already increased it.
-    fn note_buffer_lag(&self, current_time: f64) {
-        let Sink::Progressive(stream) = &self.sink else {
-            return;
-        };
-        let Some(lag) = note_open_lag(stream.newest_media_time(), current_time) else {
+    /// Records the lag at the start of a progressive buffer. `newest` is the
+    /// source position when the report was received. Sampling again here is
+    /// too late: frames keep arriving while the event waits behind a request.
+    fn note_buffer_lag(&self, current_time: f64, newest: Option<f64>) {
+        let Some(lag) = note_open_lag(newest.or_else(|| self.source_media_time()), current_time) else {
             return;
         };
         let mut playback = self.playback.get();
@@ -629,7 +642,7 @@ impl Session {
     }
 
     /// Applies one status of our media session; `Ok(false)` means playback ended.
-    fn apply(&self, status: &MediaStatus, detail: Option<String>) -> Result<bool> {
+    fn apply(&self, status: &MediaStatus, detail: Option<String>, media_time: Option<f64>) -> Result<bool> {
         match (status.player_state.as_str(), status.idle_reason.as_deref()) {
             ("PLAYING", _) => {
                 self.started.set(true);
@@ -647,7 +660,7 @@ impl Session {
             ("BUFFERING" | "LOADING", _) => {
                 if self.buffering_since.get().is_none() {
                     self.buffering_since.set(Some(Instant::now()));
-                    self.note_buffer_lag(status.current_time);
+                    self.note_buffer_lag(status.current_time, media_time);
                     let mut playback = self.playback.get();
                     playback.edge.settled_for = Duration::ZERO;
                     playback.sampled = false;
@@ -814,7 +827,9 @@ impl Session {
         self.buffering_since.set(open);
         let playing = status.player_state == "PLAYING";
         self.observe_transport_state(status.player_state.as_str());
-        if !playing && let Some(opening) = note_open_lag(newest_at_send, status.current_time) {
+        // A pause is not a buffer. Seeding the episode here would make a
+        // later, larger stall look like it opened near the edge.
+        if let Some(opening) = opening_from_status(status.player_state.as_str(), newest_at_send, status.current_time) {
             playback.edge.note_buffer(opening);
         }
         // A polled pause is not playing, and `buffering_age` has already
@@ -850,16 +865,19 @@ impl Session {
     fn push_rate(&self, media: &MediaController<'_>, mut playback: Playback, rate: f64, failures: u8) -> Result<()> {
         // The status poll that led here may have blocked. This wait starts now.
         let now = Instant::now();
-        if rate > 1.0 + 1e-3 {
-            // The receiver may apply this before it answers.
-            playback.threat = playback.threat.max(rate);
-        }
-        let wait = command_wait(&playback, rate, now);
+        // A speed-up with no room for an acknowledgement is not queued. The
+        // send happens before the wait, so a zero timeout would still deliver
+        // it and the restore would leave with it.
+        let Some(wait) = begin_rate(&mut playback, rate, now) else {
+            self.playback.set(playback);
+            return Ok(());
+        };
+        let newest_at_send = self.source_media_time();
         let (answer, error) = match media.set_playback_rate_within(rate, wait) {
             Ok(status) => {
                 // The reply is not delivered again as an event. A PLAYING
                 // status here has to close a short buffer before the next poll.
-                self.absorb_rate_status(&mut playback, &status, Instant::now());
+                self.absorb_rate_status(&mut playback, &status, Instant::now(), newest_at_send);
                 (RateAnswer::Applied, None)
             }
             Err(error @ Error::Rejected { .. }) => (RateAnswer::Refused, Some(error)),
@@ -1034,10 +1052,35 @@ fn command_wait(playback: &Playback, commanded: f64, now: Instant) -> Duration {
         // acknowledgement: the command was queued before this timeout.
         return left.min(RESTORE_BUDGET).max(ACK_WINDOW);
     }
-    if left <= RESTORE_BUDGET {
+    // A speed-up needs a full acknowledgement window and the restore budget
+    // after it. Anything shorter is refused by [`begin_rate`]: queueing it
+    // would time out at once and the restore would be queued behind it.
+    let reserved = RESTORE_BUDGET.saturating_add(ACK_WINDOW);
+    if left < reserved {
         return Duration::ZERO;
     }
     left.saturating_sub(RESTORE_BUDGET).min(REQUEST_TIMEOUT)
+}
+
+/// Starts a rate command. `None` means do not queue it. [`crate::client::CastClient::request_within`]
+/// sends before it waits, so a window shorter than [`ACK_WINDOW`] still
+/// delivers a speed-up and then reports it lost.
+fn begin_rate(playback: &mut Playback, commanded: f64, now: Instant) -> Option<Duration> {
+    let restoring = (commanded - 1.0).abs() <= 1e-3;
+    let wait = if restoring {
+        command_wait(playback, commanded, now)
+    } else {
+        let mut feared = *playback;
+        feared.threat = feared.threat.max(commanded);
+        command_wait(&feared, commanded, now)
+    };
+    if !restoring && wait < ACK_WINDOW {
+        return None;
+    }
+    if commanded > 1.0 + 1e-3 {
+        playback.threat = playback.threat.max(commanded);
+    }
+    Some(wait)
 }
 
 /// Whether the live-edge poll still runs. A stall reports Buffering, and the
@@ -1061,10 +1104,18 @@ fn buffering_age(open_since: &mut Option<Instant>, player_state: &str, now: Inst
     }
 }
 
-/// Lag when a progressive buffer opens. `None` for other transports, or before
-/// the first frame.
+/// Lag when a progressive buffer opens. `None` for other transports, before
+/// the first frame, or for a player state that is not buffering.
 fn note_open_lag(newest: Option<f64>, current_time: f64) -> Option<f64> {
     newest.map(|newest| newest - current_time)
+}
+
+/// Opening lag from a polled status. A pause has no buffer episode.
+fn opening_from_status(player_state: &str, newest: Option<f64>, current_time: f64) -> Option<f64> {
+    if !matches!(player_state, "BUFFERING" | "LOADING") {
+        return None;
+    }
+    note_open_lag(newest, current_time)
 }
 
 /// The buffer ended. Judge it, drop the calm time it interrupted, then allow
@@ -1365,7 +1416,7 @@ mod catch_up_tests {
                 .checked_sub(Duration::from_millis(450))
                 .expect("test clock"),
         ));
-        session.absorb_rate_status(&mut playback, &playing, Instant::now());
+        session.absorb_rate_status(&mut playback, &playing, Instant::now(), None);
         assert!(session.buffering_since.get().is_none());
         assert!((playback.edge.target - 0.25).abs() < 1e-9);
         assert!((playback.edge.rate - 1.5).abs() < 1e-9);
@@ -1376,7 +1427,7 @@ mod catch_up_tests {
                 .expect("test clock"),
         ));
         playback.edge.note_buffer(0.30);
-        session.absorb_rate_status(&mut playback, &playing, Instant::now());
+        session.absorb_rate_status(&mut playback, &playing, Instant::now(), None);
         assert!((playback.edge.target - 0.30).abs() < 1e-9);
         assert!((playback.edge.rate - 1.5).abs() < 1e-9);
     }
@@ -1640,7 +1691,7 @@ mod catch_up_tests {
             idle_reason: None,
             current_time: 1.0,
         };
-        session.absorb_rate_status(&mut playback, &playing, Instant::now());
+        session.absorb_rate_status(&mut playback, &playing, Instant::now(), None);
         assert_eq!(*lock(&session.state), LiveState::Playing);
         assert!(session.started.get());
         assert!(session.buffering_since.get().is_none());
@@ -1763,7 +1814,7 @@ mod catch_up_tests {
                 .checked_sub(Duration::from_millis(350))
                 .expect("test clock"),
         ));
-        session.absorb_rate_status(&mut playback, &paused, Instant::now());
+        session.absorb_rate_status(&mut playback, &paused, Instant::now(), None);
         assert!(session.buffering_since.get().is_none());
         assert!((playback.edge.target - 0.25).abs() < 1e-9);
         assert!((playback.edge.rate - 1.5).abs() < 1e-9);
@@ -1774,7 +1825,7 @@ mod catch_up_tests {
                 .checked_sub(Duration::from_millis(650))
                 .expect("test clock"),
         ));
-        session.absorb_rate_status(&mut playback, &paused, Instant::now());
+        session.absorb_rate_status(&mut playback, &paused, Instant::now(), None);
         assert!((playback.edge.target - 0.30).abs() < 1e-9);
         assert!((playback.edge.rate - 1.5).abs() < 1e-9);
         assert!(!playback.sampled);
@@ -1826,7 +1877,7 @@ mod catch_up_tests {
                 .checked_sub(Duration::from_millis(350))
                 .expect("test clock"),
         ));
-        assert!(session.apply(&paused, None).is_ok());
+        assert!(session.apply(&paused, None, None).is_ok());
         assert!(session.buffering_since.get().is_none());
         let after = session.playback.get();
         assert!((after.edge.target - 0.25).abs() < 1e-9);
@@ -1836,7 +1887,7 @@ mod catch_up_tests {
             player_state: "PLAYING".to_owned(),
             ..paused.clone()
         };
-        assert!(session.apply(&playing, None).is_ok());
+        assert!(session.apply(&playing, None, None).is_ok());
         assert!((session.playback.get().edge.target - 0.25).abs() < 1e-9);
 
         let mut playback = Playback::new();
@@ -1849,7 +1900,7 @@ mod catch_up_tests {
                 .checked_sub(Duration::from_millis(650))
                 .expect("test clock"),
         ));
-        assert!(session.apply(&paused, None).is_ok());
+        assert!(session.apply(&paused, None, None).is_ok());
         assert!((session.playback.get().edge.target - 0.30).abs() < 1e-9);
     }
 
@@ -1870,5 +1921,192 @@ mod catch_up_tests {
         assert!(paused.command.is_none());
         let playing = plan_trim(edge, sample, true);
         assert!((playing.edge.target - 0.35).abs() < 1e-9);
+    }
+
+    /// Models `request_within`: the command is queued before the wait. A lost
+    /// speed-up is followed at once by the restore, the same way `push_rate` chains it.
+    fn drive_rate(
+        playback: &mut Playback,
+        commanded: f64,
+        now: Instant,
+        answer: RateAnswer,
+    ) -> std::result::Result<Vec<f64>, ()> {
+        let Some(wait) = begin_rate(playback, commanded, now) else {
+            return Ok(Vec::new());
+        };
+        let mut sent = vec![commanded];
+        let seen = if wait.is_zero() {
+            RateAnswer::Unconfirmed
+        } else {
+            answer
+        };
+        let answered = now + wait;
+        if apply_rate_reply(playback, commanded, 0, seen, answered) {
+            return Err(());
+        }
+        let due = playback.retry.is_some_and(|retry| retry.at <= answered);
+        if (commanded - 1.0).abs() > 1e-3 && due {
+            let retry = playback.retry.take().expect("due retry");
+            sent.extend(drive_rate(playback, retry.rate, answered, answer)?);
+        }
+        Ok(sent)
+    }
+
+    #[test]
+    fn a_near_edge_speed_up_is_not_queued_with_its_restore() {
+        // 0.405 s after the target drops to 0.35 s is 687.5 ms at 1.08×,
+        // inside the restore budget. Queuing 1.08× would time out at once.
+        let now = Instant::now();
+        let mut feared = paced(1.0, 0.405, now);
+        feared.edge.target = 0.35;
+        feared.threat = 1.08;
+        assert_eq!(command_wait(&feared, 1.08, now), Duration::ZERO);
+
+        for answer in [RateAnswer::Applied, RateAnswer::Refused] {
+            let mut playback = paced(1.0, 0.405, now);
+            playback.edge.target = 0.35;
+            let sent = drive_rate(&mut playback, 1.08, now, answer).expect("held");
+            assert!(sent.is_empty(), "{sent:?} {answer:?}");
+            assert!((playback.edge.rate - 1.0).abs() < 1e-9);
+            assert!((playback.threat - 1.0).abs() < 1e-9);
+            assert!(playback.retry.is_none());
+            assert!(!playback.unsupported);
+        }
+    }
+
+    #[test]
+    fn a_rejecting_receiver_is_not_failed_by_an_unsent_speed_up() {
+        let now = Instant::now();
+        let mut playback = paced(1.0, 0.405, now);
+        playback.edge.target = 0.35;
+        for _ in 0..RESTORE_ATTEMPTS {
+            let sent = drive_rate(&mut playback, 1.08, now, RateAnswer::Refused).expect("held");
+            assert!(sent.is_empty());
+        }
+        assert!(!playback.unsupported);
+        assert!(playback.retry.is_none());
+    }
+
+    #[test]
+    fn an_accepting_receiver_keeps_a_speed_up_that_has_room() {
+        let now = Instant::now();
+        let mut playback = paced(1.0, 1.0, now);
+        playback.edge.target = 0.15;
+        let sent = drive_rate(&mut playback, 1.5, now, RateAnswer::Applied).expect("applied");
+        assert_eq!(sent, vec![1.5]);
+        assert!((playback.edge.rate - 1.5).abs() < 1e-9);
+        assert!((playback.threat - 1.5).abs() < 1e-9);
+        assert!(playback.retry.is_none());
+        let mut feared = paced(1.0, 1.0, now);
+        feared.edge.target = 0.15;
+        feared.threat = 1.5;
+        let wait = command_wait(&feared, 1.5, now);
+        let drain = Duration::from_secs_f64((1.0 - 0.15) / 0.5);
+        assert!(wait >= ACK_WINDOW);
+        assert!(wait.saturating_add(RESTORE_BUDGET) <= drain);
+    }
+
+    #[test]
+    fn a_rejecting_receiver_stops_at_the_refused_speed_up() {
+        let now = Instant::now();
+        let mut playback = paced(1.0, 1.0, now);
+        playback.edge.target = 0.15;
+        let sent = drive_rate(&mut playback, 1.5, now, RateAnswer::Refused).expect("refused");
+        assert_eq!(sent, vec![1.5]);
+        assert!(playback.unsupported);
+        assert!(playback.retry.is_none());
+        assert!((playback.edge.rate - 1.0).abs() < 1e-9);
+        assert!((playback.threat - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_lost_speed_up_with_room_still_queues_the_restore() {
+        let now = Instant::now();
+        let mut playback = paced(1.0, 1.0, now);
+        playback.edge.target = 0.15;
+        let sent = drive_rate(&mut playback, 1.5, now, RateAnswer::Unconfirmed).expect("restore");
+        assert_eq!(sent, vec![1.5, 1.0]);
+        assert!((playback.threat - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_pause_does_not_seed_the_next_buffer() {
+        assert!(opening_from_status("PAUSED", Some(10.30), 10.0).is_none());
+        let opening = opening_from_status("BUFFERING", Some(10.30), 10.0).expect("buffer");
+        assert!((opening - 0.30).abs() < 1e-9);
+        let edge = edge::Edge {
+            target: 0.25,
+            floor: 0.15,
+            ..edge::Edge::default()
+        };
+        let plan = plan_trim(
+            edge,
+            edge::Sample {
+                lag: 0.30,
+                buffering_for: None,
+                elapsed: Duration::from_millis(400),
+            },
+            false,
+        );
+        assert!(plan.edge.episode_lag.is_none());
+        let next = plan.edge.step(edge::Sample {
+            lag: 0.90,
+            buffering_for: Some(Duration::from_millis(600)),
+            elapsed: Duration::from_millis(600),
+        });
+        assert!((next.target - 0.25).abs() < 1e-9);
+        assert!((next.episode_lag.expect("sample") - 0.90).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_delayed_buffer_event_keeps_the_opening_lag() {
+        let session = test_session();
+        let mut playback = Playback::new();
+        playback.edge.target = 0.25;
+        playback.edge.floor = 0.15;
+        session.playback.set(playback);
+        let event = Event {
+            namespace: NS_MEDIA.to_owned(),
+            source: "transport-1".to_owned(),
+            payload: serde_json::json!({
+                "type": "MEDIA_STATUS",
+                "requestId": 0,
+                "status": [{"mediaSessionId": 9, "playerState": "BUFFERING", "currentTime": 10.0}]
+            }),
+            media_time: Some(10.30),
+        };
+        assert!(session.follow(&event, "session-1", "transport-1", 9).unwrap());
+        let edge = session.playback.get().edge;
+        assert!((edge.episode_lag.expect("opening") - 0.30).abs() < 1e-9);
+        let next = edge.step(edge::Sample {
+            lag: 0.90,
+            buffering_for: Some(Duration::from_millis(600)),
+            elapsed: Duration::from_millis(600),
+        });
+        assert!((next.target - 0.30).abs() < 1e-9);
+        assert!((next.floor - 0.30).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_delayed_rate_reply_keeps_the_opening_lag() {
+        let session = test_session();
+        let mut playback = Playback::new();
+        playback.edge.target = 0.25;
+        playback.edge.floor = 0.15;
+        let status = MediaStatus {
+            media_session_id: 1,
+            player_state: "BUFFERING".to_owned(),
+            idle_reason: None,
+            current_time: 10.0,
+        };
+        session.absorb_rate_status(&mut playback, &status, Instant::now(), Some(10.30));
+        assert!((playback.edge.episode_lag.expect("opening") - 0.30).abs() < 1e-9);
+        let next = playback.edge.step(edge::Sample {
+            lag: 0.90,
+            buffering_for: Some(Duration::from_millis(600)),
+            elapsed: Duration::from_millis(600),
+        });
+        assert!((next.target - 0.30).abs() < 1e-9);
+        assert!((next.floor - 0.30).abs() < 1e-9);
     }
 }

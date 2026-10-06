@@ -30,6 +30,7 @@ const IDLE_LIMIT: Duration = Duration::from_secs(20);
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_BACKLOG: usize = 256;
 const EVENT_BACKLOG: usize = 64;
+type MediaClock = Arc<dyn Fn() -> Option<f64> + Send + Sync>;
 
 /// A message the receiver sent without a matching request, such as a media
 /// status change or an application closing its virtual connection.
@@ -38,6 +39,11 @@ pub struct Event {
     pub namespace: String,
     pub source: String,
     pub payload: Value,
+    /// Progressive media time, in seconds, when this event was queued.
+    /// `None` when the session has no media clock. A buffer that is handled
+    /// later still opens at this time: the source has moved, the receiver
+    /// clock has not.
+    pub media_time: Option<f64>,
 }
 
 impl Event {
@@ -57,6 +63,8 @@ struct Shared {
     connected: Mutex<HashSet<String>>,
     next_request: AtomicU64,
     open: AtomicBool,
+    /// Sampled when an unsolicited event is queued, not when the host handles it.
+    media_clock: Mutex<Option<MediaClock>>,
 }
 
 pub struct CastClient {
@@ -80,6 +88,7 @@ impl CastClient {
             connected: Mutex::new(HashSet::new()),
             next_request: AtomicU64::new(1),
             open: AtomicBool::new(true),
+            media_clock: Mutex::new(None),
         });
         let worker_shared = shared.clone();
         let worker = std::thread::Builder::new()
@@ -104,6 +113,14 @@ impl CastClient {
     #[must_use]
     pub fn is_open(&self) -> bool {
         self.shared.open.load(Ordering::Acquire)
+    }
+
+    /// Publishes the progressive media time so a queued event can remember it.
+    pub(crate) fn watch_media_time<F>(&self, clock: F)
+    where
+        F: Fn() -> Option<f64> + Send + Sync + 'static,
+    {
+        *lock(&self.shared.media_clock) = Some(Arc::new(clock));
     }
 
     /// Opens a virtual connection to `destination` once per client.
@@ -310,10 +327,13 @@ fn dispatch(
         let _ = waiter.try_send(payload);
         return Ok(());
     }
+    let clock = lock(&shared.media_clock).clone();
+    let media_time = clock.as_ref().and_then(|clock| clock());
     let event = Event {
         namespace: message.namespace,
         source: message.source,
         payload,
+        media_time,
     };
     if let Err(TrySendError::Full(event)) = events.try_send(event) {
         tracing::warn!(namespace = %event.namespace, "dropping receiver event; host is not draining events");

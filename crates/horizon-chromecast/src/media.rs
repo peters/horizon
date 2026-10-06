@@ -206,6 +206,7 @@ mod tests {
                 "requestId": 0,
                 "status": [{"mediaSessionId": 7, "playerState": "PLAYING", "currentTime": 1.5}]
             }),
+            media_time: None,
         };
         let status = MediaStatus::from_event(&event);
         assert_eq!(status.len(), 1);

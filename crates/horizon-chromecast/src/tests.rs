@@ -18,7 +18,7 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::JoinHandle,
     time::Duration,
@@ -440,7 +440,54 @@ fn media_event(source: &str, statuses: &Value) -> crate::Event {
         namespace: NS_MEDIA.to_owned(),
         source: source.to_owned(),
         payload: json!({"type": "MEDIA_STATUS", "requestId": 0, "status": statuses.clone()}),
+        media_time: None,
     }
+}
+
+#[test]
+fn a_queued_event_carries_the_media_time_from_receipt() {
+    let (address, listener, config) = listen();
+    let server = std::thread::spawn(move || {
+        let mut stream = accept(&listener, config);
+        let (mut inbound, mut chunk) = (Vec::new(), [0; 4096]);
+        loop {
+            let read = stream.read(&mut chunk).unwrap_or(0);
+            if read == 0 {
+                return;
+            }
+            inbound.extend_from_slice(&chunk[..read]);
+            for message in proto::drain_frames(&mut inbound).unwrap() {
+                let Payload::Text(text) = &message.payload else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(text).unwrap();
+                if message.namespace == NS_RECEIVER && request["type"] == "GET_STATUS" {
+                    let notice = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": "BUFFERING", "currentTime": 10.0}]});
+                    send(&mut stream, "transport-1", NS_MEDIA, &notice);
+                    send(
+                        &mut stream,
+                        message.destination.as_str(),
+                        NS_RECEIVER,
+                        &reply(&request, app_status(false)),
+                    );
+                }
+            }
+        }
+    });
+    let client = CastClient::connect(address).unwrap();
+    let seen = Arc::new(AtomicU64::new(0));
+    let clock = Arc::clone(&seen);
+    client.watch_media_time(move || {
+        let call = clock.fetch_add(1, Ordering::Relaxed);
+        Some(if call == 0 { 10.30 } else { 10.90 })
+    });
+    client.receiver_status().unwrap();
+    let event = client.next_event(Duration::from_secs(5)).unwrap().unwrap();
+    let stamped = event.media_time.expect("receipt time");
+    assert!((stamped - 10.30).abs() < 1e-9, "{stamped}");
+    assert_eq!(seen.load(Ordering::Relaxed), 1);
+    drop(client);
+    server.join().unwrap();
 }
 
 #[test]
