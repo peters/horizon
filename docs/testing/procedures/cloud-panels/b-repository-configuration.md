@@ -353,10 +353,10 @@ Keep the synthetic repositories. The other areas use them.
 1. Make sure that no synthetic repository has an uncommitted change.
 
    ```sh
-   git -C <data-home>/smoke/app status --short
+   for r in app lib sib; do echo "== $r"; git -C <data-home>/smoke/$r status --short; done
    ```
 
-   Result: The output is empty for `app`, `lib` and `sib`.
+   Result: The output shows only the three `==` lines. No repository has a changed or untracked file.
 
 ## 9. Record of results
 

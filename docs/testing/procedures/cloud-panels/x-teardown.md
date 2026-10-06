@@ -232,7 +232,7 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 3. Add the newest candidate child process ID to the list.
 
    ```sh
-   pstree -p <launcher-pid> | grep -o 'horizon([0-9]*)'
+   pstree -p <launcher-pid> | grep -o 'horizon([0-9]*)' | tr -dc '0-9\n'
    ```
 
    Result: The list also contains the candidate child after the restarts of N05 and L03.

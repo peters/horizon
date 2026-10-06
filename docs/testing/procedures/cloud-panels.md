@@ -167,18 +167,19 @@ change in the report as a deviation.
    ```sh
    cat > <run>/hetzner-list.sh <<'EOF'
    #!/usr/bin/env bash
-   # Usage: hetzner-list.sh servers|volumes|ssh_keys|networks
+   # Usage: hetzner-list.sh servers|volumes|ssh_keys|networks|server_types [full]
    set -euo pipefail
-   kind=$1; page=1
+   kind=$1; full=${2:-}; page=1
    while [ "$page" != null ]; do
      body=$(curl -fsS -H @<run>/hetzner.header "https://api.hetzner.cloud/v1/$kind?per_page=50&page=$page")
-     jq -c --arg k "$kind" '.[$k][] | {kind: $k, id, name}' <<< "$body"
+     jq -c --arg k "$kind" --arg f "$full" '.[$k][] | if $f == "full" then . else {kind: $k, id, name} end' <<< "$body"
      page=$(jq -r '.meta.pagination.next_page' <<< "$body")
    done
    EOF
    ```
 
-   Result: The script follows `meta.pagination.next_page` until it is null. An HTTP error stops it.
+   Result: The script follows `meta.pagination.next_page` until it is null. An HTTP
+   error stops it. With `full`, it writes each complete object.
 
 4. Write a script that reads all pages of one RunPod list.
 

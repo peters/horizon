@@ -80,10 +80,10 @@ runs in the place that the dialog showed.
 4. Save the Hetzner server types and locations to the evidence.
 
    ```sh
-   curl -fsS -H @<run>/hetzner.header https://api.hetzner.cloud/v1/server_types > <evidence>/hetzner-server-types.json
+   bash <run>/hetzner-list.sh server_types full > <evidence>/hetzner-server-types.jsonl
    ```
 
-   Result: The file lists the server types, their cores, memory and prices per location.
+   Result: The file has one line for each server type of all pages, with its cores, memory and prices per location.
 
 ## 6. Tasks
 
@@ -837,7 +837,7 @@ This task uses the clouds of D01 and D02. Do not start other clouds.
 
 3. Keep `<run>/hetzner.header`. The cleanup of area X deletes it.
 
-   Result: No file with the Hetzner token stays in `<run>`.
+   Result: The header file stays in `<run>` for the teardown. Do not show its content.
 
 ## 9. Record of results
 
