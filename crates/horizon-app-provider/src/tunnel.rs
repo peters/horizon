@@ -620,7 +620,7 @@ mod tests {
                 tls: false,
             }],
             Uuid::new_v4(),
-            Duration::from_millis(100),
+            Duration::from_secs(2),
             |record| {
                 assert_eq!(record.config.extension().and_then(|value| value.to_str()), Some("yml"));
                 assert_eq!(
@@ -641,14 +641,21 @@ mod tests {
                 .unwrap()
                 .contains("synthetic-tunnel-key")
         );
-        std::thread::sleep(Duration::from_millis(250));
-        assert!(!tunnel.status().unwrap().ready);
-        tunnel.close().unwrap();
-        tunnel.close().unwrap();
         let records = records.lock().unwrap();
         assert_eq!(records.len(), 2);
         assert!(records[0].0.is_none());
         assert!(records[1].0.is_some());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while records[1].1.exists() || records[1].2.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "owned tunnel did not retire its files automatically"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!tunnel.status().unwrap().ready);
+        tunnel.close().unwrap();
+        tunnel.close().unwrap();
         assert!(!records[1].1.exists());
         assert!(!records[1].2.exists());
     }
@@ -808,10 +815,18 @@ mod tests {
                 binary.is_file() && config.is_file(),
                 "{stage} discarded private cleanup files"
             );
-            // Fixture-only cleanup: these exact children were spawned above and remain waitable.
+            // The readiness fixture only exits; the other fixtures need their owned group stopped.
             let pid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
-            rustix::process::kill_process_group(pid, rustix::process::Signal::KILL).unwrap();
-            rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty()).unwrap();
+            if stage != "readiness" {
+                rustix::process::kill_process_group(pid, rustix::process::Signal::KILL).unwrap();
+            }
+            let (reaped, status) = rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty())
+                .unwrap()
+                .unwrap();
+            assert_eq!(reaped, pid);
+            if stage == "readiness" {
+                assert_eq!(status.exit_status(), Some(0));
+            }
             std::fs::remove_file(binary).unwrap();
             std::fs::remove_file(config).unwrap();
         }
