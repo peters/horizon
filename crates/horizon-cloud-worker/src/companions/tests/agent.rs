@@ -197,6 +197,10 @@ fn a_grant_that_cannot_be_copied_does_not_keep_another_withdrawn_grant() {
     assert!(!runtime.agent.join("other").exists(), "an incomplete copy is withdrawn");
     let config = std::fs::read_to_string(runtime.agent.join("config")).unwrap();
     assert!(!config.contains("companion-app") && !config.contains("companion-service"));
+    // No catalog claims access that the agent copies do not provide.
+    files::write(&runtime.agent.join("catalog.json"), b"{}").unwrap();
+    assert!(runtime.publish_catalog_locked(b"{}").is_err());
+    assert!(!runtime.agent.join("catalog.json").exists());
 }
 
 #[test]

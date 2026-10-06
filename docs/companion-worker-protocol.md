@@ -65,8 +65,9 @@ as the agent user. If that probe fails, the source removes the alias and reports
 an error. `disconnect` removes the alias, the key copy and the pin copy for the
 agent user. If the source cannot copy the files of a grant, it removes that copy
 and reports an error. `forget` also removes a copy that remains after an
-interrupted disconnect. Catalog publication also refreshes the copies. A worker
-without agent isolation runs agents as root and publishes only the catalog.
+interrupted disconnect. Catalog publication refreshes the copies first. If that
+fails, the source removes the catalog and reports an error. A worker without
+agent isolation runs agents as root and publishes only the catalog.
 
 An agent session can copy the key. A copied key works until the target revokes
 the grant. Only target revocation blocks a copied key.

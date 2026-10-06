@@ -25,14 +25,19 @@ impl Runtime {
         self.agent_account.as_ref().map(|account| account.group)
     }
 
-    /// Publishes the discovery catalog where agent sessions can read it, and
-    /// refreshes the agent copies for a worker that became isolated later.
+    /// Refreshes the agent copies, for a worker that became isolated later, and then
+    /// publishes the discovery catalog where agent sessions can read it. If the
+    /// copies cannot be reconciled, no catalog is left to claim agent-usable access.
     pub(super) fn publish_catalog_locked(&self, bytes: &[u8]) -> io::Result<()> {
         files::shared_directory(&self.agent, self.agent_group())?;
-        files::write_with(&self.agent.join("catalog.json"), bytes, SHARED_FILE, self.agent_group())?;
+        let catalog = self.agent.join("catalog.json");
+        if let Err(error) = self.publish_agent_access() {
+            files::remove(&catalog)?;
+            return Err(error);
+        }
+        files::write_with(&catalog, bytes, SHARED_FILE, self.agent_group())?;
         // Older helpers kept the catalog in the root-only grant directory.
-        files::remove(&self.live.join("companions/catalog.json"))?;
-        self.publish_agent_access()
+        files::remove(&self.live.join("companions/catalog.json"))
     }
 
     /// Makes the agent copy match the published root configuration. A grant that
