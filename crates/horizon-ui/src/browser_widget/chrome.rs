@@ -262,8 +262,9 @@ fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
 }
 
 fn video_start_button(ui: &mut Ui, hover: &str, browser: &mut BrowserPanelState, interactive: bool) -> bool {
-    let response = crate::icon_button::icon_button(ui, interactive, "Record", |painter, rect, _color| {
-        crate::icon_button::paint_record(painter, rect, interactive);
+    let can_record = interactive && browser.status.is_alive();
+    let response = crate::icon_button::icon_button(ui, can_record, "Record", |painter, rect, _color| {
+        crate::icon_button::paint_record(painter, rect, can_record);
     })
     .on_hover_text_at_pointer(hover);
     if response.clicked() {
@@ -498,7 +499,7 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
 
 #[cfg(test)]
 mod tests {
-    use horizon_core::browser::{BackendKind, BrowserPanelState};
+    use horizon_core::browser::{BackendKind, BrowserPanelState, BrowserStatus};
 
     use super::{PickerState, REMOTE_PICKER_HINT, backend_picker, nav_widget_info, picker_state, sync_url_buffer};
     use crate::test_egui::DiscardTextures;
@@ -645,12 +646,24 @@ mod tests {
             })
         };
 
-        let interactive = idle(true);
-        assert!(!disabled_label(&interactive, "Record"));
+        let stopped = idle(true);
         assert!(
-            disabled_label(&interactive, "Copy screenshot"),
+            disabled_label(&stopped, "Record"),
+            "a stopped browser cannot accept a recording command"
+        );
+        assert!(
+            disabled_label(&stopped, "Copy screenshot"),
             "the camera stays disabled until a browser frame exists"
         );
+
+        let mut browser = BrowserPanelState::inert();
+        browser.status = BrowserStatus::Ready;
+        let mut state = crate::browser_widget::BrowserUiState::default();
+        let ready = crate::test_egui::accesskit_labels(|ui| {
+            super::show(ui, horizon_core::PanelId(1), &mut browser, &mut state, true);
+        });
+        assert!(!disabled_label(&ready, "Record"));
+        assert!(disabled_label(&ready, "Copy screenshot"));
 
         let inactive = idle(false);
         assert!(disabled_label(&inactive, "Record"));

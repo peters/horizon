@@ -46,19 +46,23 @@ It tests the camera, record, and stop icons, pause and resume, and the completed
 
 ### BROWSER-VIDEO-01 — Icons
 
-1. Look at the chrome before the page has a frame.
+1. Look at the chrome while the browser is stopped.
+
+   Result: The record disc is dim. The camera is dim.
+
+2. Look at the chrome of a live browser before the page has a frame.
 
    Result: The record disc is rose. The camera is dim.
 
-2. Open a page that produces a frame.
+3. Open a page that produces a frame.
 
    Result: The camera is bright.
 
-3. Put the pointer on the camera icon.
+4. Put the pointer on the camera icon.
 
    Result: The hover text names the copy action.
 
-4. Put the pointer on the record icon.
+5. Put the pointer on the record icon.
 
    Result: The hover text names the WebM recording.
 
