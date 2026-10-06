@@ -61,7 +61,7 @@ The handle stays 32 screen points at each canvas zoom.
 
 1. Zoom the canvas out. Then zoom the canvas in.
 
-   Result: The dots keep about the same size on the screen.
+   Result: The dots keep about the same size on the screen. This stays true when the handle is smaller than 32 screen points and the corner can hold the dots.
 
 ### 6.3 BODY — Content click
 

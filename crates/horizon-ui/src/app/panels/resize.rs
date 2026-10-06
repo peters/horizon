@@ -56,39 +56,64 @@ pub(super) fn show_resize_control(
                 ui.make_persistent_id(("panel_resize", panel_id.0)),
                 if interactive { Sense::drag() } else { Sense::hover() },
             );
-            paint_control(ui, rect, &response, interactive);
+            paint_control(ui, rect, &response, interactive, zoom);
             response.on_hover_text("Drag to resize panel")
         })
         .inner
 }
 
-fn grip_scale(rect: Rect) -> f32 {
-    rect.width() / HANDLE_SCREEN_SIZE
-}
-
-fn grip_dot_radius(rect: Rect) -> f32 {
-    GRIP_DOT_RADIUS * grip_scale(rect)
-}
-
-fn grip_dot_centers(rect: Rect) -> [Pos2; 6] {
-    let scale = grip_scale(rect);
-    let mut centers = [Pos2::ZERO; 6];
+/// Screen-point offsets inward from the panel corner, and the screen-point radius.
+///
+/// The radius follows the canvas zoom. A hit target smaller than 32 screen points
+/// shifts the mark into the corner. It scales the mark down only when the corner
+/// cannot hold the full dots.
+fn grip_screen_geometry(screen_span: f32) -> ([Vec2; 6], f32) {
+    let from_right = GRIP_DOT_COLUMNS.map(|column| HANDLE_SCREEN_SIZE - column);
+    let from_bottom = GRIP_DOT_ROWS.map(|row| HANDLE_SCREEN_SIZE - row);
+    let column_span = from_right[0] - from_right[1];
+    let row_span = from_bottom[0] - from_bottom[2];
+    let cluster = column_span.max(row_span) + 2.0 * GRIP_DOT_RADIUS;
+    let scale = if screen_span < cluster {
+        (screen_span / cluster).max(0.0)
+    } else {
+        1.0
+    };
+    let radius = GRIP_DOT_RADIUS * scale;
+    let shift_x = (from_right[0] * scale + radius - screen_span).max(0.0);
+    let shift_y = (from_bottom[0] * scale + radius - screen_span).max(0.0);
+    let mut offsets = [Vec2::ZERO; 6];
     let mut index = 0;
-    for row in GRIP_DOT_ROWS {
-        for column in GRIP_DOT_COLUMNS {
-            centers[index] = rect.min + Vec2::new(column, row) * scale;
+    for row in from_bottom {
+        for column in from_right {
+            offsets[index] = Vec2::new(column * scale - shift_x, row * scale - shift_y);
             index += 1;
         }
     }
-    centers
+    (offsets, radius)
 }
 
-fn paint_control(ui: &Ui, rect: Rect, response: &Response, interactive: bool) {
+fn grip_dots(rect: Rect, zoom: f32) -> ([Pos2; 6], f32) {
+    let (offsets, screen_radius) = grip_screen_geometry(rect.width() * zoom);
+    let radius = screen_radius / zoom;
+    let limit = (rect.width().min(rect.height()) * 0.5).max(0.0);
+    let radius = radius.min(limit);
+    let inward = Vec2::splat(radius);
+    let min = rect.min + inward;
+    let max = rect.max - inward;
+    let mut centers = [Pos2::ZERO; 6];
+    for (index, offset) in offsets.into_iter().enumerate() {
+        let center = rect.max - offset / zoom;
+        centers[index] = Pos2::new(center.x.clamp(min.x, max.x), center.y.clamp(min.y, max.y));
+    }
+    (centers, radius)
+}
+
+fn paint_control(ui: &Ui, rect: Rect, response: &Response, interactive: bool, zoom: f32) {
     let active = interactive && (response.hovered() || response.dragged());
     let color = if active { theme::ACCENT() } else { theme::FG_DIM() };
-    let radius = grip_dot_radius(rect);
+    let (centers, radius) = grip_dots(rect, zoom);
     let painter = ui.painter();
-    for center in grip_dot_centers(rect) {
+    for center in centers {
         painter.circle_filled(center, radius, color);
     }
     if active {

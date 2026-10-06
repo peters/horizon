@@ -117,21 +117,60 @@ fn grip_dots_stay_inside_the_hit_target_at_each_zoom() {
     let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(400.0, 320.0));
     for zoom in [horizon_core::MIN_CANVAS_ZOOM, 0.25, 0.5, 1.0, 2.0] {
         let rect = handle_rect(panel, zoom);
-        let radius = grip_dot_radius(rect);
+        let (centers, radius) = grip_dots(rect, zoom);
         assert!(radius > 0.0, "zoom {zoom}");
-        for center in grip_dot_centers(rect) {
-            let dot = Rect::from_center_size(center, Vec2::splat(radius * 2.0));
+        let screen_span = rect.width() * zoom;
+        assert!(
+            screen_span + 0.01 >= 9.0 + 2.0 * GRIP_DOT_RADIUS,
+            "fixture handle should hold full dots at zoom {zoom}"
+        );
+        assert!(
+            (radius * zoom - GRIP_DOT_RADIUS).abs() < 0.01,
+            "screen radius {} at zoom {zoom} (handle {screen_span} screen points)",
+            radius * zoom
+        );
+        for (index, center) in centers.iter().enumerate() {
+            let dot = Rect::from_center_size(*center, Vec2::splat(radius * 2.0));
             assert!(
                 rect.contains_rect(dot),
-                "dot at {center:?} radius {radius} left {rect:?} at zoom {zoom}"
+                "dot {index} at {center:?} radius {radius} left {rect:?} at zoom {zoom}"
             );
+            for other in centers.iter().skip(index + 1) {
+                assert!(
+                    (*center - *other).length() + 0.01 >= radius * 2.0,
+                    "dots overlap at zoom {zoom}"
+                );
+            }
         }
     }
     let rect = handle_rect(panel, 1.0);
-    let centers = grip_dot_centers(rect);
+    let (centers, radius) = grip_dots(rect, 1.0);
     assert!((centers[0] - (rect.min + Vec2::new(18.0, 17.0))).length() < 0.01);
     assert!((centers[5] - (rect.min + Vec2::new(24.0, 26.0))).length() < 0.01);
-    assert!((grip_dot_radius(rect) - 1.45).abs() < 0.01);
+    assert!((radius - GRIP_DOT_RADIUS).abs() < 0.01);
+}
+
+#[test]
+fn grip_dots_shrink_together_when_the_corner_cannot_hold_them() {
+    let panel = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(400.0, PANEL_TITLEBAR_HEIGHT + 10.0));
+    let rect = handle_rect(panel, 1.0);
+    assert!((rect.width() - 10.0).abs() < 0.01);
+    let (centers, radius) = grip_dots(rect, 1.0);
+    assert!(radius < GRIP_DOT_RADIUS);
+    assert!(radius > 0.0);
+    for (index, center) in centers.iter().enumerate() {
+        let dot = Rect::from_center_size(*center, Vec2::splat(radius * 2.0));
+        assert!(
+            rect.contains_rect(dot),
+            "dot {index} at {center:?} radius {radius} left {rect:?}"
+        );
+        for other in centers.iter().skip(index + 1) {
+            assert!(
+                (*center - *other).length() + 0.01 >= radius * 2.0,
+                "dots overlap in a short corner"
+            );
+        }
+    }
 }
 
 #[test]
