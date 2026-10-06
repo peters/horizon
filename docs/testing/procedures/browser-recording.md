@@ -18,7 +18,7 @@ It tests the camera, record, and stop icons, pause and resume, and the completed
 ## 2. Applicability
 
 - Use a current Horizon candidate. The app includes the video encoder.
-- Use Chromium on Linux, or Chrome on macOS.
+- Use Chromium on Linux or Windows, or Chrome on macOS.
 - Use a local page or a public fixture page.
 - This procedure does not test audio, canvas capture, or Safari.
 - Device panel video is in the VNC recording procedure.
@@ -125,10 +125,11 @@ It tests the camera, record, and stop icons, pause and resume, and the completed
 
 ### BROWSER-VIDEO-08 — File limit
 
-1. Set `max_file_bytes` to 65536.
-2. Record until the status says `file_limit_reached`.
+1. Start through `browser_video` with `max_file_bytes` set to 65536.
+2. Read `browser_video` status until `file_limit_reached` is true.
+3. Stop the recording.
 
-   Result: The file still plays.
+   Result: The file still plays. The Horizon chrome does not show `file_limit_reached`.
 
 ## 7. Pass criteria
 
