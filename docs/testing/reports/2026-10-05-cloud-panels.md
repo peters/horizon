@@ -81,7 +81,7 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 | [C28](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | — | — |
 | [C29](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | — | — |
 | [C30](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | — | — |
-| [C31](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | The Hetzner worker ran in the selected location. The RunPod check waits for D02. | — |
+| [C31](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | The Hetzner worker ran in the selected location. The comparison of the RunPod data center is not done yet. | — |
 | [D01](../procedures/cloud-panels/d-deployment.md) | pass | A Hetzner CPU cloud on the test tailnet reached Ready in about 2 minutes. | — |
 | [D02](../procedures/cloud-panels/d-deployment.md) | pass | A RunPod CPU cloud on a network volume and the test tailnet became Ready. | — |
 | [D03](../procedures/cloud-panels/d-deployment.md) | pending | — | — |

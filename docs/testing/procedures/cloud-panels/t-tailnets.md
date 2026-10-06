@@ -313,6 +313,10 @@ send TCP traffic to each other over the tailnet.
 
 ### 6.7 T07 — Connect from the PC to the cloud
 
+The worker runs `tailscaled` in userspace mode. Tailnet TCP to the worker goes
+to the same port on `127.0.0.1` of the worker. T08, T09 and T14 use the same
+path between clouds. Do not add a Tailscale Serve setting for this test.
+
 1. In the worker shell of `smoke-a`, find the tailnet address of the worker.
 
    ```sh

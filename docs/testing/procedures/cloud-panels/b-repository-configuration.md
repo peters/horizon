@@ -44,6 +44,7 @@ the setup agent and reads local image-only settings. It makes sure that
   | `<worker-image>` | A CPU worker image, pinned by digest, that reports all contract markers. |
   | `<gpu-image>` | A GPU worker image, pinned by digest, that reports all contract markers. |
   | `<build-repository>` | A registry repository that the build profile can push to. |
+  | `<older-worker-image>` | A worker image, pinned by digest, that an older Horizon revision built. Record that revision. The image must not report at least one marker that the current checker requires. |
 
 - Docker on the host, for B05.
 - The [worker image contract](../../../../examples/cloud-worker/README.md) and
@@ -329,7 +330,8 @@ bind of S02 alone does not change the socket that the candidate uses.
    ```
 
    Result: The output names each marker that the older image does not report.
-   The exit status is not zero.
+   The exit status is not zero. Compare the names with the markers that the
+   checker got after the recorded revision.
 
 4. Record the output of each check in the evidence.
 

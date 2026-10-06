@@ -592,6 +592,9 @@ to 9 revoke it while the fixture runs.
 
    Result: The output shows that the provider pull credential is revoked.
 
+   > **CAUTION:** REVOKE ONLY THE TWO TOKENS THAT THIS RUN MADE FOR `<build-repository>`.
+   > Other tokens of the registry can give access to other work.
+
 7. Ask the operator to revoke the pull token and the push token of `<build-repository>` at the registry.
 
    Result: The tokens no longer give access. Horizon does not revoke a token at its issuer.

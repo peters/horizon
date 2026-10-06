@@ -66,6 +66,14 @@ limits the access and that the bridge is off after a restart of Horizon.
 
    Result: The server listens on `127.0.0.1:18090`. N04 uses it.
 
+4. On the PC, find its IPv4 address on the network of the default route.
+
+   ```sh
+   ip -4 route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p'
+   ```
+
+   Result: You have `<pc-lan-address>`. Record it in the private evidence only.
+
 ## 6. Tasks
 
 ### 6.1 N01 — Share the local network

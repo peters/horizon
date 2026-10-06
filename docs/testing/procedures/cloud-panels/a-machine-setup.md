@@ -422,6 +422,9 @@ Do this task after B02. It needs the synthetic repository.
 
     Result: The output shows that the provider pull credential is revoked.
 
+    > **CAUTION:** REVOKE ONLY THE GHCR TOKEN THAT THIS RUN MADE. Other tokens of
+    > the account can give access to other work.
+
 18. Ask the operator to revoke the GHCR token at GitHub.
 
     Result: The token cannot read the image. Horizon does not revoke the token at its issuer.
@@ -529,6 +532,9 @@ Do this task after D01. It uses the cloud `smoke-a`.
 11. In Cloud settings, select **API key** for Claude again and ask the operator to paste the key.
 
     Result: After **Save settings**, Claude shows **Key saved**.
+
+    > **CAUTION:** REVOKE ONLY THE GITHUB TOKEN THAT THIS RUN MADE. Other tokens of
+    > the account can give access to other work.
 
 12. Ask the operator to revoke the GitHub token at GitHub.
 
