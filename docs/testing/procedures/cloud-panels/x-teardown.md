@@ -128,7 +128,7 @@ Do steps 1 to 7 for each cloud in the resource ledger that has an active resourc
 1. List the servers of the Hetzner project.
 
    ```sh
-   curl -sS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/servers?label_selector=horizon-operation' | jq '[.servers[] | {id, name}]'
+   curl -sS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/servers' | jq '[.servers[] | {id, name}]'
    ```
 
    Result: The list contains no server ID from the resource ledger.

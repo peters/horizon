@@ -153,9 +153,23 @@ change in the report as a deviation.
 
 ## 6. Tasks
 
-Do the areas in this order: S, A, B, C, O, D, E, T, G, N, L, X. The L area
-stops and deletes clouds that the T, G and N areas use. Do T01 and T02 before
-D01, because D01 starts `smoke-a` on the test tailnet. Do T12 and T13 after G03.
+Some tasks need a cloud or a setting from a later area. Do the tasks in this
+order. The L area stops and deletes clouds that the T, G and N areas use.
+
+1. Do S01 to S05.
+2. Do A01 to A05, A07 and A08.
+3. Do B01 to B05, then do A06.
+4. Do C01 to C30. Do not do step 5 of C02 or the task C09 yet.
+5. Do O01 and O03.
+6. Do T01 and T02, then do C09. D01 needs the saved test tailnet.
+7. Do D01 to D05. D01 and D02 select the places that C31 examines.
+8. Do step 5 of C02, then C31, A09 and O02.
+9. Do E01 to E09.
+10. Do T03 to T11 and T14.
+11. Do G01 to G12, then do T12 and T13.
+12. Do N01 to N05.
+13. Do L01 to L10.
+14. Do X01 to X05.
 
 | Area | File | Tests | Cost |
 |---|---|---|---|

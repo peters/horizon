@@ -131,7 +131,8 @@ child is the frozen candidate.
    ```
 
    Result: The fixture can use Docker. The fixture makes `/run/user/<uid>` private,
-   so it does not show this socket without a bind.
+   so it does not show this socket without a bind. Area B sets `docker_host` to
+   this socket.
 
 5. In the launcher copy, find the restart marker in the branch for a stopped candidate.
 

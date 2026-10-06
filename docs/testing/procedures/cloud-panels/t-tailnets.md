@@ -480,7 +480,15 @@ send TCP traffic to each other over the tailnet.
 This task needs a root shell. Use the SSH route of E09 in
 [area E](e-panels.md).
 
-1. In the root shell of `smoke-a`, show the process ID of `tailscaled`.
+1. In the root shell of `smoke-a`, count the online peers.
+
+   ```sh
+   jq '[.devices[] | select(.online)] | length' /run/horizon-tailnet-devices/devices.json
+   ```
+
+   Result: You have the online count before the kill. Record it in the evidence.
+
+2. In the root shell of `smoke-a`, show the process ID of `tailscaled`.
 
    ```sh
    pgrep -x tailscaled
@@ -488,7 +496,7 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The output shows one process ID.
 
-2. Stop the daemon with a kill signal.
+3. Stop the daemon with a kill signal.
 
    ```sh
    pkill -KILL -x tailscaled
@@ -496,11 +504,11 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The command stops without an error.
 
-3. Wait 30 seconds.
+4. Wait 30 seconds.
 
    Result: The supervisor of the worker has time to start the daemon again.
 
-4. Show the process ID of `tailscaled` again.
+5. Show the process ID of `tailscaled` again.
 
    ```sh
    pgrep -x tailscaled
@@ -508,15 +516,15 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The output shows one new process ID.
 
-5. In the worker shell of `smoke-a`, show the online peers.
+6. In the worker shell of `smoke-a`, show the online peers.
 
    ```sh
    jq '[.devices[] | select(.online)] | length' /run/horizon-tailnet-devices/devices.json
    ```
 
-   Result: The count is the same as in T05. The PC and `smoke-b` are online.
+   Result: The count is the same as in step 1. The PC and `smoke-b` are online.
 
-6. Do T08 step 4 again with a new test server on `smoke-b`.
+7. Do T08 step 4 again with a new test server on `smoke-b`.
 
    Result: The worker reaches `smoke-b` with the same node identity.
 

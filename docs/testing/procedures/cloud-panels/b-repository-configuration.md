@@ -52,7 +52,26 @@ the setup agent and reads local image-only settings. It makes sure that
 
 ## 5. Setup
 
-1. On the host, make the directories of the synthetic repositories.
+If the host uses rootless Docker, the candidate must know the bound socket. The
+bind of S02 alone does not change the socket that the candidate uses.
+
+1. If the host uses rootless Docker, set `docker_host` in the cloud settings file.
+
+   ```sh
+   f=<data-home>/.horizon/cloud/settings.json; jq '.docker_host = "unix:///run/user/<uid>/docker.sock"' "$f" > "$f.new" && chmod 600 "$f.new" && mv "$f.new" "$f"
+   ```
+
+   Result: The file contains `docker_host` and keeps the mode `0600`.
+
+2. After each later **Save settings**, examine the field again.
+
+   ```sh
+   jq -r '.docker_host' <data-home>/.horizon/cloud/settings.json
+   ```
+
+   Result: The output is `unix:///run/user/<uid>/docker.sock`.
+
+3. On the host, make the directories of the synthetic repositories.
 
    ```sh
    mkdir -p <data-home>/smoke/app <data-home>/smoke/lib <data-home>/smoke/sib
@@ -60,7 +79,7 @@ the setup agent and reads local image-only settings. It makes sure that
 
    Result: The fixture shows the directories at `<home>/smoke`.
 
-2. Make a Git repository in `<data-home>/smoke/app` with a README and a small Python test.
+4. Make a Git repository in `<data-home>/smoke/app` with a README and a small Python test.
 
    ```sh
    cd <data-home>/smoke/app && git init -q && echo '# Smoke app' > README.md
@@ -70,7 +89,7 @@ the setup agent and reads local image-only settings. It makes sure that
 
    Result: The primary synthetic repository has one commit and no `.horizon` directory.
 
-3. Set the origin of the primary repository to a GitHub URL of the test account.
+5. Set the origin of the primary repository to a GitHub URL of the test account.
 
    ```sh
    git -C <data-home>/smoke/app remote add origin https://github.com/<test-owner>/app.git
@@ -78,7 +97,7 @@ the setup agent and reads local image-only settings. It makes sure that
 
    Result: The origin names the test account. The repository does not need to exist on GitHub.
 
-4. Do steps 2 and 3 again for `lib` and `sib`. Use the names `lib.git` and `sib.git` in the origin.
+6. Do steps 4 and 5 again for `lib` and `sib`. Use the names `lib.git` and `sib.git` in the origin.
 
    Result: Each companion repository has one commit and a GitHub origin.
 
@@ -208,7 +227,7 @@ the setup agent and reads local image-only settings. It makes sure that
 5. Commit the `.horizon` directory in `app`, `lib` and `sib`.
 
    ```sh
-   git -C <data-home>/smoke/app add .horizon && git -C <data-home>/smoke/app commit -qm 'Add cloud configuration'
+   for r in app lib sib; do git -C <data-home>/smoke/$r add .horizon && git -C <data-home>/smoke/$r commit -qm 'Add cloud configuration'; done
    ```
 
    Result: Each repository has a committed `.horizon` directory.

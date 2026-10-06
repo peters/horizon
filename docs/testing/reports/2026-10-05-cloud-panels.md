@@ -1,7 +1,7 @@
 ---
 procedure: cloud-panels
 candidate_commit: 1e0c6ebfe8a7f41be6453623541ee60454e4dae0
-candidate_sha256: recorded in the private evidence
+candidate_sha256: f0344ead0698ccaf6c1854ce8571a103f066330467018757ab8a4b4f8055e27f
 date: 2026-10-05
 lanes: [hetzner, runpod]
 issue: https://github.com/peters/horizon/issues/1264
@@ -22,7 +22,8 @@ test failed because the device `type` action changed the typed key. The run did
 not do the other tests yet.
 
 Two retests used commit `73267151fbc8d1e9ed6433f2b3213fdf021fa8e3`, which contains
-the fixes for #1292 and #1293.
+the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
+`323fa5fc2496b1c84281772d4033a828e2e1c9eb29d4767eae755a36016426c1`.
 
 ## 2. Results
 
@@ -77,7 +78,7 @@ the fixes for #1292 and #1293.
 | [C28](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | — | — |
 | [C29](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | — | — |
 | [C30](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | — | — |
-| [C31](../procedures/cloud-panels/c-new-cloud-dialog.md) | pass | The Hetzner worker ran in the selected location. | — |
+| [C31](../procedures/cloud-panels/c-new-cloud-dialog.md) | pending | The Hetzner worker ran in the selected location. The RunPod check waits for D02. | — |
 | [D01](../procedures/cloud-panels/d-deployment.md) | pass | A Hetzner CPU cloud on the test tailnet reached Ready in about 2 minutes. | — |
 | [D02](../procedures/cloud-panels/d-deployment.md) | pending | — | — |
 | [D03](../procedures/cloud-panels/d-deployment.md) | pending | — | — |

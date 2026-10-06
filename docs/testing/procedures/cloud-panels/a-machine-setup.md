@@ -379,11 +379,17 @@ Do this task after B02. It needs the synthetic repository.
 14. Write a script that sends the same action to the MCP tool `cloud_registry`.
 
     ```sh
+    cat > <data-home>/smoke/bin/registry-mcp.sh <<'EOF'
+    #!/usr/bin/env bash
+    set -eu
+    call=$(jq -c '{jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: {name: "cloud_registry", arguments: .}}' ~/smoke/registry-status.json)
     { printf '%s\n' \
       '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' \
       '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-      '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"cloud_registry","arguments":<status action>}}'
-      sleep 10; } | <run>/bin/cloud_deploy registry-mcp <home>/.horizon/cloud/settings.json
+      "$call"
+      sleep 10; } | <run>/bin/cloud_deploy registry-mcp ~/.horizon/cloud/settings.json
+    EOF
     ```
 
     Result: The script is in `<data-home>/smoke/bin/registry-mcp.sh`.
