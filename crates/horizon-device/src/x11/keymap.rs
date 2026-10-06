@@ -106,7 +106,7 @@ pub(super) struct Plan {
     pub strokes: Vec<Stroke>,
     /// Keycodes to map before the first stroke, in ascending keycode order.
     pub bindings: Vec<(u8, u32)>,
-    /// Earliest boot-clock time in milliseconds at which `bindings` may be applied.
+    /// Earliest timeline time in milliseconds at which `bindings` may be applied.
     pub not_before_ms: u64,
     borrowed: Vec<Borrowed>,
     used: BTreeSet<u8>,
@@ -168,25 +168,26 @@ pub(super) fn spare_candidate(layout: &Layout<'_>, previous: &[Borrowed]) -> Opt
         .min_by_key(|record| (record.last_used_ms, record.keycode))
 }
 
-/// Parses the first field of `/proc/uptime`, seconds since boot with a
-/// fraction, as milliseconds.
-pub(super) fn uptime_ms(text: &str) -> Option<u64> {
-    let field = text.split_whitespace().next()?;
-    let (seconds, fraction) = field.split_once('.').unwrap_or((field, ""));
-    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
-    if !digits(seconds) || !(fraction.is_empty() || digits(fraction)) {
-        return None;
-    }
-    let milliseconds = format!("{fraction:0<3}");
-    let milliseconds: u64 = milliseconds.get(..3)?.parse().ok()?;
-    seconds
-        .parse::<u64>()
-        .ok()?
-        .checked_mul(1000)?
-        .checked_add(milliseconds)
+/// The present on the planning timeline. Records store 32-bit X server
+/// times, which wrap after about 49 days. The planner instead uses a 64-bit
+/// timeline on which "now" is this constant and every record is in the past.
+pub(super) const TIMELINE_NOW: u64 = 1 << 40;
+
+/// Converts a stored X server time to the planning timeline at `server_now`.
+pub(super) fn to_timeline(stored: u64, server_now: u32) -> u64 {
+    TIMELINE_NOW - u64::from(server_now.wrapping_sub(low_word(stored)))
 }
 
-/// The earliest boot-clock time in milliseconds at which a keycode last used at
+/// Converts a planning timeline time back to an X server time at `server_now`.
+pub(super) fn from_timeline(timeline: u64, server_now: u32) -> u64 {
+    u64::from(server_now.wrapping_add(low_word(timeline.wrapping_sub(TIMELINE_NOW))))
+}
+
+fn low_word(value: u64) -> u32 {
+    u32::try_from(value & u64::from(u32::MAX)).unwrap_or_default()
+}
+
+/// The earliest timeline time in milliseconds at which a keycode last used at
 /// `last_used_ms` may get a different keysym.
 pub(super) fn quiet_after(last_used_ms: u64) -> u64 {
     last_used_ms.saturating_add(u64::try_from(RECLAIM_QUIET.as_millis()).unwrap_or(u64::MAX))

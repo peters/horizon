@@ -116,6 +116,29 @@ spare keycodes.
 
    Result: `live-target.json` names a display that no other run uses.
 
+9. In the shell for the tasks, define these helper functions. They read text
+   from standard input, so the text is not in a process argument. They need
+   `jq`.
+
+   ```sh
+   device() { <bin>/horizon-device --target <state>/target.json "$@"; }
+   geometry() {
+     device screenshot --options '{"region":{"x":0,"y":0,"width":2,"height":2}}' \
+       | jq -c .result.geometry
+   }
+   send_type() {
+     jq -Rsc --argjson g "$(geometry)" '{geometry: $g, action: {kind: "type", text: .}}' \
+       | device act - | jq -c '{ok, state: .result.state, error: .error.code}'
+   }
+   send_key() {
+     jq -nc --argjson g "$(geometry)" --arg k "$1" \
+       '{geometry: $g, action: {kind: "key", key: $k, modifiers: []}}' | device act -
+   }
+   ```
+
+   Result: `printf 'a' | send_type` types one character into the focused
+   widget. Do not send it now.
+
 ## 6. Tasks
 
 Give each result the task ID. A report uses the ID to give a result.
@@ -147,9 +170,11 @@ Give each result the task ID. A report uses the ID to give a result.
 
 ### 6.2 T02 — Rejection before input
 
-1. Send one `type` action with more distinct non-layout characters than the
-   free slots. Use Unicode private use characters, for example `U+E000` and
-   later characters.
+1. Send one `type` action with 60 distinct Unicode private use characters.
+
+   ```sh
+   python3 -c "print(''.join(chr(0xE100 + i) for i in range(60)), end='')" | send_type
+   ```
 
    Result: The action fails with `invalid_request` and the message
    `text exceeds available X11 Unicode key mappings`.
@@ -191,7 +216,13 @@ Give each result the task ID. A report uses the ID to give a result.
 6. Send the key as three `type` actions of 40, 40 and 26 characters. Do not
    wait between the actions.
 
-   Result: Each action gives the receipt `dispatched`.
+   ```sh
+   for range in 1-40 41-80 81-106; do
+     cut -c "$range" <evidence>/key-01.txt | tr -d '\n' | send_type
+   done
+   ```
+
+   Result: Each action gives `"ok":true` and the state `dispatched`.
 
 7. Click **Save settings**.
 
@@ -230,45 +261,70 @@ Give each result the task ID. A report uses the ID to give a result.
 
 ### 6.5 T05 — Text that needs temporary keycodes
 
-1. Click the **Device input test** terminal panel of the fixture.
+1. Write the four parts of the text, one part on each line. Then write the
+   expected text and its byte count.
+
+   ```sh
+   printf '%s\n' 'æøåÆØÅéèêëüöäßñAb-' 'αβγδεζηθικλμνξο_9' 'абвгдежзийклмно' \
+     'æøåÆØÅéèêëüöäßñAb-' > <evidence>/unicode-parts.txt
+   tr -d '\n' < <evidence>/unicode-parts.txt > <evidence>/unicode-expected.txt
+   wc -c < <evidence>/unicode-expected.txt
+   ```
+
+   Result: The byte count, `N`, is `128`. The text has 45 distinct characters
+   that are not on the US keymap.
+
+2. Click the **Device input test** terminal panel of the fixture.
 
    Result: The terminal has the keyboard focus.
 
-2. Send a `key` action with `enter`.
+3. Send a `key` action with `enter`.
+
+   ```sh
+   send_key enter
+   ```
 
    Result: The terminal shows a new, empty prompt.
 
-3. Type this command with one `type` action. `N` is the UTF-8 byte count of the
-   text of step 5.
+4. Type the command for the receiver.
 
    ```sh
-   head -c N > ~/unicode.txt
+   printf 'head -c 128 > ~/unicode.txt' | send_type
    ```
 
    Result: The terminal shows the command.
 
-4. Send a `key` action with `enter`.
+5. Send a `key` action with `enter`.
 
    Result: The command waits for input.
 
-5. Send four `type` actions, one after the other. Use 15 distinct Latin-1
-   letters, 15 Greek letters, 15 Cyrillic letters, and the first part again.
+6. Send the four parts as four `type` actions, one after the other.
 
-   Result: Each action gives the receipt `dispatched`. Together, the four
-   actions need more temporary keycodes than the free slots have. Thus, the
-   tool changes temporary keycodes between the actions.
+   ```sh
+   while IFS= read -r part; do
+     printf '%s' "$part" | send_type
+   done < <evidence>/unicode-parts.txt
+   ```
 
-6. Send a `key` action with `enter`.
+   Result: Each action gives `"ok":true`. Together, the four actions need more
+   temporary keycodes than the free slots have. Thus, the tool changes
+   temporary keycodes between the actions.
+
+7. Send a `key` action with `enter`.
 
    Result: The command stops. The terminal shows a new prompt.
 
-7. Compare `<state>/data/home/unicode.txt` with the text of step 5.
+8. Compare the saved text with the expected text.
 
-   Result: The two texts are the same.
+   ```sh
+   cmp <state>/data/home/unicode.txt <evidence>/unicode-expected.txt
+   ```
 
-8. If `unicode.txt` is empty, examine the terminal.
+   Result: `cmp` shows no difference.
 
-   Result: If the text of step 5 is on a prompt line, the command stopped
+9. If `unicode.txt` is empty, examine the terminal.
+
+   Result: If the text of step 6 is on a prompt line, the command stopped
    before the input. Record the run as invalid, not as `loss`.
 
 ### 6.6 T06 — Other actions after text input
@@ -300,6 +356,11 @@ Give each result the task ID. A report uses the ID to give a result.
    temporary mapping.
 
 4. Send a `key` action with `escape` and the modifier `meta`.
+
+   ```sh
+   jq -nc --argjson g "$(geometry)" \
+     '{geometry: $g, action: {kind: "key", key: "escape", modifiers: ["meta"]}}' | device act -
+   ```
 
    Result: The action gives the receipt `dispatched`.
 

@@ -1,6 +1,6 @@
 use super::{
-    Borrowed, Keyboard, Layout, PlanError, RECLAIM_QUIET, Stroke, keysym, plan, quiet_after, runs, spare_candidate,
-    uptime_ms,
+    Borrowed, Keyboard, Layout, PlanError, RECLAIM_QUIET, Stroke, TIMELINE_NOW, from_timeline, keysym, plan,
+    quiet_after, runs, spare_candidate, to_timeline,
 };
 
 const SHIFT: u8 = 50;
@@ -391,11 +391,13 @@ fn caps_lock_inverts_shift_only_for_letter_keys() -> Result<(), PlanError> {
 }
 
 #[test]
-fn boot_clock_parses_proc_uptime() {
-    assert_eq!(uptime_ms("12345.67 98765.43\n"), Some(12_345_670));
-    assert_eq!(uptime_ms("7 1"), Some(7_000));
-    assert_eq!(uptime_ms("1.2345 0"), Some(1_234));
-    assert_eq!(uptime_ms(""), None);
-    assert_eq!(uptime_ms("-1.00 0"), None);
-    assert_eq!(uptime_ms("1.x 0"), None);
+fn server_times_convert_to_a_timeline_across_the_32_bit_wrap() {
+    let now = 5_u32;
+    let stored = u64::from(u32::MAX - 994);
+    assert_eq!(to_timeline(stored, now), TIMELINE_NOW - 1_000);
+    assert_eq!(from_timeline(TIMELINE_NOW - 1_000, now), stored);
+    assert_eq!(from_timeline(TIMELINE_NOW + 20, now), 25);
+    assert_eq!(to_timeline(25, 25), TIMELINE_NOW);
+    // An old record with a 64-bit time keeps only its low word.
+    assert_eq!(to_timeline((7 << 32) | 0x14, 25), TIMELINE_NOW - 5);
 }

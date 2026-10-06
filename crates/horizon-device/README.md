@@ -65,9 +65,10 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
 - A temporary mapping stays after the action. Later actions use it again and do
   not change it.
 - The root window property `_HORIZON_DEVICE_KEYMAP` of the display records the
-  temporary keycodes and the time of their last use, in milliseconds since
-  boot. If a recorded keycode has a different keysym now, the tool does not use
-  the record.
+  temporary keycodes and the time of their last use. The time is the X server
+  time, which does not step with the wall clock and stops during a suspend. If
+  a recorded keycode has a different keysym now, the tool does not use the
+  record.
 - The tool does not use the lowest unused keycode. The input library for the
   other actions does not start without an unused keycode.
 - If no other unused keycode is available, the tool changes the temporary
