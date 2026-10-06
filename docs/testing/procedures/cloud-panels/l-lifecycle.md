@@ -552,7 +552,8 @@ Use `smoke-r`.
 - After **Cancel rebuild**, no rebuild step waits. A full rebuild reaches **Ready**.
 - Idle stop stops `smoke-x` after the profile limit.
 - Deletion removes the resources, and redeploy makes new resources.
-- A Hetzner resume makes a new server and pins a new host key.
+- A Hetzner resume makes a new server. The host key from `/workspace` stays, and
+  pinned SSH works.
 - A RunPod resume keeps the pod ID, the network volume and the checkout.
 
 ## 8. Cleanup

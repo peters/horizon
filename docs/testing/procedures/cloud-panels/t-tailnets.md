@@ -566,6 +566,10 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The worker reaches `smoke-b` with the same node identity.
 
+8. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
+
+   Result: The server stops. Port 18081 on `smoke-b` is free for T14.
+
 ### 6.12 T12 — Refuse a network change after provisioning
 
 1. Open the card of `smoke-a`.

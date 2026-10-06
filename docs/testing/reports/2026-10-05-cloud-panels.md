@@ -19,8 +19,8 @@ The fixture, the first setup tasks, the repository configuration and most price
 catalog tests passed. A Hetzner cloud and a RunPod cloud deployed on the test
 tailnet and reached each other. Stop and resume on Hetzner kept the volume data,
 the host key and the tailnet node ID. Three worker picker tests and the tailnet
-name test failed. Two tests from the PC were blocked, because the PC was not on
-the test tailnet. The Claude sign-in
+name test failed. Three tests that need the PC were blocked, because the PC was
+not on the test tailnet. The Claude sign-in
 test failed because the device `type` action changed the typed key. The run did
 not do the other tests yet.
 
@@ -110,7 +110,7 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
 | [T02](../procedures/cloud-panels/t-tailnets.md) | pending | — | — |
 | [T03](../procedures/cloud-panels/t-tailnets.md) | pass | The card showed the test tailnet and **Selected at provisioning**. | — |
 | [T04](../procedures/cloud-panels/t-tailnets.md) | pass | `tailscaled` ran in userspace mode with the SOCKS5 proxy on `127.0.0.1:1055` and its state on `/workspace`. | — |
-| [T05](../procedures/cloud-panels/t-tailnets.md) | pass | `devices.json` listed the node as online with its tailnet addresses. | — |
+| [T05](../procedures/cloud-panels/t-tailnets.md) | blocked | The worker listed itself as online with its tailnet addresses. The PC was not on the test tailnet, so step 3 was not possible. | — |
 | [T06](../procedures/cloud-panels/t-tailnets.md) | blocked | The run used a separate test tailnet. The PC was not on it. | — |
 | [T07](../procedures/cloud-panels/t-tailnets.md) | blocked | The run used a separate test tailnet. The PC was not on it. | — |
 | [T08](../procedures/cloud-panels/t-tailnets.md) | pass | A random value crossed the tailnet in both directions between two clouds. | — |
@@ -166,7 +166,7 @@ the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
   not in the final text.
 - A02 and C07 were done again on a later candidate that contains the fixes.
 - The run used other cloud titles than the planned clouds of the procedure.
-- T06 and T07 were not done, because the PC was not on the test tailnet.
+- T06 and T07 were not done, and T05 was done only in part, because the PC was not on the test tailnet.
 
 ## 5. Cleanup
 

@@ -37,7 +37,8 @@ work. It also makes sure that the progress card shows the real stages.
 ## 4. Equipment and preconditions
 
 - The equipment in the [main procedure](../cloud-panels.md#4-equipment-and-preconditions).
-- Areas S, A, B and C are complete. Cloud settings contain the RunPod and Hetzner keys.
+- Areas S, A and B and the tasks C01 to C30 are complete. C31 comes after D01 and D02.
+  Cloud settings contain the RunPod and Hetzner keys.
 - Task T01 of [area T](t-tailnets.md) is complete. **Settings › Tailnets**
   contains the test tailnet.
 - `<repo>` has a committed `.horizon/cloud.yml` with these profiles:
