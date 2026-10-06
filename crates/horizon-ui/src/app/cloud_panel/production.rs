@@ -27,6 +27,8 @@ mod repository_setup;
 mod resize;
 mod sessions;
 mod setup;
+#[cfg(debug_assertions)]
+mod stopped_preview;
 use super::HorizonApp;
 use horizon_core::cloud_panel::CloudConfig;
 use horizon_core::{
@@ -235,6 +237,9 @@ pub(super) struct Runtime {
     first_panel_considered: bool,
     pending_browser_attachments: std::collections::HashSet<String>,
     pending_member_attachments: std::collections::HashSet<String>,
+    /// What the restored member placeholders of this cloud last showed; the board is
+    /// searched for them only when this changes.
+    member_wait: Option<horizon_core::CloudWait>,
     pending_session_attachments: std::collections::HashSet<String>,
     next_attachment_attempt: Option<std::time::Instant>,
     needs_desktop: bool,
@@ -574,6 +579,7 @@ impl HorizonApp {
         self.remove_closed_cloud_browsers(removed);
         self.sync_resized_profiles();
         self.sync_cloud_presentations();
+        self.sync_cloud_member_waits();
         self.start_first_cloud_panels(ctx);
         self.cloud_prototype.groups.reconcile(&mut self.board);
         self.sync_board_cloud_groups();
@@ -714,6 +720,8 @@ impl HorizonApp {
             // A debug build can show a synthetic deploy log. Release builds omit it.
             #[cfg(debug_assertions)]
             log_preview::seed(self);
+            #[cfg(debug_assertions)]
+            stopped_preview::seed(self, ctx);
         }
     }
     /// Reconnects each resumed worker. The reconnect that finishes a resume is still that

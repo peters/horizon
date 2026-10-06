@@ -20,7 +20,10 @@ what happened. Delete this paragraph in a real report.
 
 | Task ID | Result | Note | Defect |
 |---|---|---|---|
-| <ID> | pass, fail or blocked | <Short note> | <Issue link or —> |
+| <ID> | pass, fail, blocked or not run | <Short note> | <Issue link or —> |
+
+Use `not run` only in an interim report, for a test that the run did not do yet.
+A final report has no `not run` row.
 
 ## 3. Defects
 

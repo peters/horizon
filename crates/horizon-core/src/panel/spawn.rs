@@ -1,8 +1,8 @@
 mod device;
 mod terminal;
 
-pub(super) use terminal::restore_failure_panel;
 use terminal::spawn_terminal;
+pub(super) use terminal::{Placeholder, placeholder_panel, placeholder_terminal};
 #[cfg(test)]
 use terminal::{disconnected_snapshot_launch_command, prepare_transcript_restore};
 
@@ -114,6 +114,7 @@ impl StaticPanelSeed {
             content,
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
+            cloud_wait: None,
             session_binding: None,
             template: self.template,
             launched_at_millis: current_unix_millis(),
@@ -132,11 +133,11 @@ impl StaticPanelSeed {
 
 pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: PanelOptions) -> Result<Panel> {
     if opts.remote_workspace.is_some() {
-        return restore_failure_panel(
+        return placeholder_panel(
             id,
             workspace_id,
             opts,
-            "Remote development has been removed; this saved view is read-only",
+            Placeholder::RestoreFailure("Remote development has been removed; this saved view is read-only"),
         );
     }
     let deleting_binding = opts
