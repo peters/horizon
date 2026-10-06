@@ -1,7 +1,8 @@
 //! Progressive fragmented-MP4 stream: one endless HTTP response per receiver
-//! connection, one fragment per access unit. Receivers play it with a small
-//! start buffer that `LiveCast` then trims by briefly speeding up playback.
-use super::{hls::nal_units, mp4};
+//! connection, one fragment per access unit or AAC frame. Receivers play it
+//! with a small start buffer that `LiveCast` then trims by briefly speeding up
+//! playback.
+use super::{AudioFormat, hls::nal_units, mp4};
 use horizon_media::h264::{NAL_AUD, NAL_PPS, NAL_SPS, nal_type};
 use std::{
     io::{self, Write},
@@ -13,11 +14,12 @@ use std::{
     time::Duration,
 };
 
-/// Frames a connection may fall behind before it is dropped (~4 s at 30 fps).
-const SUBSCRIBER_BACKLOG: usize = 120;
-/// A GOP longer than this many frames is not kept for late joiners: they
-/// wait for the next keyframe instead.
-const MAX_GOP_FRAMES: usize = 600;
+/// Samples a connection may fall behind before it is dropped: about 4 s of
+/// 30 fps video plus 48 kHz audio (47 AAC frames a second).
+const SUBSCRIBER_BACKLOG: usize = 320;
+/// A GOP holding more samples than this (video and audio) is not kept for
+/// late joiners: they wait for the next keyframe instead.
+const MAX_GOP_SAMPLES: usize = 1500;
 const RECV_POLL: Duration = Duration::from_millis(500);
 /// Used for the last frame before a pause, when no later timestamp exists yet.
 const FALLBACK_DURATION: u32 = mp4::TIMESCALE / 30;
@@ -25,11 +27,13 @@ const FALLBACK_DURATION: u32 = mp4::TIMESCALE / 30;
 const NO_BASE: u64 = u64::MAX;
 
 pub(crate) struct Sample {
-    /// AVCC: 4-byte big-endian NAL lengths, without SPS/PPS/AUD.
+    /// Video: AVCC (4-byte big-endian NAL lengths) without SPS/PPS/AUD.
+    /// Audio: one raw AAC frame.
     data: Vec<u8>,
     /// Presentation time in 90 kHz ticks from the first pushed unit.
     pts: u64,
     keyframe: bool,
+    track: u32,
 }
 
 #[derive(Default)]
@@ -41,11 +45,13 @@ struct State {
     subscribers: Vec<SyncSender<Arc<Sample>>>,
     origin: Option<Duration>,
     last_pts: Option<u64>,
+    last_audio_pts: Option<u64>,
     last_keyframe: Option<u64>,
 }
 
 pub(crate) struct Stream {
     keyframe_interval: Duration,
+    audio: Option<AudioFormat>,
     state: Mutex<State>,
     /// First pts written to the newest connection; its media time 0.
     playback_base: AtomicU64,
@@ -59,9 +65,10 @@ pub(crate) struct Subscription {
 }
 
 impl Stream {
-    pub(crate) fn new(keyframe_interval: Duration) -> Self {
+    pub(crate) fn new(keyframe_interval: Duration, audio: Option<AudioFormat>) -> Self {
         Self {
             keyframe_interval,
+            audio,
             state: Mutex::new(State::default()),
             playback_base: AtomicU64::new(NO_BASE),
         }
@@ -92,13 +99,18 @@ impl Stream {
             && state.init.is_none()
             && let (Some(sps), Some(pps)) = (&state.sps, &state.pps)
         {
-            state.init = mp4::init_segment(sps, pps).map(Into::into);
+            state.init = mp4::init_segment(sps, pps, self.audio).map(Into::into);
         }
         if state.init.is_none() || data.is_empty() || (state.gop.is_empty() && !keyframe) {
             return;
         }
         state.last_pts = Some(pts);
-        let sample = Arc::new(Sample { data, pts, keyframe });
+        let sample = Arc::new(Sample {
+            data,
+            pts,
+            keyframe,
+            track: mp4::VIDEO_TRACK,
+        });
         if keyframe {
             state.gop.clear();
             state.last_keyframe = Some(pts);
@@ -106,18 +118,39 @@ impl Stream {
         // An incomplete GOP would hand late joiners frames that depend on
         // ones never sent, so past the cap there is no backlog until the next
         // keyframe. Existing connections keep receiving every frame.
-        if keyframe || (!state.gop.is_empty() && state.gop.len() < MAX_GOP_FRAMES) {
+        if keyframe || (!state.gop.is_empty() && state.gop.len() < MAX_GOP_SAMPLES) {
             state.gop.push(sample.clone());
         } else {
             state.gop.clear();
         }
-        // A connection that cannot keep up is dropped rather than buffered.
-        state.subscribers.retain(|subscriber| {
-            !matches!(
-                subscriber.try_send(sample.clone()),
-                Err(TrySendError::Full(_) | TrySendError::Disconnected(_))
-            )
+        broadcast(&mut state, &sample);
+    }
+
+    /// Adds one raw AAC frame (no ADTS header) for the audio track declared
+    /// at construction; ignored when the stream has no audio track. Frames
+    /// whose timestamp does not advance are dropped.
+    pub(crate) fn push_audio(&self, frame: &[u8], pts: Duration) {
+        if self.audio.is_none() || frame.is_empty() {
+            return;
+        }
+        let mut state = self.lock();
+        let origin = *state.origin.get_or_insert(pts);
+        let pts = ticks(pts.saturating_sub(origin));
+        if state.last_audio_pts.is_some_and(|last| pts <= last) {
+            return;
+        }
+        state.last_audio_pts = Some(pts);
+        let sample = Arc::new(Sample {
+            data: frame.to_vec(),
+            pts,
+            keyframe: true,
+            track: mp4::AUDIO_TRACK,
         });
+        // Late joiners replay the GOP from its keyframe, audio included.
+        if !state.gop.is_empty() && state.gop.len() < MAX_GOP_SAMPLES {
+            state.gop.push(sample.clone());
+        }
+        broadcast(&mut state, &sample);
     }
 
     /// True when a keyframe is due so a connection can start soon.
@@ -170,6 +203,7 @@ impl Stream {
         out.write_all(&subscription.init)?;
         let mut pending: Option<Arc<Sample>> = None;
         let mut base = None;
+        let mut last_audio = None;
         let mut sequence = 1u32;
         let mut backlog = subscription.backlog.into_iter();
         loop {
@@ -184,6 +218,31 @@ impl Stream {
             let Some(next) = next else {
                 continue;
             };
+            if next.track == mp4::AUDIO_TRACK {
+                // Audio starts with the first video frame and shares its time zero.
+                let Some(start) = base else {
+                    continue;
+                };
+                if next.pts < start || last_audio.is_some_and(|last| next.pts <= last) {
+                    continue;
+                }
+                last_audio = Some(next.pts);
+                let rate = self.audio.map_or(mp4::TIMESCALE, |format| format.sample_rate);
+                let decode =
+                    u64::try_from(u128::from(next.pts - start) * u128::from(rate) / u128::from(mp4::TIMESCALE))
+                        .unwrap_or(u64::MAX);
+                out.write_all(&mp4::fragment(
+                    mp4::AUDIO_TRACK,
+                    sequence,
+                    decode,
+                    mp4::AAC_FRAME_SAMPLES,
+                    &next.data,
+                    true,
+                ))?;
+                out.flush()?;
+                sequence = sequence.wrapping_add(1);
+                continue;
+            }
             // The feed may repeat the newest backlog frame.
             if pending.as_ref().is_some_and(|p| next.pts <= p.pts) {
                 continue;
@@ -201,6 +260,7 @@ impl Stream {
             if let Some(sample) = pending.replace(next.clone()) {
                 let duration = u32::try_from(next.pts - sample.pts).unwrap_or(FALLBACK_DURATION);
                 out.write_all(&mp4::fragment(
+                    mp4::VIDEO_TRACK,
                     sequence,
                     sample.pts - start,
                     duration,
@@ -216,6 +276,16 @@ impl Stream {
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Sends to every connection; one that cannot keep up is dropped rather than buffered.
+fn broadcast(state: &mut State, sample: &Arc<Sample>) {
+    state.subscribers.retain(|subscriber| {
+        !matches!(
+            subscriber.try_send(sample.clone()),
+            Err(TrySendError::Full(_) | TrySendError::Disconnected(_))
+        )
+    });
 }
 
 fn ticks(duration: Duration) -> u64 {
@@ -255,7 +325,7 @@ mod tests {
 
     #[test]
     fn waits_for_parameter_sets_and_a_keyframe() {
-        let stream = Stream::new(Duration::from_millis(500));
+        let stream = Stream::new(Duration::from_millis(500), None);
         stream.push(&unit(false), frame(0), false);
         assert!(!stream.ready());
         assert!(stream.subscribe().is_none());
@@ -267,7 +337,7 @@ mod tests {
 
     #[test]
     fn late_joiners_start_at_the_last_keyframe_with_rebased_time() {
-        let stream = Stream::new(Duration::from_millis(500));
+        let stream = Stream::new(Duration::from_millis(500), None);
         for index in 0..20 {
             stream.push(&unit(index % 15 == 0), frame(index), index % 15 == 0);
         }
@@ -294,7 +364,7 @@ mod tests {
 
     #[test]
     fn slow_connections_are_dropped_and_timestamps_must_advance() {
-        let stream = Stream::new(Duration::from_millis(500));
+        let stream = Stream::new(Duration::from_millis(500), None);
         stream.push(&unit(true), frame(0), true);
         let _idle = stream.subscribe().unwrap();
         for index in 1..=u32::try_from(SUBSCRIBER_BACKLOG).unwrap() + 1 {
@@ -308,10 +378,10 @@ mod tests {
 
     #[test]
     fn a_gop_past_the_cap_has_no_late_join_backlog_until_the_next_keyframe() {
-        let stream = Stream::new(Duration::from_secs(60));
+        let stream = Stream::new(Duration::from_secs(60), None);
         stream.push(&unit(true), frame(0), true);
         let existing = stream.subscribe().unwrap();
-        let cap = u32::try_from(MAX_GOP_FRAMES).unwrap();
+        let cap = u32::try_from(MAX_GOP_SAMPLES).unwrap();
         for index in 1..=cap {
             stream.push(&unit(false), frame(index), false);
             // Keep the existing connection's feed drained.
@@ -331,7 +401,7 @@ mod tests {
 
     #[test]
     fn the_playback_base_only_moves_forward() {
-        let stream = Stream::new(Duration::from_millis(500));
+        let stream = Stream::new(Duration::from_millis(500), None);
         for index in 0..20 {
             stream.push(&unit(index % 15 == 0), frame(index), index % 15 == 0);
         }
@@ -347,10 +417,49 @@ mod tests {
                 data: vec![0, 0, 0, 1, 0x65],
                 pts: 0,
                 keyframe: true,
+                track: mp4::VIDEO_TRACK,
             })],
             feed: mpsc::sync_channel(1).1,
         };
         stream.write_to(&mut Vec::new(), older).unwrap();
         assert_eq!(stream.playback_base.load(Ordering::Acquire), base);
+    }
+
+    #[test]
+    fn audio_is_interleaved_on_the_video_time_base() {
+        let format = AudioFormat {
+            sample_rate: 48_000,
+            channels: 2,
+        };
+        let stream = Stream::new(Duration::from_millis(500), Some(format));
+        // Audio before the first keyframe has nothing to start from.
+        stream.push_audio(&[0x21, 0x01], frame(0));
+        for index in 1..=3 {
+            stream.push(&unit(index == 1), frame(index), index == 1);
+            stream.push_audio(&[0x21, 0x02], frame(index) + Duration::from_millis(10));
+        }
+        // Timestamps must advance per track.
+        stream.push_audio(&[0x21, 0x03], frame(1));
+        let subscription = stream.subscribe().unwrap();
+        assert_eq!(
+            subscription.backlog.len(),
+            6,
+            "keyframe, then video and audio in arrival order"
+        );
+        stream.close();
+        let mut out = Vec::new();
+        stream.write_to(&mut out, subscription).unwrap();
+        assert_eq!(out.windows(4).filter(|w| *w == b"trak").count(), 2);
+        let audio_tfhd: Vec<usize> = out
+            .windows(16)
+            .enumerate()
+            // size, "tfhd", version and flags, then the track id.
+            .filter(|(_, w)| &w[4..8] == b"tfhd" && w[12..16] == mp4::AUDIO_TRACK.to_be_bytes())
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(audio_tfhd.len(), 3);
+        // The first audio frame sits 10 ms after the first video frame: 480 samples at 48 kHz.
+        let tfdt = out[audio_tfhd[0]..].windows(4).position(|w| w == b"tfdt").unwrap() + audio_tfhd[0] + 8;
+        assert_eq!(u64::from_be_bytes(out[tfdt..tfdt + 8].try_into().unwrap()), 480);
     }
 }

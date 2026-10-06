@@ -1,6 +1,7 @@
-//! Live stream probe: `live <ip[:port]> <file.h264> [fps]`. Plays an Annex B
-//! H.264 file (one access unit delimiter per picture) in a loop in real time.
-use horizon_chromecast::{DEFAULT_PORT, LiveCast, LiveOptions};
+//! Live stream probe: `live <ip[:port]> <file.h264> [fps] [audio.aac]`. Plays
+//! an Annex B H.264 file (one access unit delimiter per picture) in a loop in
+//! real time, with an optional 48 kHz stereo ADTS AAC file as sound.
+use horizon_chromecast::{AudioFormat, DEFAULT_PORT, LiveCast, LiveOptions};
 use horizon_media::h264::{AnnexBReader, Unit};
 use std::{net::SocketAddr, process::ExitCode, time::Duration, time::Instant};
 
@@ -65,9 +66,33 @@ fn segment_frames<T>(units: &[(T, bool)]) -> Result<u32, String> {
     Ok(longest)
 }
 
+/// Raw AAC frames from an ADTS stream (the 7- or 9-byte headers removed).
+fn aac_frames(data: &[u8]) -> Result<Vec<&[u8]>, String> {
+    let mut frames = Vec::new();
+    let mut at = 0;
+    while at + 7 <= data.len() {
+        let header = &data[at..];
+        if header[0] != 0xff || header[1] & 0xf0 != 0xf0 {
+            return Err(format!("no ADTS sync word at byte {at}"));
+        }
+        let length =
+            (usize::from(header[3] & 0x03) << 11) | (usize::from(header[4]) << 3) | usize::from(header[5] >> 5);
+        let header_length = if header[1] & 0x01 == 0 { 9 } else { 7 };
+        let frame = data
+            .get(at + header_length..at + length)
+            .ok_or("truncated ADTS frame")?;
+        frames.push(frame);
+        at += length;
+    }
+    if frames.is_empty() {
+        return Err("the audio file holds no ADTS frames".to_owned());
+    }
+    Ok(frames)
+}
+
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let usage = "usage: live <ip[:port]> <file.h264> [fps]";
+    let usage = "usage: live <ip[:port]> <file.h264> [fps] [audio.aac]";
     let target = args.next().ok_or(usage)?;
     let address: SocketAddr = target
         .parse()
@@ -78,6 +103,8 @@ fn run() -> Result<(), String> {
     if fps == 0 {
         return Err("fps must be at least 1".to_owned());
     }
+    let audio_file = args.next().map(std::fs::read).transpose().map_err(|e| e.to_string())?;
+    let audio = audio_file.as_deref().map(aac_frames).transpose()?;
     let units = access_units(&data)?;
     if units.is_empty() {
         return Err("no access unit delimiters found; encode with aud=1".to_owned());
@@ -87,8 +114,14 @@ fn run() -> Result<(), String> {
     let segment = frame * segment_frames(&units)?;
     let options = LiveOptions {
         segment,
+        audio: audio.as_ref().map(|_| AudioFormat {
+            sample_rate: 48_000,
+            channels: 2,
+        }),
         ..LiveOptions::default()
     };
+    let aac_frame = Duration::from_secs(1024) / 48_000;
+    let mut next_audio = 0u32;
     let live = LiveCast::start(address, options).map_err(|e| e.to_string())?;
     println!("serving {} ({:.2} s segments)", live.url(), segment.as_secs_f32());
     let started = Instant::now();
@@ -97,6 +130,14 @@ fn run() -> Result<(), String> {
         let pts = frame * u32::try_from(index).map_err(|_| "stream too long")?;
         if let Some(wait) = pts.checked_sub(started.elapsed()) {
             std::thread::sleep(wait);
+        }
+        // Audio up to this video frame, so both tracks advance together.
+        if let Some(frames) = &audio {
+            while aac_frame * next_audio <= pts {
+                let index = usize::try_from(next_audio).map_err(|_| "stream too long")? % frames.len();
+                live.push_aac(frames[index], aac_frame * next_audio);
+                next_audio += 1;
+            }
         }
         live.push_annexb(unit, pts, *keyframe);
         let state = live.state();
