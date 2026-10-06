@@ -77,3 +77,11 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | pin | Record a host key or a commit so that it cannot change. |
 | revoke | Remove the access that a credential gives at the provider or at the worker. |
 | forward | Connect a port on the worker to a device through the Local Network Bridge. |
+
+## Video capture
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| WebM | The video file format used for browser and VNC capture. | — |
+| AV1 | The video codec used in a WebM recording. | — |
+| recording | A temporary video file from a panel's decoded image source. | — |
