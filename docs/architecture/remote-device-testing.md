@@ -422,6 +422,9 @@ Active controller entries and unfinished cleanup remain protected.
 Local guardian history retains its separate directory-first retirement rule.
 Uncertain records and foreign owners remain unchanged.
 A setup failure reports confirmed cleanup only after its exact cleanup acknowledgement.
+This rule also applies to the replacement session during reset.
+After confirmed cleanup, the original setup error stays in the step result.
+The runner does not retry a failed reset.
 
 Keep the shared journal and registry on the same qualified filesystem.
 The registry records device and inode identities.

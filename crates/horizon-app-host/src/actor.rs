@@ -841,10 +841,11 @@ impl Actor {
     /// Reset replaces an exact closed allocation using the same upload and original deadline.
     pub fn reset(&self, id: Uuid) -> Result<SessionHandle> {
         let _run = self.run.try_read().map_err(|_| Error::RunBusy)?;
-        self.reset_for_run(id)
+        self.reset_for_run_outcome(id).0
     }
-    pub(crate) fn reset_for_run(&self, id: Uuid) -> Result<SessionHandle> {
-        self.audit.execute(Some(id), "reset", || {
+    pub(crate) fn reset_for_run_outcome(&self, id: Uuid) -> (Result<SessionHandle>, bool) {
+        let mut cleanup_confirmed = true;
+        let result = self.audit.execute(Some(id), "reset", || {
             self.prune_completed_provider()?;
             let lane = self.lane(id)?;
             let mut lane = lane.lock().map_err(|_| Error::Unavailable)?;
@@ -860,14 +861,15 @@ impl Actor {
                 return Err(error);
             }
             drop(lane);
-            let result = self.create_app(index, Arc::clone(&app), until, true, &mut false);
+            let result = self.create_app(index, Arc::clone(&app), until, true, &mut cleanup_confirmed);
             let mut upload = app.lock().map_err(|_| Error::Unavailable)?;
             upload.users.remove(&reset);
             if upload.handles.is_empty() {
                 self.close_upload(&mut upload)?;
             }
             result
-        })
+        });
+        (result, cleanup_confirmed)
     }
     /// # Errors
     /// One bounded expiry worker serves the whole controller; it retains no idle actor ownership.

@@ -4,6 +4,8 @@ use horizon_app_testing::contract::Form;
 use horizon_app_testing::recipe::{State, Target};
 #[cfg(unix)]
 use std::fmt::Write as _;
+#[cfg(unix)]
+use std::sync::Arc;
 use std::sync::Barrier;
 
 #[derive(Default)]
@@ -21,6 +23,7 @@ struct Fake {
     fail_create: Option<Box<dyn Fn(Instant) -> Error + Send + Sync>>,
     failed_creates: AtomicUsize,
     create_cleanup_confirmed: bool,
+    fail_reset_cleanup: Option<bool>,
 }
 impl Runtime for Fake {
     fn build(&self, platform: Platform, _control: &Control) -> Result<()> {
@@ -34,7 +37,7 @@ impl Runtime for Fake {
     fn create(&self, index: usize, _app: Uuid, deadline: Instant) -> Creation {
         if let Some(failure) = &self.fail_create {
             self.failed_creates.fetch_add(1, Ordering::SeqCst);
-            return Err(CreationFailure {
+            return Err(OperationFailure {
                 error: failure(deadline),
                 cleanup_confirmed: self.create_cleanup_confirmed,
             });
@@ -50,9 +53,15 @@ impl Runtime for Fake {
         }
         Ok(id)
     }
-    fn act(&self, session: Uuid, action: &Action) -> Result<Option<Uuid>> {
+    fn act(&self, session: Uuid, action: &Action) -> std::result::Result<Option<Uuid>, OperationFailure> {
         self.actions.fetch_add(1, Ordering::SeqCst);
         if matches!(action, Action::Reset {}) {
+            if let Some(cleanup_confirmed) = self.fail_reset_cleanup {
+                return Err(OperationFailure {
+                    error: horizon_app_provider::Error::TunnelStartFailed.into(),
+                    cleanup_confirmed,
+                });
+            }
             let mut sessions = self.sessions.lock().unwrap();
             let index = sessions.remove(&session).unwrap();
             let replacement = Uuid::new_v4();
@@ -60,7 +69,10 @@ impl Runtime for Fake {
             return Ok(Some(replacement));
         }
         if self.sessions.lock().unwrap()[&session] == 0 {
-            return Err(horizon_app_testing::Error::AssertionFailed.into());
+            return Err(OperationFailure {
+                error: horizon_app_testing::Error::AssertionFailed.into(),
+                cleanup_confirmed: true,
+            });
         }
         Ok(None)
     }
@@ -715,4 +727,93 @@ fn uncertain_deferred_creation_is_not_retried_or_reported_as_clean() {
     assert_eq!(failure.error, Error::AdmissionDeferred);
     assert!(!failure.cleanup_confirmed);
     assert_eq!(runtime.failed_creates.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn reset_cleanup_outcomes_preserve_errors_without_replaying_replacements() {
+    for confirmed in [false, true] {
+        let runtime = Fake {
+            fail_reset_cleanup: Some(confirmed),
+            ..Fake::default()
+        };
+        let mut reset = recipe();
+        reset.steps.truncate(1);
+        reset.steps[0].action = Action::Reset {};
+        let recipes = [reset];
+        let plan = Plan {
+            targets: targets(),
+            recipes: &recipes,
+            parallel: 2,
+            screenshots: false,
+            video: false,
+            logs_on_failure: false,
+        };
+        let report = plan
+            .execute(
+                &runtime,
+                &Control::new(Duration::from_secs(10)).unwrap(),
+                capture,
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(runtime.actions.load(Ordering::SeqCst), 3);
+        assert_eq!(runtime.active.load(Ordering::SeqCst), 0);
+        assert!(report.devices.iter().all(|device| {
+            device.cleanup_confirmed == confirmed
+                && device.allocations.len() == 1
+                && device.steps.len() == 1
+                && !device.steps[0].passed
+                && device.steps[0]
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .contains("tunnel_start_failed")
+        }));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn reset_report_uses_actual_replacement_cleanup_acknowledgements() {
+    for confirmed in [false, true] {
+        let (fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
+        std::fs::write(fixture.root.path().join("recipe.md"), "```yaml\ndevice-recipe:\n  version: 1\n  id: reset-failure\n  steps:\n    - id: reset\n      action: reset\n```\n").unwrap();
+        let report = run(
+            &actor,
+            &Control::new(Duration::from_secs(30)).unwrap(),
+            capture,
+            |progress| {
+                if progress.phase == "session_created" {
+                    fixture.fake.reject_verification.store(true, Ordering::SeqCst);
+                    let transport = Arc::clone(&fixture.fake.transport);
+                    *fixture.fake.transport.after_create.lock().unwrap() = Some(Box::new(move || {
+                        transport.lost_delete.store(!confirmed, Ordering::SeqCst);
+                    }));
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        let device = &report.devices[0];
+        assert_eq!(device.cleanup_confirmed, confirmed);
+        assert_eq!(device.allocations.len(), 1);
+        assert_eq!(device.steps.len(), 1);
+        assert!(!device.steps[0].passed);
+        assert!(device.steps[0].error.as_deref().unwrap().contains(if confirmed {
+            "app_device_unverified"
+        } else {
+            "app_resource_cleanup_uncertain"
+        }));
+        assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 2);
+        fixture.fake.transport.lost_delete.store(false, Ordering::SeqCst);
+        actor.shutdown().unwrap();
+        assert!(
+            fixture
+                .workspace
+                .journal()
+                .pending(fixture.workspace.owner())
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

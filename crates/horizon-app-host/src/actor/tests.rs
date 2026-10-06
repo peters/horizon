@@ -102,7 +102,8 @@ impl ClassicTransport for Transport {
 }
 pub(crate) struct Fake {
     pub(crate) transport: Arc<Transport>,
-    reject_verification: AtomicBool,
+    pub(crate) reject_verification: AtomicBool,
+    after_verification: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     pub(crate) delay_capacity: AtomicBool,
     before_driver_return: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     media_calls: AtomicUsize,
@@ -172,6 +173,10 @@ impl Backend for Fake {
             format!("horizon-native-{operation}")
         );
         app.use_for_driver(|token| assert_eq!(caps["appium:app"], token));
+        drop(active);
+        if let Some(hook) = self.after_verification.lock().unwrap().take() {
+            hook();
+        }
         Ok(())
     }
     fn upload(&self, _: &mut Artifact, _: Uuid, timeout: Duration) -> Result<UploadedApp> {
@@ -258,6 +263,7 @@ fn fixture() -> Fixture {
     let fake = Arc::new(Fake {
         transport: Arc::new(Transport::default()),
         reject_verification: AtomicBool::new(false),
+        after_verification: Mutex::new(None),
         delay_capacity: AtomicBool::new(false),
         before_driver_return: Mutex::new(None),
         media_calls: AtomicUsize::new(0),
@@ -1039,4 +1045,81 @@ fn retired_session_tombstones_do_not_remove_verified_media_references() {
             .is_ok()
     );
     actor.release_upload(app.id).unwrap();
+}
+
+#[test]
+fn reset_replacement_failures_return_exact_cleanup_outcomes() {
+    for confirmed in [false, true] {
+        let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+        let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
+        let old = actor.create(0, app.id, Duration::from_secs(20)).unwrap();
+        fixture.fake.reject_verification.store(true, Ordering::SeqCst);
+        let transport = Arc::clone(&fixture.fake.transport);
+        *transport.after_create.lock().unwrap() = Some(Box::new({
+            let transport = Arc::clone(&transport);
+            move || transport.lost_delete.store(!confirmed, Ordering::SeqCst)
+        }));
+        let (result, cleanup_confirmed) = actor.reset_for_run_outcome(old.id);
+        assert_eq!(cleanup_confirmed, confirmed);
+        let expected = if confirmed {
+            horizon_app_provider::Error::DeviceUnverified.into()
+        } else {
+            Error::CleanupUncertain
+        };
+        assert_eq!(result.unwrap_err(), expected);
+        assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 2);
+        actor.close(old.id).unwrap();
+        let pending = fixture.workspace.journal().pending(fixture.workspace.owner()).unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .filter(|entry| entry.kind == horizon_app_runtime::journal::Kind::Session)
+                .count(),
+            usize::from(!confirmed)
+        );
+        fixture.fake.transport.lost_delete.store(false, Ordering::SeqCst);
+        actor.shutdown().unwrap();
+        assert!(
+            fixture
+                .workspace
+                .journal()
+                .pending(fixture.workspace.owner())
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn reset_cannot_confirm_cleanup_when_allocated_replacement_handle_is_not_returned() {
+    let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+    let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
+    let old = actor.create(0, app.id, Duration::from_secs(20)).unwrap();
+    let upload = actor.uploaded(app.id).unwrap();
+    *fixture.fake.after_verification.lock().unwrap() = Some(Box::new({
+        let upload = Arc::clone(&upload);
+        move || {
+            assert!(
+                std::thread::spawn(move || {
+                    let _held = upload.lock().unwrap();
+                    panic!("injected post-allocation upload bookkeeping failure");
+                })
+                .join()
+                .is_err()
+            );
+        }
+    }));
+    let (result, confirmed) = actor.reset_for_run_outcome(old.id);
+    assert_eq!(result.unwrap_err(), Error::Unavailable);
+    assert!(!confirmed);
+    assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.fake.transport.active.lock().unwrap().len(), 1);
+    actor.close(old.id).unwrap();
+    // Restore only this deliberately poisoned test fixture for exact cleanup.
+    upload.clear_poison();
+    actor.shutdown().unwrap();
+    assert!(fixture.fake.transport.active.lock().unwrap().is_empty());
+    let pending = fixture.workspace.journal().pending(fixture.workspace.owner()).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].kind, horizon_app_runtime::journal::Kind::Upload);
 }

@@ -49,17 +49,17 @@ impl Control {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CreationFailure {
+struct OperationFailure {
     error: Error,
     cleanup_confirmed: bool,
 }
-type Creation = std::result::Result<Uuid, CreationFailure>;
+type Creation = std::result::Result<Uuid, OperationFailure>;
 
 trait Runtime: Sync {
     fn build(&self, platform: Platform, control: &Control) -> Result<()>;
     fn upload(&self, platform: Platform, deadline: Instant) -> Result<Uuid>;
     fn create(&self, index: usize, app: Uuid, deadline: Instant) -> Creation;
-    fn act(&self, session: Uuid, action: &Action) -> Result<Option<Uuid>>;
+    fn act(&self, session: Uuid, action: &Action) -> std::result::Result<Option<Uuid>, OperationFailure>;
     fn screenshot(&self, session: Uuid) -> Result<Vec<u8>>;
     fn session_link(&self, _session: Uuid, _timeout: Duration) -> Result<String> {
         Err(horizon_app_provider::Error::MediaUnavailable.into())
@@ -86,17 +86,27 @@ impl Runtime for Actor {
     }
     fn create(&self, index: usize, app: Uuid, deadline: Instant) -> Creation {
         let (result, cleanup_confirmed) = self.create_until_outcome(index, app, deadline);
-        result.map(|session| session.id).map_err(|error| CreationFailure {
+        result.map(|session| session.id).map_err(|error| OperationFailure {
             error,
             cleanup_confirmed,
         })
     }
-    fn act(&self, session: Uuid, action: &Action) -> Result<Option<Uuid>> {
+    fn act(&self, session: Uuid, action: &Action) -> std::result::Result<Option<Uuid>, OperationFailure> {
         if matches!(action, Action::Reset {}) {
-            return Ok(Some(self.reset_for_run(session)?.id));
+            let (result, cleanup_confirmed) = self.reset_for_run_outcome(session);
+            return result
+                .map(|replacement| Some(replacement.id))
+                .map_err(|error| OperationFailure {
+                    error,
+                    cleanup_confirmed,
+                });
         }
-        Actor::act(self, session, action)?;
-        Ok(None)
+        Actor::act(self, session, action)
+            .map(|()| None)
+            .map_err(|error| OperationFailure {
+                error,
+                cleanup_confirmed: true,
+            })
     }
     fn screenshot(&self, session: Uuid) -> Result<Vec<u8>> {
         Actor::screenshot(self, session)
@@ -116,14 +126,14 @@ impl Runtime for Actor {
 }
 
 fn allocate(runtime: &impl Runtime, control: &Control, index: usize, app: Uuid) -> Creation {
-    let clean = |error| CreationFailure {
+    let clean = |error| OperationFailure {
         error,
         cleanup_confirmed: true,
     };
     loop {
         control.remaining().map_err(clean)?;
         match runtime.create(index, app, control.deadline) {
-            Err(CreationFailure {
+            Err(OperationFailure {
                 error: Error::AdmissionDeferred,
                 cleanup_confirmed: true,
             }) => {
@@ -385,7 +395,7 @@ impl Plan<'_> {
         let created = control
             .remaining()
             .and_then(|_| apps.get(&target.device.platform).copied().ok_or(Error::ArtifactUnknown))
-            .map_err(|error| CreationFailure {
+            .map_err(|error| OperationFailure {
                 error,
                 cleanup_confirmed: true,
             })
@@ -472,10 +482,10 @@ impl Plan<'_> {
                     } else {
                         runtime.act(session, &step.action)
                     };
-                    if matches!(step.action, Action::Reset {}) && action.is_err() {
-                        // A replacement may have reached the provider without a returned handle.
-                        report.cleanup_confirmed = false;
-                    }
+                    let action = action.map_err(|failure| {
+                        report.cleanup_confirmed &= failure.cleanup_confirmed;
+                        failure.error
+                    });
                     let session = match action? {
                         Some(replacement) => {
                             // Retain cleanup ownership before any fallible capture or callback.
