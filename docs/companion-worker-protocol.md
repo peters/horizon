@@ -29,7 +29,9 @@ worktrees, and records successful preparation before granting access. An
 incomplete checkout requires explicit recovery; retries never reset existing
 work. Initial Git checkout and source-material preparation each allow up to
 300 seconds; authorization callers must allow those phases plus verification.
-SSH readiness probes retain their shorter 30-second deadline. Worktrees live at
+SSH readiness probes retain their shorter 30-second deadline. In `connect`, the
+root probe and the agent checks share one 35-second budget, inside the 45-second
+controller deadline. Worktrees live at
 `/workspace/companions/worktrees/<grant>`.
 
 Agents can run ordinary commands such as `ssh companion-app 'git status'` or
@@ -38,7 +40,70 @@ the target's workspace home and starts in the grant's worktree. Private keys
 stay on the source; agent forwarding and SSH connection multiplexing are
 disabled. A failed connection probe does not replace a published host-key pin.
 
-This grants trusted shell access as the target account, currently root. It is
+## Agent access
+
+On a worker with agent isolation, agent and shell sessions run as the agent
+user `horizon-agent` (UID and GID 10001). The root files under
+`/run/sshd/companions` stay private to root. The source publishes copies for
+the agent user in `/run/horizon-companions`:
+
+| Path | Owner and mode | Contents |
+|---|---|---|
+| `/run/horizon-companions` | root, group 10001, `0750` | The directory of the copies. |
+| `config` | root, group 10001, `0640` | The `Host companion-<alias>` blocks of the connected grants. |
+| `<grant>/identity` | root, group 10001, `0640` | A copy of the private key of the grant. |
+| `<grant>/known_hosts-<key>` | root, group 10001, `0640` | The host-key pin of the target. |
+| `<grant>/connection.json` | root, group 10001, `0640` | The alias and the worktree of the grant. |
+| `<grant>.probe` | root, group 10001, `0750` | A temporary configuration for the agent check of `connect`. It has no key and no pin. |
+| `catalog.json` | root, group 10001, `0640` | The discovery catalog. |
+
+OpenSSH reads the user file from the home directory in passwd, not from
+`HOME`. For this reason, the source writes `/etc/ssh/ssh_config.d/horizon-companions.conf`.
+This file includes `/run/horizon-companions/config` only for the agent user
+(`Match localuser horizon-agent`). The SSH client of root does not apply the
+copies. The agent user can read the copies but cannot change them.
+
+Root runs the SSH readiness probe of `connect`. Before `connect` writes the record,
+the source resolves the alias as the agent user with `ssh -G`. This check uses
+a temporary configuration in `<grant>.probe`. That configuration names the paths
+of the eventual copies but holds no key and no pin. It is not in `config` or in
+the catalog, and the source removes it after the check. If a probe or a check
+fails, `connect` reports an error. A new grant then gets no alias and no key.
+
+Each refresh of the owning Horizon sends `connect` again for a connected grant.
+During this `connect`, the agent user keeps the published alias. The new record
+replaces the alias only after the probe and the checks pass. If this `connect` fails, the
+source keeps or restores the previous configuration and record.
+
+The source publishes the copies of a grant only when `connection.json` of the
+grant is a `connected` record for the same alias. `connect` writes this record
+after the root probe and the first check. If `connect` stops before it writes the record, the agent
+user gets no alias and no key copy. The next reconciliation removes a temporary
+copy that remains.
+
+After `connect` publishes the copies, it resolves the alias again as the agent
+user with `ssh -G`. This examines the system include without a connection. For a
+new grant, `connect` publishes the alias, the pin and the record first. It copies
+the key only after this check passes, as the last step. If the check fails, the
+agent user did not get the key. A refresh keeps the key copy of the grant. If
+`connect` stops after it writes the record, the probe and the first check passed
+for the new configuration.
+The next reconciliation then publishes the grant. A later `connect` or
+`disconnect` replaces or removes it.
+
+`disconnect` removes the alias, the key copy and the pin copy for the
+agent user. If the source cannot copy the files of a grant, it removes that copy
+and reports an error. `forget` also removes a copy that remains after an
+interrupted disconnect. Catalog publication refreshes the copies first. If that
+fails, the source removes the catalog and reports an error. A worker without
+agent isolation runs agents as root and publishes only the catalog.
+
+An agent session can copy the key. A copied key works until the target revokes
+the grant. Only target revocation blocks a copied key.
+
+This grants trusted shell access to all agent sessions on the source. On the
+target, the forced entrypoint runs the shell as the agent user of an isolated
+target, or as root on an older image. It is
 not a sandbox or credential isolation boundary. Revocation blocks new SSH
 authentication, preserves dirty work, and cannot undo copied data or terminate
 an already established shell. Runtime grants are temporary; a controller must
@@ -69,6 +134,10 @@ direct SSH connection and worktree and can verify access even when the controlle
 snapshot is old. It does not contact stopped, unselected, or unavailable targets.
 It waits up to 10 seconds for grant setup that holds the companion lock, as the
 owning Horizon's refresh does briefly; a lock held throughout reports the access
-as unverified, never unreachable. Other failures report unreachable, and
+as unverified, never unreachable. The agent user cannot take the companion lock.
+Its inspection reads the agent copy of the connection record, the combined agent
+SSH configuration and the copies of the key and the host-key pin before and after
+the probe. A refresh can replace the route and the pin and keep the same record.
+If one of these changes, the access is unverified. Other failures report unreachable, and
 selection changes during a probe require a fresh inspection. Existing SSH can work while the controller is offline; a
 snapshot's non-ready lifecycle state remains the last controller observation.
