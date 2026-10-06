@@ -9,10 +9,21 @@ use std::{
 };
 use uuid::Uuid;
 
+pub(crate) const MAX_EVIDENCE_FILES: usize = 1024;
+const EVIDENCE_BYTES: usize = 120 * 1024 * 1024;
+const REPORT_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Default)]
+struct Usage {
+    files: usize,
+    bytes: usize,
+    report_reserved: bool,
+}
+
 pub struct Archive {
     path: PathBuf,
     directory: Directory,
-    usage: Mutex<(usize, usize)>,
+    usage: Mutex<Usage>,
 }
 pub struct Store {
     path: PathBuf,
@@ -44,7 +55,7 @@ impl Store {
         Ok(Archive {
             path: self.path.join(name),
             directory,
-            usage: Mutex::new((0, 0)),
+            usage: Mutex::new(Usage::default()),
         })
     }
 }
@@ -79,16 +90,24 @@ impl Archive {
     }
     fn write(&self, name: &str, bytes: &[u8]) -> Result<PathBuf> {
         let mut usage = self.usage.lock().map_err(|_| Error::Unavailable)?;
-        let total = usage.1.checked_add(bytes.len()).ok_or(Error::Unavailable)?;
-        let maximum = if name == "report.json" { 128 } else { 120 };
-        if usage.0 >= 1025 || total > maximum * 1024 * 1024 {
+        let report = name == "report.json";
+        let total = usage.bytes.checked_add(bytes.len()).ok_or(Error::Unavailable)?;
+        if if report {
+            usage.report_reserved || bytes.len() > REPORT_BYTES
+        } else {
+            usage.files >= MAX_EVIDENCE_FILES || total > EVIDENCE_BYTES
+        } {
             return Err(Error::Unavailable);
         }
         self.directory.matches_path(&self.path)?;
         let mut file = self.directory.new_file(name)?;
-        // Failed writes still consume their reserved budget and remain explicit private partial evidence.
-        usage.0 += 1;
-        usage.1 = total;
+        // Failed writes consume reservations; evidence never consumes the terminal report reserve.
+        if report {
+            usage.report_reserved = true;
+        } else {
+            usage.files += 1;
+            usage.bytes = total;
+        }
         file.write_all(bytes)
             .and_then(|()| file.sync_all())
             .map_err(|_| Error::Unavailable)?;
@@ -141,6 +160,41 @@ impl Archive {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn exhausted_evidence_preserves_one_bounded_terminal_report() {
+        let root = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let archive = Archive::new(root.path()).unwrap();
+        for _ in 0..MAX_EVIDENCE_FILES {
+            archive.screenshot(Uuid::new_v4(), b"validated-fixture").unwrap();
+        }
+        assert!(archive.screenshot(Uuid::new_v4(), b"one-too-many").is_err());
+        assert!(archive.finish_result(Err(Error::Cancelled)).is_err());
+        let value: Value = serde_json::from_slice(&std::fs::read(archive.path.join("report.json")).unwrap()).unwrap();
+        assert!(value["run_error"].as_str().unwrap().contains("app_run_cancelled"));
+        assert_eq!(
+            std::fs::read_dir(&archive.path).unwrap().count(),
+            MAX_EVIDENCE_FILES + 1
+        );
+        assert!(archive.finish_value(serde_json::json!({})).is_err());
+
+        let archive = Archive::new(root.path()).unwrap();
+        archive.usage.lock().unwrap().bytes = EVIDENCE_BYTES;
+        assert!(archive.screenshot(Uuid::new_v4(), b"over-byte-budget").is_err());
+        assert!(
+            archive
+                .finish_value(serde_json::json!({"large": "x".repeat(REPORT_BYTES)}))
+                .is_err()
+        );
+        assert!(
+            archive
+                .finish_value(serde_json::json!({"cleanup_confirmed": true}))
+                .is_ok()
+        );
+    }
+
     #[test]
     fn persisted_archive_admission_counts_partial_runs_and_saves_terminal_errors() {
         let root = tempfile::Builder::new()

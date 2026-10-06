@@ -178,6 +178,7 @@ pub fn run(
     {
         return Err(Error::Unavailable);
     }
+    validate_evidence(&recipes, &contract.matrix, &contract.evidence)?;
     let parallel = actor
         .available_parallel(control.remaining()?.min(Duration::from_secs(30)))?
         .min(contract.max_parallel)
@@ -198,6 +199,39 @@ pub fn run(
         logs_on_failure: contract.evidence.logs_on_failure,
     }
     .execute(actor, control, capture, progress)
+}
+
+fn validate_evidence(
+    recipes: &[Recipe],
+    matrix: &[horizon_app_testing::contract::MatrixEntry],
+    evidence: &horizon_app_testing::contract::Evidence,
+) -> Result<()> {
+    // Reserve failure logs for every allocation, including replacements after reset.
+    let files = matrix
+        .iter()
+        .map(|device| {
+            let steps = recipes
+                .iter()
+                .filter(|recipe| {
+                    recipe
+                        .platforms
+                        .as_ref()
+                        .is_none_or(|platforms| platforms.contains(&device.platform))
+                })
+                .flat_map(|recipe| &recipe.steps);
+            let mut screenshots = 0;
+            let mut allocations = 1;
+            for step in steps {
+                screenshots += usize::from(evidence.screenshots || matches!(step.action, Action::Screenshot {}));
+                allocations += usize::from(matches!(step.action, Action::Reset {}));
+            }
+            screenshots + allocations * (usize::from(evidence.video) + 4 * usize::from(evidence.logs_on_failure))
+        })
+        .sum::<usize>();
+    if files > crate::archive::MAX_EVIDENCE_FILES {
+        return Err(Error::EvidenceFull);
+    }
+    Ok(())
 }
 
 struct Plan<'a> {

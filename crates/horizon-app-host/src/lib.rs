@@ -44,7 +44,7 @@ pub enum Error {
     RunBusy,
     #[error("app_run_failed: inspect the retained per-device report and cleanup outcomes")]
     RunFailed,
-    #[error("app_evidence_full: export and explicitly retire retained private reports before starting another run")]
+    #[error("app_evidence_full: reduce requested evidence or export and explicitly retire retained private reports")]
     EvidenceFull,
     #[error("app_media_busy: two evidence downloads are already active; retry within the original deadline")]
     MediaBusy,

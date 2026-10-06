@@ -225,7 +225,11 @@ never enter receipts.
 Interactive screenshots retain the latest 32 captures for the host lifetime.
 Run reports and exported provider media survive normal host exit in private
 archives. At most eight archives are admitted across restarts, with at most 128
-MiB per archive including report reserve. Full storage refuses a new archive;
+MiB per archive: 120 MiB for at most 1,024 evidence files and a separate
+8 MiB terminal-report reserve. Before builds or allocations, runs exceeding the
+file budget are rejected; the estimate includes explicit screenshot actions and
+possible failure logs and videos for every reset allocation. Evidence that exceeds
+the byte budget remains explicitly unavailable in the retained report. Full storage refuses a new archive;
 export and explicitly retire owned evidence before the next run. The host does
 not automatically delete retained evidence. Provider recordings also remain on
 BrowserStack under its own retention policy.

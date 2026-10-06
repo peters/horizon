@@ -2,6 +2,7 @@ use super::*;
 use horizon_app_testing::catalog::Device;
 use horizon_app_testing::contract::Form;
 use horizon_app_testing::recipe::{State, Target};
+#[cfg(unix)]
 use std::fmt::Write as _;
 use std::sync::Barrier;
 
@@ -551,6 +552,79 @@ fn long_reset_run_retains_every_video_and_failure_log_through_finalization() {
             .workspace
             .journal()
             .pending(fixture.workspace.owner())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn evidence_preflight_counts_platforms_explicit_captures_and_reset_media() {
+    use horizon_app_testing::contract::{Evidence as Policy, MatrixEntry};
+    let matrix: Vec<_> = targets()
+        .iter()
+        .map(|target| MatrixEntry {
+            platform: target.device.platform,
+            form: target.device.form,
+            os: "latest".into(),
+            device: None,
+        })
+        .collect();
+    let mut recipe = recipe();
+    recipe.platforms = Some(vec![Platform::Ios]);
+    recipe.steps = (0..512)
+        .map(|index| horizon_app_testing::recipe::Step {
+            id: format!("capture-{index}"),
+            action: Action::Screenshot {},
+        })
+        .collect();
+    let mut policy = Policy {
+        screenshots: false,
+        video: false,
+        logs_on_failure: false,
+    };
+    assert!(validate_evidence(&[recipe.clone()], &matrix, &policy).is_ok());
+    policy.video = true;
+    assert!(matches!(
+        validate_evidence(&[recipe.clone()], &matrix, &policy),
+        Err(Error::EvidenceFull)
+    ));
+    policy.video = false;
+    recipe.steps.iter_mut().for_each(|step| step.action = Action::Reset {});
+    assert!(validate_evidence(&[recipe.clone()], &matrix, &policy).is_ok());
+    policy.logs_on_failure = true;
+    assert!(matches!(
+        validate_evidence(&[recipe], &matrix, &policy),
+        Err(Error::EvidenceFull)
+    ));
+}
+
+#[test]
+#[cfg(unix)]
+fn oversized_evidence_run_is_rejected_before_any_resource_operation() {
+    let (fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
+    let mut recipe = String::from("```yaml\ndevice-recipe:\n  version: 1\n  id: too-much-evidence\n  steps:\n");
+    for index in 0..200 {
+        writeln!(recipe, "    - id: reset-{index}\n      action: reset").unwrap();
+    }
+    recipe.push_str("```\n");
+    std::fs::write(fixture.root.path().join("recipe.md"), recipe).unwrap();
+    let result = run(&actor, &Control::new(Duration::from_secs(5)).unwrap(), capture, |_| {
+        panic!("must not dispatch")
+    });
+    assert!(matches!(result, Err(Error::EvidenceFull)));
+    assert!(
+        fixture
+            .workspace
+            .journal()
+            .pending(fixture.workspace.owner())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .workspace
+            .journal()
+            .completed(fixture.workspace.owner())
             .unwrap()
             .is_empty()
     );
