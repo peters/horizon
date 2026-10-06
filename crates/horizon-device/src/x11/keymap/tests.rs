@@ -1,6 +1,6 @@
 use super::{
-    Borrowed, Keyboard, Layout, PlanError, RECLAIM_QUIET, Stroke, TIMELINE_NOW, from_timeline, keysym, plan,
-    quiet_after, runs, spare_candidate, to_timeline,
+    Borrowed, Keyboard, Layout, ModifierError, PlanError, RECLAIM_QUIET, Stroke, TIMELINE_NOW, from_timeline, keyboard,
+    keysym, plan, quiet_after, runs, spare_candidate, to_timeline,
 };
 
 const SHIFT: u8 = 50;
@@ -400,4 +400,47 @@ fn server_times_convert_to_a_timeline_across_the_32_bit_wrap() {
     assert_eq!(to_timeline(25, 25), TIMELINE_NOW);
     // An old record with a 64-bit time keeps only its low word.
     assert_eq!(to_timeline((7 << 32) | 0x14, 25), TIMELINE_NOW - 5);
+}
+
+#[test]
+fn modifier_rows_decide_which_state_bits_block_text_input() {
+    let mut keysyms = layout();
+    let mut set = |keycode: u8, keysym: u32| keysyms[usize::from(keycode - 8) * 2] = keysym;
+    set(54, 0xffe5); // Caps_Lock
+    set(55, 0xffe6); // Shift_Lock
+    set(56, 0xff7f); // Num_Lock
+    set(57, 0xffe9); // Alt_L
+    let shift_row: &[u8] = &[SHIFT, 0];
+    let rows = |lock: u8, mod1: u8, mod2: u8| -> Vec<Vec<u8>> {
+        vec![
+            shift_row.to_vec(),
+            vec![lock],
+            vec![0],
+            vec![mod1],
+            vec![mod2],
+            vec![0],
+            vec![0],
+            vec![0],
+        ]
+    };
+    let check = |rows: &[Vec<u8>], state: u16| {
+        let rows: Vec<&[u8]> = rows.iter().map(Vec::as_slice).collect();
+        keyboard(&view(&keysyms), &rows, state)
+    };
+    let usual = rows(54, 57, 56);
+    assert_eq!(
+        check(&usual, 0).map(|k| (k.shift_keycode, k.caps_lock)),
+        Ok((Some(SHIFT), false))
+    );
+    assert!(check(&usual, 0x10).is_ok(), "Num Lock on Mod2");
+    assert_eq!(check(&usual, 0x08).err(), Some(ModifierError::Held), "Alt on Mod1");
+    assert_eq!(check(&usual, 0x01).err(), Some(ModifierError::Held), "Shift");
+    assert_eq!(check(&usual, 0x04).err(), Some(ModifierError::Held), "Control");
+    assert_eq!(check(&usual, 0x02).map(|k| k.caps_lock), Ok(true), "Caps Lock");
+    let swapped = rows(54, 56, 57);
+    assert!(check(&swapped, 0x08).is_ok(), "Num Lock on Mod1");
+    assert_eq!(check(&swapped, 0x10).err(), Some(ModifierError::Held), "Alt on Mod2");
+    let shift_lock = rows(55, 57, 56);
+    assert_eq!(check(&shift_lock, 0x02).err(), Some(ModifierError::Lock));
+    assert!(check(&shift_lock, 0).is_ok(), "an inactive Shift Lock is harmless");
 }

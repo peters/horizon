@@ -57,9 +57,12 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
   On a US layout, this applies to `[A-Za-z0-9]` and ASCII punctuation.
 - If Caps Lock is on, the tool holds Shift for a lowercase letter and releases
   it for an uppercase letter. This applies only to keys with a letter pair.
-- If a keyboard group other than the first is active, if a Shift, Control,
-  Alt or Super key is held, or if the server has no XTEST extension, the action
-  fails with `unsupported` before input.
+- In these conditions, the action fails with `unsupported` before input:
+  - A keyboard group other than the first is active.
+  - A modifier other than Lock and Num Lock is active. The modifier mapping of
+    the display tells which slot holds Num Lock.
+  - Lock is active, but its keys do not include Caps Lock, for example Shift Lock.
+  - The server has no XTEST extension.
 - Each other character gets a temporary mapping on an unused keycode. A server
   round trip makes sure that the server applied the mapping before the first key.
 - A temporary mapping stays after the action. Later actions use it again and do

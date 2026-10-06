@@ -1,6 +1,6 @@
 //! Text entry through XTEST with stable keycode mappings.
 
-use super::keymap::{self, Borrowed, Keyboard, Layout, Plan, PlanError};
+use super::keymap::{self, Borrowed, Layout, ModifierError, Plan, PlanError};
 use super::{X11, unavailable};
 use crate::{DeviceError, Result};
 use std::time::Duration;
@@ -11,7 +11,7 @@ use x11rb::{
         Event,
         xproto::{
             AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, EventMask, GetKeyboardMappingReply,
-            KEY_PRESS_EVENT, KEY_RELEASE_EVENT, KeyButMask, PropMode,
+            KEY_PRESS_EVENT, KEY_RELEASE_EVENT, PropMode,
         },
         xtest::{self, ConnectionExt as _},
     },
@@ -76,40 +76,22 @@ impl X11 {
                 "X11 text input requires the first keyboard group".into(),
             ));
         }
-        // A held Shift, Control, Alt or Super key would change each typed key.
-        // Lock is planned for, and Mod2 is usually Num Lock.
-        let held = [
-            KeyButMask::SHIFT,
-            KeyButMask::CONTROL,
-            KeyButMask::MOD1,
-            KeyButMask::MOD3,
-            KeyButMask::MOD4,
-            KeyButMask::MOD5,
-        ];
-        if held
-            .into_iter()
-            .any(|modifier| u16::from(state) & u16::from(modifier) != 0)
-        {
-            return Err(DeviceError::Unsupported(
-                "X11 text input requires released modifier keys".into(),
-            ));
-        }
         let modifiers = self
             .connection
             .get_modifier_mapping()
             .map_err(unavailable)?
             .reply()
             .map_err(unavailable)?;
-        // The first modifier row is Shift.
-        let keyboard = Keyboard {
-            shift_keycode: modifiers
-                .keycodes
-                .iter()
-                .take(usize::from(modifiers.keycodes_per_modifier()))
-                .copied()
-                .find(|keycode| *keycode != 0),
-            caps_lock: u16::from(state) & u16::from(KeyButMask::LOCK) != 0,
-        };
+        let per_row = usize::from(modifiers.keycodes_per_modifier()).max(1);
+        let rows: Vec<&[u8]> = modifiers.keycodes.chunks(per_row).collect();
+        let mapping = self.keyboard_mapping()?;
+        // A held Shift, Control, Alt or Super key would change each typed key.
+        let keyboard = keymap::keyboard(&self.layout(&mapping), &rows, u16::from(state)).map_err(|e| {
+            DeviceError::Unsupported(match e {
+                ModifierError::Held => "X11 text input requires released modifier keys".into(),
+                ModifierError::Lock => "X11 text input supports Caps Lock but no other Lock modifier".into(),
+            })
+        })?;
         let record_atom = self.record_atom()?;
         // A reassignment waits for the quiet interval. Plan again after the wait,
         // because another client can change the keymap in the meantime.

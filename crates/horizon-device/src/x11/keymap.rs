@@ -202,6 +202,49 @@ pub(super) struct Keyboard {
     pub caps_lock: bool,
 }
 
+/// Why the current modifier state does not allow text input.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ModifierError {
+    /// A modifier other than Lock and Num Lock is active.
+    Held,
+    /// Lock is active, but its row has no Caps Lock key, for example Shift Lock.
+    Lock,
+}
+
+const CAPS_LOCK: u32 = 0xffe5;
+const NUM_LOCK: u32 = 0xff7f;
+
+/// Derives the keyboard for the planner from the eight core modifier rows
+/// (Shift, Lock, Control, Mod1 to Mod5) and the core state mask. Any slot can
+/// hold Alt, Super or Num Lock, so the rows decide which bits are allowed.
+pub(super) fn keyboard(layout: &Layout<'_>, rows: &[&[u8]], state: u16) -> Result<Keyboard, ModifierError> {
+    let has = |row: usize, keysym: u32| {
+        rows.get(row).is_some_and(|keycodes| {
+            keycodes
+                .iter()
+                .any(|keycode| *keycode != 0 && layout.symbols(*keycode).contains(&keysym))
+        })
+    };
+    let active = |row: usize| state & (1_u16 << row) != 0;
+    // Shift (0), Control (2) and Mod1 to Mod5 (3 to 7), but not the Num Lock row.
+    if [0, 2, 3, 4, 5, 6, 7]
+        .into_iter()
+        .any(|row| active(row) && !(row >= 3 && has(row, NUM_LOCK)))
+    {
+        return Err(ModifierError::Held);
+    }
+    let caps_lock = active(1);
+    if caps_lock && !has(1, CAPS_LOCK) {
+        return Err(ModifierError::Lock);
+    }
+    Ok(Keyboard {
+        shift_keycode: rows
+            .first()
+            .and_then(|keycodes| keycodes.iter().copied().find(|keycode| *keycode != 0)),
+        caps_lock,
+    })
+}
+
 /// Plans the strokes for `text` without changing any existing keycode that a
 /// queued event could still use.
 pub(super) fn plan(
