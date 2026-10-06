@@ -10,8 +10,9 @@ user must not need to be a programmer. An agent must be able to do the full
 setup for the user on Linux, macOS and Windows.
 
 This epic also shows new users what Horizon can do. Most users do not know that
-an agent can control a browser, a VNC desktop, an iOS Simulator or a cloud
-worker from one board.
+an agent can control a browser, a VNC desktop or a cloud worker from one board.
+Control of an iOS Simulator from Linux is planned in Phase 5. It is not
+available today.
 
 ## Current state (audit of `origin/main` at `7c31b9c91`)
 
@@ -50,7 +51,7 @@ A first cloud can need these credentials:
 | Credential | Need | Where the user puts it |
 |---|---|---|
 | RunPod API key or Hetzner API token | Required | **Cloud settings** |
-| Registry push and pull logins | Required in practice | **Cloud settings**, plus local `docker login` |
+| Registry push and pull logins | Required in practice | **Cloud settings > Container registry**, plus local `docker login` |
 | Codex or Claude API key, or subscription login | One for each agent | **Cloud settings** |
 | Tailscale auth key | Optional | **Settings > Tailnets** |
 | GitHub token for push from the worker | Optional | Manual edit of `settings.json` |

@@ -73,7 +73,7 @@ the same PR.
 | Chromecast | No (note 7) | No (note 7) | No (note 7) |
 | Speech in a release build | No (note 8) | No (note 8) | No (note 8) |
 | Speech in a source build, CPU | Yes | Yes | Not tested |
-| Speech in a source build, GPU | CUDA or Vulkan | Metal | CUDA or Vulkan, not tested |
+| Speech in a source build, GPU | CUDA or Vulkan | Metal. Vulkan not tested | CUDA or Vulkan, not tested |
 | Push-to-talk in Horizon windows | Yes | Yes | Not tested |
 | Global push-to-talk and text in other applications | X11 only | Yes (note 9) | No |
 

@@ -40,19 +40,53 @@ Release builds use the default features. To get speech, use a source build.
 ## Install a release binary
 
 1. Open the [latest release](https://github.com/peters/horizon/releases/latest).
-2. Download the file for your platform:
+2. Download the raw binary for your platform:
 
    | Platform | File |
    |---|---|
-   | Linux x64 | `horizon-linux-x64.tar.gz` or `horizon-installer-linux-x64.bin` |
-   | macOS arm64 | `horizon-osx-arm64.tar.gz` or `horizon-installer-osx-arm64.bin` |
-   | macOS x64 | `horizon-osx-x64.tar.gz` or `horizon-installer-osx-x64.bin` |
-   | Windows x64 | `horizon-windows-x64.exe` or `horizon-installer-win-x64.exe` |
+   | Linux x64 | `horizon-linux-x64.tar.gz` |
+   | macOS arm64 | `horizon-osx-arm64.tar.gz` |
+   | macOS x64 | `horizon-osx-x64.tar.gz` |
+   | Windows x64 | `horizon-windows-x64.exe` |
 
-3. If you downloaded a `.tar.gz` file, extract it and make `horizon` executable.
-4. Start `horizon`.
+3. On Linux and macOS, extract the `.tar.gz` file and make `horizon` executable:
+
+   ```bash
+   tar -xzf horizon-linux-x64.tar.gz
+   chmod +x horizon
+   ```
+
+4. Start `horizon`, or `horizon-windows-x64.exe` on Windows.
 
    Result: Horizon opens an empty board.
+
+A raw binary does not update itself. Download a new release to update it.
+
+## Install with the Surge installer
+
+The Surge installer gives the in-app update prompt.
+
+1. Open the [latest release](https://github.com/peters/horizon/releases/latest).
+2. Download the installer for your platform:
+
+   | Platform | File |
+   |---|---|
+   | Linux x64 | `horizon-installer-linux-x64.bin` |
+   | macOS arm64 | `horizon-installer-osx-arm64.bin` |
+   | macOS x64 | `horizon-installer-osx-x64.bin` |
+   | Windows x64 | `horizon-installer-win-x64.exe` |
+
+3. On Linux and macOS, make the installer executable:
+
+   ```bash
+   chmod +x horizon-installer-linux-x64.bin
+   ```
+
+4. Start the installer and follow its steps.
+5. Start Horizon.
+
+   Result: Horizon opens an empty board. Horizon shows an update prompt when a
+   new stable release is available.
 
 The release does not sign or notarize the macOS application.
 
