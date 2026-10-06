@@ -681,11 +681,23 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
 ### 6.21 C21 — Sort all providers by the estimated total
 
-1. With **All providers** and **In stock only** clear, record the order of the rows.
+1. In the fixture terminal, save the offers of the CLI again, as in setup step 2.
+
+   ```sh
+   <run>/bin/cloud_deploy offers <home>/.horizon/cloud/settings.json "$(cat ~/smoke/offers-small.json)" > ~/smoke/offers-small.out.json
+   ```
+
+   Result: The file has current offers. C21 and C22 compare the dialog with it.
+
+2. Click **Refresh** in the dialog.
+
+   Result: The dialog shows prices of the same age as the file.
+
+3. With **All providers** and **In stock only** clear, record the order of the rows.
 
    Result: You have the order of the dialog.
 
-2. Read the order of the `comparison` offers in `offers-small.out.json`.
+4. Read the order of the `comparison` offers in `offers-small.out.json`.
 
    ```sh
    jq -r '.comparison.offers[] | "\(.estimated_total_usd) \(.name)"' <data-home>/smoke/offers-small.out.json
@@ -693,7 +705,7 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: You have the order by estimated total in USD. The cheapest offer is first.
 
-3. Compare the two orders.
+5. Compare the two orders.
 
    Result: The rows of the dialog have the same order as `comparison`. If the
    dialog shows all RunPod rows before the Hetzner rows, record the known defect
