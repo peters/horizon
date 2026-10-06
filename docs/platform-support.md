@@ -23,7 +23,7 @@ the same PR.
 |---|---|---|---|
 | Board, workspaces, sessions | Yes | Yes | Yes |
 | Shell panels | Yes | Yes | Partial (note 1) |
-| Agent panels | Yes | Yes | No (note 2) |
+| Agent panels | Yes | Yes | Not tested (note 2) |
 | Browser panels: Chromium and Firefox | Yes | Yes | Yes |
 | Browser panels: Safari | No | Yes | No |
 | BrowserStack browsers and phones | Yes | Yes | Yes |
@@ -39,8 +39,11 @@ the same PR.
    installation does not have this program. Windows also gives no child process
    ID, so Horizon does not follow the working directory of the shell
    (`crates/horizon-core/src/terminal/lifecycle.rs:60-63`).
-2. Horizon starts each agent through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:517`).
-   Windows has no POSIX login shell. Issue #688 has the history.
+2. Horizon starts each agent through `$SHELL -ic`
+   (`crates/horizon-core/src/panel/spawn.rs:517,584-593`). There is no
+   Windows launcher. If `SHELL` is not set, Horizon uses `/bin/bash` (note 1).
+   A POSIX shell in `SHELL`, for example Git Bash, can work, but no test
+   examines it. Issue #688 has the history.
 3. The `horizon-device` CLI and MCP tools send input to a local X11 display only.
    They do not work on Wayland without X11. On other platforms they return
    `only local X11 is implemented` (`crates/horizon-device/src/lib.rs:83-98`).

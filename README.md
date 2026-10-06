@@ -252,7 +252,7 @@ Horizon runs on Linux, macOS and Windows, but some features are Linux-only today
 | | Linux | macOS | Windows |
 |:--|:--|:--|:--|
 | Board, shell, browser and Device panels | ✓ | ✓ | ✓ (shell panels need `SHELL` set) |
-| Coding-agent panels | ✓ | ✓ | — |
+| Coding-agent panels | ✓ | ✓ | untested, needs a POSIX shell in `SHELL` |
 | Safari browser panels | — | ✓ | — |
 | Cloud workspaces | ✓ | ✓ | — |
 | Agent-driven desktops | X11 | — | — |

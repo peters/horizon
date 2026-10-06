@@ -58,7 +58,8 @@ A first cloud can need these credentials:
 
 - There is no public default worker image. Each example profile uses
   `registry.example.com`. This is the largest obstacle for a first cloud.
-- Horizon does not examine a provider key with a live API call before start.
+- **Cloud settings** does not test a key when you save it. The first live use
+  of the key is the worker catalog request in **New cloud**.
 - Tailscale accepts auth keys only. There is no OAuth client.
 
 ### GitHub
@@ -81,7 +82,7 @@ A first cloud can need these credentials:
 ### Platform support
 
 Many functions work on Linux only, and the README did not say so. On Windows,
-agent panels and clouds do not work. [Platform support](../platform-support.md)
+clouds do not work, and agent panels need a POSIX shell in `SHELL`. [Platform support](../platform-support.md)
 gives the full list with the code references.
 
 This epic does not plan new platform support. It documents the limits, and it
@@ -167,7 +168,7 @@ A cloud gives each agent its own disposable machine. The value is as follows:
 - [ ] **3.1 Public worker image.** Publish a signed default worker image. Then a
       first cloud needs no registry and no local Docker.
 - [ ] **3.2 Cloud setup wizard.** Ask for one credential in each step. Give a
-      **Create key** link and examine each key with a live API call.
+      **Create key** link and examine each key with a live API call on save.
 - [ ] **3.3 Credential import.** Find existing credentials, for example `gh auth`,
       `RUNPOD_API_KEY` and `HCLOUD_TOKEN`. Import a credential only after the user agrees.
 - [ ] **3.4 Tailscale OAuth.** Accept a Tailscale OAuth client as an alternative to

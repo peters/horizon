@@ -16,7 +16,7 @@ These functions are available:
 | Function | What it does | Platforms |
 |---|---|---|
 | Shell panels | A terminal in the workspace directory. | All, with limits on Windows |
-| Agent panels | Claude Code, Codex, Grok and other coding agents in a panel. | Linux and macOS |
+| Agent panels | Claude Code, Codex, Grok and other coding agents in a panel. | Linux and macOS. Not tested on Windows |
 | Browser panels | Chromium, Firefox or Safari on the board. You and an agent use the same page. | All. Safari on macOS only |
 | Device panels | A VNC view of a desktop on this computer or on an SSH host. | All |
 | Agent input to an isolated desktop | An agent clicks and types on an Xvfb desktop for an application test. | Linux with X11 |
@@ -147,7 +147,8 @@ The README lists all keyboard and mouse shortcuts.
 ## Open an agent, a browser and a desktop
 
 - **Agent panel:** Install the agent CLI first, for example Claude Code or Codex.
-  Then select its preset. Agent panels do not work on Windows.
+  Then select its preset. On Windows, an agent panel needs a POSIX shell in
+  `SHELL`, for example Git Bash. No test examines this.
 - **Browser panel:** Select the **Browser** preset. Horizon gives the
   `horizon-browser` MCP tools automatically to Claude Code, Codex and Grok panels.
 - **Device panel:** Add a VNC target to the configuration. See
@@ -171,16 +172,17 @@ A first cloud needs these items today:
 | RunPod API key or Hetzner API token | Required | **Cloud > Cloud settings** |
 | Worker image in a registry | Required. There is no public default image. | Build it from [`examples/cloud-worker`](../examples/cloud-worker/README.md) |
 | Git, OpenSSH, Docker with buildx | Required | This computer |
-| Registry push and pull logins | Required for a private image | **Cloud settings > Private container images** |
+| Registry push and pull logins | Required for a private image | **Cloud settings > Container registry** |
 | Agent API key or subscription login | One for each agent | **Cloud settings** |
 | Tailscale auth key | Optional | **Settings > Tailnets** |
 | Git push credential for the worker | Optional | `~/.horizon/cloud/settings.json` |
 
-Horizon makes the SSH identity for the worker. It does not examine a provider
-key until a cloud starts.
+Horizon makes the SSH identity for the worker. **Cloud settings** does not
+test a key when you save it. **New cloud** uses the key to get the live worker
+catalog. If it cannot get the catalog, you cannot start the cloud.
 
 1. Open a workspace in a Git repository.
-2. Click **Cloud > New cloud**.
+2. Click **Cloud**, then **New cloud…**.
 
    Result: The **Where is your code?** step opens.
 
