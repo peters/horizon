@@ -89,6 +89,21 @@ impl Edge {
         }
     }
 
+    /// A buffer has ended. Step back once when it opened near the edge and
+    /// lasted long enough. The playback rate stays as last confirmed.
+    pub(crate) fn finish_episode(&mut self, lasted: Duration) {
+        let Some(started_at) = self.episode_lag else {
+            return;
+        };
+        if self.backed_off || lasted < STALL || started_at >= STALL_LAG || self.target + f64::EPSILON >= PROVEN_LAG {
+            return;
+        }
+        let raised = (self.target + STEP).min(PROVEN_LAG);
+        self.floor = raised;
+        self.target = raised;
+        self.backed_off = true;
+    }
+
     /// Next target and playback rate for `sample`.
     #[must_use]
     pub(crate) fn step(mut self, sample: Sample) -> Self {

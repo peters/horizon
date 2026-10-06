@@ -550,16 +550,25 @@ impl Session {
         match (status.player_state.as_str(), status.idle_reason.as_deref()) {
             ("PLAYING", _) => {
                 self.started.set(true);
-                self.buffering_since.set(None);
+                let lasted = self.buffering_since.take().map(|since| since.elapsed());
                 self.set(LiveState::Playing);
                 let mut playback = self.playback.get();
-                playback.edge.resume();
+                if let Some(lasted) = lasted {
+                    close_buffer(&mut playback.edge, lasted);
+                    playback.sampled = false;
+                } else {
+                    playback.edge.resume();
+                }
                 self.playback.set(playback);
             }
             ("BUFFERING" | "LOADING", _) => {
                 if self.buffering_since.get().is_none() {
                     self.buffering_since.set(Some(Instant::now()));
                     self.note_buffer_lag(status.current_time);
+                    let mut playback = self.playback.get();
+                    playback.edge.settled_for = Duration::ZERO;
+                    playback.sampled = false;
+                    self.playback.set(playback);
                 }
                 if *lock(&self.state) != LiveState::Playing {
                     self.set(LiveState::Buffering);
@@ -671,10 +680,17 @@ impl Session {
         let lag = newest - status.current_time;
         // Polled GET_STATUS replies are not receiver events, so the timer has
         // to move from this status. Anything but buffering closes it.
+        let lasted = self
+            .buffering_since
+            .get()
+            .map(|since| now.saturating_duration_since(since));
         let mut open = self.buffering_since.get();
         let buffering_for = buffering_age(&mut open, status.player_state.as_str(), now);
         self.buffering_since.set(open);
         let playing = status.player_state == "PLAYING";
+        if playing && let Some(lasted) = lasted {
+            close_buffer(&mut playback.edge, lasted);
+        }
         // Only a moving picture starts the calm clock. A pause or a buffer must
         // not make the next playing sample count the time it was stopped.
         playback.sampled = playing;
@@ -780,6 +796,14 @@ fn buffering_age(open_since: &mut Option<Instant>, player_state: &str, now: Inst
 /// the first frame.
 fn note_open_lag(newest: Option<f64>, current_time: f64) -> Option<f64> {
     newest.map(|newest| newest - current_time)
+}
+
+/// The buffer ended. Judge it, drop the calm time it interrupted, then allow
+/// the next episode. The confirmed playback rate is left alone.
+fn close_buffer(edge: &mut edge::Edge, lasted: Duration) {
+    edge.finish_episode(lasted);
+    edge.settled_for = Duration::ZERO;
+    edge.resume();
 }
 
 /// What to ask the receiver, with the rate we already believe is applied.
@@ -1063,6 +1087,57 @@ mod catch_up_tests {
         let elapsed = calm_elapsed(&playback, after);
         assert!(elapsed >= Duration::from_millis(400));
         assert!(elapsed < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_buffer_that_ends_between_polls_still_steps_back() {
+        let mut edge = edge::Edge {
+            target: 0.25,
+            floor: 0.25,
+            rate: 1.08,
+            ..edge::Edge::default()
+        };
+        edge.note_buffer(0.35);
+        let during = edge.step(edge::Sample {
+            lag: 0.40,
+            buffering_for: Some(Duration::from_millis(300)),
+            elapsed: Duration::from_millis(400),
+        });
+        assert!((during.target - 0.25).abs() < 1e-9);
+        close_buffer(&mut edge, Duration::from_millis(600));
+        assert!((edge.target - 0.30).abs() < 1e-9);
+        assert!((edge.floor - 0.30).abs() < 1e-9);
+        assert!((edge.rate - 1.08).abs() < 1e-9);
+        assert_eq!(edge.settled_for, Duration::ZERO);
+        assert!(edge.episode_lag.is_none());
+    }
+
+    #[test]
+    fn a_short_interruption_does_not_spend_the_calm_time() {
+        let edge = edge::Edge::default();
+        let next = plan_trim(
+            edge,
+            edge::Sample {
+                lag: 0.41,
+                buffering_for: None,
+                elapsed: Duration::from_millis(400),
+            },
+            true,
+        );
+        assert!((next.edge.target - 0.40).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_buffer_that_already_stepped_back_does_not_step_again_when_it_ends() {
+        let mut edge = edge::Edge {
+            target: 0.30,
+            floor: 0.30,
+            backed_off: true,
+            episode_lag: Some(0.35),
+            ..edge::Edge::default()
+        };
+        close_buffer(&mut edge, Duration::from_millis(800));
+        assert!((edge.target - 0.30).abs() < 1e-9);
     }
 
     #[test]
