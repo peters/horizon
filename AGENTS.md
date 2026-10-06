@@ -145,15 +145,24 @@ GPU profile requires GPU capacity; a CPU result cannot qualify that lane.
 
 ### Native app testing
 
-For iOS/Android App Automate work, read [the native runbook](docs/architecture/remote-device-testing.md)
-and the selected app's and companion backend's `AGENTS.md` first. Use the shared
-`device_test_run`/`app_*` MCP tools or `horizon --native-run`; provider credentials
-stay in Horizon. Build/upload each platform once, keep one isolated synthetic
-backend per lane, and test concurrently up to the fresh native quota and the
-two-lane bound. Use public `device_panel` viewers for live observation and retain
-separate real app-to-loopback, per-step evidence and cleanup proof. Follow the
-runbook's private client setup and exact reconciliation; do not substitute
-browser sessions/quota, shared backend resets or a new owner after uncertainty.
+Use [the native runbook](docs/architecture/remote-device-testing.md) for iOS/Android App Automate work.
+The runbook and [test procedure](docs/testing/procedures/native-app-automate.md) follow the repository's STE100 rules.
+
+1. Read the selected app's and companion backend's `AGENTS.md`.
+   Result: The builds, synthetic services, matrix and recipes are declared.
+> **CAUTION:** USE ONLY THE APPROVED DEVICE QUOTA AND DECLARED LOOPBACK PORTS.
+> Device runs consume paid capacity and delete their owned resources.
+
+2. Use `device_test_run`, the `app_*` MCP tools or `horizon --native-run`.
+   Result: All interfaces use the same native controller. Credentials stay in Horizon.
+3. Use one immutable artifact for each platform per run.
+   Result: The host builds and uploads each platform once. Each lane uses its own isolated backend.
+4. Run at most two lanes within the current native quota.
+   Result: Browser quota does not replace App Automate quota.
+5. Observe live sessions through public `device_panel` viewers.
+   Result: Displayed frames, app requests, step evidence and cleanup have separate proof.
+6. Preserve the original owner and private state after uncertainty.
+   Result: Exact reconciliation cannot bypass an unresolved operation.
 
 ### Configuration Changes
 

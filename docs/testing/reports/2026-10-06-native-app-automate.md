@@ -90,3 +90,30 @@ Task-private evidence lives under `/tmp/issue-1255-preflight/` on the controller
 It includes candidate hashes, per-step reports, public panel inspections, videos, backend requests and cleanup receipts.
 App-specific content and companion source commits remain private.
 The source report contains no credentials, private endpoints or customer data.
+
+
+## 7. Final source check and matrix repeat
+
+The final runtime package used source `8e0ff3a1adadf6b52eadd7a4442452b617b89aa3`.
+Its SHA-256 was `8dc2b8ff53da4264c4e0d5f4138a5b3742cafff2815464bd0d336491e713b072`.
+The frozen build source matched the independently reviewed file hashes.
+All blocking local validation passed. The unchanged cloud pedantic warning remained advisory.
+
+The final matrix again passed 44 steps on four physical devices with two concurrent lanes.
+Each device used its own synthetic loopback backend.
+The four logs recorded successful app requests. All four videos fully decoded.
+Each step retained its screenshot. All 136 owned journal records were complete.
+The task closed its four public Device panels.
+
+The unchanged viewing path passed all four panels on earlier package `c0e63237b2e24295f1126f5475d3e999397a0254`.
+Three panels each passed three displayed-frame inspections during the final run.
+Panel 0 displayed frame 1 before viewport navigation clipped and moved it away.
+Connected frames advanced through 3, 5 and 7. The task preserved navigation.
+This report does not claim a fresh four-panel display pass.
+Independent review accepted the prior proof for unchanged viewing and provider code.
+
+New tests rejected oversized evidence requests before resource operations.
+They filled the file limit and simulated a full byte budget.
+Both tests then saved the separately reserved terminal report.
+They also refused oversized reports without consuming the report slot.
+The documented limits are 1,024 evidence files, 120 MiB of evidence and an 8 MiB report reserve.

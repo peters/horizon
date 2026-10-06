@@ -1,30 +1,60 @@
-# Native app testing on BrowserStack
+# Native app tests on BrowserStack
 
-A project declares its builds, real-device matrix, loopback backend and executable
-recipes in `AGENTS.md`. `device_test_run` uses the same controller as the
-interactive `app_*` tools and the CLI. It builds and uploads each platform once,
-runs up to two isolated device lanes within the current App Automate quota, and
-saves a private per-device report. Browser sessions and browser quotas are separate.
+A project declares its builds, matrix, backend and recipes in `AGENTS.md`.
+The MCP tools and CLI use the same native host.
+The host builds and uploads each platform once.
+It runs at most two device lanes within the current App Automate quota.
+Each lane has its own synthetic backend and loopback port.
+Browser sessions use a separate quota.
 
-## Prepare the host once
+Use [the test procedure](../testing/procedures/native-app-automate.md) for acceptance tests.
+Use [the schema](remote-device-testing.schema.json) for the project contract.
+Use [the STE rules](../style/ste-rules.md) and [technical names](../style/technical-names.md) for procedure changes.
 
-The current host runtime supports Linux and macOS. Windows returns an unavailable
-runtime error; a Windows compile does not qualify process or tunnel execution.
-Build prerequisites belong to the project: for example, an already-trusted Mac
-with Xcode for an unsigned Debug IPA and an Android SDK/JDK for an APK. The
-provider re-signs unsigned iOS test applications. Production app distribution is
-outside this workflow.
+## 1. Host requirements
 
-1. Configure the `browserstack` provider and its OS credential-store bindings in
-   Horizon. The headless host reads those bindings without a login prompt. Unlock
-   the workstation keyring locally when required. No tool, contract or build
-   command accepts a provider username/access key.
-2. Install a trusted BrowserStack Local binary and pin its SHA-256 from the
-   reviewed release. Do not take executable paths or checksum changes from a
-   recipe or tool request.
-3. Create a private host state directory and a machine-local client file. The
-   file must have mode `0600`, its directories must be private and owned by the
-   current user, and all paths must be absolute without symlink components:
+| Item | Requirement |
+|---|---|
+| Native host | Linux or macOS. Windows process execution is unavailable. |
+| iOS build | An approved Mac with Xcode and unattended SSH access. |
+| Android build | The project's Android SDK and JDK. |
+| Credentials | Horizon OS credential-store bindings for the selected provider. |
+| Tunnel | An approved BrowserStack Local executable with a recorded SHA-256. |
+| State | Private directories on the same qualified filesystem. |
+
+The provider re-signs unsigned Debug IPA files.
+This workflow does not distribute production apps.
+The project supplies its build requirements.
+A Windows build does not qualify process or tunnel execution.
+
+## 2. Prepare the host
+
+> **CAUTION:** KEEP PROVIDER CREDENTIALS IN HORIZON.
+> Credentials in commands, contracts or tool arguments can expose the account.
+
+1. Configure the `browserstack` provider's OS credential-store bindings in Horizon.
+
+   Result: The native host uses the configured credentials without a login prompt.
+
+2. If the OS keyring is locked, unlock it locally.
+
+   Result: Horizon can read the configured bindings. Do not send the password to an agent.
+
+3. Install the approved BrowserStack Local executable.
+
+   Result: The tunnel path names a trusted executable.
+
+4. Record its approved SHA-256.
+
+   Result: The native host refuses changed executable bytes.
+
+5. Create a private state directory.
+
+   Result: The current user owns the directory. Other users cannot read it.
+
+6. Create the machine-local client file.
+
+   Result: The file has mode `0600`. Its absolute paths have no symlink components.
 
    ```json
    {
@@ -34,15 +64,19 @@ outside this workflow.
      "state": "/absolute/path/to/private/shared-native-state",
      "provider": "browserstack",
      "tunnel_binary": "/absolute/path/to/verified/BrowserStackLocal",
-     "tunnel_sha256": "<reviewed SHA-256>"
+     "tunnel_sha256": "<approved SHA-256>"
    }
    ```
 
-   Clients using the same provider account must use the same state directory.
-   Keep the owner UUID stable for reconciliation; do not replace it to bypass
-   pending work. The host pins the project directory identity and reads declared
-   files relative to that held directory.
-4. Register one MCP server using the packaged Horizon executable:
+Clients for the same provider account must use the same state directory.
+Keep the owner UUID unchanged for recovery.
+Do not replace it to bypass uncertain work.
+The host retains the project's directory identity.
+It reads declared files through that retained directory.
+
+7. Register the packaged executable as one MCP server.
+
+   Result: The selected project and credentials come from host configuration.
 
    ```json
    {
@@ -55,28 +89,37 @@ outside this workflow.
    }
    ```
 
-   Set the client's tool timeout to at least the requested run lifetime (up to
-   1,800 seconds). Enable progress notifications. `horizon-native --mcp --client`
-   is the equivalent standalone development binary. The selected project and
-   credentials come only from host configuration, never from MCP arguments.
+8. Set the MCP timeout to at least the requested run lifetime.
 
-To inspect real devices and native capacity without allocating:
+   Result: The timeout covers a run of up to 1,800 seconds.
 
-```bash
-horizon --native-catalog
-```
+9. Enable MCP progress notifications.
 
-Catalog selections such as `latest-2` mean the third distinct numeric OS release
-in the live physical-device catalog. A missing matrix entry fails validation
-before a partial matrix is started. Server versions are provider policy:
-Android explicitly selects Appium 2.19.0 rather than its legacy default; iOS uses
-the provider's OS-compatible version.
+   Result: The client receives build, session and recipe events.
 
-## Project declaration
+The standalone development executable uses `horizon-native --mcp --client <file>`.
+MCP arguments cannot replace the configured project or credentials.
 
-The [version 1 schema](remote-device-testing.schema.json) describes the contract.
-Commands are argv arrays, not shell strings. Artifact and recipe paths stay inside
-the selected checkout. A worked declaration follows:
+## 3. Examine the device catalog
+
+1. Run the catalog command.
+
+   ```bash
+   horizon --native-catalog
+   ```
+
+   Result: The provider returns physical devices and current native capacity without allocation.
+
+`latest-2` selects the third distinct numeric OS release in the physical-device catalog.
+A missing matrix entry causes refusal before any partial matrix starts.
+Android selects Appium 2.19.0 instead of the legacy default.
+iOS uses the provider's OS-compatible version.
+
+## 4. Declare the project
+
+Commands are argv arrays. Shell strings are not permitted.
+Artifact and recipe paths stay inside the selected checkout.
+This example declares both platforms and four devices.
 
 ````markdown
 ```yaml
@@ -110,37 +153,60 @@ remote-device-testing:
 ```
 ````
 
-Every lane needs its own synthetic database/cache namespace, backend process and
-port. Read the companion backend's `AGENTS.md` and development workflow first.
-Reuse its development services without resetting a shared checkout, reading a
-production snapshot or globally flushing databases. Only declared numeric
-loopback ports are exposed. The BrowserStack adapter translates a declared
-loopback launch URL to the exact `bs-local.com:<port>` alias, preserving its path;
-the app's Debug networking policy must allow that host. The tunnel never combines
-`--only` with `--force-local`, which would defeat the restriction.
+1. Read the companion backend's `AGENTS.md` and development guide.
 
-A managed backend receives a private `HORIZON_APP_BACKEND_DIR`. Its foreground
-command emits one bounded stdout readiness record only after the app backend is
-ready:
+   Result: The local services and synthetic data requirements are known.
+
+2. Declare a separate backend for each lane.
+
+   Result: Each device has its own database, cache namespace, process and port.
+
+> **CAUTION:** KEEP SHARED CHECKOUTS AND DATA INTACT.
+> A shared reset or database deletion can interrupt other work.
+
+3. Use only isolated synthetic data.
+
+   Result: The run does not use production snapshots or global database resets.
+
+Only declared numeric loopback ports enter the tunnel allowlist.
+The adapter changes the loopback launch URL to the exact `bs-local.com:<port>` alias.
+It preserves the URL path.
+The app's Debug network policy must permit this host.
+Do not combine `--only` with `--force-local`; this combination removes the tunnel restriction.
+
+## 5. Managed backend protocol
+
+The foreground command receives a private `HORIZON_APP_BACKEND_DIR`.
+It emits one bounded stdout record after the app backend is ready.
 
 ```json
 {"native_backend_ready":1,"port":33327}
 ```
 
-On cleanup the guardian sends `{"native_backend_cleanup":1,"nonce":"..."}` and
-closes stdin. The helper must stop its nested process groups, remove only its
-owned worktree and synthetic namespace, then return
-`{"native_backend_closed":1,"nonce":"..."}`. A missing or mismatched nonce
-retains an uncertain cleanup record. Foreground commands must not daemonize or
-escape the declared guardian ownership. Remote build commands need their own
-bounded remote EOF/expiry guardian; a local SSH process group cannot clean a
-remote Xcode build by itself.
+The guardian sends a cleanup request and then closes stdin.
 
-## Executable recipes and running
+```json
+{"native_backend_cleanup":1,"nonce":"<host-cleanup-nonce>"}
+```
 
-Recipes contain exactly one structured `device-recipe` YAML block. Markdown prose
-alone is not an executable pass. Optional `platforms: [ios]` or `[android]` limits
-platform-specific recipes; both platforms are otherwise selected.
+The helper stops its owned process groups and removes only its owned worktree and synthetic namespace.
+It returns this record after cleanup completes.
+
+```json
+{"native_backend_closed":1,"nonce":"<host-cleanup-nonce>"}
+```
+
+A missing or incorrect nonce keeps cleanup uncertain.
+Foreground commands must not daemonize or escape guardian ownership.
+A remote build needs its own finite remote guardian.
+Local SSH process cleanup alone cannot stop a remote Xcode build.
+
+## 6. Declare recipes
+
+A recipe has exactly one `device-recipe` YAML block.
+Markdown text alone does not declare an executable test.
+Optional `platforms: [ios]` or `[android]` selects one platform.
+Without this field, the recipe selects both platforms.
 
 ````markdown
 ```yaml
@@ -155,137 +221,211 @@ device-recipe:
 ```
 ````
 
-Call `device_test_run` with `{"lifetime_seconds":1800}`. One original lifetime
-covers builds, uploads, allocation, recipes and evidence requests. The report
-contains build outcomes, resolved devices, each step's result/duration/screenshot,
-finalized video and failure-log outcomes, authenticated provider dashboard links
-without share tokens, and separate cleanup confirmation.
-Unavailable evidence is explicit; it is not a passing capture. A failing step
-continues the other devices. Cancellation prevents further allocation and closes
-owned resources before the retained worker writes its report.
+## 7. Run the matrix
 
-The equivalent CLI is:
+> **CAUTION:** USE ONLY THE APPROVED DEVICE QUOTA AND PORTS.
+> The run allocates paid devices and deletes its owned uploads after completion.
 
-```bash
-horizon --native-run --client /absolute/path/to/client.json
-```
+1. Call `device_test_run` with the approved lifetime.
 
-Progress is bounded NDJSON on stderr; stdout is the terminal JSON report. The
-report is saved privately before output delivery. SIGINT/SIGTERM cancel the run.
-A stalled output consumer cannot retain device ownership indefinitely. Exit code
-2 indicates failed or cancelled execution or unconfirmed cleanup; inspect the
-saved report rather than replaying a mutation blindly.
+   ```json
+   {"lifetime_seconds":1800}
+   ```
 
-`session_created` progress includes an opaque session and its read-only loopback
-RFB endpoint. Attach it through the public `device_panel` tool in the calling
-agent's workspace. Inspect actual displayed frames and changing pixels; a
-connected panel or backend readiness check is not proof of app interaction or
-network access. Close only viewers belonging to this run. The viewer uses a
-fixed 768×1536 aspect-preserving presentation and does not change device geometry.
+   Result: One original lifetime covers builds, uploads, allocation, recipes and evidence.
 
-## Interactive MCP tools
+2. Examine the per-device report.
 
-| Tool | Behavior |
-| --- | --- |
-| `app_upload` | Upload a declared platform artifact; return an opaque hash/size handle |
-| `app_session_create` | Start one declared matrix entry with its own backend and tunnel |
-| `app_snapshot` | Normalize native accessibility source and redact secure field values |
-| `app_act`, `app_wait` | Native gestures, element actions, assertions, waits and app lifecycle |
-| `app_screenshot` | Return a validated PNG and rolling private evidence handle |
-| `app_view` | Open/reuse the exact session's read-only native viewer |
-| `app_video` | Report allocation-time recording policy, download video, or close then finalize |
-| `app_logs` | Export redacted device/crash/Appium/network logs when available |
-| `app_tunnel_status` | Return redacted readiness/ownership state |
-| `app_session_close` | Acknowledge exact native closure, then stop owned local services |
-| `app_audit` | Read bounded action receipts with stream UUID and sequence cursor |
-| `device_test_run` | Execute the declared matrix through this same controller |
+   Result: The report lists build results, devices, step durations, screenshots, media results and cleanup results.
 
-Targets use `identifier`, `label`, `ref` or bounded device `coordinates`. Refs
-belong to one session and one fresh native source snapshot. Element resolution
-requires an exact unique match and checks native identity before input; ambiguity,
-changed identity and expired refs refuse the action. Taking a new snapshot,
-including Android named-element resolution, invalidates old refs. A driver
-acknowledgement is separate from an application-level assertion.
+3. Examine the backend request records.
 
-BrowserStack records from allocation to closure when video is enabled. Start and
-status report that policy; recording cannot be paused or enabled later. Stop
-closes the native session before download. Pending recordings return a typed
-unavailable error and may be retried as read-only requests. Network logs require
-provider support and enabled capture; this contract does not enable network
-capture by default. Logs may be absent when there was no crash.
+   Result: Actual app requests prove access to each assigned loopback backend.
 
-Audit retains the latest 256 receipts for the host lifetime, with static action
-names, opaque operation/session IDs, result, duration and typed error code.
-Compare stream UUIDs before reusing a cursor after a restart. Capture polling does
-not flood the audit. Raw input, provider IDs, upload tokens, URLs and credentials
-never enter receipts.
+Unavailable evidence is an explicit failure, not a successful capture.
+A failed step does not stop the other devices.
+Cancellation prevents further allocation.
+The retained worker saves the report after it closes its owned resources.
+Provider dashboard links require provider login and contain no share token.
 
-## Evidence and recovery
+The CLI uses the same controller.
+
+> **CAUTION:** USE ONLY THE APPROVED DEVICE QUOTA AND PORTS.
+> The CLI allocates paid devices and deletes its owned resources.
+
+4. Run the CLI command.
+
+   ```bash
+   horizon --native-run --client /absolute/path/to/client.json
+   ```
+
+   Result: Stderr contains finite NDJSON progress. Stdout contains the terminal JSON report.
+
+The host saves the private report before output delivery.
+SIGINT and SIGTERM cancel the run.
+A stalled output consumer cannot retain resources indefinitely.
+Exit code 2 identifies failed or cancelled execution or uncertain cleanup.
+Examine the saved report before any repeat of a mutation.
+
+## 8. Observe live panels
+
+1. Create a public `device_panel` for each `session_created` endpoint.
+
+   Result: The viewer connects to that session's read-only loopback RFB endpoint.
+
+2. Save three public inspections at least two seconds apart.
+
+   Result: Displayed pixels and advancing frames prove live presentation during app activity.
+
+3. If a panel was displayed and the person moves away, keep the test active.
+
+   Result: Background inspection continues without another reveal request.
+
+4. Close only this run's viewers after the test.
+
+   Result: Unrelated panels remain intact.
+
+Connection alone does not prove live presentation or app interaction.
+Backend readiness does not prove app network access.
+The viewer uses a fixed 768×1536 presentation and preserves the device's aspect ratio.
+It does not change device geometry.
+
+## 9. Interactive MCP reference
+
+Read `tools/list` for the complete typed argument schemas.
+Session and artifact arguments use opaque handles, not provider identifiers.
+The table names all 13 tools.
+
+| Tool | Result or behavior |
+|---|---|
+| `app_upload` | Uploads one declared platform artifact. Returns an opaque hash/size handle. |
+| `app_session_create` | Starts one matrix entry with its own backend and tunnel. |
+| `app_snapshot` | Returns the native accessibility tree. Redacts secure field values. |
+| `app_act` | Runs a native gesture, element action, assertion or app lifecycle action. |
+| `app_wait` | Waits for an element state within the original deadline. |
+| `app_screenshot` | Returns a validated PNG and private evidence handle. |
+| `app_view` | Opens or reuses that session's read-only native viewer. |
+| `app_video` | Returns recording policy or video. The `stop` operation closes the session before download. |
+| `app_logs` | Returns redacted device, crash, Appium or network logs when available. |
+| `app_tunnel_status` | Returns redacted readiness and ownership state. |
+| `app_session_close` | Gets exact provider closure acknowledgement, then stops the owned local services. |
+| `app_audit` | Returns receipts with a stream UUID and sequence cursor. |
+| `device_test_run` | Runs the complete declared matrix through the same controller. |
+
+Targets use `identifier`, `label`, `ref` or finite device `coordinates`.
+Each ref belongs to one session and one fresh snapshot.
+A new snapshot invalidates old refs.
+Android named-element resolution also takes a new snapshot.
+Input requires one exact match and unchanged native identity.
+An ambiguous target, changed identity or expired ref causes refusal.
+A driver acknowledgement does not prove the app's expected result.
+
+The provider records video from allocation to session closure when video is enabled.
+The `start` and `status` operations return this policy.
+Recording cannot pause or start later.
+Pending video returns a typed unavailable error.
+Only read-only downloads can be repeated without mutation replay.
+Network logs require provider support and enabled capture.
+The current contract does not enable network capture by default.
+Crash logs can be absent when no crash occurred.
+
+Audit retains the latest 256 receipts for the host lifetime.
+Receipts contain static action names, opaque IDs, results, durations and typed errors.
+Compare stream UUIDs before cursor reuse after a restart.
+Capture polling does not fill the audit.
+Raw input, provider IDs, upload tokens, URLs and credentials do not enter receipts.
+
+## 10. Evidence limits
 
 Interactive screenshots retain the latest 32 captures for the host lifetime.
-Run reports and exported provider media survive normal host exit in private
-archives. At most eight archives are admitted across restarts, with at most 128
-MiB per archive: 120 MiB for at most 1,024 evidence files and a separate
-8 MiB terminal-report reserve. Before builds or allocations, runs exceeding the
-file budget are rejected; the estimate includes explicit screenshot actions and
-possible failure logs and videos for every reset allocation. Evidence that exceeds
-the byte budget remains explicitly unavailable in the retained report. Full storage refuses a new archive;
-export and explicitly retire owned evidence before the next run. The host does
-not automatically delete retained evidence. Provider recordings also remain on
-BrowserStack under its own retention policy.
+Run reports and exported media survive normal host exit in private archives.
+At most eight archives are admitted across restarts.
+Each archive permits 1,024 evidence files within 120 MiB.
+One separate terminal report has an 8 MiB reserve.
+The complete archive limit is 128 MiB.
 
-Use the terminal report's `report_path` to locate its archive. The archive UUID
-is separate from the run UUID. Keep a private export receipt with the original
-path, destination and file hashes before you retire a completed archive.
+Before builds or allocations, the host rejects runs that exceed the file budget.
+The estimate counts screenshots and possible failure logs and videos for every initial or reset allocation.
+Evidence above the byte limit remains explicitly unavailable in the report.
+Full storage refuses a new archive.
+The host does not automatically delete retained evidence.
+Provider evidence also remains at BrowserStack under its retention policy.
 
-Provider downloads have fixed trusted origins, bounded redirects/body sizes and
-one remaining timeout. Credentials never reach video CDNs. Known provider
-secrets and sensitive log lines are removed before private export; other
-application content may remain private. Do not publish real app screenshots,
-recordings or logs with a public PR.
+1. Find the archive through the report's `report_path`.
 
-On a lost reply, host crash or uncertain cleanup:
+   Result: The archive UUID is separate from the run UUID.
 
-```bash
-horizon --native-reconcile --client /absolute/path/to/client.json
-```
+2. Export the completed evidence with its paths and file hashes.
 
-The exact private journal records retain quota until closure is positively
-confirmed. Reconciliation uses the original provider operation and owned local
-receipts, stops sessions/services before retiring uploads, and refuses unknown
-or missing ownership. Absence from a provider listing is not release proof.
-Repeated creation is not recovery. A leftover operation with no positive cleanup
-proof remains a hold and its original finite lifetime is preserved.
+   Result: A private export receipt identifies the original and destination paths.
 
-Distinguish local tests, live displayed-frame/control evidence, real loopback
-requests, finalized recordings and crash/cancellation proof when reporting.
-Authenticated workflows, payments and app feature parity need their own recipes;
-an anonymous shell smoke does not qualify them.
+> **CAUTION:** RETIRE ONLY COMPLETED OWNED EVIDENCE.
+> A premature deletion can remove recovery or test evidence.
 
+3. If the hashes match, retire the completed owned archive.
 
-Media downloads admit at most two requests per controller. A third request returns
-`app_media_busy` before the provider request. Downloads do not hold action locks.
-Cold app launches receive up to 60 seconds within the original session deadline.
-Other commands retain the normal 15-second limit. Horizon does not retry mutations.
+   Result: A new archive can use the released storage slot.
 
-Reports include every allocation handle used by reset steps. Each media entry names
-its allocation. The final provider dashboard link names the final allocation.
-The controller normally retains at most 32 verified provider references, including
-both live lanes. During an exclusive validated matrix run, it pins that run's
-references through final media collection, bounded by 1,088 entries: up to 32 prior
-references, 32 initial allocations and 1,024 reset steps. Every exit, including
-cancellation or panic, unpins the entries and trims the history back to 32. This
-retention does not renew resource leases; original expiry timestamps still apply
-after unpinning. References outside the active run can expire or leave this history
-and then report an explicit media error. A reset does not replace earlier evidence
-silently.
-Video finalization polls for up to 30 seconds after closure, within the run deadline.
-A pending video remains an explicit failure after this budget.
+Downloads use trusted origins, finite redirects, body limits and one remaining timeout.
+Credentials do not reach video CDNs.
+The host removes known secrets and sensitive log lines before export.
+Other app content can remain private.
+Do not publish app screenshots, recordings or logs in public PRs.
 
+At most two media downloads run per controller.
+A third request returns `app_media_busy` before provider access.
+Downloads do not hold action locks.
+Cold app launches receive up to 60 seconds within the original deadline.
+Other commands retain the normal 15-second limit.
+Horizon does not retry mutations.
+Video finalization polls for up to 30 seconds within the run deadline.
+Pending video remains an explicit failure after this limit.
 
-Keep the shared journal and registry on the same qualified filesystem. The registry
-records device and inode identities. Copied state, different device numbers, a
-changed mount, or a missing registry or state root causes an ownership refusal.
-Preserve the original state and evidence. Do not change the owner, recreate the
-registry, or stamp new identities to bypass this refusal. Filesystem migration and
-registry repair require separate qualification.
+Reports name every allocation from reset steps.
+Each media entry names its allocation.
+The final dashboard link names the final allocation.
+The normal provider-reference history has at most 32 entries, including both live lanes.
+An exclusive validated run retains its references through final media export.
+Its limit is 1,088 entries: 32 prior references, 32 initial allocations and 1,024 reset steps.
+Every exit, cancellation or panic restores the 32-entry history.
+This retention does not renew resource leases.
+Original expiry timestamps apply after the run releases its references.
+Other expired references return explicit media errors.
+Reset does not silently replace earlier evidence.
+
+## 11. Recover uncertain operations
+
+Use the original provider state and owner after a lost reply, host crash or uncertain cleanup.
+
+> **CAUTION:** RECONCILE ONLY THE RECORDED OWNED OPERATIONS.
+> Recovery deletes the recorded sessions and uploads and stops their local services.
+
+1. Run exact reconciliation with the same client file.
+
+   ```bash
+   horizon --native-reconcile --client /absolute/path/to/client.json
+   ```
+
+   Result: Provider acknowledgements and local receipts release only the recorded owned resources.
+
+2. If cleanup remains uncertain, preserve the original state and owner.
+
+   Result: The uncertainty keeps its quota hold and original finite lifetime.
+
+Absence from a provider list does not prove release.
+Repeated creation is not recovery.
+Unknown or missing ownership causes refusal.
+Reconciliation stops sessions and services before it retires uploads.
+
+Keep the shared journal and registry on the same qualified filesystem.
+The registry records device and inode identities.
+Copied state, changed device numbers or a missing root causes refusal.
+Preserve the original state and evidence.
+Do not recreate the registry or stamp new identities to bypass refusal.
+Filesystem migration and registry repair require separate qualification.
+
+## 12. Report the evidence
+
+Report local tests, displayed-frame proof, app requests, decoded video and cleanup separately.
+Authenticated workflows, payments and feature parity require their own recipes.
+An anonymous shell test does not qualify those workflows.

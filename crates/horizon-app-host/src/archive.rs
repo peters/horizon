@@ -162,11 +162,12 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     #[test]
     fn exhausted_evidence_preserves_one_bounded_terminal_report() {
-        let root = tempfile::Builder::new()
+        let temp_root = tempfile::Builder::new()
             .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir()
             .unwrap();
-        let archive = Archive::new(root.path()).unwrap();
+        let root = temp_root.path().canonicalize().unwrap();
+        let archive = Archive::new(&root).unwrap();
         for _ in 0..MAX_EVIDENCE_FILES {
             archive.screenshot(Uuid::new_v4(), b"validated-fixture").unwrap();
         }
@@ -180,7 +181,7 @@ mod tests {
         );
         assert!(archive.finish_value(serde_json::json!({})).is_err());
 
-        let archive = Archive::new(root.path()).unwrap();
+        let archive = Archive::new(&root).unwrap();
         archive.usage.lock().unwrap().bytes = EVIDENCE_BYTES;
         assert!(archive.screenshot(Uuid::new_v4(), b"over-byte-budget").is_err());
         assert!(
@@ -197,35 +198,34 @@ mod tests {
 
     #[test]
     fn persisted_archive_admission_counts_partial_runs_and_saves_terminal_errors() {
-        let root = tempfile::Builder::new()
+        let temp_root = tempfile::Builder::new()
             .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir()
             .unwrap();
-        let store = Store::new(root.path()).unwrap();
+        let root = temp_root.path().canonicalize().unwrap();
+        let store = Store::new(&root).unwrap();
         for _ in 0..8 {
             let archive = store.create().unwrap();
             assert!(archive.finish_result(Err(Error::Cancelled)).is_err());
             assert!(archive.path.join("report.json").is_file());
         }
         drop(store);
-        assert!(matches!(
-            Store::new(root.path()).unwrap().create(),
-            Err(Error::EvidenceFull)
-        ));
-        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 8);
+        assert!(matches!(Store::new(&root).unwrap().create(), Err(Error::EvidenceFull)));
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 8);
     }
     #[test]
     fn archived_capture_survives_shutdown_and_cannot_follow_root_replacement() {
-        let root = tempfile::Builder::new()
+        let temp_root = tempfile::Builder::new()
             .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir()
             .unwrap();
-        let archive = Archive::new(root.path()).unwrap();
+        let root = temp_root.path().canonicalize().unwrap();
+        let archive = Archive::new(&root).unwrap();
         let capture = archive.screenshot(Uuid::new_v4(), b"validated-fixture").unwrap();
         let path = capture.path.unwrap();
         drop(archive);
         assert_eq!(std::fs::read(&path).unwrap(), b"validated-fixture");
-        let archive = Archive::new(root.path()).unwrap();
+        let archive = Archive::new(&root).unwrap();
         let original = archive.path.with_extension("saved");
         std::fs::rename(&archive.path, &original).unwrap();
         std::fs::create_dir(&archive.path).unwrap();
