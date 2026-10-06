@@ -256,8 +256,10 @@ Do this task after B02. It needs the synthetic repository.
 
    ```sh
    python3 <run>/launcher/serve.py --horizon <run>/bin/horizon \
-     --native-view --state <run>/fixture-repair
+     --native-view --state <run>/fixture-repair [--tools <tools-root>]
    ```
+
+   Use `--tools <tools-root>` only if S02 step 9 used it.
 
    Result: A second candidate starts with no cloud settings.
 
@@ -511,18 +513,22 @@ G02 and L05 use this entry. Keep it until the end of area L.
 
 Do this task after D01. It uses the cloud `smoke-a`.
 
-> **CAUTION:** ONLY THE OPERATOR WRITES THE GITHUB TOKEN. Do not type the token
-> with a device action. Do not show the file.
+1. Make an empty token file with mode `600`.
 
-1. Ask the operator to write the GitHub token to a private file.
-
-   ```text
-   <data-home>/.horizon/cloud/credentials/github
+   ```sh
+   install -m 600 /dev/null <data-home>/.horizon/cloud/credentials/github
    ```
 
-   Result: The file has mode `600`. Nobody shows its content.
+   Result: The file exists, is empty and has mode `600`.
 
-2. Add a `git_credentials` entry for `<repo>` to the settings file.
+   > **CAUTION:** ONLY THE OPERATOR WRITES THE GITHUB TOKEN. Do not type the token
+   > with a device action. Do not show the file.
+
+2. Ask the operator to write the GitHub token into this file without a change of its mode.
+
+   Result: `stat -c %a` shows `600` for the file. Nobody shows its content.
+
+3. Add a `git_credentials` entry for `<repo>` to the settings file.
 
    ```sh
    cd <data-home>/.horizon/cloud && jq '.git_credentials = [{"local_repository":"<home>/smoke/app","repository":"<test-owner>/app","token_file":"<home>/.horizon/cloud/credentials/github","author_name":"Smoke Test","author_email":"smoke@example.invalid"}]' settings.json > settings.new && chmod 600 settings.new && mv settings.new settings.json
@@ -533,11 +539,11 @@ Do this task after D01. It uses the cloud `smoke-a`.
    > **CAUTION:** THIS STEP SENDS THE GITHUB TOKEN TO THE WORKER. Use only a token
    > that can reach the repository of the test account.
 
-3. On the card of `smoke-a`, click **Reconnect cloud**.
+4. On the card of `smoke-a`, click **Reconnect cloud**.
 
    Result: The card shows Ready.
 
-4. In a worker shell of `smoke-a`, show the mode of the credential file.
+5. In a worker shell of `smoke-a`, show the mode of the credential file.
 
    ```sh
    stat -c '%a %n' /run/horizon-credentials /run/horizon-credentials/github.json
@@ -546,7 +552,7 @@ Do this task after D01. It uses the cloud `smoke-a`.
    Result: The directory has mode `700` and the file has mode `600`. Do not show
    the content of the file.
 
-5. Remove the Git entry from the settings file.
+6. Remove the Git entry from the settings file.
 
    ```sh
    cd <data-home>/.horizon/cloud && jq 'del(.git_credentials)' settings.json > settings.new && chmod 600 settings.new && mv settings.new settings.json
@@ -554,11 +560,11 @@ Do this task after D01. It uses the cloud `smoke-a`.
 
    Result: The settings file has no Git entry.
 
-6. On the card of `smoke-a`, click **Reconnect cloud**.
+7. On the card of `smoke-a`, click **Reconnect cloud**.
 
    Result: The card shows Ready.
 
-7. In the worker shell, look for the credential file.
+8. In the worker shell, look for the credential file.
 
    ```sh
    ls /run/horizon-credentials/github.json
@@ -566,19 +572,19 @@ Do this task after D01. It uses the cloud `smoke-a`.
 
    Result: The command shows that the file does not exist.
 
-8. In Cloud settings, select **Subscription login** for Claude.
+9. In Cloud settings, select **Subscription login** for Claude.
 
    Result: The Claude section shows **Subscription login**.
 
-9. Click **Save settings**.
+10. Click **Save settings**.
 
-   Result: Claude has no API key in the settings.
+    Result: Claude has no API key in the settings.
 
-10. On the card of `smoke-a`, click **Reconnect cloud**.
+11. On the card of `smoke-a`, click **Reconnect cloud**.
 
     Result: The card shows Ready.
 
-11. In the worker shell, look for the Claude key file.
+12. In the worker shell, look for the Claude key file.
 
     ```sh
     find /workspace -name 'anthropic-api-key*' 2>/dev/null
@@ -586,26 +592,26 @@ Do this task after D01. It uses the cloud `smoke-a`.
 
     Result: The output is empty. The reconnect removed the unbound key file.
 
-12. In Cloud settings, select **API key** for Claude again.
+13. In Cloud settings, select **API key** for Claude again.
 
     Result: The card shows **Paste API key** below **Claude**.
 
     > **CAUTION:** THE OPERATOR PASTES THE AGENT KEY. Do not type the key with a
     > device action, because characters can change.
 
-13. Ask the operator to paste the Claude API key.
+14. Ask the operator to paste the Claude API key.
 
     Result: The field shows a masked value.
 
-14. Click **Save settings**.
+15. Click **Save settings**.
 
     Result: The dialog closes. Claude shows **Key saved** when the dialog opens again.
 
-15. On the card of `smoke-a`, click **Reconnect cloud**.
+16. On the card of `smoke-a`, click **Reconnect cloud**.
 
     Result: The card shows Ready. The reconnect sends the saved key to the worker.
 
-16. In the worker shell, look for the Claude key file.
+17. In the worker shell, look for the Claude key file.
 
     ```sh
     find /workspace -name 'anthropic-api-key*' 2>/dev/null
@@ -616,11 +622,11 @@ Do this task after D01. It uses the cloud `smoke-a`.
     > **CAUTION:** REVOKE ONLY THE GITHUB TOKEN THAT THIS RUN MADE. Other tokens of
     > the account can give access to other work.
 
-17. Ask the operator to revoke the GitHub token at GitHub.
+18. Ask the operator to revoke the GitHub token at GitHub.
 
     Result: The token does not give access. Removal from the worker does not revoke it.
 
-18. Mark the GitHub token as revoked in the resource ledger.
+19. Mark the GitHub token as revoked in the resource ledger.
 
     Result: The ledger shows the token of A09 as revoked.
 

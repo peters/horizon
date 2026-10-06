@@ -132,10 +132,10 @@ child is the frozen candidate.
    > can read. Use a rootless daemon with its own data root, and run only the
    > frozen candidate and synthetic repositories in the fixture.
 
-4. In the launcher copy, bind the socket of a rootless Docker daemon into the fixture.
+4. In the launcher copy, add this line directly after the line `namespace = box.namespace`.
 
-   ```text
-   <docker-socket>
+   ```python
+       namespace = namespace[:-3] + ['--bind', '<docker-socket>', '<docker-socket>'] + namespace[-3:]
    ```
 
    Result: The fixture can use the Docker daemon of this run. The fixture makes `/run/user/<uid>` private,
@@ -216,6 +216,15 @@ child is the frozen candidate.
 5. Record the UTC time and the values of each inspection in the evidence.
 
    Result: The evidence shows a live view.
+
+6. In the fixture terminal, examine the Docker daemon through the bound socket.
+
+   ```sh
+   docker -H unix://<docker-socket> info --format '{{.SecurityOptions}}'
+   ```
+
+   Result: The output contains `name=rootless`. The candidate can reach the
+   Docker daemon of this run.
 
 ### 6.4 S04 — Make sure that the frozen candidate runs
 

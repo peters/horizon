@@ -182,8 +182,10 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 1. Start a second fixture with the checked-in `serve.py`, the frozen candidate and a new state directory.
 
    ```sh
-   python3 scripts/device-smoke/serve.py --horizon <run>/bin/horizon --native-view --state <run>/fixture-unsaved
+   python3 scripts/device-smoke/serve.py --horizon <run>/bin/horizon --native-view --state <run>/fixture-unsaved [--tools <tools-root>]
    ```
+
+   Use `--tools <tools-root>` only if S02 step 9 used it.
 
    Result: The candidate starts with an ephemeral session. The session is not saved.
 
