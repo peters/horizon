@@ -15,6 +15,8 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 worker = importlib.util.module_from_spec(spec)
 loader.exec_module(worker)
 KEY = 'tskey-auth-synthetic12345678901234567890'
+CLOUD = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b'
+NAME = 'horizon-cloud-' + CLOUD
 
 class TailnetTests(unittest.TestCase):
     def setUp(self):
@@ -25,6 +27,8 @@ class TailnetTests(unittest.TestCase):
         self.state.mkdir(); self.runtime.mkdir()
         self.calls = []
         self.joined = False
+        # The daemon's host name: the container's own until a preference names the device.
+        self.hostname = 'd1021da2f9b5'
         for name, value in [('STATE', self.state), ('RUNTIME', self.runtime), ('PUBLIC', root / 'public')]:
             patcher = patch.object(worker, name, value); patcher.start(); self.addCleanup(patcher.stop)
         for name in ['private_directory', 'prepare_agents', 'start', 'wait_socket']:
@@ -36,7 +40,12 @@ class TailnetTests(unittest.TestCase):
         self.assertNotIn(KEY, ' '.join(args))
         self.assertNotIn('TS_AUTHKEY', os.environ)
         if args[0] == 'status':
-            return json.dumps({'BackendState': 'Running' if self.joined else 'NeedsLogin'}).encode()
+            return json.dumps({'BackendState': 'Running' if self.joined else 'NeedsLogin',
+                               'Self': {'HostName': self.hostname}}).encode()
+        if args[0] in {'up', 'set'}:
+            for arg in args:
+                if arg.startswith('--hostname='):
+                    self.hostname = arg.removeprefix('--hostname=')
         if args[0] == 'up':
             fd = kwargs['pass_fds'][0]
             self.assertEqual(os.pread(fd, 4096, 0).decode(), KEY)
@@ -52,6 +61,124 @@ class TailnetTests(unittest.TestCase):
             result = output.getvalue()
         self.assertNotIn(KEY, result)
         return result
+
+    def resume(self, cloud=CLOUD, container='02f08702ac0a'):
+        # A resumed cloud gets a new container with a new host name, as a Hetzner resume does.
+        self.hostname = self.hostname if self.hostname.startswith('horizon-') else container
+        environment = {} if cloud is None else {'HORIZON_CLOUD_OPERATION': cloud}
+        with patch.object(worker.sys, 'argv', ['worker', 'resume']), patch.dict(os.environ, environment, clear=True):
+            worker.main()
+
+    def test_device_name_is_a_deterministic_dns_label_from_the_cloud_id(self):
+        self.assertEqual(worker.device_name(CLOUD), 'horizon-cloud-' + CLOUD)
+        self.assertEqual(worker.device_name(CLOUD), worker.device_name(CLOUD))
+        names = {}
+        for cloud in [CLOUD, 'Cloud_A', 'cloud-a', 'cloud_a', 'CLOUD-A', 'a' * 100, 'a' * 99 + 'b', 'trailing-', 'x_']:
+            with self.subTest(cloud=cloud):
+                name = worker.device_name(cloud)
+                self.assertRegex(name, r'^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')
+                self.assertLessEqual(len(name), 63)
+                self.assertEqual(name, worker.device_name(cloud))
+                self.assertNotIn(name, names.values())
+                names[cloud] = name
+        self.assertEqual(names['cloud-a'], 'horizon-cloud-cloud-a')
+        # A direct ID that looks like a digest name takes the digest path too.
+        transformed = worker.device_name('Cloud_A')
+        lookalike = transformed.removeprefix('horizon-cloud-')
+        self.assertNotEqual(worker.device_name(lookalike), transformed)
+        self.assertRegex(worker.device_name(lookalike), r'^horizon-cloud-.*-[0-9a-f]{20}$')
+        # Long IDs that share the shortened prefix differ in an 80-bit digest of the exact ID.
+        self.assertNotEqual(worker.device_name('a' * 50 + '17383'), worker.device_name('a' * 50 + '70295'))
+        for cloud in [None, '', 'a b', 'a.b', 'cloud/a', 'a' * 101, 'ä', 'a\n', 7]:
+            with self.subTest(cloud=cloud):
+                self.assertIsNone(worker.device_name(cloud))
+
+    def test_first_enrollment_names_the_device_after_the_cloud(self):
+        self.resume()
+        self.assertEqual((self.runtime / 'device-name').read_text(), NAME)
+        self.assertEqual(self.configure('work', None), 'needs_key\n')
+        self.assertEqual(self.configure('work', KEY), 'ready\n')
+        [up] = [args for args in self.calls if args[0] == 'up']
+        self.assertIn('--hostname=' + NAME, up)
+        self.assertEqual(self.hostname, NAME)
+        self.assertFalse(any(args[0] == 'set' for args in self.calls))
+
+    def test_resume_keeps_the_name_on_a_new_container_without_a_key(self):
+        self.resume()
+        self.configure('work', None); self.configure('work', KEY)
+        for container in ['02f08702ac0a', '5a1c4e9f7b20']:
+            with self.subTest(container=container):
+                self.calls.clear()
+                (self.runtime / 'device-name').unlink()
+                self.resume(container=container)
+                self.assertEqual(self.configure('work', None), 'ready\n')
+                self.assertEqual(self.hostname, NAME)
+                self.assertEqual(self.calls, [('status', '--json'), ('status', '--json')])
+
+    def test_resume_renames_a_cloud_enrolled_with_the_container_host_name(self):
+        self.configure('work', None); self.configure('work', KEY)
+        self.assertEqual(self.hostname, 'd1021da2f9b5')
+        self.calls.clear()
+        self.resume()
+        self.assertEqual(self.configure('work', None), 'ready\n')
+        self.assertEqual(self.hostname, NAME)
+        self.assertIn(('set', '--hostname=' + NAME), self.calls)
+        self.assertFalse(any(args[0] in {'up', 'logout'} for args in self.calls))
+        self.calls.clear()
+        self.assertEqual(self.configure('work', None), 'ready\n')
+        self.assertFalse(any(args[0] == 'set' for args in self.calls))
+
+    def test_a_failed_rename_keeps_a_joined_cloud_usable(self):
+        self.configure('work', None); self.configure('work', KEY)
+        self.resume()
+        original = self.call
+        def refused(*args, **kwargs):
+            if args[0] == 'set':
+                raise worker.subprocess.CalledProcessError(1, args)
+            return original(*args, **kwargs)
+        with patch.object(worker, 'call', refused):
+            self.assertEqual(self.configure('work', None), 'ready\n')
+        self.assertEqual(self.hostname, '02f08702ac0a')
+        self.assertEqual(self.configure('work', None), 'ready\n')
+        self.assertEqual(self.hostname, NAME)
+
+    def test_reenrollment_after_resume_also_names_the_device(self):
+        (self.state / 'selection').write_text('work')
+        self.resume()
+        self.assertEqual(self.configure('work', None), 'needs_key\n')
+        self.assertEqual(self.configure('work', KEY), 'ready\n')
+        [up] = [args for args in self.calls if args[0] == 'up']
+        self.assertIn('--hostname=' + NAME, up)
+        self.calls.clear()
+        self.assertEqual(self.configure('other', None), 'needs_key\n')
+        self.assertEqual(self.configure('other', KEY), 'ready\n')
+        [up] = [args for args in self.calls if args[0] == 'up']
+        self.assertIn('--hostname=' + NAME, up)
+
+    def test_a_worker_without_a_cloud_id_keeps_the_daemon_host_name(self):
+        (self.runtime / 'device-name').write_text('stale-name')
+        self.resume(cloud=None)
+        self.assertFalse((self.runtime / 'device-name').exists())
+        self.configure('work', None); self.configure('work', KEY)
+        [up] = [args for args in self.calls if args[0] == 'up']
+        self.assertFalse(any(arg.startswith('--hostname') for arg in up))
+        self.resume(cloud='invalid cloud id')
+        self.assertFalse((self.runtime / 'device-name').exists())
+
+    def test_malformed_recorded_name_never_reaches_the_daemon(self):
+        for name in ['', 'UPPER', '-leading', 'trailing-', 'a' * 64, 'dot.name', 'name\n']:
+            with self.subTest(name=name):
+                self.calls.clear()
+                (self.runtime / 'device-name').write_text(name)
+                with self.assertRaises(ValueError): self.configure('work', KEY)
+                self.assertFalse(any(args[0] in {'up', 'set'} for args in self.calls))
+
+    def test_helper_declares_the_stable_name_contract(self):
+        with patch.object(worker.sys, 'argv', ['worker', '--stable-name-contract']), \
+                patch('sys.stdout', new_callable=io.StringIO) as output:
+            worker.main()
+        self.assertEqual(output.getvalue(), 'horizon-tailnet-contract=2\n')
+        self.assertEqual(self.calls, [])
 
     def test_join_has_no_retained_auth_key_and_retries_do_not_reuse_one_time_key(self):
         self.assertEqual(self.configure('work', None), 'needs_key\n')
@@ -156,9 +283,10 @@ class TailnetTests(unittest.TestCase):
 
     def test_resume_never_needs_a_key_or_touches_the_host_tailscale(self):
         (self.state / 'selection').write_text('work')
-        with patch.object(worker.sys, 'argv', ['worker', 'resume']): worker.main()
+        self.resume()
         worker.start.assert_called_once()
         self.assertTrue((self.runtime / 'agent-isolation').exists())
+        self.assertEqual((self.runtime / 'device-name').stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.calls, [])
 
     def test_daemon_uses_persistent_private_state_and_restarts(self):

@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Root control lane for persistent cloud networking. Never prints private input."""
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,9 @@ PROXY = 'socks5h://127.0.0.1:1055'
 CLI = '/usr/local/bin/tailscale'
 DAEMON = '/usr/local/bin/tailscaled'
 SELF = '/usr/local/bin/horizon-worker-tailnet'
+# Written at container start from the provider environment, which SSH commands do not see.
+NAME = 'device-name'
+NAME_PREFIX = 'horizon-cloud-'
 
 
 def private_directory(path):
@@ -170,7 +174,9 @@ def configure():
         if old and old != identity:
             call('logout')
         backend = status(wait=True)
+        name = recorded_name()
         if old == identity and backend == 'Running':
+            rename(name)
             print('ready')
             return
         # A reconnect timeout is not proof that a persistent identity needs login.
@@ -193,13 +199,74 @@ def configure():
         try:
             os.write(fd, key.encode())
             call('up', '--auth-key=file:/proc/self/fd/' + str(fd), '--accept-dns=false',
-                 '--timeout=30s', pass_fds=(fd,))
+                 *(['--hostname=' + name] if name else []), '--timeout=30s', pass_fds=(fd,))
         finally:
             os.close(fd)
         if status(wait=True) != 'Running':
             raise ValueError()
         publish_devices()
         print('ready')
+
+
+def device_name(cloud):
+    """The tailnet device name of a cloud: the same on every worker of its life.
+
+    Tailscale names a device after its host name, and each new container has a random
+    one. The name is horizon-cloud-<cloud ID>, or a digest form for an ID that needs a
+    change or a shorter form; the provider's server or pod name can differ.
+    """
+    if not isinstance(cloud, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', cloud):
+        return None
+    label = cloud.lower().replace('_', '-')
+    name = NAME_PREFIX + label
+    # A lossy or shortened ID gets an 80-bit digest of the exact ID, so two clouds do not
+    # share a name. Every digest name ends with one; a direct name never does, so the two
+    # kinds never meet. A UUID ends with 12 hexadecimal digits and stays direct.
+    if label != cloud or len(name) > 63 or name.endswith('-') or re.search(r'-[0-9a-f]{20}$', name):
+        name = name[:42].rstrip('-') + '-' + hashlib.sha256(cloud.encode()).hexdigest()[:20]
+    return name
+
+
+def record_name():
+    name = device_name(os.environ.get('HORIZON_CLOUD_OPERATION'))
+    recorded = RUNTIME / NAME
+    if name is None:
+        recorded.unlink(missing_ok=True)
+        return
+    fd, pending = tempfile.mkstemp(dir=RUNTIME, prefix='device-name-')
+    try:
+        with os.fdopen(fd, 'w') as output:
+            output.write(name)
+        os.replace(pending, recorded)
+    finally:
+        Path(pending).unlink(missing_ok=True)
+
+
+def recorded_name():
+    try:
+        name = (RUNTIME / NAME).read_text()
+    except FileNotFoundError:
+        return None
+    if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', name):
+        raise ValueError()
+    return name
+
+
+def rename(name):
+    # Enrollment keeps the name in the daemon's persistent preferences. This renames a
+    # cloud that enrolled with an earlier helper, which used the container host name.
+    # HostName is the name this node reports; an administrator's rename in the tailnet
+    # changes only the machine name that control assigns, which this never overrides.
+    # Self.HostName is control's copy, so a repeat within seconds can set it again.
+    # A joined cloud stays usable under its old name; a failed rename never fails it.
+    if name is None:
+        return
+    try:
+        report = json.loads(call('status', '--json'))
+        if (report.get('Self') or {}).get('HostName') != name:
+            call('set', '--hostname=' + name)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
 
 
 def wait_socket():
@@ -389,10 +456,14 @@ def main():
         handoff_browser_root()
         agent(['/usr/bin/true'])
     elif sys.argv[1:] == ['resume']:
+        private_directory(RUNTIME)
+        record_name()
         if (STATE / 'selection').exists():
-            private_directory(RUNTIME)
             (RUNTIME / 'agent-isolation').touch(mode=0o600)
             start()
+    elif sys.argv[1:] == ['--stable-name-contract']:
+        # Contract 2: the device name comes from the cloud ID, not the container host name.
+        print('horizon-tailnet-contract=2')
     elif sys.argv[1:] == ['serve']:
         serve()
     elif sys.argv[1:] == ['status']:
