@@ -49,16 +49,26 @@ Release builds use the default features. To get speech, use a source build.
    | macOS x64 | `horizon-osx-x64.tar.gz` |
    | Windows x64 | `horizon-windows-x64.exe` |
 
-3. On Linux and macOS, extract the `.tar.gz` file and make `horizon` executable:
+3. On Linux and macOS, extract the file that you downloaded. Replace
+   `<file>` with its name, for example `horizon-osx-arm64.tar.gz`:
 
    ```bash
-   tar -xzf horizon-linux-x64.tar.gz
+   tar -xzf <file>
    chmod +x horizon
    ```
 
-4. Start `horizon`, or `horizon-windows-x64.exe` on Windows.
+4. Start Horizon. On Linux and macOS, type `./horizon` in the same directory.
+   On Windows, open `horizon-windows-x64.exe`.
 
    Result: Horizon opens an empty board.
+
+If macOS blocks the first start, remove the quarantine attribute from the
+blocked file, then start it again. Replace `<path>` with that file, for example
+`./horizon`:
+
+```bash
+xattr -d com.apple.quarantine <path>
+```
 
 A raw binary does not update itself. Download a new release to update it.
 
@@ -76,19 +86,22 @@ The Surge installer gives the in-app update prompt.
    | macOS x64 | `horizon-installer-osx-x64.bin` |
    | Windows x64 | `horizon-installer-win-x64.exe` |
 
-3. On Linux and macOS, make the installer executable:
+3. On Linux and macOS, make the installer executable. Replace `<installer>`
+   with the name of the file that you downloaded:
 
    ```bash
-   chmod +x horizon-installer-linux-x64.bin
+   chmod +x <installer>
    ```
 
-4. Start the installer and follow its steps.
+4. Start the installer and follow its steps. On Linux and macOS, type
+   `./<installer>`. On Windows, open `horizon-installer-win-x64.exe`.
 5. Start Horizon.
 
    Result: Horizon opens an empty board. Horizon shows an update prompt when a
    new stable release is available.
 
-The release does not sign or notarize the macOS application.
+The release does not sign or notarize the macOS application. The quarantine
+step above applies to the raw binary and to the installer.
 
 ## Install with a package manager
 
