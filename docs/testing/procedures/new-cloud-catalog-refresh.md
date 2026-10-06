@@ -1,6 +1,6 @@
 ---
 procedure: new-cloud-catalog-refresh
-feature: New cloud dialog, background price refresh
+feature: New cloud dialog, background price refresh and layout height
 platforms: [linux]
 cost: none
 destructive: yes
@@ -15,11 +15,14 @@ owner: peters
 This procedure proves that a background price refresh in the **New cloud…**
 dialog keeps the last comparison, the account check and the layout. While the
 refresh runs, only the text **Updated N s ago** and the **Refresh** button change.
+It also makes sure that the dialog body uses the full height of the dialog in a
+narrow window. The dialog must not move or change size after it opens.
 
 ## 2. Applicability
 
-- Candidate: a build that includes the fix for
-  [issue #1293](https://github.com/peters/horizon/issues/1293).
+- Candidate: a build that includes the fixes for
+  [issue #1293](https://github.com/peters/horizon/issues/1293) and
+  [issue #1299](https://github.com/peters/horizon/issues/1299).
 - Platforms: Linux with Xvfb. Provider: RunPod.
 - This procedure does not test:
   - A refresh that takes more than 30 seconds. Unit tests cover this case.
@@ -42,6 +45,7 @@ refresh runs, only the text **Updated N s ago** and the **Refresh** button chang
 - A Device panel that shows a live view of the isolated desktop.
 - A RunPod API key from the secret store of the test account.
 - A repository with a `.horizon/cloud.yml` file and a CPU profile.
+- `xdotool` on the host, for task C5.
 
 ## 5. Setup
 
@@ -154,6 +158,76 @@ Give each task an ID. A report uses the ID to give a result.
    Note: Until the new prices arrive, the dialog can show **Comparison
    incomplete**. This is the correct result for a manual refresh.
 
+### 6.5 C5 — Narrow window
+
+This task does not need prices. A saved key that is not valid is enough. The
+fixture opens the candidate window at 1480 × 900 pixels.
+
+1. Close the New cloud dialog with **Cancel**.
+
+   Result: The dialog closes.
+
+2. Open **Cloud › New cloud…**.
+
+   Result: The dialog shows the summary to the right of the worker fields.
+
+3. Measure the bottom edge of the dialog.
+
+   Result: You have the reference position for step 9.
+
+4. Close the New cloud dialog with **Cancel**.
+
+   Result: The dialog closes.
+
+5. Find the process ID of the candidate.
+
+   ```sh
+   pgrep -f '^<frozen-candidate> --config'
+   ```
+
+   Result: The command shows one process ID.
+
+6. Set the candidate window to 800 × 900 pixels. Use the `display` value from
+   the fixture output and the process ID from step 5.
+
+   ```sh
+   DISPLAY=<display> xdotool search --pid <candidate-pid> --name '^Horizon$' \
+     windowsize %1 800 900
+   ```
+
+   Result: The window is 800 pixels wide. The toolbar shows **More** instead of
+   **Cloud**.
+
+7. Start a recording of the isolated desktop.
+
+   Result: The recorder writes frames.
+
+8. Open **More › Cloud › New cloud…**.
+
+   Result: The dialog shows the summary below the worker fields in one column.
+
+9. Measure the bottom edge of the dialog.
+
+   Result: The bottom edge is less than 40 pixels from the reference position.
+
+10. Find the first recorded frame that shows the dialog.
+
+    Result: The frame shows the dialog heading **New cloud**, **Cancel** and the
+    action button.
+
+11. Measure the top edge of the dialog in each frame of the next 2 seconds.
+
+    Result: The top edge is at the same position in each frame.
+
+12. Scroll the body of the dialog to the bottom.
+
+    Result: The summary moves up. The dialog heading **New cloud**, **Cancel**
+    and the action button do not move.
+
+13. Stop the recording.
+
+    Result: The recorder writes the file and stops.
+
 ## 7. Pass criteria
 
 - C1 shows the three cards and the accepted RunPod account.
@@ -161,6 +235,9 @@ Give each task an ID. A report uses the ID to give a result.
 - The cards and the list of workers do not move during C2.
 - The click in C3 selects the worker of the clicked card.
 - C4 shows the three cards again after the new prices arrive.
+- In C5, the bottom edge of the dialog in one column is less than 40 pixels
+  from its position in two columns.
+- In C5, the dialog does not move after the first frame that shows it.
 
 ## 8. Cleanup
 

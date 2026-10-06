@@ -2,7 +2,7 @@
 use super::{HorizonApp, Production};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
-use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
+use egui::{Align, Button, Context, Frame, Id, Key, LayerId, Layout, Order, RichText, Stroke, TextEdit, Ui, Vec2};
 use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement};
 use std::path::{Path, PathBuf};
 
@@ -23,6 +23,26 @@ const SUMMARY_WIDTH: f32 = 330.0;
 const GUTTER: f32 = 24.0;
 /// The narrowest dialog that still shows the summary beside the catalog.
 const TWO_COLUMNS: f32 = 800.0;
+/// Room for the heading and the action bar around the body.
+const CHROME_HEIGHT: f32 = 270.0;
+const BODY_MIN_HEIGHT: f32 = 120.0;
+
+/// The dialog body's height, in one column or two, taken from the window alone.
+pub(super) fn body_height(viewport: egui::Rect) -> f32 {
+    (viewport.height() - CHROME_HEIGHT).max(BODY_MIN_HEIGHT)
+}
+
+/// Whether the dialog `id` is measured before it is drawn: when it opens in a window of another
+/// size than the one it was last shown in, so the size egui remembers cannot place the first
+/// visible frame.
+fn measure_on_open(ctx: &Context, id: Id) -> bool {
+    let window = ctx.content_rect().size();
+    let key = id.with("shown-in");
+    let shown_in = ctx.data(|data| data.get_temp::<Vec2>(key));
+    ctx.data_mut(|data| data.insert_temp(key, window));
+    let opening = !ctx.memory(|memory| memory.areas().visible_last_frame(&LayerId::new(Order::Tooltip, id)));
+    opening && shown_in != Some(window)
+}
 
 #[derive(Default)]
 struct Actions {
@@ -53,8 +73,7 @@ impl HorizonApp {
         }
         let viewport = ctx.content_rect();
         let width = (viewport.width() - 64.0).clamp(240.0, 1180.0);
-        // Room for the heading and the action bar under the columns.
-        let body_height = (viewport.height() - 270.0).max(120.0);
+        let body_height = body_height(viewport);
         let mut actions = Actions::default();
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let picking = self.dir_picker.is_some();
@@ -68,9 +87,14 @@ impl HorizonApp {
             &form.selected_profile,
         );
         let id = Id::new("cloud-creation");
+        let sizing_pass = measure_on_open(ctx, id);
         // Root chrome uses Tooltip order; raise this modal last to contain its input too.
         let response = egui::Modal::new(id)
-            .area(egui::Modal::default_area(id).order(egui::Order::Tooltip))
+            .area(
+                egui::Modal::default_area(id)
+                    .order(Order::Tooltip)
+                    .sizing_pass(sizing_pass),
+            )
             .frame(
                 Frame::new()
                     .fill(theme::BG_ELEVATED())
@@ -86,43 +110,7 @@ impl HorizonApp {
                 ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
                 heading(ui, provider::label(&self.cloud_prototype.production));
                 ui.add_space(16.0);
-                if width >= TWO_COLUMNS {
-                    let left = width - SUMMARY_WIDTH - GUTTER;
-                    ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing.x = GUTTER;
-                        column(ui, left, body_height, |ui| {
-                            super::super::runtime::solid_scroll_area(ui)
-                                .id_salt("cloud-creation-body")
-                                .max_height(body_height)
-                                .show(ui, |ui| self.cloud_creation_body(ui, &mut actions, refocus_repository));
-                        });
-                        column(ui, SUMMARY_WIDTH, body_height, |ui| {
-                            super::super::runtime::solid_scroll_area(ui)
-                                .id_salt("cloud-creation-summary")
-                                .max_height(body_height)
-                                .show(ui, |ui| {
-                                    checks::with_summary(
-                                        ui,
-                                        &mut self.cloud_prototype.production,
-                                        self.cloud_prototype.root.as_deref(),
-                                    );
-                                });
-                        });
-                    });
-                } else {
-                    super::super::runtime::solid_scroll_area(ui)
-                        .id_salt("cloud-creation-body")
-                        .max_height(body_height)
-                        .show(ui, |ui| {
-                            self.cloud_creation_body(ui, &mut actions, refocus_repository);
-                            ui.add_space(12.0);
-                            checks::with_summary(
-                                ui,
-                                &mut self.cloud_prototype.production,
-                                self.cloud_prototype.root.as_deref(),
-                            );
-                        });
-                }
+                self.cloud_creation_columns(ui, width, body_height, &mut actions, refocus_repository);
                 ui.add_space(12.0);
                 checks::footer(ui, &mut self.cloud_prototype.production, &mut actions);
             });
@@ -149,6 +137,59 @@ impl HorizonApp {
         watch::poll(&mut self.cloud_prototype.production);
         self.poll_cloud_launch(ctx);
         self.poll_cloud_creation(ctx);
+    }
+
+    /// The worker fields and the summary: side by side when the dialog is wide enough, else
+    /// stacked in one scroll area. Either way the body is `body_height` tall.
+    fn cloud_creation_columns(
+        &mut self,
+        ui: &mut Ui,
+        width: f32,
+        body_height: f32,
+        actions: &mut Actions,
+        refocus_repository: bool,
+    ) {
+        if width >= TWO_COLUMNS {
+            let left = width - SUMMARY_WIDTH - GUTTER;
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = GUTTER;
+                column(ui, left, body_height, |ui| {
+                    super::super::runtime::solid_scroll_area(ui)
+                        .id_salt("cloud-creation-body")
+                        .max_height(body_height)
+                        .show(ui, |ui| self.cloud_creation_body(ui, actions, refocus_repository));
+                });
+                column(ui, SUMMARY_WIDTH, body_height, |ui| {
+                    super::super::runtime::solid_scroll_area(ui)
+                        .id_salt("cloud-creation-summary")
+                        .max_height(body_height)
+                        .show(ui, |ui| {
+                            checks::with_summary(
+                                ui,
+                                &mut self.cloud_prototype.production,
+                                self.cloud_prototype.root.as_deref(),
+                            );
+                        });
+                });
+            });
+        } else {
+            // No column holds this height, so the scroll area fills it itself instead of
+            // keeping what the dialog's previous size left it, such as egui's sizing pass.
+            super::super::runtime::solid_scroll_area(ui)
+                .id_salt("cloud-creation-body")
+                .auto_shrink(false)
+                .min_scrolled_height(body_height)
+                .max_height(body_height)
+                .show(ui, |ui| {
+                    self.cloud_creation_body(ui, actions, refocus_repository);
+                    ui.add_space(12.0);
+                    checks::with_summary(
+                        ui,
+                        &mut self.cloud_prototype.production,
+                        self.cloud_prototype.root.as_deref(),
+                    );
+                });
+        }
     }
 
     /// Closes the dialog. A clone still running stops, and a token or key that was typed but not
