@@ -469,28 +469,32 @@ Do this task after B02. It needs the synthetic repository.
 
     Result: The token cannot read the image. Horizon does not revoke the token at its issuer.
 
+21. Mark the GHCR pull token as revoked in the resource ledger.
+
+    Result: The ledger shows the token of A08 as revoked.
+
 The `runpod-build` profile needs a second entry with a push credential.
 G02 and L05 use this entry. Keep it until the end of area L.
 
-21. In the **Container registry** card, click **Add image repository**.
+22. In the **Container registry** card, click **Add image repository**.
 
     Result: The card shows **New image repository** and empty fields.
 
-22. Type `<build-repository>` in the **Image repository** field.
+23. Type `<build-repository>` in the **Image repository** field.
 
     Result: The field shows the repository of the build profile.
 
     > **CAUTION:** THE OPERATOR MUST ENTER THE CREDENTIALS. A device `type` action
     > can lose characters, and a recording can show a credential.
 
-23. Let the operator fill the pull fields and the **Publishing credential** fields for `<build-repository>`.
+24. Let the operator fill the pull fields and the **Publishing credential** fields for `<build-repository>`.
 
     Result: The pull fields and the push fields are full. The credentials do not show.
 
     > **CAUTION:** SAVE ONLY CREDENTIALS FOR THE TEST REPOSITORY. Use a read-only
     > pull credential and a push credential for that repository only.
 
-24. Click **Save settings**.
+25. Click **Save settings**.
 
     Result: The card lists `<build-repository>`. The settings file contains only file references.
 
@@ -595,6 +599,10 @@ Do this task after D01. It uses the cloud `smoke-a`.
 15. Ask the operator to revoke the GitHub token at GitHub.
 
     Result: The token does not give access. Removal from the worker does not revoke it.
+
+16. Mark the GitHub token as revoked in the resource ledger.
+
+    Result: The ledger shows the token of A09 as revoked.
 
 ## 7. Pass criteria
 

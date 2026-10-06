@@ -92,10 +92,21 @@ a worker below the profile minimum cannot be selected.
 
    Result: The command waits 25 minutes before the call.
 
-   > **CAUTION:** PAUSE ONLY THE CANDIDATE CHILD OF THE FIXTURE, AND CONTINUE IT IN THIS TASK.
-   > A paused candidate does not stop idle clouds or refresh prices.
+   > **CAUTION:** START THE WATCHDOG BEFORE YOU PAUSE THE CANDIDATE. A paused
+   > candidate does not stop idle clouds and cannot delete clouds.
 
-4. On the host, pause the candidate child.
+4. On the host, start a watchdog that continues the candidate child after 27 minutes.
+
+   ```sh
+   (sleep 1620; kill -CONT <child-pid>) &
+   ```
+
+   Result: The watchdog runs in the background. It continues the candidate even if the run stops here.
+
+   > **CAUTION:** PAUSE ONLY THE CANDIDATE CHILD OF THE FIXTURE. If you pause another
+   > Horizon, the work of other people stops.
+
+5. On the host, pause the candidate child.
 
    ```sh
    kill -STOP <child-pid>
@@ -103,11 +114,11 @@ a worker below the profile minimum cannot be selected.
 
    Result: The Device panel shows a static image. Horizon sends no new prices to the worker.
 
-5. Wait 26 minutes.
+6. Wait 26 minutes.
 
    Result: The prices on the worker are more than 20 minutes old.
 
-6. Let the candidate child continue.
+7. Let the candidate child continue.
 
    ```sh
    kill -CONT <child-pid>
@@ -115,17 +126,17 @@ a worker below the profile minimum cannot be selected.
 
    Result: The Device panel shows frames that advance again.
 
-7. Examine the output in the worker shell.
+8. Examine the output in the worker shell.
 
    Result: The `cloud_offers` answer is an error about old prices. It contains no offer.
 
-8. Wait 2 minutes.
+9. Wait 2 minutes.
 
    Result: Horizon sends fresh prices to the worker.
 
-9. Ask the agent in `smoke-a` to call `cloud_offers` again.
+10. Ask the agent in `smoke-a` to call `cloud_offers` again.
 
-   Result: The agent shows offers again. The age is less than 20 minutes.
+    Result: The agent shows offers again. The age is less than 20 minutes.
 
 ### 6.3 O03 — Make sure that a worker below the minimum cannot be selected
 

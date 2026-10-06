@@ -390,10 +390,33 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The answer shows the same alias and status as step 1.
 
+4. In the worker shell of `smoke-a`, type this command. Do not press Enter yet.
+
+   ```sh
+   sleep 70; horizon-cloud-worker companions list; horizon-cloud-worker companions inspect lib
+   ```
+
+   Result: The worker shell shows the full command without a lost character.
+
+5. Press Enter.
+
+   Result: The command waits 70 seconds on the worker. It runs while the candidate is paused.
+
+   > **CAUTION:** START THE WATCHDOG BEFORE YOU PAUSE THE CANDIDATE. A paused
+   > candidate does not stop idle clouds and cannot delete clouds.
+
+6. On the host, start a watchdog that continues the candidate child after 90 seconds.
+
+   ```sh
+   (sleep 90; kill -CONT <child-pid>) &
+   ```
+
+   Result: The watchdog runs in the background.
+
    > **CAUTION:** PAUSE ONLY THE CANDIDATE CHILD OF THE FIXTURE. If you pause another
    > Horizon, the work of other people stops.
 
-4. Pause the candidate child from S04.
+7. Pause the candidate child from S04.
 
    ```sh
    kill -STOP <child-pid>
@@ -401,33 +424,19 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The Device panel shows a static image. The candidate sends no update to the workers.
 
-5. After 70 seconds, list the companions in a worker shell of `smoke-a`.
+8. Wait 90 seconds.
 
-   ```sh
-   horizon-cloud-worker companions list
-   ```
+   Result: The watchdog continues the candidate. The `frame_sequence` of the Device panel increases again.
 
-   Result: The status of `lib` is not Ready. Ready observations expire after 60 seconds.
+9. Examine the output of the command of step 4 in the worker shell.
 
-6. Inspect the companion again.
+   Result: The `list` output shows that `lib` is not Ready, because Ready
+   observations expire after 60 seconds. The `inspect` output shows that the
+   worker reached the companion without the candidate.
 
-   ```sh
-   horizon-cloud-worker companions inspect lib
-   ```
+10. Wait until the row of `lib` on the card of `smoke-a` shows **Ready · SSH verified**.
 
-   Result: The inspection reaches the companion without the candidate.
-
-7. Continue the candidate child.
-
-   ```sh
-   kill -CONT <child-pid>
-   ```
-
-   Result: The `frame_sequence` of the Device panel increases again.
-
-8. Wait until the row of `lib` on the card of `smoke-a` shows **Ready · SSH verified**.
-
-   Result: The candidate publishes a new observation. `companions list` shows Ready again.
+    Result: The candidate publishes a new observation. `companions list` shows Ready again.
 
 ### 6.10 G10 — Use the companion tools through a run plan
 

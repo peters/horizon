@@ -55,7 +55,9 @@ resource, sends a secret or changes tailnet access.
 - A Linux host with the build tools in `AGENTS.md`, Xvfb, Openbox, x11vnc,
   bubblewrap, `dbus-daemon`, `gnome-keyring-daemon`, `secret-tool`, Python 3,
   Git, Git LFS, OpenSSH, `jq` and `curl`.
-- Docker with BuildKit and buildx. Rootless Docker is permitted.
+- A rootless Docker daemon with BuildKit and buildx that only this run uses. Record
+  its socket, data root and process ID. A rootful daemon or the daemon of the
+  operator is not permitted, because the cleanup stops this daemon and deletes its data.
 - A Horizon that runs on the host and can show a Device panel in the workspace
   of the agent.
   See the [device smoke fixture](../../../scripts/device-smoke/README.md).
@@ -135,14 +137,15 @@ change in the report as a deviation.
 6. Write each new provider resource in the resource ledger when the cloud card
    shows its ID. Record the provider, the type, the ID, the cloud title and the
    UTC time.
-7. Give each test a result: pass, fail or blocked. An interim report can also
+7. Write each issuer token that the run makes in the resource ledger, by name only.
+8. Give each test a result: pass, fail or blocked. An interim report can also
    use `not run`.
-8. For a fail, open a bug issue and write its link in the report.
-9. Put long commands for the fixture terminal in a script file below
-   `<data-home>/smoke/bin`. Then type only the short command that starts the script.
-10. To open the panel picker inside a cloud frame, use a real Ctrl-double-click.
+9. For a fail, open a bug issue and write its link in the report.
+10. Put long commands for the fixture terminal in a script file below
+    `<data-home>/smoke/bin`. Then type only the short command that starts the script.
+11. To open the panel picker inside a cloud frame, use a real Ctrl-double-click.
     Two separate device click actions are not a double-click.
-11. If `cloud_deploy` shows `Another controller owns this cloud operation`, wait
+12. If `cloud_deploy` shows `Another controller owns this cloud operation`, wait
     10 seconds and run the same command again. Do not stop the candidate.
 
 ## 5. Setup
@@ -233,10 +236,15 @@ change in the report as a deviation.
 
    Result: The resource ledger exists and has no resources.
 
+8. Write one ledger line for each issuer token that the operator made for this run.
+
+   Result: The ledger names the GHCR pull token of A08, the pull and push tokens
+   of `<build-repository>` and the GitHub token of A09. It contains no token value.
+
    > **CAUTION:** ONLY THE OPERATOR SIGNS IN THE LOCAL AGENT. Use a test account.
    > Do not type a password or a key with a device action.
 
-8. In the fixture, open a local Claude Code panel and let the operator sign it in.
+9. In the fixture, open a local Claude Code panel and let the operator sign it in.
 
    Result: The agent answers a short request. O01, G07, G08, T12 and T13 use this agent.
 
@@ -274,7 +282,7 @@ The cleanup of this procedure does X01 to X05.
 | S — Test fixture | [s-test-fixture.md](cloud-panels/s-test-fixture.md) | S01–S05 | none |
 | A — Machine setup and credentials | [a-machine-setup.md](cloud-panels/a-machine-setup.md) | A01–A09 | A09 rents compute |
 | B — Repository configuration | [b-repository-configuration.md](cloud-panels/b-repository-configuration.md) | B01–B05 | none |
-| C — New cloud dialog | [c-new-cloud-dialog.md](cloud-panels/c-new-cloud-dialog.md) | C01–C31 | C31 rents compute |
+| C — New cloud dialog | [c-new-cloud-dialog.md](cloud-panels/c-new-cloud-dialog.md) | C01–C31 | C08 if the watch starts a cloud, and C31 |
 | D — Deployment | [d-deployment.md](cloud-panels/d-deployment.md) | D01–D05 | rents compute |
 | E — Panels in a cloud | [e-panels.md](cloud-panels/e-panels.md) | E01–E09 | rents compute |
 | L — Lifecycle | [l-lifecycle.md](cloud-panels/l-lifecycle.md) | L01–L10 | rents compute |
@@ -299,11 +307,19 @@ The cleanup of this procedure does X01 to X05.
    Result: The fixture has the real RunPod key. Area X can delete RunPod clouds.
    An interrupted C07 can leave the synthetic key in place.
 
-2. Do the tasks of [area X](cloud-panels/x-teardown.md).
+2. Do X01, X02, X03 and X05 of [area X](cloud-panels/x-teardown.md).
+
+   Result: The provider APIs show no active resource of the resource ledger.
+
+3. If X02 or X05 shows an active ledger resource, stop here and tell the operator.
+
+   Result: The fixture continues, so the card keeps its retry action.
+
+4. Do X04.
 
    Result: The provider APIs show no resource from the resource ledger.
 
-3. Compare the provider lists of X02 and X05 with the baselines from the setup.
+5. Compare the provider lists of X02 and X05 with the baselines from the setup.
 
    Result: The lists are the same as the baselines. The Hetzner network of
    Horizon can stay. The resource ledger records it as kept.
@@ -311,7 +327,7 @@ The cleanup of this procedure does X01 to X05.
    > **CAUTION:** DELETE ONLY THE STATE DIRECTORY OF THIS RUN. It contains the saved
    > provider keys and the private data of the fixture.
 
-4. Delete the fixture state, the keyring password and the saved RunPod key copy of C07.
+6. Delete the fixture state, the keyring password and the saved RunPod key copy of C07.
 
    ```sh
    rm -r <run>/fixture && rm -f <run>/keyring-password <run>/runpod-key.saved
@@ -319,7 +335,7 @@ The cleanup of this procedure does X01 to X05.
 
    Result: `<run>` contains no credential file. Keep `<evidence>` outside `<run>`.
 
-5. Stop the rootless Docker daemon of this run.
+7. Stop the rootless Docker daemon of this run.
 
    ```sh
    kill <docker-pid>
@@ -327,7 +343,7 @@ The cleanup of this procedure does X01 to X05.
 
    Result: The daemon stops its containers and exits.
 
-6. Make sure that the daemon exited.
+8. Make sure that the daemon exited.
 
    ```sh
    ps -o pid=,comm= -p <docker-pid>
@@ -338,7 +354,7 @@ The cleanup of this procedure does X01 to X05.
    > **CAUTION:** DELETE ONLY THE DOCKER DATA ROOT OF THIS RUN. Other Docker data
    > roots can contain images and volumes of other people.
 
-7. Delete the Docker data root and the socket directory of this run.
+9. Delete the Docker data root and the socket directory of this run.
 
    ```sh
    rootlesskit rm -rf <docker-data> && rm -rf <run>/docker
