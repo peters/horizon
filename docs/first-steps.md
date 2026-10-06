@@ -37,7 +37,7 @@ These functions are available:
 
 Release builds use the default features. To get speech, use a source build.
 
-## Install a release binary
+## Install a release binary on Linux or macOS
 
 1. Open the [latest release](https://github.com/peters/horizon/releases/latest).
 2. Download the raw binary for your platform:
@@ -47,52 +47,94 @@ Release builds use the default features. To get speech, use a source build.
    | Linux x64 | `horizon-linux-x64.tar.gz` |
    | macOS arm64 | `horizon-osx-arm64.tar.gz` |
    | macOS x64 | `horizon-osx-x64.tar.gz` |
-   | Windows x64 | `horizon-windows-x64.exe` |
 
 3. Download `SHA256SUMS.txt` from the same release to the same directory.
-4. Examine the checksum of the downloaded file:
-   - On Linux, type `sha256sum -c --ignore-missing SHA256SUMS.txt`.
-   - On macOS, type `shasum -a 256 -c --ignore-missing SHA256SUMS.txt`.
+
+> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The release is
+> not signed. The checksum is the only check that the file is complete and not
+> replaced.
+
+4. If you use Linux, examine the checksum:
+
+   ```bash
+   sha256sum -c --ignore-missing SHA256SUMS.txt
+   ```
+
+5. If you use macOS, examine the checksum:
+
+   ```bash
+   shasum -a 256 -c --ignore-missing SHA256SUMS.txt
+   ```
 
    Result: The command shows `OK` for the file that you downloaded.
 
-   On Windows, do these two steps:
-   1. In PowerShell, type `Get-FileHash <file>`.
-   2. Compare the hash with the line for that file in `SHA256SUMS.txt`.
-
-   Result: The two hashes are the same.
-
-   If the checksum is not correct, delete the file. Do not start it.
-
-5. On Linux and macOS, extract the file that you downloaded. Replace
-   `<file>` with its name, for example `horizon-osx-arm64.tar.gz`:
+6. If the command does not show `OK`, delete the file.
+7. Extract the file. Replace `<file>` with its name, for example
+   `horizon-osx-arm64.tar.gz`:
 
    ```bash
    tar -xzf <file>
+   ```
+
+8. Make the binary executable:
+
+   ```bash
    chmod +x horizon
    ```
 
-6. Start Horizon. On Linux and macOS, type `./horizon` in the same directory.
-   On Windows, open `horizon-windows-x64.exe`.
+9. Start Horizon:
+
+   ```bash
+   ./horizon
+   ```
 
    Result: Horizon opens an empty board.
 
-If macOS blocks the first start, remove the quarantine attribute from the
-blocked file, then start it again.
+10. If macOS blocks the start, remove the quarantine attribute:
 
-> **CAUTION:** EXAMINE THE CHECKSUM BEFORE YOU REMOVE THE QUARANTINE ATTRIBUTE.
-> The release is not signed. Without the checksum, macOS cannot tell you that
-> a file is incomplete or replaced.
+    ```bash
+    xattr -d com.apple.quarantine horizon
+    ```
 
-Replace `<path>` with the blocked file, for example `./horizon`:
+11. If you did step 10, start Horizon again:
 
-```bash
-xattr -d com.apple.quarantine <path>
-```
+    ```bash
+    ./horizon
+    ```
+
+    Result: Horizon opens an empty board.
 
 A raw binary does not update itself. Download a new release to update it.
 
-## Install with the Surge installer
+## Install a release binary on Windows
+
+1. Open the [latest release](https://github.com/peters/horizon/releases/latest).
+2. Download `horizon-windows-x64.exe`.
+3. Download `SHA256SUMS.txt` from the same release.
+
+> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The release is
+> not signed. The checksum is the only check that the file is complete and not
+> replaced.
+
+4. In PowerShell, get the checksum of the file:
+
+   ```powershell
+   Get-FileHash horizon-windows-x64.exe
+   ```
+
+   Result: PowerShell shows the SHA-256 hash.
+
+5. Compare the hash with the line for `horizon-windows-x64.exe` in
+   `SHA256SUMS.txt`.
+
+   Result: The two hashes are the same.
+
+6. If the hashes are not the same, delete the file.
+7. Open `horizon-windows-x64.exe`.
+
+   Result: Horizon opens an empty board.
+
+## Install with the Surge installer on Linux or macOS
 
 The Surge installer gives the in-app update prompt.
 
@@ -104,40 +146,84 @@ The Surge installer gives the in-app update prompt.
    | Linux x64 | `horizon-installer-linux-x64.bin` |
    | macOS arm64 | `horizon-installer-osx-arm64.bin` |
    | macOS x64 | `horizon-installer-osx-x64.bin` |
-   | Windows x64 | `horizon-installer-win-x64.exe` |
 
 3. Download `SHA256SUMS.txt` from the same release to the same directory.
-4. Examine the checksum of the installer. Use the commands in step 4 of the
-   release binary procedure.
 
-   Result: The checksum of the installer is correct.
+> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The release is
+> not signed. The checksum is the only check that the file is complete and not
+> replaced.
 
-5. On Linux and macOS, make the installer executable. Replace `<installer>`
-   with the name of the file that you downloaded:
+4. If you use Linux, examine the checksum:
+
+   ```bash
+   sha256sum -c --ignore-missing SHA256SUMS.txt
+   ```
+
+5. If you use macOS, examine the checksum:
+
+   ```bash
+   shasum -a 256 -c --ignore-missing SHA256SUMS.txt
+   ```
+
+   Result: The command shows `OK` for the installer.
+
+6. If the command does not show `OK`, delete the installer.
+7. Make the installer executable. Replace `<installer>` with its name:
 
    ```bash
    chmod +x <installer>
    ```
 
-6. Start the installer and follow its steps. On Linux and macOS, type
-   `./<installer>`. On Windows, open `horizon-installer-win-x64.exe`.
-7. Start Horizon.
+8. If you use macOS, remove the quarantine attribute from the installer:
 
-   Result: Horizon opens an empty board. Horizon shows an update prompt when a
-   new stable release is available.
+   ```bash
+   xattr -d com.apple.quarantine <installer>
+   ```
 
-The release does not sign or notarize the macOS application. The quarantine
-step above applies to the raw binary and to the installer.
+9. Start the installer:
+
+   ```bash
+   ./<installer>
+   ```
+
+10. Follow the steps in the installer.
+11. Start Horizon.
+
+    Result: Horizon opens an empty board. Horizon shows an update prompt when a
+    new stable release is available.
+
+## Install with the Surge installer on Windows
+
+1. Open the [latest release](https://github.com/peters/horizon/releases/latest).
+2. Download `horizon-installer-win-x64.exe`.
+3. Download `SHA256SUMS.txt` from the same release.
+4. In PowerShell, get the checksum of the installer:
+
+   ```powershell
+   Get-FileHash horizon-installer-win-x64.exe
+   ```
+
+5. Compare the hash with the line for `horizon-installer-win-x64.exe` in
+   `SHA256SUMS.txt`.
+
+   Result: The two hashes are the same.
+
+6. If the hashes are not the same, delete the installer.
+7. Open `horizon-installer-win-x64.exe`.
+8. Follow the steps in the installer.
+9. Start Horizon.
+
+   Result: Horizon opens an empty board.
 
 ## Install with a package manager
 
-On macOS or Linux x64, use Homebrew:
+On macOS or Linux x64, install Horizon with Homebrew:
 
 ```bash
 brew install peters/horizon/horizon
 ```
 
-On Windows, use WinGet:
+On Windows, install Horizon with WinGet:
 
 ```powershell
 winget install Peters.Horizon
@@ -151,19 +237,40 @@ for Surge installs only.
 1. Install the tools for your platform:
    - All platforms: Git, Git LFS and Rust 1.95 or later from [rustup](https://rustup.rs).
    - Linux: the system headers in [AGENTS.md](../AGENTS.md#prerequisites).
-   - macOS: the Xcode Command Line Tools (`xcode-select --install`).
+   - macOS: the Xcode Command Line Tools.
    - Windows: the MSVC build tools. `rustup` installs them for the `msvc` target.
    - x86_64: NASM 2.15 or later on `PATH`.
-2. Get the source:
+2. If you use macOS, install the Xcode Command Line Tools:
+
+   ```bash
+   xcode-select --install
+   ```
+
+3. Clone the repository:
 
    ```bash
    git clone https://github.com/peters/horizon.git
+   ```
+
+4. Go to the repository directory:
+
+   ```bash
    cd horizon
+   ```
+
+5. Set up Git LFS:
+
+   ```bash
    git lfs install
+   ```
+
+6. Get the Git LFS files:
+
+   ```bash
    git lfs pull
    ```
 
-3. Build and start Horizon:
+7. Build and start Horizon:
 
    ```bash
    cargo run --release
@@ -171,22 +278,27 @@ for Surge installs only.
 
    Result: Horizon opens an empty board.
 
-If the build stops with a missing font, run `git lfs pull` again. On Linux, a
+If the build stops with a missing font, do step 6 again. On Linux, a
 `pkg-config` or linker error usually tells you that a `-dev` package is missing.
 
 ### Speech and GPU features
 
-Speech needs CMake and a C++ compiler. Linux also needs the ALSA headers.
-Select one command:
+Speech needs CMake and a C++ compiler. Linux also needs the ALSA headers. The
+build does not find a GPU toolkit automatically.
 
-| Command | Speech backend | Build needs |
-|---|---|---|
-| `cargo speech` | CPU. Metal on macOS. | CMake, C++ |
-| `cargo speech-cuda` | NVIDIA GPU | CUDA toolkit |
-| `cargo speech-vulkan` | Any GPU with Vulkan | Vulkan SDK |
+To build with speech, type one of these commands:
 
-The build does not find a GPU toolkit automatically. Select the command
-yourself. For casting with NVENC on Linux, add `--features cast-nvenc`.
+```bash
+cargo speech          # CPU. Metal on macOS.
+cargo speech-cuda     # NVIDIA GPU. Needs the CUDA toolkit.
+cargo speech-vulkan   # Any GPU with Vulkan. Needs the Vulkan SDK.
+```
+
+To build with the NVENC encoder for casting on Linux, type this command:
+
+```bash
+cargo run --release --features cast-nvenc
+```
 
 ## Use the board
 
@@ -205,30 +317,51 @@ On macOS, use Cmd instead of Ctrl in each step of this procedure.
 
    Result: A second panel of the first preset opens.
 
-5. Push Ctrl+Shift+K and type a workspace name, a panel title or `>`.
+5. Push Ctrl+Shift+K.
+
+   Result: The command palette opens.
+
+6. Type a workspace name, a panel title or `>`.
 
    Result: The command palette shows the matches.
 
-6. On the workspace header, click **Rows**, **Cols** or **Grid**.
+7. On the workspace header, click **Rows**, **Cols** or **Grid**.
 
    Result: The panels move into that layout.
 
-7. Close Horizon and start it again.
+8. Close Horizon.
+9. Start Horizon again.
 
    Result: The board, the layout and the terminal history are the same.
 
 The README lists all keyboard and mouse shortcuts. A shortcut with Ctrl uses
 Cmd on macOS.
 
-## Open an agent, a browser and a desktop
+## Open an agent panel
 
-- **Agent panel:** Install the agent CLI first, for example Claude Code or Codex.
-  Then select its preset. On Windows, an agent panel needs a POSIX shell in
-  `SHELL`, for example Git Bash. No test examines this.
-- **Browser panel:** Select the **Browser** preset. Horizon gives the
-  `horizon-browser` MCP tools automatically to Claude Code, Codex and Grok panels.
-- **Device panel:** Add a VNC target to the configuration. See
-  [Watch an app over VNC](../README.md#watch-an-app-over-vnc).
+On Windows, an agent panel needs a POSIX shell in `SHELL`, for example Git
+Bash. No test examines this.
+
+1. Install the CLI of the agent, for example Claude Code or Codex.
+2. Hold Ctrl and double-click an empty area of the board.
+3. Select the preset of the agent.
+
+   Result: The agent starts in a new panel.
+
+## Open a browser panel
+
+1. Hold Ctrl and double-click an empty area of the board.
+2. Select **Browser**.
+
+   Result: A browser panel opens.
+
+Horizon gives the `horizon-browser` MCP tools automatically to Claude Code,
+Codex and Grok panels.
+
+## Open a Device panel
+
+A Device panel needs a VNC target in the configuration. See
+[Watch an app over VNC](../README.md#watch-an-app-over-vnc).
 
 ## Start a first cloud
 
@@ -257,22 +390,26 @@ Horizon makes the SSH identity for the worker. **Cloud settings** does not
 test a key when you save it. **New cloud** uses the key to get the live worker
 catalog. If it cannot get the catalog, you cannot start the cloud.
 
+Deploy sends committed source only. Horizon does not fetch your local clone
+from `origin` before deploy. Commit and update the branch before you start.
+
 1. Open a workspace in a Git repository.
-2. Click **Cloud**, then **New cloud…**.
+2. Click **Cloud**.
+3. Click **New cloud…**.
 
    Result: The **Where is your code?** step opens.
 
-3. Paste a repository link, or select a local folder.
-4. Select a worker in the catalog.
+4. If the code is on a Git server, paste the repository link.
+5. If the code is on this computer, click **Choose folder…**.
+6. If you clicked **Choose folder…**, select the folder.
+7. Select a worker in the catalog.
 
-   Result: The summary shows the compute cost for each hour and the total for each month.
+   Result: The summary shows the compute price for each hour and an estimated
+   cost for the run. The default run time is one hour.
 
-5. Click **Start**.
+8. Click **Start**.
 
    Result: The cloud card shows each stage with its time.
-
-Deploy sends committed source only. Horizon does not fetch your local clone
-from `origin` before deploy. Commit and update the branch first.
 
 ## Get help
 
