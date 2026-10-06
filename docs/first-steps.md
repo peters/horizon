@@ -355,10 +355,12 @@ Bash. No test examines this.
 
 ## Open a browser panel
 
-Browser panels need a source build from `main`.
+Browser panels need a source build from `main`. The **Browser** preset uses a
+Chromium browser. A usual macOS installation has only Safari.
 
-1. Hold Ctrl and double-click an empty area of the board.
-2. Select **Browser**.
+1. Install Google Chrome, Chromium or Microsoft Edge.
+2. Hold Ctrl and double-click an empty area of the board.
+3. Select **Browser**.
 
    Result: A browser panel opens.
 
