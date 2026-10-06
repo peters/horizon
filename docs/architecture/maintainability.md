@@ -299,7 +299,7 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   - `panel_chrome`: panel titlebar chrome, badges, and rename UI
   - `panels`: panel-area orchestration and body rendering, with gesture and
     context-menu handling and outcome application in `panels/interaction.rs`
-    and the screen-sized resize grip, its input sublayer and focused tests in
+    and the screen-sized resize grip (six corner dots on a 32-point hit target), its input sublayer and focused tests in
     `panels/resize.rs` and `panels/resize/tests.rs`
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
     layout, row/header paint helpers and the SSH/VNC mode plus destination

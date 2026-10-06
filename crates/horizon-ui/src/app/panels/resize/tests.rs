@@ -113,6 +113,28 @@ fn disabled_grip_does_not_claim_body_input_or_resize_cursor() {
 }
 
 #[test]
+fn grip_dots_stay_inside_the_hit_target_at_each_zoom() {
+    let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(400.0, 320.0));
+    for zoom in [horizon_core::MIN_CANVAS_ZOOM, 0.25, 0.5, 1.0, 2.0] {
+        let rect = handle_rect(panel, zoom);
+        let radius = grip_dot_radius(rect);
+        assert!(radius > 0.0, "zoom {zoom}");
+        for center in grip_dot_centers(rect) {
+            let dot = Rect::from_center_size(center, Vec2::splat(radius * 2.0));
+            assert!(
+                rect.contains_rect(dot),
+                "dot at {center:?} radius {radius} left {rect:?} at zoom {zoom}"
+            );
+        }
+    }
+    let rect = handle_rect(panel, 1.0);
+    let centers = grip_dot_centers(rect);
+    assert!((centers[0] - (rect.min + Vec2::new(18.0, 17.0))).length() < 0.01);
+    assert!((centers[5] - (rect.min + Vec2::new(24.0, 26.0))).length() < 0.01);
+    assert!((grip_dot_radius(rect) - 1.45).abs() < 0.01);
+}
+
+#[test]
 fn grip_stays_within_tiny_panel_at_minimum_zoom() {
     let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(400.0, 320.0));
     let rect = handle_rect(panel, horizon_core::MIN_CANVAS_ZOOM);

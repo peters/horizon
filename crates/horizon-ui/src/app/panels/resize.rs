@@ -1,4 +1,4 @@
-use egui::{Area, CursorIcon, Id, LayerId, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Area, CursorIcon, Id, LayerId, Pos2, Rect, Response, Sense, Ui, Vec2};
 use horizon_core::PanelId;
 
 use super::super::PANEL_TITLEBAR_HEIGHT;
@@ -6,6 +6,10 @@ use super::CanvasClippedArea;
 use crate::theme;
 
 const HANDLE_SCREEN_SIZE: f32 = 32.0;
+const GRIP_DOT_RADIUS: f32 = 1.45;
+/// Positions in the 32-point handle, measured from its top-left.
+const GRIP_DOT_COLUMNS: [f32; 2] = [18.0, 24.0];
+const GRIP_DOT_ROWS: [f32; 3] = [17.0, 21.5, 26.0];
 
 pub(super) fn drag_delta(response: &Response) -> Vec2 {
     if response.drag_started() {
@@ -58,27 +62,34 @@ pub(super) fn show_resize_control(
         .inner
 }
 
+fn grip_scale(rect: Rect) -> f32 {
+    rect.width() / HANDLE_SCREEN_SIZE
+}
+
+fn grip_dot_radius(rect: Rect) -> f32 {
+    GRIP_DOT_RADIUS * grip_scale(rect)
+}
+
+fn grip_dot_centers(rect: Rect) -> [Pos2; 6] {
+    let scale = grip_scale(rect);
+    let mut centers = [Pos2::ZERO; 6];
+    let mut index = 0;
+    for row in GRIP_DOT_ROWS {
+        for column in GRIP_DOT_COLUMNS {
+            centers[index] = rect.min + Vec2::new(column, row) * scale;
+            index += 1;
+        }
+    }
+    centers
+}
+
 fn paint_control(ui: &Ui, rect: Rect, response: &Response, interactive: bool) {
     let active = interactive && (response.hovered() || response.dragged());
     let color = if active { theme::ACCENT() } else { theme::FG_DIM() };
-    let scale = rect.width() / HANDLE_SCREEN_SIZE;
+    let radius = grip_dot_radius(rect);
     let painter = ui.painter();
-    painter.rect(
-        rect,
-        4.0 * scale,
-        theme::blend(theme::PANEL_BG_ALT(), color, if active { 0.18 } else { 0.06 }),
-        Stroke::new(scale, if active { color } else { theme::BORDER_SUBTLE() }),
-        StrokeKind::Inside,
-    );
-    let corner = rect.max - Vec2::splat(7.0 * scale);
-    for length in [6.0, 12.0, 18.0] {
-        painter.line_segment(
-            [
-                Pos2::new(corner.x - length * scale, corner.y),
-                Pos2::new(corner.x, corner.y - length * scale),
-            ],
-            Stroke::new(1.5 * scale, color),
-        );
+    for center in grip_dot_centers(rect) {
+        painter.circle_filled(center, radius, color);
     }
     if active {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeNwSe);
