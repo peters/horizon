@@ -670,3 +670,110 @@ fn an_idle_watch_asking_the_provider_blocks_lifecycle_actions_until_it_releases_
     runtime.poll_idle();
     assert!(!runtime.busy());
 }
+
+/// The provider check of a `RunPod` worker in `status`, as it records the cloud.
+fn checked(status: &str) -> cloud_runtime::lifecycle::ReconciledDeployment {
+    let mut state = runpod_stopped();
+    state.worker = serde_json::from_value(serde_json::json!({
+        "id": "42", "name": "cloud-1", "imageName": "registry.example/worker", "desiredStatus": status
+    }))
+    .unwrap();
+    if status != "EXITED" {
+        (state.stage, state.stop_requested) = (Stage::Ready, false);
+    }
+    let worker = state.worker.clone();
+    let mut reconciled = cloud_runtime::lifecycle::ReconciledDeployment {
+        state,
+        report: serde_json::from_value(serde_json::json!({
+            "operation_id": "cloud-1", "outcome": {"status": "inactive", "worker_id": "42"}
+        }))
+        .unwrap(),
+    };
+    reconciled.report.worker = worker;
+    reconciled
+}
+
+// Each failure text one idle-stopped pod gave in the live run (#1321), on the path that
+// gave it, becomes the stopped cloud with Resume worker once the provider confirms it.
+#[test]
+fn every_failure_of_an_idle_stopped_worker_becomes_its_stop() {
+    use std::time::Instant;
+    let ready = || {
+        let mut state = runpod_stopped();
+        (state.stage, state.stop_requested) = (Stage::Ready, false);
+        state
+    };
+    let resumed = Some(super::super::lifecycle::Action::Resume);
+    let cases = [
+        // The connection watch of a ready cloud timed out.
+        ("Local operation timed out", Stage::Ready, None, ready()),
+        // The connection watch of a cloud that Resume worker reconnected lost the worker.
+        (
+            "Cloud presentation discovery failed; inspect deployment output",
+            Stage::Ready,
+            resumed,
+            ready(),
+        ),
+        // A reconnect found the worker not running.
+        (
+            "Existing worker is not running; check provider before reconnecting",
+            Stage::Provision,
+            None,
+            ready(),
+        ),
+        // A reconnect found the record that a provider check had already stopped.
+        (
+            "Worker was explicitly stopped. Resume it before reconnecting; prior processes may be lost.",
+            Stage::Stopped,
+            None,
+            runpod_stopped(),
+        ),
+    ];
+    for (error, stage, operation, state) in cases {
+        let (_events, deploy) = channel();
+        let mut runtime = Runtime {
+            receiver: Some(deploy),
+            cancel: Some(Cancellation::default()),
+            state: Some(state),
+            last_idle: Some(cloud_runtime::lifecycle::IdleSample {
+                idle: Duration::from_mins(29),
+                limit: Duration::from_mins(30),
+                read_at: Instant::now(),
+            }),
+            ..Runtime::default()
+        };
+        runtime.progress.stage(Stage::Validate, Instant::now());
+        if stage == Stage::Ready {
+            runtime.progress.stage(Stage::Ready, Instant::now());
+        }
+        runtime.stage = Some(stage);
+        runtime.operation = operation;
+        runtime.show_failure(error.into(), Instant::now());
+        assert!(runtime.failure_needs_check, "{error}");
+        runtime.receiver = None;
+        let check = runtime.hold_failure_for_check();
+        assert!(runtime.checking_provider() && runtime.error.is_none(), "{error}");
+        check.send(Ok(checked("EXITED"))).unwrap();
+        runtime.poll_recovery();
+        assert_eq!(runtime.stage, Some(Stage::Stopped), "{error}");
+        assert!(runtime.error.is_none() && !runtime.busy(), "{error}");
+        // A record already stopped keeps its own words; the others name the idle stop.
+        let cause = (stage != Stage::Stopped).then_some(cloud_runtime::lifecycle::StopCause::Idle {
+            limit: Duration::from_mins(30),
+        });
+        assert_eq!(runtime.stop_cause, cause, "{error}");
+    }
+    // The same failure of a worker that still runs stays the failure.
+    let (_events, deploy) = channel();
+    let mut runtime = Runtime {
+        receiver: Some(deploy),
+        state: Some(ready()),
+        stage: Some(Stage::Provision),
+        ..Runtime::default()
+    };
+    runtime.show_failure("Existing worker is not running".into(), Instant::now());
+    let check = runtime.hold_failure_for_check();
+    check.send(Ok(checked("RUNNING"))).unwrap();
+    runtime.poll_recovery();
+    assert_eq!(runtime.error.as_deref(), Some("Existing worker is not running"));
+}

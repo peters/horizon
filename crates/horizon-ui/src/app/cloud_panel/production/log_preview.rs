@@ -249,6 +249,30 @@ mod tests {
     }
 
     #[test]
+    fn a_reconnect_waits_while_the_idle_watch_asks_the_provider() {
+        let (_temp, mut app) = test_app();
+        let ctx = egui::Context::default();
+        assert!(seed_idle_stop(&mut app, Duration::from_hours(1), &ctx));
+        let runtime = app
+            .cloud_prototype
+            .production
+            .runtimes
+            .get_mut(&PREVIEW_ISSUE)
+            .expect("preview runtime");
+        let (confirming, reports) = std::sync::mpsc::channel();
+        runtime.idle_reports = Some(reports);
+        confirming.send(Report::Confirming).expect("listening");
+        runtime.poll_idle();
+        assert!(runtime.checking_provider());
+        app.start_production_deployment(PREVIEW_ISSUE, &ctx);
+        let runtime = &app.cloud_prototype.production.runtimes[&PREVIEW_ISSUE];
+        assert!(
+            runtime.connected_ready() && !runtime.state_unavailable && runtime.error.is_none(),
+            "nothing read the record the check holds"
+        );
+    }
+
+    #[test]
     fn the_idle_stop_preview_goes_from_ready_to_stopped_after_its_idle_minutes() {
         let (_temp, mut app) = test_app();
         assert!(seed_idle_stop(&mut app, Duration::ZERO, &egui::Context::default()));

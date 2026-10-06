@@ -413,6 +413,8 @@ impl Runtime {
         if let Some(state) = state {
             self.stage = Some(state.stage);
             self.state = Some(state);
+            // The record was just read: a read that found it busy before no longer counts.
+            self.state_unavailable = false;
         } else {
             // Without the saved record, the one shown is marked stopped and its
             // released server forgotten, so nothing connects to it.

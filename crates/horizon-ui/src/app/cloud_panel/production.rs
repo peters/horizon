@@ -747,7 +747,12 @@ impl HorizonApp {
         }
     }
 
+    /// Waits for a provider check, which may hold the record a deployment reads first.
     fn start_production_deployment(&mut self, id: u32, ctx: &egui::Context) {
+        let runtimes = &self.cloud_prototype.production.runtimes;
+        if runtimes.get(&id).is_some_and(Runtime::checking_provider) {
+            return;
+        }
         if let Some((request, siblings)) = self.prepare_production_deployment(id) {
             self.cloud_prototype
                 .production
