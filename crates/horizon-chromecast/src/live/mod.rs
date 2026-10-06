@@ -531,6 +531,20 @@ impl Session {
         Ok(true)
     }
 
+    /// Records the lag at the start of a progressive buffer. Events arrive
+    /// before the next poll, and by then new frames have already increased it.
+    fn note_buffer_lag(&self, current_time: f64) {
+        let Sink::Progressive(stream) = &self.sink else {
+            return;
+        };
+        let Some(lag) = note_open_lag(stream.newest_media_time(), current_time) else {
+            return;
+        };
+        let mut playback = self.playback.get();
+        playback.edge.note_buffer(lag);
+        self.playback.set(playback);
+    }
+
     /// Applies one status of our media session; `Ok(false)` means playback ended.
     fn apply(&self, status: &MediaStatus, detail: Option<String>) -> Result<bool> {
         match (status.player_state.as_str(), status.idle_reason.as_deref()) {
@@ -538,10 +552,14 @@ impl Session {
                 self.started.set(true);
                 self.buffering_since.set(None);
                 self.set(LiveState::Playing);
+                let mut playback = self.playback.get();
+                playback.edge.resume();
+                self.playback.set(playback);
             }
             ("BUFFERING" | "LOADING", _) => {
                 if self.buffering_since.get().is_none() {
                     self.buffering_since.set(Some(Instant::now()));
+                    self.note_buffer_lag(status.current_time);
                 }
                 if *lock(&self.state) != LiveState::Playing {
                     self.set(LiveState::Buffering);
@@ -650,14 +668,16 @@ impl Session {
             self.playback.set(playback);
             return Ok(());
         };
-        playback.sampled = true;
         let lag = newest - status.current_time;
         // Polled GET_STATUS replies are not receiver events, so the timer has
-        // to move from this status. A PLAYING reply closes it.
+        // to move from this status. Anything but buffering closes it.
         let mut open = self.buffering_since.get();
         let buffering_for = buffering_age(&mut open, status.player_state.as_str(), now);
         self.buffering_since.set(open);
         let playing = status.player_state == "PLAYING";
+        // Only a moving picture starts the calm clock. A pause or a buffer must
+        // not make the next playing sample count the time it was stopped.
+        playback.sampled = playing;
         let plan = plan_trim(
             playback.edge,
             edge::Sample {
@@ -741,19 +761,25 @@ fn calm_elapsed(playback: &Playback, now: Instant) -> Duration {
     }
 }
 
-/// How long the polled player has been buffering. `PLAYING` closes the timer.
+/// How long the polled player has been buffering. Any other state closes the
+/// timer, so a pause cannot be counted as part of the next buffer.
 fn buffering_age(open_since: &mut Option<Instant>, player_state: &str, now: Instant) -> Option<Duration> {
     match player_state {
         "BUFFERING" | "LOADING" => {
             let start = *open_since.get_or_insert(now);
             Some(now.saturating_duration_since(start))
         }
-        "PLAYING" => {
+        _ => {
             *open_since = None;
             None
         }
-        _ => None,
     }
+}
+
+/// Lag when a progressive buffer opens. `None` for other transports, or before
+/// the first frame.
+fn note_open_lag(newest: Option<f64>, current_time: f64) -> Option<f64> {
+    newest.map(|newest| newest - current_time)
 }
 
 /// What to ask the receiver, with the rate we already believe is applied.
@@ -805,6 +831,10 @@ fn apply_rate_reply(playback: &mut Playback, commanded: f64, failures: u8, answe
         RateAnswer::Applied => {
             playback.edge.rate = commanded;
             playback.retry = None;
+            // The reply can take long enough to look like a calm stretch.
+            if (commanded - 1.0).abs() <= 1e-3 {
+                playback.sampled = false;
+            }
             false
         }
         // The previous faster rate is still applied. Ask for 1.0 and stop
@@ -970,6 +1000,69 @@ mod catch_up_tests {
         assert_eq!(buffering_age(&mut open, "PLAYING", later), None);
         assert!(open.is_none());
         assert_eq!(buffering_age(&mut open, "LOADING", later), Some(Duration::ZERO));
+        let paused = later + Duration::from_secs(5);
+        assert_eq!(buffering_age(&mut open, "PAUSED", paused), None);
+        assert!(open.is_none());
+        assert_eq!(buffering_age(&mut open, "BUFFERING", paused), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_playing_event_opens_a_new_buffer_episode() {
+        let mut edge = edge::Edge {
+            target: 0.25,
+            floor: 0.25,
+            backed_off: true,
+            episode_lag: Some(0.30),
+            ..edge::Edge::default()
+        };
+        edge.resume();
+        assert!(!edge.backed_off);
+        assert!(edge.episode_lag.is_none());
+        edge.note_buffer(0.50);
+        let grown = edge.step(edge::Sample {
+            lag: 0.95,
+            buffering_for: Some(Duration::from_millis(500)),
+            elapsed: Duration::from_millis(400),
+        });
+        assert!((grown.target - 0.30).abs() < 1e-9);
+        let missed = edge::Edge {
+            target: 0.25,
+            floor: 0.25,
+            ..edge::Edge::default()
+        };
+        let late = missed.step(edge::Sample {
+            lag: 0.95,
+            buffering_for: Some(Duration::from_millis(500)),
+            elapsed: Duration::from_millis(400),
+        });
+        assert!((late.target - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_restored_normal_speed_does_not_keep_the_calm_clock() {
+        let now = Instant::now();
+        let mut playback = Playback::new();
+        playback.sampled = true;
+        playback.edge.rate = 1.5;
+        assert!(!apply_rate_reply(&mut playback, 1.0, 0, RateAnswer::Applied, now));
+        assert!(!playback.sampled);
+        assert!((playback.edge.rate - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn time_stopped_does_not_start_the_calm_clock() {
+        let mut playback = Playback::new();
+        let then = Instant::now();
+        playback.checked = then;
+        playback.sampled = false;
+        let later = then + Duration::from_secs(4);
+        assert_eq!(calm_elapsed(&playback, later), Duration::ZERO);
+        playback.sampled = true;
+        playback.checked = later;
+        let after = later + Duration::from_millis(400);
+        let elapsed = calm_elapsed(&playback, after);
+        assert!(elapsed >= Duration::from_millis(400));
+        assert!(elapsed < Duration::from_secs(2));
     }
 
     #[test]

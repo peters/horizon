@@ -75,6 +75,20 @@ pub(crate) struct Sample {
 }
 
 impl Edge {
+    /// The picture is moving again, so the next buffer is a new episode.
+    pub(crate) fn resume(&mut self) {
+        self.backed_off = false;
+        self.episode_lag = None;
+    }
+
+    /// Remember the lag at the moment a buffer opens. A later poll is too late:
+    /// new frames keep arriving while the receiver clock is stopped.
+    pub(crate) fn note_buffer(&mut self, lag: f64) {
+        if self.episode_lag.is_none() && lag.is_finite() && lag <= MAX_LAG {
+            self.episode_lag = Some(lag);
+        }
+    }
+
     /// Next target and playback rate for `sample`.
     #[must_use]
     pub(crate) fn step(mut self, sample: Sample) -> Self {
