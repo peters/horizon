@@ -9,6 +9,14 @@ import tempfile
 import unittest
 
 
+def root_available():
+    # CI runners grant passwordless sudo; the two-user test then runs there as root.
+    if os.geteuid() == 0:
+        return True
+    return bool(shutil.which('sudo')) and subprocess.run(
+        ['sudo', '-n', 'true'], capture_output=True, timeout=20, check=False).returncode == 0
+
+
 class AgentRuntimeTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -120,9 +128,16 @@ sys.exit(23)
         self.assertIsNone(child['env']['HORIZON_BROWSER_HOST_INSTANCE'])
         self.assertIn('has not published its browser host instance', self.stderr)
 
-    @unittest.skipUnless(os.geteuid() == 0 and shutil.which('setpriv') and shutil.which('chown'),
-                         'needs root to run the launcher as the unprivileged worker agent')
+    @unittest.skipUnless(shutil.which('setpriv') and shutil.which('chown') and root_available(),
+                         'needs root or passwordless sudo to run the launcher as the worker agent')
     def test_unprivileged_agent_reads_the_value_but_not_root_private_state(self):
+        if os.geteuid() != 0:
+            name = f'{Path(__file__).stem}.{type(self).__name__}.{self._testMethodName}'
+            nested = subprocess.run(['sudo', '-n', sys.executable, '-B', '-m', 'unittest', name],
+                                    cwd=Path(__file__).parent, capture_output=True, text=True, timeout=120)
+            self.assertEqual(nested.returncode, 0, nested.stderr)
+            self.assertNotIn('skipped', nested.stderr)
+            return
         # Ownership as on an isolated worker: root keeps the browser runtime root, the
         # agent owns the rest of the workspace and runs the launcher as UID 10001.
         private = self.workspace / 'home/.horizon'
