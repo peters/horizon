@@ -137,11 +137,10 @@ def idle_report_supported():
     return reply.returncode == 0 and reply.stdout == b'horizon-idle-report-contract=1\n'
 
 
-def source_helper_declares(option, marker):
-    # Older source helpers reject the unknown option: full submodule history and
-    # every LFS object.
+def helper_declares(helper, option, marker):
+    # Older helpers reject the unknown option, which reports no support.
     try:
-        reply = subprocess.run(['horizon-worker-source', option], capture_output=True, timeout=10, check=False)
+        reply = subprocess.run([helper, option], capture_output=True, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError):
         return False
     return reply.returncode == 0 and reply.stdout == (marker + '\n').encode()
@@ -255,9 +254,10 @@ try:
         print('horizon-session-env-contract=1')
     if shutil.which('horizon-worker-gpu-lock'):
         print('horizon-gpu-lock-contract=1')
+    # Older source helpers need full submodule history and every LFS object.
     for option, marker in (('--shallow-contract', 'horizon-source-shallow-contract=1'),
                            ('--lfs-selection-contract', 'horizon-source-lfs-selection-contract=1')):
-        if source_helper_declares(option, marker):
+        if helper_declares('horizon-worker-source', option, marker):
             print(marker)
     if shutil.which('horizon-worker-tailnet'):
         require('/usr/bin/setpriv')
@@ -269,6 +269,9 @@ try:
                 raise ValueError('Worker agent identity does not match the isolation launcher')
         if shutil.which('tailscale') and shutil.which('tailscaled'):
             print('horizon-tailnet-contract=1')
+            # Contract 2: the device name stays the same for the cloud's life.
+            if helper_declares('horizon-worker-tailnet', '--stable-name-contract', 'horizon-tailnet-contract=2'):
+                print('horizon-tailnet-contract=2')
     # Session restart: horizon-worker-session --relaunch replaces a lost process in its worktree.
     print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n'
           'horizon-session-restart-contract=1\nhorizon-shared-checkout-contract=1\nhorizon-prepare-checkout-contract=1')

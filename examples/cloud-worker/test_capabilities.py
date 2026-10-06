@@ -198,7 +198,8 @@ class CapabilitiesTests(unittest.TestCase):
                           ['horizon-worker-source', '--lfs-selection-contract'],
                           ['/usr/bin/setpriv', '--help'],
                           ['/usr/bin/id', '-u', 'horizon-agent'],
-                          ['/usr/bin/id', '-g', 'horizon-agent']])
+                          ['/usr/bin/id', '-g', 'horizon-agent'],
+                          ['horizon-worker-tailnet', '--stable-name-contract']])
 
     def test_tailnet_contract_refuses_mismatched_isolation_uid_or_gid(self):
         for identity in [(0, 10001), (10002, 10001), (10001, 0), (10001, 10002)]:
@@ -213,6 +214,20 @@ class CapabilitiesTests(unittest.TestCase):
                 status, output, _ = self.run_check(missing=('tailscale', 'tailscaled'), identities=identities)
                 self.assertEqual(status, expected, output)
                 self.assertNotIn('horizon-tailnet-contract=1', output)
+
+    def test_stable_tailnet_names_are_reported_only_when_the_tailnet_helper_declares_them(self):
+        marker = 'horizon-tailnet-contract=2'
+        older = (1, b'')  # An older helper rejects the unknown option.
+        for (code, reply), missing, expected in [((0, (marker + '\n').encode()), (), True), ((0, b''), (), False),
+                                                 ((0, (marker + ' extra\n').encode()), (), False), (older, (), False),
+                                                 ((0, (marker + '\n').encode()), ('tailscale',), False)]:
+            with self.subTest(code=code, reply=reply, missing=missing):
+                def run(command, **kwargs):
+                    declared = command == ['horizon-worker-tailnet', '--stable-name-contract']
+                    return subprocess.CompletedProcess(command, code if declared else 0, stdout=reply if declared else b'')
+                status, output, _ = self.run_check(run=run, missing=missing)
+                self.assertEqual(status, 0, output)
+                self.assertEqual(marker in output.splitlines(), expected)
 
     def test_tailnet_contract_requires_the_privilege_drop_runtime(self):
         status, output, _ = self.run_check(missing=('/usr/bin/setpriv',))
