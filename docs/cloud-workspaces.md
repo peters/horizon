@@ -638,7 +638,8 @@ cloud. Nothing resumes it automatically. The card keeps the cause until Horizon
 closes. After a restart, Horizon has no idle record. If Horizon finds the stop
 after the restart, the card shows **Stopped outside Horizon**. If the record
 already showed the stop, the card shows **Stopped**. A worker image from before the idle record contract
-(`horizon-idle-report-contract=1`) keeps no idle record. Rebuild such an image to
+(`horizon-idle-report-contract=1`) keeps no idle record. Horizon still finds the
+stop of such a worker, but shows **Stopped outside Horizon**. Rebuild the image to
 show the idle cause. You can also choose **Check provider** at any time. A
 profile without `idle_stop_minutes` never stops by itself. Shared workers and
 profiles with hosted devices do not support idle stop.

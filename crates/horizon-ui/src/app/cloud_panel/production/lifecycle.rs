@@ -31,16 +31,14 @@ impl Runtime {
         ctx: &egui::Context,
     ) {
         let (tx, rx) = channel();
+        let cancel = cloud_runtime::Cancellation::default();
         self.unexplained_failure = self.error.take();
+        self.failure_check = Some(cancel.clone());
         self.recovery_receiver = Some(rx);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = cloud_runtime::lifecycle::check_lost_worker(
-                &state_root,
-                &settings,
-                &cloud_runtime::Cancellation::default(),
-            )
-            .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
+            let result = cloud_runtime::lifecycle::check_lost_worker(&state_root, &settings, &cancel)
+                .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
             let _ = tx.send(result);
             ctx.request_repaint();
         });
@@ -80,8 +78,12 @@ impl Runtime {
         };
         self.recovery_receiver = None;
         // A check Horizon started for a failure: a confirmed stop replaces the
-        // failure, and anything else shows the failure as it was.
-        if let Some(failure) = self.unexplained_failure.take() {
+        // failure, and anything else shows the failure as it was. A check whose
+        // failure the idle watch already explained only had to release the cloud.
+        if self.failure_check.take().is_some() {
+            let Some(failure) = self.unexplained_failure.take() else {
+                return;
+            };
             match result {
                 Ok(recovered) if recovered.confirmed_stopped() => self.show_stopped_outside(recovered.state),
                 Ok(recovered) => {

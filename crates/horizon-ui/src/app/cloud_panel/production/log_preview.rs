@@ -71,7 +71,8 @@ fn seed_lines(app: &mut HorizonApp, count: usize) -> bool {
 
 /// A ready synthetic `RunPod` cloud with a 30-minute idle stop. Its idle watch reads 29
 /// idle minutes, and after `delay` the provider confirms that the worker stopped
-/// itself, as the watch of a real worker reports it. No provider is asked.
+/// itself, as the watch of a real worker reports it. No provider is asked: the record
+/// binds no worker, so billing and worker operations have nothing to reach.
 fn seed_idle_stop(app: &mut HorizonApp, delay: Duration, ctx: &egui::Context) -> bool {
     if !accepts_preview(app) {
         return false;
@@ -133,7 +134,8 @@ fn idle_launch() -> Option<(CloudLaunch, Deployment)> {
     let profile = config.profiles.get("idle")?.clone();
     let state = serde_json::from_value(serde_json::json!({
         "version": 1, "cloud_id": "synthetic-idle", "repository": "/synthetic", "revision": "a".repeat(40),
-        "profile": profile, "stage": "Ready", "operation": {"state": "bound", "worker_id": "synthetic1"},
+        // Never bound, so nothing reads billing or acts on this worker through a provider.
+        "profile": profile, "stage": "Ready", "operation": {"state": "prepared"},
         "spec": null, "sessions": [], "source_ready": true,
         "worker": {"id": "synthetic1", "name": "synthetic-idle", "imageName": "example.invalid/worker",
             "desiredStatus": "RUNNING"}
@@ -257,6 +259,11 @@ mod tests {
             .get_mut(&PREVIEW_ISSUE)
             .expect("preview runtime");
         assert!(runtime.connected_ready());
+        assert_eq!(
+            runtime.state.as_ref().map(|state| &state.operation),
+            Some(&horizon_core::cloud_runtime::CreateState::Prepared),
+            "no worker is bound, so nothing reads billing or reaches a provider"
+        );
         let deadline = Instant::now() + Duration::from_secs(10);
         while runtime.stage != Some(Stage::Stopped) {
             assert!(Instant::now() < deadline, "the synthetic worker stops");

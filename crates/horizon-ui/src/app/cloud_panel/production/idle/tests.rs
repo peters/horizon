@@ -430,6 +430,58 @@ fn a_worker_that_stops_itself_is_read_and_its_stop_confirmed_with_the_provider()
 }
 
 #[test]
+fn a_worker_without_an_idle_record_is_still_read_until_its_stop_is_confirmed() {
+    let cancel = Cancellation::default();
+    let checks = RefCell::new(
+        vec![
+            // An older image keeps no idle record, but the worker answers.
+            Ok(IdleCheck::NotWatched),
+            Ok(IdleCheck::NotWatched),
+            Err(Error::Command("Reading the worker's idle record")),
+        ]
+        .into_iter(),
+    );
+    let ready = || {
+        let mut state = runpod_stopped();
+        (state.stage, state.stop_requested) = (Stage::Ready, false);
+        state
+    };
+    let reports = RefCell::new(Vec::new());
+    run(
+        &cancel,
+        Duration::ZERO,
+        |_| checks.borrow_mut().next().unwrap(),
+        || Ok(Some(ready())),
+        |_| Ok(Some(runpod_stopped())),
+        &|report| {
+            if let Report::StoppedOutside(state) = report {
+                reports.borrow_mut().push(state.stage);
+            }
+            true
+        },
+    );
+    assert_eq!(reports.into_inner(), [Stage::Stopped]);
+    // A Hetzner cloud that is no longer watched ends the watch, as before.
+    let ended = RefCell::new(0);
+    run(
+        &Cancellation::default(),
+        Duration::ZERO,
+        |_| {
+            *ended.borrow_mut() += 1;
+            Ok(IdleCheck::NotWatched)
+        },
+        || {
+            let mut state = stopped();
+            (state.stage, state.stop_requested) = (Stage::Ready, false);
+            Ok(Some(state))
+        },
+        |_| panic!("nothing to confirm"),
+        &|_| true,
+    );
+    assert_eq!(*ended.borrow(), 1);
+}
+
+#[test]
 fn a_worker_the_provider_does_not_report_stopped_keeps_the_failed_check() {
     let reports = RefCell::new(Vec::new());
     let checks = RefCell::new(

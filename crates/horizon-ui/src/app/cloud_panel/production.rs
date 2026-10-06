@@ -253,6 +253,9 @@ pub(super) struct Runtime {
     /// A failure of a ready or reconnecting cloud, held while the provider check that
     /// may explain it as a stop runs.
     unexplained_failure: Option<String>,
+    /// Cancels that check once the idle watch shows the stop first. The check still
+    /// holds the cloud until it reports, so the card stays busy until then.
+    failure_check: Option<cloud_runtime::Cancellation>,
     sharing: local_network::Sharing,
     /// The owner's scope for that sharing, kept while it pauses.
     scope: local_network::Editor,
@@ -478,9 +481,11 @@ impl Runtime {
 
     fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {
         self.poll_remote_release();
+        // The idle watch's newest record, or its own report of the stop, comes before a
+        // provider check that classifies the stop with it.
+        self.poll_idle();
         self.poll_recovery();
         self.poll_resize();
-        self.poll_idle();
         if self.needs_repaint() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         } else if self.current_run_cost(std::time::SystemTime::now()).is_some() {
@@ -522,6 +527,7 @@ impl HorizonApp {
         let mut finished = Vec::new();
         let mut removed = Vec::new();
         let mut resumed = Vec::new();
+        let mut lost = Vec::new();
         for (&id, runtime) in &mut self.cloud_prototype.production.runtimes {
             runtime.repaint_context.get_or_insert_with(|| ctx.clone());
             let events: Vec<_> = runtime
@@ -595,6 +601,10 @@ impl HorizonApp {
                     Event::Failed(error, at) => {
                         runtime.progress.finish(at);
                         runtime.error = Some(error);
+                        // Decided now, while a resize that failed still shows as running.
+                        if runtime.failure_may_be_a_stop() {
+                            lost.push(id);
+                        }
                         finished.push(id);
                     }
                 }
@@ -602,7 +612,7 @@ impl HorizonApp {
             runtime.poll_release_and_repaint(ctx);
         }
         self.follow_cloud_billing(ctx);
-        self.finish_failed_cloud_operations(finished, ctx);
+        self.finish_failed_cloud_operations(finished, &lost, ctx);
         self.reconcile_sharing(ctx);
         self.finish_closing_clouds(ctx);
         self.reconnect_resumed(resumed, ctx);
@@ -635,13 +645,15 @@ impl HorizonApp {
             runtime.billing.follow(runtime.state.as_ref(), root, BILLING, &repaint);
         }
     }
-    fn finish_failed_cloud_operations(&mut self, finished: Vec<u32>, ctx: &egui::Context) {
+    /// `lost` are the failures that may be a stop Horizon did not make, as judged when
+    /// each was reported.
+    fn finish_failed_cloud_operations(&mut self, finished: Vec<u32>, lost: &[u32], ctx: &egui::Context) {
         for id in finished {
             if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id)
                 && runtime.error.is_some()
             {
                 runtime.receiver = None;
-                if runtime.failure_may_be_a_stop() {
+                if lost.contains(&id) && runtime.recovery_receiver.is_none() {
                     // The idle watch keeps its token and channel while the provider check
                     // runs: either may show the stop first, and a worker that still runs
                     // stays watched.

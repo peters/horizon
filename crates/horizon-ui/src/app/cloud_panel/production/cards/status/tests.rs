@@ -764,6 +764,7 @@ fn lost_connection() -> (
     runtime.receiver = None;
     runtime.cancel = None;
     runtime.unexplained_failure = runtime.error.take();
+    runtime.failure_check = Some(cloud_runtime::Cancellation::default());
     let (tx, rx) = channel();
     runtime.recovery_receiver = Some(rx);
     (runtime, tx)
@@ -921,11 +922,22 @@ fn the_first_report_of_a_stop_ends_the_other_and_a_known_stop_keeps_its_own_word
     // The idle watch shows the stop before the provider check returns.
     let (mut runtime, check) = lost_connection();
     runtime.show_stopped_outside(idle_cloud("Stopped", "EXITED"));
-    assert!(runtime.recovery_receiver.is_none() && runtime.unexplained_failure.is_none());
+    assert!(runtime.unexplained_failure.is_none());
+    assert!(
+        runtime
+            .failure_check
+            .as_ref()
+            .is_some_and(cloud_runtime::Cancellation::is_cancelled),
+        "the losing check ends early"
+    );
+    assert!(runtime.busy(), "and holds the cloud until it reports");
     let notes = runtime.logs.len();
-    let _ = check.send(Ok(checked(idle_cloud("Stopped", "EXITED"), "inactive")));
+    // The cancelled check ends with an error, which nobody shows.
+    check.send(Err(cloud_runtime::Error::Busy)).unwrap();
     runtime.poll_recovery();
+    assert!(!runtime.busy() && runtime.failure_check.is_none());
     assert_eq!(runtime.logs.len(), notes, "the stop is logged once");
+    assert!(runtime.error.is_none(), "the cancelled check shows no failure");
     assert_eq!(
         of(&runtime, Occupancy::default(), now()).verb,
         "Stopped after 30 idle minutes"

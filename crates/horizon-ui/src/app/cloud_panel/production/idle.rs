@@ -122,6 +122,13 @@ fn run(
             Ok(IdleCheck::NotWatched) => {
                 if let Some(state) = stopping(&load, interval) {
                     report(unfinished(state, "the server may still run"));
+                    return;
+                }
+                // A ready worker that stops itself but keeps no idle record, as an older
+                // image, is still read: a read that fails asks the provider.
+                if load().ok().flatten().as_ref().is_some_and(stops_itself_when_ready) {
+                    failed = None;
+                    continue;
                 }
                 return;
             }
@@ -178,6 +185,14 @@ fn run(
             }
         }
     }
+}
+
+/// A ready cloud whose worker applies its idle period itself.
+fn stops_itself_when_ready(state: &Deployment) -> bool {
+    Description::of(&state.profile).idle_stop == IdleStop::Worker
+        && state.profile.idle_stop_minutes.is_some()
+        && state.stage == Stage::Ready
+        && !state.stop_requested
 }
 
 /// The saved record when it shows a stop in progress, read with the same retries
@@ -348,9 +363,11 @@ impl Runtime {
     }
 
     fn show_stopped(&mut self, state: Option<Deployment>, line: String) {
-        // A provider check Horizon started for a failure has nothing left to explain.
-        if self.unexplained_failure.take().is_some() {
-            self.recovery_receiver = None;
+        // A provider check Horizon started for a failure has nothing left to explain. It
+        // ends early, and the card waits for it to release the cloud.
+        if let Some(check) = &self.failure_check {
+            check.cancel();
+            self.unexplained_failure = None;
         }
         self.cancel = None;
         self.progress.stage(Stage::Stopped, Instant::now());
