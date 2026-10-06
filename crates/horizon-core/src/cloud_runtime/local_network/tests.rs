@@ -360,8 +360,12 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#;
         let (bridge, root) = start(PREPARED, hold);
         wait_for_state(&bridge, |state| matches!(state, State::Active { .. }));
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !log(&root).contains(r#""id":3"#) {
-            assert!(Instant::now() < deadline, "no answer: {}", log(&root));
+        loop {
+            let replies = log(&root);
+            if replies.contains(r#""id":2"#) && replies.contains(r#""id":3"#) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing answers: {replies}");
             std::thread::sleep(Duration::from_millis(20));
         }
         let log = log(&root);
