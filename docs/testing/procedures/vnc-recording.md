@@ -19,8 +19,9 @@ It tests access control, background capture, file completion, and temporary stor
 
 - Use a current Horizon candidate. The app includes the video encoder.
 - Use synthetic content on an isolated desktop.
-- This procedure does not test audio or a browser video file.
-- PANEL-ICON-01 checks the camera, record, and stop icons on a Device panel and on browser chrome.
+- This procedure does not test audio or browser video.
+- PANEL-ICON-01 checks the camera and record icons on a Device panel.
+- Browser recording is a separate procedure.
 - Linux uses the local device fixture. Other platforms need a separate isolated desktop.
 
 ## 3. Safety
@@ -65,7 +66,7 @@ It tests access control, background capture, file completion, and temporary stor
 
    Result: The recording continues. The panel controls do not crop the recording.
 
-### PANEL-ICON-01 — Camera, record, and stop icons
+### PANEL-ICON-01 — Camera and record icons
 
 1. Open a Device panel that is not connected.
 
@@ -74,22 +75,6 @@ It tests access control, background capture, file completion, and temporary stor
 2. Connect the panel and wait until it shows the desktop.
 
    Result: The camera is bright. The record disc is rose. The camera hover text names copying the panel image. The record hover text names the recording limits.
-
-3. Open a Browser panel before it shows a page frame.
-
-   Result: The record disc is rose. The camera is dim.
-
-4. Open a page that produces a frame.
-
-   Result: The camera is bright. Its hover text names copying the panel image.
-
-5. Click the browser record icon.
-
-   Result: The stop icon is shown. Its hover text says **Stop recording**.
-
-6. Click the browser stop icon.
-
-   Result: The record icon returns. This task does not check the browser video file.
 
 ### VNC-VIDEO-02 — MCP and background capture
 

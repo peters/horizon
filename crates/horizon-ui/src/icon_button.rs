@@ -1,8 +1,8 @@
-//! Square toolbar buttons with a painted mark and a hover label.
+//! Square toolbar buttons with a painted mark.
 //!
 //! Each mark is drawn in a 16-point box inside the 22-point button.
-//! Navigation glyphs on the same row stay 13 points. The button label stays
-//! the action name for accessibility; the hover text is that name too.
+//! Navigation glyphs on the same row stay 13 points. The button label is
+//! the accessibility name. The caller supplies the hover text.
 
 use egui::{
     Color32, CornerRadius, Painter, Pos2, Rect, Response, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, WidgetType,

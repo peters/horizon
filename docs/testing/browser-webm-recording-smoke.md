@@ -8,13 +8,11 @@ Launch the exact candidate (`target/debug/horizon`) with an isolated `--config` 
 
 1. **Chrome Record control (Linux Chromium or macOS/Metal Chrome)**
    - Open a Browser panel to a local fixture or `example.com`.
-   - Before the page has a frame, the camera icon is dim and the record disc is rose.
-   - After a frame, the camera icon is bright. Its hover text names copying the panel image.
-   - Click the record icon. Confirm a red elapsed timer appears and the page still paints.
+   - Click Record. Confirm a red elapsed timer appears and the page still paints.
    - Navigate and scroll for ~5 seconds.
    - Pause: timer shows paused, page stays live.
    - Resume: timer continues, file keeps growing.
-   - Stop with the stop icon. Its hover text says Stop recording. The timer clears, and hovering the record icon shows a `.webm` path under the panel `captures/` directory.
+   - Stop: timer clears; hover Record shows a `.webm` path under the panel `captures/` directory.
    - Open the file in a player or Chromium. Playback duration matches active (non-paused) time. Horizon chrome is not in the video.
 
 2. **Static page**
