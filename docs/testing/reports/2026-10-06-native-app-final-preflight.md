@@ -1,7 +1,7 @@
 ---
 procedure: native-app-automate
-candidate_commit: d9272d11f51e0a4b2896ada372f2ecd7fc77fda0
-candidate_sha256: 5d738e33e9f100e7e91de52d790c8f2c1098f501c035e6b42333984f3d5bcad0
+candidate_commit: 51fef727e604930a7a538e1e88a6fb468d50f6e0
+candidate_sha256: 885069b88b5b99a0b6b75baabd6e1e0d9afe2d416d3f78ea12d5af51df096bba
 date: 2026-10-06
 lanes: [ios-phone-current, ios-phone-older, ios-tablet, android-phone]
 issue: https://github.com/peters/horizon/issues/1255
@@ -22,8 +22,9 @@ These results do not qualify the fresh paid device matrix.
 |---|---|---|
 | Local validation | pass | Formatting, maintainability, workspace tests, speech tests, blocking Clippy and strict Clippy passed. |
 | Packaged build | pass | The frozen executable hash matches the candidate metadata. |
-| Packaged GUI startup | pass | The actual child executable matched the frozen hash. Three displayed-frame inspections advanced through 30, 39 and 50. |
+| Packaged GUI startup | pass | The actual child executable matched the frozen hash. Three displayed-frame inspections advanced through 44, 50 and 59. |
 | MCP preflight | pass | Initialization exposed 13 tools. The screenshot action returned `app_screenshot_requires_capture`. Normal parent EOF produced exit code 0. |
+| First CLI progress write failure | pass | A closed progress pipe retained `app_run_cancelled`, exited 2 in 3.45 seconds, started no build and left reconciliation empty. |
 | Native catalog | pass | The current account offered 105 devices, allowed two lanes, and had zero active or queued sessions. |
 | NATIVE-MATRIX | hold | The fresh four-device run needs the declared app artifacts. No paid device was allocated. |
 | NATIVE-CANCEL, NATIVE-EOF, NATIVE-CRASH | hold | These checks need real app sessions. The empty MCP preflight does not qualify their cleanup behavior. |
@@ -34,6 +35,8 @@ The isolated terminal heartbeat changed throughout the observation window.
 The candidate did not change the GUI renderer.
 
 ## 3. Defects and limits
+
+Missing or empty tunnel-port maps now fail contract validation before execution. The published schema requires the tunnel and between one and sixteen ports, matching runtime validation. Regression tests omit launch arguments so the empty-map refusal cannot depend on URL checks.
 
 Progress writes now await a bounded, per-message acknowledgement. Regression tests verify that the first failed or stalled write cancels the run without another event.
 Task retirement retains the parent and child directory descriptors and uses descriptor-relative cleanup. A deterministic replacement-after-check test preserves the replacement and refuses to retire it.
