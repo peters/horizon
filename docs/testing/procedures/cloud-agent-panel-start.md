@@ -1,6 +1,6 @@
 ---
 procedure: cloud-agent-panel-start
-feature: Agent panel start in a cloud, host instance and private browser state
+feature: Agent panel start in a cloud, host instance and browser runtime root owner
 platforms: [linux]
 cost: rents compute
 destructive: yes
@@ -16,18 +16,20 @@ This procedure makes sure that an agent panel in a cloud starts without a
 permission error. It also makes sure of these conditions:
 
 - The agent gets the host instance of the worker.
-- The agent cannot read the browser runtime root of the worker.
-- A new control service publishes a new host instance after a restart.
+- The browser runtime root of the worker belongs to UID 10001.
+- The agent cannot change the published host instance.
+- A new control service gets a new host instance after a restart.
 
 ## 2. Applicability
 
-- Candidate: a build that includes the fix for
-  [issue #1306](https://github.com/peters/horizon/issues/1306). The worker image
+- Candidate: a build that includes the fixes for
+  [issue #1306](https://github.com/peters/horizon/issues/1306) and
+  [issue #1307](https://github.com/peters/horizon/issues/1307). The worker image
   must come from the same commit.
 - Platforms: Linux. Provider: Hetzner or RunPod.
 - This procedure does not test these functions:
-  - The browser tools of an agent.
-    [Issue #1307](https://github.com/peters/horizon/issues/1307) tracks them.
+  - The browser tools of an agent. Use
+    [the cloud agent browser procedure](cloud-agent-browser.md).
   - Codex and Grok panels. They use the same launcher as Claude Code.
 
 ## 3. Safety
@@ -185,15 +187,15 @@ Give each task an ID. A report uses the ID to give a result.
 
    Result: The output is `root 644`.
 
-### 6.3 H03 — Make sure that the browser state stays private
+### 6.3 H03 — Examine the browser runtime root and the published file
 
-1. In the Shell panel, list the browser runtime root.
+1. In the Shell panel, show the owner and the mode of the browser runtime root.
 
    ```sh
-   ls /workspace/home/.horizon
+   stat -c '%u %a' /workspace/home/.horizon
    ```
 
-   Result: The Shell panel shows `Permission denied`.
+   Result: The output is `10001 700`.
 
 2. Try to change the published file.
 
@@ -242,7 +244,7 @@ Give each task an ID. A report uses the ID to give a result.
 - In H01, the agent replies `ready`.
 - In H02, `HORIZON_BROWSER_HOST_INSTANCE` has the UUID of the published file.
 - In H02, `root` owns the published file and its mode is `644`.
-- In H03, the Shell panel cannot list the browser runtime root.
+- In H03, UID 10001 owns the browser runtime root.
 - In H03, the Shell panel cannot change the published file.
 - In H04, the new Shell panel gets the new UUID, not `<first-uuid>`.
 
