@@ -1,9 +1,15 @@
 #![cfg(target_os = "linux")]
 use horizon_device::{ActRequest, Action, Device, DeviceError, Key, Modifier, Point, Target};
-use x11rb::{connection::Connection, protocol::xproto::ConnectionExt};
+use x11rb::{
+    connection::Connection,
+    protocol::xproto::{ConnectionExt, KEY_PRESS_EVENT, KEY_RELEASE_EVENT},
+};
 
 #[path = "support/x11_text.rs"]
 mod x11_text;
+
+const CAPS_LOCK: u32 = 0xffe5;
+const SHIFT_L: u32 = 0xffe1;
 
 /// Both tests type into their own focused window on the same display.
 static DISPLAY: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -115,11 +121,24 @@ fn multi_chunk_type_actions_deliver_every_character_once() -> x11_text::TestResu
     assert_eq!(received, expected, "reassigned temporary mappings");
 
     // Caps Lock inverts Shift for letter keys only.
-    toggle_caps_lock(&client.connection)?;
+    let both = [KEY_PRESS_EVENT, KEY_RELEASE_EVENT];
+    fake_keysym(&client.connection, CAPS_LOCK, &both)?;
     let caps = vec!["AbC_9-xYz".to_owned(), "æQq".to_owned()];
     let received = type_chunks(&target, &mut client, caps.clone(), lag);
-    toggle_caps_lock(&client.connection)?;
+    fake_keysym(&client.connection, CAPS_LOCK, &both)?;
     assert_eq!(received?, caps.concat(), "Caps Lock");
+
+    // A held modifier would change each key, so text input refuses it before input.
+    fake_keysym(&client.connection, SHIFT_L, &[KEY_PRESS_EVENT])?;
+    let held = Device::connect(&target).and_then(|mut device| {
+        device.act(&ActRequest {
+            geometry: device.screenshot()?.geometry,
+            action: Action::Type { text: "a".into() },
+        })
+    });
+    fake_keysym(&client.connection, SHIFT_L, &[KEY_RELEASE_EVENT])?;
+    assert!(matches!(held, Err(DeviceError::Unsupported(_))), "{held:?}");
+    assert_eq!(client.collect_while(lag, || true)?, "", "no key while Shift is held");
 
     // Pointer and key actions need one unused keycode after text fills the rest,
     // also when another client takes the keycode that text input keeps.
@@ -163,12 +182,13 @@ fn unused_keycodes(connection: &x11rb::rust_connection::RustConnection) -> x11_t
         .collect())
 }
 
-fn toggle_caps_lock(connection: &x11rb::rust_connection::RustConnection) -> x11_text::TestResult<()> {
-    use x11rb::protocol::{
-        xproto::{KEY_PRESS_EVENT, KEY_RELEASE_EVENT},
-        xtest::ConnectionExt as _,
-    };
-    const CAPS_LOCK: u32 = 0xffe5;
+/// Sends XTEST events of `kinds` for the first key whose first level is `keysym`.
+fn fake_keysym(
+    connection: &x11rb::rust_connection::RustConnection,
+    keysym: u32,
+    kinds: &[u8],
+) -> x11_text::TestResult<()> {
+    use x11rb::protocol::xtest::ConnectionExt as _;
     let setup = connection.setup();
     let root = setup.roots[0].root;
     let mapping = connection
@@ -176,10 +196,10 @@ fn toggle_caps_lock(connection: &x11rb::rust_connection::RustConnection) -> x11_
         .reply()?;
     let keycode = (setup.min_keycode..=setup.max_keycode)
         .zip(mapping.keysyms.chunks(usize::from(mapping.keysyms_per_keycode)))
-        .find(|(_, symbols)| symbols.first() == Some(&CAPS_LOCK))
+        .find(|(_, symbols)| symbols.first() == Some(&keysym))
         .map(|(keycode, _)| keycode)
-        .ok_or("no Caps Lock key")?;
-    for kind in [KEY_PRESS_EVENT, KEY_RELEASE_EVENT] {
+        .ok_or("no key for the keysym")?;
+    for &kind in kinds {
         connection
             .xtest_fake_input(kind, keycode, x11rb::CURRENT_TIME, root, 0, 0, 0)?
             .check()?;

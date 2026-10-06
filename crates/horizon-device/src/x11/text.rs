@@ -3,7 +3,7 @@
 use super::keymap::{self, Borrowed, Keyboard, Layout, Plan, PlanError};
 use super::{X11, unavailable};
 use crate::{DeviceError, Result};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use x11rb::{
     connection::{Connection, RequestConnection as _},
     errors::ReplyError,
@@ -22,10 +22,11 @@ const RECORD_PROPERTY: &[u8] = b"_HORIZON_DEVICE_KEYMAP";
 const KEY_INTERVAL: Duration = Duration::from_millis(20);
 const FINAL_DRAIN: Duration = Duration::from_millis(100);
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+/// Milliseconds since boot, from `/proc/uptime` (`CLOCK_BOOTTIME`). Unlike the
+/// wall clock, it does not step, and all local processes share it.
+fn now_ms() -> std::io::Result<u64> {
+    keymap::uptime_ms(&std::fs::read_to_string("/proc/uptime")?)
+        .ok_or_else(|| std::io::Error::other("unexpected /proc/uptime format"))
 }
 
 fn indeterminate(e: impl std::fmt::Display) -> DeviceError {
@@ -62,6 +63,24 @@ impl X11 {
                 "X11 text input requires the first keyboard group".into(),
             ));
         }
+        // A held Shift, Control, Alt or Super key would change each typed key.
+        // Lock is planned for, and Mod2 is usually Num Lock.
+        let held = [
+            KeyButMask::SHIFT,
+            KeyButMask::CONTROL,
+            KeyButMask::MOD1,
+            KeyButMask::MOD3,
+            KeyButMask::MOD4,
+            KeyButMask::MOD5,
+        ];
+        if held
+            .into_iter()
+            .any(|modifier| u16::from(state) & u16::from(modifier) != 0)
+        {
+            return Err(DeviceError::Unsupported(
+                "X11 text input requires released modifier keys".into(),
+            ));
+        }
         let mapping = self.keyboard_mapping()?;
         let layout = self.layout(&mapping);
         let modifiers = self
@@ -88,9 +107,11 @@ impl X11 {
         })?;
         self.apply_bindings(&plan, record_atom)?;
         let typed = self.send_strokes(&plan, keyboard.shift_keycode);
-        let recorded = self.write_record(record_atom, &plan.record(now_ms()));
+        let recorded = now_ms()
+            .map_err(indeterminate)
+            .and_then(|now| self.write_record(record_atom, &plan.record(now)).map_err(indeterminate));
         std::thread::sleep(FINAL_DRAIN);
-        typed.and(recorded.map_err(indeterminate))
+        typed.and(recorded)
     }
 
     /// Clears the least recently used temporary keycode when no keycode is
@@ -103,7 +124,9 @@ impl X11 {
         let Some(candidate) = keymap::spare_candidate(&self.layout(&mapping), &record) else {
             return Ok(());
         };
-        let wait = Duration::from_millis(keymap::quiet_after(candidate.last_used_ms).saturating_sub(now_ms()));
+        let wait = Duration::from_millis(
+            keymap::quiet_after(candidate.last_used_ms).saturating_sub(now_ms().map_err(unavailable)?),
+        );
         std::thread::sleep(wait.min(keymap::RECLAIM_QUIET));
         record.retain(|entry| entry.keycode != candidate.keycode);
         self.connection
@@ -156,10 +179,10 @@ impl X11 {
         if plan.bindings.is_empty() {
             return Ok(());
         }
-        let wait = Duration::from_millis(plan.not_before_ms.saturating_sub(now_ms()));
+        let wait = Duration::from_millis(plan.not_before_ms.saturating_sub(now_ms().map_err(unavailable)?));
         std::thread::sleep(wait.min(keymap::RECLAIM_QUIET));
         // Record ownership before the change so a failure cannot leak keycodes.
-        self.write_record(record_atom, &plan.record(now_ms()))
+        self.write_record(record_atom, &plan.record(now_ms().map_err(unavailable)?))
             .map_err(unavailable)?;
         for (first, keysyms) in keymap::runs(&plan.bindings) {
             let count = u8::try_from(keysyms.len() / 2).map_err(unavailable)?;

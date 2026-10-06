@@ -57,15 +57,17 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
   On a US layout, this applies to `[A-Za-z0-9]` and ASCII punctuation.
 - If Caps Lock is on, the tool holds Shift for a lowercase letter and releases
   it for an uppercase letter. This applies only to keys with a letter pair.
-- If a keyboard group other than the first is active, or if the server has no
-  XTEST extension, the action fails with `unsupported` before input.
+- If a keyboard group other than the first is active, if a Shift, Control,
+  Alt or Super key is held, or if the server has no XTEST extension, the action
+  fails with `unsupported` before input.
 - Each other character gets a temporary mapping on an unused keycode. A server
   round trip makes sure that the server applied the mapping before the first key.
 - A temporary mapping stays after the action. Later actions use it again and do
   not change it.
 - The root window property `_HORIZON_DEVICE_KEYMAP` of the display records the
-  temporary keycodes and the time of their last use. If a recorded keycode has a
-  different keysym now, the tool does not use the record.
+  temporary keycodes and the time of their last use, in milliseconds since
+  boot. If a recorded keycode has a different keysym now, the tool does not use
+  the record.
 - The tool does not use the lowest unused keycode. The input library for the
   other actions does not start without an unused keycode.
 - If no other unused keycode is available, the tool changes the temporary

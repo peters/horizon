@@ -106,7 +106,7 @@ pub(super) struct Plan {
     pub strokes: Vec<Stroke>,
     /// Keycodes to map before the first stroke, in ascending keycode order.
     pub bindings: Vec<(u8, u32)>,
-    /// Earliest Unix time in milliseconds at which `bindings` may be applied.
+    /// Earliest boot-clock time in milliseconds at which `bindings` may be applied.
     pub not_before_ms: u64,
     borrowed: Vec<Borrowed>,
     used: BTreeSet<u8>,
@@ -168,7 +168,25 @@ pub(super) fn spare_candidate(layout: &Layout<'_>, previous: &[Borrowed]) -> Opt
         .min_by_key(|record| (record.last_used_ms, record.keycode))
 }
 
-/// The earliest Unix time in milliseconds at which a keycode last used at
+/// Parses the first field of `/proc/uptime`, seconds since boot with a
+/// fraction, as milliseconds.
+pub(super) fn uptime_ms(text: &str) -> Option<u64> {
+    let field = text.split_whitespace().next()?;
+    let (seconds, fraction) = field.split_once('.').unwrap_or((field, ""));
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    if !digits(seconds) || !(fraction.is_empty() || digits(fraction)) {
+        return None;
+    }
+    let milliseconds = format!("{fraction:0<3}");
+    let milliseconds: u64 = milliseconds.get(..3)?.parse().ok()?;
+    seconds
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(1000)?
+        .checked_add(milliseconds)
+}
+
+/// The earliest boot-clock time in milliseconds at which a keycode last used at
 /// `last_used_ms` may get a different keysym.
 pub(super) fn quiet_after(last_used_ms: u64) -> u64 {
     last_used_ms.saturating_add(u64::try_from(RECLAIM_QUIET.as_millis()).unwrap_or(u64::MAX))

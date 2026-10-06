@@ -93,16 +93,27 @@ operate after text input uses the spare keycodes.
    Result: `connection` is `connected`. `image_displayed` is `true`. The value
    of `frame_sequence` increases.
 
-7. Start a new Xvfb display for T01. Write a target file for this display.
+7. Start a new Xvfb display for T01 in the background. Record its process ID.
 
    ```sh
-   Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp -noreset 3> <evidence>/display
+   Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp -noreset \
+     3> <evidence>/display &
+   echo $! > <evidence>/xvfb.pid
+   ```
+
+   Result: Xvfb runs. The option `-noreset` keeps the keymap when the last
+   client disconnects.
+
+8. Wait until `<evidence>/display` contains the display number. Then write a
+   target file for this display.
+
+   ```sh
+   until [ -s <evidence>/display ]; do sleep 0.1; done
    printf '{"id":"live","endpoint":{"kind":"local_x11","display":":%s"}}' \
      "$(cat <evidence>/display)" > <evidence>/live-target.json
    ```
 
-   Result: `live-target.json` names a display that no other run uses. The
-   option `-noreset` keeps the keymap when the last client disconnects.
+   Result: `live-target.json` names a display that no other run uses.
 
 ## 6. Tasks
 
@@ -121,6 +132,8 @@ Give each result the task ID. A report uses the ID to give a result.
 
    Result: All tests pass. The multi-chunk test types 20 synthetic keys of 106
    characters. Its receiver reads each key 600 ms late with the current keymap.
+   The test also types text with Caps Lock on. With a held Shift key, it gets
+   `unsupported` and no key.
 
 2. Run the same command again on the same display.
 
@@ -305,6 +318,10 @@ Give each result the task ID. A report uses the ID to give a result.
    Result: The fixture removes `target.json` and the private home.
 
 3. Stop the Xvfb display of step 5.7.
+
+   ```sh
+   kill "$(cat <evidence>/xvfb.pid)"
+   ```
 
    Result: Only the processes of this run stop.
 

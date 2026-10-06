@@ -1,5 +1,6 @@
 use super::{
     Borrowed, Keyboard, Layout, PlanError, RECLAIM_QUIET, Stroke, keysym, plan, quiet_after, runs, spare_candidate,
+    uptime_ms,
 };
 
 const SHIFT: u8 = 50;
@@ -387,4 +388,14 @@ fn caps_lock_inverts_shift_only_for_letter_keys() -> Result<(), PlanError> {
     );
     assert_eq!(plan.bindings, vec![(FIRST_FREE + 3, u32::from(b'a'))]);
     Ok(())
+}
+
+#[test]
+fn boot_clock_parses_proc_uptime() {
+    assert_eq!(uptime_ms("12345.67 98765.43\n"), Some(12_345_670));
+    assert_eq!(uptime_ms("7 1"), Some(7_000));
+    assert_eq!(uptime_ms("1.2345 0"), Some(1_234));
+    assert_eq!(uptime_ms(""), None);
+    assert_eq!(uptime_ms("-1.00 0"), None);
+    assert_eq!(uptime_ms("1.x 0"), None);
 }
