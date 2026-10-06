@@ -82,10 +82,10 @@ impl MediaController<'_> {
     /// # Errors
     /// Returns [`Error::Rejected`] with the receiver's reason if loading fails.
     pub fn load(&mut self, load: &MediaLoad) -> Result<MediaStatus> {
-        self.load_observed(load).map(|(status, _)| status)
+        self.load_observed(load).and_then(|(statuses, _)| first_of(statuses))
     }
 
-    pub(crate) fn load_observed(&mut self, load: &MediaLoad) -> Result<(MediaStatus, Receipt)> {
+    pub(crate) fn load_observed(&mut self, load: &MediaLoad) -> Result<(Vec<MediaStatus>, Receipt)> {
         let mut media = Map::new();
         media.insert("contentId".to_owned(), load.url.clone().into());
         media.insert("contentType".to_owned(), load.content_type.clone().into());
@@ -103,9 +103,12 @@ impl MediaController<'_> {
             json!({"type": "LOAD", "media": media, "autoplay": true}),
             REQUEST_TIMEOUT,
         )?;
-        let status = first_status(&reply)?;
-        self.media_session_id = Some(status.media_session_id);
-        Ok((status, receipt))
+        let statuses = statuses(&reply)?;
+        let loaded = statuses
+            .first()
+            .ok_or(Error::Protocol("media status without a session"))?;
+        self.media_session_id = Some(loaded.media_session_id);
+        Ok((statuses, receipt))
     }
 
     /// # Errors
@@ -140,10 +143,11 @@ impl MediaController<'_> {
     /// Returns an error for a rate that is not positive and finite, if nothing
     /// is loaded, if the receiver refuses, or if it does not answer in `timeout`.
     pub fn set_playback_rate_within(&self, rate: f64, timeout: Duration) -> Result<MediaStatus> {
-        self.rate_observed(rate, timeout).map(|(status, _)| status)
+        self.rate_observed(rate, timeout)
+            .and_then(|(statuses, _)| first_of(statuses))
     }
 
-    pub(crate) fn rate_observed(&self, rate: f64, timeout: Duration) -> Result<(MediaStatus, Receipt)> {
+    pub(crate) fn rate_observed(&self, rate: f64, timeout: Duration) -> Result<(Vec<MediaStatus>, Receipt)> {
         if !rate.is_finite() || rate <= 0.0 {
             return Err(Error::Protocol("playback rate must be positive and finite"));
         }
@@ -154,7 +158,7 @@ impl MediaController<'_> {
             json!({"type": "SET_PLAYBACK_RATE", "mediaSessionId": id, "playbackRate": rate}),
             timeout,
         )?;
-        Ok((first_status(&reply)?, receipt))
+        Ok((statuses(&reply)?, receipt))
     }
 
     /// Current media status, or `None` when nothing is loaded.
@@ -168,12 +172,13 @@ impl MediaController<'_> {
     /// # Errors
     /// Returns an error if the receiver does not answer in `timeout`.
     pub fn status_within(&self, timeout: Duration) -> Result<Option<MediaStatus>> {
-        self.status_observed(timeout).map(|(status, _)| status)
+        self.status_observed(timeout)
+            .map(|(statuses, _)| statuses.into_iter().next())
     }
 
-    pub(crate) fn status_observed(&self, timeout: Duration) -> Result<(Option<MediaStatus>, Receipt)> {
+    pub(crate) fn status_observed(&self, timeout: Duration) -> Result<(Vec<MediaStatus>, Receipt)> {
         let (reply, receipt) = self.request_observed(json!({"type": "GET_STATUS"}), timeout)?;
-        Ok((statuses(&reply)?.into_iter().next(), receipt))
+        Ok((statuses(&reply)?, receipt))
     }
 
     fn command(&self, kind: &str) -> Result<MediaStatus> {
@@ -216,7 +221,11 @@ fn statuses(reply: &Value) -> Result<Vec<MediaStatus>> {
 }
 
 fn first_status(reply: &Value) -> Result<MediaStatus> {
-    statuses(reply)?
+    first_of(statuses(reply)?)
+}
+
+fn first_of(statuses: Vec<MediaStatus>) -> Result<MediaStatus> {
+    statuses
         .into_iter()
         .next()
         .ok_or(Error::Protocol("media status without a session"))

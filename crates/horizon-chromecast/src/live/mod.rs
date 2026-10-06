@@ -414,7 +414,6 @@ impl Session {
         self.set(LiveState::Buffering);
         while !self.ready_to_load() {
             if self.stopped() {
-                let _ = client.stop_application(&app.session_id);
                 return Ok(());
             }
             if !client.is_open() {
@@ -429,18 +428,21 @@ impl Session {
         }
         let mut media = client.media(&app);
         let load = media.load_observed(&self.media_load());
-        let (loaded, receipt) = match load {
+        let (loaded_statuses, receipt) = match load {
             Ok(status) => status,
             Err(error) => {
-                let _ = client.stop_application(&app.session_id);
                 return Err(error);
             }
+        };
+        let media_session_id = media.session_id()?;
+        let Some(loaded) = owned_status(&loaded_statuses, media_session_id) else {
+            return Ok(());
         };
         // The LOAD reply is consumed by its request, so apply its status here.
         // Notices queued while LOAD blocked are older than that reply.
         let queued = buffer_notices(&client, &app.transport_id, loaded.media_session_id, receipt.at)?;
         let loaded_media = CastMedia::new(&app, loaded.media_session_id);
-        let mut outcome = self.judge_polled_status(&loaded_media, &queued, &loaded, receipt.media_time, receipt.at);
+        let mut outcome = self.judge_polled_status(&loaded_media, &queued, loaded, receipt.media_time, receipt.at);
         let result = loop {
             match outcome {
                 Ok(true) => {}
@@ -481,9 +483,25 @@ impl Session {
                 None => Ok(true),
             };
         };
-        // Stopping the application also ends its media session, in one round trip.
-        let _ = client.stop_application(&app.session_id);
+        // STOP is scoped to the original LOAD. An application-wide STOP
+        // could stop a replacement loaded between an ownership check and
+        // cleanup. Before LOAD there is no media session we can safely stop.
+        if self.reconcile_pending(&client, &app, media_session_id).unwrap_or(false) {
+            let _ = media.stop();
+        }
         result
+    }
+
+    /// Drain lifecycle notices as a batch before a failed command can retry
+    /// or enter cleanup. Ordinary notices must not hide a later takeover.
+    fn reconcile_pending(&self, client: &CastClient, app: &Application, media_session_id: i64) -> Result<bool> {
+        let notices = client.take_notices(|event| !buffer_notice(event, &app.transport_id, media_session_id))?;
+        for event in notices {
+            if !self.follow_confirmed(client, &event, app, media_session_id)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Applies one receiver event; `Ok(false)` means the session is over.
@@ -526,14 +544,11 @@ impl Session {
             // stretches or hides the episode they already describe.
             let queued = buffer_notices(client, &app.transport_id, media_session_id, receipt.at)?;
             let media = CastMedia::new(app, media_session_id);
-            return match reply {
-                Some(status) if status.media_session_id == media_session_id => {
-                    self.judge_polled_status(&media, &queued, &status, newest, receipt.at)
-                }
-                _ => {
-                    self.fold_queued(&media, &queued)?;
-                    Ok(false)
-                }
+            return if let Some(status) = owned_status(&reply, media_session_id) {
+                self.judge_polled_status(&media, &queued, status, newest, receipt.at)
+            } else {
+                self.fold_queued(&media, &queued)?;
+                Ok(false)
             };
         }
         Ok(false)
@@ -546,14 +561,11 @@ impl Session {
         let (reply, receipt) = client.media(app).status_observed(REQUEST_TIMEOUT)?;
         let queued = buffer_notices(client, &app.transport_id, media_session_id, receipt.at)?;
         let media = CastMedia::new(app, media_session_id);
-        let going_on = match reply {
-            Some(status) if status.media_session_id == media_session_id => {
-                self.judge_polled_status(&media, &queued, &status, newest, receipt.at)?
-            }
-            _ => {
-                self.fold_queued(&media, &queued)?;
-                false
-            }
+        let going_on = if let Some(status) = owned_status(&reply, media_session_id) {
+            self.judge_polled_status(&media, &queued, status, newest, receipt.at)?
+        } else {
+            self.fold_queued(&media, &queued)?;
+            false
         };
         if going_on && self.stalled() {
             self.set(LiveState::Buffering);
@@ -893,16 +905,16 @@ impl Session {
         // or a slow reply makes the receiver look closer than it is.
         let newest_at_send = stream.newest_media_time();
         let status = media.status_observed(wait);
-        if matches!(&status, Ok((None, _))) {
-            return Ok(false);
-        }
-        if let Ok((Some(status), _)) = &status
-            && !self.owns_reply(media, status)?
-        {
-            return Ok(false);
+        if let Ok((statuses, _)) = &status {
+            let Some(ours) = owned_status(statuses, media.session_id()?) else {
+                return Ok(false);
+            };
+            if !self.owns_reply(media, ours)? {
+                return Ok(false);
+            }
         }
         let newest = stream.newest_media_time();
-        let (Some(newest), Ok((Some(status), receipt))) = (newest, status) else {
+        let (Some(newest), Ok((statuses, receipt))) = (newest, status) else {
             // The receiver may already be playing fast. Without a sample there
             // is no signal to stop, so return to normal speed.
             playback.sampled = false;
@@ -912,6 +924,12 @@ impl Session {
             self.playback.set(playback);
             return Ok(true);
         };
+        let Some(status) = owned_status(&statuses, media.session_id()?) else {
+            return Ok(false);
+        };
+        if !self.owns_reply(media, status)? {
+            return Ok(false);
+        }
         let lag = receipt.media_time.unwrap_or(newest) - status.current_time;
         // Notices queued during the poll were received before this reply.
         // Fold them first, or a short gap is measured out to the reply and a
@@ -927,6 +945,25 @@ impl Session {
             playback.lag_at = Some(observed);
             playback.threat = fastest(&playback);
         }
+        let sample = self.polled_sample(&mut playback, status, observed, newest_at_send, lag);
+        let plan = plan_trim(playback.edge, sample, status.player_state == "PLAYING");
+        playback.edge = plan.edge;
+        let Some(rate) = plan.command else {
+            self.playback.set(playback);
+            return Ok(true);
+        };
+        tracing::debug!(lag, rate, target = plan.edge.target, "trimming live playback");
+        self.push_rate(media, app, playback, rate, 0)
+    }
+
+    fn polled_sample(
+        &self,
+        playback: &mut Playback,
+        status: &MediaStatus,
+        observed: Instant,
+        newest_at_send: Option<f64>,
+        lag: f64,
+    ) -> edge::Sample {
         let lasted = self
             .buffering_since
             .get()
@@ -946,23 +983,12 @@ impl Session {
         close_ended_buffer(&mut playback.edge, status.player_state.as_str(), lasted);
         // Calm time runs between replies. The wait before the first playing
         // sample is not calm, and a pause or a buffer must not be either.
-        let elapsed = note_sample(&mut playback, playing, observed);
-        let plan = plan_trim(
-            playback.edge,
-            edge::Sample {
-                lag,
-                buffering_for,
-                elapsed,
-            },
-            playing,
-        );
-        playback.edge = plan.edge;
-        let Some(rate) = plan.command else {
-            self.playback.set(playback);
-            return Ok(true);
-        };
-        tracing::debug!(lag, rate, target = plan.edge.target, "trimming live playback");
-        self.push_rate(media, app, playback, rate, 0)
+        let elapsed = note_sample(playback, playing, observed);
+        edge::Sample {
+            lag,
+            buffering_for,
+            elapsed,
+        }
     }
 
     /// Applies `rate`. An explicit refusal of a faster rate stops further
@@ -997,8 +1023,11 @@ impl Session {
         };
         let newest_at_send = self.source_media_time();
         let (answer, error) = match media.rate_observed(rate, wait) {
-            Ok((status, receipt)) => {
-                if !self.owns_reply(media, &status)? {
+            Ok((statuses, receipt)) => {
+                let Some(status) = owned_status(&statuses, media.session_id()?) else {
+                    return Ok(false);
+                };
+                if !self.owns_reply(media, status)? {
                     return Ok(false);
                 }
                 // The reply is not delivered again as an event. Notices queued
@@ -1008,11 +1037,21 @@ impl Session {
                 self.playback.set(playback);
                 self.fold_ready(media.client(), app, media.session_id()?, receipt.at)?;
                 playback = self.playback.get();
-                self.absorb_rate_status(&mut playback, &status, receipt.at, newest_at_send);
+                self.absorb_rate_status(&mut playback, status, receipt.at, newest_at_send);
                 (RateAnswer::Applied, None)
             }
-            Err(error @ Error::Rejected { .. }) => (RateAnswer::Refused, Some(error)),
-            Err(error) => (RateAnswer::Unconfirmed, Some(error)),
+            Err(error @ Error::Rejected { .. }) => {
+                if !self.reconcile_pending(media.client(), app, media.session_id()?)? {
+                    return Ok(false);
+                }
+                (RateAnswer::Refused, Some(error))
+            }
+            Err(error) => {
+                if !self.reconcile_pending(media.client(), app, media.session_id()?)? {
+                    return Ok(false);
+                }
+                (RateAnswer::Unconfirmed, Some(error))
+            }
         };
         let answered = Instant::now();
         if apply_rate_reply(&mut playback, rate, failures, answer, answered) {
@@ -1069,6 +1108,20 @@ impl Session {
     fn stopped(&self) -> bool {
         self.stop.load(Ordering::Acquire)
     }
+}
+
+/// Replacement media can follow our status in the same reply. Check all
+/// entries before selecting the status for the original LOAD.
+fn owned_status(statuses: &[MediaStatus], media_session_id: i64) -> Option<&MediaStatus> {
+    if statuses
+        .iter()
+        .any(|status| status.media_session_id > media_session_id && status.player_state != "IDLE")
+    {
+        return None;
+    }
+    statuses
+        .iter()
+        .find(|status| status.media_session_id == media_session_id)
 }
 
 /// What the receiver did with a `SET_PLAYBACK_RATE` command.

@@ -138,6 +138,18 @@ fn receiver_with(listener: TcpListener, config: Arc<ServerConfig>, running: bool
                         };
                         send(&mut stream, to, NS_RECEIVER, &reply(&request, app_status(running)));
                     }
+                    (NS_MEDIA, "STOP") => {
+                        assert_eq!(request["mediaSessionId"], 9);
+                        send(
+                            &mut stream,
+                            to,
+                            NS_MEDIA,
+                            &reply(
+                                &request,
+                                json!({"type":"MEDIA_STATUS", "status":[{"mediaSessionId":9,"playerState":"IDLE","idleReason":"CANCELLED"}]}),
+                            ),
+                        );
+                    }
                     (NS_MEDIA, "LOAD") => {
                         assert_eq!(request["media"]["streamType"], "LIVE");
                         if let Some(url) = request["media"]["contentId"]
@@ -323,7 +335,8 @@ fn cast_live(transport: Transport, settle: Duration) -> Vec<String> {
     live.stop();
     assert_eq!(live.state(), LiveState::Ended);
     let log = server.join().unwrap();
-    assert!(log.contains(&format!("{NS_RECEIVER} receiver-0 STOP")), "{log:#?}");
+    assert!(log.contains(&format!("{NS_MEDIA} transport-1 STOP")), "{log:#?}");
+    assert!(!log.contains(&format!("{NS_RECEIVER} receiver-0 STOP")), "{log:#?}");
     log
 }
 
@@ -609,6 +622,74 @@ enum AfterLoad {
     BufferingFirst,
     PollReplaced,
     RateReplaced,
+    PollFirstReplaced,
+    RateFirstReplaced,
+    LostRateReplaced,
+}
+
+impl AfterLoad {
+    fn progressive(self) -> bool {
+        matches!(
+            self,
+            Self::PollReplaced
+                | Self::RateReplaced
+                | Self::PollFirstReplaced
+                | Self::RateFirstReplaced
+                | Self::LostRateReplaced
+        )
+    }
+
+    fn statuses(self, loaded: bool, replaced: bool) -> Value {
+        match (loaded, self) {
+            (true, AfterLoad::Error) => {
+                json!([{"mediaSessionId": 9, "playerState": "IDLE", "idleReason": "ERROR"}])
+            }
+            (true, AfterLoad::ErrorThenReplaced | AfterLoad::PollReplaced) => {
+                json!([{"mediaSessionId": 10, "playerState": "PLAYING"}])
+            }
+            (true, AfterLoad::PollFirstReplaced) => {
+                json!([{"mediaSessionId":9,"playerState":"PLAYING"},{"mediaSessionId":10,"playerState":"PLAYING"}])
+            }
+            (true, AfterLoad::LostRateReplaced) if replaced => {
+                json!([{"mediaSessionId":10,"playerState":"PLAYING"}])
+            }
+            (true, _) => json!([{"mediaSessionId": 9, "playerState": "PLAYING"}]),
+            (false, _) => json!([]),
+        }
+    }
+
+    fn rate_reply(self, stream: &mut ServerStream, to: &str, request: &Value, replaced: &mut bool) {
+        if self == Self::LostRateReplaced {
+            if request["playbackRate"].as_f64().unwrap() > 1.0 {
+                return;
+            }
+            *replaced = true;
+            for _ in 0..2 {
+                send(
+                    stream,
+                    PLATFORM_RECEIVER,
+                    NS_RECEIVER,
+                    &json!({"type":"RECEIVER_STATUS", "status":{"volume":{"level":0.5}}}),
+                );
+            }
+            send(
+                stream,
+                to,
+                NS_MEDIA,
+                &json!({"type":"MEDIA_STATUS", "status":[{"mediaSessionId":10,"playerState":"PLAYING"}]}),
+            );
+            send(stream, to, NS_MEDIA, &reply(request, json!({"type":"INVALID_REQUEST"})));
+        } else if matches!(self, Self::RateReplaced | Self::RateFirstReplaced) {
+            let statuses = if self == Self::RateFirstReplaced {
+                json!([{"mediaSessionId":9,"playerState":"PLAYING"},{"mediaSessionId":10,"playerState":"PLAYING"}])
+            } else {
+                json!([{"mediaSessionId":10,"playerState":"PLAYING"}])
+            };
+            let status = json!({"type": "MEDIA_STATUS", "status": statuses});
+            send(stream, to, NS_MEDIA, &status);
+            send(stream, to, NS_MEDIA, &reply(request, status));
+        }
+    }
 }
 
 /// A receiver that queues a bare IDLE ahead of a PLAYING LOAD reply.
@@ -617,6 +698,7 @@ fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, after: Af
         let mut stream = accept(&listener, config);
         let (mut log, mut inbound, mut chunk) = (Vec::new(), Vec::new(), [0; 4096]);
         let (mut running, mut loaded) = (false, false);
+        let mut replaced = false;
         loop {
             let read = stream.read(&mut chunk).unwrap_or(0);
             if read == 0 {
@@ -659,8 +741,20 @@ fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, after: Af
                             &reply(&request, app_status(false)),
                         );
                     }
+                    (NS_MEDIA, "STOP") => {
+                        assert_eq!(request["mediaSessionId"], 9);
+                        send(
+                            &mut stream,
+                            to,
+                            NS_MEDIA,
+                            &reply(
+                                &request,
+                                json!({"type":"MEDIA_STATUS", "status":[{"mediaSessionId":9,"playerState":"IDLE","idleReason":"CANCELLED"}]}),
+                            ),
+                        );
+                    }
                     (NS_MEDIA, "LOAD") => {
-                        if matches!(after, AfterLoad::PollReplaced | AfterLoad::RateReplaced) {
+                        if after.progressive() {
                             fetch(request["media"]["contentId"].as_str().unwrap());
                         }
                         let early = if after == AfterLoad::BufferingFirst {
@@ -669,7 +763,7 @@ fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, after: Af
                             "IDLE"
                         };
                         let idle = json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [{"mediaSessionId": 9, "playerState": early}]});
-                        if !matches!(after, AfterLoad::PollReplaced | AfterLoad::RateReplaced) {
+                        if !after.progressive() {
                             send(&mut stream, to, NS_MEDIA, &idle);
                         }
                         let status = json!({"type": "MEDIA_STATUS", "status": playing});
@@ -688,22 +782,9 @@ fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, after: Af
                             loaded = false;
                         }
                     }
-                    (NS_MEDIA, "SET_PLAYBACK_RATE") if after == AfterLoad::RateReplaced => {
-                        let status = json!({"type": "MEDIA_STATUS", "status": [{"mediaSessionId": 10, "playerState": "PLAYING"}]});
-                        send(&mut stream, to, NS_MEDIA, &status);
-                        send(&mut stream, to, NS_MEDIA, &reply(&request, status));
-                    }
+                    (NS_MEDIA, "SET_PLAYBACK_RATE") => after.rate_reply(&mut stream, to, &request, &mut replaced),
                     (NS_MEDIA, "GET_STATUS") => {
-                        let current = match (loaded, after) {
-                            (true, AfterLoad::Error) => {
-                                json!([{"mediaSessionId": 9, "playerState": "IDLE", "idleReason": "ERROR"}])
-                            }
-                            (true, AfterLoad::ErrorThenReplaced | AfterLoad::PollReplaced) => {
-                                json!([{"mediaSessionId": 10, "playerState": "PLAYING"}])
-                            }
-                            (true, _) => playing,
-                            (false, _) => json!([]),
-                        };
+                        let current = after.statuses(loaded, replaced);
                         let status = json!({"type": "MEDIA_STATUS", "status": current});
                         send(&mut stream, to, NS_MEDIA, &reply(&request, status));
                     }
@@ -833,36 +914,64 @@ fn live_cast_retries_a_receiver_that_is_not_listening_yet() {
     assert!(log.contains(&format!("{NS_MEDIA} transport-1 LOAD")), "{log:#?}");
 }
 
-#[test]
-fn progressive_takeover_in_poll_or_rate_reply_never_stops_replacement() {
-    for after in [AfterLoad::PollReplaced, AfterLoad::RateReplaced] {
-        let (address, listener, config) = listen();
-        let server = ordering_receiver(listener, config, after);
-        let live = LiveCast::start(address, LiveOptions::default()).unwrap();
-        for frame in 0..30u64 {
-            let pts = Duration::from_millis(frame * 100);
-            let keyframe = live.wants_keyframe(pts);
-            live.push_annexb(&access_unit(keyframe), pts, keyframe);
-        }
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        let mut frame = 30u64;
-        while live.state() != LiveState::Ended && std::time::Instant::now() < deadline {
+fn progressive_takeover_scenario(after: AfterLoad) {
+    let (address, listener, config) = listen();
+    let server = ordering_receiver(listener, config, after);
+    let live = LiveCast::start(address, LiveOptions::default()).unwrap();
+    for frame in 0..30u64 {
+        let pts = Duration::from_millis(frame * 100);
+        let keyframe = live.wants_keyframe(pts);
+        live.push_annexb(&access_unit(keyframe), pts, keyframe);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut frame = 30u64;
+    while live.state() != LiveState::Ended && std::time::Instant::now() < deadline {
+        if after != AfterLoad::LostRateReplaced || (live.state() == LiveState::Playing && frame == 30) {
             let pts = Duration::from_millis(frame * 100);
             let keyframe = live.wants_keyframe(pts);
             live.push_annexb(&access_unit(keyframe), pts, keyframe);
             frame += 1;
-            std::thread::sleep(Duration::from_millis(10));
         }
-        let state = live.state();
-        drop(live);
-        let log = server.join().unwrap();
-        assert_eq!(state, LiveState::Ended, "{after:?} {log:#?}");
-        assert!(log.iter().any(|line| line.ends_with(" GET_STATUS")), "{log:#?}");
-        if after == AfterLoad::RateReplaced {
-            assert!(log.iter().any(|line| line.ends_with(" SET_PLAYBACK_RATE")), "{log:#?}");
-        }
-        assert!(!log.iter().any(|line| line.ends_with(" STOP")), "{after:?} {log:#?}");
+        std::thread::sleep(Duration::from_millis(10));
     }
+    let state = live.state();
+    drop(live);
+    let log = server.join().unwrap();
+    assert_eq!(state, LiveState::Ended, "{after:?} {log:#?}");
+    assert!(log.iter().any(|line| line.ends_with(" GET_STATUS")), "{log:#?}");
+    if matches!(
+        after,
+        AfterLoad::RateReplaced | AfterLoad::RateFirstReplaced | AfterLoad::LostRateReplaced
+    ) {
+        assert!(log.iter().any(|line| line.ends_with(" SET_PLAYBACK_RATE")), "{log:#?}");
+    }
+    if after == AfterLoad::LostRateReplaced {
+        assert_eq!(
+            log.iter().filter(|line| line.ends_with(" SET_PLAYBACK_RATE")).count(),
+            2,
+            "{log:#?}"
+        );
+    }
+    assert!(!log.iter().any(|line| line.ends_with(" STOP")), "{after:?} {log:#?}");
+}
+
+#[test]
+fn progressive_takeover_in_poll_or_rate_reply_never_stops_replacement() {
+    for after in [AfterLoad::PollReplaced, AfterLoad::RateReplaced] {
+        progressive_takeover_scenario(after);
+    }
+}
+
+#[test]
+fn a_multi_status_poll_or_rate_reply_never_hides_replacement() {
+    for after in [AfterLoad::PollFirstReplaced, AfterLoad::RateFirstReplaced] {
+        progressive_takeover_scenario(after);
+    }
+}
+
+#[test]
+fn a_lost_speedup_and_rejected_restores_do_not_stop_a_queued_takeover() {
+    progressive_takeover_scenario(AfterLoad::LostRateReplaced);
 }
 
 #[test]
