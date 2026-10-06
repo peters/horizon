@@ -178,7 +178,9 @@ pub(super) const KEY_INTERVAL: Duration = Duration::from_millis(20);
 
 /// The longest lease: the strokes of a 256-character action, twice the paced
 /// time, plus one second.
-pub(super) const MAX_LEASE: Duration = Duration::from_millis(2 * 20 * 256 + 1_000);
+pub(super) const MAX_LEASE: Duration = KEY_INTERVAL
+    .saturating_mul(2 * 256)
+    .saturating_add(Duration::from_secs(1));
 
 /// Converts a stored X server time to the planning timeline at `server_now`.
 /// Only a lease is in the future, and a lease is at most `MAX_LEASE` ahead.
