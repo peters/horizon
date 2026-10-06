@@ -467,8 +467,8 @@ impl Panel {
         Ok(panel)
     }
 
-    /// Says `wait` in a cloud placeholder that says something else. Any other panel,
-    /// including a member that its cloud runs again, stays as it is.
+    /// Makes a cloud placeholder say `wait` when it says something else. Every other
+    /// panel stays as it is, also a cloud member that runs again.
     ///
     /// # Errors
     ///

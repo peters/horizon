@@ -240,12 +240,13 @@ impl HorizonApp {
         }
         true
     }
-    /// A restored member that its cloud does not run yet says why: the cloud is stopped
-    /// and Resume worker restores it, or Horizon reconnects the cloud. Members that their
-    /// cloud runs are left alone.
+    /// Each restored member of a cloud that does not run yet shows why. When the cloud
+    /// is stopped, the member names Resume worker. In any other stage, the member says
+    /// that Horizon reconnects the cloud. Members that run are left alone. The board is
+    /// searched only when the stage changes what a cloud's members show.
     pub(super) fn sync_cloud_member_waits(&mut self) {
         for group in &self.cloud_prototype.groups.0 {
-            let Some(runtime) = self.cloud_prototype.production.runtimes.get(&group.issue) else {
+            let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&group.issue) else {
                 continue;
             };
             let wait = if runtime.stage == Some(cloud_runtime::Stage::Stopped) {
@@ -253,6 +254,10 @@ impl HorizonApp {
             } else {
                 horizon_core::CloudWait::Reconnecting
             };
+            if runtime.member_wait == Some(wait) {
+                continue;
+            }
+            runtime.member_wait = Some(wait);
             for local in &group.panels {
                 if let Some(id) = self.board.panel_id_by_local_id(local)
                     && let Some(panel) = self.board.panel_mut(id)

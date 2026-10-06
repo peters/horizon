@@ -237,6 +237,9 @@ pub(super) struct Runtime {
     first_panel_considered: bool,
     pending_browser_attachments: std::collections::HashSet<String>,
     pending_member_attachments: std::collections::HashSet<String>,
+    /// What the restored member placeholders of this cloud last showed; the board is
+    /// searched for them only when this changes.
+    member_wait: Option<horizon_core::CloudWait>,
     pending_session_attachments: std::collections::HashSet<String>,
     next_attachment_attempt: Option<std::time::Instant>,
     needs_desktop: bool,
