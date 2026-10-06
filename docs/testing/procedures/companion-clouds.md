@@ -104,10 +104,9 @@ Give each task an ID. A report uses the ID to give a result.
 
 ### 6.2 K2 — Deploy the companion cloud
 
-> **CAUTION:** DEPLOY ONLY ONE COMPANION CLOUD. The provider charges money for
-> each worker until you delete it.
+Use one test workspace for both clouds.
 
-1. Open **Cloud › New cloud…** in the same workspace as the source cloud.
+1. Open **Cloud › New cloud…** in the test workspace.
 
    Result: The New cloud dialog opens.
 
@@ -119,6 +118,9 @@ Give each task an ID. A report uses the ID to give a result.
 
    Result: The summary shows the offer.
 
+   > **CAUTION:** DEPLOY ONLY ONE COMPANION CLOUD. The provider charges money for
+   > each worker until you delete it.
+
 4. Click **Start cloud**.
 
    Result: The card of the companion cloud shows **Ready**.
@@ -129,10 +131,7 @@ Give each task an ID. A report uses the ID to give a result.
 
 ### 6.3 K3 — Deploy the source cloud
 
-> **CAUTION:** DEPLOY ONLY ONE SOURCE CLOUD. The provider charges money for each
-> worker until you delete it.
-
-1. Open **Cloud › New cloud…** in the same workspace.
+1. Open **Cloud › New cloud…** in the test workspace.
 
    Result: The New cloud dialog opens.
 
@@ -143,6 +142,9 @@ Give each task an ID. A report uses the ID to give a result.
 3. Select the CPU profile and the cheapest offer.
 
    Result: The summary shows the offer.
+
+   > **CAUTION:** DEPLOY ONLY ONE SOURCE CLOUD. The provider charges money for
+   > each worker until you delete it.
 
 4. Click **Start cloud**.
 
