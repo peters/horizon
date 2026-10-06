@@ -49,9 +49,9 @@ Each cloud has one device name in its tailnet for the life of the cloud. The
 worker makes the name from the cloud ID. The name stays the same after a stop
 and a resume. The name has one of two forms:
 
-- A cloud ID of lowercase letters, digits and inner hyphens usually gives
-  `horizon-cloud-<cloud ID>`. A UUID cloud ID, which Horizon makes for each new
-  cloud, always has this form.
+- A cloud ID of lowercase letters, digits and inner hyphens usually gives the
+  direct form, `horizon-cloud-<cloud ID>`. A UUID cloud ID, which Horizon makes
+  for each new cloud, always has this form.
 - Other cloud IDs give a digest form. The rules for this form are below.
 
 Other clouds and agents use the full name `<device name>.<tailnet>.ts.net`. To
@@ -85,10 +85,14 @@ the digest form:
 
 Thus, each name is a valid DNS label and is unique to its cloud. Tailscale does
 not change a name that a tailnet administrator set. If a different device has
-the name, Tailscale adds a suffix such as `-1`. All members of the tailnet can
-see the cloud ID in the name. An image with this behavior reports
-`horizon-tailnet-contract=2`. An older image keeps the container host name,
-which changes at each resume.
+the name, Tailscale adds a suffix such as `-1`. An image with this behavior
+reports `horizon-tailnet-contract=2`. An older image keeps the container host
+name, which changes at each resume.
+
+All members of the tailnet can see the device name. A name in the direct form
+shows the full cloud ID. A name in the digest form shows a maximum of 28
+characters of the ID, in lowercase and with hyphens for underscores. Then it
+shows the digest. Thus, it does not always show the exact cloud ID.
 
 Agents discover ACL-visible devices in
 `/run/horizon-tailnet-devices/devices.json` (names, addresses and online state
