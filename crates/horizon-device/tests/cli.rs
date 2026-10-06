@@ -286,10 +286,8 @@ mod live_mcp {
         let point = json!({"x":1100,"y":180});
         let action = json!({"kind":"drag","from":point,"to":point,"duration_ms":19});
         let started = Instant::now();
-        assert_eq!(
-            session.call(3, "device_act", &json!({"geometry":geometry,"action":action}))?["isError"],
-            false
-        );
+        let dragged = session.call(3, "device_act", &json!({"geometry":geometry,"action":action}))?;
+        assert_eq!(dragged["isError"], false, "{dragged}");
         assert!(started.elapsed() >= Duration::from_millis(19));
         let mut stale = geometry.clone();
         stale["revision"] = json!("stale");

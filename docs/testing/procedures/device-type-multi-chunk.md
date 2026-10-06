@@ -233,8 +233,12 @@ Give each result the task ID. A report uses the ID to give a result.
 
    Result: The terminal has the keyboard focus.
 
-2. Type this command with one `type` action. `N` is the UTF-8 byte count of the
-   text of step 4.
+2. Send a `key` action with `enter`.
+
+   Result: The terminal shows a new, empty prompt.
+
+3. Type this command with one `type` action. `N` is the UTF-8 byte count of the
+   text of step 5.
 
    ```sh
    head -c N > ~/unicode.txt
@@ -242,20 +246,29 @@ Give each result the task ID. A report uses the ID to give a result.
 
    Result: The terminal shows the command.
 
-3. Send a `key` action with `enter`.
+4. Send a `key` action with `enter`.
 
    Result: The command waits for input.
 
-4. Send four `type` actions, one after the other. Use 15 distinct Latin-1
+5. Send four `type` actions, one after the other. Use 15 distinct Latin-1
    letters, 15 Greek letters, 15 Cyrillic letters, and the first part again.
 
    Result: Each action gives the receipt `dispatched`. Together, the four
    actions need more temporary keycodes than the free slots have. Thus, the
    tool changes temporary keycodes between the actions.
 
-5. Compare `<state>/data/home/unicode.txt` with the text of step 4.
+6. Send a `key` action with `enter`.
+
+   Result: The command stops. The terminal shows a new prompt.
+
+7. Compare `<state>/data/home/unicode.txt` with the text of step 5.
 
    Result: The two texts are the same.
+
+8. If `unicode.txt` is empty, examine the terminal.
+
+   Result: If the text of step 5 is on a prompt line, the command stopped
+   before the input. Record the run as invalid, not as `loss`.
 
 ### 6.6 T06 — Other actions after text input
 
