@@ -428,7 +428,7 @@ fn serve(helper: &Arc<Helper>, control: &Control) {
                     Caller::Agent => &agents,
                 };
                 if requests
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                         (count < MAX_REQUESTS).then_some(count + 1)
                     })
                     .is_err()
