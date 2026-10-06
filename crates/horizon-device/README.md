@@ -97,6 +97,15 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
   process stops during the action, a later action still waits for the lease
   and the quiet interval. A lease is at most 11.24 seconds, and a wait is at
   most 13.24 seconds.
+- If the strokes are slower than the lease expects, for example on a stalled
+  server, the tool reads the X server time before the next stroke. It then
+  writes a new lease for the remaining strokes from that time. It does this
+  when less than 1 second of the lease remains. A residual risk stays: if one
+  request stalls for more than 3 seconds (1 second of lease plus the 2-second
+  quiet interval) and the process then stops, a later action can change a
+  keycode before a slow client reads the key of that request.
+- If a key event request fails, the tool still sends the key release and the
+  Shift release, because the request can have reached the server.
 - The X server time wraps after approximately 49 days. Thus, the tool reads a
   recorded time that is more than 11.24 seconds after the X server time as an
   old time, not as a lease.

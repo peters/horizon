@@ -1,9 +1,10 @@
 //! Text entry through XTEST with stable keycode mappings.
 
 use super::keymap::{self, Borrowed, Keyboard, Layout, ModifierError, Plan, PlanError};
+use super::stroke;
 use super::{X11, unavailable};
 use crate::{DeviceError, Result};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use x11rb::{
     connection::{Connection, RequestConnection as _},
     errors::{ConnectionError, ReplyError},
@@ -70,10 +71,11 @@ impl X11 {
         // plan again after the wait, because another client can change the
         // keymap, the modifier mapping or the keyboard state in the meantime.
         let mut attempts = 0;
-        let (plan, server_now, keyboard) = loop {
+        let (plan, server_now, observed_at, keyboard) = loop {
             let mapping = self.keyboard_mapping()?;
             let keyboard = self.keyboard(&mapping)?;
             let (previous, server_now) = self.read_record(record_atom)?;
+            let observed_at = Instant::now();
             let plan = keymap::plan(&self.layout(&mapping), &previous, keyboard, text).map_err(|e| match e {
                 PlanError::Capacity => DeviceError::Invalid("text exceeds available X11 Unicode key mappings".into()),
                 PlanError::NoKeysym => DeviceError::Invalid("text contains a character without an X11 keysym".into()),
@@ -83,11 +85,11 @@ impl X11 {
                 ),
             })?;
             if !wait_until(plan.not_before_ms, &mut attempts)? {
-                break (plan, server_now, keyboard);
+                break (plan, server_now, observed_at, keyboard);
             }
         };
         self.apply_bindings(&plan, record_atom, server_now)?;
-        let typed = self.send_strokes(&plan, keyboard.shift_keycode);
+        let typed = self.send_strokes(&plan, keyboard.shift_keycode, record_atom, server_now, observed_at);
         let recorded = self.server_time(record_atom).map_err(indeterminate).and_then(|end| {
             let used = keymap::TIMELINE_NOW + u64::from(end.wrapping_sub(server_now));
             self.write_record(record_atom, &plan.record(used), server_now)
@@ -268,8 +270,7 @@ impl X11 {
         // Before any input, record the keycodes with a lease that covers the
         // last possible stroke. If this process stops early, a later action
         // still waits for the strokes that it sent.
-        let lease = keymap::TIMELINE_NOW + keymap::lease_ms(plan.strokes.len());
-        let record = plan.record(lease);
+        let record = plan.record(stroke::Lease::start(plan.strokes.len()).until);
         if !record.is_empty() {
             self.write_record(record_atom, &record, server_now)
                 .map_err(unavailable)?;
@@ -287,23 +288,35 @@ impl X11 {
         Ok(())
     }
 
-    fn send_strokes(&self, plan: &Plan, shift_keycode: Option<u8>) -> Result<()> {
+    /// Sends the strokes of `plan`. If the strokes are slower than the lease
+    /// expects, for example on a stalled server, the record gets a new lease
+    /// from the observed server time before the next stroke.
+    fn send_strokes(
+        &self,
+        plan: &Plan,
+        shift_keycode: Option<u8>,
+        record_atom: u32,
+        server_now: u32,
+        mut observed_at: Instant,
+    ) -> Result<()> {
         let fake = |kind: u8, keycode: u8| -> std::result::Result<(), ReplyError> {
             self.connection
                 .xtest_fake_input(kind, keycode, x11rb::CURRENT_TIME, self.root, 0, 0, 0)?
                 .check()
         };
-        for stroke in &plan.strokes {
-            let shift = shift_keycode.filter(|_| stroke.shift);
-            let result = (|| {
-                if let Some(shift) = shift {
-                    fake(KEY_PRESS_EVENT, shift)?;
-                }
-                fake(KEY_PRESS_EVENT, stroke.keycode)?;
-                fake(KEY_RELEASE_EVENT, stroke.keycode)
-            })();
-            let release = shift.map_or(Ok(()), |shift| fake(KEY_RELEASE_EVENT, shift));
-            result.and(release).map_err(indeterminate)?;
+        let mut lease = stroke::Lease::start(plan.strokes.len());
+        for (index, next) in plan.strokes.iter().enumerate() {
+            let elapsed = u64::try_from(observed_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+            if lease.needs_extension(elapsed) {
+                let now = self.server_time(record_atom).map_err(indeterminate)?;
+                observed_at = Instant::now();
+                let observed = keymap::TIMELINE_NOW + u64::from(now.wrapping_sub(server_now));
+                lease = stroke::Lease::extended(observed, plan.strokes.len() - index);
+                self.write_record(record_atom, &plan.record(lease.until), server_now)
+                    .map_err(indeterminate)?;
+            }
+            let shift = shift_keycode.filter(|_| next.shift);
+            stroke::send(next.keycode, shift, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, fake).map_err(indeterminate)?;
             std::thread::sleep(keymap::KEY_INTERVAL);
         }
         Ok(())

@@ -13,6 +13,7 @@ use x11rb::{
 };
 
 mod keymap;
+mod stroke;
 mod text;
 
 pub struct X11 {
