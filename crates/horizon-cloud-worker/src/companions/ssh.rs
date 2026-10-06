@@ -145,19 +145,21 @@ impl Runtime {
         if observed.trim() != "true" {
             return Err(io::Error::other("Companion worktree readiness failed"));
         }
-        files::write(&directory.join("config"), config.as_bytes())?;
-        self.update_config()?;
-        if let Err(error) = self.verify_agent_access(&ssh_alias, &command) {
-            // Report why Ready was refused. No connection record is written either way.
+        let response = Response::Connected {
+            ssh_alias: ssh_alias.clone(),
+            worktree: path_text(&worktree)?.into(),
+        };
+        let published = files::write(&directory.join("config"), config.as_bytes())
+            .and_then(|()| self.update_config())
+            .and_then(|()| self.verify_agent_access(&ssh_alias, &command))
+            .and_then(|()| files::write(&directory.join("connection.json"), &serde_json::to_vec(&response)?))
+            .and_then(|()| self.publish_agent_access());
+        if let Err(error) = published {
+            // A failed Connect leaves no alias for root or agents. The original
+            // error explains the refusal; the withdrawal is best effort.
             let _ = self.withdraw(grant);
             return Err(error);
         }
-        let response = Response::Connected {
-            ssh_alias,
-            worktree: path_text(&worktree)?.into(),
-        };
-        files::write(&directory.join("connection.json"), &serde_json::to_vec(&response)?)?;
-        self.publish_agent_access()?;
         Ok(response)
     }
 

@@ -159,6 +159,9 @@ Give each task an ID. A report uses the ID to give a result.
    Result: **Companion clouds** shows the checkbox `service` and
    `example/service · cpu`.
 
+   > **CAUTION:** SELECT ONLY THE TEST COMPANION OF THIS RUN. Each agent session
+   > on the source cloud gets shell access to the companion worker.
+
 2. Select the checkbox `service`.
 
    Result: The row shows **Checking SSH access…**.
@@ -295,6 +298,9 @@ Do these steps in the shell panel of task K5.
 
 ### 6.8 K8 — Clear the selection
 
+> **CAUTION:** STOP ALL WORK ON THE COMPANION BEFORE YOU CLEAR THE CHECKBOX.
+> The agent sessions lose access, and new SSH connections to the companion fail.
+
 1. On the source card, clear the checkbox `service`.
 
    Result: The row shows **Removing access…**.
@@ -336,6 +342,9 @@ Do these steps in the shell panel of task K5.
    ```
 
    Result: The output shows `Permission denied (publickey)`.
+
+   > **CAUTION:** DELETE ONLY `/workspace/home/companion-key-copy`. Other files
+   > in `/workspace/home` hold the state of the agent sessions.
 
 7. Delete the key copy.
 
