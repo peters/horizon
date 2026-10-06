@@ -1,22 +1,19 @@
 #!/bin/bash
-# Diagnostic loop: run the real-Chromium lane test repeatedly and keep the evidence of each failure.
+# Diagnostic loop: run the browser lane module repeatedly and keep the evidence of each failure.
 set -u
 n=${1:-25}
-test=test_browser_lane.BrowserLaneTests.test_agent_browser_create_starts_a_real_chromium_as_the_agent_lane
 pass=0; fail=0
 for i in $(seq 1 "$n"); do
-  sudo rm -rf /var/tmp/chrome-diag; sudo install -d -m 1777 /var/tmp/chrome-diag
   sudo bash .github/diag/sampler > /var/tmp/sampler.log 2>&1 & sampler=$!
   start=$(date +%s.%N)
-  (cd examples/cloud-worker && python3 -B -m unittest "$test") > /var/tmp/out.log 2>&1; status=$?
+  (cd examples/cloud-worker && python3 -B -m unittest test_browser_lane) > /var/tmp/out.log 2>&1; status=$?
   sudo kill $sampler; wait $sampler 2>/dev/null
   printf 'iteration %s status=%s elapsed=%.1f\n' "$i" "$status" "$(echo "$(date +%s.%N) - $start" | bc)"
   if [ "$status" = 0 ]; then pass=$((pass+1)); continue; fi
   fail=$((fail+1))
   echo "::group::iteration $i failure"
-  cut -c1-3000 /var/tmp/out.log
-  for f in /var/tmp/chrome-diag/*; do echo "--- $f"; sudo cat "$f" | cut -c1-400 | head -400; done
-  echo "--- sampler"; cut -c1-300 /var/tmp/sampler.log | head -600
+  cut -c1-6000 /var/tmp/out.log
+  echo "--- sampler"; cut -c1-300 /var/tmp/sampler.log | head -400
   echo "::endgroup::"
 done
 echo "PASS=$pass FAIL=$fail"

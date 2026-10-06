@@ -304,6 +304,7 @@ fn prepare_disclosure_metadata(
     }
     let version = call_during_startup(link, stop_requested, "Browser.getVersion", &serde_json::json!({}))
         .map_err(|error| format!("Browser.getVersion: {error}"))?;
+    eprintln!("DIAG Browser.getVersion -> {version}");
     if !chromium_user_agent_needs_override(&version).map_err(str::to_string)? {
         return Ok(None);
     }
@@ -323,6 +324,7 @@ fn prepare_disclosure_metadata(
         .ok_or_else(|| "Target.createTarget omitted targetId".to_string())?
         .to_string();
 
+    eprintln!("DIAG Target.createTarget -> {created}");
     chrome.register_target(&target_id);
     let metadata = read_disclosure_metadata_from_target(link, stop_requested, &target_id);
     let close_result = link
@@ -384,6 +386,7 @@ fn read_disclosure_metadata_from_target(
             })
             .result
             .map_err(|error| format!("{method}: {error}"))?;
+        eprintln!("DIAG {method} -> {result}");
         if method == "Runtime.evaluate" {
             return Ok(result);
         }

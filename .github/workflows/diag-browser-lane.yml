@@ -14,8 +14,9 @@ jobs:
       matrix:
         include:
           - { mode: after-shard, leg: 1 }
+          - { mode: after-shard, leg: 2 }
+          - { mode: after-shard, leg: 3 }
           - { mode: fresh, leg: 1 }
-          - { mode: fresh, leg: 2 }
     steps:
       - uses: actions/checkout@v7
         with:
@@ -41,10 +42,11 @@ jobs:
         run: bash scripts/ci-cargo-test-shard.sh
       - name: Processes before the lane
         run: ps -eo pid,user,etimes,pcpu,rss,cmd --sort=-pcpu | cut -c1-200 | head -60
+      - name: Build the browser client on a fresh runner
+        if: matrix.mode == 'fresh'
+        run: cargo build --locked -p horizon-browser-cli
       - name: Build
-        run: |
-          cargo build --locked -p horizon-cloud-worker -p horizon-browser-cli
-          sudo install -m 0755 .github/diag/chrome-wrapper /usr/local/bin/google-chrome
+        run: cargo build --locked -p horizon-cloud-worker
       - name: Cloud worker suite once
         env:
           HORIZON_TEST_CLOUD_WORKER: ${{ github.workspace }}/target/debug/horizon-cloud-worker
@@ -52,4 +54,4 @@ jobs:
       - name: Lane loop
         env:
           HORIZON_TEST_CLOUD_WORKER: ${{ github.workspace }}/target/debug/horizon-cloud-worker
-        run: bash .github/diag/loop 30
+        run: bash .github/diag/loop 15
