@@ -15,8 +15,6 @@ fn isolated(root: &Path) -> Runtime {
     }
 }
 
-const COMMAND: &str = "git -C /w rev-parse --is-inside-work-tree";
-
 /// Prepares the identity and the pin of `grant` and returns its alias configuration.
 fn prepare(runtime: &Runtime, grant: &str, alias: &str, host: &str) -> String {
     runtime.apply(&Request::Identity { grant: grant.into() }).unwrap();
@@ -85,6 +83,27 @@ fn launcher(root: &Path, script: &str) -> PathBuf {
     std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
     path
+}
+
+/// Every file under `root` whose content contains `secret`.
+fn files_containing(root: &Path, secret: &[u8]) -> Vec<PathBuf> {
+    let mut holders = Vec::new();
+    let mut pending = vec![root.to_owned()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if std::fs::read(&path)
+                .unwrap()
+                .windows(secret.len())
+                .any(|window| window == secret)
+            {
+                holders.push(path);
+            }
+        }
+    }
+    holders
 }
 
 /// Another test thread can briefly hold a new launcher script open while it forks.
@@ -330,28 +349,29 @@ fn ready_requires_that_the_agent_account_can_use_the_alias() {
     runtime.workspace_launcher = Some(launcher(
         root.path(),
         &format!(
-            "[ \"$1 $2 $3 $5\" = 'agent ssh -F companion-app' ] && [ \"$4\" = '{}/config' ] && [ \"$6\" = '{COMMAND}' ] && echo true",
+            "[ \"$1 $2 $3 $4 $5\" = 'agent ssh -G -F {}/config' ] && shift && exec \"$@\"",
             staged.display()
         ),
     ));
     let config = prepare(&runtime, "pair", "app", "127.0.0.1");
     let verify = |runtime: &Runtime, alias: &str| {
-        retry_busy(|| runtime.verify_agent_access("pair", &config, alias, COMMAND, Duration::from_secs(30)))
+        retry_busy(|| runtime.verify_agent_route("pair", &config, alias, Duration::from_secs(30)))
     };
     verify(&runtime, "companion-app").unwrap();
-    assert!(!staged.exists(), "the staged probe copy is removed after the probe");
+    assert!(!staged.exists(), "the staged configuration is removed after the check");
+    // Another alias does not resolve to the copy of this grant.
     assert!(verify(&runtime, "companion-other").is_err());
-    assert!(!staged.exists(), "a failed probe also removes the staged copy");
+    assert!(!staged.exists(), "a failed check also removes the staged configuration");
     // An exhausted Connect budget refuses Ready without waiting.
     assert!(
         runtime
-            .verify_agent_access("pair", &config, "companion-app", COMMAND, Duration::ZERO)
+            .verify_agent_route("pair", &config, "companion-app", Duration::ZERO)
             .is_err()
     );
     runtime.workspace_launcher = Some("/usr/bin/false".into());
     assert!(
         runtime
-            .verify_agent_access("pair", &config, "companion-app", COMMAND, Duration::from_secs(30))
+            .verify_agent_route("pair", &config, "companion-app", Duration::from_secs(30))
             .is_err()
     );
     assert!(
@@ -367,7 +387,7 @@ fn ready_requires_that_the_agent_account_can_use_the_alias() {
     // Workers without isolation have no separate agent account to check.
     runtime.agent_account = None;
     runtime
-        .verify_agent_access("pair", &config, "companion-app", COMMAND, Duration::from_secs(30))
+        .verify_agent_route("pair", &config, "companion-app", Duration::from_secs(30))
         .unwrap();
     runtime
         .verify_published_alias("pair", "companion-app", Duration::from_secs(30))
@@ -386,7 +406,7 @@ fn an_interrupted_connect_never_publishes_its_grant_to_agents() {
     runtime.workspace_launcher = Some(launcher(
         root.path(),
         &format!(
-            "if [ \"$3\" = -G ]; then exec ssh -G -F '{}' \"$4\"; fi\nmkdir '{snapshot}' && cp -a '{}' '{}' '{snapshot}/' && echo true",
+            "shift\nif [ \"$3\" != -F ]; then exec ssh -G -F '{}' \"$3\"; fi\nmkdir '{snapshot}' && cp -a '{}' '{}' '{snapshot}/' && exec \"$@\"",
             system.display(),
             runtime.live.display(),
             runtime.agent.display(),
@@ -400,7 +420,6 @@ fn an_interrupted_connect_never_publishes_its_grant_to_agents() {
             "pair",
             &config,
             &response,
-            COMMAND,
             std::time::Instant::now() + Duration::from_secs(30),
         )
     })
@@ -432,8 +451,14 @@ fn an_interrupted_connect_never_publishes_its_grant_to_agents() {
     assert_eq!(setting(&staged, "hostname"), "127.0.0.1");
     assert_eq!(
         setting(&staged, "identityfile"),
-        runtime.staged_probe("pair").join("identity").to_str().unwrap()
+        runtime.agent.join("pair/identity").to_str().unwrap()
     );
+    // Before the record, only the root-only grant directory holds the key.
+    let key = std::fs::read(runtime.key_directory("pair").join("identity")).unwrap();
+    assert_eq!(files_containing(&snapshot, &key), [saved_grant.join("identity")]);
+    assert_eq!(mode(&saved_grant), 0o700);
+    assert_eq!(mode(&saved_grant.join("identity")) & 0o077, 0);
+    assert_eq!(mode(&snapshot.join("run/companions")), 0o700);
 
     // The worker stops after the probe-config write and before connection.json:
     // during the probe, or after the config of the grant replaced the old one.
@@ -491,8 +516,8 @@ fn a_refresh_keeps_the_published_alias_and_restores_it_when_the_refresh_fails() 
     runtime.workspace_launcher = Some(launcher(
         root.path(),
         &format!(
-            "if [ \"$3\" = -G ]; then [ -e '{fail_resolve}' ] && exit 1; exec ssh -G -F '{system}' \"$4\"; fi\n\
-             ssh -G -F '{system}' \"$5\" > '{during}' || exit 1\n[ -e '{fail_probe}' ] && exit 1\necho true",
+            "shift\nif [ \"$3\" != -F ]; then [ -e '{fail_resolve}' ] && exit 1; exec ssh -G -F '{system}' \"$3\"; fi\n\
+             ssh -G -F '{system}' \"$5\" > '{during}' || exit 1\n[ -e '{fail_probe}' ] && exit 1\nexec \"$@\"",
             fail_resolve = fail_resolve.display(),
             system = system.display(),
             during = during.display(),
@@ -506,7 +531,6 @@ fn a_refresh_keeps_the_published_alias_and_restores_it_when_the_refresh_fails() 
                 "pair",
                 &config,
                 &connected("pair", "app"),
-                COMMAND,
                 std::time::Instant::now() + Duration::from_secs(30),
             )
         })
@@ -552,7 +576,6 @@ fn a_refresh_keeps_the_published_alias_and_restores_it_when_the_refresh_fails() 
                 "fresh",
                 &config,
                 &connected("fresh", "fresh"),
-                COMMAND,
                 std::time::Instant::now() + Duration::from_secs(30),
             )
         })

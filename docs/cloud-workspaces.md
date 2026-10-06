@@ -847,8 +847,8 @@ Use the returned SSH alias and worktree with ordinary SSH, Git, and rsync. A
 stale catalog loses Ready status; inspection can verify an unchanged connection
 independently. These worker tools do not start or stop clouds.
 On a worker with agent isolation, agent and shell sessions run as the agent user
-`horizon-agent` (UID 10001). Ready then also means that the agent user can use
-the alias. The agent
+`horizon-agent` (UID 10001). Ready then also means that the alias resolves for
+the agent user. The agent
 user gets a read-only copy of the alias, the key, the host-key pin and the
 catalog. The root files stay private. When you uncheck the companion, the source
 also removes the agent copy. A key that an agent copied works until the target

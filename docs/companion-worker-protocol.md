@@ -30,7 +30,7 @@ incomplete checkout requires explicit recovery; retries never reset existing
 work. Initial Git checkout and source-material preparation each allow up to
 300 seconds; authorization callers must allow those phases plus verification.
 SSH readiness probes retain their shorter 30-second deadline. In `connect`, the
-root probe and the agent probe share one 35-second budget, inside the 45-second
+root probe and the agent checks share one 35-second budget, inside the 45-second
 controller deadline. Worktrees live at
 `/workspace/companions/worktrees/<grant>`.
 
@@ -54,7 +54,7 @@ the agent user in `/run/horizon-companions`:
 | `<grant>/identity` | root, group 10001, `0640` | A copy of the private key of the grant. |
 | `<grant>/known_hosts-<key>` | root, group 10001, `0640` | The host-key pin of the target. |
 | `<grant>/connection.json` | root, group 10001, `0640` | The alias and the worktree of the grant. |
-| `<grant>.probe` | root, group 10001, `0750` | A temporary copy for the agent probe of `connect`. |
+| `<grant>.probe` | root, group 10001, `0750` | A temporary configuration for the agent check of `connect`. It has no key and no pin. |
 | `catalog.json` | root, group 10001, `0640` | The discovery catalog. |
 
 OpenSSH reads the user file from the home directory in passwd, not from
@@ -63,26 +63,28 @@ This file includes `/run/horizon-companions/config` only for the agent user
 (`Match localuser horizon-agent`). The SSH client of root does not apply the
 copies. The agent user can read the copies but cannot change them.
 
-Before `connect` reports Ready, the source runs the readiness probe a second time
-as the agent user. This probe uses a temporary copy in `<grant>.probe`. That copy
-is not in `config` or in the catalog, and the source removes it after the probe.
-If a probe fails, `connect` reports an error. A new grant then gets no alias.
+Root runs the SSH readiness probe of `connect`. Before `connect` writes the record,
+the source resolves the alias as the agent user with `ssh -G`. This check uses
+a temporary configuration in `<grant>.probe`. That configuration names the paths
+of the eventual copies but holds no key and no pin. It is not in `config` or in
+the catalog, and the source removes it after the check. If a probe or a check
+fails, `connect` reports an error. A new grant then gets no alias and no key.
 
 Each refresh of the owning Horizon sends `connect` again for a connected grant.
 During this `connect`, the agent user keeps the published alias. The new record
-replaces the alias only after both probes pass. If this `connect` fails, the
+replaces the alias only after the probe and the checks pass. If this `connect` fails, the
 source keeps or restores the previous configuration and record.
 
 The source publishes the copies of a grant only when `connection.json` of the
 grant is a `connected` record for the same alias. `connect` writes this record
-after the two probes. If `connect` stops before it writes the record, the agent
+after the root probe and the first check. If `connect` stops before it writes the record, the agent
 user gets no alias and no key copy. The next reconciliation removes a temporary
 copy that remains.
 
-After `connect` publishes the copies, it resolves the alias as the agent user
-with `ssh -G`. This examines the system include without a connection. If
-`connect` stops after it writes the record, both probes passed for the new
-configuration.
+After `connect` publishes the copies, it resolves the alias again as the agent
+user with `ssh -G`. This examines the system include without a connection. If
+`connect` stops after it writes the record, the probe and the first check passed
+for the new configuration.
 The next reconciliation then publishes the grant. A later `connect` or
 `disconnect` replaces or removes it.
 

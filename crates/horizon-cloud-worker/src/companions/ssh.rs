@@ -79,8 +79,8 @@ pub(super) fn checked_with_timeout(command: &mut Command, timeout: Duration) -> 
 /// Ends a probe configuration that `-F` selects, with the system file that `-F` skips.
 pub(super) const SYSTEM_INCLUDE: &str = "Host *\nInclude /etc/ssh/ssh_config\n";
 
-/// The root and agent readiness probes together. The controller allows a Connect
-/// request 45 seconds, which also covers its own SSH round trip to the source.
+/// The root readiness probe and the agent checks together. The controller allows a
+/// Connect request 45 seconds, which also covers its own SSH round trip to the source.
 const CONNECT_PROBES: Duration = Duration::from_secs(35);
 
 /// The published SSH configuration of one grant's alias.
@@ -148,7 +148,7 @@ impl Runtime {
         )?;
         let worktree = self.worktree(grant);
         let command = format!("git -C {} rev-parse --is-inside-work-tree", path_text(&worktree)?);
-        // Both readiness probes share one budget inside the controller's Connect deadline.
+        // The root probe and the agent checks share one budget inside the Connect deadline.
         let deadline = Instant::now() + CONNECT_PROBES;
         let observed = checked(Command::new("ssh").arg("-F").arg(&probe).arg(&ssh_alias).arg(&command))?;
         if observed.trim() != "true" {
@@ -158,13 +158,13 @@ impl Runtime {
             ssh_alias: ssh_alias.clone(),
             worktree: path_text(&worktree)?.into(),
         };
-        self.commit_connection(grant, &config, &response, &command, deadline)?;
+        self.commit_connection(grant, &config, &response, deadline)?;
         Ok(response)
     }
 
-    /// Publishes a probed connection. Agents get the alias only after the
-    /// connection record is written: their copies require that record, and their
-    /// readiness probe uses a staged copy of `config`. A refresh of a connected
+    /// Publishes a probed connection. Agents get the alias and the key only after
+    /// the connection record is written: their copies require that record, and
+    /// their check before it reads a keyless staged `config`. A refresh of a connected
     /// grant keeps the published alias until the new record replaces it. If the
     /// refresh fails, the previous connection is restored; a new grant is withdrawn.
     pub(super) fn commit_connection(
@@ -172,7 +172,6 @@ impl Runtime {
         grant: &str,
         config: &str,
         response: &Response,
-        command: &str,
         deadline: Instant,
     ) -> io::Result<()> {
         let Response::Connected { ssh_alias, .. } = response else {
@@ -182,7 +181,7 @@ impl Runtime {
         let previous = self.committed_connection(grant)?;
         let remaining = || deadline.saturating_duration_since(Instant::now());
         let committed = self
-            .verify_agent_access(grant, config, ssh_alias, command, remaining())
+            .verify_agent_route(grant, config, ssh_alias, remaining())
             .and_then(|()| files::write(&directory.join("config"), config.as_bytes()))
             .and_then(|()| files::write(&directory.join("connection.json"), &serde_json::to_vec(response)?))
             .and_then(|()| self.update_config())

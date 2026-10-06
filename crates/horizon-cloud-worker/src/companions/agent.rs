@@ -33,9 +33,9 @@ impl Runtime {
         self.agent_account.as_ref().map(|account| account.group)
     }
 
-    /// The copy that the agent readiness probe of an unfinished Connect uses. A
-    /// grant ID has no `.`, so reconciliation never publishes this directory and
-    /// removes one that an interruption left.
+    /// The keyless configuration that the agent check of an unfinished Connect
+    /// uses. A grant ID has no `.`, so reconciliation never publishes this
+    /// directory and removes one that an interruption left.
     pub(super) fn staged_probe(&self, grant: &str) -> PathBuf {
         self.agent.join(format!("{grant}.probe"))
     }
@@ -149,33 +149,17 @@ impl Runtime {
     fn copy_grant(&self, grant: &str, config: &str, destination: &Path) -> io::Result<(String, BTreeSet<String>)> {
         let group = self.agent_group();
         let source = self.key_directory(grant);
+        let (rewritten, names) = rewrite_paths(&source, config, destination)?;
         files::shared_directory(destination, group)?;
-        let mut kept = BTreeSet::new();
-        let mut rewritten = String::new();
-        for line in config.lines() {
-            let setting = line.split_whitespace().collect::<Vec<_>>();
-            match setting.as_slice() {
-                [key, value]
-                    if key.eq_ignore_ascii_case("IdentityFile") || key.eq_ignore_ascii_case("UserKnownHostsFile") =>
-                {
-                    let name = Path::new(value)
-                        .strip_prefix(&source)
-                        .ok()
-                        .and_then(|name| name.to_str())
-                        .filter(|name| !name.is_empty() && !name.contains('/'))
-                        .ok_or_else(|| io::Error::other("Companion config names a file outside its grant"))?;
-                    let copy = destination.join(name);
-                    files::write_with(&copy, &std::fs::read(source.join(name))?, SHARED_FILE, group)?;
-                    kept.insert(name.to_owned());
-                    let _ = writeln!(rewritten, "  {key} {}", path_text(&copy)?);
-                }
-                _ => {
-                    rewritten.push_str(line);
-                    rewritten.push('\n');
-                }
-            }
+        for name in &names {
+            files::write_with(
+                &destination.join(name),
+                &std::fs::read(source.join(name))?,
+                SHARED_FILE,
+                group,
+            )?;
         }
-        Ok((rewritten, kept))
+        Ok((rewritten, names))
     }
 
     /// OpenSSH reads the user file from the passwd home, which the agent account
@@ -195,22 +179,21 @@ impl Runtime {
         files::write_with(&self.system_include, content.as_bytes(), SYSTEM_FILE, None)
     }
 
-    /// Runs the readiness command as the agent account through the isolation
-    /// launcher, so Ready means that agent sessions can use the alias too. The
-    /// probe reads a staged copy of the candidate `config`, not the published
-    /// configuration, and the staged copy is removed before this returns.
+    /// Resolves the candidate `config` as the agent account before Connect commits
+    /// it, so Ready means that agent sessions can use the alias too. Root already
+    /// probed the connection. The staged configuration names the eventual copies
+    /// but holds no key or pin, so an interrupted Connect gives agents no key.
     /// `timeout` is what remains of the Connect budget after the root probe.
-    pub(super) fn verify_agent_access(
+    pub(super) fn verify_agent_route(
         &self,
         grant: &str,
         config: &str,
         ssh_alias: &str,
-        command: &str,
         timeout: Duration,
     ) -> io::Result<()> {
-        let (Some(launcher), Some(_)) = (&self.workspace_launcher, &self.agent_account) else {
+        if self.workspace_launcher.is_none() || self.agent_account.is_none() {
             return Ok(());
-        };
+        }
         if timeout.is_zero() {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -218,59 +201,58 @@ impl Runtime {
             ));
         }
         let staged = self.staged_probe(grant);
-        let observed = self.stage_probe(grant, config, &staged).and_then(|probe| {
-            ssh::checked_with_timeout(
-                Command::new(launcher)
-                    .args(["agent", "ssh", "-F"])
-                    .arg(probe)
-                    .args([ssh_alias, command]),
-                timeout,
-            )
-            .map_err(|error| io::Error::new(error.kind(), "Companion SSH access failed for agent sessions"))
+        let resolved = self.stage_route(grant, config, &staged).and_then(|probe| {
+            let probe = path_text(&probe)?;
+            self.resolve_as_agent(grant, &["-F", probe, ssh_alias], timeout)
         });
         let removed = files::remove_directory(&staged);
-        let observed = observed?;
-        removed?;
-        if observed.trim() == "true" {
-            Ok(())
-        } else {
-            Err(io::Error::other("Companion SSH access failed for agent sessions"))
-        }
+        resolved?;
+        removed
     }
 
     /// Resolves the published alias as the agent account, without a connection,
     /// so Ready also covers the system include that agent sessions use.
     pub(super) fn verify_published_alias(&self, grant: &str, ssh_alias: &str, timeout: Duration) -> io::Result<()> {
-        let (Some(launcher), Some(_)) = (&self.workspace_launcher, &self.agent_account) else {
+        if self.workspace_launcher.is_none() || self.agent_account.is_none() {
+            return Ok(());
+        }
+        self.resolve_as_agent(grant, &[ssh_alias], timeout)
+    }
+
+    /// Runs `ssh -G` with `arguments` as the agent account and requires the
+    /// published key copy of `grant`. `ssh -G` reads no key and opens no connection.
+    fn resolve_as_agent(&self, grant: &str, arguments: &[&str], timeout: Duration) -> io::Result<()> {
+        let Some(launcher) = &self.workspace_launcher else {
             return Ok(());
         };
         let expected = format!("identityfile {}", path_text(&self.agent.join(grant).join("identity"))?);
-        let resolved =
-            ssh::checked_with_timeout(Command::new(launcher).args(["agent", "ssh", "-G", ssh_alias]), timeout)
-                .map_err(|error| {
-                    io::Error::new(error.kind(), "Companion SSH alias is not published for agent sessions")
-                })?;
+        let failed = || io::Error::other("Companion SSH alias does not resolve for agent sessions");
+        let resolved = ssh::checked_with_timeout(
+            Command::new(launcher).args(["agent", "ssh", "-G"]).args(arguments),
+            timeout,
+        )
+        .map_err(|error| io::Error::new(error.kind(), failed().to_string()))?;
         if resolved.lines().any(|line| line == expected) {
             Ok(())
         } else {
-            Err(io::Error::other(
-                "Companion SSH alias is not published for agent sessions",
-            ))
+            Err(failed())
         }
     }
 
-    /// Copies the candidate `config` of `grant` to `staged` for the agent probe
-    /// and returns the path of the staged configuration.
-    fn stage_probe(&self, grant: &str, config: &str, staged: &Path) -> io::Result<PathBuf> {
-        files::shared_directory(&self.agent, self.agent_group())?;
+    /// Writes the candidate `config` of `grant` to `staged`, with the paths of
+    /// the eventual copies, and returns its path. No key or pin is copied.
+    fn stage_route(&self, grant: &str, config: &str, staged: &Path) -> io::Result<PathBuf> {
+        let group = self.agent_group();
+        let (rewritten, _) = rewrite_paths(&self.key_directory(grant), config, &self.agent.join(grant))?;
+        files::shared_directory(&self.agent, group)?;
         files::remove_directory(staged)?;
-        let (rewritten, _) = self.copy_grant(grant, config, staged)?;
+        files::shared_directory(staged, group)?;
         let probe = staged.join("config");
         files::write_with(
             &probe,
             format!("{rewritten}{}", ssh::SYSTEM_INCLUDE).as_bytes(),
             SHARED_FILE,
-            self.agent_group(),
+            group,
         )?;
         Ok(probe)
     }
@@ -311,4 +293,33 @@ pub(super) fn committed(config: &str, record: &[u8]) -> bool {
         Ok(Response::Connected { ssh_alias, .. }) => config.lines().next() == Some(&format!("Host {ssh_alias}")),
         _ => false,
     }
+}
+
+/// Rewrites the key and pin paths under `source` that `config` names to the
+/// same names under `destination`, and returns the result and those names.
+fn rewrite_paths(source: &Path, config: &str, destination: &Path) -> io::Result<(String, BTreeSet<String>)> {
+    let mut names = BTreeSet::new();
+    let mut rewritten = String::new();
+    for line in config.lines() {
+        let setting = line.split_whitespace().collect::<Vec<_>>();
+        match setting.as_slice() {
+            [key, value]
+                if key.eq_ignore_ascii_case("IdentityFile") || key.eq_ignore_ascii_case("UserKnownHostsFile") =>
+            {
+                let name = Path::new(value)
+                    .strip_prefix(source)
+                    .ok()
+                    .and_then(|name| name.to_str())
+                    .filter(|name| !name.is_empty() && !name.contains('/'))
+                    .ok_or_else(|| io::Error::other("Companion config names a file outside its grant"))?;
+                names.insert(name.to_owned());
+                let _ = writeln!(rewritten, "  {key} {}", path_text(&destination.join(name))?);
+            }
+            _ => {
+                rewritten.push_str(line);
+                rewritten.push('\n');
+            }
+        }
+    }
+    Ok((rewritten, names))
 }
