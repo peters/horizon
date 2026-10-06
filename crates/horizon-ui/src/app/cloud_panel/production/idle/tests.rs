@@ -482,6 +482,42 @@ fn a_worker_without_an_idle_record_is_still_read_until_its_stop_is_confirmed() {
 }
 
 #[test]
+fn a_record_held_by_another_operation_skips_the_check_and_keeps_watching() {
+    let checks = RefCell::new(
+        vec![
+            Ok(IdleCheck::NotWatched),
+            Err(Error::Command("Reading the worker's idle record")),
+        ]
+        .into_iter(),
+    );
+    let loads = RefCell::new(0);
+    let reports = RefCell::new(Vec::new());
+    run(
+        &Cancellation::default(),
+        Duration::ZERO,
+        |_| checks.borrow_mut().next().unwrap(),
+        // Busy through the check for an unfinished stop and the reload after it.
+        || {
+            *loads.borrow_mut() += 1;
+            Err(Error::Busy)
+        },
+        |_| Ok(Some(runpod_stopped())),
+        &|report| {
+            if let Report::StoppedOutside(state) = report {
+                reports.borrow_mut().push(state.stage);
+            }
+            true
+        },
+    );
+    assert_eq!(
+        reports.into_inner(),
+        [Stage::Stopped],
+        "still watched after the busy reload"
+    );
+    assert!(*loads.borrow() > 30);
+}
+
+#[test]
 fn a_worker_the_provider_does_not_report_stopped_keeps_the_failed_check() {
     let reports = RefCell::new(Vec::new());
     let checks = RefCell::new(

@@ -46,7 +46,10 @@ impl Runtime {
                 || self.state.as_ref().is_some_and(|state| state.stop_requested));
         (lost || reconnect)
             && !self.progress.is_deletion()
+            // A resize still running, or one whose journal is left, owns its failure in
+            // either order of its two reports.
             && !self.resize.busy()
+            && self.resize.pending.is_none()
             && self.recovery_receiver.is_none()
             && !self
                 .cancel

@@ -125,12 +125,13 @@ fn run(
                     return;
                 }
                 // A ready worker that stops itself but keeps no idle record, as an older
-                // image, is still read: a read that fails asks the provider.
-                if load().ok().flatten().as_ref().is_some_and(stops_itself_when_ready) {
-                    failed = None;
-                    continue;
+                // image, is still read: a read that fails asks the provider. A record that
+                // another operation holds is a skipped check, as above.
+                match load() {
+                    Ok(Some(state)) if stops_itself_when_ready(&state) => failed = None,
+                    Err(Error::Busy) => {}
+                    _ => return,
                 }
-                return;
             }
             Ok(IdleCheck::Stopped { idle }) => {
                 // Ends this watch's presentation of the released server itself, so the

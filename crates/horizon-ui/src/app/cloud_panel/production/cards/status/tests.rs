@@ -895,6 +895,12 @@ fn only_a_failure_that_can_be_a_stop_outside_horizon_is_checked() {
         "a rebuild that failed and reloaded the ready record"
     );
     runtime.rebuild = None;
+    runtime.progress.stage(Stage::Ready, Instant::now());
+    assert!(runtime.failure_may_be_a_stop());
+    // A resize that left its journal owns the failure, whichever of its reports came first.
+    runtime.resize.pending = Some(cloud_runtime::deployment::ResizeTarget::Workspace { size_gb: 80 });
+    assert!(!runtime.failure_may_be_a_stop(), "a failed resize");
+    runtime.resize.pending = None;
     runtime.stage = Some(Stage::Stopping);
     runtime.operation = Some(super::super::Action::Stop);
     assert!(!runtime.failure_may_be_a_stop(), "the owner's own stop failed");
