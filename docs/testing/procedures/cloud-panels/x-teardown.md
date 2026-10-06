@@ -65,11 +65,12 @@ accepts a request but before the card shows an ID, for example during the watch 
 1. List the current Hetzner and RunPod resources in the format of the baselines.
 
    ```sh
-   { for k in servers volumes ssh_keys networks; do bash <run>/hetzner-list.sh "$k"; done
-     for k in pods network-volumes registries templates; do bash <run>/runpod-list.sh "$k"; done; } > <evidence>/before-teardown.jsonl
+   ( set -e; for k in servers volumes ssh_keys networks; do bash <run>/hetzner-list.sh "$k"; done
+     for k in pods network-volumes registries templates; do bash <run>/runpod-list.sh "$k"; done ) > <evidence>/before-teardown.jsonl
    ```
 
    Result: The file has one line for each current provider resource.
+   If an API call fails, the command stops with an error. Then do this step again.
 
 2. Compare the list with the two baselines.
 
@@ -239,10 +240,11 @@ Do steps 8 to 15 for each cloud in the resource ledger that has an active resour
 4. Save all Hetzner lists in the format of the baseline.
 
    ```sh
-   for k in servers volumes ssh_keys networks; do bash <run>/hetzner-list.sh "$k"; done > <evidence>/hetzner-after.jsonl
+   ( set -e; for k in servers volumes ssh_keys networks; do bash <run>/hetzner-list.sh "$k"; done ) > <evidence>/hetzner-after.jsonl
    ```
 
    Result: The evidence shows the final Hetzner state.
+   If an API call fails, the command stops with an error. Then do this step again.
 
 5. Compare the final Hetzner state with the baseline.
 
@@ -400,10 +402,11 @@ Do steps 8 to 15 for each cloud in the resource ledger that has an active resour
 5. Save all RunPod lists in the format of the baseline.
 
    ```sh
-   for k in pods network-volumes registries templates; do bash <run>/runpod-list.sh "$k"; done > <evidence>/runpod-after.jsonl
+   ( set -e; for k in pods network-volumes registries templates; do bash <run>/runpod-list.sh "$k"; done ) > <evidence>/runpod-after.jsonl
    ```
 
    Result: The evidence shows the final RunPod state.
+   If an API call fails, the command stops with an error. Then do this step again.
 
 6. Compare the final RunPod state with the baseline.
 

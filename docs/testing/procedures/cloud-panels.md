@@ -212,10 +212,11 @@ change in the report as a deviation.
 5. Save the Hetzner baseline.
 
    ```sh
-   for k in servers volumes ssh_keys networks; do bash <run>/hetzner-list.sh "$k"; done > <evidence>/hetzner-before.jsonl
+   ( set -e; for k in servers volumes ssh_keys networks; do bash <run>/hetzner-list.sh "$k"; done ) > <evidence>/hetzner-before.jsonl
    ```
 
    Result: The file has one line for each Hetzner resource before the run.
+   If an API call fails, the command stops with an error. Then do this step again.
 
    > **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
    > contains the key. Do not show the file or the request headers.
@@ -223,10 +224,11 @@ change in the report as a deviation.
 6. Save the RunPod baseline.
 
    ```sh
-   for k in pods network-volumes registries templates; do bash <run>/runpod-list.sh "$k"; done > <evidence>/runpod-before.jsonl
+   ( set -e; for k in pods network-volumes registries templates; do bash <run>/runpod-list.sh "$k"; done ) > <evidence>/runpod-before.jsonl
    ```
 
    Result: The file has one line for each RunPod resource before the run.
+   If an API call fails, the command stops with an error. Then do this step again.
 
 7. Make the resource ledger with one header line.
 
