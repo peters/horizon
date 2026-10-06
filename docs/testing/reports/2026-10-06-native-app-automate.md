@@ -37,6 +37,7 @@ Public review and CI remained separate merge gates.
 | NATIVE-REMOTE-BUILD | pass | Parent SIGKILL stopped a real Xcode build group and removed its unique remote source directory. | — |
 | CLI setup errors | pass | The packaged archive-limit check returned a typed NDJSON error before allocation. The missing-client regression exposed no private path. | — |
 | Local validation | pass | Formatting, maintainability, workspace tests, speech tests, blocking Clippy and strict Clippy passed. | — |
+| Cleanup test portability | pass | Provider tests passed after a test-only correction. A Mac probe distinguished an exact zombie PID, a live PID and a reaped PID. | — |
 
 The matrix used these provider-resolved targets:
 
@@ -59,6 +60,8 @@ The full matrix and SIGKILL checks used the matrix candidate named above.
 The later source change added typed CLI setup-error output only.
 Successful MCP execution and resource ownership did not change.
 The final candidate repeated CLI cancellation and normal MCP EOF checks.
+The final review then corrected platform-specific observation in a cleanup regression test.
+That test-only change passed provider tests and the applicable lint tiers; packaged runtime behavior did not change.
 
 The first crash recovery attempt returned `app_reconciliation_required` and retained the exact session as uncertain.
 The second attempt completed the same operations without creation replay.

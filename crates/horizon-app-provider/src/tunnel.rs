@@ -710,10 +710,26 @@ mod tests {
         let pid = rustix::process::Pid::from_raw(descendant).unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            // Linux can retain an orphan zombie until its init reaps it; it cannot execute.
+            // A retained orphan zombie cannot execute, even before its parent reaps it.
+            #[cfg(target_os = "linux")]
             let zombie = std::fs::read_to_string(format!("/proc/{descendant}/stat"))
                 .is_ok_and(|value| value.split(") ").nth(1).is_some_and(|tail| tail.starts_with('Z')));
-            if zombie || rustix::process::test_kill_process(pid).is_err() {
+            #[cfg(target_os = "macos")]
+            let zombie = std::process::Command::new("/bin/ps")
+                .args(["-o", "stat=", "-p", &descendant.to_string()])
+                .output()
+                .is_ok_and(|output| {
+                    output.status.success()
+                        && std::str::from_utf8(&output.stdout).is_ok_and(|state| state.trim().starts_with('Z'))
+                });
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            let zombie = false;
+            let absent = match rustix::process::test_kill_process(pid) {
+                Ok(()) => false,
+                Err(rustix::io::Errno::SRCH) => true,
+                Err(error) => panic!("cannot verify owned descendant: {error}"),
+            };
+            if zombie || absent {
                 break;
             }
             assert!(Instant::now() < deadline, "owned descendant survived cleanup");
