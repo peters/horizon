@@ -360,15 +360,16 @@ Do steps 8 to 15 for each cloud in the resource ledger that has an active resour
 
 9. For each listed directory, find its Device panel with the `device_panel` operation `list`.
 
-   Result: You have the panel ID of the second fixture, if it has one.
+   Result: You have the panel ID of the second fixture, if it has one. A
+   completed A06 or C03 closed its panel.
 
-10. Send the `device_panel` operation `close` for that panel ID.
+10. If the second fixture has a Device panel, send the `device_panel` operation `close` for its panel ID.
 
-    Result: The Device panel of the second fixture closes.
+    Result: No Device panel of a second fixture stays open.
 
-11. In the terminal of the second launcher, press Ctrl-C.
+11. If the second launcher still runs, press Ctrl-C in its terminal.
 
-    Result: The second launcher stops its Xvfb, VNC and candidate.
+    Result: No second launcher runs. A completed A06 or C03 stopped its launcher.
 
     > **CAUTION:** DELETE ONLY THE LISTED DIRECTORIES OF THE SECOND FIXTURES. Other
     > directories can hold data of this run or of other people.

@@ -175,9 +175,6 @@ setting must open a repair form.
 
 ### 6.4 A04 — Turn off Hetzner and remove its settings
 
-> **CAUTION:** DO NOT TURN OFF HETZNER WHILE A HETZNER CLOUD EXISTS. Horizon needs
-> the Hetzner settings to stop and delete a Hetzner cloud.
-
 1. Open **Cloud › Cloud settings…**.
 
    Result: The Hetzner Cloud card shows **Key saved**.
@@ -185,6 +182,9 @@ setting must open a repair form.
 2. Switch off **Use Hetzner Cloud for CPU clouds**.
 
    Result: The card shows **Off**.
+
+   > **CAUTION:** DO NOT TURN OFF HETZNER WHILE A HETZNER CLOUD EXISTS. The save
+   > removes the Hetzner settings that Horizon needs to stop and delete a Hetzner cloud.
 
 3. Click **Save settings**.
 

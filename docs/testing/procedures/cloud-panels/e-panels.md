@@ -288,7 +288,15 @@ real request.
 
    Result: The command stops with exit code 0. SSH shows no host key prompt.
 
-5. Do step 4 again with an empty file as `UserKnownHostsFile`.
+5. Make an empty known hosts file in the private home.
+
+   ```sh
+   : > <home>/smoke/empty-known-hosts
+   ```
+
+   Result: The file exists and is empty.
+
+6. Do step 4 again with `<home>/smoke/empty-known-hosts` as `UserKnownHostsFile`.
 
    Result: SSH refuses the connection because it has no host key.
 
@@ -310,6 +318,10 @@ real request.
    Result: The panels close. The Shell and agent panels stay open for area T.
 
 2. Delete the empty known hosts file of E09 step 5.
+
+   ```sh
+   rm <data-home>/smoke/empty-known-hosts
+   ```
 
    Result: The file does not exist.
 
