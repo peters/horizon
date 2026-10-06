@@ -424,6 +424,26 @@ from `origin` before deploy. Commit and update the branch before you start.
 
    Result: The cloud card shows each stage with its time.
 
+## Stop or delete the first cloud
+
+A stopped worker keeps its workspace storage, and the storage continues to
+cost money. A deleted cloud costs nothing more.
+
+> **CAUTION:** DELETE ONLY A CLOUD THAT YOU DO NOT NEED. Delete removes the
+> worker, the workspace storage and all work on it. You cannot undo it.
+
+1. On the cloud card, click **Manage…**.
+2. If you want to use the cloud again later, click **Stop worker…**.
+3. If you clicked **Stop worker…**, click **Stop worker** to confirm.
+
+   Result: The worker stops. The workspace storage stays.
+
+4. If you do not need the cloud, click **Delete cloud resources…**.
+5. If you clicked **Delete cloud resources…**, click **Delete resources
+   permanently** to confirm.
+
+   Result: The card shows **Deleted**.
+
 ## Get help
 
 - [Platform support](platform-support.md)
