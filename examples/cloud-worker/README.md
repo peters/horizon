@@ -129,13 +129,14 @@ keep each cloud dedicated to related repositories/accounts. This does not provid
 per-agent isolation. Chromium still uses `--no-sandbox` inside that cloud container.
 The browser service and VNC endpoint listen only on worker loopback; presentation
 uses authenticated SSH. Browser and device MCP processes retain their injected
-agent identity. The root control service publishes its browser host
-instance, an identity and not a credential, in
-`/run/horizon-worker/browser-host-instance` (owner root, mode 0644), and
-`horizon-worker-run` exports it as `HORIZON_BROWSER_HOST_INSTANCE`. Its browser
-runtime root stays private to root, so agent browser tools cannot use it yet
-([#1307](https://github.com/peters/horizon/issues/1307)). Private credential
-files must never enter source, images or logs.
+agent identity. Private credential files must never enter source, images or logs.
+
+The control service runs as root. It writes its host instance to
+`/run/horizon-worker/browser-host-instance` with owner root and mode 0644. The
+host instance is an identity, not a credential. `horizon-worker-run` gives the
+value to each agent in `HORIZON_BROWSER_HOST_INSTANCE`. Agents cannot read the
+browser runtime root of the control service. Thus the browser tools of an agent
+cannot use that root yet ([#1307](https://github.com/peters/horizon/issues/1307)).
 
 ## Cloud tailnet contract
 

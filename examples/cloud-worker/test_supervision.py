@@ -150,6 +150,12 @@ class SupervisionTests(unittest.TestCase):
             self.supervisor.wait_until(lambda: True, 'unused')
         self.assertFalse((self.root / 'services.json').exists())
 
+    def test_close_withdraws_the_published_browser_host_instance(self):
+        # A later control service publishes a new value; until then sessions must not get this one.
+        (self.root / 'browser-host-instance').write_text('earlier-host\n')
+        self.supervisor.close()
+        self.assertFalse((self.root / 'browser-host-instance').exists())
+
     def test_bootstrap_timeout_checks_real_readiness_without_replacing_services(self):
         child = self.start('xvfb')
         with self.assertRaisesRegex(ValueError, 'display timeout'):

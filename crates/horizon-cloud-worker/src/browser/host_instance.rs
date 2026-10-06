@@ -72,6 +72,13 @@ mod tests {
     fn publishes_a_readable_copy_and_replaces_an_older_one() {
         let directory = runtime_directory();
         let path = directory.path().join("browser-host-instance");
+        // A private leftover, as the service's umask 077 creates it: the copy must still be readable.
+        std::fs::write(path.with_extension("new"), "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path.with_extension("new"), std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
         publish(&path, "older-host").unwrap();
         publish(&path, "current-host").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "current-host\n");
@@ -80,7 +87,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o644, "agents read it under the service's restrictive umask");
+            assert_eq!(mode, 0o644, "agents can read it");
         }
     }
 

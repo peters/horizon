@@ -258,6 +258,7 @@ class Supervisor:
 
     def close(self):
         (self.runtime / 'services.json').unlink(missing_ok=True)
+        (self.runtime / 'browser-host-instance').unlink(missing_ok=True)
         # Each child has its own session. Terminate only groups created here,
         # including descendants of a service whose leader has already exited.
         try:
@@ -286,6 +287,8 @@ def main():
         with (RUNTIME / 'supervisor.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             (RUNTIME / 'services.json').unlink(missing_ok=True)
+            # A value from an earlier control service must not reach new sessions.
+            (RUNTIME / 'browser-host-instance').unlink(missing_ok=True)
             supervisor = Supervisor()
             def stop(_signum, _frame):
                 supervisor.stopping = True
