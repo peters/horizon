@@ -524,6 +524,26 @@ impl BrowserPanelState {
         }
     }
 
+    /// Live local driver or cloud channel. A handle can outlive its receiver.
+    #[must_use]
+    pub fn can_accept_commands(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(cloud) = &self.cloud {
+            return cloud.can_send();
+        }
+        self.session.as_deref().is_some_and(BrowserSession::can_accept_commands)
+    }
+
+    /// Chrome record control. Cloud video status never returns to this panel.
+    #[must_use]
+    pub fn can_start_recording(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return false;
+        }
+        self.can_accept_commands()
+    }
+
     /// Queue a command only when the driver session currently exists.
     #[must_use]
     pub fn try_send(&self, command: BrowserCommand) -> bool {
@@ -1246,6 +1266,25 @@ mod tests {
     }
 
     #[test]
+    fn command_acceptance_follows_the_channel_not_browser_status() {
+        let mut state = BrowserPanelState::inert();
+        let start = BrowserCommand::Video {
+            operation: BrowserVideoOperation::Start,
+            options: None,
+        };
+        assert!(!state.can_accept_commands());
+        assert!(!state.try_send(start.clone()));
+
+        state.status = BrowserStatus::Ready;
+        assert!(!state.can_accept_commands());
+
+        state.status = BrowserStatus::Starting;
+        state.pending_relaunch = Some(PendingRelaunch { initial_url: None });
+        assert!(!state.can_accept_commands());
+        assert!(!state.try_send(start));
+    }
+
+    #[test]
     fn queued_retry_launches_after_teardown_without_another_click() {
         let (completion_tx, completion_rx) = std::sync::mpsc::channel();
         let mut state = BrowserPanelState {
@@ -1291,6 +1330,15 @@ mod tests {
         assert!(state.continue_pending_relaunch());
         assert!(state.pending_relaunch.is_none());
         assert!(state.session.is_some());
+        // The deliberately missing executable closes its receiver asynchronously.
+        // A retained session handle must not keep accepting commands after that exit.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while state.can_accept_commands() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!state.can_accept_commands());
+        assert!(state.session.is_some());
+        assert!(!state.try_send(BrowserCommand::Reload));
         state.request_shutdown();
         if let Some(signal) = state.take_shutdown_signal() {
             assert!(signal.wait(std::time::Duration::from_secs(2)));

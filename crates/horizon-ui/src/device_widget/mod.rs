@@ -90,6 +90,12 @@ impl DeviceUiState {
             .ok_or_else(|| "Device viewer has not received a desktop frame".into())
     }
 
+    /// Connected, and this session already has a desktop. Status becomes
+    /// Connected before that frame, and copy or record cannot succeed until it arrives.
+    fn has_current_desktop_frame(&self) -> bool {
+        matches!(self.status, Status::Connected) && self.session.as_ref().is_some_and(Session::has_latest_full)
+    }
+
     pub(crate) fn presented_once(&self) -> bool {
         self.presented_once
     }
@@ -201,7 +207,7 @@ impl DeviceUiState {
         self.absorb_updates(ui.ctx());
         let mut screenshots = std::mem::take(&mut self.screenshots);
         ui.horizontal_wrapped(|ui| {
-            screenshots.copy_button(ui, interactive && matches!(self.status, Status::Connected), || {
+            screenshots.copy_button(ui, interactive && self.has_current_desktop_frame(), || {
                 self.screenshot_image()
             });
             self.recording_controls(ui, interactive);

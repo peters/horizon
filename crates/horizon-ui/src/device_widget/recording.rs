@@ -197,9 +197,14 @@ impl DeviceUiState {
         if let Some(status) = &status
             && (status.capture.active || status.finalizing)
         {
-            if ui
-                .add_enabled(interactive && !status.finalizing, egui::Button::new("Stop recording"))
-                .clicked()
+            if crate::icon_button::icon_button(
+                ui,
+                interactive && !status.finalizing,
+                "Stop recording",
+                crate::icon_button::paint_stop,
+            )
+            .on_hover_text("Stop recording")
+            .clicked()
             {
                 self.recording.stop();
             }
@@ -210,15 +215,12 @@ impl DeviceUiState {
             });
             ui.ctx().request_repaint_after(Duration::from_millis(250));
         } else {
-            if ui
-                .add_enabled(
-                    interactive && matches!(self.status, super::session::Status::Connected),
-                    egui::Button::new("Record video"),
-                )
-                .on_hover_text(
-                    "Record the full desktop, including when hidden. Maximum five minutes or 256 MiB. No audio.",
-                )
-                .clicked()
+            let can_record = interactive && self.has_current_desktop_frame();
+            if crate::icon_button::icon_button(ui, can_record, "Record video", |painter, rect, _color| {
+                crate::icon_button::paint_record(painter, rect, can_record);
+            })
+            .on_hover_text("Record the full desktop, including when hidden. Maximum five minutes or 256 MiB. No audio.")
+            .clicked()
             {
                 self.recording.error = self.start_recording().err();
             }
@@ -228,10 +230,9 @@ impl DeviceUiState {
                 } else {
                     ui.label(format!("{} frames recorded", status.capture.frames_encoded));
                 }
-                if ui
-                    .button("Copy video path")
+                if crate::icon_button::icon_button(ui, true, "Copy video path", crate::icon_button::paint_clipboard)
                     .on_hover_text(
-                        "Private temporary WebM. Save a copy before closing this panel or making four more recordings.",
+                        "Copy video path. Private temporary WebM. Save a copy before closing this panel or making four more recordings.",
                     )
                     .clicked()
                 {
