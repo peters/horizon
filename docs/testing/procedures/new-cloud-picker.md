@@ -103,11 +103,11 @@ report.
 
 4. Paste the RunPod API key.
 
-   Result: The dialog shows that the key is saved.
+   Result: The RunPod field shows **Unsaved key**.
 
 5. Enable Hetzner and paste the Hetzner API token.
 
-   Result: The dialog shows that the token is saved.
+   Result: The Hetzner field shows **Unsaved key**.
 
 6. Type the server types `cx33`, `cx43` and `cpx42`.
 
@@ -117,9 +117,12 @@ report.
 
    Result: The dialog shows the three locations.
 
-8. Close Cloud settings.
+8. Click **Save settings**.
 
-   Result: The dialog closes.
+   Result: Horizon saves the settings and closes the dialog.
+
+   Note: If you close the dialog without **Save settings**, Horizon discards
+   the key, the token and the lists.
 
 9. Open **Cloud › New cloud…**.
 
@@ -346,17 +349,32 @@ this order. Each task starts with the result of the task before it.
 
    Result: The totals on the cards and the summary change.
 
-2. Calculate the hourly price of a RunPod card × 730.
+2. Click **RunPod**.
+
+   Result: The cards show totals in US dollars.
+
+3. Calculate the hourly price of a RunPod card × 730.
 
    Result: The card total is a little more than this value. The difference is
-   the workspace volume.
+   the workspace volume and the container disk for 730 hours.
 
-3. Examine the total of a Hetzner card.
+4. Click **Hetzner**.
 
-   Result: The total is not more than the monthly price, the volume and the
-   IPv4 address.
+   Result: The cards show totals in euros.
 
-4. Set **Compare for** to `1` hour.
+5. Examine the total of a Hetzner card.
+
+   Result: The total is not more than the capped charges of each UTC calendar
+   month in the run.
+
+   Note: Hetzner caps the compute, the volume and the IPv4 address for each
+   UTC calendar month. A run of 730 hours can touch two or three months.
+
+6. Click **All providers**.
+
+   Result: The worker list shows RunPod rows and Hetzner rows.
+
+7. Set **Compare for** to `1` hour.
 
    Result: The totals go back to the values for one hour.
 
