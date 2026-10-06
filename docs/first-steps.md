@@ -307,7 +307,10 @@ cargo run --release --features cast-nvenc
 
 ## Use the board
 
-On macOS, use Cmd instead of Ctrl in each step of this procedure.
+On macOS, use Cmd instead of Ctrl in each step of this procedure. On Windows,
+a shell panel needs a shell in the `SHELL` variable, for example Git Bash. If
+`SHELL` is not set, Horizon starts `/bin/bash`. See
+[the platform support](platform-support.md).
 
 1. Hold Ctrl and double-click an empty area of the board.
 
