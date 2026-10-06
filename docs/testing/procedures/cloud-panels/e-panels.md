@@ -104,9 +104,12 @@ real request.
 
    Result: The operator saves the key. Nobody types it with a device action.
 
+   > **CAUTION:** THIS STEP SENDS THE NEW CLAUDE API KEY TO THE WORKER OF `smoke-a`.
+   > Do this step only on the test cloud `smoke-a`, with the key of the test account.
+
 3. If the operator entered the key again, click **Reconnect cloud** on the card of `smoke-a`.
 
-   Result: The card shows Ready. The reconnect sends the new key to the worker.
+   Result: The card shows Ready. The reconnect sends the new key to the worker of `smoke-a`.
 
 4. Open a new Claude Code panel.
 

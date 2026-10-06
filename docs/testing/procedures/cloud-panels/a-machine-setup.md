@@ -607,9 +607,12 @@ Do this task after D01. It uses the cloud `smoke-a`.
 
     Result: The dialog closes. Claude shows **Key saved** when the dialog opens again.
 
+    > **CAUTION:** THIS STEP SENDS THE CLAUDE API KEY TO THE WORKER OF `smoke-a`.
+    > Do this step only on the test cloud `smoke-a`, with the key of the test account.
+
 16. On the card of `smoke-a`, click **Reconnect cloud**.
 
-    Result: The card shows Ready. The reconnect sends the saved key to the worker.
+    Result: The card shows Ready. The reconnect sends the saved key to the worker of `smoke-a`.
 
 17. In the worker shell, look for the Claude key file.
 

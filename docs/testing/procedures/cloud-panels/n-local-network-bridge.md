@@ -53,13 +53,17 @@ limits the access and that the bridge is off after a restart of Horizon.
    Result: The output shows `<temporary-directory>` and the random value. Record
    both in the private evidence.
 
-2. On the second device, start a test HTTP server for that directory.
+   > **CAUTION:** BIND THE TEST SERVER ONLY TO `<device-address>`. If the server
+   > listens on all interfaces, other networks of the device, for example a
+   > tailnet, can get access to it.
+
+2. On the second device, start a test HTTP server for that directory on `<device-address>`.
 
    ```sh
-   python3 -m http.server <device-port> --directory <temporary-directory>
+   python3 -m http.server <device-port> --bind <device-address> --directory <temporary-directory>
    ```
 
-   Result: The server listens on `<device-port>` and serves only the temporary directory.
+   Result: The server listens only on `<device-address>:<device-port>` and serves only the temporary directory.
 
 3. On the PC, make a test directory with one synthetic file.
 
