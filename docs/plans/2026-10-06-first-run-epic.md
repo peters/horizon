@@ -105,7 +105,8 @@ A cloud gives each agent its own disposable machine. The value is as follows:
 |---|---|---|
 | Steps from zero to a running board | About 6, with a toolkit | 1 command or 1 agent request |
 | Credentials for a first cloud | 3 to 6 | 1 provider key and 1 agent sign-in |
-| GPU speed in a release build | CPU only, no speech | GPU when the machine has one |
+| Speech in a release build | Not included | Included, on the GPU when the machine has one, else on the CPU |
+| NVENC casting in a Linux release build | Not included | Used when the driver and FFmpeg support it |
 | Time to the first cloud | Not measured | 10 minutes or less |
 | Functions that a new user can find in the app | Board, terminal | All functions in this plan |
 
@@ -133,9 +134,11 @@ A cloud gives each agent its own disposable machine. The value is as follows:
 - [ ] **1.1 Doctor command.** Add `horizon doctor` and a `horizon_doctor` MCP
       tool. Report GPU, driver, CUDA SM, Vulkan, FFmpeg encoders, microphone,
       browsers, git, `gh`, Tailscale and credential state. Give JSON output for agents.
-- [ ] **1.2 GPU in release builds.** Put speech in every release. Load the CUDA
-      and Vulkan backends at runtime, with CPU fallback. If runtime load is not
-      possible, publish a CUDA variant and let the installer select it.
+- [ ] **1.2 Speech and NVENC in release builds.** Put speech in every release.
+      Load the CUDA and Vulkan speech backends at runtime, with CPU fallback. If
+      runtime load is not possible, publish a CUDA variant and let the installer
+      select it. Put NVENC in the Linux release, with the `libx264` fallback.
+      Rendering already uses the GPU through wgpu.
 - [ ] **1.3 GPU detection for source builds.** Add `cargo xtask build`. It finds
       the CUDA toolkit, the Vulkan SDK and the GPU SM, then selects the features.
       Make `build.rs` show a warning when it finds a toolkit that the build does not use.

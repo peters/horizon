@@ -7,8 +7,8 @@ replace the specification. The free specification is available from
 
 ## Scope
 
-STE is the default for all documentation. It is mandatory for each new or
-changed document of these types:
+STE is the default for technical documentation. It is mandatory for each new
+or changed document of these types:
 
 - Install, setup and onboarding guides, for example `docs/first-steps.md`.
 - Test procedures in `docs/testing/procedures/`.
@@ -16,6 +16,7 @@ changed document of these types:
 - Runbooks, for example `scripts/device-smoke/README.md`.
 - Reference and architecture documents.
 - Plans in `docs/plans/` and the body of an epic issue.
+- The procedure part of a pull request body.
 - Procedure sections and new rules in `AGENTS.md`.
 
 `README.md` is not in the scope. Write it in plain, friendly language for users,

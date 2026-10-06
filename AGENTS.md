@@ -298,7 +298,7 @@ authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
 
 ### Documentation Standard
 
-- ASD-STE100 Simplified Technical English (STE) is the default language for all documentation. Write each new or changed document in STE. Follow [the STE rules](docs/style/ste-rules.md) and [the technical names](docs/style/technical-names.md).
+- ASD-STE100 Simplified Technical English (STE) is the default language for technical documentation. Write each new or changed document in STE. Follow [the STE rules](docs/style/ste-rules.md) and [the technical names](docs/style/technical-names.md).
 - This rule applies to install and setup guides, runbooks, test procedures, reference documents, plans and epics. It also applies to the body of an epic issue and to the procedure part of a PR body.
 - `README.md` is not in the scope. It is the first text that a user reads, so write it in plain, friendly language. Use the names in the glossary there too. Put procedures and reference text in STE documents under `docs/` and link to them from the README.
 - Code comments, commit messages, quoted tool output and historical documents in `docs/archive/` are not in the scope.
