@@ -414,7 +414,12 @@ again when it creates the cloud. Thus the filter does not hide an unlisted Hetzn
 type. Its row shows **Unlisted · advisory**, and the starting points can use it. CPU workers are more powerful with more vCPUs and then more memory; GPU types
 rank by price, which follows their performance more closely than their memory does.
 Search and the **In stock only** filter are always visible above the full worker
-list, with a count of the results and workers hidden by requirements. **In stock
+list, with a count of the results and workers hidden by requirements.
+The full worker list uses the order of the `cloud_offers` comparison. The workers
+that meet the requirements come first, with the cheapest estimated total first.
+The workers below the requirements follow in the same order. Each row shows the
+hourly price in the billing currency and, under it, the estimated total in the
+comparison currency. If two totals are equal, each provider keeps its own order. **In stock
 only** is checked by default; uncheck it to show sold-out workers. Opening the
 dialog or changing profiles restores these filter defaults. A CPU size is offered only when a
 flavor can hold the profile's container disk. A GPU profile always requests one
