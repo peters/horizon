@@ -1,5 +1,5 @@
 //! Complete provider catalogs for a repository profile, before browsing filters.
-use super::{Offer, Place, Requirements, catalog, hetzner_catalog, places};
+use super::{Offer, Place, Requirements, catalog, hetzner, hetzner_catalog, places};
 use crate::{
     Profile,
     hetzner::catalog::Catalog,
@@ -68,11 +68,7 @@ pub fn workers(
                         .and_then(|catalog| catalog.regions.get(location))
                         .cloned()
                         .unwrap_or_default(),
-                    availability: if offer.availability == "listed" {
-                        crate::prices::Availability::High
-                    } else {
-                        crate::prices::Availability::None
-                    },
+                    availability: hetzner::advisory_stock(offer),
                 }]
             } else {
                 runpod.map_or_else(Vec::new, |(list, _)| places(list, offer, profile.storage.volume_tier))

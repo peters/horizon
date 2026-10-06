@@ -29,6 +29,7 @@ documents that are not yet STE.
 | [cloud-panels](procedures/cloud-panels.md) | Cloud panels end to end: 113 tests in 12 area files | rents compute |
 | [cloud-settings-replace-key](procedures/cloud-settings-replace-key.md) | Cloud settings saved keys | none |
 | [new-cloud-catalog-refresh](procedures/new-cloud-catalog-refresh.md) | New cloud dialog, background price refresh and layout height | none |
+| [new-cloud-picker](procedures/new-cloud-picker.md) | New cloud dialog, worker list, filters, picks and data centers | none |
 
 ## Reports
 

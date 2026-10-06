@@ -386,6 +386,9 @@ For a detailed check of the refresh, use the
 
    Result: The dialog closes. No cloud starts.
 
+The [New cloud picker procedure](../new-cloud-picker.md) gives more detailed
+steps for C12 to C30. Use it for a run that changes the picker.
+
 ### 6.12 C12 — Show the full catalog size with In stock only clear
 
 1. Open the dialog with `runpod-small`, **All providers** and **In stock only** clear.
