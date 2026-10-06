@@ -262,7 +262,7 @@ fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
 }
 
 fn video_start_button(ui: &mut Ui, hover: &str, browser: &mut BrowserPanelState, interactive: bool) -> bool {
-    let can_record = interactive && browser.can_accept_commands();
+    let can_record = interactive && browser.can_start_recording();
     let response = crate::icon_button::icon_button(ui, can_record, "Record", |painter, rect, _color| {
         crate::icon_button::paint_record(painter, rect, can_record);
     })

@@ -649,6 +649,7 @@ fn cloud_command_channel_accepts_recording_without_a_local_session() {
     let fixture = orientation_fixture();
     assert!(fixture.panel.session.is_none());
     assert!(fixture.panel.can_accept_commands());
+    assert!(!fixture.panel.can_start_recording());
     assert!(fixture.panel.try_send(BrowserCommand::Video {
         operation: BrowserVideoOperation::Start,
         options: None,

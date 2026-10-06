@@ -157,6 +157,7 @@ Do not run the video smoke script on Windows.
 
 - The camera is dim until a page frame exists, then bright.
 - The record disc is rose when the driver can take a command. It stays dim while the browser has no driver.
+- A cloud panel keeps the record disc dim.
 - The stop icon replaces the record disc during capture.
 - Pause and resume keep one file. Playback matches the active time.
 - MCP returns a private WebM file and does not return pixels in the audit.

@@ -80,6 +80,12 @@ impl BrowserEventSender {
 }
 
 impl BrowserSession {
+    /// The driver thread still holds the command receiver.
+    #[must_use]
+    pub fn can_accept_commands(&self) -> bool {
+        self.command_tx.receiver_connected()
+    }
+
     #[must_use]
     pub fn send(&self, command: BrowserCommand) -> bool {
         let is_stop = matches!(command, BrowserCommand::Stop);
@@ -353,5 +359,14 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn session_rejects_commands_after_the_driver_receiver_exits() {
+        let (session, receiver) = session_for_audit(Arc::new(RecordingCoordination::default()));
+        assert!(session.can_accept_commands());
+        drop(receiver);
+        assert!(!session.can_accept_commands());
+        assert!(!session.send(BrowserCommand::Reload));
     }
 }

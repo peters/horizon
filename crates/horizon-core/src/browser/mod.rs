@@ -524,18 +524,24 @@ impl BrowserPanelState {
         }
     }
 
-    /// Whether [`Self::try_send`] has a local driver or a live cloud channel.
-    ///
-    /// A queued relaunch reports [`BrowserStatus::Starting`] before either
-    /// channel exists. A cloud view remains after its pump thread exits, but
-    /// that thread drops the command receiver on the way out.
+    /// Live local driver or cloud channel. A handle can outlive its receiver.
     #[must_use]
     pub fn can_accept_commands(&self) -> bool {
         #[cfg(feature = "cloud-workspaces")]
         if let Some(cloud) = &self.cloud {
             return cloud.can_send();
         }
-        self.session.is_some()
+        self.session.as_deref().is_some_and(BrowserSession::can_accept_commands)
+    }
+
+    /// Chrome record control. Cloud video status never returns to this panel.
+    #[must_use]
+    pub fn can_start_recording(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return false;
+        }
+        self.can_accept_commands()
     }
 
     /// Queue a command only when the driver session currently exists.
