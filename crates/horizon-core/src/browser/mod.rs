@@ -524,15 +524,16 @@ impl BrowserPanelState {
         }
     }
 
-    /// Whether [`Self::try_send`] has a local driver or a cloud channel.
+    /// Whether [`Self::try_send`] has a local driver or a live cloud channel.
     ///
     /// A queued relaunch reports [`BrowserStatus::Starting`] before either
-    /// channel exists. Status alone does not mean a command can be accepted.
+    /// channel exists. A cloud view remains after its pump thread exits, but
+    /// that thread drops the command receiver on the way out.
     #[must_use]
     pub fn can_accept_commands(&self) -> bool {
         #[cfg(feature = "cloud-workspaces")]
-        if self.cloud.is_some() {
-            return true;
+        if let Some(cloud) = &self.cloud {
+            return cloud.can_send();
         }
         self.session.is_some()
     }

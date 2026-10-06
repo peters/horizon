@@ -7,6 +7,7 @@ use super::*;
 struct OrientationFixture {
     panel: BrowserPanelState,
     receiver: mpsc::Receiver<BrowserCommand>,
+    alive: Arc<()>,
 }
 
 fn orientation_fixture() -> OrientationFixture {
@@ -18,6 +19,7 @@ fn orientation_fixture() -> OrientationFixture {
         .unwrap();
     assert!(child.wait().unwrap().success());
     let (tx, receiver) = mpsc::sync_channel(1);
+    let alive = Arc::new(());
     let mut panel = BrowserPanelState::inert();
     panel.status = BrowserStatus::Ready;
     panel.cloud = Some(CloudView {
@@ -35,13 +37,14 @@ fn orientation_fixture() -> OrientationFixture {
         device: None,
         process_lost: false,
         tx,
+        channel_alive: Arc::downgrade(&alive),
         latest: Latest::default(),
         waker: Waker::default(),
         stop: Arc::new(AtomicBool::new(false)),
         child: Arc::new(Mutex::new(child)),
         handoff_sequence: std::sync::atomic::AtomicU64::new(0),
     });
-    OrientationFixture { panel, receiver }
+    OrientationFixture { panel, receiver, alive }
 }
 
 fn orientation_poll(panel: &mut BrowserPanelState, orientation: RemoteOrientationView) {
@@ -199,6 +202,7 @@ fn orientation_requires_a_provider_target_on_cloud_presentations() {
     for backend in [BackendKind::ChromiumCdp, BackendKind::FirefoxBidi] {
         for target in [None, Some("device-fixture")] {
             let (tx, rx) = mpsc::sync_channel(1);
+            let alive = Arc::new(());
             let mut panel = BrowserPanelState::inert();
             panel.status = BrowserStatus::Ready;
             panel.cloud = Some(CloudView {
@@ -216,6 +220,7 @@ fn orientation_requires_a_provider_target_on_cloud_presentations() {
                 device: None,
                 process_lost: false,
                 tx,
+                channel_alive: Arc::downgrade(&alive),
                 latest: Latest::default(),
                 waker: Waker::default(),
                 stop: Arc::new(AtomicBool::new(false)),
@@ -317,6 +322,7 @@ fn stopped_cloud_keeps_its_environment_and_refuses_local_backend_switch() {
     let mut child = std::process::Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
     child.wait().unwrap();
     let (tx, _rx) = mpsc::sync_channel(1);
+    let alive = Arc::new(());
     let mut panel = BrowserPanelState::inert();
     panel.cloud = Some(CloudView {
         connection: Connection {
@@ -333,6 +339,7 @@ fn stopped_cloud_keeps_its_environment_and_refuses_local_backend_switch() {
         device: None,
         process_lost: false,
         tx,
+        channel_alive: Arc::downgrade(&alive),
         latest: Latest::default(),
         waker: Waker::default(),
         stop: Arc::new(AtomicBool::new(false)),
@@ -650,4 +657,18 @@ fn cloud_command_channel_accepts_recording_without_a_local_session() {
         fixture.receiver.try_recv().unwrap(),
         BrowserCommand::Video { .. }
     ));
+}
+
+#[test]
+fn cloud_command_channel_closes_when_its_receiver_exits() {
+    use super::super::BrowserVideoOperation;
+    let fixture = orientation_fixture();
+    assert!(fixture.panel.can_accept_commands());
+    drop(fixture.alive);
+    drop(fixture.receiver);
+    assert!(!fixture.panel.can_accept_commands());
+    assert!(!fixture.panel.try_send(BrowserCommand::Video {
+        operation: BrowserVideoOperation::Start,
+        options: None,
+    }));
 }

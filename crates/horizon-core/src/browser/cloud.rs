@@ -6,7 +6,7 @@ use std::{
     io::{self, BufRead, BufReader, Read, Write},
     process::{Child, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -25,6 +25,8 @@ pub(super) struct CloudView {
     pub(super) device: Option<String>,
     pub(super) process_lost: bool,
     tx: mpsc::SyncSender<BrowserCommand>,
+    /// The pump thread holds the matching `Arc` until it drops the receiver.
+    channel_alive: Weak<()>,
     latest: Latest,
     waker: Waker,
     stop: Arc<AtomicBool>,
@@ -81,6 +83,7 @@ impl CloudView {
         let latest = Latest::default();
         let waker = Waker::default();
         let stop = Arc::new(AtomicBool::new(false));
+        let alive = Arc::new(());
         let view = Self {
             connection,
             id,
@@ -90,6 +93,7 @@ impl CloudView {
             process_lost: false,
             backend,
             tx,
+            channel_alive: Arc::downgrade(&alive),
             latest,
             waker,
             stop,
@@ -110,6 +114,10 @@ impl CloudView {
         };
         thread::spawn(move || {
             let result = pump(input, &responses, &rx, &frames, &latest, &waker, &stop, open);
+            // Drop the receiver before publishing a follow-up error so a send
+            // cannot succeed after the pump has stopped reading.
+            drop(alive);
+            drop(rx);
             if let Err(e) = result {
                 *latest.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(CloudViewState {
                     error: Some(e.to_string()),
@@ -134,6 +142,10 @@ impl CloudView {
     }
     pub(super) fn send(&self, command: BrowserCommand) -> bool {
         self.tx.try_send(command).is_ok()
+    }
+    /// The receiver is still alive. A full queue can still reject one command.
+    pub(super) fn can_send(&self) -> bool {
+        self.channel_alive.upgrade().is_some()
     }
     pub(super) fn needs_waker(&self) -> bool {
         self.waker
