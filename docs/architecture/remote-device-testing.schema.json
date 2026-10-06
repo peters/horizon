@@ -108,7 +108,8 @@
           "minimum": 0
         },
         "provider": {
-          "type": "string"
+          "type": "string",
+          "const": "browserstack"
         },
         "recipes": {
           "description": "Exact project-relative recipe files. Markdown recipes contain a device-recipe YAML fence.",

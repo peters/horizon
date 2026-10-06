@@ -139,8 +139,9 @@ terminal output, or the container averaging half a CPU core) and records how
 long the worker has been idle; while the cloud is ready, Horizon reads that
 record over SSH every two minutes and, once the worker has been idle for the
 whole period, stops the cloud exactly as **Stop** does: the server is released
-and the volume kept. The card then shows the cloud stopped, and **Resume**
-creates a new server on the same volume; nothing resumes it automatically.
+and the volume kept. The card then shows **Stopped after 30 idle minutes** (for
+a 30-minute period), and **Resume worker** creates a new server on the same
+volume. Nothing resumes it automatically.
 Choosing **Reconnect cloud** during the few seconds the stop takes waits for it
 to finish and then shows the cloud stopped, or offers **Reconcile stop** when the
 stop did not finish, rather than reporting that another operation holds the cloud.
@@ -194,8 +195,10 @@ ranked: `cloud_deploy offers SETTINGS [REQUIREMENTS_JSON]` from this computer, a
 `cloud_offers` tool for agents on its workers once the host sends them the catalog.
 Native Hetzner offers remain in `other_providers`. The additional `comparison`
 orders offers from every configured provider by `estimated_total_usd`, using dated
-ECB reference rates. Check `comparison.complete` before calling its first offer
-the cheapest match; a failed catalog or unavailable conversion makes it false.
+ECB reference rates. If two totals are equal, each provider keeps its own order.
+The **New cloud** worker list uses the same order. Check `comparison.complete`
+before calling its first offer the cheapest match; a failed catalog or
+unavailable conversion makes it false.
 Billing stays in each provider's currency.
 
 - native amounts are euros, net of VAT, and `max_hourly` is read in euros for them;

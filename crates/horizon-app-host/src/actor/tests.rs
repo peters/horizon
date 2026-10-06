@@ -1123,3 +1123,23 @@ fn reset_cannot_confirm_cleanup_when_allocated_replacement_handle_is_not_returne
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].kind, horizon_app_runtime::journal::Kind::Upload);
 }
+
+pub(crate) fn actor_with_fixed_backend(port: u16) -> (Fixture, Actor) {
+    let (fixture, original) = actor("http://localhost:{tunnel.port.backend}");
+    let mut contract = original.contract.clone();
+    contract.tunnel.ports.insert("backend".into(), Port::Fixed(port));
+    contract.matrix.push(contract.matrix[0].clone());
+    let mut matrix = original.matrix.clone();
+    matrix.push(ResolvedDevice {
+        matrix_index: 1,
+        device: matrix[0].device.clone(),
+    });
+    let actor = Actor::from_backend(
+        Arc::clone(&fixture.workspace),
+        fixture.fake.clone(),
+        Arc::clone(&original.local),
+        contract,
+        matrix,
+    );
+    (fixture, actor)
+}

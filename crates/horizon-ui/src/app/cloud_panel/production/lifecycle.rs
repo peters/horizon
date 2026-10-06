@@ -1,5 +1,8 @@
 use super::{Confirmation, Event, HorizonApp, Runtime, Settings, Stage, Store, channel, cloud_runtime, deployment};
 
+/// What a provider check reports.
+type RecoveryResult = cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Action {
     Deploy,
@@ -22,6 +25,79 @@ pub(super) enum Action {
 mod tests;
 
 impl Runtime {
+    /// Shows the failure an operation reported. Whether it may be a stop Horizon did
+    /// not make is decided now, while a resize that failed still shows as running.
+    pub(super) fn show_failure(&mut self, error: String, at: std::time::Instant) {
+        self.progress.finish(at);
+        self.error = Some(error);
+        self.failure_needs_check = self.failure_may_be_a_stop();
+    }
+
+    /// Whether the failure just reported can be a stop Horizon did not make: the
+    /// connection to a ready worker was lost, or a reconnect failed while it looked
+    /// for the bound worker, or found it recorded as stopped. A failure after its
+    /// operation was cancelled, as by a stop, is not one.
+    pub(super) fn failure_may_be_a_stop(&self) -> bool {
+        // The attempt reached Ready; a failed rebuild that reloaded a ready record did not.
+        let lost = self.stage == Some(Stage::Ready) && self.progress.ended_in(Stage::Ready).is_some();
+        let reconnect = self.operation.is_none()
+            && self.rebuild.is_none()
+            && (matches!(self.stage, Some(Stage::Provision | Stage::Readiness))
+                || self.state.as_ref().is_some_and(|state| state.stop_requested));
+        (lost || reconnect)
+            && !self.progress.is_deletion()
+            // A resize still running, or one whose journal is left, owns its failure in
+            // either order of its two reports.
+            && !self.resize.busy()
+            && self.resize.pending.is_none()
+            && self.recovery_receiver.is_none()
+            && !self
+                .cancel
+                .as_ref()
+                .is_some_and(cloud_runtime::Cancellation::is_cancelled)
+            && self
+                .state
+                .as_ref()
+                .is_some_and(cloud_runtime::lifecycle::may_stop_outside)
+    }
+
+    /// Holds the failure just reported and asks the provider whether the worker stopped
+    /// without Horizon.
+    pub(super) fn start_failure_check(
+        &mut self,
+        state_root: std::path::PathBuf,
+        settings: Settings,
+        ctx: &egui::Context,
+    ) {
+        let tx = self.hold_failure_for_check();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = cloud_runtime::lifecycle::check_lost_worker(
+                &state_root,
+                &settings,
+                &cloud_runtime::Cancellation::default(),
+            )
+            .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Holds the failure for the provider check whose result the returned sender
+    /// carries. That check alone decides: the idle watch of the lost worker ends now,
+    /// and a check of its own that already holds the cloud makes this one wait, so no
+    /// provider check holds the cloud once the card shows the result.
+    pub(super) fn hold_failure_for_check(&mut self) -> std::sync::mpsc::Sender<RecoveryResult> {
+        if let Some(watch) = self.cancel.take() {
+            watch.cancel();
+        }
+        self.idle_reports = None;
+        let (tx, rx) = channel();
+        self.unexplained_failure = self.error.take();
+        self.recovery_receiver = Some(rx);
+        tx
+    }
+
     fn start_reconciliation(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {
         if self.receiver.is_some() {
             return;
@@ -55,6 +131,24 @@ impl Runtime {
             )),
         };
         self.recovery_receiver = None;
+        // A check Horizon started for a failure: a confirmed stop replaces the
+        // failure, and anything else shows the failure as it was.
+        if let Some(failure) = self.unexplained_failure.take() {
+            match result {
+                Ok(recovered) if recovered.confirmed_stopped() => self.show_stopped_outside(recovered.state),
+                Ok(recovered) => {
+                    // The check may have recorded another outcome; the card shows it beside the failure.
+                    if recovered.report.outcome.needs_attention() {
+                        self.push_note(recovered.report.outcome.explanation().into());
+                    }
+                    self.stage = Some(recovered.state.stage);
+                    self.state = Some(recovered.state);
+                    self.error = Some(failure);
+                }
+                Err(_) => self.error = Some(failure),
+            }
+            return;
+        }
         match result {
             Ok(recovered) => {
                 // A stopped worker, including one that stopped itself when idle, only needs Resume.
@@ -91,8 +185,14 @@ impl Runtime {
     pub(super) fn busy(&self) -> bool {
         self.remote_release.is_some()
             || self.resize.busy()
-            || self.recovery_receiver.is_some()
+            || self.checking_provider()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
+    }
+
+    /// A provider check holds, or may hold, the cloud: Check provider, the check of a
+    /// failure, or the idle watch's own check.
+    pub(super) fn checking_provider(&self) -> bool {
+        self.recovery_receiver.is_some() || self.idle_confirming()
     }
 
     fn start_device_release(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {
@@ -201,6 +301,34 @@ fn first_deletion_step(state: Option<&cloud_runtime::state::Deployment>) -> Stag
 }
 
 impl HorizonApp {
+    /// Asks the provider, before the card shows the failure of cloud `id`, whether it
+    /// is a stop Horizon did not make. The check shows as Checking provider. Without
+    /// settings the failure shows at once.
+    pub(super) fn check_failure_with_provider(&mut self, id: u32, ctx: &egui::Context) {
+        let Some(root) = self.cloud_prototype.root.clone() else {
+            return;
+        };
+        let Some(launch) = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.issue == id)
+            .and_then(|group| group.remote.as_ref())
+        else {
+            return;
+        };
+        let (Ok(settings), Ok(state_root)) = (
+            Settings::load(&root.join("settings.json")),
+            cloud_runtime::state::cloud_directory(&root, &launch.id),
+        ) else {
+            return;
+        };
+        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+            runtime.start_failure_check(state_root, settings, ctx);
+        }
+    }
+
     pub(super) fn change_production_worker(&mut self, id: u32, action: Action, ctx: &egui::Context) {
         if let Action::Resize(target) = action {
             self.start_production_resize(id, target, ctx);

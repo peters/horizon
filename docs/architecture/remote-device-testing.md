@@ -4,7 +4,10 @@ A project declares its builds, matrix, backend and recipes in `AGENTS.md`.
 The MCP tools and CLI use the same native host.
 The host builds and uploads each platform once.
 It runs at most two device lanes within the current App Automate quota.
-Each lane has its own synthetic backend and loopback port.
+Managed services give each lane its own synthetic backend and loopback port.
+Contracts with any fixed service port run one lane at a time.
+The report records the effective concurrency.
+Only `provider: browserstack` is supported; other provider names fail contract validation.
 Browser sessions use a separate quota.
 
 Use [the test procedure](../testing/procedures/native-app-automate.md) for acceptance tests.
@@ -438,3 +441,7 @@ Filesystem migration and registry repair require separate qualification.
 Report local tests, displayed-frame proof, app requests, decoded video and cleanup separately.
 Authenticated workflows, payments and feature parity require their own recipes.
 An anonymous shell test does not qualify those workflows.
+
+`app_act` refuses the recipe-only screenshot action.
+Use `app_screenshot` to receive the image and retained evidence.
+A failed CLI progress sink cancels the shared run before later allocation.

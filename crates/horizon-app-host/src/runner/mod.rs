@@ -210,7 +210,19 @@ pub fn run(
     let parallel = actor
         .available_parallel(control.remaining()?.min(Duration::from_secs(30)))?
         .min(contract.max_parallel)
-        .min(2);
+        // Fixed services have one exclusive port owner. Managed services remain lane-isolated.
+        .min(
+            if contract
+                .tunnel
+                .ports
+                .values()
+                .any(|port| matches!(port, horizon_app_testing::contract::Port::Fixed(_)))
+            {
+                1
+            } else {
+                2
+            },
+        );
     if parallel == 0 {
         return Err(horizon_app_runtime::Error::CapacityUnavailable.into());
     }

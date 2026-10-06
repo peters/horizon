@@ -34,6 +34,8 @@ pub enum Error {
     LocalCleanupUncertain(uuid::Uuid),
     #[error("app_session_unknown: the opaque native session is not owned by this actor")]
     SessionUnknown,
+    #[error("app_screenshot_requires_capture: use app_screenshot to retain and return capture evidence")]
+    ScreenshotRequiresCapture,
     #[error("app_resource_cleanup_uncertain: reconcile the exact owned native resource")]
     CleanupUncertain,
     #[error("app_artifact_unknown: the opaque native artifact is not owned or has expired")]

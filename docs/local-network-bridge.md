@@ -122,8 +122,9 @@ sharing stops and says why instead of widening. Switching sharing off forgets it
   it off and on to start counting again.
 - **Everything on the worker can use it.** While the bridge is on, every process on
   a dedicated worker can use its proxy and forwards, and so can web pages open in
-  the worker's browsers, which can reach a forward's `127.0.0.1` port. Shared
-  workers are not supported.
+  the worker's browsers, which can reach a forward's `127.0.0.1` port. Each user
+  on the worker can also ask for the status, discover, probe, forward and
+  unforward. Shared workers are not supported.
 - **One Horizon at a time.** While one computer shares its network with a worker,
   another computer's bridge to the same worker waits and reports that the worker
   is already bridged.
@@ -192,6 +193,10 @@ What each system provides:
 | macOS | yes | yes | yes, from `arp` |
 | Windows | yes | yes | yes, from `arp` |
 
+The Windows row describes the discovery code only. Horizon refuses cloud
+operations on Windows, so you cannot use the bridge from Windows today. See
+[the platform support](platform-support.md).
+
 Discovery from Windows is not fully tested yet, and Windows Firewall can hide
 devices that answer mDNS or SSDP; `local_network_status` tells agents so. A source
 that fails adds a note to the answer instead of failing the whole request.
@@ -232,3 +237,15 @@ on the worker's `127.0.0.1`. The helper passes discovery and probe requests to t
 computer over the same SSH session, and this computer checks each one before it
 answers. The helper stops, and removes its sockets and forwards,
 when the SSH session ends or stops sending its heartbeat for a minute.
+
+Agents on the worker run as the user `horizon-agent`, not as root. The helper
+serves them on the agent socket, `/run/horizon-local-network.sock`. Each user on
+the worker can connect to this socket. The agent socket accepts only the agent
+operations: status, discover, probe, forward and unforward. It refuses all other
+requests.
+
+The bridge sockets, the lock and the private control socket of the helper are in
+`/run/horizon-local-network`. Only root can open this directory. A newer bridge
+session uses the private control socket to replace a helper that lost its
+session. An agent cannot switch the bridge on or off, stop the helper or change
+the scope. Only you can switch the bridge and set its scope, on this computer.

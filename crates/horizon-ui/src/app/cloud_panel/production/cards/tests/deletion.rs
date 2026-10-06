@@ -354,3 +354,23 @@ fn a_pending_stop_replaces_the_whole_manage_drawer() {
         );
     }
 }
+
+#[test]
+fn manage_offers_no_reconnect_or_second_check_while_the_idle_watch_asks_the_provider() {
+    use super::super::super::idle::Report;
+    let ctx = egui::Context::default();
+    let (reports, received) = std::sync::mpsc::channel();
+    let mut runtime = ready_bound_runtime();
+    runtime.idle_reports = Some(received);
+    assert!(has(&action_texts(&ctx, &mut runtime), "Reconnect cloud"));
+    reports.send(Report::Confirming).unwrap();
+    runtime.poll_idle();
+    let confirming = action_texts(&ctx, &mut runtime);
+    assert!(has(&confirming, "Checking provider…"), "{confirming:?}");
+    for hidden in ["Reconnect cloud", "Check provider", "Read record again"] {
+        assert!(!has(&confirming, hidden), "{hidden} waits for the check");
+    }
+    reports.send(Report::Confirmed).unwrap();
+    runtime.poll_idle();
+    assert!(has(&action_texts(&ctx, &mut runtime), "Reconnect cloud"));
+}

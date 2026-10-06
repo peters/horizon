@@ -212,6 +212,17 @@ impl Default for PanelOptions {
     }
 }
 
+/// Why a restored member panel of a cloud does not run its process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudWait {
+    /// Horizon reconnects the cloud. Remote processes continue independently.
+    Reconnecting,
+    /// The worker of the cloud is stopped. Resume worker restores the panel.
+    Stopped,
+    /// This build has no cloud support. Remote processes continue independently.
+    Unsupported,
+}
+
 pub struct Panel {
     pub id: PanelId,
     pub local_id: String,
@@ -228,6 +239,8 @@ pub struct Panel {
     /// Preserve browser identity while an inert restore placeholder awaits its remote worker.
     pub(crate) disconnected_browser_profile: Option<crate::runtime_state::BrowserProfileState>,
     pub(crate) disconnected_device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
+    /// What this panel says while its cloud does not run it; `None` for any other panel.
+    cloud_wait: Option<CloudWait>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     pub launched_at_millis: i64,
@@ -403,6 +416,7 @@ impl Panel {
             content,
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
+            cloud_wait: None,
             session_binding: None,
             template: None,
             launched_at_millis: 0,
@@ -429,7 +443,57 @@ impl Panel {
         opts: PanelOptions,
         error_message: &str,
     ) -> Result<Self> {
-        spawn::restore_failure_panel(id, workspace_id, opts, error_message)
+        spawn::placeholder_panel(
+            id,
+            workspace_id,
+            opts,
+            spawn::Placeholder::RestoreFailure(error_message),
+        )
+    }
+
+    /// Build a placeholder for a restored member of a cloud that does not run it yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the placeholder terminal runtime cannot be created.
+    pub fn cloud_placeholder(
+        id: PanelId,
+        workspace_id: WorkspaceId,
+        opts: PanelOptions,
+        wait: CloudWait,
+    ) -> Result<Self> {
+        let mut panel = spawn::placeholder_panel(id, workspace_id, opts, spawn::Placeholder::Cloud(wait))?;
+        panel.cloud_wait = Some(wait);
+        Ok(panel)
+    }
+
+    /// Makes a cloud placeholder say `wait` when it says something else. Every other
+    /// panel stays as it is, also a cloud member that runs again.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the new placeholder terminal cannot be created.
+    pub fn show_cloud_wait(&mut self, wait: CloudWait) -> Result<bool> {
+        if self.cloud_wait.is_none_or(|shown| shown == wait) {
+            return Ok(false);
+        }
+        let Some(terminal) = self.terminal() else {
+            return Ok(false);
+        };
+        let replacement = spawn::placeholder_terminal(self, terminal.rows(), terminal.cols(), wait)?;
+        if let PanelContent::Terminal(mut old) =
+            std::mem::replace(&mut self.content, PanelContent::Terminal(replacement))
+        {
+            old.request_shutdown();
+        }
+        self.cloud_wait = Some(wait);
+        Ok(true)
+    }
+
+    /// What this panel says while its cloud does not run it.
+    #[must_use]
+    pub fn cloud_wait(&self) -> Option<CloudWait> {
+        self.cloud_wait
     }
 
     /// Drain pending terminal events. Returns `true` if any output was processed.
@@ -734,6 +798,7 @@ mod tests {
             content: PanelContent::Usage(UsageDashboard::new()),
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
+            cloud_wait: None,
             session_binding: None,
             template: None,
             launched_at_millis: 0,

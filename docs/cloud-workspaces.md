@@ -45,6 +45,55 @@ refused. Custom images must advertise `horizon-tailnet-contract=1` before a
 selected-network cloud can be allocated; **None** remains compatible with older
 images.
 
+Each cloud has one device name in its tailnet for the life of the cloud. The
+worker makes the name from the cloud ID. The name stays the same after a stop
+and a resume. The name has one of two forms:
+
+- A cloud ID of lowercase letters, digits and inner hyphens usually gives the
+  direct form, `horizon-cloud-<cloud ID>`. A UUID cloud ID, which Horizon makes
+  for each new cloud, always has this form.
+- Other cloud IDs give a digest form. The rules for this form are below.
+
+Other clouds and agents use the full name `<device name>.<tailnet>.ts.net`. To
+find the device name of a worker, read the first entry in its device inventory.
+The provider name of the server or pod can be different from the device name.
+
+Tailscale names a device after its host name, and each new container has a
+random host name. Thus, the worker gives the device name to Tailscale:
+
+- When the container starts, the worker reads the cloud ID from
+  `HORIZON_CLOUD_OPERATION`. It writes the name to a root-only file in
+  `/run/horizon-tailnet`.
+- The first enrollment gives the name to `tailscale up` with `--hostname`.
+- The node state on the cloud volume keeps the name. A resume does not need
+  the auth key again.
+- If the device has a different host name, the next deploy or resume changes it
+  with `tailscale set --hostname`. This applies to a cloud that enrolled with an
+  older image, after a rebuild of its image. If this change fails, the cloud
+  stays in the tailnet with its old name.
+
+The digest form starts with `horizon-cloud-` and a short form of the cloud ID.
+The worker writes the ID in lowercase and changes each underscore to a hyphen.
+Then it adds a hyphen and 20 hexadecimal characters (80 bits) of the SHA-256 of
+the exact ID. The full name has a maximum of 63 characters. These cloud IDs get
+the digest form:
+
+- An ID with capital letters or underscores.
+- An ID with a last hyphen.
+- An ID that makes a name of more than 63 characters.
+- An ID that ends with a hyphen and 20 hexadecimal characters.
+
+Thus, each name is a valid DNS label and is unique to its cloud. Tailscale does
+not change a name that a tailnet administrator set. If a different device has
+the name, Tailscale adds a suffix such as `-1`. An image with this behavior
+reports `horizon-tailnet-contract=2`. An older image keeps the container host
+name, which changes at each resume.
+
+All members of the tailnet can see the device name. A name in the direct form
+shows the full cloud ID. A name in the digest form shows a maximum of 28
+characters of the ID, in lowercase and with hyphens for underscores. Then it
+shows the digest. Thus, it does not always show the exact cloud ID.
+
 Agents discover ACL-visible devices in
 `/run/horizon-tailnet-devices/devices.json` (names, addresses and online state
 only). HTTP/HTTPS and SOCKS proxy environment variables provide outbound access;
@@ -414,7 +463,15 @@ again when it creates the cloud. Thus the filter does not hide an unlisted Hetzn
 type. Its row shows **Unlisted · advisory**, and the starting points can use it. CPU workers are more powerful with more vCPUs and then more memory; GPU types
 rank by price, which follows their performance more closely than their memory does.
 Search and the **In stock only** filter are always visible above the full worker
-list, with a count of the results and workers hidden by requirements. **In stock
+list, with a count of the results and workers hidden by requirements.
+The full worker list uses the order of the `cloud_offers` comparison. The workers
+that meet the requirements come first, with the cheapest estimated total first.
+The workers below the requirements follow in the same order. Each row shows the
+hourly price in the billing currency. If the dialog can convert the estimate, the
+row also shows the estimated total in the comparison currency. Without a current
+exchange rate, a row in another currency shows only its hourly price, and the
+dialog shows that the comparison is incomplete. If two totals are equal, each
+provider keeps its own order. **In stock
 only** is checked by default; uncheck it to show sold-out workers. Opening the
 dialog or changing profiles restores these filter defaults. A CPU size is offered only when a
 flavor can hold the profile's container disk. A GPU profile always requests one
@@ -473,7 +530,8 @@ Agents in Horizon panels can ask for the same prices through the `cloud_offers`
 tool of Horizon's MCP server, for example "the cheapest GPU with at least 24 GB in
 Europe for 10 hours". It returns up to 50 offers, cheapest estimated total first:
 each with its hourly price, an estimate for the expected hours including 20 GB (or
-the requested size) of workspace storage, for a CPU size the flavors a cloud of that
+the requested size) of workspace storage and, for RunPod, the default 20 GB container
+disk of a profile, for a CPU size the flavors a cloud of that
 size requests (from Cloud settings) priced at the dearest, since RunPod picks one, availability (CPU sizes are confirmed
 when a cloud is created), the regions with that GPU in stock, and that it runs on
 provider-operated hosts. The running Horizon answers, fetching prices when they are
@@ -499,6 +557,9 @@ center is shown immediately, grouped by region, for choosing exactly one. Region
 choices select all compatible data centers in that region. Sold-out regions and
 data centers stay visible and selectable. Data centers that cannot hold the chosen
 workspace volume stay visible with **Storage unavailable**, and cannot be chosen.
+If no data center in a region can hold the volume, the region chip also shows
+**Storage unavailable** and cannot be chosen. It does not show **none in stock**,
+because the cause is storage and not stock.
 The machine's `data_centers` setting still limits
 what is offered, and the dialog says how many other data centers it excludes.
 
@@ -556,6 +617,11 @@ the worker and tools continue. Reconnect inspects the same worker, restores SSH
 tunnels and attaches existing sessions. Reconnect also restores closed terminal
 views from their saved remote references.
 
+After a restart, each panel of a cloud waits until its cloud is ready. Until
+then, the panel shows that Horizon reconnects the cloud. When the cloud is
+stopped, the panel shows that the cloud is stopped and that **Resume worker** on
+the card restores the panel.
+
 A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
 runtime card. Compute replacement retains the same network workspace but stops
 processes, discards temporary container files and reconnects recorded sessions on
@@ -598,19 +664,51 @@ attempts that reach readiness inspect fresh provider data; this does not change
 panel eligibility for a cached Ready record when an earlier preflight fails. This capacity check does not itself prove that files
 survive a provider restart; persistence still needs a live recovery test.
 
-Stop ends running processes; storage can remain billable. Idle stop is off unless
-a profile opts in: set `idle_stop_minutes` (10 to 1440) so a dedicated worker stops after that
-long without agent activity. The worker
-counts as active while any agent terminal prints output or its container uses
-at least half a CPU core, so a quiet build keeps it running. On RunPod the worker
-stops itself, even while this computer is offline, using the provider's credential
-scoped to that worker, and never deletes anything. Hetzner gives a worker no
-credential that could stop it, so there Horizon makes the stop, only while it is
-running, and the stop releases the server and keeps the volume as Stop does; see
-[Hetzner idle stop](cloud-hetzner.md#idle-stop). The rest of this section describes RunPod. Choose **Check provider** on the card afterwards: a worker confirmed
-stopped offers Resume like an explicitly stopped one, and nothing resumes it
-automatically. Profiles without the field never stop on their own, and workers
-shared across workspaces and profiles with hosted devices do not support it.
+Stop ends the processes on the worker. The storage can stay billable. Idle stop
+is off by default. To use it, set `idle_stop_minutes` (10 to 1440) in a profile.
+A dedicated worker then stops after that time without agent activity. The worker
+is active while an agent terminal prints output. The worker is also active while
+its container uses half a CPU core or more, so a quiet build keeps it on.
+
+On RunPod, the worker stops itself. It uses a provider credential that applies
+only to that worker. The stop also occurs when this computer is offline. The
+worker never deletes anything. Hetzner gives a worker no credential that can stop
+it. Thus Horizon stops a Hetzner cloud, but only while Horizon runs. That stop
+releases the server and keeps the volume, as Stop does. Refer to
+[Hetzner idle stop](cloud-hetzner.md#idle-stop).
+
+While a RunPod cloud with an idle period is ready, Horizon reads the idle record
+of the worker every two minutes. Horizon does not stop a RunPod worker. Horizon
+uses the record only to find the cause of a stop. For each RunPod cloud, Horizon
+asks the provider for the status of the worker in these conditions:
+
+- Horizon cannot read a ready worker.
+- The connection to a ready worker fails.
+- A reconnect does not find the worker, or finds a record that says stopped.
+
+Horizon does not do this check for a Hetzner cloud. Only Horizon stops a Hetzner
+cloud, so a failure there stays a failure.
+
+During this check, the card shows **Checking provider**. If the provider reports
+that the worker stopped, the card shows a stopped cloud with **Resume worker**.
+It does not show **Operation failed**. The card names the cause as follows:
+
+| Card | Log line | Cause |
+|---|---|---|
+| **Stopped after 30 idle minutes** · **Storage kept · billable** | `No agent activity for 30 minutes, so this worker stopped itself.` | The last idle record showed a complete, or almost complete, idle period. |
+| **Stopped** · **Storage kept · billable** · **Stopped outside Horizon** | `The provider reports that this worker is stopped. Horizon did not stop it; …` | Horizon cannot tell the cause. An agent or the provider account can stop a worker. |
+
+If the provider reports that the worker runs, the card shows the original
+failure. Horizon records a stop that the provider confirms as an ordinary stopped
+cloud. Nothing resumes it automatically. The card keeps the cause until Horizon
+closes. After a restart, Horizon has no idle record. If Horizon finds the stop
+after the restart, the card shows **Stopped outside Horizon**. If the record
+already showed the stop, the card shows **Stopped**. A worker image from before the idle record contract
+(`horizon-idle-report-contract=1`) keeps no idle record. Horizon still finds the
+stop of such a worker, but shows **Stopped outside Horizon**. Rebuild the image to
+show the idle cause. You can also choose **Check provider** at any time. A
+profile without `idle_stop_minutes` never stops by itself. Shared workers and
+profiles with hosted devices do not support idle stop.
 
 On RunPod, the same opt-in lets an agent stop its worker when its task is done, such as when
 its pull request is merged, without this computer. Agents get a
@@ -837,6 +935,14 @@ the same catalog as `horizon-cloud-worker companions list` and `inspect <alias>`
 Use the returned SSH alias and worktree with ordinary SSH, Git, and rsync. A
 stale catalog loses Ready status; inspection can verify an unchanged connection
 independently. These worker tools do not start or stop clouds.
+On a worker with agent isolation, agent and shell sessions run as the agent user
+`horizon-agent` (UID 10001). Ready then also means that the alias resolves for
+the agent user. The agent
+user gets a read-only copy of the alias, the key, the host-key pin and the
+catalog. The root files stay private. When you uncheck the companion, the source
+also removes the agent copy. A key that an agent copied works until the target
+revokes the grant. See
+[agent access](companion-worker-protocol.md#agent-access).
 The same server also offers `cloud_offers`, so agents on workers without browser
 tools can rank cloud offers from the prices the owning Horizon last sent the
 worker.

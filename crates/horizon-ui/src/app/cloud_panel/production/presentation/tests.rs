@@ -725,3 +725,25 @@ fn cloud_device_identity_survives_placeholder_autosave_and_reattachment() {
         assert_eq!(panel.device().unwrap().identity, Some(identity.clone()));
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn a_restored_member_of_a_stopped_cloud_names_resume_worker_until_the_cloud_runs_it() {
+    let (_temp, mut app) = restore_fixture();
+    add_restored_member(&mut app, "agent", PanelKind::Shell);
+    let id = app.board.panel_id_by_local_id("agent").unwrap();
+    let text = |app: &HorizonApp| app.board.panel(id).unwrap().terminal().unwrap().last_lines_text(30);
+    assert!(text(&app).contains("Horizon is reconnecting the cloud of this panel."));
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&1).unwrap();
+    runtime.stage = Some(cloud_runtime::Stage::Stopped);
+    app.sync_cloud_member_waits();
+    let stopped = text(&app);
+    assert!(stopped.contains("The cloud of this panel is stopped."), "{stopped}");
+    assert!(stopped.contains("Choose Resume worker on the cloud card to restore this panel."));
+    assert!(!stopped.contains("Fix the command or binary"), "{stopped}");
+    // Resume worker starts: the member waits for the reconnect again.
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&1).unwrap();
+    runtime.stage = Some(cloud_runtime::Stage::Provision);
+    app.sync_cloud_member_waits();
+    assert!(text(&app).contains("Horizon is reconnecting the cloud of this panel."));
+}

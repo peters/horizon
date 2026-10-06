@@ -1,3 +1,4 @@
+mod host_instance;
 mod orientation;
 use base64::Engine;
 use horizon_browser::{
@@ -34,9 +35,8 @@ pub struct Host {
 }
 impl Host {
     pub fn new() -> io::Result<Self> {
-        let paths = BrowserRuntimePaths::resolve();
-        std::fs::create_dir_all(paths.root())?;
-        std::fs::write(paths.root().join("cloud-host-instance"), manifest::host_instance())?;
+        // First, before anything reads the identity.
+        host_instance::adopt()?;
         let root = BrowserRuntimePaths::resolve().root().join("cloud-browser-history");
         std::fs::create_dir_all(&root)?;
         let mut closed = std::collections::BTreeSet::new();

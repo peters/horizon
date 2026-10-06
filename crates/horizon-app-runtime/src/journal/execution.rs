@@ -14,9 +14,18 @@ pub struct Workspace {
     journal: Arc<Journal>,
     owner: Uuid,
     root: PathBuf,
-    _lease: File,
+    _lease: Lease,
     root_file: File,
     reconcile: bool,
+}
+
+// Explicit unlock also releases the lease when a concurrently spawned child briefly
+// inherits the open file description before exec closes its descriptors.
+struct Lease(File);
+impl Drop for Lease {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
 }
 
 impl Workspace {
@@ -35,7 +44,7 @@ impl Workspace {
         if root.canonicalize().map_err(|_| Error::OwnershipRefused)? != root {
             return Err(Error::OwnershipRefused);
         }
-        let lease = journal.store.claim(owner, &root, &root_file)?;
+        let lease = Lease(journal.store.claim(owner, &root, &root_file)?);
         let reconcile = journal.execution_pending(owner, &root)?;
         Ok(Self {
             journal,
@@ -149,6 +158,24 @@ mod tests {
         drop(other);
         drop(first);
         Workspace::open(journal, owner, folder.path()).unwrap();
+    }
+
+    #[test]
+    fn dropping_execution_lease_unlocks_an_inherited_file_description() {
+        let folder = canonical_temp();
+        let journal = Arc::new(journal(&folder.path().join("state"), 'a'));
+        let owner = Uuid::new_v4();
+        let root_file = File::open(folder.path()).unwrap();
+        let first = Lease(journal.store.claim(owner, folder.path(), &root_file).unwrap());
+        let inherited = first.0.try_clone().unwrap();
+        assert!(matches!(
+            Workspace::open(Arc::clone(&journal), owner, folder.path()),
+            Err(Error::ExecutionBusy)
+        ));
+        drop(first);
+        let restarted = Workspace::open(journal, owner, folder.path()).unwrap();
+        drop(inherited);
+        drop(restarted);
     }
 
     #[test]

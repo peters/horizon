@@ -74,9 +74,20 @@ pub enum Transport {
     Hls,
 }
 
+/// An AAC-LC audio track: up to 48 kHz, mono or stereo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioFormat {
+    pub sample_rate: u32,
+    pub channels: u8,
+}
+
 #[derive(Clone, Debug)]
 pub struct LiveOptions {
     pub transport: Transport,
+    /// Declares an AAC-LC track fed through [`LiveCast::push_aac`]
+    /// (progressive only). Once declared, feed audio continuously, silence
+    /// included: receivers wait for both tracks before they play.
+    pub audio: Option<AudioFormat>,
     /// Target segment length; segments are cut on the first keyframe after it.
     /// Progressive streams ask for a keyframe this often so receivers can join.
     pub segment: Duration,
@@ -94,6 +105,7 @@ impl Default for LiveOptions {
     fn default() -> Self {
         Self {
             transport: Transport::default(),
+            audio: None,
             segment: Duration::from_millis(500),
             window: 10,
             preroll: 2,
@@ -106,6 +118,16 @@ impl LiveOptions {
     fn validate(&self) -> Result<()> {
         if self.segment.is_zero() {
             return Err(Error::InvalidOptions("segment duration must be positive"));
+        }
+        if let Some(format) = self.audio {
+            if self.transport != Transport::Progressive {
+                return Err(Error::InvalidOptions("audio needs the progressive transport"));
+            }
+            if mp4::audio_specific_config(format).is_none() {
+                return Err(Error::InvalidOptions(
+                    "audio must be AAC-LC at a standard rate up to 48 kHz, mono or stereo",
+                ));
+            }
         }
         // The progressive stream has no playlist: window and pre-roll are HLS only.
         if self.transport == Transport::Progressive {
@@ -150,7 +172,7 @@ impl Sink {
     fn new(options: &LiveOptions) -> Self {
         match options.transport {
             Transport::Hls => Self::Hls(Arc::new(Mutex::new(Segmenter::new(options.segment, options.window)))),
-            Transport::Progressive => Self::Progressive(Arc::new(Stream::new(options.segment))),
+            Transport::Progressive => Self::Progressive(Arc::new(Stream::new(options.segment, options.audio))),
         }
     }
 
@@ -217,6 +239,15 @@ impl LiveCast {
             url,
             _server: server,
         })
+    }
+
+    /// Adds one raw AAC-LC frame (no ADTS header) for the audio track declared
+    /// in [`LiveOptions::audio`], timed on the same clock as the video.
+    /// Ignored without a declared audio track, and before the first video unit.
+    pub fn push_aac(&self, frame: &[u8], pts: Duration) {
+        if let Sink::Progressive(stream) = &self.sink {
+            stream.push_audio(frame, pts);
+        }
     }
 
     /// Adds one Annex B access unit with its presentation time. Input must be

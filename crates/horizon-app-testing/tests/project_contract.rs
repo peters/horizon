@@ -557,3 +557,13 @@ fn harmless_feature_options_remain_valid() {
         Contract::from_agents(&agents).unwrap();
     }
 }
+
+#[test]
+fn unsupported_providers_are_rejected_before_host_dispatch() {
+    for provider in ["saucelabs", "other", "BrowserStack"] {
+        assert_eq!(
+            Contract::from_agents(&AGENTS.replace("provider: browserstack", &format!("provider: {provider}"))).err(),
+            Some(Error::ContractInvalid)
+        );
+    }
+}

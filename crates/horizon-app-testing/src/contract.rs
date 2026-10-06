@@ -41,6 +41,10 @@ pub struct MatrixEntry {
     pub device: Option<String>,
 }
 
+fn browserstack_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": "string", "const": "browserstack"})
+}
+
 fn latest() -> String {
     "latest".into()
 }
@@ -96,6 +100,7 @@ impl Default for Evidence {
 #[serde(deny_unknown_fields)]
 pub struct Contract {
     pub version: u32,
+    #[schemars(schema_with = "browserstack_schema")]
     pub provider: String,
     pub apps: BTreeMap<Platform, App>,
     #[serde(default)]
@@ -154,7 +159,7 @@ impl Contract {
     pub fn validate(&self) -> Result<()> {
         let invalid = || Error::ContractInvalid;
         if self.version != 1
-            || !identifier(&self.provider)
+            || self.provider != "browserstack"
             || self.apps.is_empty()
             || self.matrix.is_empty()
             || self.matrix.len() > 32

@@ -50,7 +50,15 @@ ends when the receiver or another sender stops it.
 
    Result: The file `live-test.h264` exists.
 
-3. Build the live example:
+3. Make a test sound file with a 440 Hz tone:
+
+   ```bash
+   ffmpeg -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=120" -ac 2 -c:a aac -b:a 128k -f adts live-test.aac
+   ```
+
+   Result: The file `live-test.aac` exists.
+
+4. Build the live example:
 
    ```bash
    cargo build -p horizon-chromecast --example live
@@ -120,6 +128,32 @@ ends when the receiver or another sender stops it.
 
    Result: The media from the other sender continues to play.
 
+### 5.5 CC-PROG-AUDIO — Cast with sound
+
+1. Set the receiver volume to a low level.
+
+   Result: The volume indicator on the receiver shows a low level.
+
+2. Start the live example with the sound file:
+
+   ```bash
+   cargo run -p horizon-chromecast --example live -- <receiver-ip> live-test.h264 30 live-test.aac
+   ```
+
+   Result: The state goes to `Playing`.
+
+3. Listen to the receiver.
+
+   Result: A steady tone plays together with the moving test picture. The tone has no gaps.
+
+4. Wait 15 seconds after the state `Playing`.
+
+   Result: The tone continues. The picture lag is 1 second or less.
+
+5. Stop the live example with Ctrl+C.
+
+   Result: The receiver stops the playback.
+
 ## 6. Pass criteria
 
 - The state became `Playing` in 10 seconds or less in task CC-PROG-START.
@@ -127,6 +161,8 @@ ends when the receiver or another sender stops it.
 - The live example ended without an error in task CC-PROG-END.
 - The live example ended and left the other sender playing in task
   CC-PROG-TAKEOVER.
+- The tone played without gaps, and the lag stayed at 1 second or less, in task
+  CC-PROG-AUDIO.
 
 ## 7. Cleanup
 

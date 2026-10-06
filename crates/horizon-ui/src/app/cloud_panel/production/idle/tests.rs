@@ -27,11 +27,13 @@ fn watch_with(cancel: &Cancellation, results: Vec<cloud_runtime::Result<IdleChec
         Duration::ZERO,
         |_| results.borrow_mut().next().unwrap_or(Ok(IdleCheck::NotWatched)),
         || Ok(Some(stopped())),
+        None,
         &|report| {
             reports.borrow_mut().push(match report {
                 Report::Failed(message) => message,
                 Report::Stopped(state, line) => format!("{:?}: {line}", state.map(|state| state.stage)),
-                Report::Checked => return true,
+                Report::StoppedOutside(state) => format!("outside: {:?}", state.stage),
+                Report::Checked | Report::Sampled(_) | Report::Confirming | Report::Confirmed => return true,
             });
             true
         },
@@ -102,6 +104,7 @@ fn a_watch_whose_card_stopped_listening_checks_nothing_more() {
             })
         },
         || panic!("nothing to load"),
+        None,
         // The card listened for the first check only.
         &|report| matches!(report, Report::Checked) && *checks.borrow() == 0,
     );
@@ -117,6 +120,7 @@ fn a_cancelled_watch_checks_nothing() {
         Duration::ZERO,
         |_| panic!("no check after cancellation"),
         || panic!("nothing to load"),
+        None,
         &|_| panic!("nothing to report"),
     );
 }
@@ -177,6 +181,7 @@ fn a_stop_whose_record_cannot_be_read_back_is_still_reported() {
                 })
             },
             load,
+            None,
             &|report| {
                 if let Report::Stopped(state, line) = report {
                     reports.borrow_mut().push((state.is_some(), line));
@@ -230,11 +235,13 @@ fn a_stop_left_unfinished_is_shown_even_after_a_busy_reload() {
             stopping.stage = Stage::Stopping;
             Ok(Some(stopping))
         },
+        None,
         &|report| {
             match report {
                 Report::Stopped(state, _) => reports.borrow_mut().push(state.map(|state| state.stage)),
                 Report::Failed(_) => reports.borrow_mut().push(None),
-                Report::Checked => {}
+                Report::StoppedOutside(_) => panic!("Horizon's own stop"),
+                Report::Checked | Report::Sampled(_) | Report::Confirming | Report::Confirmed => {}
             }
             true
         },
@@ -258,6 +265,7 @@ fn a_stop_that_began_and_failed_is_shown_for_the_card_to_finish() {
             stopping.stage = Stage::Stopping;
             Ok(Some(stopping))
         },
+        None,
         &|report| {
             if let Report::Stopped(state, line) = report {
                 reports.borrow_mut().push((state.map(|state| state.stage), line));
@@ -373,4 +381,399 @@ fn a_busy_failure_waits_for_the_idle_stop_and_reports_the_stopped_cloud() {
         matches!(&events[..], [Event::Output(_), Event::Stopped(state)] if state.stage == Stage::Stopped),
         "{events:?}"
     );
+}
+
+/// A `RunPod` cloud whose worker stopped itself, as the provider check records it.
+fn runpod_stopped() -> Deployment {
+    let mut state = stopped();
+    state.profile.provider = "runpod".into();
+    state.profile.idle_stop_minutes = Some(30);
+    state
+}
+
+#[test]
+fn a_worker_that_stops_itself_is_read_and_its_stop_confirmed_with_the_provider() {
+    let cancel = Cancellation::default();
+    let checks = RefCell::new(
+        vec![
+            Ok(IdleCheck::Active {
+                idle: Duration::from_mins(29),
+                limit: Duration::from_mins(30),
+            }),
+            // The worker stopped itself: it can no longer be read.
+            Err(Error::Command("Reading the worker's idle record")),
+        ]
+        .into_iter(),
+    );
+    let reports = RefCell::new(Vec::new());
+    run(
+        &cancel,
+        Duration::ZERO,
+        |_| checks.borrow_mut().next().unwrap(),
+        || Ok(Some(runpod_stopped())),
+        Some(&|_| Ok(Some(runpod_stopped()))),
+        &|report| {
+            match report {
+                Report::Sampled(sample) => reports.borrow_mut().push(format!("idle {:?}", sample.idle)),
+                Report::StoppedOutside(state) => reports.borrow_mut().push(format!("stopped {:?}", state.stage)),
+                Report::Stopped(..) | Report::Failed(_) | Report::Confirmed => {
+                    panic!("not Horizon's stop, and not a failure")
+                }
+                Report::Confirming => reports.borrow_mut().push("confirming".into()),
+                Report::Checked => {}
+            }
+            true
+        },
+    );
+    assert_eq!(
+        reports.into_inner(),
+        ["idle 1740s", "confirming", "stopped Stopped"],
+        "the card is busy while the provider is asked"
+    );
+    assert!(
+        cancel.is_cancelled(),
+        "the watch ends the presentation of the stopped worker"
+    );
+}
+
+#[test]
+fn a_worker_without_an_idle_record_is_still_read_until_its_stop_is_confirmed() {
+    let cancel = Cancellation::default();
+    let checks = RefCell::new(
+        vec![
+            // An older image keeps no idle record, but the worker answers.
+            Ok(IdleCheck::NotWatched),
+            Ok(IdleCheck::NotWatched),
+            Err(Error::Command("Reading the worker's idle record")),
+        ]
+        .into_iter(),
+    );
+    let ready = || {
+        let mut state = runpod_stopped();
+        (state.stage, state.stop_requested) = (Stage::Ready, false);
+        state
+    };
+    let reports = RefCell::new(Vec::new());
+    run(
+        &cancel,
+        Duration::ZERO,
+        |_| checks.borrow_mut().next().unwrap(),
+        || Ok(Some(ready())),
+        Some(&|_| Ok(Some(runpod_stopped()))),
+        &|report| {
+            if let Report::StoppedOutside(state) = report {
+                reports.borrow_mut().push(state.stage);
+            }
+            true
+        },
+    );
+    assert_eq!(reports.into_inner(), [Stage::Stopped]);
+    // A Hetzner cloud that is no longer watched ends the watch, as before.
+    let ended = RefCell::new(0);
+    run(
+        &Cancellation::default(),
+        Duration::ZERO,
+        |_| {
+            *ended.borrow_mut() += 1;
+            Ok(IdleCheck::NotWatched)
+        },
+        || {
+            let mut state = stopped();
+            (state.stage, state.stop_requested) = (Stage::Ready, false);
+            Ok(Some(state))
+        },
+        None,
+        &|_| true,
+    );
+    assert_eq!(*ended.borrow(), 1);
+}
+
+#[test]
+fn a_stop_another_check_recorded_first_is_still_shown() {
+    let cancel = Cancellation::default();
+    let reports = RefCell::new(Vec::new());
+    run(
+        &cancel,
+        Duration::ZERO,
+        // `cloud_deploy reconcile` recorded the worker's own stop before this check.
+        |_| Ok(IdleCheck::NotWatched),
+        || Ok(Some(runpod_stopped())),
+        None,
+        &|report| {
+            if let Report::StoppedOutside(state) = report {
+                reports.borrow_mut().push(state.stage);
+            }
+            true
+        },
+    );
+    assert_eq!(reports.into_inner(), [Stage::Stopped]);
+    assert!(
+        cancel.is_cancelled(),
+        "the watch ends the presentation of the stopped worker"
+    );
+}
+
+#[test]
+fn a_record_held_by_another_operation_skips_the_check_and_keeps_watching() {
+    let checks = RefCell::new(
+        vec![
+            Ok(IdleCheck::NotWatched),
+            Err(Error::Command("Reading the worker's idle record")),
+        ]
+        .into_iter(),
+    );
+    let loads = RefCell::new(0);
+    let reports = RefCell::new(Vec::new());
+    run(
+        &Cancellation::default(),
+        Duration::ZERO,
+        |_| checks.borrow_mut().next().unwrap(),
+        // Busy through the check for an unfinished stop and the reload after it.
+        || {
+            *loads.borrow_mut() += 1;
+            Err(Error::Busy)
+        },
+        Some(&|_| Ok(Some(runpod_stopped()))),
+        &|report| {
+            if let Report::StoppedOutside(state) = report {
+                reports.borrow_mut().push(state.stage);
+            }
+            true
+        },
+    );
+    assert_eq!(
+        reports.into_inner(),
+        [Stage::Stopped],
+        "still watched after the busy reload"
+    );
+    assert!(*loads.borrow() > 30);
+}
+
+#[test]
+fn a_worker_the_provider_does_not_report_stopped_keeps_the_failed_check() {
+    let reports = RefCell::new(Vec::new());
+    let checks = RefCell::new(
+        vec![
+            Err(Error::Command("Reading the worker's idle record")),
+            Ok(IdleCheck::NotWatched),
+        ]
+        .into_iter(),
+    );
+    run(
+        &Cancellation::default(),
+        Duration::ZERO,
+        |_| checks.borrow_mut().next().unwrap(),
+        || Ok(None),
+        Some(&|_| Err(Error::Invalid("provider unavailable"))),
+        &|report| {
+            if let Report::Failed(message) = report {
+                reports.borrow_mut().push(message);
+            }
+            true
+        },
+    );
+    assert_eq!(
+        reports.into_inner(),
+        ["Idle check failed: Reading the worker's idle record failed; inspect deployment output"]
+    );
+}
+
+#[test]
+fn the_card_names_the_idle_stop_of_a_worker_that_stopped_itself() {
+    let (reports, received) = channel();
+    let (_events, deploy) = channel();
+    let mut runtime = Runtime {
+        idle_reports: Some(received),
+        receiver: Some(deploy),
+        cancel: Some(Cancellation::default()),
+        stage: Some(Stage::Ready),
+        ..Runtime::default()
+    };
+    reports
+        .send(Report::Sampled(cloud_runtime::lifecycle::IdleSample {
+            idle: Duration::from_mins(29),
+            limit: Duration::from_mins(30),
+            read_at: std::time::Instant::now(),
+        }))
+        .unwrap();
+    reports
+        .send(Report::StoppedOutside(Box::new(runpod_stopped())))
+        .unwrap();
+    runtime.poll_idle();
+    assert_eq!(runtime.stage, Some(Stage::Stopped));
+    assert_eq!(
+        runtime.stop_cause,
+        Some(cloud_runtime::lifecycle::StopCause::Idle {
+            limit: Duration::from_mins(30)
+        })
+    );
+    assert!(runtime.receiver.is_none() && runtime.error.is_none() && runtime.cancel.is_none());
+    let note = &runtime.logs.back().unwrap().text;
+    assert!(
+        note.starts_with("No agent activity for 30 minutes, so this worker stopped itself.")
+            && note.ends_with("Resume starts the same worker again."),
+        "{note}"
+    );
+}
+
+#[test]
+fn a_stop_without_idle_evidence_is_shown_as_a_stop_outside_horizon() {
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        ..Runtime::default()
+    };
+    runtime.show_stopped_outside(runpod_stopped());
+    assert_eq!(runtime.stop_cause, Some(cloud_runtime::lifecycle::StopCause::Unknown));
+    assert!(runtime.logs.back().unwrap().text.contains("Horizon did not stop it"));
+    // Horizon's own idle stop names its period.
+    let (reports, received) = channel();
+    let mut runtime = Runtime {
+        idle_reports: Some(received),
+        stage: Some(Stage::Ready),
+        ..Runtime::default()
+    };
+    reports
+        .send(Report::Stopped(Some(Box::new(stopped())), "stopped when idle".into()))
+        .unwrap();
+    runtime.poll_idle();
+    assert_eq!(
+        runtime.stop_cause,
+        Some(cloud_runtime::lifecycle::StopCause::Idle {
+            limit: Duration::from_mins(10)
+        })
+    );
+}
+
+#[test]
+fn an_idle_watch_asking_the_provider_blocks_lifecycle_actions_until_it_releases_the_cloud() {
+    let (sender, received) = channel();
+    let (_events, deploy) = channel();
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        receiver: Some(deploy),
+        idle_reports: Some(received),
+        state: Some(runpod_stopped()),
+        ..Runtime::default()
+    };
+    assert!(!runtime.busy());
+    sender.send(Report::Confirming).unwrap();
+    runtime.poll_idle();
+    // The card shows Checking provider while Stop, Delete and Rebuild wait.
+    assert!(runtime.busy() && runtime.checking_provider());
+    sender.send(Report::Confirmed).unwrap();
+    runtime.poll_idle();
+    assert!(!runtime.busy() && !runtime.checking_provider());
+    // A watch whose channel is gone holds nothing the card waits for.
+    sender.send(Report::Confirming).unwrap();
+    runtime.poll_idle();
+    drop(sender);
+    runtime.poll_idle();
+    assert!(!runtime.busy());
+}
+
+/// The provider check of a `RunPod` worker in `status`, as it records the cloud.
+fn checked(status: &str) -> cloud_runtime::lifecycle::ReconciledDeployment {
+    let mut state = runpod_stopped();
+    state.worker = serde_json::from_value(serde_json::json!({
+        "id": "42", "name": "cloud-1", "imageName": "registry.example/worker", "desiredStatus": status
+    }))
+    .unwrap();
+    if status != "EXITED" {
+        (state.stage, state.stop_requested) = (Stage::Ready, false);
+    }
+    let worker = state.worker.clone();
+    let mut reconciled = cloud_runtime::lifecycle::ReconciledDeployment {
+        state,
+        report: serde_json::from_value(serde_json::json!({
+            "operation_id": "cloud-1", "outcome": {"status": "inactive", "worker_id": "42"}
+        }))
+        .unwrap(),
+    };
+    reconciled.report.worker = worker;
+    reconciled
+}
+
+// Each failure text one idle-stopped pod gave in the live run (#1321), on the path that
+// gave it, becomes the stopped cloud with Resume worker once the provider confirms it.
+#[test]
+fn every_failure_of_an_idle_stopped_worker_becomes_its_stop() {
+    use std::time::Instant;
+    let ready = || {
+        let mut state = runpod_stopped();
+        (state.stage, state.stop_requested) = (Stage::Ready, false);
+        state
+    };
+    let resumed = Some(super::super::lifecycle::Action::Resume);
+    let cases = [
+        // The connection watch of a ready cloud timed out.
+        ("Local operation timed out", Stage::Ready, None, ready()),
+        // The connection watch of a cloud that Resume worker reconnected lost the worker.
+        (
+            "Cloud presentation discovery failed; inspect deployment output",
+            Stage::Ready,
+            resumed,
+            ready(),
+        ),
+        // A reconnect found the worker not running.
+        (
+            "Existing worker is not running; check provider before reconnecting",
+            Stage::Provision,
+            None,
+            ready(),
+        ),
+        // A reconnect found the record that a provider check had already stopped.
+        (
+            "Worker was explicitly stopped. Resume it before reconnecting; prior processes may be lost.",
+            Stage::Stopped,
+            None,
+            runpod_stopped(),
+        ),
+    ];
+    for (error, stage, operation, state) in cases {
+        let (_events, deploy) = channel();
+        let mut runtime = Runtime {
+            receiver: Some(deploy),
+            cancel: Some(Cancellation::default()),
+            state: Some(state),
+            last_idle: Some(cloud_runtime::lifecycle::IdleSample {
+                idle: Duration::from_mins(29),
+                limit: Duration::from_mins(30),
+                read_at: Instant::now(),
+            }),
+            ..Runtime::default()
+        };
+        runtime.progress.stage(Stage::Validate, Instant::now());
+        if stage == Stage::Ready {
+            runtime.progress.stage(Stage::Ready, Instant::now());
+        }
+        runtime.stage = Some(stage);
+        runtime.operation = operation;
+        runtime.show_failure(error.into(), Instant::now());
+        assert!(runtime.failure_needs_check, "{error}");
+        runtime.receiver = None;
+        let check = runtime.hold_failure_for_check();
+        assert!(runtime.checking_provider() && runtime.error.is_none(), "{error}");
+        check.send(Ok(checked("EXITED"))).unwrap();
+        runtime.poll_recovery();
+        assert_eq!(runtime.stage, Some(Stage::Stopped), "{error}");
+        assert!(runtime.error.is_none() && !runtime.busy(), "{error}");
+        // A record already stopped keeps its own words; the others name the idle stop.
+        let cause = (stage != Stage::Stopped).then_some(cloud_runtime::lifecycle::StopCause::Idle {
+            limit: Duration::from_mins(30),
+        });
+        assert_eq!(runtime.stop_cause, cause, "{error}");
+    }
+    // The same failure of a worker that still runs stays the failure.
+    let (_events, deploy) = channel();
+    let mut runtime = Runtime {
+        receiver: Some(deploy),
+        state: Some(ready()),
+        stage: Some(Stage::Provision),
+        ..Runtime::default()
+    };
+    runtime.show_failure("Existing worker is not running".into(), Instant::now());
+    let check = runtime.hold_failure_for_check();
+    check.send(Ok(checked("RUNNING"))).unwrap();
+    runtime.poll_recovery();
+    assert_eq!(runtime.error.as_deref(), Some("Existing worker is not running"));
 }

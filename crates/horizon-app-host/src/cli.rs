@@ -50,6 +50,7 @@ pub async fn execute(host: Host, lifetime: Duration) -> Result<()> {
                 }
                 let mut bytes = serde_json::to_vec(&event).map_err(|_| Error::Cancelled)?;
                 if bytes.len() > 8192 {
+                    retained.cancel();
                     return Err(Error::Cancelled);
                 }
                 bytes.push(b'\n');

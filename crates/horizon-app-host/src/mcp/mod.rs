@@ -180,6 +180,9 @@ impl NativeMcp {
     )]
     async fn app_act(&self, Parameters(input): Parameters<model::Act>) -> std::result::Result<Json<Value>, String> {
         self.execute(move |actor| {
+            if matches!(input.action, horizon_app_testing::recipe::Action::Screenshot {}) {
+                return Err(Error::ScreenshotRequiresCapture);
+            }
             let session = handle(&input.session)?;
             if matches!(input.action, horizon_app_testing::recipe::Action::Reset {}) {
                 return Ok(json!({"completed":true,"replacement":actor.reset(session)?}));

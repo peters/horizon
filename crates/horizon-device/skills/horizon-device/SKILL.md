@@ -1,6 +1,6 @@
 ---
 name: horizon-device
-description: Manage Horizon native VNC Device panels and drive isolated local desktops for simulators and native application tests through device_panel and the horizon-device CLI/MCP. Browser pages use horizon-browser.
+description: Manage Horizon native VNC Device panels and drive isolated local desktops for simulators and native application tests through device_panel and the horizon-device CLI/MCP. Device panels work on every platform; driving an isolated desktop works on Linux with X11 only. Browser pages use horizon-browser.
 ---
 
 # Horizon native VNC and device control
@@ -155,8 +155,18 @@ For nested Device-panel tests, view the isolated Horizon containing that panel
 through a native panel in the user's workspace; keep each target and its
 geometry distinct.
 
-For feature evidence, record directly from the task-owned isolated desktop using
-a recorder explicitly scoped to its display. Native panels have no video API;
+For feature evidence, record the task-owned isolated desktop. On supporting
+hosts, use `device_panel` with `operation: "video"`, the owned `panel_id`, and
+`action: "start" | "status" | "stop"`. Every action requires the exact owner.
+This records the full decoded desktop, including when hidden or off canvas,
+without audio. View crop and scale do not affect the recording. Capture stops
+on disconnect, reconnect, close, after five minutes, or at 256 MiB. Stop is
+asynchronous: poll until `recording.capture.active` and `recording.finalizing`
+are both false, then check `encoder_failed` and `frames_encoded`. The private
+`recording.capture.path` is on the Horizon host, not a download URL. Copy it
+before panel close or four subsequent recordings. Never resume automatically
+or record an unowned viewer. The Horizon app includes the video encoder.
+On older hosts, use a recorder explicitly scoped to the isolated display;
 `browser_video` is for browser pages. Start before the flow, stop afterward and
 inspect decoded frames. If recording is unavailable or stalls, report the blocked
 recording lane; still images do not replace motion evidence. Client-side scaling

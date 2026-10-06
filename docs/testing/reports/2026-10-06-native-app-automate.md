@@ -13,6 +13,12 @@ issue: https://github.com/peters/horizon/issues/1255
 
 ## 1. Summary
 
+This report records the earlier candidates named in its metadata and Section 7.
+It does not qualify later changes to the native host.
+Section 7 records the limits of the last live-view check.
+The controller reboot removed the temporary raw evidence directory after these runs.
+The committed results remain historical records, not fresh device evidence.
+
 The packaged MCP run passed all 44 recipe steps on four physical devices.
 The run used two concurrent lanes and four separate synthetic backends.
 Every device showed advancing frames, received successful backend responses and confirmed cleanup.

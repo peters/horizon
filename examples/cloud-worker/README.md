@@ -124,12 +124,56 @@ tmux. Deleting a worker loses its processes and Pod-local volume.
 The stock image runs agents and workspace services as UID 10001 with no
 capabilities or privilege escalation. Root owns the SSH/control lane, provider
 stop credential and private Tailscale state; these are inaccessible to agents.
+Companion access is shared with agents. The helper publishes read-only copies of
+the alias, the key, the host-key pin and the catalog for group 10001 in
+`/run/horizon-companions`. It also adds `/etc/ssh/ssh_config.d/horizon-companions.conf`
+for the `horizon-agent` login. See
+[agent access](../../docs/companion-worker-protocol.md#agent-access).
 Agents share one identity and can access each other's workspace credentials, so
 keep each cloud dedicated to related repositories/accounts. This does not provide
 per-agent isolation. Chromium still uses `--no-sandbox` inside that cloud container.
 The browser service and VNC endpoint listen only on worker loopback; presentation
 uses authenticated SSH. Browser and device MCP processes retain their injected
 agent identity. Private credential files must never enter source, images or logs.
+
+The control service, `horizon-cloud-worker serve`, hosts the cloud browsers. On a
+worker with agent isolation, the supervisor starts it as UID 10001 through the
+isolation launcher, as it starts the desktop services. The stock image starts
+agent isolation (`horizon-worker-tailnet isolate`) before the supervisor. The
+browser tools of an agent and the control service then use one browser runtime
+root, `/workspace/home/.horizon`, with one owner. The cloud browsers also run as
+UID 10001. Root writes no browser state in that directory. At worker start, root
+can only change the owner of its entries, as the next paragraphs tell.
+
+The control service makes browsers only for the agent sessions of the worker.
+The actor of the browser tools must be `horizon:cloud-<id>`, and
+`/workspace/sessions/<id>` must be a directory. `horizon-worker-run` sets this
+actor for each agent. For another actor, the control service starts the browser
+but does not give the panel to the actor. Then `browser_create` fails with
+`Browser creation deadline expired` at the end of its timeout, and the control
+service stops the browser.
+
+Earlier images ran the control service as root and left root-owned entries in
+the browser runtime root. At worker start, before any agent runs,
+`horizon-worker-tailnet isolate` examines the directory without following links.
+If an entry has another owner, it gives the directory to UID 10001 with
+`chown -R --no-dereference`. If the path is a symbolic link, root does not change
+it or follow it.
+
+The supervisor gives each control service a new host instance in
+`HORIZON_WORKER_BROWSER_HOST_INSTANCE`. After the service answers on its loopback
+endpoint, the supervisor writes the value to
+`/run/horizon-worker/browser-host-instance`, with owner root and mode 0644. The
+supervisor starts SSH only after this file exists. `horizon-worker-run` gives the
+value to each agent in `HORIZON_BROWSER_HOST_INSTANCE`. The host instance is an
+identity, not a credential.
+
+The control service uses the account of the agents, so an agent can stop it or
+change its browser state. If the control service stops, the supervisor stops all
+worker services. This gives agents no new access to the browsers: the loopback
+endpoint and the remote browser credentials in `/run/horizon-credentials` are already
+open to them. With a selected tailnet, the cloud browsers use the proxy settings
+of the agents.
 
 ## Cloud tailnet contract
 
@@ -146,7 +190,15 @@ userspace daemon and resumes its persistent node state after worker restart.
 Agents use HTTP/SOCKS proxies and the sanitized device inventory in
 `/run/horizon-tailnet-devices/devices.json`; this image does not require TUN or
 NET_ADMIN. Image qualification reports `horizon-tailnet-contract=1` only when the
-binaries and isolated launcher are installed. See
+binaries and isolated launcher are installed. It also reports
+`horizon-tailnet-contract=2` when `horizon-worker-tailnet --stable-name-contract`
+declares it. Then the device name comes from the cloud ID and stays the same for
+the life of the cloud. It is not the random container host name. A UUID cloud ID
+gives `horizon-cloud-<cloud ID>`. An ID that needs a change or a shorter form
+gives a digest form; see the tailnet section of the cloud workspaces guide.
+`resume` records the name from `HORIZON_CLOUD_OPERATION` at container start.
+`configure` gives it to `tailscale up --hostname` or `tailscale set --hostname`.
+See
 [cloud tailnets](../../docs/cloud-workspaces.md#tailnets-auth-key-mvp) for scope,
 selection and follow-ups. Root SSH/SCP puts sibling uploads in private staging.
 Only the consuming import opens those inputs with `O_NOFOLLOW`, passes read-only

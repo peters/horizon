@@ -1,6 +1,8 @@
 use super::*;
 use std::process::Command;
 
+mod agent;
+
 fn runtime(root: &Path) -> Runtime {
     Runtime {
         workspace: root.join("workspace"),
@@ -8,6 +10,10 @@ fn runtime(root: &Path) -> Runtime {
         ssh_home: root.join("home/.ssh"),
         source_helper: "/usr/bin/true".into(),
         workspace_launcher: None,
+        agent: root.join("agent"),
+        agent_account: None,
+        system_include: root.join("etc/ssh_config.d/horizon-companions.conf"),
+        privileged: true,
         probe_wait: Duration::from_millis(300),
     }
 }

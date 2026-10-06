@@ -186,6 +186,7 @@ async fn typed_mcp_transport_controls_owned_native_sessions_and_rejects_foreign_
         .await;
     assert!(invalid.is_err() || invalid.is_ok_and(|value| value.is_error == Some(true)));
     actor.snapshot(handle(&session).unwrap()).unwrap();
+    screenshot_action_requires_capture(&client, &actor, &session).await;
     let session = reset_session(&client, &actor, &session).await;
     owned_media_survives_close_and_lane_pruning(&client, &actor, &session, &artifact_id).await;
     let close = client
@@ -199,6 +200,41 @@ async fn typed_mcp_transport_controls_owned_native_sessions_and_rejects_foreign_
     client.close().await.unwrap();
     serving.await.unwrap();
     actor.release_upload(handle(&artifact_id).unwrap()).unwrap();
+}
+
+async fn screenshot_action_requires_capture(client: &rmcp::Peer<rmcp::RoleClient>, actor: &Actor, session: &str) {
+    let capture_action = client
+        .call_tool(
+            CallToolRequestParams::new("app_act").with_arguments(
+                json!({"session":session,"action":{"action":"screenshot"}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(capture_action.is_error, Some(true));
+    assert!(
+        serde_json::to_string(&capture_action)
+            .unwrap()
+            .contains("app_screenshot_requires_capture")
+    );
+    actor.snapshot(handle(session).unwrap()).unwrap();
+    let captured = client
+        .call_tool(
+            CallToolRequestParams::new("app_screenshot")
+                .with_arguments(json!({"session":session}).as_object().unwrap().clone()),
+        )
+        .await
+        .unwrap();
+    assert_ne!(captured.is_error, Some(true));
+    assert!(
+        captured
+            .content
+            .iter()
+            .any(|content| serde_json::to_value(content).unwrap()["type"] == "image")
+    );
 }
 
 async fn reset_session(client: &rmcp::Peer<rmcp::RoleClient>, actor: &Actor, session: &str) -> String {

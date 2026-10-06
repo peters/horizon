@@ -46,10 +46,40 @@ const OTHER_HOST_MESSAGE: &str = "browser panel's driver runs in another Horizon
 pub const HOST_INSTANCE_ENV: &str = "HORIZON_BROWSER_HOST_INSTANCE";
 static HOST_INSTANCE: OnceLock<String> = OnceLock::new();
 
-/// Identity of this Horizon host process, generated once per process.
+/// Identity of this Horizon host process, generated once per process unless
+/// [`configure_host_instance`] assigned it first.
 #[must_use]
 pub fn host_instance() -> &'static str {
     HOST_INSTANCE.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}
+
+/// Adopt an identity that another process assigned to this host, such as the
+/// cloud worker supervisor that also gives it to the worker's agent sessions.
+/// Call it before anything reads [`host_instance`]; repeating the same value
+/// is allowed.
+///
+/// # Errors
+/// Returns `InvalidInput` for an invalid value and `AlreadyExists` when this
+/// process already uses another identity.
+pub fn configure_host_instance(value: &str) -> std::io::Result<()> {
+    configure_host_instance_in(&HOST_INSTANCE, value)
+}
+
+fn configure_host_instance_in(cell: &OnceLock<String>, value: &str) -> std::io::Result<()> {
+    if !valid_host_instance(value) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid browser host instance",
+        ));
+    }
+    if cell.get_or_init(|| value.to_owned()) == value {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "this process already uses another browser host instance",
+        ))
+    }
 }
 
 #[must_use]

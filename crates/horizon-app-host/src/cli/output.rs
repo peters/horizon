@@ -46,12 +46,16 @@ impl Output {
         loop {
             control.remaining()?;
             if self.failed.load(Ordering::Acquire) || Instant::now() >= end {
+                control.cancel();
                 return Err(Error::Cancelled);
             }
             match self.send.try_send(bytes) {
                 Ok(()) => return Ok(()),
                 Err(TrySendError::Full(value)) => bytes = value,
-                Err(TrySendError::Disconnected(_)) => return Err(Error::Cancelled),
+                Err(TrySendError::Disconnected(_)) => {
+                    control.cancel();
+                    return Err(Error::Cancelled);
+                }
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -72,6 +76,28 @@ impl Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_progress_sink_cancels_the_shared_control() {
+        struct Failed;
+        impl Write for Failed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let output = Output::new(Failed).unwrap();
+        let control = Control::new(Duration::from_secs(10)).unwrap();
+        output.send(vec![0], &control).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !output.failed.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(matches!(output.send(vec![0], &control), Err(Error::Cancelled)));
+        assert!(matches!(control.remaining(), Err(Error::Cancelled)));
+    }
+
     #[test]
     fn stalled_sink_never_owns_controller_and_backpressure_obeys_cancellation() {
         struct Blocked(std::sync::mpsc::Receiver<()>);

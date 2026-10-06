@@ -817,3 +817,29 @@ fn reset_report_uses_actual_replacement_cleanup_acknowledgements() {
         );
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn fixed_service_matrix_serializes_and_completes_every_declared_device() {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let (fixture, actor) = crate::actor::tests::actor_with_fixed_backend(listener.local_addr().unwrap().port());
+    let report = run(&actor, &Control::new(Duration::from_secs(30)).unwrap(), capture, |_| {
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(report.parallel, 1);
+    assert_eq!(report.devices.len(), 2);
+    assert!(report.builds.iter().all(|build| build.error.is_none()));
+    assert!(report.devices.iter().all(|device| device.error.is_none()
+        && device.cleanup_confirmed
+        && device.steps.iter().all(|step| step.passed)));
+    assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 2);
+    assert!(
+        fixture
+            .workspace
+            .journal()
+            .pending(fixture.workspace.owner())
+            .unwrap()
+            .is_empty()
+    );
+}

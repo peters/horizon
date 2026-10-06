@@ -64,8 +64,9 @@ fn cpu_offers_meet_the_size_and_rank_by_estimated_total() {
         (first.id.as_str(), first.flavors.as_slice(), first.memory_gb),
         ("cpu-4-16", &["cpu3g".to_owned()][..], Some(16))
     );
-    // Ten hours of compute plus ten hours of a 20 GB network volume.
-    let storage = 20.0 * 0.07 * 10.0 / MONTH_HOURS;
+    // Ten hours of compute plus ten hours of a 20 GB network volume and of the default
+    // 20 GB container disk, as the New cloud catalog prices a default profile.
+    let storage = (20.0 * 0.07 + 20.0 * list().storage.container) * 10.0 / MONTH_HOURS;
     assert!((first.estimated_total - (0.16 * 10.0 + storage)).abs() < 1e-9);
     assert_eq!(first.availability, "checked_at_creation");
     assert_eq!(

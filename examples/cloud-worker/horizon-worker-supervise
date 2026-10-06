@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 
 
 RUNTIME = Path('/run/horizon-worker')
@@ -21,6 +22,11 @@ SERVICES = {'control', 'sshd'}
 # Started only when the worker was created with an idle period.
 OPTIONAL = {'idle'}
 DESKTOP_UNHEALTHY_SECONDS = 10
+# Present when agents run as UID 10001: horizon-worker-tailnet isolate, before this supervisor.
+AGENT_ISOLATION = Path('/run/horizon-tailnet/agent-isolation')
+# horizon-cloud-worker serve: the browser service endpoint and the browser host instance it adopts.
+CONTROL_ENDPOINT = ('127.0.0.1', 47280)
+HOST_INSTANCE_ENV = 'HORIZON_WORKER_BROWSER_HOST_INSTANCE'
 VNC_MAX_OPEN_FILES = 4096
 
 
@@ -64,6 +70,30 @@ def display_ready():
         return True
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def control_answers(endpoint=CONTROL_ENDPOINT):
+    # The service answers only after it holds its browser runtime root.
+    try:
+        with socket.create_connection(endpoint, timeout=1) as connection:
+            connection.settimeout(2)
+            connection.sendall(b'{"operation":"list"}\n')
+            with connection.makefile('rb') as stream:
+                reply = json.loads(stream.readline(1 << 20))
+        # The same answer that horizon-worker-check --ready requires.
+        return isinstance(reply, dict) and isinstance(reply.get('browsers'), list) and not reply.get('error')
+    except (OSError, ValueError):
+        return False
+
+
+def publish_readable(path, value):
+    # Atomic, owned by this root supervisor in its own directory, readable by agent sessions.
+    pending = path.with_name(path.name + '.new')
+    pending.unlink(missing_ok=True)
+    with pending.open('x') as stream:
+        os.fchmod(stream.fileno(), 0o644)
+        stream.write(value + '\n')
+    pending.replace(path)
 
 
 def vnc_ready():
@@ -149,18 +179,23 @@ def stop_groups(groups):
 
 
 class Supervisor:
-    def __init__(self, workspace=WORKSPACE, runtime=RUNTIME):
+    def __init__(self, workspace=WORKSPACE, runtime=RUNTIME, control_endpoint=CONTROL_ENDPOINT):
         self.workspace = workspace
         self.runtime = runtime
+        self.control_endpoint = control_endpoint
+        self.host_instance = None
         self.children = {}
         self.identities = {}
         self.stopping = False
 
-    def start(self, name, command):
-        if name not in {'sshd', 'idle', 'control'} and Path('/run/horizon-tailnet/agent-isolation').exists():
+    def start(self, name, command, environment=None):
+        # With agent isolation the control service is the agents' browser host, so it runs as
+        # their account like the desktop: it never writes their files as root.
+        if name not in {'sshd', 'idle'} and AGENT_ISOLATION.exists():
             command = ['/usr/local/bin/horizon-worker-tailnet', 'agent', *command]
         with (self.workspace / (name + '.log')).open('ab') as log:
             child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                                     env=environment,
                                      preexec_fn=limit_vnc_descriptors if name == 'vnc' else None)
         self.children[name] = child
         self.identities[name] = process_identity(child.pid, allow_exited=True)
@@ -208,6 +243,19 @@ class Supervisor:
             del self.children['configure']
             del self.identities['configure']
 
+    def start_control(self, command=('horizon-cloud-worker', 'serve')):
+        # An unprivileged control service cannot write this root-owned directory, so the
+        # supervisor chooses its browser host instance and publishes it for agent sessions.
+        self.host_instance = str(uuid.uuid4())
+        return self.start('control', list(command), dict(os.environ, **{HOST_INSTANCE_ENV: self.host_instance}))
+
+    def await_control(self):
+        # Agent sessions take the browser host instance from this file (horizon-worker-run),
+        # so it is published only for a service that answers, before any session can start.
+        self.wait_until(lambda: control_answers(self.control_endpoint),
+                        'Worker control service did not answer')
+        publish_readable(self.runtime / 'browser-host-instance', self.host_instance)
+
     def publish(self, desktop):
         self.assert_running(configuring=True)
         names = SERVICES | (DESKTOP if desktop else set()) | (OPTIONAL & set(self.children))
@@ -228,7 +276,8 @@ class Supervisor:
                                '-forever', '-shared', '-viewonly', '-nopw'])
             self.wait_until(vnc_ready, 'Worker desktop transport did not become ready')
         self.configure(['horizon-worker-configure'])
-        self.start('control', ['horizon-cloud-worker', 'serve'])
+        self.start_control()
+        self.await_control()
         self.start('sshd', ['/usr/sbin/sshd', '-D', '-e'])
         if os.environ.get('HORIZON_IDLE_STOP_MINUTES'):
             self.start('idle', ['horizon-worker-idle'])
@@ -265,6 +314,8 @@ class Supervisor:
         finally:
             self.children.clear()
             self.identities.clear()
+            # The next control service gets a new value; no new session may receive this one.
+            (self.runtime / 'browser-host-instance').unlink(missing_ok=True)
 
 
 def main():
@@ -286,6 +337,8 @@ def main():
         with (RUNTIME / 'supervisor.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             (RUNTIME / 'services.json').unlink(missing_ok=True)
+            # A value from an earlier control service must not reach new sessions.
+            (RUNTIME / 'browser-host-instance').unlink(missing_ok=True)
             supervisor = Supervisor()
             def stop(_signum, _frame):
                 supervisor.stopping = True

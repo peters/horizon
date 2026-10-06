@@ -179,3 +179,76 @@ fn legacy_remote_view_stays_after_release() {
     board.remove_empty_workspaces();
     assert!(board.workspace(remote).is_some());
 }
+
+#[cfg(feature = "cloud-workspaces")]
+#[test]
+fn a_restored_cloud_member_says_why_it_waits_instead_of_blaming_its_command() {
+    use crate::{CanvasViewState, CloudWait, RuntimeState, WindowConfig};
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("must-not-spawn");
+    let mut state: RuntimeState = serde_json::from_value(serde_json::json!({
+        "workspaces": [{"local_id": "cloud-space", "name": "Cloud", "panels": [
+            {"local_id": "cloud-member", "name": "Claude", "kind": PanelKind::Shell,
+                "command": "/bin/sh", "args": ["-c", "touch \"$1\"", "fixture", marker]},
+            {"local_id": "broken", "name": "Broken", "kind": PanelKind::Codex, "command": "bad\0codex"}
+        ]}]
+    }))
+    .unwrap();
+    let mut group = CloudGroup::new(1, "Cloud 1".into(), "cloud-space".into(), PathBuf::new(), [0.0, 0.0]);
+    group.panels.push("cloud-member".into());
+    group.remote = Some(
+        serde_json::from_value(serde_json::json!({
+            "id": "cloud-1", "revision": "a", "profile_name": "cpu",
+            "profile": {"provider": "hetzner", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4}
+        }))
+        .unwrap(),
+    );
+    state.cloud_groups = crate::cloud_panel::CloudGroups(vec![group]);
+    let mut board = Board::from_runtime_state(&state).unwrap();
+    let member = board.panel_id_by_local_id("cloud-member").unwrap();
+    let text = |board: &Board, id| board.panel(id).unwrap().terminal().unwrap().last_lines_text(30);
+
+    let reconnecting = text(&board, member);
+    assert!(
+        reconnecting.contains("Horizon is reconnecting the cloud of this panel."),
+        "{reconnecting}"
+    );
+    assert!(reconnecting.contains("Panel: Claude"));
+    assert!(!reconnecting.contains("Fix the command or binary"), "{reconnecting}");
+
+    let panel = board.panel_mut(member).unwrap();
+    assert!(panel.show_cloud_wait(CloudWait::Stopped).unwrap());
+    assert_eq!(panel.cloud_wait(), Some(CloudWait::Stopped));
+    assert!(
+        !panel.show_cloud_wait(CloudWait::Stopped).unwrap(),
+        "the text is already shown"
+    );
+    let stopped = text(&board, member);
+    assert!(stopped.contains("The cloud of this panel is stopped."), "{stopped}");
+    assert!(stopped.contains("Choose Resume worker on the cloud card to restore this panel."));
+    assert!(!stopped.contains("reconnecting") && !stopped.contains("Fix the command or binary"));
+    assert!(!marker.exists(), "a cloud member never starts its command locally");
+
+    // A real command failure keeps its own advice, and no cloud text replaces it.
+    let broken = board.panel_id_by_local_id("broken").unwrap();
+    assert!(
+        !board
+            .panel_mut(broken)
+            .unwrap()
+            .show_cloud_wait(CloudWait::Stopped)
+            .unwrap()
+    );
+    assert!(text(&board, broken).contains("Fix the command or binary, then restart the panel."));
+
+    let saved = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+    let saved_member = saved.workspaces[0]
+        .panels
+        .iter()
+        .find(|panel| panel.local_id == "cloud-member")
+        .unwrap();
+    assert_eq!(
+        saved_member.command.as_deref(),
+        Some("/bin/sh"),
+        "the member keeps its command"
+    );
+}

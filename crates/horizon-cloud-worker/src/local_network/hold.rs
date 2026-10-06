@@ -10,7 +10,7 @@ use std::{
     io::{self, BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, SocketAddrV4},
     os::unix::{
-        fs::{FileTypeExt, MetadataExt, OpenOptionsExt},
+        fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -33,6 +33,9 @@ const BUSY: &str = "The bridge is busy; try again";
 const NO_PROBE: &str = "The owner's Horizon does not support probes yet; ask the owner to update Horizon";
 const UNEXPECTED: &str = "The owner's Horizon answered with something else";
 const RETIRE_TIMEOUT: Duration = Duration::from_secs(10);
+/// The whole of one request must arrive within this, however slowly it trickles in.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const PRIVATE: &str = "Only a bridge helper can ask for that";
 const NOTE: &str = "TCP only. Names are resolved on the owner's computer. Every process on this worker, including web pages open in its browsers, can use the proxy and forwards while the bridge is on. Forwards end when the bridge stops or reconnects; check the status and forward again.";
 
 struct Pinned {
@@ -198,38 +201,95 @@ impl Helper {
     }
 }
 
-/// The control socket, removed on drop only while it is still this helper's.
-struct Control {
+/// Who reached the helper, by the socket they used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Caller {
+    /// The private control socket: root, and a newer session's helper.
+    Private,
+    /// The agent socket, open to every local user.
+    Agent,
+}
+
+/// One listening socket, removed on drop only while it is still this helper's.
+struct Socket {
     listener: UnixListener,
     path: PathBuf,
-    lock: PathBuf,
     identity: (u64, u64),
 }
 
-impl Control {
-    /// A newer session takes the control socket over from a helper whose session was lost,
-    /// which then ends; it refuses while that helper's owner is still heard from. Asking and
-    /// replacing happen under one lock, so two new sessions cannot both take over.
-    fn bind(paths: &Paths) -> io::Result<Self> {
-        let path = paths.control();
-        let lock = paths.lock();
-        let _guard = Locked::new(&lock)?;
-        // A retiring helper removes its socket only under this lock, after checking it is its own.
-        retire_running(&path)?;
-        match std::fs::remove_file(&path) {
+impl Socket {
+    /// Binds at `staging` in the private directory, sets `mode`, then moves the socket over
+    /// whatever is at `path` in one step. Callers hold the lock.
+    fn bind(staging: &Path, path: PathBuf, mode: u32) -> io::Result<Self> {
+        match std::fs::remove_file(staging) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        let listener = UnixListener::bind(&path)?;
-        listener.set_nonblocking(true)?;
+        let listener = UnixListener::bind(staging)?;
+        let placed = (|| {
+            listener.set_nonblocking(true)?;
+            std::fs::set_permissions(staging, std::fs::Permissions::from_mode(mode))?;
+            std::fs::rename(staging, &path)
+        })();
+        if let Err(error) = placed {
+            let _ = std::fs::remove_file(staging);
+            return Err(error);
+        }
         let metadata = std::fs::symlink_metadata(&path)?;
         Ok(Self {
             listener,
             path,
-            lock,
             identity: (metadata.dev(), metadata.ino()),
         })
+    }
+
+    /// Removes the socket file if it is still this one. Callers hold the lock.
+    fn remove(&self) {
+        if std::fs::symlink_metadata(&self.path).is_ok_and(|metadata| (metadata.dev(), metadata.ino()) == self.identity)
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// The helper's sockets: the private control socket, and the agent socket that answers only
+/// what agents may ask.
+struct Control {
+    private: Socket,
+    agent: Socket,
+    lock: PathBuf,
+}
+
+impl Control {
+    /// A newer session takes the sockets over from a helper whose session was lost, which then
+    /// ends; it refuses while that helper's owner is still heard from. Asking and replacing
+    /// happen under one lock, so two new sessions cannot both take over.
+    fn bind(paths: &Paths) -> io::Result<Self> {
+        let lock = paths.lock();
+        let _guard = Locked::new(&lock)?;
+        // A retiring helper removes its sockets only under this lock, after checking they are its own.
+        retire_running(&paths.control())?;
+        let private = Socket::bind(&paths.staging("control"), paths.control(), 0o600)?;
+        let agent = match Socket::bind(&paths.staging("agent"), paths.agent.clone(), 0o666) {
+            Ok(agent) => agent,
+            Err(error) => {
+                private.remove();
+                return Err(error);
+            }
+        };
+        Ok(Self { private, agent, lock })
+    }
+
+    /// Accepts one connection from either socket, if one is waiting.
+    fn accept(&self) -> io::Result<(UnixStream, Caller)> {
+        match self.private.listener.accept() {
+            Ok((stream, _)) => Ok((stream, Caller::Private)),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                self.agent.listener.accept().map(|(stream, _)| (stream, Caller::Agent))
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -238,10 +298,8 @@ impl Drop for Control {
         let Ok(_guard) = Locked::new(&self.lock) else {
             return;
         };
-        if std::fs::symlink_metadata(&self.path).is_ok_and(|metadata| (metadata.dev(), metadata.ino()) == self.identity)
-        {
-            let _ = std::fs::remove_file(&self.path);
-        }
+        self.agent.remove();
+        self.private.remove();
     }
 }
 
@@ -274,7 +332,7 @@ fn retire_running(path: &Path) -> io::Result<()> {
     }
 }
 
-/// An exclusive lock on the directory's lock file while replacing or removing the control socket.
+/// An exclusive lock on the directory's lock file while replacing or removing the sockets.
 struct Locked(File);
 
 impl Locked {
@@ -350,7 +408,7 @@ fn wait_for_socket(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// One control request's share of [`MAX_REQUESTS`], returned however its handler ends.
+/// One request's share of its socket's [`MAX_REQUESTS`], returned however its handler ends.
 struct Pending(Arc<AtomicUsize>);
 
 impl Drop for Pending {
@@ -360,10 +418,15 @@ impl Drop for Pending {
 }
 
 fn serve(helper: &Arc<Helper>, control: &Control) {
-    let requests = Arc::new(AtomicUsize::new(0));
+    // Each socket has its own budget, so agents cannot crowd out a newer session's helper.
+    let (private, agents) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     while helper.owner.alive() && !helper.retired.load(Ordering::Acquire) {
-        match control.listener.accept() {
-            Ok((mut stream, _)) => {
+        match control.accept() {
+            Ok((mut stream, caller)) => {
+                let requests = match caller {
+                    Caller::Private => &private,
+                    Caller::Agent => &agents,
+                };
                 if requests
                     .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                         (count < MAX_REQUESTS).then_some(count + 1)
@@ -375,13 +438,13 @@ fn serve(helper: &Arc<Helper>, control: &Control) {
                     let _ = stream.write_all(b"\n");
                     continue;
                 }
-                let share = Pending(Arc::clone(&requests));
+                let share = Pending(Arc::clone(requests));
                 let helper = Arc::clone(helper);
                 let _ = thread::Builder::new()
                     .name("local-network-control".into())
                     .spawn(move || {
                         let _share = share;
-                        let _ = handle(&helper, stream);
+                        let _ = handle(&helper, &stream, caller);
                     });
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
@@ -392,21 +455,72 @@ fn serve(helper: &Arc<Helper>, control: &Control) {
     }
 }
 
-fn handle(helper: &Helper, mut stream: UnixStream) -> io::Result<()> {
+/// Reads a request, or writes its answer, against a single deadline, so a client that sends
+/// or reads a byte at a time cannot hold a share of the request budget for long.
+struct Deadline<'a> {
+    stream: &'a UnixStream,
+    until: Instant,
+}
+
+impl Deadline<'_> {
+    fn left(&self) -> io::Result<Duration> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "The client was too slow"));
+        }
+        Ok(left)
+    }
+}
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.stream.set_read_timeout(Some(self.left()?))?;
+        let mut stream = self.stream;
+        stream.read(buffer)
+    }
+}
+
+impl Write for Deadline<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.stream.set_write_timeout(Some(self.left()?))?;
+        let mut stream = self.stream;
+        stream.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn handle(helper: &Helper, stream: &UnixStream, caller: Caller) -> io::Result<()> {
     stream.set_nonblocking(false)?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     let mut line = String::new();
-    let count = BufReader::new(&stream).take(MAX_MESSAGE + 1).read_line(&mut line)?;
+    let request = Deadline {
+        stream,
+        until: Instant::now() + REQUEST_TIMEOUT,
+    };
+    let count = BufReader::new(request).take(MAX_MESSAGE + 1).read_line(&mut line)?;
     let answer = if count as u64 > MAX_MESSAGE {
         Answer::Error("Request too large".into())
     } else {
-        serde_json::from_str(&line).map_or_else(
-            |_| Answer::Error("Invalid request".into()),
-            |request| helper.answer(request),
-        )
+        match serde_json::from_str::<Request>(&line) {
+            Err(_) => Answer::Error("Invalid request".into()),
+            Ok(request) if caller == Caller::Agent && !request.for_agents() => Answer::Error(PRIVATE.into()),
+            Ok(request) => helper.answer(request),
+        }
     };
-    serde_json::to_writer(&mut stream, &answer)?;
-    stream.write_all(b"\n")
+    let mut reply = serde_json::to_vec(&answer)?;
+    reply.push(b'\n');
+    send(stream, &reply, REQUEST_TIMEOUT)
+}
+
+/// Writes the whole answer within `timeout`, so a client that never reads it frees its share.
+fn send(stream: &UnixStream, reply: &[u8], timeout: Duration) -> io::Result<()> {
+    Deadline {
+        stream,
+        until: Instant::now() + timeout,
+    }
+    .write_all(reply)
 }
 
 #[cfg(test)]
@@ -423,6 +537,15 @@ mod tests {
             owner: Owner::silent(silent),
             retired: AtomicBool::new(false),
         }
+    }
+
+    #[test]
+    fn an_answer_that_nobody_reads_gives_up_at_the_deadline() {
+        let (stream, _unread) = UnixStream::pair().unwrap();
+        let started = Instant::now();
+        // Far more than a Unix socket buffers, as a large discovery answer can be.
+        assert!(send(&stream, &vec![b'x'; 16 * 1024 * 1024], Duration::from_millis(300)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     }
 
     #[test]
