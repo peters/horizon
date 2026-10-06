@@ -112,7 +112,8 @@ impl Receiver {
 }
 
 /// Distinct characters that can get a temporary mapping now: unused keycodes,
-/// less one, plus keycodes still holding a mapping recorded by `horizon-device`.
+/// less the lowest one, plus keycodes still holding a mapping recorded by
+/// `horizon-device`. Keycodes of the modifier mapping never count.
 // Each test crate includes this module; not every crate uses every helper.
 #[allow(dead_code)]
 pub fn mapping_capacity(connection: &RustConnection) -> TestResult<usize> {
@@ -127,8 +128,14 @@ pub fn mapping_capacity(connection: &RustConnection) -> TestResult<usize> {
         let start = usize::from(keycode - setup.min_keycode) * width;
         &mapping.keysyms[start..start + width]
     };
+    let modifiers = connection.get_modifier_mapping()?.reply()?.keycodes;
+    let is_modifier = |keycode: u8| modifiers.contains(&keycode);
+    // `horizon-device` keeps the lowest unused keycode free for other actions,
+    // also when it is a modifier keycode, and then skips each modifier keycode.
     let unused = (setup.min_keycode..=setup.max_keycode)
         .filter(|keycode| *keycode != 8 && symbols(*keycode).iter().all(|symbol| *symbol == 0))
+        .skip(1)
+        .filter(|keycode| !is_modifier(*keycode))
         .count();
     let atom = connection.intern_atom(false, b"_HORIZON_DEVICE_KEYMAP")?.reply()?.atom;
     let record = connection
@@ -142,6 +149,7 @@ pub fn mapping_capacity(connection: &RustConnection) -> TestResult<usize> {
         .filter(|entry| {
             u8::try_from(entry[0]).is_ok_and(|keycode| {
                 (setup.min_keycode..=setup.max_keycode).contains(&keycode)
+                    && !is_modifier(keycode)
                     && symbols(keycode).get(..2) == Some(&[entry[1], entry[1]][..])
                     && symbols(keycode)
                         .iter()
@@ -149,6 +157,5 @@ pub fn mapping_capacity(connection: &RustConnection) -> TestResult<usize> {
             })
         })
         .count();
-    // `horizon-device` keeps the lowest unused keycode free for other actions.
-    Ok(unused.saturating_sub(1) + borrowed)
+    Ok(unused + borrowed)
 }

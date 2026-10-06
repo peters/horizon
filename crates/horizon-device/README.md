@@ -116,8 +116,10 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
 
 A client that is more than 2 seconds late can still translate a changed keycode
 incorrectly. The distinct characters that need a mapping must fit in the free
-slots. The free slots are the unused keycodes, less one, and the recorded
-temporary keycodes that the text does not need. If they do not fit, or if a
+slots. The free slots are the unused keycodes, less the lowest unused keycode,
+and the recorded temporary keycodes that the text does not need. No keycode of
+the modifier mapping is a free slot, so a display with unused modifier keycodes
+has fewer free slots. If they do not fit, or if a
 character has no X11 keysym, the action fails with `invalid_request`. It fails
 before a keymap change or input. The tool does not remove temporary mappings
 after an action. They stay until the X server stops or resets. Use only owned,
