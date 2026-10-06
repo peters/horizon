@@ -240,8 +240,9 @@ the two lanes at the same time.
 
 5. Open the **Output** tab of the card.
 
-   Result: The last line starts with
-   `No agent activity for 30 minutes, so Horizon stopped this cloud.`
+   Result: The last line starts with `No agent activity for <N> minutes, so
+   Horizon stopped this cloud.` `<N>` is the measured idle time. It is 30 or
+   more, because the idle watch reads the worker every few minutes.
 
 6. Type this command in a terminal outside the fixture:
 
