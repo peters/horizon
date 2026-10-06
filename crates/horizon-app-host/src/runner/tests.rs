@@ -2,6 +2,7 @@ use super::*;
 use horizon_app_testing::catalog::Device;
 use horizon_app_testing::contract::Form;
 use horizon_app_testing::recipe::{State, Target};
+use std::fmt::Write as _;
 use std::sync::Barrier;
 
 #[derive(Default)]
@@ -519,7 +520,7 @@ fn long_reset_run_retains_every_video_and_failure_log_through_finalization() {
     let (fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
     let mut recipe = String::from("```yaml\ndevice-recipe:\n  version: 1\n  id: long-reset\n  steps:\n");
     for index in 0..35 {
-        recipe.push_str(&format!("    - id: reset-{index}\n      action: reset\n"));
+        writeln!(recipe, "    - id: reset-{index}\n      action: reset").unwrap();
     }
     recipe.push_str("    - id: late-failure\n      action: assert\n      target: {by: identifier, value: menu.open}\n      state: hidden\n```\n");
     std::fs::write(fixture.root.path().join("recipe.md"), recipe).unwrap();

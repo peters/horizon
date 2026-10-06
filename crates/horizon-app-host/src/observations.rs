@@ -164,13 +164,10 @@ mod tests {
         let id = Uuid::new_v4();
         let run = history.begin_run().unwrap();
         history
-            .retain(
-                id,
-                "private-expired-id",
-                Instant::now() - Duration::from_secs(301),
-                &BTreeSet::new(),
-            )
+            .retain(id, "private-expired-id", Instant::now(), &BTreeSet::new())
             .unwrap();
+        // Simulate expiry without depending on the platform clock's epoch or sleeping.
+        history.0.lock().unwrap().references.get_mut(&id).unwrap().expiry = Instant::now();
         assert_eq!(history.reference(id).unwrap(), "private-expired-id");
         drop(run);
         assert_eq!(history.reference(id), Err(Error::SessionUnknown));
