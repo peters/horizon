@@ -466,6 +466,25 @@ fn high_performance_storage_offers_only_data_centers_that_hold_it() {
 }
 
 #[test]
+fn a_region_that_cannot_hold_the_workspace_says_storage_unavailable() {
+    let mut form = form("cpu");
+    let labels = render(&mut form);
+    assert!(
+        labels.iter().any(|label| label == "Europe\nchecking stock"),
+        "{labels:?}"
+    );
+    let profiles = &mut form.profiles.as_mut().unwrap().profiles;
+    profiles.get_mut("cpu").unwrap().storage.volume_tier = StorageTier::HighPerformance;
+    // Only US-1 holds a high-performance volume, so Europe is a storage limit, not a stock one.
+    let labels = render(&mut form);
+    assert!(
+        labels.iter().any(|label| label == "Europe\nStorage unavailable"),
+        "{labels:?}"
+    );
+    assert!(!labels.iter().any(|label| label == "Europe\nnone in stock"));
+}
+
+#[test]
 fn the_wait_checkbox_appears_only_for_a_sold_out_selection() {
     let mut form = form("gpu");
     form.placement.gpu_types = vec!["a6000".into()];

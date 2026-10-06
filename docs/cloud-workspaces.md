@@ -508,6 +508,9 @@ center is shown immediately, grouped by region, for choosing exactly one. Region
 choices select all compatible data centers in that region. Sold-out regions and
 data centers stay visible and selectable. Data centers that cannot hold the chosen
 workspace volume stay visible with **Storage unavailable**, and cannot be chosen.
+If no data center in a region can hold the volume, the region chip also shows
+**Storage unavailable** and cannot be chosen. It does not show **none in stock**,
+because the cause is storage and not stock.
 The machine's `data_centers` setting still limits
 what is offered, and the dialog says how many other data centers it excludes.
 

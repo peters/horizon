@@ -120,11 +120,12 @@ impl From<Stock> for Count {
     }
 }
 
-/// A region's data centers and how many have stock.
+/// A region's data centers and how many have stock: `None` when none of them can hold
+/// the workspace volume, which is a storage limit rather than a stock one.
 struct Region {
     name: String,
     data_centers: Vec<String>,
-    in_stock: Count,
+    in_stock: Option<Count>,
 }
 
 fn regions(candidates: &[Candidate<'_>]) -> Vec<Region> {
@@ -133,11 +134,15 @@ fn regions(candidates: &[Candidate<'_>]) -> Vec<Region> {
         let region = regions.entry(&candidate.region).or_insert_with(|| Region {
             name: candidate.region.clone(),
             data_centers: Vec::new(),
-            in_stock: Count::Known(0),
+            in_stock: None,
         });
         if candidate.compatible {
             region.data_centers.push(candidate.center.id.clone());
-            region.in_stock = region.in_stock.with(candidate.stock.into());
+            region.in_stock = Some(
+                region
+                    .in_stock
+                    .map_or(candidate.stock.into(), |count| count.with(candidate.stock.into())),
+            );
         }
     }
     let mut regions: Vec<Region> = regions.into_values().collect();
@@ -145,6 +150,12 @@ fn regions(candidates: &[Candidate<'_>]) -> Vec<Region> {
         region.data_centers.sort();
     }
     regions
+}
+
+/// A region chip's line: its stock, or why no data center there can take the cloud,
+/// in the words a data center chip uses.
+fn region_label(in_stock: Option<Count>) -> (String, Color32) {
+    in_stock.map_or_else(|| ("Storage unavailable".to_owned(), theme::FG_DIM()), stock_label)
 }
 
 fn stock_label(in_stock: Count) -> (String, Color32) {
@@ -174,7 +185,8 @@ pub(super) fn field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Pl
     ui.horizontal_wrapped(|ui| {
         let total = regions
             .iter()
-            .fold(Count::Known(0), |total, region| total.with(region.in_stock));
+            .filter_map(|region| region.in_stock)
+            .fold(Count::Known(0), Count::with);
         let (detail, tint) = stock_label(total);
         if option(ui, "Any data center", current.is_any(), Some(&detail), Some(tint)) {
             chosen = Some(Placement {
@@ -184,7 +196,7 @@ pub(super) fn field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Pl
         }
         for region in &regions {
             let selected = !region.data_centers.is_empty() && current.data_centers == region.data_centers;
-            let (detail, tint) = stock_label(region.in_stock);
+            let (detail, tint) = region_label(region.in_stock);
             if ui
                 .add_enabled(
                     !region.data_centers.is_empty(),
@@ -577,22 +589,54 @@ mod tests {
             candidate(&us, Stock::Checking),
         ];
         let regions = regions(&candidates);
-        let summary: Vec<(&str, usize, Count)> = regions
+        let summary: Vec<(&str, usize, Option<Count>)> = regions
             .iter()
             .map(|region| (region.name.as_str(), region.data_centers.len(), region.in_stock))
             .collect();
         assert_eq!(
             summary,
-            [("Europe", 2, Count::Known(1)), ("North America", 1, Count::Checking)]
+            [
+                ("Europe", 2, Some(Count::Known(1))),
+                ("North America", 1, Some(Count::Checking))
+            ]
         );
         // A failed check reads as unknown rather than as a check still running.
         let failed = [candidate(&eu, Stock::Yes), candidate(&us, Stock::Unknown)];
         let total = super::regions(&failed)
             .iter()
-            .fold(Count::Known(0), |total, region| total.with(region.in_stock));
+            .filter_map(|region| region.in_stock)
+            .fold(Count::Known(0), Count::with);
         assert_eq!(total, Count::Unknown);
         assert_eq!(stock_label(Count::Unknown).0, "stock unknown");
         assert_eq!(Count::Checking.with(Count::Known(2)), Count::Checking);
+    }
+
+    #[test]
+    fn a_region_without_the_workspace_volume_reads_storage_unavailable() {
+        let (eu, oceania) = (center("EU-RO-1", "EUROPE", true), center("OC-AU-1", "OCEANIA", false));
+        let mut sold_out = candidate(&eu, Stock::No);
+        let mut no_volume = candidate(&oceania, Stock::No);
+        no_volume.compatible = false;
+        let regions = regions(&[candidate(&eu, Stock::No), no_volume]);
+        let labels: Vec<(&str, String)> = regions
+            .iter()
+            .map(|region| (region.name.as_str(), region_label(region.in_stock).0))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("Europe", "none in stock".to_owned()),
+                ("Oceania", "Storage unavailable".to_owned())
+            ]
+        );
+        assert!(regions[1].data_centers.is_empty());
+        // A region without storage adds nothing to the stock of any data center.
+        sold_out.stock = Stock::Yes;
+        let total = super::regions(&[sold_out])
+            .iter()
+            .filter_map(|region| region.in_stock)
+            .fold(Count::Known(0), Count::with);
+        assert_eq!(total, Count::Known(1));
     }
 
     #[test]
