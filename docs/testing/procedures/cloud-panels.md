@@ -292,9 +292,16 @@ The cleanup of this procedure does X01 to X05.
    Result: The lists are the same as the baselines. The Hetzner network of
    Horizon can stay. The resource ledger records it as kept.
 
-3. Remove the copies of the credential files from `<run>`.
+   > **CAUTION:** DELETE ONLY THE STATE DIRECTORY OF THIS RUN. It contains the saved
+   > provider keys and the private data of the fixture.
 
-   Result: `<run>` contains no credential file.
+3. Delete the state directory of the fixture and the keyring password file.
+
+   ```sh
+   rm -r <run>/fixture && rm -f <run>/keyring-password
+   ```
+
+   Result: `<run>` contains no credential file. Keep `<evidence>` outside `<run>`.
 
 ## 9. Record of results
 

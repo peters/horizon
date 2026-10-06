@@ -168,7 +168,7 @@ send TCP traffic to each other over the tailnet.
 
 ### 6.3 T03 — Provision a cloud on the tailnet
 
-D01 starts `smoke-a` on the test tailnet. If D01 did this, do only steps 7 and 8.
+D01 starts `smoke-a` on the test tailnet and records it in the ledger. If D01 did this, do only step 7.
 
 1. Open **Cloud › New cloud…** in the workspace of the test.
 

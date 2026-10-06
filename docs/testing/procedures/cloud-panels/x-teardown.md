@@ -328,13 +328,14 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
 ## 8. Cleanup
 
-1. Delete the two header files.
+1. Delete the two header files and the two list scripts.
 
    ```sh
    rm -f <run>/hetzner.header <run>/runpod.header <run>/hetzner-list.sh <run>/runpod-list.sh
    ```
 
-   Result: No file in `<run>` contains a provider key.
+   Result: The API header copies are gone. The private data of the fixture below
+   `<state>` still contains the saved provider keys. The main cleanup removes them.
 
 2. If a provider list still shows a resource from the ledger, record a defect and tell the operator.
 

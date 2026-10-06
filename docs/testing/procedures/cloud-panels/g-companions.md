@@ -439,7 +439,7 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The line for `horizon-browser` shows `OK`. Do not build a new copy.
 
-2. Write a plan file below `<data-home>/smoke/bin`.
+2. Write the plan file `<data-home>/smoke/bin/companions-plan.json`.
 
    ```json
    {"version":1,"steps":[{"id":"list","tool":"cloud_companions","arguments":{}}]}

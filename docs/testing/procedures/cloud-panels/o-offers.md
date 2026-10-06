@@ -92,6 +92,9 @@ a worker below the profile minimum cannot be selected.
 
    Result: The command waits 25 minutes before the call.
 
+   > **CAUTION:** PAUSE ONLY THE CANDIDATE CHILD OF THE FIXTURE, AND CONTINUE IT IN THIS TASK.
+   > A paused candidate does not stop idle clouds or refresh prices.
+
 4. On the host, pause the candidate child.
 
    ```sh

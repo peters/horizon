@@ -18,11 +18,12 @@ A result of `not run` means that the run did not do the test yet.
 The fixture, the first setup tasks, the repository configuration and most price
 catalog tests passed. A Hetzner cloud and a RunPod cloud deployed on the test
 tailnet and reached each other. Stop and resume on Hetzner kept the volume data,
-the host key and the tailnet node ID. Three worker picker tests and the tailnet
-name test failed. Three tests that need the PC were blocked, because the PC was
-not on the test tailnet. The Claude sign-in test failed because the device
-`type` action changed the typed key. A01 failed because the Cloud settings
-dialog moved after it opened. The run did not do the other tests yet.
+the host key and the tailnet node ID. The run did not do the other tests yet.
+
+Three worker picker tests and the tailnet name test failed. The Claude sign-in
+test failed because the device `type` action changed the typed key. A01 failed
+because the Cloud settings dialog moved after it opened. Three tests that need
+the PC were blocked, because the PC was not on the test tailnet.
 
 Two retests used commit `73267151fbc8d1e9ed6433f2b3213fdf021fa8e3`, which contains
 the fixes for #1292 and #1293. The SHA-256 of that frozen candidate was
