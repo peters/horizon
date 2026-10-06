@@ -124,6 +124,11 @@ tmux. Deleting a worker loses its processes and Pod-local volume.
 The stock image runs agents and workspace services as UID 10001 with no
 capabilities or privilege escalation. Root owns the SSH/control lane, provider
 stop credential and private Tailscale state; these are inaccessible to agents.
+Companion access is shared with agents. The helper publishes read-only copies of
+the alias, the key, the host-key pin and the catalog for group 10001 in
+`/run/horizon-companions`. It also adds `/etc/ssh/ssh_config.d/horizon-companions.conf`
+for the `horizon-agent` login. See
+[agent access](../../docs/companion-worker-protocol.md#agent-access).
 Agents share one identity and can access each other's workspace credentials, so
 keep each cloud dedicated to related repositories/accounts. This does not provide
 per-agent isolation. Chromium still uses `--no-sandbox` inside that cloud container.

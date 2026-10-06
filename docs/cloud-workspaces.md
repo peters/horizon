@@ -903,6 +903,14 @@ the same catalog as `horizon-cloud-worker companions list` and `inspect <alias>`
 Use the returned SSH alias and worktree with ordinary SSH, Git, and rsync. A
 stale catalog loses Ready status; inspection can verify an unchanged connection
 independently. These worker tools do not start or stop clouds.
+On a worker with agent isolation, agent and shell sessions run as the agent user
+`horizon-agent` (UID 10001). Ready then also means that the alias resolves for
+the agent user. The agent
+user gets a read-only copy of the alias, the key, the host-key pin and the
+catalog. The root files stay private. When you uncheck the companion, the source
+also removes the agent copy. A key that an agent copied works until the target
+revokes the grant. See
+[agent access](companion-worker-protocol.md#agent-access).
 The same server also offers `cloud_offers`, so agents on workers without browser
 tools can rank cloud offers from the prices the owning Horizon last sent the
 worker.
