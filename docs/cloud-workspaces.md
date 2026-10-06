@@ -478,7 +478,8 @@ Agents in Horizon panels can ask for the same prices through the `cloud_offers`
 tool of Horizon's MCP server, for example "the cheapest GPU with at least 24 GB in
 Europe for 10 hours". It returns up to 50 offers, cheapest estimated total first:
 each with its hourly price, an estimate for the expected hours including 20 GB (or
-the requested size) of workspace storage, for a CPU size the flavors a cloud of that
+the requested size) of workspace storage and, for RunPod, the default 20 GB container
+disk of a profile, for a CPU size the flavors a cloud of that
 size requests (from Cloud settings) priced at the dearest, since RunPod picks one, availability (CPU sizes are confirmed
 when a cloud is created), the regions with that GPU in stock, and that it runs on
 provider-operated hosts. The running Horizon answers, fetching prices when they are

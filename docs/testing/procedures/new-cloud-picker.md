@@ -353,10 +353,6 @@ this order. Each task starts with the result of the task before it.
 
    Result: The order is the same.
 
-   Note: The MCP totals do not include the RunPod container disk. If a RunPod
-   total and a Hetzner total differ by less than this charge, the order can
-   differ.
-
 6. Check **In stock only**.
 
    Result: The check box shows a check mark.

@@ -174,17 +174,17 @@ mod tests {
             },
             "providers interleave by total rather than one after the other"
         );
-        // The same workers, as a cloud_offers answer, rank in the same order.
-        let section = |provider: &str| {
-            matching
-                .iter()
-                .filter(|offer| offer.provider == provider)
-                .map(|offer| serde_json::to_value(offer).unwrap())
-                .collect::<Vec<_>>()
+        // A cloud_offers request for the same profile ranks the same workers in the same order.
+        let request = crate::offers::Requirements {
+            min_vcpu: Some(profile.cpu),
+            min_memory_gb: Some(profile.memory_gb),
+            limit: Some(50),
+            ..crate::offers::Requirements::default()
         };
+        let (list, preferences) = runpod();
         let mut answer = serde_json::json!({
-            "offers": section("RunPod"),
-            "other_providers": [{"offers": section("Hetzner")}],
+            "offers": crate::offers::offers(&list, &preferences, &request),
+            "other_providers": [crate::offers::hetzner_section(&hetzner(), &request)],
         });
         comparison::append(&mut answer, Some(&rates));
         let compared: Vec<_> = answer["comparison"]["offers"]

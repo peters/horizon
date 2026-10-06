@@ -156,10 +156,13 @@ pub struct Offer {
 }
 
 /// Offers in `list` meeting `requirements`, cheapest estimated total first. CPU sizes
-/// request the flavors `preferences` choose, as a deployment would.
+/// request the flavors `preferences` choose, as a deployment would. Estimates include a
+/// profile's default container disk, so they match the New cloud catalog of a profile
+/// that keeps that default.
 #[must_use]
 pub fn offers(list: &PriceList, preferences: &Preferences, requirements: &Requirements) -> Vec<Offer> {
-    let mut offers = catalog(list, preferences, requirements, (Tier::Standard, 0));
+    let container_gb = crate::Storage::default().container_gb;
+    let mut offers = catalog(list, preferences, requirements, (Tier::Standard, container_gb));
     offers.truncate(requirements.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT));
     offers
 }
