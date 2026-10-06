@@ -2,56 +2,48 @@
 use crate::{Error, Result, runner::Control};
 use std::{
     io::Write,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, SyncSender, TrySendError},
-    },
+    sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError},
     time::{Duration, Instant},
 };
 
+struct Message {
+    bytes: Vec<u8>,
+    complete: SyncSender<bool>,
+}
 pub(super) struct Output {
-    send: SyncSender<Vec<u8>>,
-    failed: Arc<AtomicBool>,
-    acknowledged: Arc<AtomicBool>,
+    send: SyncSender<Message>,
 }
 impl Output {
     pub(super) fn new(mut writer: impl Write + Send + 'static) -> Result<Self> {
-        let (send, receive) = mpsc::sync_channel::<Vec<u8>>(32);
-        let failed = Arc::new(AtomicBool::new(false));
-        let acknowledged = Arc::new(AtomicBool::new(false));
-        let failed_sink = Arc::clone(&failed);
-        let acknowledgement = Arc::clone(&acknowledged);
-        // The sink owns no native actor, control, workspace or cleanup resources; never join a blocked writer.
+        let (send, receive) = mpsc::sync_channel::<Message>(32);
+        // The sink owns no actor, control, workspace or cleanup resources; never join a blocked writer.
         std::thread::Builder::new()
             .name("native-cli-output".into())
             .spawn(move || {
-                for bytes in receive {
-                    if writer.write_all(&bytes).and_then(|()| writer.flush()).is_err() {
-                        failed_sink.store(true, Ordering::Release);
+                for message in receive {
+                    let written = writer.write_all(&message.bytes).and_then(|()| writer.flush()).is_ok();
+                    let _ = message.complete.send(written);
+                    if !written {
                         return;
                     }
-                    acknowledgement.store(true, Ordering::Release);
                 }
             })
             .map_err(|_| Error::Unavailable)?;
-        Ok(Self {
-            send,
-            failed,
-            acknowledged,
-        })
+        Ok(Self { send })
     }
-    pub(super) fn send(&self, mut bytes: Vec<u8>, control: &Control) -> Result<()> {
+    pub(super) fn send(&self, bytes: Vec<u8>, control: &Control) -> Result<()> {
         let end = Instant::now() + Duration::from_secs(2);
+        let (complete, receive) = mpsc::sync_channel(1);
+        let mut message = Message { bytes, complete };
         loop {
             control.remaining()?;
-            if self.failed.load(Ordering::Acquire) || Instant::now() >= end {
+            if Instant::now() >= end {
                 control.cancel();
                 return Err(Error::Cancelled);
             }
-            match self.send.try_send(bytes) {
-                Ok(()) => return Ok(()),
-                Err(TrySendError::Full(value)) => bytes = value,
+            match self.send.try_send(message) {
+                Ok(()) => break,
+                Err(TrySendError::Full(value)) => message = value,
                 Err(TrySendError::Disconnected(_)) => {
                     control.cancel();
                     return Err(Error::Cancelled);
@@ -59,15 +51,29 @@ impl Output {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+        loop {
+            control.remaining()?;
+            if Instant::now() >= end {
+                control.cancel();
+                return Err(Error::Cancelled);
+            }
+            match receive.recv_timeout(Duration::from_millis(10)) {
+                Ok(true) => return Ok(()),
+                Ok(false) | Err(RecvTimeoutError::Disconnected) => {
+                    control.cancel();
+                    return Err(Error::Cancelled);
+                }
+                Err(RecvTimeoutError::Timeout) => (),
+            }
+        }
     }
     pub(super) fn terminal(&self, bytes: Vec<u8>) -> Result<()> {
-        self.send.try_send(bytes).map_err(|_| Error::Unavailable)?;
-        let end = Instant::now() + Duration::from_secs(2);
-        while !self.acknowledged.load(Ordering::Acquire) {
-            if self.failed.load(Ordering::Acquire) || Instant::now() >= end {
-                return Err(Error::Unavailable);
-            }
-            std::thread::sleep(Duration::from_millis(10));
+        let (complete, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Message { bytes, complete })
+            .map_err(|_| Error::Unavailable)?;
+        if receive.recv_timeout(Duration::from_secs(2)) != Ok(true) {
+            return Err(Error::Unavailable);
         }
         Ok(())
     }
@@ -77,7 +83,7 @@ impl Output {
 mod tests {
     use super::*;
     #[test]
-    fn failed_progress_sink_cancels_the_shared_control() {
+    fn first_failed_progress_write_cancels_without_another_event() {
         struct Failed;
         impl Write for Failed {
             fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
@@ -89,37 +95,45 @@ mod tests {
         }
         let output = Output::new(Failed).unwrap();
         let control = Control::new(Duration::from_secs(10)).unwrap();
-        output.send(vec![0], &control).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while !output.failed.load(Ordering::Acquire) && Instant::now() < deadline {
-            std::thread::yield_now();
-        }
         assert!(matches!(output.send(vec![0], &control), Err(Error::Cancelled)));
         assert!(matches!(control.remaining(), Err(Error::Cancelled)));
     }
 
-    #[test]
-    fn stalled_sink_never_owns_controller_and_backpressure_obeys_cancellation() {
-        struct Blocked(std::sync::mpsc::Receiver<()>);
-        impl Write for Blocked {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                let _ = self.0.recv();
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
+    struct Blocked(mpsc::Receiver<()>);
+    impl Write for Blocked {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let _ = self.0.recv();
+            Ok(bytes.len())
         }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    #[test]
+    fn first_stalled_write_cancels_without_filling_the_queue() {
         let (release, wait) = mpsc::channel();
         let output = Output::new(Blocked(wait)).unwrap();
         let control = Control::new(Duration::from_secs(10)).unwrap();
-        for _ in 0..32 {
-            output.send(vec![0], &control).unwrap();
-        }
-        control.cancel();
         let start = Instant::now();
         assert!(matches!(output.send(vec![0], &control), Err(Error::Cancelled)));
-        assert!(start.elapsed() < Duration::from_millis(100));
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert!(matches!(control.remaining(), Err(Error::Cancelled)));
+        drop(release);
+    }
+    #[test]
+    fn stalled_write_obeys_external_cancellation_without_owning_control() {
+        let (release, wait) = mpsc::channel();
+        let output = Output::new(Blocked(wait)).unwrap();
+        let control = std::sync::Arc::new(Control::new(Duration::from_secs(10)).unwrap());
+        let retained = std::sync::Arc::clone(&control);
+        let cancel = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            retained.cancel();
+        });
+        let start = Instant::now();
+        assert!(matches!(output.send(vec![0], &control), Err(Error::Cancelled)));
+        assert!(start.elapsed() < Duration::from_secs(1));
+        cancel.join().unwrap();
         drop(output);
         drop(release);
     }

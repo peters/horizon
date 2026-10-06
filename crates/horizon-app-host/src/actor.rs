@@ -1073,7 +1073,7 @@ impl<'a> MediaRead<'a> {
     fn acquire(count: &'a std::sync::atomic::AtomicUsize) -> Result<Self> {
         use std::sync::atomic::Ordering;
         count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
                 (value < 2).then_some(value + 1)
             })
             .map_err(|_| Error::MediaBusy)?;

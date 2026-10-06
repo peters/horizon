@@ -44,6 +44,9 @@ unsafe_op_in_unsafe_fn = "warn"
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 struct_excessive_bools = "allow"
+# Keep empty-collection assertions usable for resource handles without PartialEq.
+# Rust 1.99 adds this diagnostic-only preference to the default lint group.
+assert_is_empty = "allow"
 
 [workspace.dependencies]
 horizon-app-testing = { path = "crates/horizon-app-testing", version = "0.2.7" }

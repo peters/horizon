@@ -166,7 +166,6 @@ impl Directory {
     /// Trusted host use only, after durable operation completion. Anchored cleanup never follows links.
     /// Missing directories are idempotent after cleanup; incomplete operations must never call this API.
     pub fn retire_child(&self, name: &str) -> Result<()> {
-        use std::os::unix::fs::MetadataExt;
         operation_name(name)?;
         let child = match rustix::fs::openat(
             &self.file,
@@ -178,18 +177,7 @@ impl Directory {
             Err(rustix::io::Errno::NOENT) => return self.file.sync_all().map_err(|_| Error::StateUnavailable),
             Err(_) => return Err(Error::StateUnavailable),
         };
-        let expected = child.metadata().map_err(|_| Error::StateUnavailable)?;
-        if expected.uid() != rustix::process::getuid().as_raw() || expected.mode() & 0o077 != 0 {
-            return Err(Error::StateUnavailable);
-        }
-        clear_completed(&child, 0, &mut 512)?;
-        let current =
-            rustix::fs::statat(&self.file, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|_| Error::StateUnavailable)?;
-        if (identity_number(current.st_dev)?, identity_number(current.st_ino)?) != (expected.dev(), expected.ino()) {
-            return Err(Error::StateUnavailable);
-        }
-        rustix::fs::unlinkat(&self.file, name, AtFlags::REMOVEDIR).map_err(|_| Error::StateUnavailable)?;
-        self.file.sync_all().map_err(|_| Error::StateUnavailable)
+        retire_held_child(&self.file, std::ffi::OsStr::new(name), &child)
     }
 
     /// # Errors
@@ -281,6 +269,44 @@ fn operation_name(name: &str) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(unix)]
+pub(crate) fn retire_held_child(parent: &File, name: &std::ffi::OsStr, child: &File) -> Result<()> {
+    retire_held_child_checked(parent, name, child, || ())
+}
+
+#[cfg(unix)]
+fn retire_held_child_checked(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    child: &File,
+    before_clear: impl FnOnce(),
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let path = Path::new(name);
+    if path.components().count() != 1 || !matches!(path.components().next(), Some(std::path::Component::Normal(_))) {
+        return Err(Error::StateUnavailable);
+    }
+    let expected = child.metadata().map_err(|_| Error::StateUnavailable)?;
+    if !expected.is_dir() || expected.uid() != rustix::process::getuid().as_raw() || expected.mode() & 0o077 != 0 {
+        return Err(Error::StateUnavailable);
+    }
+    let matches = || {
+        let current =
+            rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|_| Error::StateUnavailable)?;
+        if (identity_number(current.st_dev)?, identity_number(current.st_ino)?) != (expected.dev(), expected.ino()) {
+            return Err(Error::StateUnavailable);
+        }
+        Ok(())
+    };
+    matches()?;
+    before_clear();
+    // Recursion uses the retained child descriptor, never the exported command path.
+    clear_completed(child, 0, &mut 512)?;
+    matches()?;
+    rustix::fs::unlinkat(parent, name, AtFlags::REMOVEDIR).map_err(|_| Error::StateUnavailable)?;
+    parent.sync_all().map_err(|_| Error::StateUnavailable)
+}
+
 #[cfg(unix)]
 fn clear_completed(directory: &File, depth: u8, remaining: &mut usize) -> Result<()> {
     if depth >= 8 {
@@ -434,6 +460,32 @@ mod tests {
             directory.create_child_with_sync(&name, || panic!("existing child was adopted"), || Ok(())),
             Err(Error::StateUnavailable)
         );
+    }
+
+    #[test]
+    fn replacement_during_retirement_never_deletes_the_replacement_contents() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let directory = Directory::open(&root.path().canonicalize().unwrap()).unwrap();
+        let name = uuid::Uuid::new_v4().simple().to_string();
+        directory.create_child(&name).unwrap();
+        let child = directory.child(&name).unwrap();
+        child.new_file("owned").unwrap();
+        let original = root.path().join(&name);
+        let moved = root.path().join("retained-original");
+        assert_eq!(
+            retire_held_child_checked(&directory.file, std::ffi::OsStr::new(&name), &child.file, || {
+                std::fs::rename(&original, &moved).unwrap();
+                std::fs::create_dir(&original).unwrap();
+                std::fs::write(original.join("foreign"), b"preserve").unwrap();
+            }),
+            Err(Error::StateUnavailable)
+        );
+        assert_eq!(std::fs::read(original.join("foreign")).unwrap(), b"preserve");
+        assert!(moved.is_dir());
     }
 
     #[test]

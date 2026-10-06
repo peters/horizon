@@ -26,18 +26,29 @@ struct Receipt {
 struct Task {
     path: std::path::PathBuf,
     directory: std::fs::File,
+    parent: std::fs::File,
 }
 impl Task {
     fn new(path: &std::path::Path) -> Result<Self> {
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(path)
-            .map_err(|_| Error::StateUnavailable)?;
-        let directory = std::fs::File::from(
+        use std::os::unix::fs::MetadataExt;
+        let parent = std::fs::File::from(
             rustix::fs::openat(
                 rustix::fs::CWD,
-                path,
+                path.parent().ok_or(Error::StateUnavailable)?,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(|_| Error::StateUnavailable)?,
+        );
+        let name = path.file_name().ok_or(Error::StateUnavailable)?;
+        rustix::fs::mkdirat(&parent, name, rustix::fs::Mode::RWXU).map_err(|_| Error::StateUnavailable)?;
+        let directory = std::fs::File::from(
+            rustix::fs::openat(
+                &parent,
+                name,
                 rustix::fs::OFlags::RDONLY
                     | rustix::fs::OFlags::DIRECTORY
                     | rustix::fs::OFlags::NOFOLLOW
@@ -50,12 +61,11 @@ impl Task {
         if metadata.uid() != rustix::process::getuid().as_raw() || metadata.mode() & 0o077 != 0 {
             return Err(Error::StateUnavailable);
         }
-        let parent =
-            std::fs::File::open(path.parent().ok_or(Error::StateUnavailable)?).map_err(|_| Error::StateUnavailable)?;
         parent.sync_all().map_err(|_| Error::StateUnavailable)?;
         Ok(Self {
             path: path.to_owned(),
             directory,
+            parent,
         })
     }
     fn identity(&self) -> Result<(u64, u64)> {
@@ -64,15 +74,11 @@ impl Task {
         Ok((metadata.dev(), metadata.ino()))
     }
     fn retire(&self) -> Result<()> {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = std::fs::symlink_metadata(&self.path).map_err(|_| Error::StateUnavailable)?;
-        if !metadata.is_dir() || (metadata.dev(), metadata.ino()) != self.identity()? {
-            return Err(Error::StateUnavailable);
-        }
-        std::fs::remove_dir_all(&self.path).map_err(|_| Error::StateUnavailable)?;
-        std::fs::File::open(self.path.parent().ok_or(Error::StateUnavailable)?)
-            .and_then(|parent| parent.sync_all())
-            .map_err(|_| Error::StateUnavailable)
+        storage::retire_held_child(
+            &self.parent,
+            self.path.file_name().ok_or(Error::StateUnavailable)?,
+            &self.directory,
+        )
     }
 }
 
