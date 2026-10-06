@@ -11,8 +11,8 @@ use crate::transcript::PanelTranscript;
 use crate::workspace::WorkspaceId;
 
 use super::super::{
-    DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions,
-    PanelResume,
+    CloudWait, DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout,
+    PanelOptions, PanelResume,
 };
 use super::{
     ResolvedTerminalLaunch, agent_env, current_unix_millis, default_shell, kitty_keyboard_for_kind,
@@ -39,11 +39,20 @@ struct TerminalPanelBuildArgs {
     ssh_connection: Option<SshConnection>,
 }
 
-pub(in crate::panel) fn restore_failure_panel(
+/// What a placeholder panel says instead of running its process.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::panel) enum Placeholder<'a> {
+    /// The process could not start; the text is the error.
+    RestoreFailure(&'a str),
+    /// The cloud of the panel does not run it now.
+    Cloud(CloudWait),
+}
+
+pub(in crate::panel) fn placeholder_panel(
     id: PanelId,
     workspace_id: WorkspaceId,
     opts: PanelOptions,
-    error_message: &str,
+    placeholder: Placeholder<'_>,
 ) -> Result<Panel> {
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
     let visible = opts.visible;
@@ -99,13 +108,7 @@ pub(in crate::panel) fn restore_failure_panel(
     let terminal = if let Some(replay) = remote_replay {
         spawn_remote_snapshot_terminal(id, rows, cols, replay)?
     } else {
-        spawn_restore_failure_snapshot_terminal(
-            id,
-            kind,
-            rows,
-            cols,
-            restore_failure_replay_bytes(&title, error_message),
-        )?
+        spawn_restore_failure_snapshot_terminal(id, kind, rows, cols, placeholder_replay_bytes(&title, placeholder))?
     };
     let ssh_status = if kind == PanelKind::Ssh {
         Some(SshConnectionStatus::Disconnected)
@@ -314,17 +317,56 @@ fn spawn_restore_failure_snapshot_terminal(
     })
 }
 
-fn restore_failure_replay_bytes(title: &str, error_message: &str) -> Vec<u8> {
-    format!(
-        concat!(
-            "Horizon could not restore this panel.\r\n\r\n",
-            "Panel: {title}\r\n",
-            "Error: {error_message}\r\n\r\n",
-            "Fix the command or binary, then restart the panel.\r\n"
-        ),
-        title = title,
-        error_message = error_message
+/// The terminal of a cloud placeholder for `panel` that says `wait`.
+pub(in crate::panel) fn placeholder_terminal(panel: &Panel, rows: u16, cols: u16, wait: CloudWait) -> Result<Terminal> {
+    spawn_restore_failure_snapshot_terminal(
+        panel.id,
+        panel.kind,
+        rows,
+        cols,
+        placeholder_replay_bytes(&panel.title, Placeholder::Cloud(wait)),
     )
+}
+
+fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8> {
+    match placeholder {
+        Placeholder::RestoreFailure(error_message) => format!(
+            concat!(
+                "Horizon could not restore this panel.\r\n\r\n",
+                "Panel: {title}\r\n",
+                "Error: {error_message}\r\n\r\n",
+                "Fix the command or binary, then restart the panel.\r\n"
+            ),
+            title = title,
+            error_message = error_message
+        ),
+        Placeholder::Cloud(CloudWait::Reconnecting) => format!(
+            concat!(
+                "Horizon is reconnecting the cloud of this panel.\r\n\r\n",
+                "Panel: {title}\r\n",
+                "Remote processes continue independently.\r\n\r\n",
+                "The panel comes back when the cloud is ready.\r\n"
+            ),
+            title = title
+        ),
+        Placeholder::Cloud(CloudWait::Stopped) => format!(
+            concat!(
+                "The cloud of this panel is stopped.\r\n\r\n",
+                "Panel: {title}\r\n\r\n",
+                "Choose Resume worker on the cloud card to restore this panel.\r\n"
+            ),
+            title = title
+        ),
+        Placeholder::Cloud(CloudWait::Unsupported) => format!(
+            concat!(
+                "Cloud support is disabled in this Horizon build.\r\n\r\n",
+                "Panel: {title}\r\n",
+                "Remote processes continue independently.\r\n\r\n",
+                "Open this session in a Horizon build with cloud support to restore this panel.\r\n"
+            ),
+            title = title
+        ),
+    }
     .into_bytes()
 }
 
@@ -414,6 +456,7 @@ fn build_terminal_panel(
         content: PanelContent::Terminal(terminal),
         disconnected_browser_profile: None,
         disconnected_device_identity: None,
+        cloud_wait: None,
         session_binding,
         template,
         launched_at_millis: current_unix_millis(),

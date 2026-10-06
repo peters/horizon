@@ -375,6 +375,17 @@ impl FrameSlot {
         }
     }
 
+    /// Publish a validated, tightly packed RGB8 frame from a native source.
+    /// Invalid dimensions or byte lengths leave the previous frame unchanged.
+    #[must_use]
+    pub fn store_rgb(&self, width: u32, height: u32, rgb: Vec<u8>) -> Option<u64> {
+        let pixels = u64::from(width).checked_mul(u64::from(height))?;
+        if width == 0 || height == 0 || pixels > 33_554_432 || pixels.checked_mul(3)? != rgb.len() as u64 {
+            return None;
+        }
+        Some(self.publish_rgb(width, height, rgb))
+    }
+
     fn publish_rgb(&self, width: u32, height: u32, rgb: Vec<u8>) -> u64 {
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         inner.next_seq += 1;

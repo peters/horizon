@@ -45,6 +45,55 @@ refused. Custom images must advertise `horizon-tailnet-contract=1` before a
 selected-network cloud can be allocated; **None** remains compatible with older
 images.
 
+Each cloud has one device name in its tailnet for the life of the cloud. The
+worker makes the name from the cloud ID. The name stays the same after a stop
+and a resume. The name has one of two forms:
+
+- A cloud ID of lowercase letters, digits and inner hyphens usually gives the
+  direct form, `horizon-cloud-<cloud ID>`. A UUID cloud ID, which Horizon makes
+  for each new cloud, always has this form.
+- Other cloud IDs give a digest form. The rules for this form are below.
+
+Other clouds and agents use the full name `<device name>.<tailnet>.ts.net`. To
+find the device name of a worker, read the first entry in its device inventory.
+The provider name of the server or pod can be different from the device name.
+
+Tailscale names a device after its host name, and each new container has a
+random host name. Thus, the worker gives the device name to Tailscale:
+
+- When the container starts, the worker reads the cloud ID from
+  `HORIZON_CLOUD_OPERATION`. It writes the name to a root-only file in
+  `/run/horizon-tailnet`.
+- The first enrollment gives the name to `tailscale up` with `--hostname`.
+- The node state on the cloud volume keeps the name. A resume does not need
+  the auth key again.
+- If the device has a different host name, the next deploy or resume changes it
+  with `tailscale set --hostname`. This applies to a cloud that enrolled with an
+  older image, after a rebuild of its image. If this change fails, the cloud
+  stays in the tailnet with its old name.
+
+The digest form starts with `horizon-cloud-` and a short form of the cloud ID.
+The worker writes the ID in lowercase and changes each underscore to a hyphen.
+Then it adds a hyphen and 20 hexadecimal characters (80 bits) of the SHA-256 of
+the exact ID. The full name has a maximum of 63 characters. These cloud IDs get
+the digest form:
+
+- An ID with capital letters or underscores.
+- An ID with a last hyphen.
+- An ID that makes a name of more than 63 characters.
+- An ID that ends with a hyphen and 20 hexadecimal characters.
+
+Thus, each name is a valid DNS label and is unique to its cloud. Tailscale does
+not change a name that a tailnet administrator set. If a different device has
+the name, Tailscale adds a suffix such as `-1`. An image with this behavior
+reports `horizon-tailnet-contract=2`. An older image keeps the container host
+name, which changes at each resume.
+
+All members of the tailnet can see the device name. A name in the direct form
+shows the full cloud ID. A name in the digest form shows a maximum of 28
+characters of the ID, in lowercase and with hyphens for underscores. Then it
+shows the digest. Thus, it does not always show the exact cloud ID.
+
 Agents discover ACL-visible devices in
 `/run/horizon-tailnet-devices/devices.json` (names, addresses and online state
 only). HTTP/HTTPS and SOCKS proxy environment variables provide outbound access;
@@ -508,6 +557,9 @@ center is shown immediately, grouped by region, for choosing exactly one. Region
 choices select all compatible data centers in that region. Sold-out regions and
 data centers stay visible and selectable. Data centers that cannot hold the chosen
 workspace volume stay visible with **Storage unavailable**, and cannot be chosen.
+If no data center in a region can hold the volume, the region chip also shows
+**Storage unavailable** and cannot be chosen. It does not show **none in stock**,
+because the cause is storage and not stock.
 The machine's `data_centers` setting still limits
 what is offered, and the dialog says how many other data centers it excludes.
 
@@ -564,6 +616,11 @@ worker images must be rebuilt before adding shared-checkout panels. Closing Hori
 the worker and tools continue. Reconnect inspects the same worker, restores SSH
 tunnels and attaches existing sessions. Reconnect also restores closed terminal
 views from their saved remote references.
+
+After a restart, each panel of a cloud waits until its cloud is ready. Until
+then, the panel shows that Horizon reconnects the cloud. When the cloud is
+stopped, the panel shows that the cloud is stopped and that **Resume worker** on
+the card restores the panel.
 
 A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
 runtime card. Compute replacement retains the same network workspace but stops

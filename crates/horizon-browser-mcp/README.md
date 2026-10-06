@@ -547,3 +547,25 @@ retrying. Remote viewports still refuse arbitrary `browser_resize` dimensions
 with `remote_viewport_fixed`. The host and MCP executable must both include
 orientation support; all remote creates use a separate versioned queue, including configured orientation without a per-call override so an
 older host cannot silently ignore the override.
+
+### Native VNC video recording
+
+`device_panel` supports `{"operation":"video","panel_id":"<owned id>","action":"start"}`,
+with `status` and `stop` as the other actions. Every action requires the exact
+owning agent in the same workspace. Reconnect explicitly to acquire an unowned
+viewer before capture. There is no new CLI command.
+
+The host records the full decoded desktop as AV1 WebM with a target of 10 fps, including while
+hidden or off canvas. View crop and scale do not affect recording; audio is not
+captured. Status reports the measured effective frame rate and dropped frames;
+encoding may run slower than the target. Recording stops on disconnect, reconnect, panel close, after five
+minutes, or at the encoder's 256 MiB limit. Restoring a session never resumes a
+recording. The Horizon app always includes the encoder. The standalone browser
+library separately supports builds without its video-capture feature.
+
+Stop requests background finalization. Poll until `recording.capture.active`
+and `recording.finalizing` are both false. Check `encoder_failed` and
+`frames_encoded` before using `recording.capture.path`, a private file on the
+Horizon host. It is not a remotely downloadable URL. Save a copy before closing
+the panel or making four subsequent recordings. The UI provides **Record video**,
+**Stop recording**, and **Copy video path** for the same recorder.

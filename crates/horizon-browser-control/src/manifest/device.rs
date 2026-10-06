@@ -46,6 +46,13 @@ pub enum Operation {
         #[serde(flatten)]
         input: ScreenshotInput,
     },
+    /// Record the full VNC desktop as private `WebM`. Start requires a connected owned viewer.
+    /// Recording continues offscreen and stops on disconnect, after five minutes, or at 256 MiB.
+    /// Stop is asynchronous: poll status until active and finalizing are both false.
+    Video {
+        panel_id: String,
+        action: VideoAction,
+    },
     Visibility {
         panel_id: String,
         visible: bool,
@@ -61,6 +68,23 @@ pub enum Operation {
     Close {
         panel_id: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoAction {
+    Start,
+    Status,
+    Stop,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub struct VideoRecording {
+    /// True while the worker is finishing the file. Do not use the file until false.
+    pub finalizing: bool,
+    /// Encoder counters and private host-local file path. Files last until panel close or four subsequent recordings.
+    #[schemars(with = "serde_json::Value")]
+    pub capture: horizon_browser::BrowserVideoCapture,
 }
 
 /// Public native Device input. Internal host commands cannot be deserialized here.
@@ -318,6 +342,7 @@ pub struct ImageEvidence {
 pub enum Outcome {
     Panels { panels: Vec<PanelState> },
     Screenshot { capture: Screenshot },
+    Video { recording: VideoRecording },
     Closed { panel_id: String },
     Failed { code: String, message: String },
 }
@@ -521,6 +546,26 @@ pub fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<Outco
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_video_input_has_a_bounded_action_contract() {
+        for action in ["start", "status", "stop"] {
+            let input = serde_json::json!({"operation":"video", "panel_id":"panel", "action":action});
+            assert!(matches!(
+                serde_json::from_value::<DevicePanelInput>(input)
+                    .unwrap()
+                    .into_operation(),
+                Operation::Video { .. }
+            ));
+        }
+        for field in ["path", "endpoint", "command"] {
+            let mut input = serde_json::json!({"operation":"video", "panel_id":"panel", "action":"start"});
+            input[field] = "arbitrary".into();
+            assert!(serde_json::from_value::<DevicePanelInput>(input).is_err());
+        }
+        let schema = serde_json::to_string(&schemars::schema_for!(DevicePanelInput)).unwrap();
+        assert!(schema.contains("VideoAction"));
+    }
 
     #[test]
     fn create_accepts_an_ssh_route_and_older_requests_without_one() {

@@ -457,7 +457,7 @@ Fixed metrics:
 | Sidebar width | 210 default, 168 minimum |
 | Panel titlebar height | 34 |
 | Panel padding | 8 |
-| Panel resize handle | 32 screen points, independent of canvas zoom (bounded by panel extent) |
+| Panel resize handle | 32 screen points, independent of canvas zoom (bounded by panel extent). The painted mark is six dots in the corner. Those dots keep the same screen size when the corner can hold them. The square is the hit target and has no fill. |
 | Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5 |
 | Text field in a dialog | 38 high, text margin (12, 10) |
 | Dialog buttons | creation dialog: at least 120 x 40; accounts dialog: the primary ("Save settings", or "Save and start" while continuing a first cloud) 148 x 40, `Cancel` at least 80 x 40 |

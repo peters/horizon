@@ -21,8 +21,9 @@ the UI and the agents must agree.
 ## 2. Applicability
 
 - Candidate: a build that includes the fixes for
-  [issue #1302](https://github.com/peters/horizon/issues/1302) and
-  [issue #1303](https://github.com/peters/horizon/issues/1303).
+  [issue #1302](https://github.com/peters/horizon/issues/1302),
+  [issue #1303](https://github.com/peters/horizon/issues/1303) and
+  [issue #1304](https://github.com/peters/horizon/issues/1304).
 - Platforms: Linux with Xvfb. Providers: RunPod and Hetzner.
 - Test list: C12 to C30 of the cloud panel smoke test,
   [issue #1264](https://github.com/peters/horizon/issues/1264).
@@ -30,8 +31,6 @@ the UI and the agents must agree.
   - The start of a cloud.
   - A background price refresh. The
     [catalog refresh procedure](new-cloud-catalog-refresh.md) tests it.
-  - The region chip for a region without storage (C26). A later fix adds this
-    task.
 
 ## 3. Safety
 
@@ -438,7 +437,26 @@ this order. Each task starts with the result of the task before it.
 
    Result: The chips show the stock counts for the new size.
 
-### 6.15 C27 — Region scope
+### 6.15 C26 — Region without storage
+
+1. Find the region chip **Oceania**.
+
+   Result: The chip shows **Storage unavailable**. It does not show **none in
+   stock**.
+
+2. Click the region chip **Oceania**.
+
+   Result: The chip is disabled. The summary does not change.
+
+3. Find the data center chips under **Oceania**.
+
+   Result: Each chip shows **Storage unavailable** and is disabled.
+
+4. Read the stock text of **Any data center**.
+
+   Result: The count does not include a data center in Oceania.
+
+### 6.16 C27 — Region scope
 
 1. Click the region chip **Europe**.
 
@@ -456,7 +474,7 @@ this order. Each task starts with the result of the task before it.
 
    Result: The summary shows **any data center**.
 
-### 6.16 C28 — High-performance storage
+### 6.17 C28 — High-performance storage
 
 1. In the summary, click **High-performance**.
 
@@ -472,7 +490,7 @@ this order. Each task starts with the result of the task before it.
 
    Result: The three cards show again.
 
-### 6.17 C29 — Stock of the largest size
+### 6.18 C29 — Stock of the largest size
 
 1. Click **RunPod**.
 
@@ -487,7 +505,7 @@ this order. Each task starts with the result of the task before it.
    Result: The summary shows **In stock**, **Low stock** or **Out of stock**.
    It does not show **stock unknown**.
 
-### 6.18 C30 — GPU workers
+### 6.19 C30 — GPU workers
 
 1. Select the profile `gpu`.
 
@@ -521,6 +539,8 @@ this order. Each task starts with the result of the task before it.
 - The search, the currencies, the picks and the totals agree with C19, C20, C22 and C23.
 - The MCP answer in C22 has the same cheapest offer as the **Cheapest** card.
 - The data center chips and the region chips agree with C24, C25 and C27.
+- In C26, a region that cannot hold the workspace volume shows **Storage
+  unavailable**, not **none in stock**.
 - C28 hides the cards for high-performance storage.
 - C29 never shows **stock unknown**.
 - C30 shows no Hetzner row for a GPU profile.

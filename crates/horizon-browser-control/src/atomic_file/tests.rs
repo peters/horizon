@@ -214,6 +214,10 @@ fn listings_are_retaken_until_they_are_whole() {
     assert_eq!(listing, 3);
 }
 
+/// The window is given as already over, so the first torn listing is returned
+/// as it is. A desktop clock makes the assertion depend on when the runner
+/// schedules the thread: a first take slower than the window also returns one
+/// listing, which is what failed this test on CI.
 #[test]
 fn a_torn_listing_is_returned_after_the_window() {
     let takes = Cell::new(0);
@@ -223,11 +227,11 @@ fn a_torn_listing_is_returned_after_the_window() {
             Ok(takes.get())
         },
         |_| true,
-        Duration::from_millis(20),
+        Duration::ZERO,
     )
     .unwrap();
 
-    assert!(listing > 1, "a torn listing is retaken at least once");
+    assert_eq!(listing, 1, "a listing taken after the window is returned as it is");
 }
 
 #[test]
