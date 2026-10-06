@@ -124,58 +124,66 @@ fixture terminal.
 
    Result: The New cloud dialog opens.
 
-2. Wait 3 seconds and take a new screenshot.
+2. Wait 3 seconds.
+
+   Result: The dialog stays open.
+
+3. Take a new screenshot.
 
    Result: The dialog does not move.
 
-3. Type `smoke-a` in the title field.
+4. Type `smoke-a` in the title field.
 
    Result: The title field shows `smoke-a`.
 
-4. Type `<repo>` in the repository field and click **Read .horizon/cloud.yml**.
+5. Type `<repo>` in the repository field.
+
+   Result: The field shows `<repo>`.
+
+6. Click **Read .horizon/cloud.yml**.
 
    Result: **Profile** lists the profiles that area B committed.
 
-5. In **Profile**, select `hetzner-cpu`.
+7. In **Profile**, select `hetzner-cpu`.
 
    Result: The **Machine** list shows Hetzner workers.
 
-6. Click the cheapest Hetzner row that is in stock.
+8. Click the cheapest Hetzner row that is in stock.
 
    Result: The summary shows the server type and the location.
 
-7. Record the selected location in the private evidence.
+9. Record the selected location in the private evidence.
 
    Result: C31 compares this location with the location of the server.
 
    > **CAUTION:** SELECT ONLY THE TEST TAILNET. The worker joins the tailnet and
    > can reach the devices that its policy permits.
 
-8. In **Tailnet**, select the test tailnet.
+10. In **Tailnet**, select the test tailnet.
 
-   Result: The test tailnet is selected. **None** is not selected.
+    Result: The test tailnet is selected. **None** is not selected.
 
-   > **CAUTION:** THIS STEP RENTS COMPUTE. Hetzner charges money for the server
-   > and the volume until somebody deletes them.
+    > **CAUTION:** THIS STEP RENTS COMPUTE. Hetzner charges money for the server
+    > and the volume until somebody deletes them.
 
-9. Click **Start cloud**.
+11. Click **Start cloud**.
 
-   Result: The dialog closes. The card of `smoke-a` shows the active stage and its
-   elapsed time.
+    Result: The dialog closes. The card of `smoke-a` shows the active stage and its
+    elapsed time.
 
-10. Wait until the card shows **Ready**.
+12. Wait until the card shows **Ready**.
 
     Result: The card shows the measured time to worker readiness.
 
-11. Open the **Machine** tab of the card.
+13. Open the **Machine** tab of the card.
 
     Result: The tab shows the server type, the location and the server ID.
 
-12. Write the server, the volume and the SSH key of `smoke-a` in the resource ledger.
+14. Write the server, the volume and the SSH key of `smoke-a` in the resource ledger.
 
     Result: The ledger has three Hetzner lines for `smoke-a`.
 
-13. Write the tailnet node name of `smoke-a` in the resource ledger.
+15. Write the tailnet node name of `smoke-a` in the resource ledger.
 
     Result: The ledger has a tailnet line for `smoke-a` with the node ID from the
     admin console of the test tailnet.
@@ -183,7 +191,7 @@ fixture terminal.
     > **CAUTION:** SEND THE HETZNER TOKEN ONLY TO THE HETZNER API. The header file
     > contains the token. Do not show the file or the request headers.
 
-14. List the networks of the Hetzner project.
+16. List the networks of the Hetzner project.
 
     ```sh
     bash <run>/hetzner-list.sh networks
@@ -191,72 +199,80 @@ fixture terminal.
 
     Result: If the list has a new network with a `horizon-network` label, write it in the ledger as kept.
 
-15. Record the time to **Ready** in the evidence.
+17. Record the time to **Ready** in the evidence.
 
     Result: The evidence shows the deployment time.
 
 ### 6.2 D02 — Deploy a RunPod CPU cloud on a network volume
 
-1. Open **Cloud › New cloud…** and wait 3 seconds.
+1. Open **Cloud › New cloud…**.
+
+   Result: The New cloud dialog opens.
+
+2. Wait 3 seconds.
 
    Result: The New cloud dialog opens and does not move.
 
-2. Type `smoke-r` in the title field.
+3. Type `smoke-r` in the title field.
 
    Result: The title field shows `smoke-r`.
 
-3. Type `<repo>` in the repository field and click **Read .horizon/cloud.yml**.
+4. Type `<repo>` in the repository field.
+
+   Result: The field shows `<repo>`.
+
+5. Click **Read .horizon/cloud.yml**.
 
    Result: **Profile** lists the profiles that area B committed.
 
-4. In **Profile**, select `runpod-cpu`.
+6. In **Profile**, select `runpod-cpu`.
 
    Result: The **Machine** list shows RunPod CPU workers.
 
-5. Click the cheapest RunPod row that is in stock.
+7. Click the cheapest RunPod row that is in stock.
 
    Result: The summary shows the worker, its stock and a network volume.
 
-6. Examine the storage lines of the summary.
+8. Examine the storage lines of the summary.
 
    Result: The summary shows **Standard** or **High-performance** and the volume size.
 
-7. In **Data center**, select one exact data center that has the worker in stock.
+9. In **Data center**, select one exact data center that has the worker in stock.
 
    Result: The summary names the data center. Record it in the private evidence for C31.
 
    > **CAUTION:** SELECT ONLY THE TEST TAILNET. The worker joins the tailnet and
    > can reach the devices that its policy permits.
 
-8. In **Tailnet**, select the test tailnet.
+10. In **Tailnet**, select the test tailnet.
 
-   Result: The test tailnet is selected.
+    Result: The test tailnet is selected.
 
-   > **CAUTION:** THIS STEP RENTS COMPUTE. RunPod charges money for the pod, and
-   > for the network volume also when the pod is stopped.
+    > **CAUTION:** THIS STEP RENTS COMPUTE. RunPod charges money for the pod, and
+    > for the network volume also when the pod is stopped.
 
-9. Click **Start cloud**.
+11. Click **Start cloud**.
 
-   Result: The card of `smoke-r` shows the active stage and its elapsed time.
+    Result: The card of `smoke-r` shows the active stage and its elapsed time.
 
-10. Wait until the card shows **Ready**.
+12. Wait until the card shows **Ready**.
 
     Result: The card shows the measured time to worker readiness.
 
-11. Open the **Machine** tab of the card.
+13. Open the **Machine** tab of the card.
 
     Result: The tab shows the pod ID, the data center and the region.
 
-12. Write the pod and the network volume of `smoke-r` in the resource ledger.
+14. Write the pod and the network volume of `smoke-r` in the resource ledger.
 
     Result: The ledger has two RunPod lines for `smoke-r`.
 
-13. Write the tailnet node name of `smoke-r` in the resource ledger.
+15. Write the tailnet node name of `smoke-r` in the resource ledger.
 
     Result: The ledger has a tailnet line for `smoke-r` with the node ID from the
     admin console of the test tailnet.
 
-14. In a worker shell of `smoke-r`, show the mount of `/workspace`.
+16. In a worker shell of `smoke-r`, show the mount of `/workspace`.
 
     ```sh
     findmnt /workspace
@@ -266,46 +282,54 @@ fixture terminal.
 
 ### 6.3 D03 — Deploy a RunPod GPU cloud with a CUDA minimum
 
-1. Open **Cloud › New cloud…** and wait 3 seconds.
+1. Open **Cloud › New cloud…**.
+
+   Result: The New cloud dialog opens.
+
+2. Wait 3 seconds.
 
    Result: The New cloud dialog opens and does not move.
 
-2. Type `smoke-g` in the title field.
+3. Type `smoke-g` in the title field.
 
    Result: The title field shows `smoke-g`.
 
-3. Type `<repo>` in the repository field and click **Read .horizon/cloud.yml**.
+4. Type `<repo>` in the repository field.
+
+   Result: The field shows `<repo>`.
+
+5. Click **Read .horizon/cloud.yml**.
 
    Result: **Profile** lists the profiles that area B committed.
 
-4. In **Profile**, select `runpod-gpu`.
+6. In **Profile**, select `runpod-gpu`.
 
    Result: The **Machine** list shows GPU types and their stock.
 
-5. Click the cheapest GPU type that is in stock.
+7. Click the cheapest GPU type that is in stock.
 
    Result: The summary shows the GPU type and a pod volume.
 
-6. In **Tailnet**, select **None**.
+8. In **Tailnet**, select **None**.
 
    Result: **None** is selected.
 
    > **CAUTION:** THIS STEP RENTS A GPU. A GPU costs more money for each hour
    > than a CPU worker.
 
-7. Click **Start cloud**.
+9. Click **Start cloud**.
 
    Result: The card of `smoke-g` shows the active stage and its elapsed time.
 
-8. Wait until the card shows **Ready**.
+10. Wait until the card shows **Ready**.
 
-   Result: The card names the GPU type.
+    Result: The card names the GPU type.
 
-9. Write the pod of `smoke-g` in the resource ledger.
+11. Write the pod of `smoke-g` in the resource ledger.
 
-   Result: The ledger has a RunPod line for `smoke-g`.
+    Result: The ledger has a RunPod line for `smoke-g`.
 
-10. In a worker shell of `smoke-g`, show the GPU and the CUDA version of the driver.
+12. In a worker shell of `smoke-g`, show the GPU and the CUDA version of the driver.
 
     ```sh
     nvidia-smi

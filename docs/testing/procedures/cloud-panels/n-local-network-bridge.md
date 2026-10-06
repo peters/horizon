@@ -42,16 +42,24 @@ limits the access and that the bridge is off after a restart of Horizon.
 
 ## 5. Setup
 
-1. On the second device, start a test HTTP server with a random value.
+1. On the second device, make a temporary directory with a random value.
 
    ```sh
-   d=$(mktemp -d) && python3 -c 'import secrets; print(secrets.token_hex(16))' > "$d/nonce" && python3 -m http.server <device-port> --directory "$d"
+   d=$(mktemp -d) && python3 -c 'import secrets; print(secrets.token_hex(16))' > "$d/nonce" && echo "$d" && cat "$d/nonce"
    ```
 
-   Result: The server listens on `<device-port>` and serves only a new temporary
-   directory. Record the value and the directory in the private evidence.
+   Result: The output shows `<temporary-directory>` and the random value. Record
+   both in the private evidence.
 
-2. On the PC, make a test directory with one synthetic file.
+2. On the second device, start a test HTTP server for that directory.
+
+   ```sh
+   python3 -m http.server <device-port> --directory <temporary-directory>
+   ```
+
+   Result: The server listens on `<device-port>` and serves only the temporary directory.
+
+3. On the PC, make a test directory with one synthetic file.
 
    ```sh
    mkdir -p <run>/lnb-test && echo smoke-lnb > <run>/lnb-test/index.txt
@@ -59,7 +67,7 @@ limits the access and that the bridge is off after a restart of Horizon.
 
    Result: The directory contains only the synthetic file.
 
-3. On the PC, start a test HTTP server on the loopback address, port 18090.
+4. On the PC, start a test HTTP server on the loopback address, port 18090.
 
    ```sh
    python3 -m http.server 18090 --bind 127.0.0.1 --directory <run>/lnb-test
@@ -67,7 +75,7 @@ limits the access and that the bridge is off after a restart of Horizon.
 
    Result: The server listens on `127.0.0.1:18090`. N04 uses it.
 
-4. On the PC, find its IPv4 address on the network of the default route.
+5. On the PC, find its IPv4 address on the network of the default route.
 
    ```sh
    ip -4 route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p'

@@ -188,12 +188,12 @@ change in the report as a deviation.
    ```sh
    cat > <run>/runpod-list.sh <<'EOF'
    #!/usr/bin/env bash
-   # Usage: runpod-list.sh pods|network-volumes|registries
+   # Usage: runpod-list.sh pods|network-volumes|registries|templates
    set -euo pipefail
    url="https://api.runpod.io/v2/$1"; next=$url
    while :; do
      body=$(curl -fsS -H @<run>/runpod.header "$next")
-     jq -c --arg k "$1" '(if type == "array" then . else (.pods // .networkVolumes // .registries // []) end)[] | {kind: $k, id, name}' <<< "$body"
+     jq -c --arg k "$1" '(if type == "array" then . else (.pods // .networkVolumes // .registries // .templates // []) end)[] | {kind: $k, id, name}' <<< "$body"
      more=$(jq -r 'if type == "object" then (.pagination.hasNextPage // false) else false end' <<< "$body")
      [ "$more" = true ] || break
      next="$url?cursor=$(jq -r '.pagination.nextCursor | @uri' <<< "$body")"
@@ -220,7 +220,7 @@ change in the report as a deviation.
 6. Save the RunPod baseline.
 
    ```sh
-   for k in pods network-volumes registries; do bash <run>/runpod-list.sh "$k"; done > <evidence>/runpod-before.jsonl
+   for k in pods network-volumes registries templates; do bash <run>/runpod-list.sh "$k"; done > <evidence>/runpod-before.jsonl
    ```
 
    Result: The file has one line for each RunPod resource before the run.
@@ -249,17 +249,23 @@ Do the cleanup of area G after T12 and T13. The cleanup of this procedure does
 area X.
 
 1. Do A01 to A05, A07 and A08. The setup of this procedure did S01 to S05.
-2. Do B01 to B05, then do A06.
-3. Do C01 to C30. Do not do step 5 of C02 or the task C09 yet.
-4. Do O01 and O03.
-5. Do T01 and T02, then do C09. D01 needs the saved test tailnet.
-6. Do D01 to D05. D01 and D02 select the places that C31 examines.
-7. Do step 5 of C02, then C31 and A09.
-8. Do E01 to E09, then O02. O02 uses the Claude Code panel of E02.
-9. Do T03 to T11 and T14.
-10. Do G01 to G12, then do T12 and T13. Then do the cleanup of area G.
-11. Do N01 to N05.
-12. Do L01 to L10.
+2. Do B01 to B05.
+3. Do A06.
+4. Do C01 to C30. Do not do step 8 of C02 or the task C09 yet.
+5. Do O01 and O03.
+6. Do T01 and T02. D01 needs the saved test tailnet.
+7. Do C09.
+8. Do D01 to D05. D01 and D02 select the places that C31 examines.
+9. Do step 8 of C02.
+10. Do C31 and A09.
+11. Do E01 to E09.
+12. Do O02. O02 uses the Claude Code panel of E02.
+13. Do T03 to T11 and T14.
+14. Do G01 to G12.
+15. Do T12 and T13.
+16. Do the cleanup of area G.
+17. Do N01 to N05.
+18. Do L01 to L10.
 
 The cleanup of this procedure does X01 to X05.
 

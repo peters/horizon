@@ -129,27 +129,31 @@ a worker below the profile minimum cannot be selected.
 
 ### 6.3 O03 — Make sure that a worker below the minimum cannot be selected
 
-1. Open **Cloud › New cloud…** and wait 3 seconds.
+1. Open **Cloud › New cloud…**.
+
+   Result: The New cloud dialog opens.
+
+2. Wait 3 seconds.
 
    Result: The New cloud dialog opens and does not move.
 
-2. Select the profile `runpod-cpu` in **Profile**.
+3. Select the profile `runpod-cpu` in **Profile**.
 
    Result: The **Machine** list shows a count of workers that the requirements hide.
 
-3. Select **Show workers below requirements**.
+4. Select **Show workers below requirements**.
 
    Result: The list shows the hidden workers, each with a reason.
 
-4. Record the worker in the summary.
+5. Record the worker in the summary.
 
-   Result: You have the selected worker before step 5.
+   Result: You have the selected worker before step 6.
 
-5. Click a worker that is below the requirements.
+6. Click a worker that is below the requirements.
 
-   Result: The summary does not change. The worker from step 4 stays selected.
+   Result: The summary does not change. The worker from step 5 stays selected.
 
-6. Click **Cancel**.
+7. Click **Cancel**.
 
    Result: The dialog closes. No cloud starts.
 

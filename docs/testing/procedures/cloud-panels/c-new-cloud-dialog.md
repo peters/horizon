@@ -89,23 +89,31 @@ runs in the place that the dialog showed.
 
 ### 6.1 C01 — Open New cloud from the panel picker, the toolbar and the overflow menu
 
-1. In a workspace, open the panel picker and click **Cloud**.
+1. In a workspace, open the panel picker.
+
+   Result: The panel picker opens.
+
+2. Click **Cloud**.
 
    Result: The New cloud dialog opens with the heading **New cloud**.
 
-2. Click **Cancel**.
+3. Click **Cancel**.
 
    Result: The dialog closes. No cloud starts.
 
-3. Click **Cloud** in the menu bar, then click **New cloud…**.
+4. Click **Cloud** in the menu bar.
+
+   Result: The Cloud menu opens.
+
+5. Click **New cloud…**.
 
    Result: The New cloud dialog opens.
 
-4. Click **Cancel**.
+6. Click **Cancel**.
 
    Result: The dialog closes.
 
-5. Set the candidate window to 800 × 900 pixels.
+7. Set the candidate window to 800 × 900 pixels.
 
    ```sh
    DISPLAY=<display> xdotool search --pid <child-pid> --name '^Horizon$' windowsize %1 800 900
@@ -113,11 +121,11 @@ runs in the place that the dialog showed.
 
    Result: The toolbar shows **More** instead of **Cloud**.
 
-6. Open **More › Cloud › New cloud…**.
+8. Open **More › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens in one column.
 
-7. Click **Cancel** and set the window back to its first size.
+9. Click **Cancel** and set the window back to its first size.
 
    Result: The toolbar shows **Cloud** again.
 
@@ -127,20 +135,32 @@ runs in the place that the dialog showed.
 
    Result: The workspace is in the main window.
 
-2. In the sidebar, open the context menu of this workspace and click **Open in New Window**.
+2. In the sidebar, open the context menu of this workspace.
+
+   Result: The context menu opens.
+
+3. Click **Open in New Window**.
 
    Result: The workspace opens in its own window.
 
-3. Select the detached workspace and open **Cloud › New cloud…**.
+4. Select the detached workspace.
+
+   Result: The detached workspace is the active workspace.
+
+5. Open **Cloud › New cloud…**.
 
    Result: The dialog shows `Move this workspace to the main window before creating
    a cloud`. No worker, cloud or session starts.
 
-4. Close the dialog and move the workspace back to the main window.
+6. Close the dialog.
+
+   Result: The dialog closes. No cloud starts.
+
+7. Move the workspace back to the main window.
 
    Result: The workspace is in the main window again.
 
-5. After D01, open the context menu of the workspace that holds `smoke-a`.
+8. After D01, open the context menu of the workspace that holds `smoke-a`.
 
    Result: **Open in New Window** is not available. Its hint says `Cloud workspaces
    stay in the main window. Use the cloud's Full screen action.`
@@ -159,38 +179,58 @@ runs in the place that the dialog showed.
 
    Result: The Device panel shows a live view.
 
-3. In the second fixture, open **Cloud › New cloud…** and type `smoke-unsaved` in **Cloud title**.
+3. In the second fixture, open **Cloud › New cloud…**.
+
+   Result: The New cloud dialog opens.
+
+4. Type `smoke-unsaved` in **Cloud title**.
 
    Result: The title shows in the field.
 
-4. Press Enter.
+5. Press Enter.
 
    Result: The dialog shows `Open a saved session from Sessions before starting a
    cloud`. The title `smoke-unsaved` stays in the field.
 
-5. Examine the board of the second fixture.
+6. Examine the board of the second fixture.
 
    Result: The board has no cloud `smoke-unsaved`.
 
-6. Stop the second fixture with Ctrl-C and close its Device panel.
+7. Close the Device panel of the second fixture.
+
+   Result: The Device panel closes. The second fixture continues.
+
+8. Stop the second fixture with Ctrl-C.
 
    Result: Only the first fixture continues.
 
 ### 6.4 C04 — Combine RunPod and Hetzner and show the three picks
 
-1. Open **Cloud › New cloud…**, type `<home>/smoke/app` and click **Read .horizon/cloud.yml**.
+1. Open **Cloud › New cloud…**.
+
+   Result: The New cloud dialog opens.
+
+2. Type `<home>/smoke/app` as the repository.
+
+   Result: The field shows the repository.
+
+3. Click **Read .horizon/cloud.yml**.
 
    Result: The dialog shows `Fetching prices and stock…` and then the worker catalog.
 
-2. Select `runpod-small` in **Profile** and click **All providers**.
+4. Select `runpod-small` in **Profile**.
+
+   Result: The dialog shows the workers of `runpod-small`.
+
+5. Click **All providers**.
 
    Result: The full list shows RunPod rows and Hetzner rows.
 
-3. Examine the picks above the list.
+6. Examine the picks above the list.
 
    Result: The dialog shows the **CHEAPEST**, **BALANCED** and **MOST POWERFUL** cards.
 
-4. Examine **BEFORE YOU START**.
+7. Examine **BEFORE YOU START**.
 
    Result: The list shows `RunPod account accepted, prices are current`.
 
@@ -221,25 +261,41 @@ runs in the place that the dialog showed.
    Result: **In stock only** has a check mark. **Show workers below requirements**
    has no check mark. These are the defaults.
 
-2. Click **RunPod**, then **Hetzner**, then **All providers**.
+2. Click **RunPod**.
+
+   Result: The list shows only RunPod rows.
+
+3. Click **Hetzner**.
+
+   Result: The list shows only Hetzner rows.
+
+4. Click **All providers**.
 
    Result: The cards and the list show only the rows of the chosen provider.
 
-3. Clear **In stock only**.
+5. Clear **In stock only**.
 
    Result: The list shows more rows. Some rows show `Out of stock` or `Unlisted · advisory`.
 
-4. Type `8 vCPU` in the search field.
+6. Type `8 vCPU` in the search field.
 
    Result: The list shows only rows with 8 vCPU.
 
-5. Clear the search field and select a region in **Data center**.
+7. Clear the search field.
+
+   Result: The list shows all rows again.
+
+8. Select a region in **Data center**.
 
    Result: The RunPod stock shows the stock for that region.
 
-6. Close the dialog and open it again.
+9. Close the dialog with **Cancel**.
 
-   Result: **In stock only** is selected again. The search field is empty.
+   Result: The dialog closes. No cloud starts.
+
+10. Open **Cloud › New cloud…** again.
+
+    Result: **In stock only** is selected again. The search field is empty.
 
 ### 6.7 C07 — Refresh the prices and block Start for a stale catalog
 
@@ -282,7 +338,11 @@ runs in the place that the dialog showed.
 
    Result: The dialog closes. No cloud starts.
 
-10. Copy `<run>/runpod-key.saved` back to the RunPod key file and delete the copy.
+10. Copy `<run>/runpod-key.saved` back to the RunPod key file.
+
+    Result: The key file contains the real key again.
+
+11. Delete `<run>/runpod-key.saved`.
 
     Result: The key file contains the real key again. A new New cloud dialog shows current RunPod prices.
 
@@ -291,39 +351,43 @@ For a detailed check of the refresh, use the
 
 ### 6.8 C08 — Watch a sold-out worker with a price cap and stop the watch
 
-1. Clear **In stock only** and click a row that shows `Out of stock`.
+1. Clear **In stock only**.
+
+   Result: The list also shows sold-out rows.
+
+2. Click a row that shows `Out of stock`.
 
    Result: The action bar shows **Start new cloud once available**.
 
-2. In **Data center**, select one exact data center where the worker is out of stock.
+3. In **Data center**, select one exact data center where the worker is out of stock.
 
    Result: The summary names the data center and the price of the worker.
 
-3. Select **Start new cloud once available**.
+4. Select **Start new cloud once available**.
 
    Result: The start button shows **Start when available**.
 
-4. Type `smoke-watch` in **Cloud title**.
+5. Type `smoke-watch` in **Cloud title**.
 
    Result: **Start when available** is available.
 
    > **CAUTION:** THE WATCH RENTS COMPUTE WHEN STOCK RETURNS. Start the watch only
    > with the permission of the operator. Click **Stop watching** in the next step.
 
-5. Click **Start when available**.
+6. Click **Start when available**.
 
    Result: The summary shows `Waiting for stock in <place>` and the price limit.
    The fields are locked.
 
-6. Click **Stop watching** at once.
+7. Click **Stop watching** at once.
 
    Result: The watch stops. The fields are not locked. No cloud starts.
 
-7. If a cloud starts before step 6, write its resources in the resource ledger.
+8. If a cloud starts before step 7, write its resources in the resource ledger.
 
    Result: The resource ledger records the cloud. Area X deletes it.
 
-8. Clear **Start new cloud once available**.
+9. Clear **Start new cloud once available**.
 
    Result: The start button shows **Start cloud** again.
 
@@ -382,7 +446,11 @@ For a detailed check of the refresh, use the
 
    Result: The summary shows the new container disk. The CPU sizes that cannot hold it go away.
 
-6. Delete the title and click **Cancel**.
+6. Delete the title.
+
+   Result: **Start cloud** is disabled.
+
+7. Click **Cancel**.
 
    Result: The dialog closes. No cloud starts.
 
@@ -529,7 +597,11 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: The summary does not change. You cannot select the row.
 
-5. Clear **Show workers below requirements** and select `runpod-small` again.
+5. Clear **Show workers below requirements**.
+
+   Result: The rows below requirements are hidden again.
+
+6. Select `runpod-small` again.
 
    Result: The rows below requirements go away.
 
@@ -602,7 +674,7 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: The card names the same worker.
 
-3. Find the in-stock row with the most vCPU, and then the most memory.
+3. Find the in-stock row that has the most vCPU, with the most memory to decide a tie.
 
    Result: You have the expected most powerful worker. For RunPod CPU, this is
    often `32 vCPU · 256 GB`.
@@ -617,66 +689,82 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
    Result: The totals change to the totals for one month.
 
-2. Select a RunPod row and record its hourly price and its total.
+2. Select a RunPod row.
+
+   Result: The summary shows the RunPod worker.
+
+3. Record its hourly price and its total.
 
    Result: You have the values for the next step.
 
-3. Calculate the RunPod total.
+4. Calculate the RunPod total.
 
    Result: The value is the hourly price × 730, plus the network volume for one
    month. The standard volume costs $0.07 for each GB each month.
 
-4. Select a Hetzner row and record its hourly price, its monthly price and its total.
+5. Select a Hetzner row.
+
+   Result: The summary shows the Hetzner worker.
+
+6. Record its hourly price, its monthly price and its total.
 
    Result: You have the values for the next step.
 
-5. Calculate the Hetzner total.
+7. Calculate the Hetzner total.
 
    Result: The value is the smaller of the hourly price × 730 and the monthly
    cap, plus the volume and the IPv4 address.
 
-6. Compare the calculated totals with the totals of the dialog.
+8. Compare the calculated totals with the totals of the dialog.
 
    Result: The difference is less than one cent for each provider, after the ECB rate.
 
-7. Set **Compare for** back to `1 hours`.
+9. Set **Compare for** back to `1 hours`.
 
    Result: The totals show the value for one hour again.
 
 ### 6.24 C24 — List the data centers and disable those without storage
 
-1. Select a RunPod CPU row and open **Data center**.
+1. Select a RunPod CPU row.
+
+   Result: The summary shows the RunPod worker.
+
+2. Open **Data center**.
 
    Result: The dialog shows **Any data center** and the data centers, grouped by region.
 
-2. Count the data centers and the data centers with **Storage unavailable**.
+3. Count the data centers and the data centers with **Storage unavailable**.
 
    Result: You have the two counts.
 
-3. Get the RunPod data centers and their network volume support from the RunPod console.
+4. Get the RunPod data centers and their network volume support from the RunPod console.
 
    Result: You have the expected list. The `data_centers` setting can limit it.
 
-4. Compare the counts with the expected list.
+5. Compare the counts with the expected list.
 
    Result: The dialog lists each allowed data center. A data center with no
    standard network volume shows **Storage unavailable**.
 
-5. Click a data center with **Storage unavailable**.
+6. Click a data center with **Storage unavailable**.
 
    Result: You cannot select it.
 
 ### 6.25 C25 — Update the exact stock on the region chips with the size
 
-1. Select the RunPod row `2 vCPU · 4 GB` and record the stock on each region chip.
+1. Select the RunPod row `2 vCPU · 4 GB`.
+
+   Result: The summary shows `2 vCPU · 4 GB`.
+
+2. Record the stock on each region chip.
 
    Result: Each chip shows how many of its data centers have this size in stock.
 
-2. Select the RunPod row `32 vCPU · 256 GB`.
+3. Select the RunPod row `32 vCPU · 256 GB`.
 
    Result: The dialog runs an exact stock check for the new size.
 
-3. Record the stock on each region chip again.
+4. Record the stock on each region chip again.
 
    Result: The chips show the stock for the new size. At least one count changes,
    or the counts match the RunPod stock for both sizes.
@@ -712,16 +800,20 @@ steps for C12 to C30. Use it for a run that changes the picker.
 
 ### 6.28 C28 — Change the data centers with High-performance storage
 
-1. Select a RunPod CPU row and click **High-performance** in **STORAGE**.
+1. Select a RunPod CPU row.
+
+   Result: The summary shows the RunPod worker and its storage.
+
+2. Click **High-performance** in **STORAGE**.
 
    Result: The data center list changes. It shows only data centers that hold
    high-performance volumes.
 
-2. Examine the picks and **ESTIMATED COST**.
+3. Examine the picks and **ESTIMATED COST**.
 
    Result: The picks do not show. The storage price shows `Price not published`.
 
-3. Click **Standard** in **STORAGE**.
+4. Click **Standard** in **STORAGE**.
 
    Result: The data center list and the picks show again.
 

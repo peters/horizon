@@ -84,7 +84,11 @@ setting must open a repair form.
 
    Result: The first screenshot shows the dialog directly after it opens.
 
-4. Wait 3 seconds and take a second screenshot.
+4. Wait 3 seconds.
+
+   Result: The dialog stays open.
+
+5. Take a second screenshot.
 
    Result: The dialog is at the same position and size as in the first screenshot.
 
@@ -117,7 +121,7 @@ setting must open a repair form.
 
    Result: An empty key field opens. **Keep saved key** is directly below the field.
 
-6. Leave the field empty and click **Save settings**.
+6. Click **Save settings** with the field empty.
 
    Result: The dialog closes.
 
@@ -264,15 +268,19 @@ Do this task after B02. It needs the synthetic repository.
 
    Result: The New cloud dialog opens.
 
-5. Type `<home>/smoke/app` as the repository and click **Read .horizon/cloud.yml**.
+5. Type `<home>/smoke/app` as the repository.
+
+   Result: The field shows the repository.
+
+6. Click **Read .horizon/cloud.yml**.
 
    Result: The dialog loads the profiles. **BEFORE YOU START** shows that a key is not available.
 
-6. Type `smoke-repair` in **Cloud title**.
+7. Type `smoke-repair` in **Cloud title**.
 
    Result: The title shows in the field.
 
-7. Press Enter.
+8. Press Enter.
 
    Result: The repair form opens. It keeps the title `smoke-repair` and shows
    **Save and start** and **Cancel**.
@@ -280,13 +288,17 @@ Do this task after B02. It needs the synthetic repository.
    > **CAUTION:** DO NOT CLICK **Save and start**. It saves the settings and
    > starts the cloud. The provider charges money for the worker.
 
-8. Click **Cancel**.
+9. Click **Cancel**.
 
    Result: The form closes. No cloud starts. The board has no cloud `smoke-repair`.
 
-9. Stop the second fixture with Ctrl-C and close its Device panel.
+10. Close the Device panel of the second fixture.
 
-   Result: Only the first fixture continues.
+    Result: The Device panel closes. The second fixture continues.
+
+11. Stop the second fixture with Ctrl-C.
+
+    Result: Only the first fixture continues.
 
 ### 6.7 A07 — Make sure that the settings file holds only paths
 
@@ -313,7 +325,16 @@ Do this task after B02. It needs the synthetic repository.
    grep -c -E 'rpa_|tskey-|sk-|ghp_|github_pat_' settings.json
    ```
 
-   Result: The output is `0`. The file contains no literal secret.
+   Result: The output is `0`.
+
+4. Search the settings file for the content of each saved credential file.
+
+   ```sh
+   for f in credentials/*; do grep -q -F -f "$f" settings.json && echo "found: $f"; done; echo done
+   ```
+
+   Result: The output is only `done`. The settings file contains no saved
+   credential, for example the Hetzner token. The command shows no secret.
 
 ### 6.8 A08 — Validate, examine and revoke a private registry credential
 
@@ -529,15 +550,19 @@ Do this task after D01. It uses the cloud `smoke-a`.
 
    Result: The command shows that the file does not exist.
 
-8. In Cloud settings, select **Subscription login** for Claude and click **Save settings**.
+8. In Cloud settings, select **Subscription login** for Claude.
+
+   Result: The Claude section shows **Subscription login**.
+
+9. Click **Save settings**.
 
    Result: Claude has no API key in the settings.
 
-9. On the card of `smoke-a`, click **Reconnect cloud**.
+10. On the card of `smoke-a`, click **Reconnect cloud**.
 
-   Result: The card shows Ready.
+    Result: The card shows Ready.
 
-10. In the worker shell, look for the Claude key file.
+11. In the worker shell, look for the Claude key file.
 
     ```sh
     find /workspace -name 'anthropic-api-key*' 2>/dev/null
@@ -548,15 +573,15 @@ Do this task after D01. It uses the cloud `smoke-a`.
     > **CAUTION:** THE OPERATOR PASTES THE AGENT KEY. Do not type the key with a
     > device action, because characters can change.
 
-11. In Cloud settings, select **API key** for Claude again and ask the operator to paste the key.
+12. In Cloud settings, select **API key** for Claude again and ask the operator to paste the key.
 
     Result: After **Save settings**, Claude shows **Key saved**.
 
-12. On the card of `smoke-a`, click **Reconnect cloud**.
+13. On the card of `smoke-a`, click **Reconnect cloud**.
 
     Result: The card shows Ready. The reconnect sends the saved key to the worker.
 
-13. In the worker shell, look for the Claude key file.
+14. In the worker shell, look for the Claude key file.
 
     ```sh
     find /workspace -name 'anthropic-api-key*' 2>/dev/null
@@ -567,7 +592,7 @@ Do this task after D01. It uses the cloud `smoke-a`.
     > **CAUTION:** REVOKE ONLY THE GITHUB TOKEN THAT THIS RUN MADE. Other tokens of
     > the account can give access to other work.
 
-14. Ask the operator to revoke the GitHub token at GitHub.
+15. Ask the operator to revoke the GitHub token at GitHub.
 
     Result: The token does not give access. Removal from the worker does not revoke it.
 

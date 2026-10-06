@@ -193,15 +193,19 @@ Use `smoke-a`.
 
    Result: You have the worker ID.
 
-2. Open the **Manage** tab of the card and click **Check provider**.
+2. Open the **Manage** tab of the card.
+
+   Result: The tab shows **Check provider**.
+
+3. Click **Check provider**.
 
    Result: The card shows **Checking provider**, then the result.
 
-3. Examine the result.
+4. Examine the result.
 
    Result: The card shows the same worker ID and **Ready**. Nothing starts or stops.
 
-4. In the fixture terminal, run the reconcile command of the `cloud_deploy` example.
+5. In the fixture terminal, run the reconcile command of the `cloud_deploy` example.
 
    ```sh
    <run>/bin/cloud_deploy reconcile <home>/.horizon/cloud/settings.json <home>/.horizon/cloud/<cloud-id>
@@ -328,50 +332,62 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
 ### 6.7 L07 — Make sure that idle stop works
 
-1. Open **Cloud › New cloud…** and wait 3 seconds.
+1. Open **Cloud › New cloud…**.
+
+   Result: The New cloud dialog opens.
+
+2. Wait 3 seconds.
 
    Result: The New cloud dialog opens and does not move.
 
-2. Type `smoke-x` in the title field.
+3. Type `smoke-x` in the title field.
 
    Result: The title field shows `smoke-x`.
 
-3. Type `<repo>` in the repository field and click **Read .horizon/cloud.yml**.
+4. Type `<repo>` in the repository field.
+
+   Result: The field shows `<repo>`.
+
+5. Click **Read .horizon/cloud.yml**.
 
    Result: **Profile** lists the profiles that area B committed.
 
-4. In **Profile**, select `hetzner-idle`.
+6. In **Profile**, select `hetzner-idle`.
 
    Result: The summary shows a Hetzner worker.
 
-5. In **Tailnet**, select **None**.
+7. In **Tailnet**, select **None**.
 
    Result: **None** is selected.
 
    > **CAUTION:** THIS STEP RENTS COMPUTE. Hetzner charges money for the server
    > and the volume until somebody deletes them.
 
-6. Click **Start cloud**.
+8. Click **Start cloud**.
 
    Result: The card of `smoke-x` shows **Ready**.
 
-7. Write the server, the volume and the SSH key of `smoke-x` in the resource ledger.
+9. Write the server, the volume and the SSH key of `smoke-x` in the resource ledger.
 
    Result: The ledger has three lines for `smoke-x`.
 
-8. Do not open a panel in `smoke-x`. Keep the candidate open and connected.
+10. Do not open a panel in `smoke-x`. Keep the candidate open and connected.
 
-   Result: The worker has no agent output and no CPU load.
+    Result: The worker has no agent output and no CPU load.
 
-9. Wait 15 minutes.
+11. Wait 15 minutes.
 
-   Result: The card of `smoke-x` shows **Stopped**.
+    Result: The card of `smoke-x` shows **Stopped**.
 
-10. Mark the server of `smoke-x` as deleted in the resource ledger.
+12. Mark the server of `smoke-x` as deleted in the resource ledger.
 
     Result: The ledger shows the server as deleted and the volume as kept.
 
-11. Open the **Manage** tab and click **Check provider**.
+13. Open the **Manage** tab.
+
+    Result: The tab shows **Check provider**.
+
+14. Click **Check provider**.
 
     Result: The card shows **Stopped** and offers **Resume worker**. Nothing
     starts the worker.
@@ -572,24 +588,28 @@ Use `smoke-r`.
    Result: Each active line in the ledger belongs to a cloud on the board.
 
 L05 is the last task that uses the `<build-repository>` entry of A08. Steps 3
-to 10 revoke it while the fixture runs.
+to 11 revoke it while the fixture runs.
 
-3. Open **Cloud › Cloud settings…** and wait 3 seconds.
+3. Open **Cloud › Cloud settings…**.
+
+   Result: The Cloud settings dialog opens.
+
+4. Wait 3 seconds.
 
    Result: The **Container registry** card lists `<build-repository>` from A08.
 
    > **CAUTION:** REVOKE ONLY THE `<build-repository>` ENTRY OF THIS RUN. A worker
    > that needs this credential cannot pull its image after a restart.
 
-4. On the `<build-repository>` entry, click **Revoke pull binding**.
+5. On the `<build-repository>` entry, click **Revoke pull binding**.
 
    Result: The entry shows that the provider pull credential is revoked.
 
-5. Write the status action for `<build-repository>` as in A08 step 13.
+6. Write the status action for `<build-repository>` as in A08 step 13.
 
    Result: `<data-home>/smoke/registry-status.json` names `<build-repository>` and its generation.
 
-6. Run the status action with the CLI.
+7. Run the status action with the CLI.
 
    ```sh
    <run>/bin/cloud_deploy registry <home>/.horizon/cloud/settings.json <home>/smoke/registry-status.json
@@ -597,26 +617,26 @@ to 10 revoke it while the fixture runs.
 
    Result: The output shows that the provider pull credential is revoked.
 
-7. Mark the RunPod registry credential of `<build-repository>` from G02 as deleted in the resource ledger.
+8. Mark the RunPod registry credential of `<build-repository>` from G02 as deleted in the resource ledger.
 
    Result: The ledger shows no active registry credential of this run.
 
    > **CAUTION:** REVOKE ONLY THE TWO TOKENS THAT THIS RUN MADE FOR `<build-repository>`.
    > Other tokens of the registry can give access to other work.
 
-8. Ask the operator to revoke the pull token and the push token of `<build-repository>` at the registry.
+9. Ask the operator to revoke the pull token and the push token of `<build-repository>` at the registry.
 
    Result: The tokens no longer give access. Horizon does not revoke a token at its issuer.
 
-9. Show the registry entries in the settings file.
+10. Show the registry entries in the settings file.
 
-   ```sh
-   jq '[.registries.bindings[]? | .repository]' <data-home>/.horizon/cloud/settings.json
-   ```
+    ```sh
+    jq '[.registries.bindings[]? | .repository]' <data-home>/.horizon/cloud/settings.json
+    ```
 
-   Result: Each listed entry has a revoked pull credential. Record the list in the evidence.
+    Result: Each listed entry has a revoked pull credential. Record the list in the evidence.
 
-10. Delete `<data-home>/smoke/registry-status.json`.
+11. Delete `<data-home>/smoke/registry-status.json`.
 
     Result: No registry action file of this run stays in the private home.
 

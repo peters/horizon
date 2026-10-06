@@ -91,15 +91,19 @@ Device `type` actions can change a typed key
 form shows as saved can still be wrong. This task examines the sign-in with a
 real request.
 
-1. In `smoke-a`, open the panel picker as in E01 and click **Claude Code**.
+1. In `smoke-a`, open the panel picker as in E01.
+
+   Result: The panel picker opens.
+
+2. Click **Claude Code**.
 
    Result: A Claude Code panel opens and the agent starts.
 
-2. Examine the first lines of the panel.
+3. Examine the first lines of the panel.
 
    Result: The panel shows no `Permission denied` line and no login prompt.
 
-3. Type a short request to the agent.
+4. Type a short request to the agent.
 
    ```text
    Reply with the word ready.
@@ -110,25 +114,29 @@ real request.
    > **CAUTION:** ONLY THE OPERATOR ENTERS THE KEY. A device action can change
    > the key, and a screenshot can show it.
 
-4. If the panel shows a `401` error, ask the operator to enter the key again in **Cloud settings…**.
+5. If the panel shows a `401` error, ask the operator to enter the key again in **Cloud settings…**.
 
    Result: The operator saves the key. Nobody types it with a device action.
 
-5. If the operator entered the key again, click **Reconnect cloud** on the card of `smoke-a`.
+6. If the operator entered the key again, click **Reconnect cloud** on the card of `smoke-a`.
 
    Result: The card shows Ready. The reconnect sends the new key to the worker.
 
-6. Open a new Claude Code panel and do step 3 again.
+7. Open a new Claude Code panel and do step 4 again.
 
    Result: The agent replies `ready`.
 
 ### 6.3 E03 — Start a Codex panel
 
-1. In `smoke-a`, open the panel picker as in E01 and click **Codex**.
+1. In `smoke-a`, open the panel picker as in E01.
+
+   Result: The panel picker opens.
+
+2. Click **Codex**.
 
    Result: A Codex panel opens.
 
-2. Type a short request to the agent.
+3. Type a short request to the agent.
 
    ```text
    Reply with the word ready.
@@ -136,26 +144,30 @@ real request.
 
    Result: The agent replies `ready`.
 
-3. If Codex refuses to start, examine the message in the panel.
+4. If Codex refuses to start, examine the message in the panel.
 
    Result: The message gives a clear reason, for example no login or no
    key.
 
-4. Record the result and the reason in the evidence.
+5. Record the result and the reason in the evidence.
 
    Result: The evidence shows that Codex started or gave a clear reason.
 
 ### 6.4 E04 — Load a page in a Browser panel
 
-1. In `smoke-a`, open the panel picker as in E01 and click **Browser**.
+1. In `smoke-a`, open the panel picker as in E01.
+
+   Result: The panel picker opens.
+
+2. Click **Browser**.
 
    Result: A Browser panel opens in the cloud.
 
-2. In the Claude Code panel from E02, ask the agent to open `https://example.com` with its browser tools.
+3. In the Claude Code panel from E02, ask the agent to open `https://example.com` with its browser tools.
 
    Result: The Browser panel shows the Example Domain page.
 
-3. Examine the controller label of the Browser panel.
+4. Examine the controller label of the Browser panel.
 
    Result: The label names the agent that controls the page.
 
@@ -175,11 +187,19 @@ real request.
 
 ### 6.6 E06 — Open the Editor and Usage panels
 
-1. In `smoke-a`, open the panel picker as in E01 and click **Markdown**.
+1. In `smoke-a`, open the panel picker as in E01.
+
+   Result: The panel picker opens.
+
+2. Click **Markdown**.
 
    Result: An Editor panel opens in the cloud.
 
-2. Open the panel picker again as in E01 and click **Usage**.
+3. Open the panel picker again as in E01.
+
+   Result: The panel picker opens.
+
+4. Click **Usage**.
 
    Result: A Usage panel opens in the cloud and shows usage data or a clear message.
 
@@ -205,23 +225,27 @@ real request.
 
    Result: The cloud fills the window.
 
-6. Click the Shell panel and press F11.
+6. Click the Shell panel.
+
+   Result: The Shell panel has the keyboard focus.
+
+7. Press F11.
 
    Result: The Shell panel fills the window.
 
-7. Press Escape.
+8. Press Escape.
 
    Result: The full screen view of the cloud shows again.
 
-8. Press Escape again.
+9. Press Escape again.
 
    Result: The board shows the same view as before step 5.
 
-9. Click **Grid**.
+10. Click **Grid**.
 
-   Result: The panels fill the frame in a grid.
+    Result: The panels fill the frame in a grid.
 
-10. Drag the bottom-right corner of the frame to make it smaller.
+11. Drag the bottom-right corner of the frame to make it smaller.
 
     Result: The frame becomes smaller. All panels become smaller together and do
     not overlap.

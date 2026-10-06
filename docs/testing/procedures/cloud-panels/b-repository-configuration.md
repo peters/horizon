@@ -234,16 +234,20 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: Each repository has a committed `.horizon` directory.
 
-6. Open **Cloud › New cloud…** and type `<home>/smoke/app` as the repository.
+6. Open **Cloud › New cloud…**.
+
+   Result: The New cloud dialog opens.
+
+7. Type `<home>/smoke/app` as the repository.
 
    Result: The dialog reads the repository.
 
-7. Click **Read .horizon/cloud.yml**.
+8. Click **Read .horizon/cloud.yml**.
 
    Result: **Profile** lists `hetzner-cpu`, `hetzner-idle`, `runpod-small`,
    `runpod-cpu`, `runpod-gpu` and `runpod-build`. The default is `hetzner-cpu`.
 
-8. Select `runpod-gpu` in **Profile**.
+9. Select `runpod-gpu` in **Profile**.
 
    Result: The dialog shows GPU workers. Select `hetzner-cpu` again.
 

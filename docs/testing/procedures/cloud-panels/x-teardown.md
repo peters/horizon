@@ -168,18 +168,22 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
 ### 6.3 X03 — Remove the test tailnet key and the test tailnet nodes
 
-1. Open **Settings** and click the **Tailnets** tab.
+1. Open **Settings**.
+
+   Result: The Settings window opens.
+
+2. Click the **Tailnets** tab.
 
    Result: The tab lists the test tailnet.
 
    > **CAUTION:** REMOVE ONLY THE TEST TAILNET. Other tailnets in the list
    > can belong to other tests.
 
-2. On the row of the test tailnet, click **Remove**.
+3. On the row of the test tailnet, click **Remove**.
 
    Result: The test tailnet is not in the list.
 
-3. Look for an auth key in the cloud files of the private home.
+4. Look for an auth key in the cloud files of the private home.
 
    ```sh
    grep -r -l 'tskey-' <data-home>/.horizon/cloud
@@ -187,33 +191,33 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
    Result: The output is empty. Horizon keeps auth keys only in the Secret Service.
 
-4. Open the admin console of the test tailnet in a browser panel.
+5. Open the admin console of the test tailnet in a browser panel.
 
    Result: The console lists the devices of the test tailnet.
 
-5. Find each device whose node ID agrees with a tailnet line in the resource ledger.
+6. Find each device whose node ID agrees with a tailnet line in the resource ledger.
 
    Result: You have the list of leftover test nodes. A node can have a new name
    after a resume ([issue #1310](https://github.com/peters/horizon/issues/1310)), so use the node ID.
 
-6. Record the node ID, name, last seen time and state of each leftover test node.
+7. Record the node ID, name, last seen time and state of each leftover test node.
 
    Result: The evidence lists the leftover tailnet nodes.
 
    > **CAUTION:** REMOVE ONLY THE NODE IDS THAT THE RESOURCE LEDGER RECORDS. Other
    > devices of the tailnet can belong to other people, and their access stops.
 
-7. In the admin console, remove each leftover test node.
+8. In the admin console, remove each leftover test node.
 
    Result: The console does not list the node IDs of the ledger.
 
-8. Mark each tailnet line of the resource ledger as deleted.
+9. Mark each tailnet line of the resource ledger as deleted.
 
    Result: The ledger shows no active tailnet node.
 
-9. Compare the device list with the tailnet baseline of area T.
+10. Compare the device list with the tailnet baseline of area T.
 
-   Result: The list is the same as the baseline. Each device that the ledger does not record is unchanged.
+    Result: The list is the same as the baseline. Each device that the ledger does not record is unchanged.
 
 ### 6.4 X04 — Close the Device panel and stop the fixture
 
@@ -281,9 +285,16 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 
    Result: The list contains no network volume ID from the resource ledger.
 
-3. Open the templates in the RunPod console.
+> **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
+> contains the key. Do not show the file or the request headers.
 
-   Result: The list contains no template that the run made.
+3. List the templates of the RunPod account.
+
+   ```sh
+   bash <run>/runpod-list.sh templates
+   ```
+
+   Result: Each template was also in the baseline. Horizon makes no RunPod template.
 
 > **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
 > contains the key. Do not show the file or the request headers.
@@ -302,7 +313,7 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 5. Save all RunPod lists in the format of the baseline.
 
    ```sh
-   for k in pods network-volumes registries; do bash <run>/runpod-list.sh "$k"; done > <evidence>/runpod-after.jsonl
+   for k in pods network-volumes registries templates; do bash <run>/runpod-list.sh "$k"; done > <evidence>/runpod-after.jsonl
    ```
 
    Result: The evidence shows the final RunPod state.
