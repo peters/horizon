@@ -116,8 +116,8 @@ impl CloudView {
             let result = pump(input, &responses, &rx, &frames, &latest, &waker, &stop, open);
             // Drop the receiver before publishing a follow-up error so a send
             // cannot succeed after the pump has stopped reading.
-            drop(alive);
             drop(rx);
+            drop(alive);
             if let Err(e) = result {
                 *latest.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(CloudViewState {
                     error: Some(e.to_string()),
@@ -141,7 +141,7 @@ impl CloudView {
             .kill();
     }
     pub(super) fn send(&self, command: BrowserCommand) -> bool {
-        self.tx.try_send(command).is_ok()
+        self.can_send() && self.tx.try_send(command).is_ok()
     }
     /// The receiver is still alive. A full queue can still reject one command.
     pub(super) fn can_send(&self) -> bool {

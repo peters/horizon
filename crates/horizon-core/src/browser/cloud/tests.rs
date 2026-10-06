@@ -665,11 +665,22 @@ fn cloud_command_channel_closes_when_its_receiver_exits() {
     use super::super::BrowserVideoOperation;
     let fixture = orientation_fixture();
     assert!(fixture.panel.can_accept_commands());
-    drop(fixture.alive);
     drop(fixture.receiver);
+    assert!(!fixture.panel.try_send(BrowserCommand::Reload));
+    drop(fixture.alive);
     assert!(!fixture.panel.can_accept_commands());
     assert!(!fixture.panel.try_send(BrowserCommand::Video {
         operation: BrowserVideoOperation::Start,
         options: None,
     }));
+}
+
+#[test]
+fn cloud_command_channel_rejects_sends_after_its_liveness_marker_exits() {
+    let fixture = orientation_fixture();
+    assert!(fixture.panel.can_accept_commands());
+    drop(fixture.alive);
+    assert!(!fixture.panel.can_accept_commands());
+    assert!(!fixture.panel.try_send(BrowserCommand::Reload));
+    assert!(matches!(fixture.receiver.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
