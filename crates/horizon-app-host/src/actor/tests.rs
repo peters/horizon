@@ -14,7 +14,7 @@ pub(crate) struct Transport {
     pub(crate) active: Mutex<BTreeMap<String, Value>>,
     pub(crate) creates: AtomicUsize,
     pub(crate) deletes: AtomicUsize,
-    allocation_timeouts: Mutex<Vec<Duration>>,
+    allocation_timeouts: Mutex<Vec<(Duration, Instant)>>,
     pub(crate) after_create: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     mutations: AtomicUsize,
     pub(crate) lost_create: AtomicBool,
@@ -37,7 +37,7 @@ impl ClassicTransport for Transport {
             self.mutations.fetch_add(1, Ordering::SeqCst);
         }
         if method == "POST" && path == "/session" {
-            self.allocation_timeouts.lock().unwrap().push(timeout);
+            self.allocation_timeouts.lock().unwrap().push((timeout, Instant::now()));
             let index = self.creates.fetch_add(1, Ordering::SeqCst) + 1;
             let id = format!("synthetic_session_{index:016}");
             self.active.lock().unwrap().insert(id.clone(), body.cloned().unwrap());
@@ -800,11 +800,18 @@ fn in_budget_dispatch_contention_reduces_the_provider_request_timeout() {
         }));
         receive.recv_timeout(Duration::from_secs(1)).unwrap();
     }));
+    *fixture.fake.transport.after_create.lock().unwrap() = Some(Box::new(|| {
+        std::thread::sleep(Duration::from_millis(400));
+    }));
     let deadline = Instant::now() + Duration::from_secs(10);
-    let session = actor.create(0, app.id, Duration::from_secs(10)).unwrap();
-    let budget = fixture.fake.transport.allocation_timeouts.lock().unwrap()[0];
+    let session = actor.create_until(0, app.id, deadline).unwrap();
+    let (budget, dispatched) = fixture.fake.transport.allocation_timeouts.lock().unwrap()[0];
     assert!(
-        budget <= deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(250),
+        budget <= Duration::from_secs(9),
+        "the held gate must consume at least one second"
+    );
+    assert!(
+        budget <= deadline.saturating_duration_since(dispatched) + Duration::from_millis(250),
         "provider budget must include the time spent waiting on the durable gate"
     );
     held.lock().unwrap().take().unwrap().join().unwrap();
