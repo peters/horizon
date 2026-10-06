@@ -340,10 +340,14 @@ Use these procedures alone for a run that changes their function.
    Result: Each difference is a kept Hetzner network of Horizon or a resource
    that X01 records as not owned by this run.
 
+6. Do the [cleanup of area X](cloud-panels/x-teardown.md#8-cleanup).
+
+   Result: `<run>` contains no API header file and no list script.
+
    > **CAUTION:** DELETE ONLY THE STATE DIRECTORY OF THIS RUN. It contains the saved
    > provider keys and the private data of the fixture.
 
-6. Delete the fixture state, the keyring password and the saved RunPod key copy of C07.
+7. Delete the fixture state, the keyring password and the saved RunPod key copy of C07.
 
    ```sh
    rm -r <run>/fixture && rm -f <run>/keyring-password <run>/runpod-key.saved
@@ -351,7 +355,7 @@ Use these procedures alone for a run that changes their function.
 
    Result: `<run>` contains no credential file. Keep `<evidence>` outside `<run>`.
 
-7. Make sure that `<docker-pid>` is still the Docker daemon of this run.
+8. Make sure that `<docker-pid>` is still the Docker daemon of this run.
 
    ```sh
    ps -o pid=,args= -p <docker-pid>
@@ -360,7 +364,7 @@ Use these procedures alone for a run that changes their function.
    Result: The command line names `dockerd` and `<docker-data>`. If it does
    not, do not stop the process. Find the daemon of this run by its data root.
 
-8. Stop the rootless Docker daemon of this run.
+9. Stop the rootless Docker daemon of this run.
 
    ```sh
    kill <docker-pid>
@@ -368,18 +372,18 @@ Use these procedures alone for a run that changes their function.
 
    Result: The daemon stops its containers and exits.
 
-9. Make sure that the daemon exited.
+10. Make sure that the daemon exited.
 
-   ```sh
-   ps -o pid=,comm= -p <docker-pid>
-   ```
+    ```sh
+    ps -o pid=,comm= -p <docker-pid>
+    ```
 
-   Result: The output is empty.
+    Result: The output is empty.
 
-   > **CAUTION:** DELETE ONLY THE DOCKER DATA ROOT OF THIS RUN. Other Docker data
-   > roots can contain images and volumes of other people.
+    > **CAUTION:** DELETE ONLY THE DOCKER DATA ROOT OF THIS RUN. Other Docker data
+    > roots can contain images and volumes of other people.
 
-10. Delete the Docker data root and the socket directory of this run.
+11. Delete the Docker data root and the socket directory of this run.
 
     ```sh
     rootlesskit rm -rf <docker-data> && rm -rf <run>/docker

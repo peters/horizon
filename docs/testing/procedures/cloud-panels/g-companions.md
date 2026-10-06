@@ -285,41 +285,67 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The answer gives an `operation_id` and a phase at once.
 
-4. Call `cloud_companion_operation` with the same `cloud`, `alias` and `operation_id` until `done` is true.
+4. Call `cloud_companion_operation` with the same `cloud`, `alias` and `operation_id`.
 
-   Result: The last phase is Ready. The companion that runs did not start a new worker.
+   Result: The answer shows the phase, `done` and `resend`.
+
+5. If the answer shows `resend: true`, send the request of step 3 again with its `operation_id`.
+
+   Result: The operation continues. Nothing else continues it, because a poll only reads the phase.
+
+6. If the answer shows `done: false`, do step 4 again after 10 seconds.
+
+   Result: At last the answer shows `done: true`. The last phase is Ready. The
+   companion that runs did not start a new worker.
 
    > **CAUTION:** STOP ONLY THE TEST COMPANION. On Hetzner, the stop deletes the
    > server of `smoke-lib`.
 
-5. Call `cloud_companion_stop` with the source cloud and the alias.
+7. Call `cloud_companion_stop` with the source cloud and the alias.
 
    Result: The answer gives an `operation_id` and a phase.
 
-6. Call `cloud_companion_operation` with the new `operation_id` until `done` is true.
+8. Call `cloud_companion_operation` with the `operation_id` of step 7.
 
-   Result: The card of `smoke-lib` shows **Stopped**.
+   Result: The answer shows the phase, `done` and `resend`.
 
-7. Record the deletion of the server of `smoke-lib` in the resource ledger.
+9. If the answer shows `resend: true`, send the request of step 7 again with its `operation_id`.
 
-   Result: The ledger shows the server as deleted.
+   Result: The stop continues.
 
-   > **CAUTION:** THIS STEP RENTS COMPUTE. The request makes a new Hetzner server
-   > for `smoke-lib`.
+10. If the answer shows `done: false`, do step 8 again after 10 seconds.
 
-8. Call `cloud_companion_ensure_ready` with the source cloud and the alias.
+    Result: At last the answer shows `done: true`. The card of `smoke-lib` shows **Stopped**.
 
-   Result: The answer gives a new `operation_id`.
+11. Record the deletion of the server of `smoke-lib` in the resource ledger.
 
-9. Call `cloud_companion_operation` until `done` is true.
+    Result: The ledger shows the server as deleted.
 
-   Result: The last phase is Ready. The card of `smoke-lib` shows **Ready**.
+    > **CAUTION:** THIS STEP RENTS COMPUTE. The request makes a new Hetzner server
+    > for `smoke-lib`.
 
-10. Write the new server ID of `smoke-lib` in the resource ledger.
+12. Call `cloud_companion_ensure_ready` with the source cloud and the alias.
+
+    Result: The answer gives a new `operation_id`.
+
+13. Call `cloud_companion_operation` with the `operation_id` of step 12.
+
+    Result: The answer shows the phase, `done` and `resend`.
+
+14. If the answer shows `resend: true`, send the request of step 12 again with its `operation_id`.
+
+    Result: The operation continues.
+
+15. If the answer shows `done: false`, do step 13 again after 10 seconds.
+
+    Result: At last the answer shows `done: true` and a Ready phase. The card of
+    `smoke-lib` shows **Ready**.
+
+16. Write the new server ID of `smoke-lib` in the resource ledger.
 
     Result: The ledger contains the new server.
 
-11. Send the same `cloud_companion_ensure_ready` request again with the `operation_id` of step 8.
+17. Send the same `cloud_companion_ensure_ready` request again with the `operation_id` of step 12.
 
     Result: The answer gives the same operation. No second worker starts.
 

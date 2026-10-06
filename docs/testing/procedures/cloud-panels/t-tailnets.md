@@ -678,13 +678,17 @@ This task needs a root shell. Use the SSH route of E09 in
 
 2. Call `cloud_companion_operation` with the same `cloud`, `alias` and `operation_id`.
 
-   Result: The answer shows the phase of the operation.
+   Result: The answer shows the phase, `done` and `resend`.
 
-3. If the answer shows `done: false`, call `cloud_companion_operation` again after 10 seconds.
+3. If the answer shows `resend: true`, send the request of step 1 again with its `operation_id`.
+
+   Result: The operation continues. A poll only reads the phase and does not continue it.
+
+4. If the answer shows `done: false`, do step 2 again after 10 seconds.
 
    Result: At last the answer shows `done: true` and a Ready phase.
 
-4. Call `cloud_companion_ensure_ready` with a synthetic auth key as the tailnet.
+5. Call `cloud_companion_ensure_ready` with a synthetic auth key as the tailnet.
 
    ```json
    {"cloud":"<smoke-a cloud ID>","alias":"lib","tailnet":"tskey-auth-SYNTHETICVALUE"}
@@ -692,7 +696,7 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The tool refuses the request. The answer does not contain `SYNTHETICVALUE`.
 
-5. Search the agent log and the candidate log for the synthetic value.
+6. Search the agent log and the candidate log for the synthetic value.
 
    Result: No log contains `SYNTHETICVALUE`.
 
