@@ -500,7 +500,7 @@ impl Drop for Lookup {
 /// limit is a general failure.
 fn resolve(lookups: &Arc<AtomicUsize>, name: &str, port: u16) -> Result<Vec<SocketAddr>, Reply> {
     lookups
-        .try_update(Ordering::AcqRel, Ordering::Acquire, |running| {
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |running| {
             (running < MAX_LOOKUPS).then_some(running + 1)
         })
         .map_err(|_| Reply::GeneralFailure)?;

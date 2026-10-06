@@ -21,7 +21,7 @@ pub(super) struct Permit;
 impl Permit {
     pub(super) fn acquire() -> Option<Self> {
         ACTIVE_FETCHES
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < MAX_ACTIVE_FETCHES).then_some(n + 1)
             })
             .ok()

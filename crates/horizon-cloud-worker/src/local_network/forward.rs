@@ -118,7 +118,7 @@ struct Slot(Arc<AtomicUsize>);
 impl Slot {
     fn take(relays: &Arc<AtomicUsize>) -> Option<Self> {
         relays
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < MAX_RELAYS).then_some(count + 1)
             })
             .ok()

@@ -271,7 +271,7 @@ impl Stream {
                 // Writers can start out of order; only a newer base may win.
                 let _ = self
                     .playback_base
-                    .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                         (current == NO_BASE || next.pts > current).then_some(next.pts)
                     });
                 next.pts

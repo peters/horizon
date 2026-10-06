@@ -341,7 +341,7 @@ pub fn poll(
                 continue;
             }
             if USAGE_WORKERS
-                .try_update(
+                .fetch_update(
                     std::sync::atomic::Ordering::AcqRel,
                     std::sync::atomic::Ordering::Acquire,
                     |n| (n < 4).then_some(n + 1),
