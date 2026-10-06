@@ -35,6 +35,8 @@ pub struct Host {
 }
 impl Host {
     pub fn new() -> io::Result<Self> {
+        // First, before anything reads the identity.
+        host_instance::adopt()?;
         let root = BrowserRuntimePaths::resolve().root().join("cloud-browser-history");
         std::fs::create_dir_all(&root)?;
         let mut closed = std::collections::BTreeSet::new();
@@ -50,8 +52,6 @@ impl Host {
             Err(error) => return Err(error),
         };
         let remote_allocations = super::remote::Allocations::new(root.join("remote-holds"))?;
-        // Last, so a published value always belongs to a service that started.
-        host_instance::publish(Path::new(host_instance::PUBLISHED), manifest::host_instance())?;
         Ok(Self {
             capabilities,
             browsers: BTreeMap::new(),

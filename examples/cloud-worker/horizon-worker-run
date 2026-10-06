@@ -39,9 +39,8 @@ export HORIZON_SESSION_DIR="/workspace/session-data/$id"
 mkdir -p /workspace/locks
 export HORIZON_GPU_LOCK=/workspace/locks/gpu.lock
 unset HORIZON HORIZON_BROWSER_HOST_INSTANCE
-# The root control service publishes its browser host instance here for this unprivileged
-# session; its browser runtime root stays private to it.
-# The supervisor removes the file at start and stop, so the read itself decides the fallback.
+# The root supervisor publishes the control service's browser host instance here after the
+# service answers. It removes the file at start and stop, so the read itself decides the fallback.
 host_instance=/run/horizon-worker/browser-host-instance
 if host_value="$(cat "$host_instance" 2>/dev/null)" && [ -n "$host_value" ]; then
     export HORIZON_BROWSER_HOST_INSTANCE="$host_value"

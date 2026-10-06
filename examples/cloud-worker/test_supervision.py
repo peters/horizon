@@ -5,6 +5,7 @@ import resource
 import signal
 from pathlib import Path
 import runpy
+import socket
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ MODULE = runpy.run_path(str(Path(__file__).with_name('horizon-worker-supervise')
 Supervisor = MODULE['Supervisor']
 CHECK = MODULE['check_ready']
 DESKTOP_READY = MODULE['desktop_ready']
+HOST_INSTANCE_ENV = MODULE['HOST_INSTANCE_ENV']
 
 
 class SupervisionTests(unittest.TestCase):
@@ -150,38 +152,128 @@ class SupervisionTests(unittest.TestCase):
             self.supervisor.wait_until(lambda: True, 'unused')
         self.assertFalse((self.root / 'services.json').exists())
 
-    def test_close_withdraws_the_published_browser_host_instance(self):
-        # A later control service publishes a new value; until then sessions must not get this one.
-        # This control service publishes again while it stops, so only a removal after the stop holds.
+    def free_endpoint(self):
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            return probe.getsockname()
+
+    def control_code(self, endpoint, delay=0):
+        # Stands in for horizon-cloud-worker serve: it records the assigned browser host
+        # instance, then answers each request line on the endpoint.
+        return ('import os, pathlib, socket, time\n'
+                f'pathlib.Path({str(self.root / "assigned")!r}).write_text(os.environ.get({HOST_INSTANCE_ENV!r}, ""))\n'
+                f'time.sleep({delay})\n'
+                f'listener = socket.create_server({endpoint!r})\n'
+                'while True:\n'
+                '    connection, _ = listener.accept()\n'
+                '    with connection:\n'
+                '        connection.makefile("rb").readline()\n'
+                '        connection.sendall(b\'{"browsers":[]}\\n\')\n')
+
+    def start_control(self, code):
+        return self.supervisor.start_control([sys.executable, '-c', code])
+
+    def test_control_runs_as_the_agent_with_isolation_and_ssh_stays_privileged(self):
+        isolation = self.root / 'agent-isolation'
+        isolation.touch()
+        launched = []
+
+        class Launched(Exception):
+            pass
+
+        def popen(command, **options):
+            launched.append((command, options.get('env')))
+            raise Launched()
+        with mock.patch.dict(Supervisor.start.__globals__, AGENT_ISOLATION=isolation), \
+                mock.patch.object(subprocess, 'Popen', side_effect=popen):
+            for start in [self.supervisor.start_control, *[lambda name=name: self.supervisor.start(name, ['service'])
+                                                           for name in ['xvfb', 'sshd', 'idle']]]:
+                with self.assertRaises(Launched):
+                    start()
+            isolation.unlink()
+            with self.assertRaises(Launched):
+                self.supervisor.start_control()
+        launcher = ['/usr/local/bin/horizon-worker-tailnet', 'agent']
+        (control, environment), xvfb, sshd, idle, (privileged, later) = launched
+        self.assertEqual(control, launcher + ['horizon-cloud-worker', 'serve'])
+        self.assertEqual(xvfb[0], launcher + ['service'])
+        self.assertEqual(sshd, (['service'], None))
+        self.assertEqual(idle, (['service'], None))
+        self.assertEqual(privileged, ['horizon-cloud-worker', 'serve'], 'custom images without isolation')
+        self.assertTrue(environment[HOST_INSTANCE_ENV])
+        self.assertEqual(environment.get('PATH'), os.environ.get('PATH'), 'the rest of the environment is kept')
+        self.assertEqual(later[HOST_INSTANCE_ENV], self.supervisor.host_instance)
+        self.assertNotEqual(later[HOST_INSTANCE_ENV], environment[HOST_INSTANCE_ENV],
+                            'each control service gets a new value')
+
+    def test_the_assigned_value_is_published_only_after_the_service_answers(self):
         published = self.root / 'browser-host-instance'
-        ready = self.root / 'control-ready'
-        self.start('control', 'import pathlib, signal, sys, time\n'
-                   'def stop(*_):\n'
-                   '    pathlib.Path(' + repr(str(published)) + ').write_text("late-host\\n")\n'
-                   '    sys.exit(0)\n'
-                   'signal.signal(signal.SIGTERM, stop)\n'
-                   'pathlib.Path(' + repr(str(published)) + ').write_text("earlier-host\\n")\n'
-                   'pathlib.Path(' + repr(str(ready)) + ').touch()\n'
-                   'time.sleep(60)\n')
-        deadline = time.monotonic() + 5
-        while not ready.exists() and time.monotonic() < deadline:
-            time.sleep(.01)
+        endpoint = self.free_endpoint()
+        self.supervisor.control_endpoint = endpoint
+        self.start_control(self.control_code(endpoint, delay=.3))
+        self.assertFalse(published.exists())
+        self.supervisor.await_control()
+        value = (self.root / 'assigned').read_text()
+        self.assertTrue(value)
+        self.assertEqual(value, self.supervisor.host_instance)
+        self.assertEqual(published.read_text(), value + '\n')
+        self.assertEqual(published.stat().st_mode & 0o777, 0o644, 'agent sessions can read it')
+        self.assertFalse(published.with_name('browser-host-instance.new').exists())
+
+    def test_close_withdraws_the_published_browser_host_instance(self):
+        # The next control service gets a new value; until then sessions must not get this one.
+        published = self.root / 'browser-host-instance'
+        endpoint = self.free_endpoint()
+        self.supervisor.control_endpoint = endpoint
+        self.start_control(self.control_code(endpoint))
+        self.supervisor.await_control()
         self.assertTrue(published.exists())
         self.supervisor.close()
         self.assertFalse(published.exists())
 
-    def test_readiness_waits_for_the_published_browser_host_instance(self):
-        published = self.root / 'browser-host-instance'
-        self.start('control', 'import pathlib, time\ntime.sleep(.3)\n'
-                   'pathlib.Path(' + repr(str(published)) + ').write_text("host\\n")\ntime.sleep(60)\n')
-        self.supervisor.await_control()
-        self.assertEqual(published.read_text(), 'host\n')
-
-    def test_a_control_service_that_fails_before_publication_is_reported(self):
-        self.start('control', 'import time\ntime.sleep(.2)\nraise SystemExit(1)\n')
+    def test_a_control_service_that_fails_before_it_answers_is_reported(self):
+        self.supervisor.control_endpoint = self.free_endpoint()
+        self.start_control('import time\ntime.sleep(.2)\nraise SystemExit(1)\n')
         with self.assertRaisesRegex(ValueError, 'Required worker service exited: control'):
             self.supervisor.await_control()
         self.assertFalse((self.root / 'browser-host-instance').exists())
+
+    def test_only_a_complete_answer_proves_that_the_control_service_is_ready(self):
+        answers = MODULE['control_answers']
+        self.assertFalse(answers(self.free_endpoint()), 'nothing listens')
+        for answer, ready in [(b'', False), (b'not json\n', False), (b'[]\n', False), (b'{}\n', False),
+                              (b'{"browsers":[],"error":"Worker stopped"}\n', False),
+                              (b'{"browsers":[],"error":null}\n', True)]:
+            with self.subTest(answer=answer):
+                listener = socket.create_server(self.free_endpoint())
+                self.addCleanup(listener.close)
+                requests = []
+
+                def reply(answer=answer, listener=listener):
+                    connection, _ = listener.accept()
+                    with connection:
+                        requests.append(connection.makefile('rb').readline())
+                        connection.sendall(answer)
+                server = threading.Thread(target=reply)
+                server.start()
+                self.assertEqual(answers(listener.getsockname()), ready)
+                server.join(5)
+                self.assertEqual(requests, [b'{"operation":"list"}\n'])
+
+    def test_publication_replaces_an_older_value_and_a_private_leftover(self):
+        published = self.root / 'browser-host-instance'
+        leftover = published.with_name('browser-host-instance.new')
+        leftover.write_text('partial')
+        leftover.chmod(0o600)
+        umask = os.umask(0o077)
+        try:
+            MODULE['publish_readable'](published, 'older-host')
+            MODULE['publish_readable'](published, 'current-host')
+        finally:
+            os.umask(umask)
+        self.assertEqual(published.read_text(), 'current-host\n')
+        self.assertEqual(published.stat().st_mode & 0o777, 0o644)
+        self.assertFalse(leftover.exists())
 
     def test_bootstrap_timeout_checks_real_readiness_without_replacing_services(self):
         child = self.start('xvfb')
