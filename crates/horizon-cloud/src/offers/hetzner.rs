@@ -3,6 +3,7 @@
 //! is reported but never used to hide an offer.
 use super::{DEFAULT_LIMIT, DEFAULT_STORAGE_GB, MAX_HOURS, MAX_LIMIT, MONTH_HOURS, Offer, Requirements, normalize};
 use crate::hetzner::catalog::{self, Catalog};
+use crate::prices::Availability;
 use time::{Date, Month, OffsetDateTime};
 
 /// Whether Horizon can create clouds on Hetzner: deploy, stop, resume, check and
@@ -128,6 +129,18 @@ fn priced(
         interruptible: false,
         rentable: DEPLOYABLE,
     })
+}
+
+/// The stock a Hetzner offer reads as where stock filters or picks apply. The flag is
+/// advisory and creation confirms the exact type and location, so an unlisted offer
+/// reads as low stock and never as sold out: a stock filter keeps it.
+#[must_use]
+pub(super) fn advisory_stock(offer: &Offer) -> Availability {
+    if offer.availability == "listed" {
+        Availability::High
+    } else {
+        Availability::Low
+    }
 }
 
 /// An amount billed per started hour, and at most `monthly` in each calendar month

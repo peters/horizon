@@ -194,8 +194,10 @@ ranked: `cloud_deploy offers SETTINGS [REQUIREMENTS_JSON]` from this computer, a
 `cloud_offers` tool for agents on its workers once the host sends them the catalog.
 Native Hetzner offers remain in `other_providers`. The additional `comparison`
 orders offers from every configured provider by `estimated_total_usd`, using dated
-ECB reference rates. Check `comparison.complete` before calling its first offer
-the cheapest match; a failed catalog or unavailable conversion makes it false.
+ECB reference rates. If two totals are equal, each provider keeps its own order.
+The **New cloud** worker list uses the same order. Check `comparison.complete`
+before calling its first offer the cheapest match; a failed catalog or
+unavailable conversion makes it false.
 Billing stays in each provider's currency.
 
 - native amounts are euros, net of VAT, and `max_hourly` is read in euros for them;
@@ -220,8 +222,9 @@ Repository `min_cpu` and `min_memory_gb` define minimum requirements. The picker
 shows cheapest, balanced and most powerful matches for the requested duration,
 with storage and IPv4 included. All providers is the default browsing scope;
 provider buttons narrow it. In stock only starts checked; below-minimum workers
-start hidden and can be inspected but cannot be selected. Hetzner's listed stock
-is advisory, and unchecking the stock filter exposes unlisted types too.
+start hidden and can be inspected but cannot be selected. Hetzner's availability
+flag is advisory. **In stock only** does not hide an unlisted type. Its row shows
+**Unlisted · advisory**, and the three picks can use it.
 
 The estimate uses USD for comparisons and retains euro prices for billing.
 Reference rates come from the [ECB](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html),

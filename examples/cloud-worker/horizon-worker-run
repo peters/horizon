@@ -38,8 +38,16 @@ export HORIZON_SESSION_DIR="/workspace/session-data/$id"
 # Shared by every session on this worker; see horizon-worker-gpu-lock.
 mkdir -p /workspace/locks
 export HORIZON_GPU_LOCK=/workspace/locks/gpu.lock
-unset HORIZON
-export HORIZON_BROWSER_HOST_INSTANCE="$(cat "$HORIZON_BROWSER_ROOT/cloud-host-instance")"
+unset HORIZON HORIZON_BROWSER_HOST_INSTANCE
+# The root control service publishes its browser host instance here for this unprivileged
+# session; its browser runtime root stays private to it.
+# The supervisor removes the file at start and stop, so the read itself decides the fallback.
+host_instance=/run/horizon-worker/browser-host-instance
+if host_value="$(cat "$host_instance" 2>/dev/null)" && [ -n "$host_value" ]; then
+    export HORIZON_BROWSER_HOST_INSTANCE="$host_value"
+else
+    printf 'The worker has not published its browser host instance (%s); browser tools in this session cannot identify their workspace.\n' "$host_instance" >&2
+fi
 [ "$agent" != shell ] || agent=bash
 if [ "$agent" = claude ]; then
     # Readiness requires the runtime version recorded by the image.

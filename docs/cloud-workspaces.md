@@ -409,10 +409,20 @@ rates; cross-provider ranking requires a current dated quote. With **In stock on
 checked, starting points include only workers reported in stock, using the exact
 capacity check for the selected CPU size. If none match, all three starting points
 are empty. Uncheck it to include unavailable workers.
-Hetzner availability is advisory and creation rechecks the exact type and location. CPU workers are more powerful with more vCPUs and then more memory; GPU types
+Hetzner availability is advisory. Horizon examines the exact type and location
+again when it creates the cloud. Thus the filter does not hide an unlisted Hetzner
+type. Its row shows **Unlisted · advisory**, and the starting points can use it. CPU workers are more powerful with more vCPUs and then more memory; GPU types
 rank by price, which follows their performance more closely than their memory does.
 Search and the **In stock only** filter are always visible above the full worker
-list, with a count of the results and workers hidden by requirements. **In stock
+list, with a count of the results and workers hidden by requirements.
+The full worker list uses the order of the `cloud_offers` comparison. The workers
+that meet the requirements come first, with the cheapest estimated total first.
+The workers below the requirements follow in the same order. Each row shows the
+hourly price in the billing currency. If the dialog can convert the estimate, the
+row also shows the estimated total in the comparison currency. Without a current
+exchange rate, a row in another currency shows only its hourly price, and the
+dialog shows that the comparison is incomplete. If two totals are equal, each
+provider keeps its own order. **In stock
 only** is checked by default; uncheck it to show sold-out workers. Opening the
 dialog or changing profiles restores these filter defaults. A CPU size is offered only when a
 flavor can hold the profile's container disk. A GPU profile always requests one
@@ -471,7 +481,8 @@ Agents in Horizon panels can ask for the same prices through the `cloud_offers`
 tool of Horizon's MCP server, for example "the cheapest GPU with at least 24 GB in
 Europe for 10 hours". It returns up to 50 offers, cheapest estimated total first:
 each with its hourly price, an estimate for the expected hours including 20 GB (or
-the requested size) of workspace storage, for a CPU size the flavors a cloud of that
+the requested size) of workspace storage and, for RunPod, the default 20 GB container
+disk of a profile, for a CPU size the flavors a cloud of that
 size requests (from Cloud settings) priced at the dearest, since RunPod picks one, availability (CPU sizes are confirmed
 when a cloud is created), the regions with that GPU in stock, and that it runs on
 provider-operated hosts. The running Horizon answers, fetching prices when they are

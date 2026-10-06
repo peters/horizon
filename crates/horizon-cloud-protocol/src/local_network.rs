@@ -11,7 +11,8 @@ use std::{
     time::Duration,
 };
 
-/// Worker directory for the bridge socket, the helper's control socket and its status.
+/// Root-only worker directory for the bridge sockets and the helper's private control socket.
+/// Agents reach the helper on a socket outside it.
 pub const DIRECTORY: &str = "/run/horizon-local-network";
 /// Printed by `horizon-cloud-worker local-network prepare` on an image that supports the bridge.
 pub const PREPARED: &str = "horizon-local-network=1";

@@ -18,7 +18,7 @@ pub use client::{CastClient, Event};
 pub use discovery::{Receiver, discover};
 #[cfg(feature = "encoder")]
 pub use live::LiveCastSink;
-pub use live::{LiveCast, LiveOptions, LiveState, Transport, avcc_to_annexb};
+pub use live::{AudioFormat, LiveCast, LiveOptions, LiveState, Transport, avcc_to_annexb};
 pub use media::{MediaController, MediaLoad, MediaStatus, StreamType};
 pub use receiver::{Application, DEFAULT_MEDIA_RECEIVER, ReceiverStatus, Volume};
 
