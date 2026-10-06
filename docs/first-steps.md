@@ -388,6 +388,7 @@ A first cloud needs these items today:
 | RunPod API key or Hetzner API token | Required | **Cloud > Cloud settings** |
 | Worker image in a registry | Required. There is no public default image. | Build it from [`examples/cloud-worker`](../examples/cloud-worker/README.md) |
 | Git, OpenSSH, Docker with buildx | Required | This computer |
+| `.horizon/cloud.yml` in the selected commit | Required, or local image-only settings in **More options** | The repository. **New cloud** can open a setup agent that writes it. See [Repository setup](cloud-workspaces.md#repository-setup-and-deployment) |
 | Registry push and pull logins | Required for a private image | **Cloud settings > Container registry** |
 | Agent API key or subscription login | One for each agent | **Cloud settings** |
 | Tailscale auth key | Optional | **Settings > Tailnets** |
@@ -407,14 +408,14 @@ from `origin` before deploy. Commit and update the branch before you start.
    Result: The **Where is your code?** step opens.
 
 4. If the code is on a Git server, paste the repository link.
-5. If the code is on this computer, click **Choose folder…**.
-6. If you clicked **Choose folder…**, select the folder.
+5. If the code is on this computer, click **Browse…**.
+6. If you clicked **Browse…**, select the folder.
 7. Select a worker in the catalog.
 
    Result: The summary shows the compute price for each hour and an estimated
    cost for the run. The default run time is one hour.
 
-8. Click **Start**.
+8. Click **Start cloud**.
 
    Result: The cloud card shows each stage with its time.
 
