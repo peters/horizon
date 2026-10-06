@@ -2,6 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 use crate::cdp::CdpLink;
 use crate::disclosure::{
@@ -19,6 +20,8 @@ use super::{
 };
 
 const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
+/// Poll interval while the disclosure target loads its bootstrap page.
+const DISCLOSURE_DOCUMENT_POLL: Duration = Duration::from_millis(20);
 const DEVTOOLS_PORT_REAP_FAILURE: &str =
     "failed to reap Chromium after a DevTools-port conflict; aborting retry to preserve exact process ownership";
 
@@ -367,28 +370,80 @@ fn read_disclosure_metadata_from_target(
         .get("sessionId")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "Target.attachToTarget omitted sessionId".to_string())?;
-    for (method, params) in [
-        ("Runtime.enable", serde_json::json!({})),
-        (
+    call_in_target(
+        link,
+        stop_requested,
+        session_id,
+        "Runtime.enable",
+        &serde_json::json!({}),
+    )?;
+    wait_for_disclosure_document(link, stop_requested, session_id, CALL_TIMEOUT)?;
+    call_in_target(
+        link,
+        stop_requested,
+        session_id,
+        "Runtime.evaluate",
+        &serde_json::json!({
+            "expression": CHROMIUM_USER_AGENT_METADATA_EXPRESSION,
+            "awaitPromise": true,
+            "returnByValue": true,
+        }),
+    )
+}
+
+/// `Target.createTarget` can answer before the new target commits its URL. Until then the
+/// target shows its initial `about:blank` document, which is not a secure context, so
+/// `navigator.userAgentData` is absent there. Read the metadata only from the bootstrap page.
+fn wait_for_disclosure_document(
+    link: &mut CdpLink,
+    stop_requested: &AtomicBool,
+    session_id: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let location = call_in_target(
+            link,
+            stop_requested,
+            session_id,
             "Runtime.evaluate",
-            serde_json::json!({
-                "expression": CHROMIUM_USER_AGENT_METADATA_EXPRESSION,
-                "awaitPromise": true,
-                "returnByValue": true,
-            }),
-        ),
-    ] {
-        let result = link
-            .call_and_drain_until(CALL_TIMEOUT, method, &params, Some(session_id), || {
-                stop_requested.load(Ordering::Acquire)
-            })
-            .result
-            .map_err(|error| format!("{method}: {error}"))?;
-        if method == "Runtime.evaluate" {
-            return Ok(result);
+            &serde_json::json!({ "expression": "location.href", "returnByValue": true }),
+        );
+        let shown = match &location {
+            Ok(result) => result
+                .pointer("/result/value")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("no document URL")
+                .to_string(),
+            Err(error) => error.clone(),
+        };
+        if shown == CHROMIUM_DISCLOSURE_BOOTSTRAP_URL {
+            return Ok(());
         }
+        if stop_requested.load(Ordering::Acquire) {
+            return Err("browser startup was cancelled".to_string());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "the disclosure target did not show {CHROMIUM_DISCLOSURE_BOOTSTRAP_URL}; last result: {shown}"
+            ));
+        }
+        std::thread::sleep(DISCLOSURE_DOCUMENT_POLL);
     }
-    Err("Runtime.evaluate did not return native user-agent metadata".to_string())
+}
+
+fn call_in_target(
+    link: &mut CdpLink,
+    stop_requested: &AtomicBool,
+    session_id: &str,
+    method: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    link.call_and_drain_until(CALL_TIMEOUT, method, params, Some(session_id), || {
+        stop_requested.load(Ordering::Acquire)
+    })
+    .result
+    .map_err(|error| format!("{method}: {error}"))
 }
 
 fn call_during_startup(
@@ -705,5 +760,103 @@ mod tests {
 
         let completion = session.shutdown_signal();
         assert!(completion.wait(Duration::from_secs(2)));
+    }
+}
+
+#[cfg(test)]
+mod disclosure_document_tests {
+    use std::net::TcpListener;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+
+    use serde_json::{Value, json};
+    use tungstenite::Message;
+
+    use crate::cdp::CdpLink;
+    use crate::disclosure::{CHROMIUM_DISCLOSURE_BOOTSTRAP_URL, CHROMIUM_USER_AGENT_METADATA_EXPRESSION};
+
+    /// A target that shows its initial `about:blank` document for `blank_reads` location reads,
+    /// as Chromium does when `Target.createTarget` answers before the navigation commits.
+    fn target(blank_reads: usize) -> (CdpLink, std::thread::JoinHandle<Vec<Value>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+        let address = listener.local_addr().expect("mock address");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept mock");
+            let mut socket = tungstenite::accept(stream).expect("mock handshake");
+            let mut commands = Vec::new();
+            let mut location_reads = 0;
+            while let Ok(Message::Text(text)) = socket.read() {
+                let command: Value = serde_json::from_str(&text).expect("command JSON");
+                let result = match (command["method"].as_str(), command["params"]["expression"].as_str()) {
+                    (Some("Target.attachToTarget"), _) => json!({ "sessionId": "bootstrap" }),
+                    (Some("Runtime.evaluate"), Some("location.href")) => {
+                        location_reads += 1;
+                        let href = if location_reads > blank_reads {
+                            CHROMIUM_DISCLOSURE_BOOTSTRAP_URL
+                        } else {
+                            "about:blank"
+                        };
+                        json!({ "result": { "type": "string", "value": href } })
+                    }
+                    (Some("Runtime.evaluate"), _) if location_reads > blank_reads => {
+                        json!({ "result": { "type": "object", "value": { "platform": "Linux" } } })
+                    }
+                    // Outside a secure context the metadata expression yields null.
+                    (Some("Runtime.evaluate"), _) => {
+                        json!({ "result": { "type": "object", "subtype": "null", "value": null } })
+                    }
+                    _ => json!({}),
+                };
+                commands.push(command.clone());
+                let reply = json!({ "id": command["id"], "result": result });
+                socket.send(Message::Text(reply.to_string().into())).expect("respond");
+            }
+            commands
+        });
+        let link = CdpLink::connect(&format!("ws://{address}/")).expect("connect mock");
+        (link, server)
+    }
+
+    fn reads_of(commands: &[Value], expression: &str) -> usize {
+        commands
+            .iter()
+            .filter(|command| command["params"]["expression"] == expression)
+            .count()
+    }
+
+    #[test]
+    fn metadata_is_read_only_after_the_target_shows_the_bootstrap_page() {
+        let (mut link, server) = target(2);
+        let metadata =
+            super::read_disclosure_metadata_from_target(&mut link, &AtomicBool::new(false), "bootstrap-target")
+                .unwrap_or_else(|error| panic!("read metadata: {error}"));
+        drop(link);
+        let commands = server.join().expect("mock server");
+
+        assert_eq!(metadata["result"]["value"]["platform"], "Linux");
+        assert_eq!(reads_of(&commands, "location.href"), 3);
+        assert_eq!(reads_of(&commands, CHROMIUM_USER_AGENT_METADATA_EXPRESSION), 1);
+        assert_eq!(
+            commands.last().map(|command| &command["params"]["expression"]),
+            Some(&json!(CHROMIUM_USER_AGENT_METADATA_EXPRESSION))
+        );
+    }
+
+    #[test]
+    fn a_target_that_never_shows_the_bootstrap_page_fails_without_reading_metadata() {
+        let (mut link, server) = target(usize::MAX);
+        let Err(error) = super::wait_for_disclosure_document(
+            &mut link,
+            &AtomicBool::new(false),
+            "bootstrap",
+            Duration::from_millis(100),
+        ) else {
+            panic!("the initial document was accepted as the bootstrap page");
+        };
+        drop(link);
+        let commands = server.join().expect("mock server");
+
+        assert!(error.contains("about:blank"), "{error}");
+        assert_eq!(reads_of(&commands, CHROMIUM_USER_AGENT_METADATA_EXPRESSION), 0);
     }
 }
