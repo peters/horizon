@@ -167,7 +167,7 @@ child is the frozen candidate.
 
    Result: The evidence contains the launcher changes.
 
-7. Do steps 1 to 4 of S05.
+7. Do steps 1 and 2 of S05.
 
    Result: The launcher copy starts an unlocked keyring with the candidate.
 
@@ -260,7 +260,7 @@ child is the frozen candidate.
 ### 6.5 S05 — Give the fixture a Secret Service
 
 The candidate keeps tailnet auth keys in the Secret Service. The fixture has its
-own D-Bus, so the keyring of the operator is not available. Do steps 1 to 4
+own D-Bus, so the keyring of the operator is not available. Do steps 1 and 2
 before the first start of the launcher in S02 step 9. The launcher refuses a
 state directory that exists when it starts. A restart through the restart marker
 keeps the launcher and its state directory, so it needs no new keyring.
@@ -274,23 +274,24 @@ keeps the launcher and its state directory, so it needs no new keyring.
    Result: The file contains a random password. Keep it private. It unlocks the
    keyring that later holds the test tailnet auth key. The main cleanup deletes it.
 
-2. In the launcher copy, start `gnome-keyring-daemon` after the D-Bus daemon.
+2. In the launcher copy, add these lines directly after the line `sandbox.wait_for_unix_socket(box.host_socket, children[-1])`.
 
-   ```text
-   gnome-keyring-daemon --foreground --unlock --components=secrets
+   ```python
+           keyring_log = (args.state / 'keyring.log').open('wb')
+           logs.append(keyring_log)
+           keyring = subprocess.Popen(
+               namespace + ['gnome-keyring-daemon', '--foreground', '--unlock', '--components=secrets'],
+               env=env, stdin=subprocess.PIPE, stdout=keyring_log, stderr=keyring_log)
+           children.append(keyring)
+           keyring.stdin.write(Path('<run>/keyring-password').read_bytes().strip())
+           keyring.stdin.close()
    ```
 
-   Result: The launcher starts the keyring on the D-Bus of the fixture.
+   Result: The launcher starts the keyring on the D-Bus of the fixture. The
+   keyring reads the password, unlocks the login collection and continues to
+   run. The launcher stops the keyring with its other children.
 
-3. In the launcher copy, write the synthetic password to the standard input of the keyring.
-
-   Result: The keyring reads the password and unlocks the login collection.
-
-4. In the launcher copy, close the standard input of the keyring after the password.
-
-   Result: The keyring continues to run.
-
-5. Make sure that the keyring runs in the fixture.
+3. Make sure that the keyring runs in the fixture.
 
    ```sh
    pstree -p <launcher-pid> | grep -o 'gnome-keyring-d([0-9]*)'
@@ -298,7 +299,7 @@ keeps the launcher and its state directory, so it needs no new keyring.
 
    Result: The output shows one keyring process below the launcher of the fixture.
 
-6. In the fixture terminal, store a test value.
+4. In the fixture terminal, store a test value.
 
    ```sh
    printf smoke-value | secret-tool store --label=smoke smoke probe
@@ -306,7 +307,7 @@ keeps the launcher and its state directory, so it needs no new keyring.
 
    Result: The command stops without an error. The keyring does not ask for a password.
 
-7. In the fixture terminal, read the test value.
+5. In the fixture terminal, read the test value.
 
    ```sh
    secret-tool lookup smoke probe
@@ -314,7 +315,7 @@ keeps the launcher and its state directory, so it needs no new keyring.
 
    Result: The output is `smoke-value`.
 
-8. In the fixture terminal, delete the test value.
+6. In the fixture terminal, delete the test value.
 
    ```sh
    secret-tool clear smoke probe
@@ -322,7 +323,7 @@ keeps the launcher and its state directory, so it needs no new keyring.
 
    Result: A new lookup shows no value.
 
-9. Do S03 and S04 again.
+7. Do S03 and S04 again.
 
    Result: The Device panel shows a live view. The child has the frozen SHA-256.
 

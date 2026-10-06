@@ -338,7 +338,7 @@ Use these procedures alone for a run that changes their function.
 
 4. Do X04.
 
-   Result: The provider APIs show no resource from the resource ledger.
+   Result: The fixture and its children stopped, and the target expired.
 
 5. Compare the provider lists of X02 and X05 with the baselines from the setup.
 
@@ -377,18 +377,22 @@ Use these procedures alone for a run that changes their function.
 
    Result: The daemon stops its containers and exits.
 
-10. Make sure that the daemon exited.
+10. Wait a maximum of 60 seconds until the daemon exits.
 
     ```sh
-    ps -o pid=,comm= -p <docker-pid>
+    timeout 60 tail --pid=<docker-pid> -f /dev/null; ps -o pid=,comm= -p <docker-pid>
     ```
 
-    Result: The output is empty.
+    Result: The output is empty. The daemon exited.
+
+11. If the output of step 10 is not empty, stop the cleanup and tell the operator.
+
+    Result: The data root of a daemon that runs stays. Do not do step 12.
 
     > **CAUTION:** DELETE ONLY THE DOCKER DATA ROOT OF THIS RUN. Other Docker data
     > roots can contain images and volumes of other people.
 
-11. Delete the Docker data root and the socket directory of this run.
+12. Delete the Docker data root and the socket directory of this run.
 
     ```sh
     rootlesskit rm -rf <docker-data> && rm -rf <run>/docker

@@ -598,10 +598,18 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The output shows one process ID.
 
+3. In the root shell, record the node ID, the name and the addresses of the worker.
+
+   ```sh
+   tailscale --socket=/run/horizon-tailnet/tailscaled.sock status --json | jq -c '{id: .Self.ID, name: .Self.DNSName, addresses: .Self.TailscaleIPs}'
+   ```
+
+   Result: You have the node identity before the kill. Record it in the evidence.
+
    > **CAUTION:** KILL THE DAEMON ONLY ON `smoke-a`. The node leaves the tailnet
    > until the supervisor starts the daemon again.
 
-3. Stop the daemon with a kill signal.
+4. Stop the daemon with a kill signal.
 
    ```sh
    pkill -KILL -x tailscaled
@@ -609,11 +617,11 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The command stops without an error.
 
-4. Wait 30 seconds.
+5. Wait 30 seconds.
 
    Result: The supervisor of the worker has time to start the daemon again.
 
-5. Show the process ID of `tailscaled` again.
+6. Show the process ID of `tailscaled` again.
 
    ```sh
    pgrep -x tailscaled
@@ -621,7 +629,15 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The output shows one new process ID.
 
-6. In the worker shell of `smoke-a`, show the online peers.
+7. Show the node ID, the name and the addresses of the worker again.
+
+   ```sh
+   tailscale --socket=/run/horizon-tailnet/tailscaled.sock status --json | jq -c '{id: .Self.ID, name: .Self.DNSName, addresses: .Self.TailscaleIPs}'
+   ```
+
+   Result: The node ID, the name and the addresses are the same as in step 3.
+
+8. In the worker shell of `smoke-a`, show the online peers.
 
    ```sh
    jq '[.devices[] | select(.online)] | length' /run/horizon-tailnet-devices/devices.json
@@ -629,13 +645,13 @@ This task needs a root shell. Use the SSH route of E09 in
 
    Result: The count is the same as in step 1. The PC and `smoke-b` are online.
 
-7. Do T08 step 13 again with a new test server on `smoke-b`.
+9. Do T08 step 13 again with a new test server on `smoke-b`.
 
    Result: The worker reaches `smoke-b` with the same node identity.
 
-8. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
+10. In the worker shell of `smoke-b`, stop the test server with Ctrl-C.
 
-   Result: The server stops. Port 18081 on `smoke-b` is free for T14.
+    Result: The server stops. Port 18081 on `smoke-b` is free for T14.
 
 ### 6.12 T12 — Refuse a network change after provisioning
 
