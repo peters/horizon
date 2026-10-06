@@ -906,4 +906,57 @@ fn only_a_failure_that_can_be_a_stop_outside_horizon_is_checked() {
     assert!(runtime.failure_may_be_a_stop(), "a reconnect of the bound worker");
     runtime.state.as_mut().unwrap().operation = cloud_runtime::CreateState::Requested;
     assert!(!runtime.failure_may_be_a_stop(), "a new worker was never bound");
+    let (mut hetzner, _check) = lost_connection();
+    hetzner.error = hetzner.unexplained_failure.take();
+    hetzner.recovery_receiver = None;
+    hetzner.state.as_mut().unwrap().profile.provider = "hetzner".into();
+    assert!(
+        !hetzner.failure_may_be_a_stop(),
+        "only Horizon stops a Hetzner cloud; its idle watch keeps running"
+    );
+}
+
+#[test]
+fn the_first_report_of_a_stop_ends_the_other_and_a_known_stop_keeps_its_own_words() {
+    // The idle watch shows the stop before the provider check returns.
+    let (mut runtime, check) = lost_connection();
+    runtime.show_stopped_outside(idle_cloud("Stopped", "EXITED"));
+    assert!(runtime.recovery_receiver.is_none() && runtime.unexplained_failure.is_none());
+    let notes = runtime.logs.len();
+    let _ = check.send(Ok(checked(idle_cloud("Stopped", "EXITED"), "inactive")));
+    runtime.poll_recovery();
+    assert_eq!(runtime.logs.len(), notes, "the stop is logged once");
+    assert_eq!(
+        of(&runtime, Occupancy::default(), now()).verb,
+        "Stopped after 30 idle minutes"
+    );
+    // A record that Horizon already stopped is not a stop outside Horizon.
+    let (mut runtime, check) = lost_connection();
+    runtime.state = Some(idle_cloud("Stopped", "EXITED"));
+    check
+        .send(Ok(checked(idle_cloud("Stopped", "EXITED"), "inactive")))
+        .unwrap();
+    runtime.poll_recovery();
+    assert_eq!(runtime.stop_cause, None);
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(
+        (status.verb.as_str(), status.primary),
+        ("Stopped", Some(Primary::Resume))
+    );
+}
+
+#[test]
+fn a_check_that_finds_the_worker_gone_says_so_beside_the_failure() {
+    let (mut runtime, check) = lost_connection();
+    let mut missing = checked(idle_cloud("Ready", "RUNNING"), "missing");
+    missing.report.worker = None;
+    check.send(Ok(missing)).unwrap();
+    runtime.poll_recovery();
+    assert_eq!(runtime.error.as_deref(), Some("Local operation timed out"));
+    assert!(
+        runtime
+            .logs
+            .back()
+            .is_some_and(|line| line.text.contains("no longer returned by the provider"))
+    );
 }

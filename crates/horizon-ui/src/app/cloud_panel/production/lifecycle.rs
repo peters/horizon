@@ -22,12 +22,31 @@ pub(super) enum Action {
 mod tests;
 
 impl Runtime {
-    pub(super) fn start_reconciliation(
+    /// Holds the failure just reported and asks the provider whether the worker stopped
+    /// without Horizon. The check waits while the idle watch checks the same worker.
+    pub(super) fn start_failure_check(
         &mut self,
         state_root: std::path::PathBuf,
         settings: Settings,
         ctx: &egui::Context,
     ) {
+        let (tx, rx) = channel();
+        self.unexplained_failure = self.error.take();
+        self.recovery_receiver = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = cloud_runtime::lifecycle::check_lost_worker(
+                &state_root,
+                &settings,
+                &cloud_runtime::Cancellation::default(),
+            )
+            .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    fn start_reconciliation(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {
         if self.receiver.is_some() {
             return;
         }
@@ -66,6 +85,11 @@ impl Runtime {
             match result {
                 Ok(recovered) if recovered.confirmed_stopped() => self.show_stopped_outside(recovered.state),
                 Ok(recovered) => {
+                    // The check may have recorded another outcome; the card shows it beside the failure.
+                    if recovered.report.outcome.needs_attention() {
+                        self.push_note(recovered.report.outcome.explanation().into());
+                    }
+                    self.stage = Some(recovered.state.stage);
                     self.state = Some(recovered.state);
                     self.error = Some(failure);
                 }

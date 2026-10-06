@@ -330,7 +330,17 @@ impl Runtime {
 
     /// Shows a stop the provider confirmed and Horizon did not make, with its cause
     /// as the newest idle record tells it.
+    /// A record that was already stopped before the check, as by an earlier Stop,
+    /// shows as that stop.
     pub(super) fn show_stopped_outside(&mut self, state: Deployment) {
+        if self.state.as_ref().is_some_and(|shown| shown.stop_requested) {
+            self.show_stopped(
+                Some(state),
+                "The provider confirmed that this worker is stopped. Choose Resume worker to start it again.".into(),
+            );
+            self.stop_cause = None;
+            return;
+        }
         let cause = StopCause::of(self.last_idle.as_ref(), Instant::now());
         let line = outside_line(&state, cause);
         self.show_stopped(Some(state), line);
@@ -338,6 +348,10 @@ impl Runtime {
     }
 
     fn show_stopped(&mut self, state: Option<Deployment>, line: String) {
+        // A provider check Horizon started for a failure has nothing left to explain.
+        if self.unexplained_failure.take().is_some() {
+            self.recovery_receiver = None;
+        }
         self.cancel = None;
         self.progress.stage(Stage::Stopped, Instant::now());
         if let Some(state) = state {

@@ -640,17 +640,14 @@ impl HorizonApp {
             if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id)
                 && runtime.error.is_some()
             {
-                let explain = runtime.failure_may_be_a_stop();
                 runtime.receiver = None;
-                if let Some(cancel) = runtime.cancel.take()
-                    && explain
-                {
-                    // The provider check decides; the idle watch of the lost worker ends.
-                    cancel.cancel();
-                    runtime.idle_reports = None;
-                }
-                if explain {
+                if runtime.failure_may_be_a_stop() {
+                    // The idle watch keeps its token and channel while the provider check
+                    // runs: either may show the stop first, and a worker that still runs
+                    // stays watched.
                     self.check_failure_with_provider(id, ctx);
+                } else {
+                    runtime.cancel = None;
                 }
             }
         }
@@ -679,8 +676,7 @@ impl HorizonApp {
             return;
         };
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
-            runtime.unexplained_failure = runtime.error.take();
-            runtime.start_reconciliation(state_root, settings, ctx);
+            runtime.start_failure_check(state_root, settings, ctx);
         }
     }
     fn remove_closed_cloud_browsers(&mut self, removed: Vec<(u32, String)>) {

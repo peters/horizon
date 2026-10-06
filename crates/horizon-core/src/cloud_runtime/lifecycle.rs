@@ -10,7 +10,7 @@ use std::path::Path;
 
 mod outside;
 mod power;
-pub use outside::{IdleSample, StopCause, may_stop_outside, worker_stopped};
+pub use outside::{IdleSample, StopCause, check_lost_worker, may_stop_outside, worker_stopped};
 #[cfg(all(test, unix))]
 use power::Announce;
 pub(in crate::cloud_runtime) use power::{request_resume, request_stop};

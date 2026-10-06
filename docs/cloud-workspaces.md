@@ -613,12 +613,15 @@ releases the server and keeps the volume, as Stop does. Refer to
 
 While a RunPod cloud with an idle period is ready, Horizon reads the idle record
 of the worker every two minutes. Horizon does not stop a RunPod worker. Horizon
-uses the record only to find the cause of a stop. Horizon asks the provider for
-the status of the worker in these conditions:
+uses the record only to find the cause of a stop. For each RunPod cloud, Horizon
+asks the provider for the status of the worker in these conditions:
 
 - Horizon cannot read a ready worker.
 - The connection to a ready worker fails.
 - A reconnect does not find the worker, or finds a record that says stopped.
+
+Horizon does not do this check for a Hetzner cloud. Only Horizon stops a Hetzner
+cloud, so a failure there stays a failure.
 
 During this check, the card shows **Checking provider**. If the provider reports
 that the worker stopped, the card shows a stopped cloud with **Resume worker**.
@@ -632,8 +635,9 @@ It does not show **Operation failed**. The card names the cause as follows:
 If the provider reports that the worker runs, the card shows the original
 failure. Horizon records a stop that the provider confirms as an ordinary stopped
 cloud. Nothing resumes it automatically. The card keeps the cause until Horizon
-closes. After a restart, Horizon has no idle record, so the card shows **Stopped
-outside Horizon**. A worker image from before the idle record contract
+closes. After a restart, Horizon has no idle record. If Horizon finds the stop
+after the restart, the card shows **Stopped outside Horizon**. If the record
+already showed the stop, the card shows **Stopped**. A worker image from before the idle record contract
 (`horizon-idle-report-contract=1`) keeps no idle record. Rebuild such an image to
 show the idle cause. You can also choose **Check provider** at any time. A
 profile without `idle_stop_minutes` never stops by itself. Shared workers and

@@ -10,7 +10,7 @@ use crate::cloud_runtime::{
 };
 use horizon_cloud::{
     Cancellation, Worker,
-    provider::{Description, IdleStop},
+    provider::{Description, IdleStop, StoppedCost},
 };
 use std::{
     path::Path,
@@ -63,34 +63,49 @@ impl StopCause {
 
 /// Whether a stop that Horizon did not make can explain a failed connection to the
 /// cloud `state` records: a bound worker that Horizon does not stop, replace or
-/// delete itself.
+/// delete itself, on a provider whose stop keeps the worker. Only such a worker can
+/// stop without Horizon; a Hetzner stop is Horizon's own release of the server.
 #[must_use]
 pub fn may_stop_outside(state: &Deployment) -> bool {
-    matches!(state.operation, CreateState::Bound { .. })
+    Description::of(&state.profile).stopped == StoppedCost::WorkerKept
+        && matches!(state.operation, CreateState::Bound { .. })
         && !matches!(state.stage, Stage::Stopping | Stage::Replace | Stage::Deleted)
 }
 
-/// Asks the provider, as Check provider does, whether the worker of a cloud whose
-/// connection failed has stopped. A stop the provider confirms is recorded as an
-/// ordinary stopped cloud, so only Resume starts the worker again.
+/// Asks the provider, as Check provider does, about the worker of a cloud whose
+/// connection failed. A stop the provider confirms is recorded as an ordinary
+/// stopped cloud, so only Resume starts the worker again. The check waits while
+/// another operation, such as another check of the same worker, holds the cloud.
 ///
-/// Returns the saved record when the provider confirms the stop, and `None` when the
-/// worker still runs, the provider reports anything else, or [`may_stop_outside`]
-/// refuses the record.
+/// Returns `None`, without asking the provider, when [`may_stop_outside`] refuses
+/// the record.
 /// # Errors
 /// Reports a provider check that failed, or a cloud that another operation holds.
-pub fn worker_stopped(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<Option<Deployment>> {
-    worker_stopped_with(root, cancel, Duration::from_secs(1), |store| {
+pub fn check_lost_worker(
+    root: &Path,
+    settings: &Settings,
+    cancel: &Cancellation,
+) -> Result<Option<ReconciledDeployment>> {
+    check_with(root, cancel, Duration::from_secs(1), |store| {
         reconcile_locked(store, settings, None, cancel)
     })
 }
 
-fn worker_stopped_with(
+/// As [`check_lost_worker`], with only the saved record of a confirmed stop.
+/// # Errors
+/// As [`check_lost_worker`].
+pub fn worker_stopped(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<Option<Deployment>> {
+    Ok(check_lost_worker(root, settings, cancel)?
+        .filter(ReconciledDeployment::confirmed_stopped)
+        .map(|reconciled| reconciled.state))
+}
+
+fn check_with(
     root: &Path,
     cancel: &Cancellation,
     pause: Duration,
     check: impl Fn(&Store) -> Result<ReconciledDeployment>,
-) -> Result<Option<Deployment>> {
+) -> Result<Option<ReconciledDeployment>> {
     for attempt in 0..BUSY_ATTEMPTS {
         if attempt > 0 {
             cancel.check()?;
@@ -103,8 +118,7 @@ fn worker_stopped_with(
         if !store.load()?.as_ref().is_some_and(may_stop_outside) {
             return Ok(None);
         }
-        let reconciled = check(&store)?;
-        return Ok(reconciled.confirmed_stopped().then_some(reconciled.state));
+        return check(&store).map(Some);
     }
     Err(Error::Busy)
 }
@@ -219,17 +233,33 @@ mod tests {
         assert_eq!(StopCause::of(None, start), StopCause::Unknown);
     }
 
+    /// As [`worker_stopped`], with the provider check given.
+    fn stopped_with(
+        root: &Path,
+        cancel: &Cancellation,
+        check: impl Fn(&Store) -> Result<ReconciledDeployment>,
+    ) -> Result<Option<Deployment>> {
+        Ok(check_with(root, cancel, Duration::ZERO, check)?
+            .filter(ReconciledDeployment::confirmed_stopped)
+            .map(|reconciled| reconciled.state))
+    }
+
     #[test]
     fn only_a_stop_the_provider_confirms_is_reported_and_recorded() {
         let temp = tempfile::tempdir().unwrap();
         let cancel = Cancellation::default();
         save(temp.path(), "Ready", "runpod");
-        let found = worker_stopped_with(temp.path(), &cancel, Duration::ZERO, reported("RUNNING")).unwrap();
-        assert!(found.is_none(), "a running worker keeps the failure");
-        let stopped = worker_stopped_with(temp.path(), &cancel, Duration::ZERO, reported("EXITED"))
+        let running = check_with(temp.path(), &cancel, Duration::ZERO, reported("RUNNING"))
             .unwrap()
             .unwrap();
-        assert_eq!(stopped.stage, Stage::Stopped);
+        assert!(!running.confirmed_stopped(), "a running worker keeps the failure");
+        assert!(
+            stopped_with(temp.path(), &cancel, reported("RUNNING"))
+                .unwrap()
+                .is_none()
+        );
+        let exited = stopped_with(temp.path(), &cancel, reported("EXITED")).unwrap().unwrap();
+        assert_eq!(exited.stage, Stage::Stopped);
         let saved = Store::lock(temp.path()).unwrap().load().unwrap().unwrap();
         assert!(
             saved.stop_requested && saved.stage == Stage::Stopped,
@@ -245,20 +275,17 @@ mod tests {
         for stage in ["Stopping", "Replace", "Deleted"] {
             save(temp.path(), stage, "runpod");
             assert!(
-                worker_stopped_with(temp.path(), &cancel, Duration::ZERO, unasked)
-                    .unwrap()
-                    .is_none(),
+                stopped_with(temp.path(), &cancel, unasked).unwrap().is_none(),
                 "{stage}"
             );
         }
         let mut requested = save(temp.path(), "Provision", "runpod");
         requested.operation = CreateState::Requested;
         Store::lock(temp.path()).unwrap().save(&requested).unwrap();
-        assert!(
-            worker_stopped_with(temp.path(), &cancel, Duration::ZERO, unasked)
-                .unwrap()
-                .is_none()
-        );
+        assert!(stopped_with(temp.path(), &cancel, unasked).unwrap().is_none());
+        // A Hetzner stop releases the server; only Horizon makes it.
+        save(temp.path(), "Ready", "hetzner");
+        assert!(stopped_with(temp.path(), &cancel, unasked).unwrap().is_none());
     }
 
     #[test]
@@ -266,18 +293,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         save(temp.path(), "Ready", "runpod");
         let held = Store::lock(temp.path()).unwrap();
-        let result = worker_stopped_with(
-            temp.path(),
-            &Cancellation::default(),
-            Duration::ZERO,
-            reported("EXITED"),
-        );
+        let result = stopped_with(temp.path(), &Cancellation::default(), reported("EXITED"));
         assert!(matches!(result, Err(Error::Busy)), "{result:?}");
         drop(held);
         let cancelled = Cancellation::default();
         cancelled.cancel();
         let held = Store::lock(temp.path()).unwrap();
-        let result = worker_stopped_with(temp.path(), &cancelled, Duration::ZERO, reported("EXITED"));
+        let result = stopped_with(temp.path(), &cancelled, reported("EXITED"));
         assert!(matches!(result, Err(Error::Provider(_))), "{result:?}");
         drop(held);
     }
@@ -291,7 +313,7 @@ mod tests {
             sample_with(temp.path(), |_| record()).unwrap(),
             IdleCheck::Active {
                 idle: Duration::from_secs(1700),
-                limit: Duration::from_secs(1800),
+                limit: Duration::from_mins(30),
             },
             "Horizon only reads it: the worker stops itself"
         );
