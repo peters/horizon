@@ -625,6 +625,7 @@ enum AfterLoad {
     PollFirstReplaced,
     RateFirstReplaced,
     LostRateReplaced,
+    MixedNoticeReplaced,
 }
 
 impl AfterLoad {
@@ -636,6 +637,7 @@ impl AfterLoad {
                 | Self::PollFirstReplaced
                 | Self::RateFirstReplaced
                 | Self::LostRateReplaced
+                | Self::MixedNoticeReplaced
         )
     }
 
@@ -656,6 +658,23 @@ impl AfterLoad {
             (true, _) => json!([{"mediaSessionId": 9, "playerState": "PLAYING"}]),
             (false, _) => json!([]),
         }
+    }
+
+    fn status_reply(self, stream: &mut ServerStream, to: &str, request: &Value, loaded: bool, replaced: bool) {
+        if self == AfterLoad::MixedNoticeReplaced && loaded {
+            send(
+                stream,
+                to,
+                NS_MEDIA,
+                &json!({"type":"MEDIA_STATUS", "status":[
+                    {"mediaSessionId":9,"playerState":"BUFFERING"},
+                    {"mediaSessionId":10,"playerState":"PLAYING"}
+                ]}),
+            );
+        }
+        let current = self.statuses(loaded, replaced);
+        let status = json!({"type": "MEDIA_STATUS", "status": current});
+        send(stream, to, NS_MEDIA, &reply(request, status));
     }
 
     fn rate_reply(self, stream: &mut ServerStream, to: &str, request: &Value, replaced: &mut bool) {
@@ -679,6 +698,16 @@ impl AfterLoad {
                 &json!({"type":"MEDIA_STATUS", "status":[{"mediaSessionId":10,"playerState":"PLAYING"}]}),
             );
             send(stream, to, NS_MEDIA, &reply(request, json!({"type":"INVALID_REQUEST"})));
+        } else if self == Self::MixedNoticeReplaced {
+            send(
+                stream,
+                to,
+                NS_MEDIA,
+                &reply(
+                    request,
+                    json!({"type":"MEDIA_STATUS", "status":[{"mediaSessionId":9,"playerState":"PLAYING"}]}),
+                ),
+            );
         } else if matches!(self, Self::RateReplaced | Self::RateFirstReplaced) {
             let statuses = if self == Self::RateFirstReplaced {
                 json!([{"mediaSessionId":9,"playerState":"PLAYING"},{"mediaSessionId":10,"playerState":"PLAYING"}])
@@ -783,11 +812,7 @@ fn ordering_receiver(listener: TcpListener, config: Arc<ServerConfig>, after: Af
                         }
                     }
                     (NS_MEDIA, "SET_PLAYBACK_RATE") => after.rate_reply(&mut stream, to, &request, &mut replaced),
-                    (NS_MEDIA, "GET_STATUS") => {
-                        let current = after.statuses(loaded, replaced);
-                        let status = json!({"type": "MEDIA_STATUS", "status": current});
-                        send(&mut stream, to, NS_MEDIA, &reply(&request, status));
-                    }
+                    (NS_MEDIA, "GET_STATUS") => after.status_reply(&mut stream, to, &request, loaded, replaced),
                     (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => return log,
                     _ => {}
                 }
@@ -1026,4 +1051,88 @@ fn overflowing_notifications_close_the_connection_and_fail_waiters() {
     ));
     drop(client);
     server.join().unwrap();
+}
+
+#[test]
+fn mixed_session_notifications_are_not_discarded_by_the_buffer_fold() {
+    progressive_takeover_scenario(AfterLoad::MixedNoticeReplaced);
+}
+
+/// Drops the fast-rate acknowledgement and queues a real buffer plus a stale
+/// lifecycle notice. A lifecycle confirmation deliberately answers slowly.
+pub(crate) fn delayed_confirmation_receiver(
+    receiver_notice: bool,
+) -> (CastClient, crate::Application, JoinHandle<Vec<String>>) {
+    let (address, listener, config) = listen();
+    let server = std::thread::spawn(move || {
+        let mut stream = accept(&listener, config);
+        let (mut log, mut inbound, mut chunk) = (Vec::new(), Vec::new(), [0; 4096]);
+        let mut sped = false;
+        loop {
+            let read = stream.read(&mut chunk).unwrap_or(0);
+            if read == 0 {
+                return log;
+            }
+            inbound.extend_from_slice(&chunk[..read]);
+            for message in proto::drain_frames(&mut inbound).unwrap() {
+                let Payload::Text(text) = &message.payload else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(text).unwrap();
+                let kind = request["type"].as_str().unwrap_or_default();
+                let to = message.destination.as_str();
+                log.push(format!("{} {kind} {}", message.namespace, request["playbackRate"]));
+                let playing = json!({"type":"MEDIA_STATUS","status":[{"mediaSessionId":9,"playerState":"PLAYING","currentTime":10.0}]});
+                match (message.namespace.as_str(), kind) {
+                    (NS_RECEIVER, "GET_STATUS") => {
+                        if sped {
+                            std::thread::sleep(Duration::from_millis(600));
+                        }
+                        send(
+                            &mut stream,
+                            PLATFORM_RECEIVER,
+                            NS_RECEIVER,
+                            &reply(&request, app_status(true)),
+                        );
+                    }
+                    (NS_MEDIA, "LOAD") => send(&mut stream, to, NS_MEDIA, &reply(&request, playing)),
+                    (NS_MEDIA, "SET_PLAYBACK_RATE") if request["playbackRate"].as_f64().unwrap() > 1.0 => {
+                        sped = true;
+                        send(
+                            &mut stream,
+                            to,
+                            NS_MEDIA,
+                            &json!({"type":"MEDIA_STATUS","status":[{"mediaSessionId":9,"playerState":"BUFFERING","currentTime":10.0}]}),
+                        );
+                        std::thread::sleep(Duration::from_millis(600));
+                        send(&mut stream, to, NS_MEDIA, &playing);
+                        if receiver_notice {
+                            send(&mut stream, PLATFORM_RECEIVER, NS_RECEIVER, &app_status(false));
+                        } else {
+                            send(
+                                &mut stream,
+                                to,
+                                NS_MEDIA,
+                                &json!({"type":"MEDIA_STATUS","status":[{"mediaSessionId":9,"playerState":"IDLE"}]}),
+                            );
+                        }
+                    }
+                    (NS_MEDIA, "SET_PLAYBACK_RATE") => {
+                        assert_eq!(request["mediaSessionId"], 9);
+                        send(&mut stream, to, NS_MEDIA, &reply(&request, playing));
+                    }
+                    (NS_MEDIA, "GET_STATUS") => {
+                        std::thread::sleep(Duration::from_millis(600));
+                        send(&mut stream, to, NS_MEDIA, &reply(&request, playing));
+                    }
+                    (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => return log,
+                    _ => {}
+                }
+            }
+        }
+    });
+    let client = CastClient::connect(address).unwrap();
+    client.watch_media_time(|| Some(10.3));
+    let app = client.launch(DEFAULT_MEDIA_RECEIVER).unwrap();
+    (client, app, server)
 }

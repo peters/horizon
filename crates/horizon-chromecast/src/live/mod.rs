@@ -326,6 +326,7 @@ pub(crate) struct Session {
 struct Playback {
     edge: edge::Edge,
     unsupported: bool,
+    restore_exhausted: bool,
     retry: Option<Retry>,
     next_check: Instant,
     checked: Instant,
@@ -371,6 +372,7 @@ impl Playback {
         Self {
             edge: edge::Edge::default(),
             unsupported: false,
+            restore_exhausted: false,
             retry: None,
             next_check: now,
             checked: now,
@@ -486,7 +488,7 @@ impl Session {
         // STOP is scoped to the original LOAD. An application-wide STOP
         // could stop a replacement loaded between an ownership check and
         // cleanup. Before LOAD there is no media session we can safely stop.
-        if self.reconcile_pending(&client, &app, media_session_id).unwrap_or(false) {
+        if self.reconcile_pending(&client, &app, media_session_id).unwrap_or(true) {
             let _ = media.stop();
         }
         result
@@ -524,6 +526,20 @@ impl Session {
         if going_on {
             return Ok(true);
         }
+        // A newer LOAD cannot be a stale status for our original session.
+        // Do not send even a restore after another sender owns the transport.
+        if event.source == app.transport_id
+            && MediaStatus::from_event(event)
+                .iter()
+                .any(|status| status.media_session_id > media_session_id && status.player_state != "IDLE")
+        {
+            return Ok(false);
+        }
+        if matches!(event.namespace.as_str(), NS_RECEIVER | NS_MEDIA)
+            && !self.normal_before_confirmation(client, app, media_session_id)?
+        {
+            return Ok(false);
+        }
         if event.namespace == NS_RECEIVER {
             let current = client.receiver_status()?;
             return Ok(current
@@ -557,6 +573,9 @@ impl Session {
     /// Before reporting a stall, applies a fresh status: the BUFFERING that
     /// started the timer may have been queued behind a newer PLAYING reply.
     fn check_stall(&self, client: &CastClient, app: &Application, media_session_id: i64) -> Result<bool> {
+        if !self.normal_before_confirmation(client, app, media_session_id)? {
+            return Ok(false);
+        }
         let newest = self.source_media_time();
         let (reply, receipt) = client.media(app).status_observed(REQUEST_TIMEOUT)?;
         let queued = buffer_notices(client, &app.transport_id, media_session_id, receipt.at)?;
@@ -1030,32 +1049,24 @@ impl Session {
                 if !self.owns_reply(media, status)? {
                     return Ok(false);
                 }
-                // The reply is not delivered again as an event. Notices queued
-                // while the command blocked are older than it. Store this
-                // playback first: the fold loads the session copy, and the
-                // planned edge still lives only in this local value.
-                self.playback.set(playback);
-                self.fold_ready(media.client(), app, media.session_id()?, receipt.at)?;
-                playback = self.playback.get();
-                self.absorb_rate_status(&mut playback, status, receipt.at, newest_at_send);
+                playback = self.accept_rate_status(media, app, playback, status, receipt, newest_at_send)?;
                 (RateAnswer::Applied, None)
             }
-            Err(error @ Error::Rejected { .. }) => {
-                if !self.reconcile_pending(media.client(), app, media.session_id()?)? {
-                    return Ok(false);
-                }
-                (RateAnswer::Refused, Some(error))
-            }
-            Err(error) => {
-                if !self.reconcile_pending(media.client(), app, media.session_id()?)? {
-                    return Ok(false);
-                }
-                (RateAnswer::Unconfirmed, Some(error))
-            }
+            Err(error @ Error::Rejected { .. }) => (RateAnswer::Refused, Some(error)),
+            Err(error) => (RateAnswer::Unconfirmed, Some(error)),
         };
         let answered = Instant::now();
-        if apply_rate_reply(&mut playback, rate, failures, answer, answered) {
-            self.playback.set(playback);
+        let fatal = apply_rate_reply(&mut playback, rate, failures, answer, answered);
+        // Publish the locally planned edge and the possibly applied rate before
+        // confirmation. It may restore speed or fold a newly learned backoff.
+        self.playback.set(playback);
+        if answer != RateAnswer::Applied {
+            if !self.reconcile_pending(media.client(), app, media.session_id()?)? {
+                return Ok(false);
+            }
+            playback = self.playback.get();
+        }
+        if fatal {
             return Err(error.unwrap_or(Error::Protocol("playback rate was not confirmed")));
         }
         // A lost speed-up has to be followed by normal speed before the event
@@ -1070,6 +1081,63 @@ impl Session {
         }
         self.playback.set(playback);
         Ok(true)
+    }
+
+    /// Apply notices before a correlated rate status without losing the
+    /// controller state which was local to the pending command.
+    fn accept_rate_status(
+        &self,
+        media: &MediaController<'_>,
+        app: &Application,
+        playback: Playback,
+        status: &MediaStatus,
+        receipt: crate::client::Receipt,
+        newest: Option<f64>,
+    ) -> Result<Playback> {
+        self.playback.set(playback);
+        self.fold_ready(media.client(), app, media.session_id()?, receipt.at)?;
+        let mut playback = self.playback.get();
+        self.absorb_rate_status(&mut playback, status, receipt.at, newest);
+        Ok(playback)
+    }
+
+    /// Lifecycle confirmations may use the ordinary request timeout only
+    /// after normal speed is confirmed. Lost speed-up replies count as fast.
+    /// Restores share the same finite attempt budget as the regular controller.
+    fn normal_before_confirmation(&self, client: &CastClient, app: &Application, id: i64) -> Result<bool> {
+        let media = client.media_session(app, id);
+        loop {
+            let mut playback = self.playback.get();
+            if fastest(&playback) <= 1.0 + 1e-3 {
+                return Ok(true);
+            }
+            if playback.restore_exhausted {
+                return Err(Error::Protocol("playback rate was not confirmed"));
+            }
+            let failures = playback.retry.map_or(0, |retry| retry.failures);
+            let wait = begin_rate(&mut playback, 1.0, Instant::now())
+                .ok_or(Error::Protocol("normal speed restore was not admitted"))?;
+            let newest = self.source_media_time();
+            let answer = match media.rate_observed(1.0, wait) {
+                Ok((statuses, receipt)) => {
+                    let Some(status) = owned_status(&statuses, id) else {
+                        return Ok(false);
+                    };
+                    if !self.owns_reply(&media, status)? {
+                        return Ok(false);
+                    }
+                    playback = self.accept_rate_status(&media, app, playback, status, receipt, newest)?;
+                    RateAnswer::Applied
+                }
+                Err(Error::Rejected { .. }) => RateAnswer::Refused,
+                Err(_) => RateAnswer::Unconfirmed,
+            };
+            let failed = apply_rate_reply(&mut playback, 1.0, failures, answer, Instant::now());
+            self.playback.set(playback);
+            if failed {
+                return Err(Error::Protocol("playback rate was not confirmed"));
+            }
+        }
     }
 
     /// A correlated reply must still belong to the original LOAD.
@@ -1301,7 +1369,8 @@ fn admit_rate(playback: &Playback, wanted: f64, now: Instant) -> Option<f64> {
         return None;
     }
     // A millisecond past the budget, so the boundary does not round back to a hold.
-    let reserved = RESTORE_BUDGET.saturating_add(ACK_WINDOW).as_secs_f64() + 0.001;
+    let age = now.saturating_duration_since(playback.lag_at?).as_secs_f64();
+    let reserved = RESTORE_BUDGET.saturating_add(ACK_WINDOW).as_secs_f64() + age + 0.001;
     let excess = headroom / reserved;
     if excess <= 1e-3 || !excess.is_finite() {
         return None;
@@ -1334,8 +1403,10 @@ fn buffer_notices(
 /// A playing, paused, or buffering status for our session. Idle and receiver
 /// notices stay on the queue: they decide whether the session continues.
 fn buffer_notice(event: &QueuedEvent, transport_id: &str, media_session_id: i64) -> bool {
+    let statuses = MediaStatus::from_event(event);
     event.source == transport_id
-        && MediaStatus::from_event(event).iter().any(|status| {
+        && !statuses.is_empty()
+        && statuses.iter().all(|status| {
             status.media_session_id == media_session_id
                 && matches!(
                     status.player_state.as_str(),
@@ -1507,7 +1578,10 @@ fn apply_rate_reply(playback: &mut Playback, commanded: f64, failures: u8, answe
                 playback.retry = None;
                 false
             }
-            None => true,
+            None => {
+                playback.restore_exhausted = true;
+                true
+            }
         },
     }
 }
@@ -1763,6 +1837,59 @@ mod catch_up_tests {
         let elapsed = note_sample(&mut playback, true, next);
         assert!(elapsed >= Duration::from_millis(400));
         assert!(elapsed < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn delayed_samples_still_admit_a_safe_fallback_rate() {
+        let sampled = Instant::now();
+        let mut playback = paced(1.0, 0.41, sampled);
+        playback.edge.target = 0.35;
+        for age in [5, 20, 100, 400] {
+            let now = sampled + Duration::from_millis(age);
+            let rate = admit_rate(&playback, 1.08, now).expect("safe slower trim");
+            assert!(rate > 1.001 && rate < 1.08);
+            assert!(begin_rate(&mut playback, rate, now).unwrap() >= ACK_WINDOW);
+            playback.threat = 1.0;
+        }
+    }
+
+    #[test]
+    fn lost_speedup_restores_before_lifecycle_confirmation_and_preserves_backoff() {
+        for receiver_notice in [false, true] {
+            let (client, app, server) = crate::tests::delayed_confirmation_receiver(receiver_notice);
+            let mut media = client.media(&app);
+            media.load(&MediaLoad::default()).unwrap();
+            let session = test_session();
+            session.started.set(true);
+            session.set(LiveState::Playing);
+            let mut playback = paced(1.0, 0.45, Instant::now());
+            playback.edge.target = 0.25;
+            playback.edge.floor = 0.15;
+            assert!(session.push_rate(&media, &app, playback, 1.08, 0).unwrap());
+            let result = session.playback.get();
+            assert!((result.edge.target - 0.30).abs() < 1e-6, "{result:?}");
+            assert!((result.edge.floor - 0.30).abs() < 1e-6, "{result:?}");
+            assert!((fastest(&result) - 1.0).abs() < 1e-9);
+            assert!(result.retry.is_none());
+            drop(client);
+            let log = server.join().unwrap();
+            let fast = log
+                .iter()
+                .position(|line| line.ends_with("SET_PLAYBACK_RATE 1.08"))
+                .unwrap();
+            let restore = log
+                .iter()
+                .position(|line| line.ends_with("SET_PLAYBACK_RATE 1.0"))
+                .unwrap();
+            let confirm = log
+                .iter()
+                .enumerate()
+                .skip(fast + 1)
+                .find(|(_, line)| line.contains("GET_STATUS"))
+                .unwrap()
+                .0;
+            assert!(fast < restore && restore < confirm, "{log:#?}");
+        }
     }
 
     fn paced(rate: f64, lag: f64, at: Instant) -> Playback {

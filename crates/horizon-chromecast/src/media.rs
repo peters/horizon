@@ -75,6 +75,11 @@ impl CastClient {
             media_session_id: None,
         }
     }
+    pub(crate) fn media_session(&self, app: &Application, id: i64) -> MediaController<'_> {
+        let mut media = self.media(app);
+        media.media_session_id = Some(id);
+        media
+    }
 }
 
 impl MediaController<'_> {
