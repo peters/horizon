@@ -161,12 +161,12 @@ mod tests {
     use super::*;
     use horizon_cloud::runpod::recovery::{Outcome, Reconciliation};
 
-    fn save(root: &Path, stage: &str, provider: &str) -> Deployment {
+    fn save(root: &Path, recorded: &str, provider: &str) -> Deployment {
         let profile = serde_json::json!({"provider":provider,"image":"registry.example/worker","cpu":2,
             "memory_gb":4,"idle_stop_minutes":30});
         let state: Deployment = serde_json::from_value(serde_json::json!({
             "version":1,"cloud_id":"idle-cloud","repository":"/synthetic","revision":"a".repeat(40),
-            "profile":profile,"stage":stage,"operation":{"state":"bound","worker_id":"worker1"},
+            "profile":profile,"stage":recorded,"operation":{"state":"bound","worker_id":"worker1"},
             "spec":null,"sessions":[],"source_ready":true,
             "worker":{"id":"worker1","name":"idle-cloud","imageName":"registry.example/worker",
                 "desiredStatus":"RUNNING","publicIp":"192.0.2.10","portMappings":{"22":40022}}
