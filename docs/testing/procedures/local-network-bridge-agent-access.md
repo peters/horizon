@@ -44,9 +44,9 @@ the private control socket of the helper, and must not stop the bridge.
 - An isolated desktop for the candidate, with a live view in a Device panel.
 - A Ready cloud. The worker image contains the `horizon-cloud-worker` of the
   candidate commit. A Hetzner `cx23` profile with only an image is enough.
-- A router or other device on the local network with an open TCP port, for
-  example the web page of the router on port 80. In this procedure,
-  `<router>` is its address, for example `192.168.1.1`.
+- A router or other device on the local network with a web page on TCP port 80,
+  plain HTTP. In this procedure, `<router>` is its IPv4 address, for example
+  `192.168.1.1`.
 - A root shell on the worker through the SSH connection of the cloud.
 - No model key on the worker. The tasks use the command line of the helper.
 
@@ -211,10 +211,12 @@ the private control socket of the helper, and must not stop the bridge.
    Result: The output shows `worker_port`, `host` with `<router>` and `port`
    with `80`. In this procedure, `<forward>` is the `worker_port` value.
 
-2. Get the router page through the forward as the agent user.
+2. Get the router page through the forward as the agent user. Send the same
+   `Host` header as in N06.
 
    ```sh
-   agent curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<forward>/
+   agent curl -sS -o /dev/null -w '%{http_code}\n' \
+     -H 'Host: <router>' http://127.0.0.1:<forward>/
    ```
 
    Result: The output is the same HTTP status as in N06.

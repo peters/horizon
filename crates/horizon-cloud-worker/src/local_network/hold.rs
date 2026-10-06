@@ -444,7 +444,7 @@ fn serve(helper: &Arc<Helper>, control: &Control) {
                     .name("local-network-control".into())
                     .spawn(move || {
                         let _share = share;
-                        let _ = handle(&helper, stream, caller);
+                        let _ = handle(&helper, &stream, caller);
                     });
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
@@ -455,30 +455,48 @@ fn serve(helper: &Arc<Helper>, control: &Control) {
     }
 }
 
-/// Reads one request against a single deadline, so a client that sends a byte at a time
-/// cannot hold a share of the request budget for long.
+/// Reads a request, or writes its answer, against a single deadline, so a client that sends
+/// or reads a byte at a time cannot hold a share of the request budget for long.
 struct Deadline<'a> {
     stream: &'a UnixStream,
     until: Instant,
 }
 
-impl Read for Deadline<'_> {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+impl Deadline<'_> {
+    fn left(&self) -> io::Result<Duration> {
         let left = self.until.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "Request too slow"));
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "The client was too slow"));
         }
-        self.stream.set_read_timeout(Some(left))?;
+        Ok(left)
+    }
+}
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.stream.set_read_timeout(Some(self.left()?))?;
         let mut stream = self.stream;
         stream.read(buffer)
     }
 }
 
-fn handle(helper: &Helper, mut stream: UnixStream, caller: Caller) -> io::Result<()> {
+impl Write for Deadline<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.stream.set_write_timeout(Some(self.left()?))?;
+        let mut stream = self.stream;
+        stream.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn handle(helper: &Helper, stream: &UnixStream, caller: Caller) -> io::Result<()> {
     stream.set_nonblocking(false)?;
     let mut line = String::new();
     let request = Deadline {
-        stream: &stream,
+        stream,
         until: Instant::now() + REQUEST_TIMEOUT,
     };
     let count = BufReader::new(request).take(MAX_MESSAGE + 1).read_line(&mut line)?;
@@ -491,8 +509,18 @@ fn handle(helper: &Helper, mut stream: UnixStream, caller: Caller) -> io::Result
             Ok(request) => helper.answer(request),
         }
     };
-    serde_json::to_writer(&mut stream, &answer)?;
-    stream.write_all(b"\n")
+    let mut reply = serde_json::to_vec(&answer)?;
+    reply.push(b'\n');
+    send(stream, &reply, REQUEST_TIMEOUT)
+}
+
+/// Writes the whole answer within `timeout`, so a client that never reads it frees its share.
+fn send(stream: &UnixStream, reply: &[u8], timeout: Duration) -> io::Result<()> {
+    Deadline {
+        stream,
+        until: Instant::now() + timeout,
+    }
+    .write_all(reply)
 }
 
 #[cfg(test)]
@@ -509,6 +537,15 @@ mod tests {
             owner: Owner::silent(silent),
             retired: AtomicBool::new(false),
         }
+    }
+
+    #[test]
+    fn an_answer_that_nobody_reads_gives_up_at_the_deadline() {
+        let (stream, _unread) = UnixStream::pair().unwrap();
+        let started = Instant::now();
+        // Far more than a Unix socket buffers, as a large discovery answer can be.
+        assert!(send(&stream, &vec![b'x'; 16 * 1024 * 1024], Duration::from_millis(300)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     }
 
     #[test]
