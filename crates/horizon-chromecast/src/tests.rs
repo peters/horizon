@@ -441,6 +441,7 @@ fn media_event(source: &str, statuses: &Value) -> crate::Event {
         source: source.to_owned(),
         payload: json!({"type": "MEDIA_STATUS", "requestId": 0, "status": statuses.clone()}),
         media_time: None,
+        received_at: std::time::Instant::now(),
     }
 }
 

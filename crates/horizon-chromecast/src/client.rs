@@ -44,6 +44,9 @@ pub struct Event {
     /// later still opens at this time: the source has moved, the receiver
     /// clock has not.
     pub media_time: Option<f64>,
+    /// When this event was queued. An episode uses this, not the later moment
+    /// the host handles the notification.
+    pub received_at: Instant,
 }
 
 impl Event {
@@ -334,6 +337,7 @@ fn dispatch(
         source: message.source,
         payload,
         media_time,
+        received_at: Instant::now(),
     };
     if let Err(TrySendError::Full(event)) = events.try_send(event) {
         tracing::warn!(namespace = %event.namespace, "dropping receiver event; host is not draining events");
