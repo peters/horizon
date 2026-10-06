@@ -258,7 +258,6 @@ class Supervisor:
 
     def close(self):
         (self.runtime / 'services.json').unlink(missing_ok=True)
-        (self.runtime / 'browser-host-instance').unlink(missing_ok=True)
         # Each child has its own session. Terminate only groups created here,
         # including descendants of a service whose leader has already exited.
         try:
@@ -266,6 +265,8 @@ class Supervisor:
         finally:
             self.children.clear()
             self.identities.clear()
+            # Only after the control service stopped, so it cannot publish the value again.
+            (self.runtime / 'browser-host-instance').unlink(missing_ok=True)
 
 
 def main():

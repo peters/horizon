@@ -152,9 +152,23 @@ class SupervisionTests(unittest.TestCase):
 
     def test_close_withdraws_the_published_browser_host_instance(self):
         # A later control service publishes a new value; until then sessions must not get this one.
-        (self.root / 'browser-host-instance').write_text('earlier-host\n')
+        # This control service publishes again while it stops, so only a removal after the stop holds.
+        published = self.root / 'browser-host-instance'
+        ready = self.root / 'control-ready'
+        self.start('control', 'import pathlib, signal, sys, time\n'
+                   'def stop(*_):\n'
+                   '    pathlib.Path(' + repr(str(published)) + ').write_text("late-host\\n")\n'
+                   '    sys.exit(0)\n'
+                   'signal.signal(signal.SIGTERM, stop)\n'
+                   'pathlib.Path(' + repr(str(published)) + ').write_text("earlier-host\\n")\n'
+                   'pathlib.Path(' + repr(str(ready)) + ').touch()\n'
+                   'time.sleep(60)\n')
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertTrue(published.exists())
         self.supervisor.close()
-        self.assertFalse((self.root / 'browser-host-instance').exists())
+        self.assertFalse(published.exists())
 
     def test_bootstrap_timeout_checks_real_readiness_without_replacing_services(self):
         child = self.start('xvfb')
