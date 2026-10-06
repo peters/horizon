@@ -25,9 +25,9 @@ pub fn avcc_to_annexb(sample: &[u8], length_size: usize, parameter_sets: &[&[u8]
 pub use sink::LiveCastSink;
 
 use crate::{
-    Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaController, MediaLoad, MediaStatus, Result,
+    Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, MediaController, MediaLoad, MediaStatus, Result,
     StreamType,
-    client::{NS_CONNECTION, REQUEST_TIMEOUT},
+    client::{NS_CONNECTION, QueuedEvent, REQUEST_TIMEOUT},
     media::NS_MEDIA,
     receiver::NS_RECEIVER,
 };
@@ -421,15 +421,15 @@ impl Session {
                 return Err(Error::Closed);
             }
             // The application can close or be replaced before LOAD; then leave it be.
-            if let Some(event) = client.next_event(BUFFER_POLL)?
+            if let Some(event) = client.next_notice(BUFFER_POLL)?
                 && !self.follow_confirmed(&client, &event, &app, NO_MEDIA_SESSION)?
             {
                 return Ok(());
             }
         }
         let mut media = client.media(&app);
-        let load = media.load(&self.media_load());
-        let loaded = match load {
+        let load = media.load_observed(&self.media_load());
+        let (loaded, receipt) = match load {
             Ok(status) => status,
             Err(error) => {
                 let _ = client.stop_application(&app.session_id);
@@ -438,9 +438,9 @@ impl Session {
         };
         // The LOAD reply is consumed by its request, so apply its status here.
         // Notices queued while LOAD blocked are older than that reply.
-        let queued = buffer_notices(&client, &app.transport_id, loaded.media_session_id)?;
+        let queued = buffer_notices(&client, &app.transport_id, loaded.media_session_id, receipt.at)?;
         let loaded_media = CastMedia::new(&app, loaded.media_session_id);
-        let mut outcome = self.judge_polled_status(&loaded_media, &queued, &loaded, None, Instant::now());
+        let mut outcome = self.judge_polled_status(&loaded_media, &queued, &loaded, receipt.media_time, receipt.at);
         let result = loop {
             match outcome {
                 Ok(true) => {}
@@ -459,8 +459,10 @@ impl Session {
             if !matches!(outcome, Ok(true)) {
                 continue;
             }
-            if let Err(error) = self.keep_up(&media, &app) {
-                break Err(error);
+            match self.keep_up(&media, &app) {
+                Ok(true) => {}
+                Ok(false) => return Ok(()),
+                Err(error) => break Err(error),
             }
             // A restore that is already due cannot sit behind the event poll.
             // The buffer keeps shrinking for the whole wait.
@@ -474,7 +476,7 @@ impl Session {
             } else {
                 EVENT_POLL
             };
-            outcome = match client.next_event(poll)? {
+            outcome = match client.next_notice(poll)? {
                 Some(event) => self.follow_confirmed(&client, &event, &app, loaded.media_session_id),
                 None => Ok(true),
             };
@@ -491,7 +493,7 @@ impl Session {
     fn follow_confirmed(
         &self,
         client: &CastClient,
-        event: &Event,
+        event: &QueuedEvent,
         app: &Application,
         media_session_id: i64,
     ) -> Result<bool> {
@@ -518,15 +520,15 @@ impl Session {
             // The queued event was discarded. Its source time is not this
             // reply's: sample immediately before the confirming request.
             let newest = self.source_media_time();
-            let reply = client.media(app).status()?;
+            let (reply, receipt) = client.media(app).status_observed(REQUEST_TIMEOUT)?;
             // Notices that arrived while this confirm blocked are older than
             // the reply. Judge them first, or the reply's later timestamp
             // stretches or hides the episode they already describe.
-            let queued = buffer_notices(client, &app.transport_id, media_session_id)?;
+            let queued = buffer_notices(client, &app.transport_id, media_session_id, receipt.at)?;
             let media = CastMedia::new(app, media_session_id);
             return match reply {
                 Some(status) if status.media_session_id == media_session_id => {
-                    self.judge_polled_status(&media, &queued, &status, newest, Instant::now())
+                    self.judge_polled_status(&media, &queued, &status, newest, receipt.at)
                 }
                 _ => {
                     self.fold_queued(&media, &queued)?;
@@ -541,12 +543,12 @@ impl Session {
     /// started the timer may have been queued behind a newer PLAYING reply.
     fn check_stall(&self, client: &CastClient, app: &Application, media_session_id: i64) -> Result<bool> {
         let newest = self.source_media_time();
-        let reply = client.media(app).status()?;
-        let queued = buffer_notices(client, &app.transport_id, media_session_id)?;
+        let (reply, receipt) = client.media(app).status_observed(REQUEST_TIMEOUT)?;
+        let queued = buffer_notices(client, &app.transport_id, media_session_id, receipt.at)?;
         let media = CastMedia::new(app, media_session_id);
         let going_on = match reply {
             Some(status) if status.media_session_id == media_session_id => {
-                self.judge_polled_status(&media, &queued, &status, newest, Instant::now())?
+                self.judge_polled_status(&media, &queued, &status, newest, receipt.at)?
             }
             _ => {
                 self.fold_queued(&media, &queued)?;
@@ -561,7 +563,7 @@ impl Session {
 
     pub(crate) fn follow(
         &self,
-        event: &Event,
+        event: &QueuedEvent,
         session_id: &str,
         transport_id: &str,
         media_session_id: i64,
@@ -757,7 +759,7 @@ impl Session {
     fn judge_polled_status(
         &self,
         media: &CastMedia<'_>,
-        queued: &[Event],
+        queued: &[QueuedEvent],
         status: &MediaStatus,
         media_time: Option<f64>,
         at: Instant,
@@ -767,15 +769,15 @@ impl Session {
     }
 
     /// Drains buffer notices and applies them before the caller judges a reply.
-    fn fold_ready(&self, client: &CastClient, app: &Application, media_session_id: i64) -> Result<()> {
-        let queued = buffer_notices(client, &app.transport_id, media_session_id)?;
+    fn fold_ready(&self, client: &CastClient, app: &Application, media_session_id: i64, at: Instant) -> Result<()> {
+        let queued = buffer_notices(client, &app.transport_id, media_session_id, at)?;
         self.fold_queued(&CastMedia::new(app, media_session_id), &queued)
     }
 
     /// Applies `queued` in receipt order. A notice that ends the session does
     /// not stop this fold: the reply the caller is about to judge is newer.
-    fn fold_queued(&self, media: &CastMedia<'_>, queued: &[Event]) -> Result<()> {
-        let mut ordered: Vec<&Event> = queued.iter().collect();
+    fn fold_queued(&self, media: &CastMedia<'_>, queued: &[QueuedEvent]) -> Result<()> {
+        let mut ordered: Vec<&QueuedEvent> = queued.iter().collect();
         ordered.sort_by_key(|event| event.received_at);
         for event in ordered {
             let _newer_reply_decides = self.follow(event, media.session, media.transport, media.media_session)?;
@@ -835,9 +837,9 @@ impl Session {
     /// back at the live-edge target.
     /// # Errors
     /// Fails when playback cannot be returned to normal speed.
-    fn keep_up(&self, media: &MediaController<'_>, app: &Application) -> Result<()> {
+    fn keep_up(&self, media: &MediaController<'_>, app: &Application) -> Result<bool> {
         let Sink::Progressive(stream) = &self.sink else {
-            return Ok(());
+            return Ok(true);
         };
         let mut playback = self.playback.get();
         let now = Instant::now();
@@ -846,12 +848,12 @@ impl Session {
             playback.sampled = false;
             if now < retry.at {
                 self.playback.set(playback);
-                return Ok(());
+                return Ok(true);
             }
             return self.push_rate(media, app, playback, retry.rate, retry.failures);
         }
         if playback.unsupported {
-            return Ok(());
+            return Ok(true);
         }
         let state = lock(&self.state).clone();
         if !polls_after_stall(self.started.get(), &state) {
@@ -862,7 +864,7 @@ impl Session {
                 return self.push_rate(media, app, playback, 1.0, 0);
             }
             self.playback.set(playback);
-            return Ok(());
+            return Ok(true);
         }
         if state != LiveState::Playing {
             // A stall moved us to Buffering. Keep polling: the next PLAYING
@@ -874,7 +876,7 @@ impl Session {
         }
         if now < playback.next_check {
             self.playback.set(playback);
-            return Ok(());
+            return Ok(true);
         }
         playback.next_check = now + EDGE_POLL;
         // GET_STATUS blocks this loop, so a lost reply cannot be told from a
@@ -890,9 +892,17 @@ impl Session {
         // source. The lag used for the rate decision is still read afterwards,
         // or a slow reply makes the receiver look closer than it is.
         let newest_at_send = stream.newest_media_time();
-        let status = media.status_within(wait);
+        let status = media.status_observed(wait);
+        if matches!(&status, Ok((None, _))) {
+            return Ok(false);
+        }
+        if let Ok((Some(status), _)) = &status
+            && !self.owns_reply(media, status)?
+        {
+            return Ok(false);
+        }
         let newest = stream.newest_media_time();
-        let (Some(newest), Ok(Some(status))) = (newest, status) else {
+        let (Some(newest), Ok((Some(status), receipt))) = (newest, status) else {
             // The receiver may already be playing fast. Without a sample there
             // is no signal to stop, so return to normal speed.
             playback.sampled = false;
@@ -900,18 +910,18 @@ impl Session {
                 return self.push_rate(media, app, playback, 1.0, 0);
             }
             self.playback.set(playback);
-            return Ok(());
+            return Ok(true);
         };
-        let lag = newest - status.current_time;
+        let lag = receipt.media_time.unwrap_or(newest) - status.current_time;
         // Notices queued during the poll were received before this reply.
         // Fold them first, or a short gap is measured out to the reply and a
         // real stall can miss the opening time on its own notice.
-        self.fold_ready(media.client(), app, status.media_session_id)?;
+        self.fold_ready(media.client(), app, media.session_id()?, receipt.at)?;
         self.adopt_folded_edge(&mut playback);
         // The status call blocks. Time the buffer, and the lag sample, from
         // when the reply arrived. A deadline taken at send time is already
         // partly spent.
-        let observed = Instant::now();
+        let observed = receipt.at;
         if lag.is_finite() {
             playback.lag = Some(lag);
             playback.lag_at = Some(observed);
@@ -949,7 +959,7 @@ impl Session {
         playback.edge = plan.edge;
         let Some(rate) = plan.command else {
             self.playback.set(playback);
-            return Ok(());
+            return Ok(true);
         };
         tracing::debug!(lag, rate, target = plan.edge.target, "trimming live playback");
         self.push_rate(media, app, playback, rate, 0)
@@ -968,7 +978,7 @@ impl Session {
         mut playback: Playback,
         rate: f64,
         failures: u8,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         // The status poll that led here may have blocked. This wait starts now.
         let now = Instant::now();
         // A speed-up with no room for an acknowledgement is not queued. The
@@ -979,23 +989,26 @@ impl Session {
         // normal speed now. Waiting for the next poll leaves that rate on.
         let Some(rate) = command_after_admission(&playback, rate, now) else {
             self.playback.set(playback);
-            return Ok(());
+            return Ok(true);
         };
         let Some(wait) = begin_rate(&mut playback, rate, now) else {
             self.playback.set(playback);
-            return Ok(());
+            return Ok(true);
         };
         let newest_at_send = self.source_media_time();
-        let (answer, error) = match media.set_playback_rate_within(rate, wait) {
-            Ok(status) => {
+        let (answer, error) = match media.rate_observed(rate, wait) {
+            Ok((status, receipt)) => {
+                if !self.owns_reply(media, &status)? {
+                    return Ok(false);
+                }
                 // The reply is not delivered again as an event. Notices queued
                 // while the command blocked are older than it. Store this
                 // playback first: the fold loads the session copy, and the
                 // planned edge still lives only in this local value.
                 self.playback.set(playback);
-                self.fold_ready(media.client(), app, status.media_session_id)?;
+                self.fold_ready(media.client(), app, media.session_id()?, receipt.at)?;
                 playback = self.playback.get();
-                self.absorb_rate_status(&mut playback, &status, Instant::now(), newest_at_send);
+                self.absorb_rate_status(&mut playback, &status, receipt.at, newest_at_send);
                 (RateAnswer::Applied, None)
             }
             Err(error @ Error::Rejected { .. }) => (RateAnswer::Refused, Some(error)),
@@ -1012,12 +1025,23 @@ impl Session {
         if (rate - 1.0).abs() > 1e-3 && due {
             let Some(retry) = playback.retry.take() else {
                 self.playback.set(playback);
-                return Ok(());
+                return Ok(true);
             };
             return self.push_rate(media, app, playback, retry.rate, retry.failures);
         }
         self.playback.set(playback);
-        Ok(())
+        Ok(true)
+    }
+
+    /// A correlated reply must still belong to the original LOAD.
+    fn owns_reply(&self, media: &MediaController<'_>, status: &MediaStatus) -> Result<bool> {
+        if status.media_session_id != media.session_id()? {
+            return Ok(false);
+        }
+        if status.player_state == "IDLE" {
+            return self.apply(status, None, None, Instant::now());
+        }
+        Ok(true)
     }
 
     /// Playing, but the receiver has reported buffering for longer than the grace period.
@@ -1245,24 +1269,18 @@ fn command_after_admission(playback: &Playback, wanted: f64, now: Instant) -> Op
 
 /// Buffer notices already queued for our media session. Anything else is put
 /// back, in order, so the cast loop still sees a terminal event.
-fn buffer_notices(client: &CastClient, transport_id: &str, media_session_id: i64) -> Result<Vec<Event>> {
-    let queued = client.drain_ready()?;
-    let mut notices = Vec::new();
-    let mut rest = Vec::new();
-    for event in queued {
-        if buffer_notice(&event, transport_id, media_session_id) {
-            notices.push(event);
-        } else {
-            rest.push(event);
-        }
-    }
-    client.defer(rest);
-    Ok(notices)
+fn buffer_notices(
+    client: &CastClient,
+    transport_id: &str,
+    media_session_id: i64,
+    at: Instant,
+) -> Result<Vec<QueuedEvent>> {
+    client.take_notices(|event| event.received_at <= at && buffer_notice(event, transport_id, media_session_id))
 }
 
 /// A playing, paused, or buffering status for our session. Idle and receiver
 /// notices stay on the queue: they decide whether the session continues.
-fn buffer_notice(event: &Event, transport_id: &str, media_session_id: i64) -> bool {
+fn buffer_notice(event: &QueuedEvent, transport_id: &str, media_session_id: i64) -> bool {
     event.source == transport_id
         && MediaStatus::from_event(event).iter().any(|status| {
             status.media_session_id == media_session_id
@@ -2255,14 +2273,16 @@ mod catch_up_tests {
         playback.edge.target = 0.25;
         playback.edge.floor = 0.15;
         session.playback.set(playback);
-        let event = Event {
-            namespace: NS_MEDIA.to_owned(),
-            source: "transport-1".to_owned(),
-            payload: serde_json::json!({
-                "type": "MEDIA_STATUS",
-                "requestId": 0,
-                "status": [{"mediaSessionId": 9, "playerState": "BUFFERING", "currentTime": 10.0}]
-            }),
+        let event = QueuedEvent {
+            event: crate::Event {
+                namespace: NS_MEDIA.to_owned(),
+                source: "transport-1".to_owned(),
+                payload: serde_json::json!({
+                    "type": "MEDIA_STATUS",
+                    "requestId": 0,
+                    "status": [{"mediaSessionId": 9, "playerState": "BUFFERING", "currentTime": 10.0}]
+                }),
+            },
             media_time: Some(10.30),
             received_at: Instant::now(),
         };
@@ -2301,15 +2321,17 @@ mod catch_up_tests {
         assert!((next.floor - 0.30).abs() < 1e-9);
     }
 
-    fn media_notice(player_state: &str, current_time: f64, media_time: Option<f64>, at: Instant) -> Event {
-        Event {
-            namespace: NS_MEDIA.to_owned(),
-            source: "transport-1".to_owned(),
-            payload: serde_json::json!({
-                "type": "MEDIA_STATUS",
-                "requestId": 0,
-                "status": [{"mediaSessionId": 9, "playerState": player_state, "currentTime": current_time}]
-            }),
+    fn media_notice(player_state: &str, current_time: f64, media_time: Option<f64>, at: Instant) -> QueuedEvent {
+        QueuedEvent {
+            event: crate::Event {
+                namespace: NS_MEDIA.to_owned(),
+                source: "transport-1".to_owned(),
+                payload: serde_json::json!({
+                    "type": "MEDIA_STATUS",
+                    "requestId": 0,
+                    "status": [{"mediaSessionId": 9, "playerState": player_state, "currentTime": current_time}]
+                }),
+            },
             media_time,
             received_at: at,
         }
@@ -2509,5 +2531,50 @@ mod catch_up_tests {
         near.edge.target = 0.35;
         let slower = command_after_admission(&near, 1.08, now).expect("slower");
         assert!(slower > 1.0 + 1e-3 && slower < 1.08, "{slower}");
+    }
+    #[test]
+    fn calm_playback_converges_through_all_targets_with_safe_admission() {
+        let mut playback = Playback::new();
+        let mut lag = 0.41;
+        let mut now = Instant::now();
+        let tick = Duration::from_millis(100);
+        let mut commanded = Vec::new();
+        for _ in 0..1000 {
+            let plan = plan_trim(
+                playback.edge,
+                edge::Sample {
+                    lag,
+                    buffering_for: None,
+                    elapsed: tick,
+                },
+                true,
+            );
+            playback.edge = plan.edge;
+            playback.lag = Some(lag);
+            playback.lag_at = Some(now);
+            let wanted = if fastest(&playback) > 1.0 && status_wait(&playback, now).is_none() {
+                Some(1.0)
+            } else {
+                plan.command
+            };
+            if let Some(wanted) = wanted
+                && let Some(rate) = command_after_admission(&playback, wanted, now)
+            {
+                let wait = begin_rate(&mut playback, rate, now).expect("admitted");
+                assert!(wait >= ACK_WINDOW);
+                assert!(!apply_rate_reply(&mut playback, rate, 0, RateAnswer::Applied, now));
+                commanded.push(rate);
+            }
+            lag -= (playback.edge.rate - 1.0) * tick.as_secs_f64();
+            now += tick;
+        }
+        assert!(
+            (playback.edge.target - edge::LIVE_EDGE).abs() < 1e-9,
+            "{:?}",
+            playback.edge
+        );
+        assert!((edge::LIVE_EDGE..=edge::LIVE_EDGE + 0.05).contains(&lag), "{lag}");
+        assert!((playback.edge.rate - 1.0).abs() < 1e-9);
+        assert!(commanded.iter().any(|rate| *rate > 1.0 && *rate < 1.08));
     }
 }

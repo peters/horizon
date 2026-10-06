@@ -1,7 +1,7 @@
 //! Media namespace of a launched application: load a URL and control playback.
 use crate::{
     Application, CastClient, Error, Event, Result,
-    client::{REQUEST_TIMEOUT, rejected},
+    client::{REQUEST_TIMEOUT, Receipt, rejected},
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -82,6 +82,10 @@ impl MediaController<'_> {
     /// # Errors
     /// Returns [`Error::Rejected`] with the receiver's reason if loading fails.
     pub fn load(&mut self, load: &MediaLoad) -> Result<MediaStatus> {
+        self.load_observed(load).map(|(status, _)| status)
+    }
+
+    pub(crate) fn load_observed(&mut self, load: &MediaLoad) -> Result<(MediaStatus, Receipt)> {
         let mut media = Map::new();
         media.insert("contentId".to_owned(), load.url.clone().into());
         media.insert("contentType".to_owned(), load.content_type.clone().into());
@@ -95,10 +99,13 @@ impl MediaController<'_> {
         if let Some(format) = &load.hls_video_segment_format {
             media.insert("hlsVideoSegmentFormat".to_owned(), format.clone().into());
         }
-        let reply = self.request(json!({"type": "LOAD", "media": media, "autoplay": true}))?;
+        let (reply, receipt) = self.request_observed(
+            json!({"type": "LOAD", "media": media, "autoplay": true}),
+            REQUEST_TIMEOUT,
+        )?;
         let status = first_status(&reply)?;
         self.media_session_id = Some(status.media_session_id);
-        Ok(status)
+        Ok((status, receipt))
     }
 
     /// # Errors
@@ -133,16 +140,21 @@ impl MediaController<'_> {
     /// Returns an error for a rate that is not positive and finite, if nothing
     /// is loaded, if the receiver refuses, or if it does not answer in `timeout`.
     pub fn set_playback_rate_within(&self, rate: f64, timeout: Duration) -> Result<MediaStatus> {
+        self.rate_observed(rate, timeout).map(|(status, _)| status)
+    }
+
+    pub(crate) fn rate_observed(&self, rate: f64, timeout: Duration) -> Result<(MediaStatus, Receipt)> {
         if !rate.is_finite() || rate <= 0.0 {
             return Err(Error::Protocol("playback rate must be positive and finite"));
         }
         let id = self
             .media_session_id
             .ok_or(Error::Protocol("no media session is loaded"))?;
-        first_status(&self.request_within(
+        let (reply, receipt) = self.request_observed(
             json!({"type": "SET_PLAYBACK_RATE", "mediaSessionId": id, "playbackRate": rate}),
             timeout,
-        )?)
+        )?;
+        Ok((first_status(&reply)?, receipt))
     }
 
     /// Current media status, or `None` when nothing is loaded.
@@ -156,8 +168,12 @@ impl MediaController<'_> {
     /// # Errors
     /// Returns an error if the receiver does not answer in `timeout`.
     pub fn status_within(&self, timeout: Duration) -> Result<Option<MediaStatus>> {
-        let reply = self.request_within(json!({"type": "GET_STATUS"}), timeout)?;
-        Ok(statuses(&reply)?.into_iter().next())
+        self.status_observed(timeout).map(|(status, _)| status)
+    }
+
+    pub(crate) fn status_observed(&self, timeout: Duration) -> Result<(Option<MediaStatus>, Receipt)> {
+        let (reply, receipt) = self.request_observed(json!({"type": "GET_STATUS"}), timeout)?;
+        Ok((statuses(&reply)?.into_iter().next(), receipt))
     }
 
     fn command(&self, kind: &str) -> Result<MediaStatus> {
@@ -172,8 +188,17 @@ impl MediaController<'_> {
     }
 
     fn request_within(&self, payload: Value, timeout: Duration) -> Result<Value> {
+        self.request_observed(payload, timeout).map(|(reply, _)| reply)
+    }
+
+    fn request_observed(&self, payload: Value, timeout: Duration) -> Result<(Value, Receipt)> {
         self.client
-            .request_within(&self.transport_id, NS_MEDIA, payload, timeout)
+            .request_observed(&self.transport_id, NS_MEDIA, payload, timeout)
+    }
+
+    pub(crate) fn session_id(&self) -> Result<i64> {
+        self.media_session_id
+            .ok_or(Error::Protocol("no media session is loaded"))
     }
 
     #[must_use]
@@ -211,8 +236,6 @@ mod tests {
                 "requestId": 0,
                 "status": [{"mediaSessionId": 7, "playerState": "PLAYING", "currentTime": 1.5}]
             }),
-            media_time: None,
-            received_at: std::time::Instant::now(),
         };
         let status = MediaStatus::from_event(&event);
         assert_eq!(status.len(), 1);

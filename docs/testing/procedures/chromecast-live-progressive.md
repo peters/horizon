@@ -26,6 +26,14 @@ ends when the receiver or another sender stops it.
   tests cover it.
 - This procedure does not test the Horizon UI.
 
+### Automated controller checks
+
+Run `cargo test -p horizon-chromecast --lib` before the receiver run. The tests
+use synthetic clocks and a receiver on loopback TLS. They check all target steps
+from 0.4 s to 0.15 s, rate refusal and lost replies, buffer backoff, notification
+ordering, a bounded event queue, and takeover replies that must not send STOP.
+These checks do not measure picture or sound delay on a physical receiver.
+
 ## 3. Equipment and preconditions
 
 - A receiver on the local network, for example a TV with Chromecast built-in.

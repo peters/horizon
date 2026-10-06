@@ -10,9 +10,9 @@ use std::{
     io::{ErrorKind, Read, Write},
     net::SocketAddr,
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Condvar, Mutex, PoisonError,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError},
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError},
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -39,14 +39,51 @@ pub struct Event {
     pub namespace: String,
     pub source: String,
     pub payload: Value,
-    /// Progressive media time, in seconds, when this event was queued.
-    /// `None` when the session has no media clock. A buffer that is handled
-    /// later still opens at this time: the source has moved, the receiver
-    /// clock has not.
+}
+
+/// Receipt metadata is private; the public event remains source compatible.
+#[derive(Clone, Debug)]
+pub(crate) struct QueuedEvent {
+    pub event: Event,
     pub media_time: Option<f64>,
-    /// When this event was queued. An episode uses this, not the later moment
-    /// the host handles the notification.
     pub received_at: Instant,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Receipt {
+    pub at: Instant,
+    pub media_time: Option<f64>,
+}
+
+struct Reply {
+    payload: Value,
+    receipt: Receipt,
+}
+
+impl std::ops::Deref for QueuedEvent {
+    type Target = Event;
+    fn deref(&self) -> &Event {
+        &self.event
+    }
+}
+
+#[derive(Default)]
+struct EventQueue {
+    events: Mutex<VecDeque<QueuedEvent>>,
+    ready: Condvar,
+}
+
+impl EventQueue {
+    fn push(&self, event: QueuedEvent) -> Result<()> {
+        let mut events = lock(&self.events);
+        if events.len() >= EVENT_BACKLOG {
+            // Fail the connection instead of losing an end/takeover notice.
+            return Err(Error::Protocol("receiver event backlog exceeded"));
+        }
+        events.push_back(event);
+        self.ready.notify_one();
+        Ok(())
+    }
 }
 
 impl Event {
@@ -62,22 +99,19 @@ enum Command {
 }
 
 struct Shared {
-    pending: Mutex<HashMap<u64, SyncSender<Value>>>,
+    pending: Mutex<HashMap<u64, SyncSender<Reply>>>,
     connected: Mutex<HashSet<String>>,
     next_request: AtomicU64,
     open: AtomicBool,
     /// Sampled when an unsolicited event is queued, not when the host handles it.
     media_clock: Mutex<Option<MediaClock>>,
+    events: EventQueue,
 }
 
 pub struct CastClient {
     address: SocketAddr,
     commands: SyncSender<Command>,
     shared: Arc<Shared>,
-    events: Mutex<Receiver<Event>>,
-    /// Taken off the channel and put back. `next_event` reads these first so
-    /// a caller can inspect the queue without losing what it does not handle.
-    deferred: Mutex<VecDeque<Event>>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -88,24 +122,22 @@ impl CastClient {
     pub fn connect(address: SocketAddr) -> Result<Self> {
         let stream = channel::connect(address, POLL)?;
         let (commands, command_queue) = mpsc::sync_channel(COMMAND_BACKLOG);
-        let (event_sink, events) = mpsc::sync_channel(EVENT_BACKLOG);
         let shared = Arc::new(Shared {
             pending: Mutex::new(HashMap::new()),
             connected: Mutex::new(HashSet::new()),
             next_request: AtomicU64::new(1),
             open: AtomicBool::new(true),
             media_clock: Mutex::new(None),
+            events: EventQueue::default(),
         });
         let worker_shared = shared.clone();
         let worker = std::thread::Builder::new()
             .name("chromecast-io".to_owned())
-            .spawn(move || run(stream, command_queue, &worker_shared, &event_sink))?;
+            .spawn(move || run(stream, command_queue, &worker_shared))?;
         let client = Self {
             address,
             commands,
             shared,
-            events: Mutex::new(events),
-            deferred: Mutex::new(VecDeque::new()),
             worker: Some(worker),
         };
         client.connect_virtual(PLATFORM_RECEIVER)?;
@@ -147,6 +179,9 @@ impl CastClient {
     /// # Errors
     /// Returns [`Error::Closed`] once the connection has ended.
     pub fn send(&self, destination: &str, namespace: &str, payload: &Value) -> Result<()> {
+        if !self.is_open() {
+            return Err(Error::Closed);
+        }
         let frame = CastMessage::text(SENDER_ID, destination, namespace, payload.to_string()).encode_frame()?;
         self.commands.send(Command::Send(frame)).map_err(|_| Error::Closed)
     }
@@ -166,9 +201,20 @@ impl CastClient {
         &self,
         destination: &str,
         namespace: &str,
-        mut payload: Value,
+        payload: Value,
         timeout: Duration,
     ) -> Result<Value> {
+        self.request_observed(destination, namespace, payload, timeout)
+            .map(|(value, _)| value)
+    }
+
+    pub(crate) fn request_observed(
+        &self,
+        destination: &str,
+        namespace: &str,
+        mut payload: Value,
+        timeout: Duration,
+    ) -> Result<(Value, Receipt)> {
         let id = self.shared.next_request.fetch_add(1, Ordering::Relaxed);
         let Some(fields) = payload.as_object_mut() else {
             return Err(Error::Protocol("request payload must be an object"));
@@ -178,7 +224,7 @@ impl CastClient {
         lock(&self.shared.pending).insert(id, reply);
         let sent = self.send(destination, namespace, &payload);
         let result = sent.and_then(|()| match response.recv_timeout(timeout) {
-            Ok(value) => Ok(value),
+            Ok(reply) => Ok((reply.payload, reply.receipt)),
             Err(RecvTimeoutError::Timeout) => Err(Error::Timeout(request_kind(&payload))),
             Err(RecvTimeoutError::Disconnected) => Err(Error::Closed),
         });
@@ -191,40 +237,39 @@ impl CastClient {
     /// Returns [`Error::Closed`] once the connection has ended and every
     /// queued event has been read.
     pub fn next_event(&self, timeout: Duration) -> Result<Option<Event>> {
-        if let Some(event) = lock(&self.deferred).pop_front() {
+        self.next_notice(timeout).map(|event| event.map(|queued| queued.event))
+    }
+
+    pub(crate) fn next_notice(&self, timeout: Duration) -> Result<Option<QueuedEvent>> {
+        let queue = &self.shared.events;
+        let events = lock(&queue.events);
+        let (mut events, _) = queue
+            .ready
+            .wait_timeout_while(events, timeout, |events| events.is_empty() && self.is_open())
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(event) = events.pop_front() {
             return Ok(Some(event));
         }
-        match lock(&self.events).recv_timeout(timeout) {
-            Ok(event) => Ok(Some(event)),
-            Err(RecvTimeoutError::Timeout) => Ok(None),
-            Err(RecvTimeoutError::Disconnected) => Err(Error::Closed),
-        }
+        if self.is_open() { Ok(None) } else { Err(Error::Closed) }
     }
 
-    /// Events already queued, without waiting.
-    /// # Errors
-    /// Returns [`Error::Closed`] once the connection has ended and every
-    /// queued event has been read.
-    pub(crate) fn drain_ready(&self) -> Result<Vec<Event>> {
-        let mut queued = Vec::new();
-        loop {
-            match self.next_event(Duration::ZERO) {
-                Ok(Some(event)) => queued.push(event),
-                Ok(None) => return Ok(queued),
-                // The events already taken are still delivered. The next read
-                // reports the closed connection.
-                Err(Error::Closed) if !queued.is_empty() => return Ok(queued),
-                Err(error) => return Err(error),
+    /// Removes matching notices atomically from the one bounded queue.
+    /// Retained lifecycle notices never create room in a second backlog.
+    pub(crate) fn take_notices(&self, matches: impl Fn(&QueuedEvent) -> bool) -> Result<Vec<QueuedEvent>> {
+        let mut events = lock(&self.shared.events.events);
+        let mut taken = Vec::new();
+        events.retain(|event| {
+            if matches(event) {
+                taken.push(event.clone());
+                false
+            } else {
+                true
             }
+        });
+        if events.is_empty() && taken.is_empty() && !self.is_open() {
+            return Err(Error::Closed);
         }
-    }
-
-    /// Puts `events` ahead of anything still queued, keeping their order.
-    pub(crate) fn defer(&self, events: Vec<Event>) {
-        let mut deferred = lock(&self.deferred);
-        for event in events.into_iter().rev() {
-            deferred.push_front(event);
-        }
+        Ok(taken)
     }
 }
 
@@ -263,25 +308,24 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn run(mut stream: channel::TlsStream, commands: Receiver<Command>, shared: &Shared, events: &SyncSender<Event>) {
-    if let Err(error) = io_loop(&mut stream, &commands, shared, events) {
+fn run(mut stream: channel::TlsStream, commands: Receiver<Command>, shared: &Shared) {
+    if let Err(error) = io_loop(&mut stream, &commands, shared) {
         tracing::debug!(%error, "chromecast connection ended");
     }
     // Close the queue before failing waiters: a request registered after the
     // clear below can then no longer be sent, so it cannot wait for a reply.
     drop(commands);
-    shared.open.store(false, Ordering::Release);
+    {
+        let _events = lock(&shared.events.events);
+        shared.open.store(false, Ordering::Release);
+        shared.events.ready.notify_all();
+    }
     lock(&shared.pending).clear();
     stream.conn.send_close_notify();
     let _ = stream.flush();
 }
 
-fn io_loop(
-    stream: &mut channel::TlsStream,
-    commands: &Receiver<Command>,
-    shared: &Shared,
-    events: &SyncSender<Event>,
-) -> Result<()> {
+fn io_loop(stream: &mut channel::TlsStream, commands: &Receiver<Command>, shared: &Shared) -> Result<()> {
     let ping = CastMessage::text(
         SENDER_ID,
         PLATFORM_RECEIVER,
@@ -316,7 +360,7 @@ fn io_loop(
                 last_inbound = Instant::now();
                 inbound.extend_from_slice(&chunk[..read]);
                 for message in proto::drain_frames(&mut inbound)? {
-                    dispatch(stream, message, shared, events)?;
+                    dispatch(stream, message, shared)?;
                 }
             }
             Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
@@ -325,12 +369,7 @@ fn io_loop(
     }
 }
 
-fn dispatch(
-    stream: &mut channel::TlsStream,
-    message: CastMessage,
-    shared: &Shared,
-    events: &SyncSender<Event>,
-) -> Result<()> {
+fn dispatch(stream: &mut channel::TlsStream, message: CastMessage, shared: &Shared) -> Result<()> {
     let Payload::Text(text) = message.payload else {
         return Ok(());
     };
@@ -359,41 +398,56 @@ fn dispatch(
         .and_then(Value::as_u64)
         .filter(|id| *id != 0)
         .and_then(|id| lock(&shared.pending).remove(&id));
+    let clock = lock(&shared.media_clock).clone();
+    let receipt = Receipt {
+        at: Instant::now(),
+        media_time: clock.as_ref().and_then(|clock| clock()),
+    };
     if let Some(waiter) = waiter {
-        let _ = waiter.try_send(payload);
+        let _ = waiter.try_send(Reply { payload, receipt });
         return Ok(());
     }
-    let clock = lock(&shared.media_clock).clone();
-    let media_time = clock.as_ref().and_then(|clock| clock());
-    let event = Event {
-        namespace: message.namespace,
-        source: message.source,
-        payload,
-        media_time,
-        received_at: Instant::now(),
-    };
-    if let Err(TrySendError::Full(event)) = events.try_send(event) {
-        tracing::warn!(namespace = %event.namespace, "dropping receiver event; host is not draining events");
-    }
-    Ok(())
+    shared.events.push(QueuedEvent {
+        event: Event {
+            namespace: message.namespace,
+            source: message.source,
+            payload,
+        },
+        media_time: receipt.media_time,
+        received_at: receipt.at,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn notice(source: &str) -> Event {
-        Event {
-            namespace: NS_CONNECTION.to_owned(),
-            source: source.to_owned(),
-            payload: json!({"type": "CLOSE"}),
+    fn notice(source: &str) -> QueuedEvent {
+        QueuedEvent {
+            event: Event {
+                namespace: NS_CONNECTION.to_owned(),
+                source: source.to_owned(),
+                payload: json!({"type": "CLOSE"}),
+            },
             media_time: None,
             received_at: Instant::now(),
         }
     }
 
-    fn bare_client(events: Receiver<Event>, commands: SyncSender<Command>) -> CastClient {
-        CastClient {
+    #[test]
+    fn backlog_overflow_is_explicit_and_keeps_terminal_notices() {
+        let queue = EventQueue::default();
+        for _ in 0..EVENT_BACKLOG {
+            queue.push(notice("terminal")).unwrap();
+        }
+        assert!(queue.push(notice("overflow")).is_err());
+        assert_eq!(lock(&queue.events).len(), EVENT_BACKLOG);
+        assert!(lock(&queue.events).iter().all(|event| event.kind() == Some("CLOSE")));
+    }
+    #[test]
+    fn inspecting_notices_keeps_one_bounded_backlog_in_receipt_order() {
+        let (commands, _receiver) = mpsc::sync_channel(COMMAND_BACKLOG);
+        let client = CastClient {
             address: SocketAddr::from(([127, 0, 0, 1], 1)),
             commands,
             shared: Arc::new(Shared {
@@ -402,39 +456,40 @@ mod tests {
                 next_request: AtomicU64::new(1),
                 open: AtomicBool::new(true),
                 media_clock: Mutex::new(None),
+                events: EventQueue::default(),
             }),
-            events: Mutex::new(events),
-            deferred: Mutex::new(VecDeque::new()),
             worker: None,
+        };
+        client.shared.events.push(notice("first-terminal")).unwrap();
+        for _ in 0..EVENT_BACKLOG - 1 {
+            client.shared.events.push(notice("buffer")).unwrap();
         }
-    }
-
-    #[test]
-    fn deferred_events_stay_ahead_of_the_channel() {
-        let (commands, _commands) = mpsc::sync_channel(4);
-        let (sink, events) = mpsc::sync_channel(4);
-        let client = bare_client(events, commands);
-        let first = notice("first");
-        let second = notice("second");
-        sink.send(second).expect("queue");
-        client.defer(vec![first]);
-        let got = client.drain_ready().expect("drain");
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[0].source, "first");
-        assert_eq!(got[1].source, "second");
-        assert!(client.drain_ready().expect("empty").is_empty());
-    }
-
-    #[test]
-    fn a_closed_queue_still_returns_events_already_taken() {
-        let (commands, _commands) = mpsc::sync_channel(4);
-        let (sink, events) = mpsc::sync_channel(4);
-        let client = bare_client(events, commands);
-        client.defer(vec![notice("kept")]);
-        drop(sink);
-        let got = client.drain_ready().expect("kept");
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].source, "kept");
-        assert!(client.drain_ready().is_err());
+        for _ in 0..10 {
+            let removed = client.take_notices(|event| event.source == "buffer").unwrap();
+            assert_eq!(removed.len(), EVENT_BACKLOG - 1);
+            for _ in 0..EVENT_BACKLOG - 1 {
+                client.shared.events.push(notice("buffer")).unwrap();
+            }
+            assert_eq!(lock(&client.shared.events.events).len(), EVENT_BACKLOG);
+        }
+        assert!(client.shared.events.push(notice("overflow-terminal")).is_err());
+        let latest = lock(&client.shared.events.events).back().unwrap().received_at;
+        assert!(
+            client
+                .take_notices(|event| event.received_at < latest && event.source == "buffer")
+                .unwrap()
+                .len()
+                < EVENT_BACKLOG - 1
+        );
+        assert_eq!(lock(&client.shared.events.events).back().unwrap().received_at, latest);
+        // Public API still returns the original three-field Event.
+        let Event {
+            namespace,
+            source,
+            payload,
+        } = client.next_event(Duration::ZERO).unwrap().unwrap();
+        assert_eq!(namespace, NS_CONNECTION);
+        assert_eq!(source, "first-terminal");
+        assert_eq!(payload["type"], "CLOSE");
     }
 }
