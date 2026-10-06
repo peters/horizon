@@ -27,6 +27,8 @@ mod repository_setup;
 mod resize;
 mod sessions;
 mod setup;
+#[cfg(debug_assertions)]
+mod stopped_preview;
 use super::HorizonApp;
 use horizon_core::cloud_panel::CloudConfig;
 use horizon_core::{
@@ -574,6 +576,7 @@ impl HorizonApp {
         self.remove_closed_cloud_browsers(removed);
         self.sync_resized_profiles();
         self.sync_cloud_presentations();
+        self.sync_cloud_member_waits();
         self.start_first_cloud_panels(ctx);
         self.cloud_prototype.groups.reconcile(&mut self.board);
         self.sync_board_cloud_groups();
@@ -714,6 +717,8 @@ impl HorizonApp {
             // A debug build can show a synthetic deploy log. Release builds omit it.
             #[cfg(debug_assertions)]
             log_preview::seed(self);
+            #[cfg(debug_assertions)]
+            stopped_preview::seed(self, ctx);
         }
     }
     /// Reconnects each resumed worker. The reconnect that finishes a resume is still that

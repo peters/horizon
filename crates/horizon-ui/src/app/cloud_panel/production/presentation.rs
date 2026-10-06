@@ -240,6 +240,29 @@ impl HorizonApp {
         }
         true
     }
+    /// A restored member that its cloud does not run yet says why: the cloud is stopped
+    /// and Resume worker restores it, or Horizon reconnects the cloud. Members that their
+    /// cloud runs are left alone.
+    pub(super) fn sync_cloud_member_waits(&mut self) {
+        for group in &self.cloud_prototype.groups.0 {
+            let Some(runtime) = self.cloud_prototype.production.runtimes.get(&group.issue) else {
+                continue;
+            };
+            let wait = if runtime.stage == Some(cloud_runtime::Stage::Stopped) {
+                horizon_core::CloudWait::Stopped
+            } else {
+                horizon_core::CloudWait::Reconnecting
+            };
+            for local in &group.panels {
+                if let Some(id) = self.board.panel_id_by_local_id(local)
+                    && let Some(panel) = self.board.panel_mut(id)
+                    && let Err(error) = panel.show_cloud_wait(wait)
+                {
+                    self.cloud_prototype.error = Some(error.to_string());
+                }
+            }
+        }
+    }
     pub(super) fn sync_cloud_presentations(&mut self) {
         for index in 0..self.cloud_prototype.groups.0.len() {
             let group = &self.cloud_prototype.groups.0[index];

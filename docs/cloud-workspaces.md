@@ -565,6 +565,11 @@ the worker and tools continue. Reconnect inspects the same worker, restores SSH
 tunnels and attaches existing sessions. Reconnect also restores closed terminal
 views from their saved remote references.
 
+After a restart, each panel of a cloud waits until its cloud is ready. Until
+then, the panel shows that Horizon reconnects the cloud. When the cloud is
+stopped, the panel shows that the cloud is stopped and that **Resume worker** on
+the card restores the panel.
+
 A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
 runtime card. Compute replacement retains the same network workspace but stops
 processes, discards temporary container files and reconnects recorded sessions on
