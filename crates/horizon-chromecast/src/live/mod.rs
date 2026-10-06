@@ -625,10 +625,13 @@ impl Session {
             return Ok(());
         }
         if !self.started.get() || *lock(&self.state) != LiveState::Playing {
-            if playback.sampled {
-                playback.sampled = false;
-                self.playback.set(playback);
+            // A stall report stops the poll. A faster rate still has to come down,
+            // or the receiver keeps eating the buffer with no restore deadline.
+            playback.sampled = false;
+            if self.started.get() && playback.edge.rate > 1.0 + 1e-3 {
+                return self.push_rate(media, playback, 1.0, 0, now);
             }
+            self.playback.set(playback);
             return Ok(());
         }
         if now < playback.next_check {
@@ -654,26 +657,23 @@ impl Session {
         let mut open = self.buffering_since.get();
         let buffering_for = buffering_age(&mut open, status.player_state.as_str(), now);
         self.buffering_since.set(open);
-        let previous = playback.edge.rate;
-        let next = playback.edge.step(edge::Sample {
-            lag,
-            buffering_for,
-            elapsed,
-        });
-        let speed_up = next.rate > previous + 1e-3;
-        let changed = (next.rate - previous).abs() > 1e-3;
-        playback.edge = next;
-        // Do not speed up into an open buffer. Do send the return to normal
-        // speed: that is how a target that was too close lets the buffer rebuild.
-        if !changed || (speed_up && status.player_state != "PLAYING") {
-            if speed_up {
-                playback.edge.rate = previous;
-            }
+        let playing = status.player_state == "PLAYING";
+        let plan = plan_trim(
+            playback.edge,
+            edge::Sample {
+                lag,
+                buffering_for,
+                elapsed,
+            },
+            playing,
+        );
+        playback.edge = plan.edge;
+        let Some(rate) = plan.command else {
             self.playback.set(playback);
             return Ok(());
-        }
-        tracing::debug!(lag, rate = next.rate, target = next.target, "trimming live playback");
-        self.push_rate(media, playback, next.rate, 0, now)
+        };
+        tracing::debug!(lag, rate, target = plan.edge.target, "trimming live playback");
+        self.push_rate(media, playback, rate, 0, now)
     }
 
     /// Applies `rate`. An explicit refusal of a faster rate stops further
@@ -754,6 +754,37 @@ fn buffering_age(open_since: &mut Option<Instant>, player_state: &str, now: Inst
         }
         _ => None,
     }
+}
+
+/// What to ask the receiver, with the rate we already believe is applied.
+struct Trim {
+    edge: edge::Edge,
+    /// `None` when no command should be sent. The edge rate stays at the last
+    /// confirmed rate until a reply says otherwise.
+    command: Option<f64>,
+}
+
+/// Plans the next rate command. The requested rate is not stored as applied:
+/// a refusal must still see the rate the receiver was already using.
+fn plan_trim(edge: edge::Edge, sample: edge::Sample, playing: bool) -> Trim {
+    let previous = edge.rate;
+    let mut next = edge.step(sample);
+    let mut requested = next.rate;
+    // An open buffer must not keep a faster rate. The stall state stops the
+    // poll entirely, and this covers the reports before that.
+    if !playing && previous > 1.0 + 1e-3 {
+        requested = 1.0;
+    }
+    next.rate = previous;
+    let speed_up = requested > previous + 1e-3;
+    let changed = (requested - previous).abs() > 1e-3;
+    // Do not speed up into an open buffer. Do send the return to normal speed.
+    let command = if changed && (playing || !speed_up) {
+        Some(requested)
+    } else {
+        None
+    };
+    Trim { edge: next, command }
 }
 
 /// Records `answer` to `commanded`. Returns whether the session must fail
@@ -929,5 +960,47 @@ mod catch_up_tests {
         assert_eq!(buffering_age(&mut open, "PLAYING", later), None);
         assert!(open.is_none());
         assert_eq!(buffering_age(&mut open, "LOADING", later), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_refused_first_speed_up_is_judged_from_the_rate_already_applied() {
+        let now = Instant::now();
+        let plan = plan_trim(
+            edge::Edge::default(),
+            edge::Sample {
+                lag: 0.65,
+                buffering_for: None,
+                elapsed: Duration::from_millis(400),
+            },
+            true,
+        );
+        assert!((plan.edge.rate - 1.0).abs() < 1e-9);
+        let rate = plan.command.expect("speed up");
+        assert!((rate - 1.08).abs() < 1e-9);
+        let mut playback = Playback::new();
+        playback.edge = plan.edge;
+        assert!(!apply_rate_reply(&mut playback, rate, 0, RateAnswer::Refused, now));
+        assert!(playback.unsupported);
+        assert!(playback.retry.is_none());
+        assert!((playback.edge.rate - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn buffering_while_fast_asks_for_normal_speed_without_pretending_it_applied() {
+        let edge = edge::Edge {
+            rate: 1.5,
+            ..edge::Edge::default()
+        };
+        let plan = plan_trim(
+            edge,
+            edge::Sample {
+                lag: 2.0,
+                buffering_for: Some(Duration::from_secs(1)),
+                elapsed: Duration::from_millis(400),
+            },
+            false,
+        );
+        assert_eq!(plan.command, Some(1.0));
+        assert!((plan.edge.rate - 1.5).abs() < 1e-9);
     }
 }

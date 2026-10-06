@@ -75,6 +75,10 @@ impl Edge {
     #[must_use]
     pub(crate) fn step(mut self, sample: Sample) -> Self {
         if !sample.lag.is_finite() || sample.lag > MAX_LAG {
+            // Do not move the target on a sample we cannot trust. Do not stay
+            // fast either: there is no later deadline that restores normal speed.
+            self.rate = 1.0;
+            self.settled_for = Duration::ZERO;
             return self;
         }
         // A resumed picture may try the next step. The same episode may not.
@@ -261,9 +265,11 @@ mod tests {
         let ahead = speeding.step(sample(-0.05, None, Duration::from_millis(400)));
         assert!((ahead.rate - 1.0).abs() < f64::EPSILON);
         assert!((ahead.target - 0.30).abs() < f64::EPSILON);
+        let mut stopped = speeding;
+        stopped.rate = 1.0;
         let nonsense = speeding.step(sample(f64::NAN, None, Duration::from_millis(400)));
-        assert_eq!(nonsense, speeding);
+        assert_eq!(nonsense, stopped);
         let huge = speeding.step(sample(MAX_LAG + 1.0, None, Duration::from_millis(400)));
-        assert_eq!(huge, speeding);
+        assert_eq!(huge, stopped);
     }
 }
