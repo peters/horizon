@@ -262,8 +262,7 @@ fn inject(input: &mut Enigo, action: &Action) -> enigo::InputResult<()> {
             input.scroll(*vertical_notches, Axis::Vertical)?;
             input.scroll(*horizontal_notches, Axis::Horizontal)
         }
-        // `X11::type_text` sends text directly through XTEST.
-        Action::Type { .. } => Ok(()),
+        Action::Type { .. } => Err(enigo::InputError::InvalidInput("X11 text input uses X11::type_text")),
         Action::Key { key, modifiers } => {
             let mods: Vec<_> = modifiers
                 .iter()

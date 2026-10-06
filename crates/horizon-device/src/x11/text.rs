@@ -1,14 +1,18 @@
 //! Text entry through XTEST with stable keycode mappings.
 
-use super::keymap::{self, Borrowed, Layout, Plan, PlanError};
+use super::keymap::{self, Borrowed, Keyboard, Layout, Plan, PlanError};
 use super::{X11, unavailable};
 use crate::{DeviceError, Result};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use x11rb::{
-    connection::Connection,
+    connection::{Connection, RequestConnection as _},
+    errors::ReplyError,
     protocol::{
-        xproto::{AtomEnum, ConnectionExt as _, GetKeyboardMappingReply, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, PropMode},
-        xtest::ConnectionExt as _,
+        xproto::{
+            AtomEnum, ConnectionExt as _, GetKeyboardMappingReply, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, KeyButMask,
+            PropMode,
+        },
+        xtest::{self, ConnectionExt as _},
     },
     wrapper::ConnectionExt as _,
 };
@@ -35,6 +39,29 @@ impl X11 {
     /// keeps its keysym while a queued event can still refer to it, so a
     /// client that reads events late still translates every key correctly.
     pub(super) fn type_text(&self, text: &str) -> Result<()> {
+        if self
+            .connection
+            .extension_information(xtest::X11_EXTENSION_NAME)
+            .map_err(unavailable)?
+            .is_none()
+        {
+            return Err(DeviceError::Unsupported(
+                "X11 text input requires the XTEST extension".into(),
+            ));
+        }
+        let state = self
+            .connection
+            .query_pointer(self.root)
+            .map_err(unavailable)?
+            .reply()
+            .map_err(unavailable)?
+            .mask;
+        // Core state bits 13 and 14 hold the XKB group. Other groups have other levels.
+        if u16::from(state) & 0x6000 != 0 {
+            return Err(DeviceError::Unsupported(
+                "X11 text input requires the first keyboard group".into(),
+            ));
+        }
         let mapping = self.keyboard_mapping()?;
         let layout = self.layout(&mapping);
         let modifiers = self
@@ -44,20 +71,23 @@ impl X11 {
             .reply()
             .map_err(unavailable)?;
         // The first modifier row is Shift.
-        let shift_keycode = modifiers
-            .keycodes
-            .iter()
-            .take(usize::from(modifiers.keycodes_per_modifier()))
-            .copied()
-            .find(|keycode| *keycode != 0);
+        let keyboard = Keyboard {
+            shift_keycode: modifiers
+                .keycodes
+                .iter()
+                .take(usize::from(modifiers.keycodes_per_modifier()))
+                .copied()
+                .find(|keycode| *keycode != 0),
+            caps_lock: u16::from(state) & u16::from(KeyButMask::LOCK) != 0,
+        };
         let record_atom = self.record_atom()?;
         let previous = self.read_record(record_atom)?;
-        let plan = keymap::plan(&layout, &previous, shift_keycode, text).map_err(|e| match e {
+        let plan = keymap::plan(&layout, &previous, keyboard, text).map_err(|e| match e {
             PlanError::Capacity => DeviceError::Invalid("text exceeds available X11 Unicode key mappings".into()),
             PlanError::NoKeysym => DeviceError::Invalid("text contains a character without an X11 keysym".into()),
         })?;
         self.apply_bindings(&plan, record_atom)?;
-        let typed = self.send_strokes(&plan, shift_keycode);
+        let typed = self.send_strokes(&plan, keyboard.shift_keycode);
         let recorded = self.write_record(record_atom, &plan.record(now_ms()));
         std::thread::sleep(FINAL_DRAIN);
         typed.and(recorded.map_err(indeterminate))
@@ -65,7 +95,7 @@ impl X11 {
 
     /// Clears the least recently used temporary keycode when no keycode is
     /// unused. The input backend of the other actions refuses to start without
-    /// one, for example after text from an older version used every keycode.
+    /// one, for example after another client used the keycode that `type` keeps.
     pub(super) fn ensure_unused_keycode(&self) -> Result<()> {
         let mapping = self.keyboard_mapping()?;
         let record_atom = self.record_atom()?;
@@ -78,6 +108,8 @@ impl X11 {
         record.retain(|entry| entry.keycode != candidate.keycode);
         self.connection
             .change_keyboard_mapping(1, candidate.keycode, 2, &[0, 0])
+            .map_err(unavailable)?
+            .check()
             .map_err(unavailable)?;
         self.write_record(record_atom, &record).map_err(unavailable)
     }
@@ -131,20 +163,22 @@ impl X11 {
             .map_err(unavailable)?;
         for (first, keysyms) in keymap::runs(&plan.bindings) {
             let count = u8::try_from(keysyms.len() / 2).map_err(unavailable)?;
+            // A checked request is a round trip: the server applied the mapping
+            // before the first key event, and clients get the notification first.
             self.connection
                 .change_keyboard_mapping(count, first, 2, &keysyms)
+                .map_err(unavailable)?
+                .check()
                 .map_err(unavailable)?;
         }
-        // A round trip proves that the server applied every mapping before the
-        // first key event; clients receive the notifications ahead of the keys.
-        self.connection.sync().map_err(unavailable)
+        Ok(())
     }
 
     fn send_strokes(&self, plan: &Plan, shift_keycode: Option<u8>) -> Result<()> {
-        let fake = |kind: u8, keycode: u8| {
+        let fake = |kind: u8, keycode: u8| -> std::result::Result<(), ReplyError> {
             self.connection
-                .xtest_fake_input(kind, keycode, x11rb::CURRENT_TIME, self.root, 0, 0, 0)
-                .map(drop)
+                .xtest_fake_input(kind, keycode, x11rb::CURRENT_TIME, self.root, 0, 0, 0)?
+                .check()
         };
         for stroke in &plan.strokes {
             let shift = shift_keycode.filter(|_| stroke.shift);
@@ -157,24 +191,19 @@ impl X11 {
             })();
             let release = shift.map_or(Ok(()), |shift| fake(KEY_RELEASE_EVENT, shift));
             result.and(release).map_err(indeterminate)?;
-            self.connection.sync().map_err(indeterminate)?;
             std::thread::sleep(KEY_INTERVAL);
         }
         Ok(())
     }
 
-    fn write_record(
-        &self,
-        record_atom: u32,
-        record: &[Borrowed],
-    ) -> std::result::Result<(), x11rb::errors::ReplyError> {
+    fn write_record(&self, record_atom: u32, record: &[Borrowed]) -> std::result::Result<(), ReplyError> {
         let words = Borrowed::encode(record);
         if words.is_empty() {
-            self.connection.delete_property(self.root, record_atom)?;
+            self.connection.delete_property(self.root, record_atom)?.check()
         } else {
             self.connection
-                .change_property32(PropMode::REPLACE, self.root, record_atom, AtomEnum::CARDINAL, &words)?;
+                .change_property32(PropMode::REPLACE, self.root, record_atom, AtomEnum::CARDINAL, &words)?
+                .check()
         }
-        self.connection.sync()
     }
 }

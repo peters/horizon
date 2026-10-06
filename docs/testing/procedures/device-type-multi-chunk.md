@@ -235,8 +235,9 @@ Give each result the task ID. A report uses the ID to give a result.
 4. Send four `type` actions, one after the other. Use 15 distinct Latin-1
    letters, 15 Greek letters, 15 Cyrillic letters, and the first part again.
 
-   Result: Each action gives the receipt `dispatched`. Each action needs more
-   new temporary keycodes than the free slots have. The tool reuses keycodes.
+   Result: Each action gives the receipt `dispatched`. Together, the four
+   actions need more temporary keycodes than the free slots have. Thus, the
+   tool changes temporary keycodes between the actions.
 
 5. Compare `<state>/data/home/unicode.txt` with the text of step 4.
 

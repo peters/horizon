@@ -55,6 +55,10 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
 - A character on the first level or the Shift level of the current keymap uses
   that key. The tool holds Shift for the Shift level. No mapping is necessary.
   On a US layout, this applies to `[A-Za-z0-9]` and ASCII punctuation.
+- If Caps Lock is on, the tool holds Shift for a lowercase letter and releases
+  it for an uppercase letter. This applies only to keys with a letter pair.
+- If a keyboard group other than the first is active, or if the server has no
+  XTEST extension, the action fails with `unsupported` before input.
 - Each other character gets a temporary mapping on an unused keycode. A server
   round trip makes sure that the server applied the mapping before the first key.
 - A temporary mapping stays after the action. Later actions use it again and do
@@ -74,11 +78,11 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
 A client that is more than 2 seconds late can still translate a changed keycode
 incorrectly. The distinct characters that need a mapping must fit in the free
 slots. The free slots are the unused keycodes, less one, and the recorded
-temporary keycodes that the text does not need. If
-they do not fit, or if a character has no X11 keysym, the action fails. It fails
+temporary keycodes that the text does not need. If they do not fit, or if a
+character has no X11 keysym, the action fails with `invalid_request`. It fails
 before a keymap change or input. The tool does not remove temporary mappings
-after an action. They stay until the X server stops. Use only owned, isolated
-displays as targets.
+after an action. They stay until the X server stops or resets. Use only owned,
+isolated displays as targets, with one controller for each display.
 
 Library consumers need no async runtime:
 

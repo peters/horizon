@@ -94,8 +94,14 @@ impl Receiver {
 
     fn translate(&self, event: &KeyPressEvent) -> TestResult<Option<char>> {
         let mapping = self.connection.get_keyboard_mapping(event.detail, 1)?.reply()?;
-        let shifted = u16::from(event.state) & u16::from(KeyButMask::SHIFT) != 0;
+        let state = u16::from(event.state);
         let level = |index: usize| mapping.keysyms.get(index).copied().unwrap_or_default();
+        let character = |index: usize| xkeysym::Keysym::new(level(index)).key_char();
+        // Caps Lock inverts Shift on a key with a lowercase and an uppercase letter.
+        let letters = matches!((character(0), character(1)),
+            (Some(lower), Some(upper)) if lower != upper && lower.to_uppercase().eq(std::iter::once(upper)));
+        let shifted =
+            (state & u16::from(KeyButMask::SHIFT) != 0) != (letters && state & u16::from(KeyButMask::LOCK) != 0);
         let symbol = if shifted && level(1) != 0 { level(1) } else { level(0) };
         let symbol = xkeysym::Keysym::new(symbol);
         if symbol.is_modifier_key() {
@@ -130,7 +136,9 @@ pub fn mapping_capacity(connection: &RustConnection) -> TestResult<usize> {
         .reply()?;
     let words: Vec<u32> = record.value32().map(Iterator::collect).unwrap_or_default();
     let borrowed = words
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|entry| {
             u8::try_from(entry[0]).is_ok_and(|keycode| {
                 (setup.min_keycode..=setup.max_keycode).contains(&keycode)

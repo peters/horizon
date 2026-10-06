@@ -69,7 +69,9 @@ impl Borrowed {
     /// Decodes records; malformed words are ignored because the property is advisory.
     pub(super) fn decode(words: &[u32]) -> Vec<Self> {
         words
-            .chunks_exact(Self::WORDS)
+            .as_chunks::<{ Self::WORDS }>()
+            .0
+            .iter()
             .filter_map(|word| {
                 Some(Self {
                     keycode: u8::try_from(word[0]).ok()?,
@@ -133,8 +135,6 @@ pub(super) fn keysym(character: char) -> Option<u32> {
     (keysym != xkeysym::Keysym::NoSymbol).then(|| keysym.raw())
 }
 
-/// Plans the strokes for `text` without changing any existing keycode that a
-/// queued event could still use. `shift_keycode` enables second-level keysyms.
 /// The records that still describe the server keymap, one for each keycode.
 /// A record is ours only while the server holds exactly what we mapped.
 fn owned(layout: &Layout<'_>, previous: &[Borrowed]) -> Vec<Borrowed> {
@@ -173,10 +173,21 @@ pub(super) fn quiet_after(last_used_ms: u64) -> u64 {
     last_used_ms.saturating_add(u64::try_from(RECLAIM_QUIET.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// The modifier keys and state that select a level of the current keymap.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Keyboard {
+    /// A keycode bound to Shift; without one, only first-level keysyms are used.
+    pub shift_keycode: Option<u8>,
+    /// Caps Lock is on, so Shift selects the lowercase level of a letter key.
+    pub caps_lock: bool,
+}
+
+/// Plans the strokes for `text` without changing any existing keycode that a
+/// queued event could still use.
 pub(super) fn plan(
     layout: &Layout<'_>,
     previous: &[Borrowed],
-    shift_keycode: Option<u8>,
+    keyboard: Keyboard,
     text: &str,
 ) -> Result<Plan, PlanError> {
     let mut borrowed = owned(layout, previous);
@@ -187,7 +198,7 @@ pub(super) fn plan(
         if located.contains_key(&symbol) || missing.contains(&symbol) {
             continue;
         }
-        match locate(layout, shift_keycode, symbol) {
+        match locate(layout, keyboard, symbol) {
             Some(stroke) => {
                 located.insert(symbol, stroke);
             }
@@ -252,17 +263,29 @@ pub(super) fn plan(
 }
 
 /// Finds `symbol` on the unshifted level first, then on the shifted level.
-fn locate(layout: &Layout<'_>, shift_keycode: Option<u8>, symbol: u32) -> Option<Stroke> {
-    let on_level = |level: usize| {
-        layout
-            .keycodes()
-            .find(|(keycode, symbols)| *keycode != RESERVED_KEYCODE && symbols.get(level) == Some(&symbol))
-            .map(|(keycode, _)| keycode)
-    };
-    on_level(0).map(|keycode| Stroke { keycode, shift: false }).or_else(|| {
-        shift_keycode?;
-        on_level(1).map(|keycode| Stroke { keycode, shift: true })
+fn locate(layout: &Layout<'_>, keyboard: Keyboard, symbol: u32) -> Option<Stroke> {
+    [0, 1].into_iter().find_map(|level| {
+        layout.keycodes().find_map(|(keycode, symbols)| {
+            if keycode == RESERVED_KEYCODE || symbols.get(level) != Some(&symbol) {
+                return None;
+            }
+            // Caps Lock inverts Shift on a key with a lowercase and an uppercase letter.
+            let shift = (level == 1) != (keyboard.caps_lock && is_letter_pair(symbols));
+            (!shift || keyboard.shift_keycode.is_some()).then_some(Stroke { keycode, shift })
+        })
     })
+}
+
+fn is_letter_pair(symbols: &[u32]) -> bool {
+    let character = |index: usize| {
+        symbols
+            .get(index)
+            .and_then(|symbol| xkeysym::Keysym::new(*symbol).key_char())
+    };
+    match (character(0), character(1)) {
+        (Some(lower), Some(upper)) => lower != upper && lower.to_uppercase().eq(std::iter::once(upper)),
+        _ => false,
+    }
 }
 
 /// Groups bindings into runs of consecutive keycodes for one request each.

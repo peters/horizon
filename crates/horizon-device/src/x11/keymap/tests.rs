@@ -1,6 +1,16 @@
-use super::{Borrowed, Layout, PlanError, RECLAIM_QUIET, Stroke, keysym, plan, quiet_after, runs, spare_candidate};
+use super::{
+    Borrowed, Keyboard, Layout, PlanError, RECLAIM_QUIET, Stroke, keysym, plan, quiet_after, runs, spare_candidate,
+};
 
 const SHIFT: u8 = 50;
+const SHIFTED: Keyboard = Keyboard {
+    shift_keycode: Some(SHIFT),
+    caps_lock: false,
+};
+const NO_SHIFT: Keyboard = Keyboard {
+    shift_keycode: None,
+    caps_lock: false,
+};
 const FIRST_FREE: u8 = 100;
 const FREE: usize = 5;
 
@@ -54,7 +64,7 @@ fn apply(keysyms: &mut [u32], bindings: &[(u8, u32)]) {
 fn layout_characters_use_existing_keys_and_shift_without_mapping() -> Result<(), PlanError> {
     let keysyms = layout();
     let text = "Synthetic_KEY-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ z";
-    let plan = plan(&view(&keysyms), &[], Some(SHIFT), text)?;
+    let plan = plan(&view(&keysyms), &[], SHIFTED, text)?;
     assert!(plan.bindings.is_empty(), "no keycode is remapped");
     assert_eq!(plan.not_before_ms, 0);
     assert_eq!(plan.strokes.len(), text.chars().count());
@@ -93,7 +103,7 @@ fn layout_characters_use_existing_keys_and_shift_without_mapping() -> Result<(),
 #[test]
 fn shifted_characters_need_a_mapping_without_a_shift_key() -> Result<(), PlanError> {
     let keysyms = layout();
-    let plan = plan(&view(&keysyms), &[], None, "aA_")?;
+    let plan = plan(&view(&keysyms), &[], NO_SHIFT, "aA_")?;
     assert_eq!(
         plan.strokes[0],
         Stroke {
@@ -111,7 +121,7 @@ fn shifted_characters_need_a_mapping_without_a_shift_key() -> Result<(), PlanErr
 #[test]
 fn reserved_keycode_is_never_used() -> Result<(), PlanError> {
     let mut keysyms = layout();
-    let plan_hash = plan(&view(&keysyms), &[], Some(SHIFT), "#")?;
+    let plan_hash = plan(&view(&keysyms), &[], SHIFTED, "#")?;
     assert_eq!(plan_hash.bindings, vec![(FIRST_FREE + 4, u32::from(b'#'))]);
     keysyms[0] = 0;
     let previous = [Borrowed {
@@ -119,7 +129,7 @@ fn reserved_keycode_is_never_used() -> Result<(), PlanError> {
         keysym: 0,
         last_used_ms: 0,
     }];
-    let plan = plan(&view(&keysyms), &previous, Some(SHIFT), "æ")?;
+    let plan = plan(&view(&keysyms), &previous, SHIFTED, "æ")?;
     assert_eq!(plan.bindings, vec![(FIRST_FREE + 4, 0xe6)]);
     assert!(plan.record(1).iter().all(|record| record.keycode != 8));
     Ok(())
@@ -128,7 +138,7 @@ fn reserved_keycode_is_never_used() -> Result<(), PlanError> {
 #[test]
 fn temporary_mappings_are_reused_unchanged_across_actions() -> Result<(), PlanError> {
     let mut keysyms = layout();
-    let first = plan(&view(&keysyms), &[], Some(SHIFT), "æø🦀")?;
+    let first = plan(&view(&keysyms), &[], SHIFTED, "æø🦀")?;
     let crab = keysym('🦀').ok_or(PlanError::NoKeysym)?;
     assert_eq!(
         first.bindings,
@@ -139,7 +149,7 @@ fn temporary_mappings_are_reused_unchanged_across_actions() -> Result<(), PlanEr
     assert_eq!(record.len(), 3);
     assert!(record.iter().all(|entry| entry.last_used_ms == 1_000));
 
-    let second = plan(&view(&keysyms), &record, Some(SHIFT), "øæå")?;
+    let second = plan(&view(&keysyms), &record, SHIFTED, "øæå")?;
     assert_eq!(
         second.bindings,
         vec![(FIRST_FREE + 1, 0xe5)],
@@ -195,7 +205,7 @@ fn reclaim_takes_least_recently_used_keycodes_after_quiet_interval() -> Result<(
     apply(&mut keysyms, &previous_bindings);
     let reused = char::from_u32(0xe000 + u32::from(FIRST_FREE)).ok_or(PlanError::NoKeysym)?;
     let text = format!("{reused}æø");
-    let plan = plan(&view(&keysyms), &previous, Some(SHIFT), &text)?;
+    let plan = plan(&view(&keysyms), &previous, SHIFTED, &text)?;
     // Keycode FIRST_FREE stays because this text uses it; the two least
     // recently used of the others are reassigned.
     assert_eq!(plan.bindings, vec![(FIRST_FREE + 3, 0xf8), (FIRST_FREE + 4, 0xe6)]);
@@ -216,10 +226,10 @@ fn capacity_counts_unused_and_reclaimable_keycodes() {
     let fits: String = (0..FREE - 1)
         .filter_map(|index| char::from_u32(0xe000 + u32::try_from(index).unwrap_or_default()))
         .collect();
-    assert!(plan(&view(&keysyms), &[], Some(SHIFT), &fits).is_ok());
+    assert!(plan(&view(&keysyms), &[], SHIFTED, &fits).is_ok());
     let too_many = format!("{fits}\u{f000}");
     assert_eq!(
-        plan(&view(&keysyms), &[], Some(SHIFT), &too_many).err(),
+        plan(&view(&keysyms), &[], SHIFTED, &too_many).err(),
         Some(PlanError::Capacity)
     );
 }
@@ -233,7 +243,7 @@ fn foreign_changes_invalidate_borrowed_records() -> Result<(), PlanError> {
         keysym: 0xe6,
         last_used_ms: 1,
     }];
-    let plan = plan(&view(&keysyms), &previous, Some(SHIFT), "æ")?;
+    let plan = plan(&view(&keysyms), &previous, SHIFTED, "æ")?;
     assert_eq!(plan.bindings, vec![(FIRST_FREE + 4, 0xe6)]);
     assert_eq!(plan.not_before_ms, 0);
     assert_eq!(plan.record(3).len(), 1, "foreign keycode is no longer recorded");
@@ -246,7 +256,7 @@ fn lowest_unused_keycode_stays_unused_for_other_actions() -> Result<(), PlanErro
     let text: String = (0..FREE - 1)
         .filter_map(|index| char::from_u32(0xe000 + u32::try_from(index).unwrap_or_default()))
         .collect();
-    let plan = plan(&view(&keysyms), &[], Some(SHIFT), &text)?;
+    let plan = plan(&view(&keysyms), &[], SHIFTED, &text)?;
     apply(&mut keysyms, &plan.bindings);
     let unused: Vec<u8> = (FIRST_FREE..FIRST_FREE + u8::try_from(FREE).unwrap_or_default())
         .filter(|keycode| keysyms[usize::from(keycode - 8) * 2] == 0)
@@ -259,7 +269,7 @@ fn lowest_unused_keycode_stays_unused_for_other_actions() -> Result<(), PlanErro
 fn characters_without_keysym_are_rejected() {
     let keysyms = layout();
     assert_eq!(
-        plan(&view(&keysyms), &[], Some(SHIFT), "a\u{fffe}").err(),
+        plan(&view(&keysyms), &[], SHIFTED, "a\u{fffe}").err(),
         Some(PlanError::NoKeysym)
     );
 }
@@ -324,4 +334,33 @@ fn a_full_keymap_releases_the_least_recently_used_temporary_keycode() {
         None,
         "foreign mappings are never cleared"
     );
+}
+
+#[test]
+fn caps_lock_inverts_shift_only_for_letter_keys() -> Result<(), PlanError> {
+    let mut keysyms = layout();
+    apply(&mut keysyms, &[(FIRST_FREE + 4, 0xe6)]);
+    let locked = Keyboard {
+        caps_lock: true,
+        ..SHIFTED
+    };
+    let plan = plan(&view(&keysyms), &[], locked, "aA_-æ")?;
+    let shifts: Vec<bool> = plan.strokes.iter().map(|stroke| stroke.shift).collect();
+    assert_eq!(shifts, vec![true, false, true, false, false]);
+    assert!(plan.bindings.is_empty());
+    let unshifted = Keyboard {
+        shift_keycode: None,
+        caps_lock: true,
+    };
+    let plan = super::plan(&view(&keysyms), &[], unshifted, "aA")?;
+    assert_eq!(
+        plan.strokes[1],
+        Stroke {
+            keycode: 10,
+            shift: false
+        },
+        "Caps Lock alone gives the uppercase letter"
+    );
+    assert_eq!(plan.bindings, vec![(FIRST_FREE + 3, u32::from(b'a'))]);
+    Ok(())
 }

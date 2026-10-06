@@ -322,7 +322,7 @@ mod live_mcp {
         let horizon_device::Endpoint::LocalX11 { display } = &config.endpoint else {
             return Err("requires X11".into());
         };
-        let mut receiver = x11_text::Receiver::open(display).map_err(|e| e.to_string())?;
+        let mut client = x11_text::Receiver::open(display).map_err(|e| e.to_string())?;
         let expected = "UTF8 æøå🦀 AaZz_09!?";
         for mode in ["cli", "mcp"] {
             let geometry = horizon_device::Device::connect(&config)?.screenshot()?.geometry;
@@ -331,7 +331,7 @@ mod live_mcp {
             let sender = std::thread::spawn(move || -> std::result::Result<(), String> {
                 send_type(mode, &target, &request).map_err(|error| error.to_string())
             });
-            let received = receiver
+            let received = client
                 .collect_while(Duration::from_millis(300), || sender.is_finished())
                 .map_err(|e| e.to_string())?;
             sender
