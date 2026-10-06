@@ -174,8 +174,26 @@ pub(super) fn spare_candidate(layout: &Layout<'_>, previous: &[Borrowed]) -> Opt
 pub(super) const TIMELINE_NOW: u64 = 1 << 40;
 
 /// Converts a stored X server time to the planning timeline at `server_now`.
+/// A time less than half the 32-bit range ahead of `server_now` is a lease
+/// in the future; any other time is in the past.
 pub(super) fn to_timeline(stored: u64, server_now: u32) -> u64 {
-    TIMELINE_NOW - u64::from(server_now.wrapping_sub(low_word(stored)))
+    let age = server_now.wrapping_sub(low_word(stored));
+    if age <= u32::MAX / 2 {
+        TIMELINE_NOW - u64::from(age)
+    } else {
+        TIMELINE_NOW + u64::from(low_word(stored).wrapping_sub(server_now))
+    }
+}
+
+/// How long the strokes of one action can keep their keycodes busy, in
+/// milliseconds: twice the paced duration, plus one second.
+pub(super) fn lease_ms(strokes: usize, interval: Duration) -> u64 {
+    let paced = u64::try_from(interval.as_millis()).unwrap_or(u64::MAX);
+    u64::try_from(strokes)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(paced)
+        .saturating_mul(2)
+        .saturating_add(1_000)
 }
 
 /// Converts a planning timeline time back to an X server time at `server_now`.
@@ -242,7 +260,13 @@ pub(super) fn keyboard(layout: &Layout<'_>, rows: &[&[u8]], state: u16) -> Resul
         return Err(ModifierError::Lock);
     }
     Ok(Keyboard {
-        shift_keycode: keycodes(0).next(),
+        // Another key in the Shift row would type its own symbol with each stroke.
+        shift_keycode: keycodes(0).find(|keycode| {
+            layout
+                .symbols(*keycode)
+                .iter()
+                .any(|symbol| matches!(symbol, 0xffe1 | 0xffe2))
+        }),
         caps_lock,
     })
 }

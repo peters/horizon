@@ -58,7 +58,8 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
 - If Caps Lock is on, the tool holds Shift for a lowercase letter and releases
   it for an uppercase letter. This applies only to keys with a letter pair.
 - In these conditions, the action fails with `unsupported` before input:
-  - A keyboard group other than the first is active.
+  - A keyboard group other than the first is active. The tool reads the
+    group and the modifiers from XKB, or from the core state without XKB.
   - A modifier other than Lock and Num Lock is active. A Mod slot counts as
     Num Lock only if each of its keys is Num Lock in the modifier mapping.
   - Lock is active, but one of its keys is not Caps Lock, for example Shift Lock.
@@ -82,6 +83,10 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
   the same 2 seconds first.
 - After a wait, the tool reads the keymap again and chooses again. If it must
   wait a third time, the action fails with `unavailable` before input.
+- Before the first key, the record gives each keycode of the action a lease
+  until the last possible stroke: twice the paced time, plus 1 second. If the
+  process stops during the action, a later action still waits for the lease
+  and the quiet interval. A wait is at most 13.24 seconds.
 
 A client that is more than 2 seconds late can still translate a changed keycode
 incorrectly. The distinct characters that need a mapping must fit in the free

@@ -398,6 +398,11 @@ fn server_times_convert_to_a_timeline_across_the_32_bit_wrap() {
     assert_eq!(from_timeline(TIMELINE_NOW - 1_000, now), stored);
     assert_eq!(from_timeline(TIMELINE_NOW + 20, now), 25);
     assert_eq!(to_timeline(25, 25), TIMELINE_NOW);
+    // A lease ahead of the server time stays in the future.
+    assert_eq!(to_timeline(1_005, 5), TIMELINE_NOW + 1_000);
+    assert_eq!(to_timeline(3, u32::MAX - 6), TIMELINE_NOW + 10);
+    assert_eq!(from_timeline(TIMELINE_NOW + 10, u32::MAX - 6), 3);
+    assert_eq!(super::lease_ms(256, std::time::Duration::from_millis(20)), 11_240);
     // An old record with a 64-bit time keeps only its low word.
     assert_eq!(to_timeline((7 << 32) | 0x14, 25), TIMELINE_NOW - 5);
 }
@@ -454,8 +459,10 @@ fn modifier_rows_decide_which_state_bits_block_text_input() {
         Some(ModifierError::Lock),
         "Caps Lock and Shift Lock"
     );
-    // Keycode 8 is never the Shift key.
+    // Keycode 8 and keys other than Shift are never the Shift key.
     let mut reserved = rows(54, 57, 56);
-    reserved[0] = vec![8, SHIFT];
+    reserved[0] = vec![8, 57, SHIFT];
     assert_eq!(check(&reserved, 0).map(|k| k.shift_keycode), Ok(Some(SHIFT)));
+    reserved[0] = vec![57];
+    assert_eq!(check(&reserved, 0).map(|k| k.shift_keycode), Ok(None));
 }

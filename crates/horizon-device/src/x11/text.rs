@@ -9,6 +9,7 @@ use x11rb::{
     errors::{ConnectionError, ReplyError},
     protocol::{
         Event,
+        xkb::{self, ConnectionExt as _},
         xproto::{
             AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, EventMask, GetKeyboardMappingReply,
             KEY_PRESS_EVENT, KEY_RELEASE_EVENT, PropMode,
@@ -22,6 +23,9 @@ use x11rb::{
 const RECORD_PROPERTY: &[u8] = b"_HORIZON_DEVICE_KEYMAP";
 const KEY_INTERVAL: Duration = Duration::from_millis(20);
 const FINAL_DRAIN: Duration = Duration::from_millis(100);
+/// The longest wait for one keycode: the lease of the longest action, then the
+/// quiet interval.
+const MAX_WAIT: Duration = Duration::from_millis(2 * 20 * 256 + 1_000 + 2_000);
 
 /// Sleeps until the timeline reaches `not_before_ms`, at most the quiet interval
 /// at a time. Returns false when no wait is necessary, so that the caller uses
@@ -38,7 +42,7 @@ fn wait_until(not_before_ms: u64, attempts: &mut u8) -> Result<bool> {
             "X11 keymap changed during the quiet interval; observe and retry".into(),
         ));
     }
-    std::thread::sleep(Duration::from_millis(remaining).min(keymap::RECLAIM_QUIET));
+    std::thread::sleep(Duration::from_millis(remaining).min(MAX_WAIT));
     Ok(true)
 }
 
@@ -63,15 +67,9 @@ impl X11 {
                 "X11 text input requires the XTEST extension".into(),
             ));
         }
-        let state = self
-            .connection
-            .query_pointer(self.root)
-            .map_err(unavailable)?
-            .reply()
-            .map_err(unavailable)?
-            .mask;
-        // Core state bits 13 and 14 hold the XKB group. Other groups have other levels.
-        if u16::from(state) & 0x6000 != 0 {
+        let (state, group) = self.keyboard_state()?;
+        // Other groups have other levels.
+        if group != 0 {
             return Err(DeviceError::Unsupported(
                 "X11 text input requires the first keyboard group".into(),
             ));
@@ -86,7 +84,7 @@ impl X11 {
         let rows: Vec<&[u8]> = modifiers.keycodes.chunks(per_row).collect();
         let mapping = self.keyboard_mapping()?;
         // A held Shift, Control, Alt or Super key would change each typed key.
-        let keyboard = keymap::keyboard(&self.layout(&mapping), &rows, u16::from(state)).map_err(|e| {
+        let keyboard = keymap::keyboard(&self.layout(&mapping), &rows, state).map_err(|e| {
             DeviceError::Unsupported(match e {
                 ModifierError::Held => "X11 text input requires released modifier keys".into(),
                 ModifierError::Lock => "X11 text input supports Caps Lock but no other Lock modifier".into(),
@@ -142,6 +140,42 @@ impl X11 {
             .check()
             .map_err(unavailable)?;
         self.write_record(record_atom, &record, server_now).map_err(unavailable)
+    }
+
+    /// The effective modifier mask and keyboard group. XKB reports the group
+    /// only to a client that uses the extension. Without XKB, the core state
+    /// holds the group in bits 13 and 14.
+    fn keyboard_state(&self) -> Result<(u16, u8)> {
+        if self
+            .connection
+            .extension_information(xkb::X11_EXTENSION_NAME)
+            .map_err(unavailable)?
+            .is_some()
+            && self
+                .connection
+                .xkb_use_extension(1, 0)
+                .map_err(unavailable)?
+                .reply()
+                .map_err(unavailable)?
+                .supported
+        {
+            let state = self
+                .connection
+                .xkb_get_state(xkb::ID::USE_CORE_KBD.into())
+                .map_err(unavailable)?
+                .reply()
+                .map_err(unavailable)?;
+            return Ok((u16::from(state.mods), u8::from(state.group)));
+        }
+        let mask = u16::from(
+            self.connection
+                .query_pointer(self.root)
+                .map_err(unavailable)?
+                .reply()
+                .map_err(unavailable)?
+                .mask,
+        );
+        Ok((mask & 0xff, u8::try_from((mask >> 13) & 3).unwrap_or_default()))
     }
 
     fn keyboard_mapping(&self) -> Result<GetKeyboardMappingReply> {
@@ -223,12 +257,15 @@ impl X11 {
     }
 
     fn apply_bindings(&self, plan: &Plan, record_atom: u32, server_now: u32) -> Result<()> {
-        if plan.bindings.is_empty() {
-            return Ok(());
+        // Before any input, record the keycodes with a lease that covers the
+        // last possible stroke. If this process stops early, a later action
+        // still waits for the strokes that it sent.
+        let lease = keymap::TIMELINE_NOW + keymap::lease_ms(plan.strokes.len(), KEY_INTERVAL);
+        let record = plan.record(lease);
+        if !record.is_empty() {
+            self.write_record(record_atom, &record, server_now)
+                .map_err(unavailable)?;
         }
-        // Record ownership before the change so a failure cannot leak keycodes.
-        self.write_record(record_atom, &plan.record(keymap::TIMELINE_NOW), server_now)
-            .map_err(unavailable)?;
         for (first, keysyms) in keymap::runs(&plan.bindings) {
             let count = u8::try_from(keysyms.len() / 2).map_err(unavailable)?;
             // A checked request is a round trip: the server applied the mapping
