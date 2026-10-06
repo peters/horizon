@@ -88,6 +88,33 @@ fn advisory_availability_is_reported_but_never_hides_an_offer() {
     assert_eq!(hel1.availability, "listed");
 }
 
+#[test]
+fn an_unlisted_worker_keeps_advisory_stock_for_filters_and_picks() {
+    let config = crate::CloudConfig::parse(crate::EXAMPLE).unwrap();
+    let profile = &config.profiles["development"];
+    assert!(crate::provider::HETZNER.supports(profile));
+    let workers = super::super::workers(profile, 1.0, None, Some(&catalog()));
+    let stock = |id: &str, location: &str| {
+        let index = workers
+            .offers
+            .iter()
+            .position(|offer| offer.id == id && offer.location.as_deref() == Some(location))
+            .unwrap();
+        assert_eq!(workers.places[index].len(), 1);
+        workers.places[index][0].availability
+    };
+    assert_eq!(stock("cx43", "hel1"), Availability::High);
+    // Hetzner's flag is advisory: an unlisted type is never sold out.
+    assert_eq!(stock("cx43", "fsn1"), Availability::Low);
+    assert!(
+        workers
+            .places
+            .iter()
+            .flatten()
+            .all(|place| place.availability != Availability::None)
+    );
+}
+
 fn at(year: i32, month: time::Month, day: u8, hour: u8, minute: u8) -> OffsetDateTime {
     time::Date::from_calendar_date(year, month, day)
         .unwrap()

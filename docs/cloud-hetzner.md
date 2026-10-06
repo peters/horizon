@@ -220,8 +220,9 @@ Repository `min_cpu` and `min_memory_gb` define minimum requirements. The picker
 shows cheapest, balanced and most powerful matches for the requested duration,
 with storage and IPv4 included. All providers is the default browsing scope;
 provider buttons narrow it. In stock only starts checked; below-minimum workers
-start hidden and can be inspected but cannot be selected. Hetzner's listed stock
-is advisory, and unchecking the stock filter exposes unlisted types too.
+start hidden and can be inspected but cannot be selected. Hetzner's availability
+flag is advisory. **In stock only** does not hide an unlisted type. Its row shows
+**Unlisted · advisory**, and the three picks can use it.
 
 The estimate uses USD for comparisons and retains euro prices for billing.
 Reference rates come from the [ECB](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html),
