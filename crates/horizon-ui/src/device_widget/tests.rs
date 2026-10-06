@@ -40,8 +40,10 @@ fn click_events(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
 #[test]
 fn recording_icon_is_enabled_only_while_connected_and_interactive() {
     let labels_for = |status, interactive| {
-        let mut state = DeviceUiState::default();
-        state.status = status;
+        let mut state = DeviceUiState {
+            status,
+            ..DeviceUiState::default()
+        };
         crate::test_egui::accesskit_labels(|ui| {
             state.recording_controls(ui, interactive);
         })

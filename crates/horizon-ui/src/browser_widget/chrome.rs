@@ -632,8 +632,7 @@ mod tests {
         labels
             .iter()
             .find(|(label, _)| label == name)
-            .map(|(_, disabled)| *disabled)
-            .unwrap_or_else(|| panic!("missing {name} in {labels:?}"))
+            .map_or_else(|| panic!("missing {name} in {labels:?}"), |(_, disabled)| *disabled)
     }
 
     #[test]
