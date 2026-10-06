@@ -84,7 +84,7 @@ runs in the place that the dialog showed.
 4. Save the Hetzner server types and locations to the evidence.
 
    ```sh
-   curl -s -H @<run>/hetzner.header https://api.hetzner.cloud/v1/server_types > <evidence>/hetzner-server-types.json
+   curl -fsS -H @<run>/hetzner.header https://api.hetzner.cloud/v1/server_types > <evidence>/hetzner-server-types.json
    ```
 
    Result: The file lists the server types, their cores, memory and prices per location.
@@ -768,7 +768,7 @@ This task uses the clouds of D01 and D02. Do not start other clouds.
 4. After D01, read the location of the server of `smoke-a` from the Hetzner API.
 
    ```sh
-   curl -s -H @<run>/hetzner.header https://api.hetzner.cloud/v1/servers/<server-id> | jq -r '.server.datacenter.location.name'
+   curl -fsS -H @<run>/hetzner.header https://api.hetzner.cloud/v1/servers/<server-id> | jq -r '.server.datacenter.location.name'
    ```
 
    Result: The location is the same as the location of the summary.

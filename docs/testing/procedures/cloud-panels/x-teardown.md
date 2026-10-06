@@ -133,7 +133,7 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 1. List the servers of the Hetzner project.
 
    ```sh
-   curl -sS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/servers' | jq '[.servers[] | {id, name}]'
+   curl -fsS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/servers' | jq '[.servers[] | {id, name}]'
    ```
 
    Result: The list contains no server ID from the resource ledger.
@@ -141,7 +141,7 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 2. List the volumes of the Hetzner project.
 
    ```sh
-   curl -sS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/volumes' | jq '[.volumes[] | {id, name}]'
+   curl -fsS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/volumes' | jq '[.volumes[] | {id, name}]'
    ```
 
    Result: The list contains no volume ID from the resource ledger.
@@ -149,7 +149,7 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 3. List the SSH keys of the Hetzner project.
 
    ```sh
-   curl -sS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/ssh_keys' | jq '[.ssh_keys[] | {id, name}]'
+   curl -fsS -H @<run>/hetzner.header 'https://api.hetzner.cloud/v1/ssh_keys' | jq '[.ssh_keys[] | {id, name}]'
    ```
 
    Result: The list contains no SSH key ID from the resource ledger.
@@ -238,7 +238,7 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 1. List the pods of the RunPod account.
 
    ```sh
-   curl -sS -H @<run>/runpod.header 'https://api.runpod.io/v2/pods' | jq '[.. | objects | select(has("id")) | {id, name}]'
+   curl -fsS -H @<run>/runpod.header 'https://api.runpod.io/v2/pods' | jq '[.. | objects | select(has("id")) | {id, name}]'
    ```
 
    Result: The list contains no pod ID from the resource ledger.
@@ -246,7 +246,7 @@ Do steps 1 to 8 for each cloud in the resource ledger that has an active resourc
 2. List the network volumes of the RunPod account.
 
    ```sh
-   curl -sS -H @<run>/runpod.header 'https://api.runpod.io/v2/network-volumes' | jq '[.. | objects | select(has("id")) | {id, name}]'
+   curl -fsS -H @<run>/runpod.header 'https://api.runpod.io/v2/network-volumes' | jq '[.. | objects | select(has("id")) | {id, name}]'
    ```
 
    Result: The list contains no network volume ID from the resource ledger.

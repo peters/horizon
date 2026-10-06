@@ -59,6 +59,14 @@ setting must open a repair form.
 
    Result: The command shows that the file does not exist.
 
+2. Make the directory for the test files and scripts of the run.
+
+   ```sh
+   mkdir -p <data-home>/smoke/bin && chmod 700 <data-home>/smoke
+   ```
+
+   Result: The fixture shows the directory at `<home>/smoke/bin`.
+
 ## 6. Tasks
 
 ### 6.1 A01 — Open Cloud settings from the Cloud menu

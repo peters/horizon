@@ -147,7 +147,11 @@ child is the frozen candidate.
 
    Result: The evidence contains the launcher changes.
 
-7. Start the persistent launcher with a new state directory.
+7. Do steps 1 to 4 of S05.
+
+   Result: The launcher copy starts an unlocked keyring with the candidate.
+
+8. Start the persistent launcher with a new state directory.
 
    ```sh
    python3 <run>/launcher/serve.py --horizon <run>/bin/horizon \
@@ -157,7 +161,7 @@ child is the frozen candidate.
    Result: The output shows a `vnc_address`. The fixture writes `lab.json` and
    `target.json` in `<state>`.
 
-8. If x11vnc is not on the host, add `--tools <tools-root>` to the command in step 7.
+9. If x11vnc is not on the host, add `--tools <tools-root>` to the command in step 8.
 
    Result: The fixture uses x11vnc from the unpacked tools root.
 
@@ -222,12 +226,14 @@ child is the frozen candidate.
 ### 6.5 S05 — Give the fixture a Secret Service
 
 The candidate keeps tailnet auth keys in the Secret Service. The fixture has its
-own D-Bus, so the keyring of the operator is not available.
+own D-Bus, so the keyring of the operator is not available. Do steps 1 to 4
+before the first start of the launcher in S02 step 8. The launcher refuses a
+state directory that exists, so a later restart needs a new state directory.
 
 1. Make a synthetic password for the keyring of the fixture.
 
    ```sh
-   head -c 24 /dev/urandom | base64 > <state>/keyring-password && chmod 600 <state>/keyring-password
+   head -c 24 /dev/urandom | base64 > <run>/keyring-password && chmod 600 <run>/keyring-password
    ```
 
    Result: The file contains a random password. It is not a real secret.
@@ -248,9 +254,13 @@ own D-Bus, so the keyring of the operator is not available.
 
    Result: The keyring continues to run.
 
-5. Stop the launcher with Ctrl-C and start it again as in S02 step 7.
+5. Make sure that the keyring runs in the fixture.
 
-   Result: The launcher starts the keyring with the candidate.
+   ```sh
+   pgrep -a gnome-keyring-d
+   ```
+
+   Result: The output shows one `gnome-keyring-daemon` process of the fixture.
 
 6. In the fixture terminal, store a test value.
 

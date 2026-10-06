@@ -83,6 +83,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    ```sh
    cd <data-home>/smoke/app && git init -q && echo '# Smoke app' > README.md
+   git config user.name 'Smoke Test' && git config user.email smoke@example.invalid
    printf 'import unittest\nclass T(unittest.TestCase):\n    def test_one(self):\n        self.assertEqual(1, 1)\n' > test_app.py
    git add . && git commit -qm 'Add smoke app'
    ```

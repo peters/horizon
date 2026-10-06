@@ -168,8 +168,8 @@ order. The L area stops and deletes clouds that the T, G and N areas use.
 4. Do O01 and O03.
 5. Do T01 and T02, then do C09. D01 needs the saved test tailnet.
 6. Do D01 to D05. D01 and D02 select the places that C31 examines.
-7. Do step 5 of C02, then C31, A09 and O02.
-8. Do E01 to E09.
+7. Do step 5 of C02, then C31 and A09.
+8. Do E01 to E09, then O02. O02 uses the Claude Code panel of E02.
 9. Do T03 to T11 and T14.
 10. Do G01 to G12, then do T12 and T13.
 11. Do N01 to N05.
