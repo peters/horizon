@@ -212,7 +212,8 @@ def device_name(cloud):
     """The tailnet device name of a cloud: the same on every worker of its life.
 
     Tailscale names a device after its host name, and each new container has a random
-    one. The provider names the cloud's server or pod the same way, from the cloud ID.
+    one. The name is horizon-cloud-<cloud ID>, or a digest form for an ID that needs a
+    change or a shorter form; the provider's server or pod name can differ.
     """
     if not isinstance(cloud, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', cloud):
         return None
