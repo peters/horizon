@@ -163,6 +163,7 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary directory");
         let paths = Paths {
             directory: root.path().to_owned(),
+            agent: root.path().join("agent.sock"),
         };
         let (client, transport) = tokio::io::duplex(64 * 1024);
         let task = tokio::spawn(async move {
