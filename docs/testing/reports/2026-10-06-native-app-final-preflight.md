@@ -1,7 +1,7 @@
 ---
 procedure: native-app-automate
-candidate_commit: fead1545547f6af48716ab6e34fa5a6df85d3be4
-candidate_sha256: 100de1b2b927be7d79880179b4ad52d5007e6b0da9d6818547fbdce08e8ab7db
+candidate_commit: d9272d11f51e0a4b2896ada372f2ecd7fc77fda0
+candidate_sha256: 5d738e33e9f100e7e91de52d790c8f2c1098f501c035e6b42333984f3d5bcad0
 date: 2026-10-06
 lanes: [ios-phone-current, ios-phone-older, ios-tablet, android-phone]
 issue: https://github.com/peters/horizon/issues/1255
@@ -11,7 +11,7 @@ issue: https://github.com/peters/horizon/issues/1255
 
 ## 1. Summary
 
-The required local checks and packaged build passed on the candidate above.
+The required local checks and packaged build passed on the candidate above using Rust 1.99, matching CI.
 The packaged GUI passed a live startup check through the public Device panel.
 The packaged MCP interface exposed all 13 tools and refused the recipe-only screenshot action with its typed error.
 These results do not qualify the fresh paid device matrix.
@@ -22,7 +22,7 @@ These results do not qualify the fresh paid device matrix.
 |---|---|---|
 | Local validation | pass | Formatting, maintainability, workspace tests, speech tests, blocking Clippy and strict Clippy passed. |
 | Packaged build | pass | The frozen executable hash matches the candidate metadata. |
-| Packaged GUI startup | pass | The actual child executable matched the frozen hash. Three displayed-frame inspections advanced through 73, 81 and 89. |
+| Packaged GUI startup | pass | The actual child executable matched the frozen hash. Three displayed-frame inspections advanced through 30, 39 and 50. |
 | MCP preflight | pass | Initialization exposed 13 tools. The screenshot action returned `app_screenshot_requires_capture`. Normal parent EOF produced exit code 0. |
 | Native catalog | pass | The current account offered 105 devices, allowed two lanes, and had zero active or queued sessions. |
 | NATIVE-MATRIX | hold | The fresh four-device run needs the declared app artifacts. No paid device was allocated. |
@@ -34,6 +34,12 @@ The isolated terminal heartbeat changed throughout the observation window.
 The candidate did not change the GUI renderer.
 
 ## 3. Defects and limits
+
+Progress writes now await a bounded, per-message acknowledgement. Regression tests verify that the first failed or stalled write cancels the run without another event.
+Task retirement retains the parent and child directory descriptors and uses descriptor-relative cleanup. A deterministic replacement-after-check test preserves the replacement and refuses to retire it.
+
+The CI toolchain deprecated the atomic `fetch_update` name. The replacement `try_update` is supported by the declared Rust 1.95 minimum.
+The workspace allows the new `assert_is_empty` style preference so empty-resource assertions remain usable without `PartialEq`; the blocking and strict lint tiers pass.
 
 The advisory pedantic tier returned 101 for unchanged cloud code.
 This report does not mark that tier as passed.
@@ -55,5 +61,5 @@ Shared application checkouts, desktops and development services remained intact.
 
 Private evidence lives under `/var/tmp/horizon-1313-smoke/` on the controller.
 It includes the frozen executable, source identity, public panel observations, private GUI capture and MCP receipts.
-Local validation logs live under `/var/tmp/horizon-1313-final-validation/`.
+Local validation logs live under `/var/tmp/horizon-1313-ci-validation/`.
 The report contains no app content, client configuration, credentials or private provider references.
