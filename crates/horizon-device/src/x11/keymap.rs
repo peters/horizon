@@ -173,27 +173,35 @@ pub(super) fn spare_candidate(layout: &Layout<'_>, previous: &[Borrowed]) -> Opt
 /// timeline on which "now" is this constant and every record is in the past.
 pub(super) const TIMELINE_NOW: u64 = 1 << 40;
 
+/// The pacing between two strokes.
+pub(super) const KEY_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The longest lease: the strokes of a 256-character action, twice the paced
+/// time, plus one second.
+pub(super) const MAX_LEASE: Duration = Duration::from_millis(2 * 20 * 256 + 1_000);
+
 /// Converts a stored X server time to the planning timeline at `server_now`.
-/// A time less than half the 32-bit range ahead of `server_now` is a lease
-/// in the future; any other time is in the past.
+/// Only a lease is in the future, and a lease is at most `MAX_LEASE` ahead.
+/// Any other time is in the past, up to the full 32-bit range of about 49 days.
 pub(super) fn to_timeline(stored: u64, server_now: u32) -> u64 {
-    let age = server_now.wrapping_sub(low_word(stored));
-    if age <= u32::MAX / 2 {
-        TIMELINE_NOW - u64::from(age)
+    let ahead = low_word(stored).wrapping_sub(server_now);
+    if u128::from(ahead) <= MAX_LEASE.as_millis() {
+        TIMELINE_NOW + u64::from(ahead)
     } else {
-        TIMELINE_NOW + u64::from(low_word(stored).wrapping_sub(server_now))
+        TIMELINE_NOW - u64::from(server_now.wrapping_sub(low_word(stored)))
     }
 }
 
 /// How long the strokes of one action can keep their keycodes busy, in
 /// milliseconds: twice the paced duration, plus one second.
-pub(super) fn lease_ms(strokes: usize, interval: Duration) -> u64 {
-    let paced = u64::try_from(interval.as_millis()).unwrap_or(u64::MAX);
-    u64::try_from(strokes)
+pub(super) fn lease_ms(strokes: usize) -> u64 {
+    let paced = u64::try_from(KEY_INTERVAL.as_millis()).unwrap_or(u64::MAX);
+    let lease = u64::try_from(strokes)
         .unwrap_or(u64::MAX)
         .saturating_mul(paced)
         .saturating_mul(2)
-        .saturating_add(1_000)
+        .saturating_add(1_000);
+    lease.min(u64::try_from(MAX_LEASE.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Converts a planning timeline time back to an X server time at `server_now`.

@@ -21,11 +21,9 @@ use x11rb::{
 
 /// Root window property that records the keycodes this tool mapped.
 const RECORD_PROPERTY: &[u8] = b"_HORIZON_DEVICE_KEYMAP";
-const KEY_INTERVAL: Duration = Duration::from_millis(20);
 const FINAL_DRAIN: Duration = Duration::from_millis(100);
-/// The longest wait for one keycode: the lease of the longest action, then the
-/// quiet interval.
-const MAX_WAIT: Duration = Duration::from_millis(2 * 20 * 256 + 1_000 + 2_000);
+/// The longest wait for one keycode: the longest lease, then the quiet interval.
+const MAX_WAIT: Duration = keymap::MAX_LEASE.saturating_add(keymap::RECLAIM_QUIET);
 
 /// Sleeps until the timeline reaches `not_before_ms`, at most the quiet interval
 /// at a time. Returns false when no wait is necessary, so that the caller uses
@@ -266,7 +264,7 @@ impl X11 {
         // Before any input, record the keycodes with a lease that covers the
         // last possible stroke. If this process stops early, a later action
         // still waits for the strokes that it sent.
-        let lease = keymap::TIMELINE_NOW + keymap::lease_ms(plan.strokes.len(), KEY_INTERVAL);
+        let lease = keymap::TIMELINE_NOW + keymap::lease_ms(plan.strokes.len());
         let record = plan.record(lease);
         if !record.is_empty() {
             self.write_record(record_atom, &record, server_now)
@@ -302,7 +300,7 @@ impl X11 {
             })();
             let release = shift.map_or(Ok(()), |shift| fake(KEY_RELEASE_EVENT, shift));
             result.and(release).map_err(indeterminate)?;
-            std::thread::sleep(KEY_INTERVAL);
+            std::thread::sleep(keymap::KEY_INTERVAL);
         }
         Ok(())
     }

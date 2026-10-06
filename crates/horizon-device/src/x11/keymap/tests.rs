@@ -402,7 +402,20 @@ fn server_times_convert_to_a_timeline_across_the_32_bit_wrap() {
     assert_eq!(to_timeline(1_005, 5), TIMELINE_NOW + 1_000);
     assert_eq!(to_timeline(3, u32::MAX - 6), TIMELINE_NOW + 10);
     assert_eq!(from_timeline(TIMELINE_NOW + 10, u32::MAX - 6), 3);
-    assert_eq!(super::lease_ms(256, std::time::Duration::from_millis(20)), 11_240);
+    assert_eq!(super::lease_ms(256), 11_240);
+    assert_eq!(
+        super::lease_ms(10_000),
+        11_240,
+        "a lease never exceeds the longest action"
+    );
+    // A time further ahead than the longest lease is old, not a lease.
+    assert_eq!(to_timeline(11_245, 5), TIMELINE_NOW + 11_240);
+    assert_eq!(
+        to_timeline(11_246, 5),
+        TIMELINE_NOW - u64::from(5_u32.wrapping_sub(11_246))
+    );
+    let month_old = 5_u32.wrapping_sub(30 * 24 * 3_600 * 1_000);
+    assert_eq!(to_timeline(u64::from(month_old), 5), TIMELINE_NOW - 2_592_000_000);
     // An old record with a 64-bit time keeps only its low word.
     assert_eq!(to_timeline((7 << 32) | 0x14, 25), TIMELINE_NOW - 5);
 }
