@@ -409,7 +409,9 @@ rates; cross-provider ranking requires a current dated quote. With **In stock on
 checked, starting points include only workers reported in stock, using the exact
 capacity check for the selected CPU size. If none match, all three starting points
 are empty. Uncheck it to include unavailable workers.
-Hetzner availability is advisory and creation rechecks the exact type and location. CPU workers are more powerful with more vCPUs and then more memory; GPU types
+Hetzner availability is advisory. Horizon examines the exact type and location
+again when it creates the cloud. Thus the filter does not hide an unlisted Hetzner
+type. Its row shows **Unlisted · advisory**, and the starting points can use it. CPU workers are more powerful with more vCPUs and then more memory; GPU types
 rank by price, which follows their performance more closely than their memory does.
 Search and the **In stock only** filter are always visible above the full worker
 list, with a count of the results and workers hidden by requirements. **In stock
