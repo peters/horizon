@@ -36,11 +36,10 @@ impl Layout<'_> {
         (self.min_keycode..=u8::MAX).zip(self.keysyms.chunks(width))
     }
 
-    fn level(&self, keycode: u8, level: usize) -> u32 {
+    fn symbols(&self, keycode: u8) -> &[u32] {
         self.keycodes()
             .find(|(code, _)| *code == keycode)
-            .and_then(|(_, symbols)| symbols.get(level).copied())
-            .unwrap_or_default()
+            .map_or(&[], |(_, symbols)| symbols)
     }
 }
 
@@ -136,15 +135,17 @@ pub(super) fn keysym(character: char) -> Option<u32> {
 }
 
 /// The records that still describe the server keymap, one for each keycode.
-/// A record is ours only while the server holds exactly what we mapped.
+/// A record is ours only while the server holds exactly what we mapped: the
+/// keysym on the first two levels, and on each other level the keysym or none.
 fn owned(layout: &Layout<'_>, previous: &[Borrowed]) -> Vec<Borrowed> {
     let mut borrowed: Vec<Borrowed> = previous
         .iter()
         .filter(|record| {
+            let symbols = layout.symbols(record.keycode);
             record.keycode != RESERVED_KEYCODE
                 && record.keysym != 0
-                && layout.level(record.keycode, 0) == record.keysym
-                && layout.level(record.keycode, 1) == record.keysym
+                && symbols.get(..2) == Some(&[record.keysym, record.keysym][..])
+                && symbols.iter().all(|symbol| *symbol == 0 || *symbol == record.keysym)
         })
         .copied()
         .collect();

@@ -143,6 +143,9 @@ pub fn mapping_capacity(connection: &RustConnection) -> TestResult<usize> {
             u8::try_from(entry[0]).is_ok_and(|keycode| {
                 (setup.min_keycode..=setup.max_keycode).contains(&keycode)
                     && symbols(keycode).get(..2) == Some(&[entry[1], entry[1]][..])
+                    && symbols(keycode)
+                        .iter()
+                        .all(|symbol| *symbol == 0 || *symbol == entry[1])
             })
         })
         .count();

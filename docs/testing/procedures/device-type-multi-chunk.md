@@ -96,12 +96,13 @@ operate after text input uses the spare keycodes.
 7. Start a new Xvfb display for T01. Write a target file for this display.
 
    ```sh
-   Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp 3> <evidence>/display
+   Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp -noreset 3> <evidence>/display
    printf '{"id":"live","endpoint":{"kind":"local_x11","display":":%s"}}' \
      "$(cat <evidence>/display)" > <evidence>/live-target.json
    ```
 
-   Result: `live-target.json` names a display that no other run uses.
+   Result: `live-target.json` names a display that no other run uses. The
+   option `-noreset` keeps the keymap when the last client disconnects.
 
 ## 6. Tasks
 
@@ -245,17 +246,43 @@ Give each result the task ID. A report uses the ID to give a result.
 
 ### 6.6 T06 — Other actions after text input
 
-1. Run `doctor` for the fixture target.
+1. List the unused keycodes of the fixture display. Do not count keycode 8.
+
+   ```sh
+   xmodmap -display :<fixture display> -pke | awk 'NF <= 3'
+   ```
+
+   Result: After T05, one keycode, `<K>`, is unused.
+
+2. Map `<K>` from this independent client.
+
+   ```sh
+   xmodmap -display :<fixture display> -e "keycode <K> = F13 F13"
+   ```
+
+   Result: The list of step 1 shows only keycode 8. The keymap has no unused keycode.
+
+3. Run `doctor` for the fixture target.
 
    ```sh
    <bin>/horizon-device --target <state>/target.json doctor
    ```
 
-   Result: The result has `"ok":true` and the capability `keyboard`.
+   Result: The result has `"ok":true` and the capability `keyboard`. The list
+   of step 1 shows one more unused keycode: `doctor` cleared the oldest
+   temporary mapping.
 
-2. Send a `key` action with `escape` and the modifier `meta`.
+4. Send a `key` action with `escape` and the modifier `meta`.
 
    Result: The action gives the receipt `dispatched`.
+
+5. Clear the mapping of step 2.
+
+   ```sh
+   xmodmap -display :<fixture display> -e "keycode <K> ="
+   ```
+
+   Result: Keycode `<K>` is unused again.
 
 ## 7. Pass criteria
 

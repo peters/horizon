@@ -44,6 +44,14 @@ fn layout() -> Vec<u32> {
     keysyms
 }
 
+fn view3(keysyms: &[u32]) -> Layout<'_> {
+    Layout {
+        min_keycode: 8,
+        keysyms_per_keycode: 3,
+        keysyms,
+    }
+}
+
 fn view(keysyms: &[u32]) -> Layout<'_> {
     Layout {
         min_keycode: 8,
@@ -247,6 +255,22 @@ fn foreign_changes_invalidate_borrowed_records() -> Result<(), PlanError> {
     assert_eq!(plan.bindings, vec![(FIRST_FREE + 4, 0xe6)]);
     assert_eq!(plan.not_before_ms, 0);
     assert_eq!(plan.record(3).len(), 1, "foreign keycode is no longer recorded");
+
+    // A third level that another client added also ends ownership.
+    let mut wide = vec![0; keysyms.len() / 2 * 3];
+    for (keycode, symbols) in keysyms.chunks(2).enumerate() {
+        wide[keycode * 3..keycode * 3 + 2].copy_from_slice(symbols);
+    }
+    let index = usize::from(FIRST_FREE + 3 - 8) * 3;
+    wide[index..index + 3].copy_from_slice(&[0xe6, 0xe6, 0xe6]);
+    let owned = [Borrowed {
+        keycode: FIRST_FREE + 3,
+        keysym: 0xe6,
+        last_used_ms: 1,
+    }];
+    assert_eq!(super::owned(&view3(&wide), &owned), owned.to_vec());
+    wide[index + 2] = 0xfe03;
+    assert!(super::owned(&view3(&wide), &owned).is_empty(), "foreign third level");
     Ok(())
 }
 
