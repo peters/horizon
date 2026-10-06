@@ -608,6 +608,18 @@ impl Session {
                     self.set(LiveState::Buffering);
                 }
             }
+            ("PAUSED", _) => {
+                // The pause is not part of the buffer. Judge what was already
+                // open, then drop the calm clock so the pause cannot extend it.
+                let lasted = self.buffering_since.take().map(|since| since.elapsed());
+                let mut playback = self.playback.get();
+                if let Some(lasted) = lasted {
+                    close_buffer(&mut playback.edge, lasted);
+                }
+                playback.sampled = false;
+                playback.edge.settled_for = Duration::ZERO;
+                self.playback.set(playback);
+            }
             ("IDLE", Some("ERROR")) => {
                 return Err(Error::Rejected {
                     kind: "MEDIA_ERROR".to_owned(),
@@ -701,7 +713,12 @@ impl Session {
         let elapsed = calm_elapsed(&playback, now);
         playback.checked = now;
         playback.next_check = now + EDGE_POLL;
-        let (Some(newest), Ok(Some(status))) = (stream.newest_media_time(), media.status()) else {
+        // status() blocks. Read the source position after it returns. A newest
+        // timestamp from before the call compared with the later receiver clock
+        // makes the lag look smaller than it is.
+        let status = media.status();
+        let newest = stream.newest_media_time();
+        let (Some(newest), Ok(Some(status))) = (newest, status) else {
             // The receiver may already be playing fast. Without a sample there
             // is no signal to stop, so return to normal speed.
             playback.sampled = false;
@@ -1276,6 +1293,54 @@ mod catch_up_tests {
         );
         assert_eq!(plan.command, Some(1.0));
         assert!((plan.edge.rate - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_pause_event_closes_a_short_buffer_and_still_judges_a_long_one() {
+        let session = test_session();
+        let paused = MediaStatus {
+            media_session_id: 1,
+            player_state: "PAUSED".to_owned(),
+            idle_reason: None,
+            current_time: 1.0,
+        };
+        let mut playback = Playback::new();
+        playback.edge.target = 0.25;
+        playback.edge.floor = 0.25;
+        playback.edge.settled_for = Duration::from_secs(3);
+        playback.sampled = true;
+        playback.edge.note_buffer(0.30);
+        session.playback.set(playback);
+        session.buffering_since.set(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(350))
+                .expect("test clock"),
+        ));
+        assert!(session.apply(&paused, None).is_ok());
+        assert!(session.buffering_since.get().is_none());
+        let after = session.playback.get();
+        assert!((after.edge.target - 0.25).abs() < 1e-9);
+        assert_eq!(after.edge.settled_for, Duration::ZERO);
+        assert!(!after.sampled);
+        let playing = MediaStatus {
+            player_state: "PLAYING".to_owned(),
+            ..paused.clone()
+        };
+        assert!(session.apply(&playing, None).is_ok());
+        assert!((session.playback.get().edge.target - 0.25).abs() < 1e-9);
+
+        let mut playback = Playback::new();
+        playback.edge.target = 0.25;
+        playback.edge.floor = 0.25;
+        playback.edge.note_buffer(0.30);
+        session.playback.set(playback);
+        session.buffering_since.set(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(650))
+                .expect("test clock"),
+        ));
+        assert!(session.apply(&paused, None).is_ok());
+        assert!((session.playback.get().edge.target - 0.30).abs() < 1e-9);
     }
 
     #[test]
