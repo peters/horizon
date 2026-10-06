@@ -127,15 +127,21 @@ impl Stream {
     }
 
     /// Adds one raw AAC frame (no ADTS header) for the audio track declared
-    /// at construction; ignored when the stream has no audio track. Frames
-    /// whose timestamp does not advance are dropped.
+    /// at construction; ignored when the stream has no audio track. Video
+    /// sets the shared time origin, so audio before the first video unit, and
+    /// frames whose timestamp does not advance, are dropped.
     pub(crate) fn push_audio(&self, frame: &[u8], pts: Duration) {
         if self.audio.is_none() || frame.is_empty() {
             return;
         }
         let mut state = self.lock();
-        let origin = *state.origin.get_or_insert(pts);
-        let pts = ticks(pts.saturating_sub(origin));
+        let Some(origin) = state.origin else {
+            return;
+        };
+        let Some(since_origin) = pts.checked_sub(origin) else {
+            return;
+        };
+        let pts = ticks(since_origin);
         if state.last_audio_pts.is_some_and(|last| pts <= last) {
             return;
         }
@@ -146,9 +152,14 @@ impl Stream {
             keyframe: true,
             track: mp4::AUDIO_TRACK,
         });
-        // Late joiners replay the GOP from its keyframe, audio included.
-        if !state.gop.is_empty() && state.gop.len() < MAX_GOP_SAMPLES {
-            state.gop.push(sample.clone());
+        // Late joiners replay the GOP from its keyframe, audio included. A
+        // full GOP is dropped, as for video, so nobody starts from a cut one.
+        if state.gop.len() < MAX_GOP_SAMPLES {
+            if !state.gop.is_empty() {
+                state.gop.push(sample.clone());
+            }
+        } else {
+            state.gop.clear();
         }
         broadcast(&mut state, &sample);
     }
@@ -204,6 +215,8 @@ impl Stream {
         let mut pending: Option<Arc<Sample>> = None;
         let mut base = None;
         let mut last_audio = None;
+        // Decode time the next audio frame continues from, in samples.
+        let mut next_audio_decode: Option<u64> = None;
         let mut sequence = 1u32;
         let mut backlog = subscription.backlog.into_iter();
         loop {
@@ -228,9 +241,16 @@ impl Stream {
                 }
                 last_audio = Some(next.pts);
                 let rate = self.audio.map_or(mp4::TIMESCALE, |format| format.sample_rate);
-                let decode =
+                let measured =
                     u64::try_from(u128::from(next.pts - start) * u128::from(rate) / u128::from(mp4::TIMESCALE))
                         .unwrap_or(u64::MAX);
+                // The 90 kHz clock cannot carry every sample boundary exactly;
+                // stay contiguous unless the audio really jumped (a gap or a cut).
+                let decode = match next_audio_decode {
+                    Some(expected) if measured.abs_diff(expected) <= u64::from(mp4::AAC_FRAME_SAMPLES / 2) => expected,
+                    _ => measured,
+                };
+                next_audio_decode = Some(decode + u64::from(mp4::AAC_FRAME_SAMPLES));
                 out.write_all(&mp4::fragment(
                     mp4::AUDIO_TRACK,
                     sequence,
@@ -432,8 +452,9 @@ mod tests {
             channels: 2,
         };
         let stream = Stream::new(Duration::from_millis(500), Some(format));
-        // Audio before the first keyframe has nothing to start from.
+        // Audio before the first video unit has no time origin yet.
         stream.push_audio(&[0x21, 0x01], frame(0));
+        assert!(stream.lock().origin.is_none());
         for index in 1..=3 {
             stream.push(&unit(index == 1), frame(index), index == 1);
             stream.push_audio(&[0x21, 0x02], frame(index) + Duration::from_millis(10));
@@ -461,5 +482,40 @@ mod tests {
         // The first audio frame sits 10 ms after the first video frame: 480 samples at 48 kHz.
         let tfdt = out[audio_tfhd[0]..].windows(4).position(|w| w == b"tfdt").unwrap() + audio_tfhd[0] + 8;
         assert_eq!(u64::from_be_bytes(out[tfdt..tfdt + 8].try_into().unwrap()), 480);
+    }
+
+    #[test]
+    fn audio_decode_times_stay_contiguous_at_44_1_khz() {
+        let format = AudioFormat {
+            sample_rate: 44_100,
+            channels: 2,
+        };
+        let stream = Stream::new(Duration::from_millis(500), Some(format));
+        stream.push(&unit(true), Duration::ZERO, true);
+        let subscription = stream.subscribe().unwrap();
+        for index in 1..=300u64 {
+            let pts = Duration::from_nanos(index * 1024 * 1_000_000_000 / 44_100);
+            stream.push_audio(&[0x21, 0x02], pts);
+        }
+        stream.push(&unit(false), Duration::from_secs(15), false);
+        stream.close();
+        let mut out = Vec::new();
+        stream.write_to(&mut out, subscription).unwrap();
+        let mut decodes = Vec::new();
+        let mut at = 0;
+        while let Some(found) = out[at..]
+            .windows(16)
+            .position(|w| &w[4..8] == b"tfhd" && w[12..16] == mp4::AUDIO_TRACK.to_be_bytes())
+        {
+            let tfhd = at + found;
+            let tfdt = out[tfhd..].windows(4).position(|w| w == b"tfdt").unwrap() + tfhd + 8;
+            decodes.push(u64::from_be_bytes(out[tfdt..tfdt + 8].try_into().unwrap()));
+            at = tfdt;
+        }
+        assert_eq!(decodes.len(), 300);
+        assert!(
+            decodes.windows(2).all(|pair| pair[1] - pair[0] == 1024),
+            "audio decode times must not drift"
+        );
     }
 }

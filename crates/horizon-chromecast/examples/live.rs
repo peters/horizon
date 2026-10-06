@@ -84,6 +84,9 @@ fn aac_frames(data: &[u8]) -> Result<Vec<&[u8]>, String> {
         frames.push(frame);
         at += length;
     }
+    if at != data.len() {
+        return Err(format!("truncated ADTS header at byte {at}"));
+    }
     if frames.is_empty() {
         return Err("the audio file holds no ADTS frames".to_owned());
     }

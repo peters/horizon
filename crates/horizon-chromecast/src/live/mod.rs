@@ -241,18 +241,18 @@ impl LiveCast {
         })
     }
 
-    /// Adds one Annex B access unit with its presentation time. Input must be
-    /// in presentation order (no B-frames): units whose timestamp goes
-    /// backwards are dropped, since segments carry no separate decode time.
     /// Adds one raw AAC-LC frame (no ADTS header) for the audio track declared
     /// in [`LiveOptions::audio`], timed on the same clock as the video.
-    /// Ignored without a declared audio track.
+    /// Ignored without a declared audio track, and before the first video unit.
     pub fn push_aac(&self, frame: &[u8], pts: Duration) {
         if let Sink::Progressive(stream) = &self.sink {
             stream.push_audio(frame, pts);
         }
     }
 
+    /// Adds one Annex B access unit with its presentation time. Input must be
+    /// in presentation order (no B-frames): units whose timestamp goes
+    /// backwards are dropped, since segments carry no separate decode time.
     pub fn push_annexb(&self, annexb: &[u8], pts: Duration, keyframe: bool) {
         match &self.sink {
             Sink::Hls(segmenter) => lock(segmenter).push(annexb, pts, keyframe),
