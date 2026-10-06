@@ -382,8 +382,8 @@ fn caps_lock_refuses_letters_and_keeps_other_characters() -> Result<(), PlanErro
         vec![(FIRST_FREE + 3, 0x0100_e000)],
         "a character without case"
     );
-    // The key type, which the planner does not read, decides the case of a
-    // letter: `[a, A]` can be alphabetic or two-level.
+    // With Lock, a client can change the case of a keysym that the key type
+    // does not select, so a letter with case is refused.
     for letter in ["a", "A", "æ", "\u{f8}", "\u{df}"] {
         assert_eq!(
             super::plan(&view(&keysyms), &[], locked, letter).err(),

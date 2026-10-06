@@ -73,8 +73,9 @@ or wrong. Thus, `type` does not change a keycode that a queued key can use:
     its first level.
   - Lock is active, but one of its keys does not have Caps Lock on its first
     level, for example Shift Lock.
-  - Caps Lock is on, and the text has a letter with case. The XKB key type
-    decides which case a client gives, and the tool does not read key types.
+  - Caps Lock is on, and the text has a letter with case. A client can
+    change the case of a keysym that the key type does not select with Lock,
+    so the key type alone does not decide which case the client gives.
   - The server has no XTEST extension.
 - Each other character gets a temporary mapping on an unused keycode. A server
   round trip makes sure that the server applied the mapping before the first key.

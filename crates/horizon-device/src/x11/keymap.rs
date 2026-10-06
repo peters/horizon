@@ -162,8 +162,9 @@ pub(super) struct Stroke {
 pub(super) enum PlanError {
     NoKeysym,
     Capacity,
-    /// Caps Lock is on, and the text has a letter with case. The case that a
-    /// client gives depends on the XKB key type, which the planner does not read.
+    /// Caps Lock is on, and the text has a letter with case. A client can
+    /// change the case of a keysym that the key type does not select with
+    /// Lock, so the key type alone does not decide the case.
     CapsLock,
 }
 
