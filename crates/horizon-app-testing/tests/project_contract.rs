@@ -467,6 +467,19 @@ fn published_schema_matches_the_project_contract_wire_types() {
     ))
     .unwrap();
     let actual = serde_json::to_value(horizon_app_testing::contract::schema()).unwrap();
+    assert_eq!(actual["$defs"]["Tunnel"]["properties"]["ports"]["minProperties"], 1);
+    assert_eq!(actual["$defs"]["Tunnel"]["properties"]["ports"]["maxProperties"], 16);
+    assert!(
+        actual["$defs"]["Contract"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("tunnel"))
+    );
+    assert!(
+        actual["$defs"]["Contract"]["properties"]["tunnel"]
+            .get("default")
+            .is_none()
+    );
     assert_eq!(
         published, actual,
         "regenerate the documented project schema after wire changes"
@@ -566,4 +579,19 @@ fn unsupported_providers_are_rejected_before_host_dispatch() {
             Some(Error::ContractInvalid)
         );
     }
+}
+
+#[test]
+fn refuses_missing_and_empty_tunnel_before_any_session_can_start() {
+    let agents = AGENTS.replace(
+        "  launch_arguments:\n    BASE_URL: \"http://localhost:{tunnel.port.backend}\"\n",
+        "",
+    );
+    for tunnel in ["", "  tunnel:\n    ports: {}\n"] {
+        let input = agents.replace("  tunnel:\n    ports: {backend: 8080}\n", tunnel);
+        assert_eq!(Contract::from_agents(&input).err(), Some(Error::ContractInvalid));
+    }
+    let mut contract = Contract::from_agents(&agents).unwrap();
+    contract.tunnel.ports.clear();
+    assert_eq!(contract.validate(), Err(Error::ContractInvalid));
 }

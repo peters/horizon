@@ -341,7 +341,7 @@ print(json.dumps('complete' if tunnel else {'phase':'complete','success':True}),
         )
         .unwrap(),
     );
-    let mut contract = Contract::from_agents("```yaml\nremote-device-testing:\n  version: 1\n  provider: browserstack\n  max_parallel: 2\n  apps:\n    ios:\n      build: [build]\n      artifact: App.ipa\n      bundle_id: com.example.app\n  matrix: [{platform: ios, form: phone}]\n  recipes: [recipe.md]\n```").unwrap();
+    let mut contract = Contract::from_agents("```yaml\nremote-device-testing:\n  version: 1\n  provider: browserstack\n  max_parallel: 2\n  apps:\n    ios:\n      build: [build]\n      artifact: App.ipa\n      bundle_id: com.example.app\n  tunnel:\n    ports: {backend: 8080}\n  matrix: [{platform: ios, form: phone}]\n  recipes: [recipe.md]\n```").unwrap();
     contract.tunnel.ports.insert(
         "backend".into(),
         Port::Managed(DeclaredBackend {

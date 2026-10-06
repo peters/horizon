@@ -6,7 +6,7 @@ use horizon_app_testing::contract::{Contract, Platform};
 use std::fs;
 
 fn contract() -> Contract {
-    Contract::from_agents("```yaml\nremote-device-testing:\n  version: 1\n  provider: browserstack\n  apps:\n    ios:\n      build: [build]\n      artifact: build/App.ipa\n      bundle_id: com.example.app\n  matrix: [{platform: ios, form: phone}]\n  recipes: [recipe.md]\n```").unwrap()
+    Contract::from_agents("```yaml\nremote-device-testing:\n  version: 1\n  provider: browserstack\n  apps:\n    ios:\n      build: [build]\n      artifact: build/App.ipa\n      bundle_id: com.example.app\n  tunnel:\n    ports: {backend: 8080}\n  matrix: [{platform: ios, form: phone}]\n  recipes: [recipe.md]\n```").unwrap()
 }
 
 #[test]

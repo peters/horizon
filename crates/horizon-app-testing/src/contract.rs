@@ -45,13 +45,21 @@ fn browserstack_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({"type": "string", "const": "browserstack"})
 }
 
+fn ports_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut schema = generator.subschema_for::<BTreeMap<String, Port>>();
+    schema.insert("minProperties".into(), 1.into());
+    schema.insert("maxProperties".into(), 16.into());
+    schema
+}
+
 fn latest() -> String {
     "latest".into()
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Tunnel {
+    #[schemars(schema_with = "ports_schema")]
     pub ports: BTreeMap<String, Port>,
 }
 
@@ -105,7 +113,6 @@ pub struct Contract {
     pub apps: BTreeMap<Platform, App>,
     #[serde(default)]
     pub launch_arguments: BTreeMap<String, String>,
-    #[serde(default)]
     pub tunnel: Tunnel,
     pub matrix: Vec<MatrixEntry>,
     /// Exact project-relative recipe files. Markdown recipes contain a device-recipe YAML fence.
@@ -167,6 +174,7 @@ impl Contract {
             || self.recipes.len() > 128
             || !(1..=16).contains(&self.max_parallel)
             || self.launch_arguments.len() > 32
+            || self.tunnel.ports.is_empty()
             || self.tunnel.ports.len() > 16
         {
             return Err(invalid());

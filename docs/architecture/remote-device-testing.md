@@ -171,6 +171,7 @@ remote-device-testing:
 
    Result: The run does not use production snapshots or global database resets.
 
+Declare between one and sixteen tunnel ports. Missing or empty port maps are invalid.
 Only declared numeric loopback ports enter the tunnel allowlist.
 The adapter changes the loopback launch URL to the exact `bs-local.com:<port>` alias.
 It preserves the URL path.

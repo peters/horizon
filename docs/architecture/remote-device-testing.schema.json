@@ -129,10 +129,7 @@
           }
         },
         "tunnel": {
-          "$ref": "#/$defs/Tunnel",
-          "default": {
-            "ports": {}
-          }
+          "$ref": "#/$defs/Tunnel"
         },
         "version": {
           "type": "integer",
@@ -145,6 +142,7 @@
         "version",
         "provider",
         "apps",
+        "tunnel",
         "matrix",
         "recipes"
       ]
@@ -228,7 +226,9 @@
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/Port"
-          }
+          },
+          "maxProperties": 16,
+          "minProperties": 1
         }
       },
       "additionalProperties": false,
