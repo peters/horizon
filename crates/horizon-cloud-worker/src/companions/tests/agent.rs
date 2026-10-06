@@ -342,6 +342,58 @@ fn agent_inspection_reads_the_published_record_without_the_lock() {
 }
 
 #[test]
+fn agent_inspection_withholds_the_verdict_when_a_refresh_changes_only_the_route_or_the_pin() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime {
+        privileged: false,
+        ..isolated(root.path())
+    };
+    connect(&runtime, "pair", "app", "127.0.0.1");
+    let access = Access {
+        grant: "pair".into(),
+        ssh_alias: "companion-app".into(),
+        worktree: "/workspace/companions/worktrees/pair".into(),
+    };
+    let record = || std::fs::read(runtime.agent.join("pair/connection.json")).unwrap();
+    let directory = runtime.key_directory("pair");
+
+    // A refresh to another host and host key keeps the record and replaces the route and the pin.
+    let before = record();
+    let changed = runtime.probe_access(&access, || {
+        let known_hosts = directory.join("known_hosts-other");
+        files::write(&known_hosts, b"horizon-companion-pair ssh-ed25519 BBBB\n")?;
+        let config = ssh::alias_config(
+            "companion-app",
+            &"127.0.0.2".parse().unwrap(),
+            22,
+            "horizon-companion-pair",
+            &directory.join("identity"),
+            &known_hosts,
+        )?;
+        files::write(&directory.join("config"), config.as_bytes())?;
+        runtime.update_config()?;
+        Ok(false)
+    });
+    assert_eq!(record(), before);
+    assert!(is_busy(&changed.unwrap_err()));
+
+    // A refresh that rewrites only the content of the pin is also a concurrent change.
+    let changed = runtime.probe_access(&access, || {
+        files::write(
+            &directory.join("known_hosts-other"),
+            b"horizon-companion-pair ssh-ed25519 CCCC\n",
+        )?;
+        runtime.update_config()?;
+        Ok(false)
+    });
+    assert_eq!(record(), before);
+    assert!(is_busy(&changed.unwrap_err()));
+
+    // Without a concurrent change, the probe result stands.
+    assert!(!runtime.probe_access(&access, || Ok(false)).unwrap());
+}
+
+#[test]
 fn ready_requires_that_the_agent_account_can_use_the_alias() {
     let root = tempfile::tempdir().unwrap();
     let mut runtime = isolated(root.path());

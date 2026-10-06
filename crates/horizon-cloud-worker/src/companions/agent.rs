@@ -257,9 +257,11 @@ impl Runtime {
         Ok(probe)
     }
 
-    /// Agent sessions cannot take the companion lock. A connection record that
-    /// changes during the probe means setup ran at the same time, so the probe
-    /// reports busy, as a held lock does.
+    /// Agent sessions cannot take the companion lock. A change during the probe
+    /// to the published connection record, the combined configuration or the
+    /// copied key and pin means that setup ran at the same time, so the probe
+    /// reports busy, as a held lock does. A refresh can replace the route and
+    /// the pin and keep the same record.
     pub(super) fn probe_published_access(
         &self,
         access: &Access,
@@ -268,9 +270,11 @@ impl Runtime {
         if !horizon_cloud::valid_id(&access.grant) {
             return Err(io::Error::other("Invalid companion grant"));
         }
-        let record = self.agent.join(&access.grant).join(CONNECTION);
-        let before = std::fs::read(&record)?;
-        let response: Response = serde_json::from_slice(&before)?;
+        let before = self.published_state(&access.grant)?;
+        let record = before
+            .get(&self.agent.join(&access.grant).join(CONNECTION))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Companion grant is not connected"))?;
+        let response: Response = serde_json::from_slice(record)?;
         if response
             != (Response::Connected {
                 ssh_alias: access.ssh_alias.clone(),
@@ -280,10 +284,33 @@ impl Runtime {
             return Ok(false);
         }
         let result = probe();
-        if std::fs::read(&record).ok().as_deref() != Some(before.as_slice()) {
+        if self.published_state(&access.grant).ok().as_ref() != Some(&before) {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, Busy));
         }
         result
+    }
+
+    /// The combined agent configuration and the published copies of `grant`.
+    /// Files that a publication writes or removes at the same time are left out:
+    /// a completed change also changes the configuration or a copy.
+    fn published_state(&self, grant: &str) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
+        let mut state = BTreeMap::new();
+        let config = self.agent.join("config");
+        state.insert(config.clone(), std::fs::read(config)?);
+        for entry in std::fs::read_dir(self.agent.join(grant))? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|extension| extension == "pending") {
+                continue;
+            }
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    state.insert(path, bytes);
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(state)
     }
 }
 

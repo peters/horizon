@@ -132,7 +132,9 @@ snapshot is old. It does not contact stopped, unselected, or unavailable targets
 It waits up to 10 seconds for grant setup that holds the companion lock, as the
 owning Horizon's refresh does briefly; a lock held throughout reports the access
 as unverified, never unreachable. The agent user cannot take the companion lock.
-Its inspection reads the agent copy of the connection record before and after
-the probe. If the record changes, the access is unverified. Other failures report unreachable, and
+Its inspection reads the agent copy of the connection record, the combined agent
+SSH configuration and the copies of the key and the host-key pin before and after
+the probe. A refresh can replace the route and the pin and keep the same record.
+If one of these changes, the access is unverified. Other failures report unreachable, and
 selection changes during a probe require a fresh inspection. Existing SSH can work while the controller is offline; a
 snapshot's non-ready lifecycle state remains the last controller observation.
