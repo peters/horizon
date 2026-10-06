@@ -76,8 +76,8 @@ shell commands, files, or other MCP servers.
   `WebDriver` and no network capture.
 - `browser_screenshot` captures the latest decoded viewport frame of a ready
   browser panel, and `device_panel` with `operation: screenshot` captures the
-  full source desktop of a connected native VNC viewer. UI **Copy screenshot**
-  buttons copy the same source pixels directly as an image to the host clipboard.
+  full source desktop of a connected native VNC viewer. The camera icon on a
+  browser or Device panel copies the same source pixels directly as an image to the host clipboard.
   Native Fit, crop, scale and 1:1 controls do not alter the captured desktop.
   MCP requests accept `panel_id` and optional `copy_to_clipboard` (default false).
   Results return a private PNG `path`, original `width`/`height`, and
@@ -567,5 +567,6 @@ Stop requests background finalization. Poll until `recording.capture.active`
 and `recording.finalizing` are both false. Check `encoder_failed` and
 `frames_encoded` before using `recording.capture.path`, a private file on the
 Horizon host. It is not a remotely downloadable URL. Save a copy before closing
-the panel or making four subsequent recordings. The UI provides **Record video**,
-**Stop recording**, and **Copy video path** for the same recorder.
+the panel or making four subsequent recordings. The Device panel uses a record
+icon, a stop icon, and a clipboard icon for the same recorder. Hover text names
+those actions.

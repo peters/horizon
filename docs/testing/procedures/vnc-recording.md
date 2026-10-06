@@ -48,13 +48,13 @@ It tests access control, background capture, file completion, and temporary stor
 
 ### VNC-VIDEO-01 — UI capture
 
-1. Click **Record video** in the candidate's Device panel.
+1. Click the record icon in the candidate's Device panel. The hover text names the recording limits.
 
-   Result: **Recording VNC desktop** and **Stop recording** appear.
+   Result: The status says **Recording VNC desktop**, and the stop icon is shown.
 
 2. Change the synthetic content for five seconds.
-3. Click **Stop recording**.
-4. Wait for the frame count and **Copy video path**.
+3. Click the stop icon.
+4. Wait for the frame count and the clipboard icon. The hover text names the private recording file.
 5. Copy the path and play the file.
 
    Result: The file shows the full remote desktop in WebM format without audio.

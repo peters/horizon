@@ -262,17 +262,10 @@ fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
 }
 
 fn video_start_button(ui: &mut Ui, hover: &str, browser: &mut BrowserPanelState, interactive: bool) -> bool {
-    let response = ui.add_enabled(
-        interactive,
-        egui::Button::new(RichText::new("●").size(13.0).color(theme::PALETTE_RED()))
-            .min_size(vec2(22.0, 22.0))
-            .fill(theme::PANEL_BG_ALT())
-            .corner_radius(6)
-            .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE())),
-    );
-    let enabled = response.enabled();
-    response.widget_info(|| nav_widget_info("Record", enabled));
-    let response = response.on_hover_text_at_pointer(hover);
+    let response = crate::icon_button::icon_button(ui, interactive, "Record", |painter, rect, _color| {
+        crate::icon_button::paint_record(painter, rect, interactive);
+    })
+    .on_hover_text_at_pointer(hover);
     if response.clicked() {
         browser.video_error = None;
         if !browser.try_send(BrowserCommand::Video {
@@ -291,7 +284,18 @@ fn video_stop_button(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: 
         || "Stop recording".to_string(),
         |error| format!("Stop recording ({error})"),
     );
-    video_button(ui, "⏹", &label, browser, BrowserVideoOperation::Stop, interactive)
+    let response = crate::icon_button::icon_button(ui, interactive, "Stop recording", crate::icon_button::paint_stop)
+        .on_hover_text_at_pointer(label);
+    if response.clicked() {
+        if !browser.try_send(BrowserCommand::Video {
+            operation: BrowserVideoOperation::Stop,
+            options: None,
+        }) {
+            browser.video_error = Some(VIDEO_QUEUE_REJECTED.to_string());
+        }
+        return true;
+    }
+    false
 }
 
 fn video_button(

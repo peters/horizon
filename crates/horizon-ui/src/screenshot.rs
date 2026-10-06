@@ -42,9 +42,9 @@ impl Screenshots {
         enabled: bool,
         image: impl FnOnce() -> Result<ColorImage, String>,
     ) -> bool {
-        let response = ui
-            .add_enabled(enabled, egui::Button::new("Copy screenshot"))
-            .on_hover_text("Copy the panel image to your clipboard at its source resolution");
+        let response =
+            crate::icon_button::icon_button(ui, enabled, "Copy screenshot", crate::icon_button::paint_screenshot)
+                .on_hover_text("Copy the panel image to your clipboard at its source resolution");
         let clicked = response.clicked();
         if clicked {
             let result = image().and_then(|image| {
