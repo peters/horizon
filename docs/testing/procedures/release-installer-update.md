@@ -118,17 +118,46 @@ Do not use a developer's existing installation.
 
    Result: The previous snapshot remains available at `app-0.2.0-smoke.1`.
 
+5. Examine the shortcuts for the selected platform.
+
+   | Platform | Shortcut in the private account |
+   |---|---|
+   | Linux | `.local/share/applications/horizon.desktop` |
+   | Windows | `Desktop/Horizon.lnk` and `AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Horizon.lnk` |
+   | macOS | `Desktop/Horizon.app` and `Applications/Horizon.app` |
+
+   Result: Each shortcut identifies the active installed executable or its launcher.
+   Result: No shortcut identifies the previous snapshot.
+
+6. Start the installed candidate once more.
+
+   Result: The live view shows the installed application.
+
+7. Record the installed process identity.
+
+   Result: The report contains the PID, executable path and SHA-256.
+   Result: The executable path is in the private install root.
+   Result: The SHA-256 matches the frozen candidate.
+
 ### 6.2 INSTALL-02 — Executable identity regression
 
 1. Copy the installed application into a second private fixture.
 
    Result: The fixture has its own runtime manifest and install root.
 
-2. Remove `mainExe` from the copied runtime manifest.
+2. Record the copied runtime manifest's `bucket` value.
+
+   Result: The report can restore the original local package store.
+
+3. Set the copied runtime manifest's `bucket` to a new empty private directory.
+
+   Result: The copied candidate cannot get a release index from that directory.
+
+4. Remove `mainExe` from the copied runtime manifest.
 
    Result: The copied manifest represents the older installer output without a supervisor identity.
 
-3. Run `surge-update-smoke` against the copied candidate without `--apply`.
+5. Run `surge-update-smoke` against the copied candidate without `--apply`.
 
    ```sh
    "$smoke_update_helper" --app-exe "$smoke_copy_root/app/$smoke_main_exe"
@@ -136,11 +165,23 @@ Do not use a developer's existing installation.
 
    Result: The check refuses the missing executable identity before it reads the release index.
 
-4. Restore `mainExe` in the copied runtime manifest.
+6. Restore `mainExe` in the copied runtime manifest.
 
    Result: The value matches the candidate's relative executable path.
 
-5. Repeat the check without `--apply`.
+7. Repeat the check without `--apply`.
+
+   ```sh
+   "$smoke_update_helper" --app-exe "$smoke_copy_root/app/$smoke_main_exe"
+   ```
+
+   Result: The helper refuses the missing release index.
+
+8. Restore the copied runtime manifest's original `bucket` value.
+
+   Result: The copied candidate can get the local release index again.
+
+9. Repeat the check without `--apply`.
 
    ```sh
    "$smoke_update_helper" --app-exe "$smoke_copy_root/app/$smoke_main_exe"

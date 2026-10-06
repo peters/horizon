@@ -20,6 +20,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | Surge installer | The program that installs a Horizon release from a Surge package. | — |
 | runtime manifest | The installed `.surge/runtime.yml` file with the release and executable identity. | — |
 | package store | The directory that holds packages and release metadata for a local test. | — |
+| nonce | A random value that a run makes one time. A reply that contains it is current. | token |
 
 ## Horizon objects
 
@@ -36,6 +37,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | offer | One worker type with a price from a provider catalog. | quote, SKU |
 | tailnet | A Tailscale network that Horizon joins with an auth key. | tailscale network, overlay |
 | auth key | A Tailscale key that starts with `tskey-auth-`. It is a secret. | token, join key |
+| device name | The name of a worker in a tailnet. Other devices use it to reach the worker. | hostname, machine name |
 | companion | A second repository that a cloud can use. | sibling repo, linked repo |
 | sibling | A companion on the same worker as the cloud. | same-worker companion |
 | companion cloud | A companion on its own worker. | — |
@@ -44,6 +46,18 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | host instance | The identity of the Horizon host process that owns the browsers of an agent. Browser tools use it to find the workspace of the agent. It is not a secret. | host ID |
 | panel picker | The menu of a cloud that opens a new panel, with the title **Add panel**. | panel menu |
 | browser runtime root | The directory in `HORIZON_BROWSER_ROOT` with the private browser state of a host. | browser root |
+
+## Install and build
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| release build | A Horizon executable from a GitHub release, Surge, Homebrew or WinGet. It has the default features only. | prebuilt, official build |
+| source build | A Horizon executable that you build with `cargo` from the repository. | local build, dev build |
+| feature | A Cargo feature that adds a function at build time, for example `speech` or `cast-nvenc`. | flag, option |
+| platform | One operating system that Horizon supports: Linux, macOS or Windows. | OS (in text), target |
+| platform support | The list of functions that work on each platform, in `docs/platform-support.md`. | compatibility matrix |
+| welcome board | A planned sample workspace that opens on the first start. | tour, onboarding board |
+| doctor | A planned command that examines this computer and reports what Horizon needs. | health check, diagnostics |
 
 ## Casting
 
