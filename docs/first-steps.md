@@ -106,21 +106,22 @@ The Surge installer gives the in-app update prompt.
    | macOS x64 | `horizon-installer-osx-x64.bin` |
    | Windows x64 | `horizon-installer-win-x64.exe` |
 
-3. Download `SHA256SUMS.txt` from the same release. Examine the checksum of
-   the installer in the same way as in the release binary procedure.
+3. Download `SHA256SUMS.txt` from the same release to the same directory.
+4. Examine the checksum of the installer. Use the commands in step 4 of the
+   release binary procedure.
 
-   Result: The command shows `OK` for the installer.
+   Result: The checksum of the installer is correct.
 
-4. On Linux and macOS, make the installer executable. Replace `<installer>`
+5. On Linux and macOS, make the installer executable. Replace `<installer>`
    with the name of the file that you downloaded:
 
    ```bash
    chmod +x <installer>
    ```
 
-5. Start the installer and follow its steps. On Linux and macOS, type
+6. Start the installer and follow its steps. On Linux and macOS, type
    `./<installer>`. On Windows, open `horizon-installer-win-x64.exe`.
-6. Start Horizon.
+7. Start Horizon.
 
    Result: Horizon opens an empty board. Horizon shows an update prompt when a
    new stable release is available.
@@ -189,6 +190,8 @@ yourself. For casting with NVENC on Linux, add `--features cast-nvenc`.
 
 ## Use the board
 
+On macOS, use Cmd instead of Ctrl in each step of this procedure.
+
 1. Hold Ctrl and double-click an empty area of the board.
 
    Result: A list of presets opens.
@@ -214,7 +217,8 @@ yourself. For casting with NVENC on Linux, add `--features cast-nvenc`.
 
    Result: The board, the layout and the terminal history are the same.
 
-The README lists all keyboard and mouse shortcuts.
+The README lists all keyboard and mouse shortcuts. A shortcut with Ctrl uses
+Cmd on macOS.
 
 ## Open an agent, a browser and a desktop
 
