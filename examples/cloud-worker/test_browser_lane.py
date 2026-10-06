@@ -18,6 +18,7 @@ import runpy
 import select
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -296,6 +297,32 @@ class BrowserLaneTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         return f'http://127.0.0.1:{server.server_address[1]}/'
 
+    def watch_browser_errors(self):
+        # Diagnostics only: the create result names no cause when a browser stops at start,
+        # but the control service shows the browser's own error while it holds the browser.
+        errors, done = set(), threading.Event()
+
+        def watch():
+            while not done.is_set():
+                try:
+                    with socket.create_connection(SUPERVISE['CONTROL_ENDPOINT'], timeout=1) as connection:
+                        connection.settimeout(2)
+                        connection.sendall(b'{"operation":"list"}\n')
+                        with connection.makefile('rb') as stream:
+                            reply = json.loads(stream.readline(1 << 20))
+                    errors.update(browser['error'] for browser in reply.get('browsers', []) if browser.get('error'))
+                except (OSError, ValueError):
+                    pass
+                done.wait(.05)
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+
+        def stop():
+            done.set()
+            watcher.join(timeout=5)
+            return sorted(errors)
+        return stop
+
     def browser_processes(self):
         # Every browser process of this test: its profile is in the agent's home.
         processes = {}
@@ -360,8 +387,12 @@ class BrowserLaneTests(unittest.TestCase):
         self.await_answer(service)
         call = self.mcp('agent-host')
 
-        created = self.answer(call('browser_create', {'backend': 'chromium', 'url': url, 'visible': False,
-                                                      'timeout_millis': 60000}))
+        browser_errors = self.watch_browser_errors()
+        result = call('browser_create', {'backend': 'chromium', 'url': url, 'visible': False, 'timeout_millis': 60000})
+        errors = browser_errors()
+        self.assertFalse(result.get('isError'), f'{self.text(result)}; browser errors: {errors}; control log: '
+                         f"{(self.root / 'control-agent-host.log').read_text(errors='replace')[-4000:]}")
+        created = self.answer(result)
         panel = created['panel']['panel_id']
         self.assertEqual(created['panel']['owner'], f'horizon:cloud-{SESSION}')
         processes = self.browser_processes()
