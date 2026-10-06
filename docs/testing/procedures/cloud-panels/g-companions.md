@@ -227,6 +227,9 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
 ### 6.6 G06 — Clear a companion while the target is stopped
 
+> **CAUTION:** CHECK A COMPANION ONLY ON A TEST CLOUD. A checked companion gives
+> the source cloud shell access to the target worker.
+
 1. Select `lib` again on the card of `smoke-a`, as in G03.
 
    Result: The row shows **Ready · SSH verified**.
@@ -270,6 +273,9 @@ also makes sure that agents can start and stop a companion cloud through MCP.
    Result: The row of `lib` shows **Not selected**. The removal is complete.
 
 ### 6.7 G07 — Use the companion MCP tools
+
+> **CAUTION:** CHECK A COMPANION ONLY ON A TEST CLOUD. A checked companion gives
+> the source cloud shell access to the target worker.
 
 1. Select `lib` again on the card of `smoke-a`, as in G03.
 
@@ -392,6 +398,9 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 9. If step 8 found a resource, do steps 2 to 7 again with the title `smoke-lib1`.
 
    Result: A cloud without a worker exists. Use its cloud ID in the next steps.
+
+    > **CAUTION:** CHECK A COMPANION ONLY ON A TEST CLOUD. A checked companion
+    > gives the source cloud shell access to the target worker.
 
 10. Click the checkbox of `lib` on the card of `smoke-a`.
 
