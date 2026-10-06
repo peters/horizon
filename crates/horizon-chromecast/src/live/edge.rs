@@ -8,7 +8,8 @@
 //! It starts at that 0.4 s target, which is the point a Google TV has played
 //! smoothly, and after a calm stretch it tries 50 ms closer, down to 0.15 s.
 //! Half a second of buffering while it is already near the edge steps the
-//! target back and does not try that low again in the same session.
+//! target back once. That episode does not step again until playback resumes,
+//! and the session does not try the failed level again.
 
 use std::time::Duration;
 
@@ -42,6 +43,8 @@ pub(crate) struct Edge {
     pub floor: f64,
     pub rate: f64,
     pub settled_for: Duration,
+    /// The open buffering episode has already stepped the target back.
+    pub backed_off: bool,
 }
 
 impl Default for Edge {
@@ -51,6 +54,7 @@ impl Default for Edge {
             floor: LIVE_EDGE,
             rate: 1.0,
             settled_for: Duration::ZERO,
+            backed_off: false,
         }
     }
 }
@@ -73,10 +77,17 @@ impl Edge {
         if !sample.lag.is_finite() || sample.lag > MAX_LAG {
             return self;
         }
+        // A resumed picture may try the next step. The same episode may not.
+        if sample.buffering_for.is_none() {
+            self.backed_off = false;
+        }
         if self.stalled(sample) {
-            let raised = (self.target + STEP).min(PROVEN_LAG);
-            self.floor = raised;
-            self.target = raised;
+            if !self.backed_off {
+                let raised = (self.target + STEP).min(PROVEN_LAG);
+                self.floor = raised;
+                self.target = raised;
+                self.backed_off = true;
+            }
             self.rate = 1.0;
             self.settled_for = Duration::ZERO;
             return self;
@@ -86,7 +97,11 @@ impl Edge {
             self.settled_for = Duration::ZERO;
             return self;
         }
-        if self.rate <= 1.0 && sample.lag <= self.target + ACT {
+        // A buffering report is not calm playback, even when it is shorter
+        // than the stall that steps the target back.
+        if sample.buffering_for.is_some() {
+            self.settled_for = Duration::ZERO;
+        } else if self.rate <= 1.0 && sample.lag <= self.target + ACT {
             self.settled_for = self.settled_for.saturating_add(sample.elapsed);
             if self.settled_for >= CREEP_AFTER && self.target > self.floor + f64::EPSILON {
                 self.target = (self.target - STEP).max(self.floor);
@@ -139,6 +154,7 @@ mod tests {
             floor,
             rate,
             settled_for,
+            backed_off: false,
         }
     }
 
@@ -186,6 +202,38 @@ mod tests {
         assert!((next.rate - 1.0).abs() < f64::EPSILON);
         let later = next.step(sample(0.31, None, CREEP_AFTER));
         assert!((later.target - 0.30).abs() < 1e-9);
+    }
+
+    #[test]
+    fn one_buffering_episode_steps_back_once() {
+        let trying = at(LIVE_EDGE, LIVE_EDGE, 1.0, Duration::ZERO);
+        let once = trying.step(sample(0.16, Some(STALL), Duration::from_millis(400)));
+        assert!((once.target - 0.20).abs() < 1e-9);
+        assert!(once.backed_off);
+        let still = once.step(sample(0.16, Some(Duration::from_secs(3)), Duration::from_millis(400)));
+        assert!((still.target - 0.20).abs() < 1e-9);
+        assert!((still.floor - 0.20).abs() < 1e-9);
+        let resumed = still.step(sample(0.21, None, Duration::from_millis(400)));
+        assert!(!resumed.backed_off);
+        let again = resumed.step(sample(0.20, Some(STALL), Duration::from_millis(400)));
+        assert!((again.target - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn buffering_does_not_count_as_calm() {
+        let calm = at(
+            PROVEN_LAG,
+            LIVE_EDGE,
+            1.0,
+            CREEP_AFTER.saturating_sub(Duration::from_millis(400)),
+        );
+        let next = calm.step(sample(
+            0.41,
+            Some(Duration::from_millis(200)),
+            Duration::from_millis(400),
+        ));
+        assert!((next.target - PROVEN_LAG).abs() < 1e-9);
+        assert_eq!(next.settled_for, Duration::ZERO);
     }
 
     #[test]

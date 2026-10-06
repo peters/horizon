@@ -316,6 +316,8 @@ struct Playback {
     retry: Option<Retry>,
     next_check: Instant,
     checked: Instant,
+    /// `checked` is a real playback sample, not session start or a gap.
+    sampled: bool,
 }
 
 /// A playback-rate command to send again at `at`. `failures` counts failed
@@ -336,6 +338,7 @@ impl Playback {
             retry: None,
             next_check: now,
             checked: now,
+            sampled: false,
         }
     }
 }
@@ -608,34 +611,49 @@ impl Session {
             return Ok(());
         };
         let mut playback = self.playback.get();
-        if playback.unsupported {
-            return Ok(());
-        }
         let now = Instant::now();
+        // A restore still has to land after a faster rate was refused.
         if let Some(retry) = playback.retry {
+            playback.sampled = false;
             if now < retry.at {
+                self.playback.set(playback);
                 return Ok(());
             }
             return self.push_rate(media, playback, retry.rate, retry.failures, now);
         }
-        if !self.started.get() || now < playback.next_check || *lock(&self.state) != LiveState::Playing {
+        if playback.unsupported {
             return Ok(());
         }
-        let elapsed = now.saturating_duration_since(playback.checked);
+        if !self.started.get() || *lock(&self.state) != LiveState::Playing {
+            if playback.sampled {
+                playback.sampled = false;
+                self.playback.set(playback);
+            }
+            return Ok(());
+        }
+        if now < playback.next_check {
+            return Ok(());
+        }
+        let elapsed = calm_elapsed(&playback, now);
         playback.checked = now;
         playback.next_check = now + EDGE_POLL;
         let (Some(newest), Ok(Some(status))) = (stream.newest_media_time(), media.status()) else {
+            // The receiver may already be playing fast. Without a sample there
+            // is no signal to stop, so return to normal speed.
+            playback.sampled = false;
+            if playback.edge.rate > 1.0 + 1e-3 {
+                return self.push_rate(media, playback, 1.0, 0, now);
+            }
             self.playback.set(playback);
             return Ok(());
         };
+        playback.sampled = true;
         let lag = newest - status.current_time;
-        // A PLAYING reply closes a buffering report even when the queued event
-        // that clears it has not been applied yet.
-        let buffering_for = matches!(status.player_state.as_str(), "BUFFERING" | "LOADING").then(|| {
-            self.buffering_since
-                .get()
-                .map_or(Duration::ZERO, |since| since.elapsed())
-        });
+        // Polled GET_STATUS replies are not receiver events, so the timer has
+        // to move from this status. A PLAYING reply closes it.
+        let mut open = self.buffering_since.get();
+        let buffering_for = buffering_age(&mut open, status.player_state.as_str(), now);
+        self.buffering_since.set(open);
         let previous = playback.edge.rate;
         let next = playback.edge.step(edge::Sample {
             lag,
@@ -658,9 +676,10 @@ impl Session {
         self.push_rate(media, playback, next.rate, 0, now)
     }
 
-    /// Applies `rate`. An explicit refusal of a faster rate gives up on
-    /// trimming. A lost reply while speeding up is treated as if the rate
-    /// applied, so the next command restores normal speed.
+    /// Applies `rate`. An explicit refusal of a faster rate stops further
+    /// trimming. A rate the receiver may already be using is not recorded as
+    /// 1.0 until a restore is confirmed. A lost reply while speeding up is
+    /// treated as if the rate applied, so the next command restores normal speed.
     /// # Errors
     /// Fails when playback cannot be returned to normal speed.
     fn push_rate(
@@ -671,55 +690,17 @@ impl Session {
         failures: u8,
         now: Instant,
     ) -> Result<()> {
-        let result = media.set_playback_rate(rate);
-        let restoring = (rate - 1.0).abs() <= 1e-3;
-        match result {
-            Ok(_) => {
-                playback.edge.rate = rate;
-                playback.retry = None;
-                self.playback.set(playback);
-                Ok(())
-            }
-            // Only an explicit refusal proves the faster rate was not applied.
-            Err(Error::Rejected { .. }) if !restoring => {
-                playback.unsupported = true;
-                playback.edge.rate = 1.0;
-                playback.retry = None;
-                self.playback.set(playback);
-                Ok(())
-            }
-            // The rate may have applied before the reply was lost: restore now.
-            Err(_) if !restoring => {
-                playback.retry = Some(Retry {
-                    at: now,
-                    rate: 1.0,
-                    failures: 0,
-                });
-                self.playback.set(playback);
-                Ok(())
-            }
-            Err(error) => match after_restore(false, failures, now) {
-                Some(CatchUp::Until(at, failures)) => {
-                    playback.retry = Some(Retry {
-                        at,
-                        rate: 1.0,
-                        failures,
-                    });
-                    self.playback.set(playback);
-                    Ok(())
-                }
-                Some(CatchUp::Watching) => {
-                    playback.edge.rate = 1.0;
-                    playback.retry = None;
-                    self.playback.set(playback);
-                    Ok(())
-                }
-                None => {
-                    self.playback.set(playback);
-                    Err(error)
-                }
-            },
+        let (answer, error) = match media.set_playback_rate(rate) {
+            Ok(_) => (RateAnswer::Applied, None),
+            Err(error @ Error::Rejected { .. }) => (RateAnswer::Refused, Some(error)),
+            Err(error) => (RateAnswer::Unconfirmed, Some(error)),
+        };
+        if apply_rate_reply(&mut playback, rate, failures, answer, now) {
+            self.playback.set(playback);
+            return Err(error.unwrap_or(Error::Protocol("playback rate was not confirmed")));
         }
+        self.playback.set(playback);
+        Ok(())
     }
 
     /// Playing, but the receiver has reported buffering for longer than the grace period.
@@ -737,6 +718,95 @@ impl Session {
 
     fn stopped(&self) -> bool {
         self.stop.load(Ordering::Acquire)
+    }
+}
+
+/// What the receiver did with a `SET_PLAYBACK_RATE` command.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RateAnswer {
+    Applied,
+    /// The receiver explicitly refused the command, so it kept the old rate.
+    Refused,
+    /// The reply was lost. The command may or may not have applied.
+    Unconfirmed,
+}
+
+/// Elapsed calm time. The clock starts at the first real sample, so launch
+/// and LOAD do not count, and a gap without a sample does not count either.
+fn calm_elapsed(playback: &Playback, now: Instant) -> Duration {
+    if playback.sampled {
+        now.saturating_duration_since(playback.checked)
+    } else {
+        Duration::ZERO
+    }
+}
+
+/// How long the polled player has been buffering. `PLAYING` closes the timer.
+fn buffering_age(open_since: &mut Option<Instant>, player_state: &str, now: Instant) -> Option<Duration> {
+    match player_state {
+        "BUFFERING" | "LOADING" => {
+            let start = *open_since.get_or_insert(now);
+            Some(now.saturating_duration_since(start))
+        }
+        "PLAYING" => {
+            *open_since = None;
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Records `answer` to `commanded`. Returns whether the session must fail
+/// because normal speed could not be restored.
+fn apply_rate_reply(playback: &mut Playback, commanded: f64, failures: u8, answer: RateAnswer, now: Instant) -> bool {
+    let restoring = (commanded - 1.0).abs() <= 1e-3;
+    match answer {
+        RateAnswer::Applied => {
+            playback.edge.rate = commanded;
+            playback.retry = None;
+            false
+        }
+        // The previous faster rate is still applied. Ask for 1.0 and stop
+        // trying to go faster. Record 1.0 only when that restore is confirmed.
+        RateAnswer::Refused if !restoring => {
+            playback.unsupported = true;
+            if playback.edge.rate > 1.0 + 1e-3 {
+                playback.retry = Some(Retry {
+                    at: now,
+                    rate: 1.0,
+                    failures: 0,
+                });
+            } else {
+                playback.edge.rate = 1.0;
+                playback.retry = None;
+            }
+            false
+        }
+        // The faster rate may have applied before the reply was lost.
+        RateAnswer::Unconfirmed if !restoring => {
+            playback.retry = Some(Retry {
+                at: now,
+                rate: 1.0,
+                failures: 0,
+            });
+            false
+        }
+        _ => match after_restore(false, failures, now) {
+            Some(CatchUp::Until(at, failures)) => {
+                playback.retry = Some(Retry {
+                    at,
+                    rate: 1.0,
+                    failures,
+                });
+                false
+            }
+            Some(CatchUp::Watching) => {
+                playback.edge.rate = 1.0;
+                playback.retry = None;
+                false
+            }
+            None => true,
+        },
     }
 }
 
@@ -788,5 +858,76 @@ mod catch_up_tests {
             Some(CatchUp::Until(now + RESTORE_RETRY, 2))
         );
         assert_eq!(after_restore(false, RESTORE_ATTEMPTS - 1, now), None);
+    }
+
+    #[test]
+    fn a_refused_slower_trim_restores_the_rate_already_applied() {
+        let now = Instant::now();
+        let mut playback = Playback::new();
+        playback.edge.rate = 1.5;
+        assert!(!apply_rate_reply(&mut playback, 1.08, 0, RateAnswer::Refused, now));
+        assert!(playback.unsupported);
+        assert!((playback.edge.rate - 1.5).abs() < 1e-9);
+        let retry = playback.retry.expect("restore scheduled");
+        assert!((retry.rate - 1.0).abs() < 1e-9);
+        assert_eq!(retry.failures, 0);
+
+        assert!(!apply_rate_reply(
+            &mut playback,
+            1.0,
+            retry.failures,
+            RateAnswer::Applied,
+            now
+        ));
+        assert!(playback.unsupported);
+        assert!((playback.edge.rate - 1.0).abs() < 1e-9);
+        assert!(playback.retry.is_none());
+    }
+
+    #[test]
+    fn a_refused_first_speed_up_does_not_invent_a_restore() {
+        let now = Instant::now();
+        let mut playback = Playback::new();
+        assert!(!apply_rate_reply(&mut playback, 1.08, 0, RateAnswer::Refused, now));
+        assert!(playback.unsupported);
+        assert!((playback.edge.rate - 1.0).abs() < 1e-9);
+        assert!(playback.retry.is_none());
+    }
+
+    #[test]
+    fn a_lost_faster_command_is_followed_by_a_restore() {
+        let now = Instant::now();
+        let mut playback = Playback::new();
+        assert!(!apply_rate_reply(&mut playback, 1.5, 0, RateAnswer::Unconfirmed, now));
+        let retry = playback.retry.expect("restore scheduled");
+        assert!((retry.rate - 1.0).abs() < 1e-9);
+        assert!((playback.edge.rate - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_first_calm_sample_ignores_time_before_playback() {
+        let mut playback = Playback::new();
+        playback.checked = Instant::now()
+            .checked_sub(Duration::from_secs(30))
+            .expect("instant in range");
+        let now = Instant::now();
+        assert_eq!(calm_elapsed(&playback, now), Duration::ZERO);
+        playback.sampled = true;
+        assert!(calm_elapsed(&playback, now) >= Duration::from_secs(29));
+    }
+
+    #[test]
+    fn a_polled_buffer_starts_and_a_playing_status_closes_it() {
+        let start = Instant::now();
+        let mut open = None;
+        assert_eq!(buffering_age(&mut open, "BUFFERING", start), Some(Duration::ZERO));
+        let later = start + Duration::from_millis(600);
+        assert_eq!(
+            buffering_age(&mut open, "BUFFERING", later),
+            Some(Duration::from_millis(600))
+        );
+        assert_eq!(buffering_age(&mut open, "PLAYING", later), None);
+        assert!(open.is_none());
+        assert_eq!(buffering_age(&mut open, "LOADING", later), Some(Duration::ZERO));
     }
 }
