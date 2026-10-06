@@ -12,6 +12,10 @@ use x11rb::{
     rust_connection::RustConnection,
 };
 
+mod keymap;
+mod stroke;
+mod text;
+
 pub struct X11 {
     target: Target,
     connection: RustConnection,
@@ -115,6 +119,7 @@ impl Backend for X11 {
         self.geometry()
     }
     fn doctor(&self) -> Result<Readiness> {
+        self.ensure_unused_keycode()?;
         let Endpoint::LocalX11 { display } = &self.target.endpoint;
         Enigo::new(&Settings {
             x11_display: Some(display.clone()),
@@ -197,46 +202,17 @@ impl Backend for X11 {
             return Err(DeviceError::StaleGeometry);
         }
         if let Action::Type { text } = &request.action {
-            let setup = self.connection.setup();
-            let mapping = self
-                .connection
-                .get_keyboard_mapping(setup.min_keycode, setup.max_keycode - setup.min_keycode + 1)
-                .map_err(unavailable)?
-                .reply()
-                .map_err(unavailable)?;
-            let mut needed: std::collections::BTreeSet<_> = text.chars().collect();
-            let mut available = 0;
-            for (keycode, symbols) in (setup.min_keycode..=setup.max_keycode)
-                .zip(mapping.keysyms.chunks(usize::from(mapping.keysyms_per_keycode)))
-            {
-                if keycode != 8 && symbols.iter().all(|symbol| *symbol == 0) {
-                    available += 1;
-                }
-                // Enigo reuses exact first-level keysyms. Only Latin-1 has an
-                // unambiguous mapping without duplicating its legacy symbol table.
-                if let Some(&symbol) = symbols.first() {
-                    let codepoint = match symbol {
-                        0x20..=0x7e | 0xa0..=0xff => Some(symbol),
-                        _ => None,
-                    };
-                    if let Some(character) = codepoint.and_then(char::from_u32) {
-                        needed.remove(&character);
-                    }
-                }
-            }
-            if needed.len() > available {
-                return Err(DeviceError::Invalid(
-                    "text exceeds available X11 Unicode key mappings".into(),
-                ));
-            }
+            self.type_text(text)?;
+        } else {
+            self.ensure_unused_keycode()?;
+            let Endpoint::LocalX11 { display } = &self.target.endpoint;
+            let mut input = Enigo::new(&Settings {
+                x11_display: Some(display.clone()),
+                ..Settings::default()
+            })
+            .map_err(unavailable)?;
+            inject(&mut input, &request.action).map_err(|e| DeviceError::Indeterminate(e.to_string()))?;
         }
-        let Endpoint::LocalX11 { display } = &self.target.endpoint;
-        let mut input = Enigo::new(&Settings {
-            x11_display: Some(display.clone()),
-            ..Settings::default()
-        })
-        .map_err(unavailable)?;
-        inject(&mut input, &request.action).map_err(|e| DeviceError::Indeterminate(e.to_string()))?;
         Ok(ActionReceipt {
             state: "dispatched".into(),
             geometry: request.geometry.clone(),
@@ -287,19 +263,7 @@ fn inject(input: &mut Enigo, action: &Action) -> enigo::InputResult<()> {
             input.scroll(*vertical_notches, Axis::Vertical)?;
             input.scroll(*horizontal_notches, Axis::Horizontal)
         }
-        Action::Type { text } => {
-            // X11 clients consume mapping notifications asynchronously. Keep the
-            // temporary Unicode mappings alive until queued key events can drain.
-            let result = (|| {
-                for character in text.chars() {
-                    input.key(enigo::Key::Unicode(character), Direction::Click)?;
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Ok(())
-            })();
-            std::thread::sleep(Duration::from_millis(100));
-            result
-        }
+        Action::Type { .. } => Err(enigo::InputError::InvalidInput("X11 text input uses X11::type_text")),
         Action::Key { key, modifiers } => {
             let mods: Vec<_> = modifiers
                 .iter()

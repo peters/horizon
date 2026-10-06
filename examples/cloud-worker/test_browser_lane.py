@@ -53,6 +53,8 @@ _loader = importlib.machinery.SourceFileLoader('tailnet_lane', str(Path(__file__
 TAILNET = importlib.util.module_from_spec(importlib.util.spec_from_loader(_loader.name, _loader))
 _loader.exec_module(TAILNET)
 DENIED = 'the operating system denied access to a host coordination file'
+# Upper bound for the cold first Chromium start; the largest measured start took 15 s.
+WARM_LIMIT = 120
 
 
 def root_available():
@@ -61,6 +63,26 @@ def root_available():
         return True
     return bool(shutil.which('sudo')) and subprocess.run(
         ['sudo', '-n', 'true'], capture_output=True, timeout=20, check=False).returncode == 0
+
+
+def warm_chromium(directory):
+    # The first Chromium start on a new CI runner reads the browser from a cold disk. Measured
+    # on ubuntu-latest: 0.6 s to 15 s to the DevTools endpoint, and more than 15 s with high I/O
+    # pressure after the test shard; later starts take about 0.1 s. Render one page first, so
+    # this test examines the agent lane and not the disk. The product limits stay unchanged.
+    profile = Path(directory) / 'warm-profile'
+    started = time.monotonic()
+    try:
+        warm = subprocess.run([CHROMIUM, '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+                               f'--user-data-dir={profile}', '--no-first-run', '--dump-dom', 'chrome://version/'],
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=WARM_LIMIT, check=False)
+    except subprocess.TimeoutExpired:
+        raise AssertionError(f'Chromium did not render a page within {WARM_LIMIT} s on this machine') from None
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
+    if b'<html' not in warm.stdout.lower():
+        raise AssertionError(f'Chromium did not render a page: {warm.stderr.decode(errors="replace")[-2000:]}')
+    return time.monotonic() - started
 
 
 def as_agent(command):
@@ -381,6 +403,7 @@ class BrowserLaneTests(unittest.TestCase):
     def test_agent_browser_create_starts_a_real_chromium_as_the_agent_lane(self):
         if os.geteuid() != 0:
             return self.nested()
+        warm_chromium(self.root)
         url = self.page()
         service = self.serve(agent=True, host='agent-host', workspace=self.workspace())
         self.addCleanup(subprocess.run, ['pkill', '-KILL', '-f', '--', f'--user-data-dir={self.home}'], check=False)
