@@ -120,7 +120,7 @@ change in the report as a deviation.
 | `smoke-g` | RunPod, GPU | None | D03 |
 | `smoke-sib` | RunPod, CPU, `runpod-build` with the sibling `sib` | None | C10, G02, G11, L05 |
 | `smoke-lib` | Hetzner, CPU, companion repository `<lib>` | None | G01, G03–G10, G12 |
-| `smoke-lib0` | Hetzner, CPU, companion repository `<lib>`, no worker | None | G08 |
+| `smoke-lib0` | Hetzner, CPU, companion repository `<lib>`, no worker (`smoke-lib1` if a retry is necessary) | None | G08 |
 | `smoke-x` | Hetzner, CPU, image-only, idle stop of 10 minutes | None | L07, L08 |
 
 ### 4.3 Rules for each step
@@ -287,7 +287,7 @@ The cleanup of this procedure does X01 to X05.
 | E — Panels in a cloud | [e-panels.md](cloud-panels/e-panels.md) | E01–E09 | rents compute |
 | L — Lifecycle | [l-lifecycle.md](cloud-panels/l-lifecycle.md) | L01–L10 | rents compute |
 | T — Tailnets | [t-tailnets.md](cloud-panels/t-tailnets.md) | T01–T14 | T03–T12 and T14 rent compute |
-| G — Companion repositories | [g-companions.md](cloud-panels/g-companions.md) | G01–G12 | G08 is free |
+| G — Companion repositories | [g-companions.md](cloud-panels/g-companions.md) | G01–G12 | rents compute, also G08 if the provider request is faster than the cancel |
 | O — Offers and cost | [o-offers.md](cloud-panels/o-offers.md) | O01–O03 | O02 rents compute |
 | N — Local Network Bridge | [n-local-network-bridge.md](cloud-panels/n-local-network-bridge.md) | N01–N05 | rents compute |
 | X — Teardown | [x-teardown.md](cloud-panels/x-teardown.md) | X01–X05 | none |

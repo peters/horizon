@@ -271,10 +271,10 @@ state directory that exists, so a later restart needs a new state directory.
 5. Make sure that the keyring runs in the fixture.
 
    ```sh
-   pgrep -a gnome-keyring-d
+   pstree -p <launcher-pid> | grep -o 'gnome-keyring-d([0-9]*)'
    ```
 
-   Result: The output shows one `gnome-keyring-daemon` process of the fixture.
+   Result: The output shows one keyring process below the launcher of the fixture.
 
 6. In the fixture terminal, store a test value.
 

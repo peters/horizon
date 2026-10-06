@@ -79,10 +79,10 @@ accepts a request but before the card shows an ID, for example during the watch 
 
    Result: You have the new resources since the setup. Some can belong to other people.
 
-3. For each new resource that the ledger does not contain, find its cloud card or its `smoke-` name.
+3. For each new resource that is not in the ledger, find its ID on a test cloud card.
 
-   Result: A resource that a planned test cloud shows, or that has the name of a
-   planned test cloud, belongs to this run.
+   Result: A resource belongs to this run only when a card or the state directory
+   of a test cloud of this run shows its ID. A name alone is not enough.
 
 4. Write each new resource of this run in the resource ledger.
 
@@ -130,9 +130,10 @@ Do steps 8 to 15 for each cloud in the resource ledger that has an active resour
     Result: The ledger keeps the resources as active. The card keeps the retry
     action. Open a defect issue and tell the operator that the resources can cost money.
 
-14. If the card shows **Deleted**, mark each resource of the cloud as deleted in the resource ledger.
+14. If the card shows **Deleted**, mark the worker, storage and SSH key resources of the cloud as deleted.
 
-    Result: The ledger shows no active resource for this cloud.
+    Result: The ledger shows no active provider resource for this cloud. Its
+    tailnet line stays active until X03 removes the node.
 
     > **CAUTION:** REMOVE ONLY A CLOUD THAT SHOWS **DELETED**. Horizon removes the
     > cloud and its panels from the board, and the retry action goes away.

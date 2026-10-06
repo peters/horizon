@@ -329,42 +329,62 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The row shows **Not selected**.
 
-2. Open **Cloud › New cloud…**, type `<lib>` as the repository and `smoke-lib0` as the title.
+2. Open **Cloud › New cloud…**.
+
+   Result: The New cloud dialog opens.
+
+3. Type `<lib>` as the repository.
 
    Result: The dialog reads `<lib>`.
 
-3. Select the profile `hetzner-cpu`.
+4. Type `smoke-lib0` as the title.
+
+   Result: The title field shows `smoke-lib0`.
+
+5. Select the profile `hetzner-cpu`.
 
    Result: The summary shows a Hetzner worker.
 
    > **CAUTION:** CANCEL THE OPERATION BEFORE THE PROVIDER REQUEST. If the card
    > shows a server, record it in the resource ledger and delete it in X01.
 
-4. Click **Start cloud**.
+6. Click **Start cloud**.
 
    Result: The card of `smoke-lib0` shows the first stages.
 
-5. While the card shows the image stage, click **Cancel operation**.
+7. While the card shows the image stage, click **Cancel operation**.
 
    Result: The card keeps `smoke-lib0` without a worker.
 
-6. Click the checkbox of `lib` on the card of `smoke-a`.
+8. If the card shows a server or a volume, write them in the resource ledger.
 
-   Result: The row shows **Choose cloud**, because two clouds match.
+   Result: X01 deletes them. The provider request was faster than the cancel.
 
-7. Select the cloud ID of `smoke-lib0`.
+9. If step 8 found a resource, do steps 2 to 7 again with the title `smoke-lib1`.
 
-   Result: The row shows the ID of `smoke-lib0`.
+   Result: A cloud without a worker exists. Use its cloud ID in the next steps.
 
-8. In the local agent panel, call `cloud_companion_ensure_ready` with the source cloud and the alias.
+10. Click the checkbox of `lib` on the card of `smoke-a`.
 
-   Result: The answer is `confirmation_required`. No worker starts.
+    Result: The row shows **Choose cloud**, because two clouds match.
 
-9. Clear the checkbox of `lib` on the card of `smoke-a`.
+11. Select the cloud ID of the cloud without a worker, `smoke-lib0` or `smoke-lib1`.
 
-   Result: The row shows **Not selected**.
+    Result: The row shows the ID of that cloud.
 
-10. Select `lib` again and choose the cloud ID of `smoke-lib`.
+12. In the local agent panel, call `cloud_companion_ensure_ready` with the source cloud and the alias.
+
+    Result: The answer is `confirmation_required`. No worker starts.
+
+13. Clear the checkbox of `lib` on the card of `smoke-a`.
+
+    Result: The row shows **Not selected**.
+
+14. Click the checkbox of `lib` again.
+
+    Result: The row shows **Choose cloud**.
+
+15. Select the cloud ID of `smoke-lib`.
 
     Result: The row shows **Ready · SSH verified**.
 
