@@ -1,6 +1,6 @@
 //! Text entry through XTEST with stable keycode mappings.
 
-use super::keymap::{self, Borrowed, Layout, ModifierError, Plan, PlanError};
+use super::keymap::{self, Borrowed, Keyboard, Layout, ModifierError, Plan, PlanError};
 use super::{X11, unavailable};
 use crate::{DeviceError, Result};
 use std::time::Duration;
@@ -67,42 +67,21 @@ impl X11 {
                 "X11 text input requires the XTEST extension".into(),
             ));
         }
-        let (state, group) = self.keyboard_state()?;
-        // Other groups have other levels.
-        if group != 0 {
-            return Err(DeviceError::Unsupported(
-                "X11 text input requires the first keyboard group".into(),
-            ));
-        }
-        let modifiers = self
-            .connection
-            .get_modifier_mapping()
-            .map_err(unavailable)?
-            .reply()
-            .map_err(unavailable)?;
-        let per_row = usize::from(modifiers.keycodes_per_modifier()).max(1);
-        let rows: Vec<&[u8]> = modifiers.keycodes.chunks(per_row).collect();
-        let mapping = self.keyboard_mapping()?;
-        // A held Shift, Control, Alt or Super key would change each typed key.
-        let keyboard = keymap::keyboard(&self.layout(&mapping), &rows, state).map_err(|e| {
-            DeviceError::Unsupported(match e {
-                ModifierError::Held => "X11 text input requires released modifier keys".into(),
-                ModifierError::Lock => "X11 text input supports Caps Lock but no other Lock modifier".into(),
-            })
-        })?;
         let record_atom = self.record_atom()?;
-        // A reassignment waits for the quiet interval. Plan again after the wait,
-        // because another client can change the keymap in the meantime.
+        // A reassignment waits for the quiet interval. Read the keyboard and
+        // plan again after the wait, because another client can change the
+        // keymap, the modifier mapping or the keyboard state in the meantime.
         let mut attempts = 0;
-        let (plan, server_now) = loop {
+        let (plan, server_now, keyboard) = loop {
             let mapping = self.keyboard_mapping()?;
+            let keyboard = self.keyboard(&mapping)?;
             let (previous, server_now) = self.read_record(record_atom)?;
             let plan = keymap::plan(&self.layout(&mapping), &previous, keyboard, text).map_err(|e| match e {
                 PlanError::Capacity => DeviceError::Invalid("text exceeds available X11 Unicode key mappings".into()),
                 PlanError::NoKeysym => DeviceError::Invalid("text contains a character without an X11 keysym".into()),
             })?;
             if !wait_until(plan.not_before_ms, &mut attempts)? {
-                break (plan, server_now);
+                break (plan, server_now, keyboard);
             }
         };
         self.apply_bindings(&plan, record_atom, server_now)?;
@@ -140,6 +119,33 @@ impl X11 {
             .check()
             .map_err(unavailable)?;
         self.write_record(record_atom, &record, server_now).map_err(unavailable)
+    }
+
+    /// The Shift key and Caps Lock state for `mapping`. Fails with
+    /// `unsupported` for a keyboard state that would change the typed keys.
+    fn keyboard(&self, mapping: &GetKeyboardMappingReply) -> Result<Keyboard> {
+        let (state, group) = self.keyboard_state()?;
+        // Other groups have other levels.
+        if group != 0 {
+            return Err(DeviceError::Unsupported(
+                "X11 text input requires the first keyboard group".into(),
+            ));
+        }
+        let modifiers = self
+            .connection
+            .get_modifier_mapping()
+            .map_err(unavailable)?
+            .reply()
+            .map_err(unavailable)?;
+        let per_row = usize::from(modifiers.keycodes_per_modifier()).max(1);
+        let rows: Vec<&[u8]> = modifiers.keycodes.chunks(per_row).collect();
+        // A held Shift, Control, Alt or Super key would change each typed key.
+        keymap::keyboard(&self.layout(mapping), &rows, state).map_err(|e| {
+            DeviceError::Unsupported(match e {
+                ModifierError::Held => "X11 text input requires released modifier keys".into(),
+                ModifierError::Lock => "X11 text input supports Caps Lock but no other Lock modifier".into(),
+            })
+        })
     }
 
     /// The effective modifier mask and keyboard group. XKB reports the group
