@@ -292,6 +292,13 @@ Compare same-machine warm baselines, preserve independent decode/quality and
 lifecycle gates, and record every keep/discard with evidence. This loop does not
 authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
 
+### Documentation Standard
+
+- ASD-STE100 Simplified Technical English (STE) is the default language for all documentation. Write each new or changed document in STE. Follow [the STE rules](docs/style/ste-rules.md) and [the technical names](docs/style/technical-names.md).
+- This rule applies to `README.md`, install and setup guides, onboarding text, runbooks, test procedures, reference documents, plans and epics. It also applies to the body of an epic issue and to the procedure part of a PR body.
+- Code comments, commit messages, quoted tool output and historical documents in `docs/archive/` are not in the scope.
+- If you change part of an older document, write the changed part in STE. Do not convert the full document in an unrelated PR.
+
 ### Dependencies
 
 - Always check crates.io for the latest stable version before adding

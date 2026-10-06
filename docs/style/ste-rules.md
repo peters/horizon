@@ -1,21 +1,26 @@
 # Simplified Technical English rules for Horizon documents
 
-Horizon writes test procedures, setup guides and runbooks in ASD-STE100
-Simplified Technical English (STE). This file gives the rules that apply in this
-repository. It does not replace the specification. The free specification is
-available from [asd-ste100.org](https://www.asd-ste100.org/).
+Horizon writes its documentation in ASD-STE100 Simplified Technical English
+(STE). This file gives the rules that apply in this repository. It does not
+replace the specification. The free specification is available from
+[asd-ste100.org](https://www.asd-ste100.org/).
 
 ## Scope
 
-STE is mandatory for these documents:
+STE is the default for all documentation. It is mandatory for each new or
+changed document of these types:
 
+- `README.md` and the install, setup and onboarding guides.
 - Test procedures in `docs/testing/procedures/`.
 - Test reports in `docs/testing/reports/` (descriptive rules only).
-- Setup guides and runbooks, for example `scripts/device-smoke/README.md`.
-- Procedure sections in `AGENTS.md`.
+- Runbooks, for example `scripts/device-smoke/README.md`.
+- Reference and architecture documents.
+- Plans in `docs/plans/` and the body of an epic issue.
+- Procedure sections and new rules in `AGENTS.md`.
 
-STE is recommended for reference and architecture documents. Do not convert
-historical documents. Move them to `docs/archive/` instead.
+Code comments, commit messages and quoted tool output are not in the scope. If
+you change part of an older document, write the changed part in STE. Do not
+convert historical documents. Move them to `docs/archive/` instead.
 
 ## Words
 
