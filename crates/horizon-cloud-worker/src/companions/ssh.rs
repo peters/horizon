@@ -76,6 +76,9 @@ pub(super) fn checked_with_timeout(command: &mut Command, timeout: Duration) -> 
     String::from_utf8(output).map_err(|_| io::Error::other("Invalid companion output"))
 }
 
+/// Ends a probe configuration that `-F` selects, with the system file that `-F` skips.
+pub(super) const SYSTEM_INCLUDE: &str = "Host *\nInclude /etc/ssh/ssh_config\n";
+
 /// The root and agent readiness probes together. The controller allows a Connect
 /// request 45 seconds, which also covers its own SSH round trip to the source.
 const CONNECT_PROBES: Duration = Duration::from_secs(35);
@@ -155,21 +158,45 @@ impl Runtime {
             ssh_alias: ssh_alias.clone(),
             worktree: path_text(&worktree)?.into(),
         };
-        let published = files::write(&directory.join("config"), config.as_bytes())
-            .and_then(|()| self.update_config())
-            .and_then(|()| {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                self.verify_agent_access(&ssh_alias, &command, remaining)
-            })
-            .and_then(|()| files::write(&directory.join("connection.json"), &serde_json::to_vec(&response)?))
-            .and_then(|()| self.publish_agent_access());
-        if let Err(error) = published {
+        if let Err(error) = self.commit_connection(grant, &config, &response, &command, deadline) {
             // A failed Connect leaves no alias for root or agents. The original
             // error explains the refusal; the withdrawal is best effort.
             let _ = self.withdraw(grant);
             return Err(error);
         }
         Ok(response)
+    }
+
+    /// Publishes a probed connection. Agents get the alias only after the
+    /// connection record is written: their copies require that record, and their
+    /// readiness probe uses a staged configuration outside the published one. An
+    /// interruption at any step leaves agents without the alias of this grant.
+    pub(super) fn commit_connection(
+        &self,
+        grant: &str,
+        config: &str,
+        response: &Response,
+        command: &str,
+        deadline: Instant,
+    ) -> io::Result<()> {
+        let Response::Connected { ssh_alias, .. } = response else {
+            return Err(io::Error::other("Invalid companion connection"));
+        };
+        let directory = self.key_directory(grant);
+        // A replaced connection stops being agent-usable before its configuration changes.
+        files::remove(&directory.join("connection.json"))?;
+        files::remove_directory(&self.agent.join(grant))?;
+        files::write(&directory.join("config"), config.as_bytes())?;
+        self.update_config()?;
+        self.verify_agent_access(
+            grant,
+            ssh_alias,
+            command,
+            deadline.saturating_duration_since(Instant::now()),
+        )?;
+        files::write(&directory.join("connection.json"), &serde_json::to_vec(response)?)?;
+        self.publish_agent_access()?;
+        self.verify_published_alias(grant, ssh_alias, deadline.saturating_duration_since(Instant::now()))
     }
 
     fn require_available_alias(&self, grant: &str, alias: &str) -> io::Result<()> {
@@ -219,7 +246,7 @@ impl Runtime {
         let original = original.strip_prefix(&include).unwrap_or(&original);
         // -F suppresses the system file, so include it after the user file as ordinary SSH does.
         Ok(format!(
-            "{}{}\nHost *\nInclude /etc/ssh/ssh_config\n",
+            "{}{}\n{SYSTEM_INCLUDE}",
             self.combined_config(Some((path, candidate)))?,
             original
         ))

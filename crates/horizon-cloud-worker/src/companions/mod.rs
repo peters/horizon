@@ -239,8 +239,9 @@ impl Runtime {
     /// Removes the grant's alias for root and agent sessions. The identity stays
     /// until the caller confirms target revocation.
     fn withdraw(&self, grant: &str) -> io::Result<()> {
-        // The agent copy goes first, so a failed reconciliation cannot keep it.
+        // The agent copies go first, so a failed reconciliation cannot keep them.
         files::remove_directory(&self.agent.join(grant))?;
+        files::remove_directory(&self.staged_probe(grant))?;
         let directory = self.key_directory(grant);
         if directory.exists() {
             files::remove(&directory.join("config"))?;
@@ -255,8 +256,9 @@ impl Runtime {
         if directory.join("config").exists() || directory.join("connection.json").exists() {
             return Err(io::Error::other("Disconnect the companion before forgetting its key"));
         }
-        // Disconnect already withdrew the agent copy; this also clears an interrupted one.
+        // Disconnect already withdrew the agent copies; this also clears interrupted ones.
         files::remove_directory(&self.agent.join(grant))?;
+        files::remove_directory(&self.staged_probe(grant))?;
         files::remove_directory(&directory)?;
         Ok(Response::Forgotten)
     }

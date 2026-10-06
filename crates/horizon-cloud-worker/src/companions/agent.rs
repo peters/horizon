@@ -4,15 +4,16 @@
 //! directory. For an isolated worker, a root-owned copy that only the agent group
 //! can read is published under the agent directory, with a system SSH include
 //! that only the agent account matches. Root's SSH never applies it and agents
-//! cannot change it. This is trusted shell access, not credential isolation: an
-//! agent can copy the key, and a copy works until the target revokes the grant.
+//! cannot change it. Only a grant with a committed connection record is published.
+//! This is trusted shell access, not credential isolation: an agent can copy the
+//! key, and a copy works until the target revokes the grant.
 use super::{Busy, Runtime, files, path_text, ssh};
 use horizon_cloud_protocol::companion::{Access, Response};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     io,
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
     time::Duration,
 };
@@ -30,6 +31,13 @@ const CONNECTION: &str = "connection.json";
 impl Runtime {
     fn agent_group(&self) -> Option<u32> {
         self.agent_account.as_ref().map(|account| account.group)
+    }
+
+    /// The copy that the agent readiness probe of an unfinished Connect uses. A
+    /// grant ID has no `.`, so reconciliation never publishes this directory and
+    /// removes one that an interruption left.
+    pub(super) fn staged_probe(&self, grant: &str) -> PathBuf {
+        self.agent.join(format!("{grant}.probe"))
     }
 
     /// Refreshes the agent copies, for a worker that became isolated later, and then
@@ -51,9 +59,9 @@ impl Runtime {
         files::remove(&self.live.join("companions/catalog.json"))
     }
 
-    /// Makes the agent copy match the published root configuration. A grant that
-    /// is no longer connected, or that cannot be copied, loses its copied key, pin
-    /// and alias; one failure does not keep a withdrawn grant usable. The first
+    /// Makes the agent copy match the connected grants. A grant without a valid
+    /// connection record, or that cannot be copied, loses its copied key, pin and
+    /// alias; one failure does not keep a withdrawn grant usable. The first
     /// failure is reported after the reconciliation.
     pub(super) fn publish_agent_access(&self) -> io::Result<()> {
         let group = self.agent_group();
@@ -64,10 +72,11 @@ impl Runtime {
             let mut combined = String::new();
             for path in self.grant_configs()? {
                 match self.publish_grant(&path) {
-                    Ok((grant, config, files)) => {
+                    Ok(Some((grant, config, files))) => {
                         combined.push_str(&config);
                         published.insert(grant, files);
                     }
+                    Ok(None) => {}
                     Err(error) => {
                         first_error.get_or_insert(error);
                     }
@@ -110,8 +119,9 @@ impl Runtime {
 
     /// Copies the files that one grant's configuration at `path` names and returns
     /// the grant, that configuration rewritten to the copied paths, and the names
-    /// of the copied files.
-    fn publish_grant(&self, path: &Path) -> io::Result<(String, String, BTreeSet<String>)> {
+    /// of the copied files. A grant whose Connect did not write a connection
+    /// record for this alias is not published.
+    fn publish_grant(&self, path: &Path) -> io::Result<Option<(String, String, BTreeSet<String>)>> {
         let grant = path
             .parent()
             .and_then(Path::file_name)
@@ -119,11 +129,32 @@ impl Runtime {
             .filter(|grant| horizon_cloud::valid_id(grant))
             .ok_or_else(|| io::Error::other("Invalid companion grant"))?;
         let config = std::fs::read_to_string(path)?;
+        let record = match std::fs::read(self.key_directory(grant).join(CONNECTION)) {
+            Ok(record) => record,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let connected = match serde_json::from_slice(&record) {
+            Ok(Response::Connected { ssh_alias, .. }) => config.lines().next() == Some(&format!("Host {ssh_alias}")),
+            _ => false,
+        };
+        if !connected {
+            return Ok(None);
+        }
+        let destination = self.agent.join(grant);
+        let (rewritten, mut kept) = self.copy_grant(grant, &config, &destination)?;
+        files::write_with(&destination.join(CONNECTION), &record, SHARED_FILE, self.agent_group())?;
+        kept.insert(CONNECTION.to_owned());
+        Ok(Some((grant.to_owned(), rewritten, kept)))
+    }
+
+    /// Copies the key and the pin that `config` names into `destination` and
+    /// returns `config` rewritten to the copies and the names of the copies.
+    fn copy_grant(&self, grant: &str, config: &str, destination: &Path) -> io::Result<(String, BTreeSet<String>)> {
         let group = self.agent_group();
         let source = self.key_directory(grant);
-        let destination = self.agent.join(grant);
-        files::shared_directory(&destination, group)?;
-        let mut kept = BTreeSet::from([CONNECTION.to_owned()]);
+        files::shared_directory(destination, group)?;
+        let mut kept = BTreeSet::new();
         let mut rewritten = String::new();
         for line in config.lines() {
             let setting = line.split_whitespace().collect::<Vec<_>>();
@@ -148,12 +179,7 @@ impl Runtime {
                 }
             }
         }
-        match std::fs::read(source.join(CONNECTION)) {
-            Ok(bytes) => files::write_with(&destination.join(CONNECTION), &bytes, SHARED_FILE, group)?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => files::remove(&destination.join(CONNECTION))?,
-            Err(error) => return Err(error),
-        }
-        Ok((grant.to_owned(), rewritten, kept))
+        Ok((rewritten, kept))
     }
 
     /// OpenSSH reads the user file from the passwd home, which the agent account
@@ -174,9 +200,17 @@ impl Runtime {
     }
 
     /// Runs the readiness command as the agent account through the isolation
-    /// launcher, so Ready means that agent sessions can use the alias too.
+    /// launcher, so Ready means that agent sessions can use the alias too. The
+    /// probe reads a staged copy of the grant configuration, not the published
+    /// one, and the staged copy is removed before this returns.
     /// `timeout` is what remains of the Connect budget after the root probe.
-    pub(super) fn verify_agent_access(&self, ssh_alias: &str, command: &str, timeout: Duration) -> io::Result<()> {
+    pub(super) fn verify_agent_access(
+        &self,
+        grant: &str,
+        ssh_alias: &str,
+        command: &str,
+        timeout: Duration,
+    ) -> io::Result<()> {
         let (Some(launcher), Some(_)) = (&self.workspace_launcher, &self.agent_account) else {
             return Ok(());
         };
@@ -186,16 +220,63 @@ impl Runtime {
                 "Companion SSH access for agent sessions was not checked in time",
             ));
         }
-        let observed = ssh::checked_with_timeout(
-            Command::new(launcher).args(["agent", "ssh", ssh_alias, command]),
-            timeout,
-        )
-        .map_err(|error| io::Error::new(error.kind(), "Companion SSH access failed for agent sessions"))?;
+        let staged = self.staged_probe(grant);
+        let observed = self.stage_probe(grant, &staged).and_then(|probe| {
+            ssh::checked_with_timeout(
+                Command::new(launcher)
+                    .args(["agent", "ssh", "-F"])
+                    .arg(probe)
+                    .args([ssh_alias, command]),
+                timeout,
+            )
+            .map_err(|error| io::Error::new(error.kind(), "Companion SSH access failed for agent sessions"))
+        });
+        let removed = files::remove_directory(&staged);
+        let observed = observed?;
+        removed?;
         if observed.trim() == "true" {
             Ok(())
         } else {
             Err(io::Error::other("Companion SSH access failed for agent sessions"))
         }
+    }
+
+    /// Resolves the published alias as the agent account, without a connection,
+    /// so Ready also covers the system include that agent sessions use.
+    pub(super) fn verify_published_alias(&self, grant: &str, ssh_alias: &str, timeout: Duration) -> io::Result<()> {
+        let (Some(launcher), Some(_)) = (&self.workspace_launcher, &self.agent_account) else {
+            return Ok(());
+        };
+        let expected = format!("identityfile {}", path_text(&self.agent.join(grant).join("identity"))?);
+        let resolved =
+            ssh::checked_with_timeout(Command::new(launcher).args(["agent", "ssh", "-G", ssh_alias]), timeout)
+                .map_err(|error| {
+                    io::Error::new(error.kind(), "Companion SSH alias is not published for agent sessions")
+                })?;
+        if resolved.lines().any(|line| line == expected) {
+            Ok(())
+        } else {
+            Err(io::Error::other(
+                "Companion SSH alias is not published for agent sessions",
+            ))
+        }
+    }
+
+    /// Copies the root configuration of `grant` to `staged` for the agent probe
+    /// and returns the path of the staged configuration.
+    fn stage_probe(&self, grant: &str, staged: &Path) -> io::Result<PathBuf> {
+        let config = std::fs::read_to_string(self.key_directory(grant).join("config"))?;
+        files::shared_directory(&self.agent, self.agent_group())?;
+        files::remove_directory(staged)?;
+        let (rewritten, _) = self.copy_grant(grant, &config, staged)?;
+        let probe = staged.join("config");
+        files::write_with(
+            &probe,
+            format!("{rewritten}{}", ssh::SYSTEM_INCLUDE).as_bytes(),
+            SHARED_FILE,
+            self.agent_group(),
+        )?;
+        Ok(probe)
     }
 
     /// Agent sessions cannot take the companion lock. A connection record that

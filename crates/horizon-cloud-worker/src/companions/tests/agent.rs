@@ -15,27 +15,38 @@ fn isolated(root: &Path) -> Runtime {
     }
 }
 
-/// Connects `grant` as the companion transport does after a successful probe.
-fn connect(runtime: &Runtime, grant: &str, alias: &str, host: &str) {
+const COMMAND: &str = "git -C /w rev-parse --is-inside-work-tree";
+
+/// Prepares the identity and the pin of `grant` and returns its alias configuration.
+fn prepare(runtime: &Runtime, grant: &str, alias: &str, host: &str) -> String {
     runtime.apply(&Request::Identity { grant: grant.into() }).unwrap();
     let directory = runtime.key_directory(grant);
     let known_hosts = directory.join("known_hosts-pin");
     files::write(&known_hosts, b"horizon-companion-pair ssh-ed25519 AAAA\n").unwrap();
-    let ssh_alias = format!("companion-{alias}");
-    let config = ssh::alias_config(
-        &ssh_alias,
+    ssh::alias_config(
+        &format!("companion-{alias}"),
         &host.parse().unwrap(),
         22,
         &format!("horizon-companion-{grant}"),
         &directory.join("identity"),
         &known_hosts,
     )
-    .unwrap();
-    files::write(&directory.join("config"), config.as_bytes()).unwrap();
-    let response = Response::Connected {
-        ssh_alias,
+    .unwrap()
+}
+
+fn connected(grant: &str, alias: &str) -> Response {
+    Response::Connected {
+        ssh_alias: format!("companion-{alias}"),
         worktree: format!("/workspace/companions/worktrees/{grant}"),
-    };
+    }
+}
+
+/// Connects `grant` as the companion transport does after a successful probe.
+fn connect(runtime: &Runtime, grant: &str, alias: &str, host: &str) {
+    let config = prepare(runtime, grant, alias, host);
+    let directory = runtime.key_directory(grant);
+    files::write(&directory.join("config"), config.as_bytes()).unwrap();
+    let response = connected(grant, alias);
     files::write(
         &directory.join("connection.json"),
         &serde_json::to_vec(&response).unwrap(),
@@ -44,10 +55,16 @@ fn connect(runtime: &Runtime, grant: &str, alias: &str, host: &str) {
     runtime.update_config().unwrap();
 }
 
-/// Resolves `alias` as the agent account does: the system file includes the agent copy.
-fn resolve(runtime: &Runtime, root: &Path, alias: &str) -> String {
+/// The system file of the agent account, which includes the agent copy.
+fn system_config(runtime: &Runtime, root: &Path) -> PathBuf {
     let system = root.join("ssh_config");
     std::fs::write(&system, format!("Include {}\n", runtime.system_include.display())).unwrap();
+    system
+}
+
+/// Resolves `alias` as the agent account does.
+fn resolve(runtime: &Runtime, root: &Path, alias: &str) -> String {
+    let system = system_config(runtime, root);
     ssh::checked(Command::new("ssh").arg("-G").arg("-F").arg(&system).arg(alias)).unwrap()
 }
 
@@ -60,6 +77,27 @@ fn setting<'a>(resolved: &'a str, name: &str) -> &'a str {
 
 fn mode(path: &Path) -> u32 {
     std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// An isolation launcher that runs `script` with the launcher arguments.
+fn launcher(root: &Path, script: &str) -> PathBuf {
+    let path = root.join("launcher");
+    std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    path
+}
+
+/// Another test thread can briefly hold a new launcher script open while it forks.
+fn retry_busy<T>(operation: impl Fn() -> io::Result<T>) -> io::Result<T> {
+    for _ in 0..200 {
+        match operation() {
+            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+    operation()
 }
 
 #[test]
@@ -287,49 +325,156 @@ fn agent_inspection_reads_the_published_record_without_the_lock() {
 #[test]
 fn ready_requires_that_the_agent_account_can_use_the_alias() {
     let root = tempfile::tempdir().unwrap();
-    let launcher = root.path().join("launcher");
-    std::fs::write(
-        &launcher,
-        "#!/bin/sh\n[ \"$1 $2 $3\" = 'agent ssh companion-app' ] && [ \"$4\" = 'git -C /w rev-parse --is-inside-work-tree' ] && echo true\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let mut runtime = Runtime {
-        workspace_launcher: Some(launcher),
-        ..isolated(root.path())
-    };
-    let command = "git -C /w rev-parse --is-inside-work-tree";
+    let mut runtime = isolated(root.path());
+    let staged = runtime.staged_probe("pair");
+    runtime.workspace_launcher = Some(launcher(
+        root.path(),
+        &format!(
+            "[ \"$1 $2 $3 $5\" = 'agent ssh -F companion-app' ] && [ \"$4\" = '{}/config' ] && [ \"$6\" = '{COMMAND}' ] && echo true",
+            staged.display()
+        ),
+    ));
+    let config = prepare(&runtime, "pair", "app", "127.0.0.1");
+    files::write(&runtime.key_directory("pair").join("config"), config.as_bytes()).unwrap();
     let verify = |runtime: &Runtime, alias: &str| {
-        // Another test thread can briefly hold the new script open while it forks.
-        for _ in 0..200 {
-            match runtime.verify_agent_access(alias, command, Duration::from_secs(30)) {
-                Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                result => return result,
-            }
-        }
-        runtime.verify_agent_access(alias, command, Duration::from_secs(30))
+        retry_busy(|| runtime.verify_agent_access("pair", alias, COMMAND, Duration::from_secs(30)))
     };
     verify(&runtime, "companion-app").unwrap();
+    assert!(!staged.exists(), "the staged probe copy is removed after the probe");
     assert!(verify(&runtime, "companion-other").is_err());
+    assert!(!staged.exists(), "a failed probe also removes the staged copy");
     // An exhausted Connect budget refuses Ready without waiting.
     assert!(
         runtime
-            .verify_agent_access("companion-app", command, Duration::ZERO)
+            .verify_agent_access("pair", "companion-app", COMMAND, Duration::ZERO)
             .is_err()
     );
     runtime.workspace_launcher = Some("/usr/bin/false".into());
     assert!(
         runtime
-            .verify_agent_access("companion-app", command, Duration::from_secs(30))
+            .verify_agent_access("pair", "companion-app", COMMAND, Duration::from_secs(30))
+            .is_err()
+    );
+    assert!(
+        !runtime.agent.join("pair").exists(),
+        "a probe never publishes the grant"
+    );
+    // An alias that the published configuration does not resolve refuses Ready.
+    assert!(
+        runtime
+            .verify_published_alias("pair", "companion-app", Duration::from_secs(30))
             .is_err()
     );
     // Workers without isolation have no separate agent account to check.
     runtime.agent_account = None;
     runtime
-        .verify_agent_access("companion-app", command, Duration::from_secs(30))
+        .verify_agent_access("pair", "companion-app", COMMAND, Duration::from_secs(30))
         .unwrap();
+    runtime
+        .verify_published_alias("pair", "companion-app", Duration::from_secs(30))
+        .unwrap();
+}
+
+#[test]
+fn an_interrupted_connect_never_publishes_its_grant_to_agents() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runtime = isolated(root.path());
+    connect(&runtime, "other", "service", "127.0.0.2");
+    // The agent probe saves the worker state, as an interruption during the probe
+    // leaves it. The final check resolves the alias through the agent system file.
+    let snapshot = root.path().join("snapshot");
+    let system = system_config(&runtime, root.path());
+    runtime.workspace_launcher = Some(launcher(
+        root.path(),
+        &format!(
+            "if [ \"$3\" = -G ]; then exec ssh -G -F '{}' \"$4\"; fi\nmkdir '{snapshot}' && cp -a '{}' '{}' '{snapshot}/' && echo true",
+            system.display(),
+            runtime.live.display(),
+            runtime.agent.display(),
+            snapshot = snapshot.display()
+        ),
+    ));
+    let config = prepare(&runtime, "pair", "app", "127.0.0.1");
+    let response = connected("pair", "app");
+    retry_busy(|| {
+        runtime.commit_connection(
+            "pair",
+            &config,
+            &response,
+            COMMAND,
+            std::time::Instant::now() + Duration::from_secs(30),
+        )
+    })
+    .unwrap();
+    assert!(runtime.agent.join("pair/connection.json").exists());
+    assert!(!runtime.staged_probe("pair").exists());
+    assert_eq!(
+        setting(&resolve(&runtime, root.path(), "companion-app"), "hostname"),
+        "127.0.0.1"
+    );
+
+    // During the probe, only the staged copy named the alias.
+    let saved_agent = snapshot.join("agent");
+    let saved_grant = snapshot.join("run/companions/pair");
+    assert!(saved_grant.join("config").exists() && !saved_grant.join("connection.json").exists());
+    assert!(!saved_agent.join("pair").exists());
+    assert!(
+        !std::fs::read_to_string(saved_agent.join("config"))
+            .unwrap()
+            .contains("companion-app")
+    );
+    let staged = ssh::checked(
+        Command::new("ssh")
+            .args(["-G", "-F"])
+            .arg(saved_agent.join("pair.probe/config"))
+            .arg("companion-app"),
+    )
+    .unwrap();
+    assert_eq!(setting(&staged, "hostname"), "127.0.0.1");
+    assert_eq!(
+        setting(&staged, "identityfile"),
+        runtime.staged_probe("pair").join("identity").to_str().unwrap()
+    );
+
+    // The worker stops after the probe-config write and before connection.json.
+    for (saved, live) in [(snapshot.join("run"), &runtime.live), (saved_agent, &runtime.agent)] {
+        std::fs::remove_dir_all(live).unwrap();
+        std::fs::rename(saved, live).unwrap();
+    }
+    runtime.publish_catalog_locked(b"{}").unwrap();
+    assert!(
+        !runtime.agent.join("pair").exists(),
+        "no key copy for an unfinished Connect"
+    );
+    assert!(
+        !runtime.staged_probe("pair").exists(),
+        "reconciliation removes the staged copy"
+    );
+    let published = std::fs::read_to_string(runtime.agent.join("config")).unwrap();
+    assert!(!published.contains("companion-app") && published.contains("companion-service"));
+    assert_eq!(
+        setting(&resolve(&runtime, root.path(), "companion-app"), "hostname"),
+        "companion-app",
+        "the alias does not resolve for agents"
+    );
+    assert!(runtime.agent.join("other/identity").exists());
+    assert!(runtime.agent.join("catalog.json").exists());
+
+    // A record for another alias does not publish this configuration either.
+    files::write(
+        &runtime.key_directory("pair").join("connection.json"),
+        &serde_json::to_vec(&connected("pair", "renamed")).unwrap(),
+    )
+    .unwrap();
+    runtime.publish_agent_access().unwrap();
+    assert!(!runtime.agent.join("pair").exists());
+
+    // Revocation still removes everything of the grant.
+    runtime.apply(&Request::Disconnect { grant: "pair".into() }).unwrap();
+    runtime.apply(&Request::Forget { grant: "pair".into() }).unwrap();
+    assert!(!runtime.key_directory("pair").exists());
+    assert!(!runtime.agent.join("pair").exists());
+    assert!(runtime.agent.join("other/identity").exists());
 }
 
 #[test]

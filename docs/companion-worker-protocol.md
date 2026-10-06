@@ -54,6 +54,7 @@ the agent user in `/run/horizon-companions`:
 | `<grant>/identity` | root, group 10001, `0640` | A copy of the private key of the grant. |
 | `<grant>/known_hosts-<key>` | root, group 10001, `0640` | The host-key pin of the target. |
 | `<grant>/connection.json` | root, group 10001, `0640` | The alias and the worktree of the grant. |
+| `<grant>.probe` | root, group 10001, `0750` | A temporary copy for the agent probe of `connect`. |
 | `catalog.json` | root, group 10001, `0640` | The discovery catalog. |
 
 OpenSSH reads the user file from the home directory in passwd, not from
@@ -63,8 +64,23 @@ This file includes `/run/horizon-companions/config` only for the agent user
 copies. The agent user can read the copies but cannot change them.
 
 Before `connect` reports Ready, the source runs the readiness probe a second time
-as the agent user. If that probe fails, the source removes the alias and reports
-an error. `disconnect` removes the alias, the key copy and the pin copy for the
+as the agent user. This probe uses a temporary copy in `<grant>.probe`. That copy
+is not in `config` or in the catalog, and the source removes it after the probe.
+If that probe fails, the source removes the alias and reports an error.
+
+The source publishes the copies of a grant only when `connection.json` of the
+grant is a `connected` record for the same alias. `connect` writes this record
+after the two probes. If `connect` stops before it writes the record, the agent
+user gets no alias and no key copy. The next reconciliation removes a temporary
+copy that remains.
+
+After `connect` publishes the copies, it resolves the alias as the agent user
+with `ssh -G`. This examines the system include without a connection. If
+`connect` stops after it writes the record, both probes passed for the grant.
+The next reconciliation then publishes the grant. A later `connect` or
+`disconnect` replaces or removes it.
+
+`disconnect` removes the alias, the key copy and the pin copy for the
 agent user. If the source cannot copy the files of a grant, it removes that copy
 and reports an error. `forget` also removes a copy that remains after an
 interrupted disconnect. Catalog publication refreshes the copies first. If that
