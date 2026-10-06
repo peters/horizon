@@ -379,3 +379,32 @@ fn legacy_manifests_deserialize_without_a_workspace_stamp() {
         "a stamp without a host instance never matches a live host"
     );
 }
+
+#[test]
+fn an_assigned_host_instance_is_adopted_once_and_never_replaced() {
+    let cell = OnceLock::new();
+    assert_eq!(
+        configure_host_instance_in(&cell, "").unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert_eq!(
+        configure_host_instance_in(&cell, "bad\ninstance").unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert!(cell.get().is_none(), "an invalid value assigns nothing");
+    configure_host_instance_in(&cell, HOST_A).unwrap();
+    configure_host_instance_in(&cell, HOST_A).unwrap();
+    assert_eq!(
+        configure_host_instance_in(&cell, HOST_B).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(cell.get().map(String::as_str), Some(HOST_A));
+
+    let generated = OnceLock::new();
+    generated.get_or_init(|| "generated".to_owned());
+    assert_eq!(
+        configure_host_instance_in(&generated, HOST_A).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists,
+        "an identity already in use is never replaced"
+    );
+}
