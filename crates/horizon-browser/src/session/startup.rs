@@ -4,9 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
 use crate::cdp::CdpLink;
-use crate::disclosure::{
-    CHROMIUM_DISCLOSURE_BOOTSTRAP_URL, CHROMIUM_USER_AGENT_METADATA_EXPRESSION, chromium_user_agent_needs_override,
-};
+use crate::disclosure::{CHROMIUM_DISCLOSURE_BOOTSTRAP_URL, chromium_user_agent_needs_override};
 use crate::frames::FrameSlot;
 use crate::process::{ChromeError, ChromeProcess, ChromeProcessControl};
 use crate::{AutomationDisclosurePolicy, BrowserConfig};
@@ -17,6 +15,8 @@ use super::{
     BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
     run_loop,
 };
+
+mod metadata;
 
 const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
 const DEVTOOLS_PORT_REAP_FAILURE: &str =
@@ -367,28 +367,7 @@ fn read_disclosure_metadata_from_target(
         .get("sessionId")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "Target.attachToTarget omitted sessionId".to_string())?;
-    for (method, params) in [
-        ("Runtime.enable", serde_json::json!({})),
-        (
-            "Runtime.evaluate",
-            serde_json::json!({
-                "expression": CHROMIUM_USER_AGENT_METADATA_EXPRESSION,
-                "awaitPromise": true,
-                "returnByValue": true,
-            }),
-        ),
-    ] {
-        let result = link
-            .call_and_drain_until(CALL_TIMEOUT, method, &params, Some(session_id), || {
-                stop_requested.load(Ordering::Acquire)
-            })
-            .result
-            .map_err(|error| format!("{method}: {error}"))?;
-        if method == "Runtime.evaluate" {
-            return Ok(result);
-        }
-    }
-    Err("Runtime.evaluate did not return native user-agent metadata".to_string())
+    metadata::read(link, stop_requested, session_id, CALL_TIMEOUT)
 }
 
 fn call_during_startup(
