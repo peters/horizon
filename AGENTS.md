@@ -43,7 +43,7 @@ No Rust toolchain or system headers are needed for this path. Release binaries a
 
 #### Prerequisites
 
-- **Rust stable ≥ 1.95** (edition 2024). Install via [rustup](https://rustup.rs) if not present.
+- **Rust stable ≥ 1.95** (edition 2024). Install via [rustup](https://rustup.rs) if not present. `rust-toolchain.toml` temporarily pins Rust 1.98.1 until [issue #1350](https://github.com/peters/horizon/issues/1350) is closed. `rustup` installs the pinned version automatically.
 - **Git LFS** for the bundled fonts and assets. The build stops if a font is still an LFS pointer.
 - **Linux only:** the eframe/wgpu rendering stack needs system headers. Install them before `cargo build`:
   - Debian/Ubuntu: `sudo apt install -y build-essential pkg-config libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libgl-dev cmake nasm`

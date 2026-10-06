@@ -1,3 +1,5 @@
+# Temporary pin: Clippy 1.99 adds `assert_is_empty`, which the test code does
+# not pass yet. Return to `stable` when #1350 is closed.
 [toolchain]
-channel = "stable"
+channel = "1.98.1"
 components = ["rustfmt", "clippy"]
