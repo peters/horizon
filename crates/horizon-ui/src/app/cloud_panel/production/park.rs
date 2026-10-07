@@ -506,9 +506,13 @@ impl HorizonApp {
             let to_canvas = crate::app::view::canvas_scene_transform(canvas, self.canvas_view).inverse();
             let scale = 1.0 / self.canvas_view.zoom.max(f32::EPSILON);
             let body = to_canvas * body;
-            let painter = ctx
-                .layer_painter(egui::LayerId::new(order, egui::Id::new(("panel", id.0))))
-                .with_clip_rect(body);
+            // The clip is set, not intersected with the default screen clip: a body in
+            // canvas coordinates can lie far outside the screen rectangle.
+            let painter = egui::Painter::new(
+                ctx.clone(),
+                egui::LayerId::new(order, egui::Id::new(("panel", id.0))),
+                body,
+            );
             let strip =
                 egui::Rect::from_min_max(egui::pos2(body.left(), body.bottom() - STRIP_HEIGHT * scale), body.max);
             painter.rect_filled(strip, 0.0, crate::theme::alpha(crate::theme::PANEL_BG_ALT(), 235));

@@ -10,14 +10,18 @@ const MEMBERS: [&str; 2] = ["one", "two"];
 
 /// A ready cloud with two shell members that wait to attach, as after a restart.
 fn ready_cloud() -> (tempfile::TempDir, HorizonApp) {
-    let (temp, mut app) = test_app();
+    let (temp, app) = test_app();
+    ready_cloud_in(temp, app, [0.0, 0.0])
+}
+
+fn ready_cloud_in(temp: tempfile::TempDir, mut app: HorizonApp, origin: [f32; 2]) -> (tempfile::TempDir, HorizonApp) {
     let profile = CloudConfig::parse(
         "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker\n    cpu: 4\n    memory_gb: 8\n",
     )
     .unwrap()
     .profiles["dev"]
         .clone();
-    let mut group = CloudGroup::new(1, "Cloud".into(), "workspace".into(), temp.path().into(), [0.0, 0.0]);
+    let mut group = CloudGroup::new(1, "Cloud".into(), "workspace".into(), temp.path().into(), origin);
     group.remote = Some(CloudLaunch {
         deployment_started: true,
         id: "fixture".into(),
@@ -425,4 +429,75 @@ fn a_cloud_in_view_at_a_later_ready_restores_missing_sessions_live() {
             .tracker
             .is_some_and(|tracker| !tracker.is_parked())
     );
+}
+
+#[test]
+fn the_strip_is_painted_over_a_parked_panel_in_view() {
+    let (temp, ctx, app) = crate::app::test_support::test_app_with_config_and_startup(
+        &horizon_core::Config::default(),
+        horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        },
+    );
+    // Far down the canvas, as in practice: the canvas coordinates of the panel body
+    // lie outside the screen rectangle, which a screen clip would cut away.
+    let (_temp, mut app) = ready_cloud_in(temp, app, [0.0, 3000.0]);
+    app.root_viewport_stabilizer = None;
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    assert_eq!(wait_of(&app, "one"), Some(CloudWait::Parked));
+    // Keep it parked while it is drawn, so the strip shows.
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .parking
+        .policy
+        .attach_dwell = Duration::from_hours(1);
+    let id = member(&app, "one");
+    let frame = |app: &mut HorizonApp| {
+        let output = crate::app::test_support::run_app_frame_with_input(
+            &ctx,
+            app,
+            crate::app::test_support::raw_input([1400.0, 900.0], None),
+        );
+        output.shapes.iter().find_map(|clipped| {
+            let mut text = String::new();
+            collect_text(&clipped.shape, &mut text);
+            text.starts_with("Parked ·")
+                .then(|| (clipped.shape.visual_bounding_rect(), clipped.clip_rect))
+        })
+    };
+    // Let startup settle the view, then move the panel out of view, as before a pan.
+    for _ in 0..3 {
+        frame(&mut app);
+    }
+    app.canvas_view = horizon_core::CanvasViewState::new([-50_000.0, 0.0], 0.8);
+    for _ in 0..2 {
+        assert!(frame(&mut app).is_none(), "no strip while the panel is out of view");
+    }
+    app.canvas_view = horizon_core::CanvasViewState::new([0.0, -2300.0], 0.8);
+    // The first frame that draws the panel also draws its strip.
+    let strip = frame(&mut app);
+    let body = app.terminal_body_screen_rects[&id];
+    let (bounds, clip) = strip.expect("the strip is painted");
+    eprintln!("body {body:?} strip {bounds:?} clip {clip:?}");
+    assert!(clip.intersects(bounds), "the strip is not clipped away");
+    assert!(
+        body.expand(1.0).contains_rect(bounds),
+        "the strip lies in the panel body"
+    );
+    assert!(
+        body.bottom() - bounds.bottom() < 12.0,
+        "the strip sits at the bottom of the body"
+    );
+}
+
+fn collect_text(shape: &egui::Shape, text: &mut String) {
+    match shape {
+        egui::Shape::Text(shape) => text.push_str(&shape.galley.job.text),
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_text(shape, text)),
+        _ => {}
+    }
 }
