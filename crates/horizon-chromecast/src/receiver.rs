@@ -23,6 +23,9 @@ pub struct ReceiverStatus {
     #[serde(default)]
     pub applications: Vec<Application>,
     pub volume: Option<Volume>,
+    /// The TV is in standby; launching an application would switch it on.
+    #[serde(default)]
+    pub is_stand_by: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -33,6 +36,9 @@ pub struct Application {
     pub display_name: String,
     pub session_id: String,
     pub transport_id: String,
+    /// The platform's idle screen (a backdrop), not an application someone runs.
+    #[serde(default)]
+    pub is_idle_screen: bool,
     #[serde(default)]
     namespaces: Vec<Namespace>,
 }

@@ -696,11 +696,23 @@ fn a_confirmed_unload_after_playing_ends_the_cast_without_stop() {
     assert!(!log.iter().any(|line| line.ends_with(" STOP")), "{log:#?}");
 }
 
+/// What a sender finds when it reconnects to [`dropping_receiver`].
+#[derive(Clone, Copy, PartialEq)]
+enum AfterDrop {
+    /// Our application and media session still run.
+    StillRunning,
+    /// The receiver restarted: only its idle screen shows.
+    Restarted,
+    /// Another sender's application took over.
+    TakenOver,
+    /// The TV went to standby.
+    Standby,
+}
+
 /// A receiver that drops the sender's TCP connection, without a TLS
 /// `close_notify`, right after the first LOAD reply, as a TV can mid-playback.
-/// The second connection finds the application still running unless the
-/// receiver `restarted`; it never drops again.
-fn dropping_receiver(listener: TcpListener, config: Arc<ServerConfig>, restarted: bool) -> JoinHandle<Vec<String>> {
+/// It never drops the second connection.
+fn dropping_receiver(listener: TcpListener, config: Arc<ServerConfig>, after: AfterDrop) -> JoinHandle<Vec<String>> {
     std::thread::spawn(move || {
         let mut log = Vec::new();
         listener.set_nonblocking(true).unwrap();
@@ -719,7 +731,7 @@ fn dropping_receiver(listener: TcpListener, config: Arc<ServerConfig>, restarted
             socket.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             let mut stream = StreamOwned::new(ServerConnection::new(config.clone()).unwrap(), socket);
             let (mut inbound, mut chunk) = (Vec::new(), [0; 4096]);
-            if connection == 1 && restarted {
+            if connection == 1 && after != AfterDrop::StillRunning {
                 running = false;
             }
             'messages: loop {
@@ -748,7 +760,19 @@ fn dropping_receiver(listener: TcpListener, config: Arc<ServerConfig>, restarted
                                 "STOP" => false,
                                 _ => running,
                             };
-                            send(&mut stream, to, NS_RECEIVER, &reply(&request, app_status(running)));
+                            let mut status = app_status(running);
+                            if connection == 1 && !running {
+                                let (other, idle) = match after {
+                                    AfterDrop::TakenOver => ("233637DE", false),
+                                    _ => ("E8C28D3C", true),
+                                };
+                                status["status"]["applications"] = json!([{
+                                    "appId": other, "displayName": "Other", "sessionId": "other-1",
+                                    "transportId": "other-1", "isIdleScreen": idle, "namespaces": []
+                                }]);
+                                status["status"]["isStandBy"] = json!(after == AfterDrop::Standby);
+                            }
+                            send(&mut stream, to, NS_RECEIVER, &reply(&request, status));
                         }
                         (NS_MEDIA, "LOAD") if connection == 0 => {
                             send(&mut stream, to, NS_MEDIA, &reply(&request, playing));
@@ -782,7 +806,7 @@ fn dropping_receiver(listener: TcpListener, config: Arc<ServerConfig>, restarted
 #[test]
 fn a_dropped_connection_is_rejoined_and_playback_goes_on() {
     let (address, listener, config) = listen();
-    let (state, log) = cast_against(dropping_receiver(listener, config, false), address);
+    let (state, log) = cast_against(dropping_receiver(listener, config, AfterDrop::StillRunning), address);
     assert_eq!(state, LiveState::Playing, "{log:#?}");
     assert!(
         log.contains(&format!("1 {NS_MEDIA} transport-1 GET_STATUS")),
@@ -802,13 +826,27 @@ fn a_dropped_connection_is_rejoined_and_playback_goes_on() {
 #[test]
 fn a_receiver_that_restarts_under_the_cast_is_launched_and_loaded_again() {
     let (address, listener, config) = listen();
-    let (state, log) = cast_against(dropping_receiver(listener, config, true), address);
+    let (state, log) = cast_against(dropping_receiver(listener, config, AfterDrop::Restarted), address);
     assert_eq!(state, LiveState::Playing, "{log:#?}");
     assert!(
         log.contains(&format!("1 {NS_RECEIVER} {PLATFORM_RECEIVER} LAUNCH")),
         "{log:#?}"
     );
     assert!(log.contains(&format!("1 {NS_MEDIA} transport-1 LOAD")), "{log:#?}");
+}
+
+#[test]
+fn a_dropped_connection_never_relaunches_over_another_application_or_a_tv_in_standby() {
+    for after in [AfterDrop::TakenOver, AfterDrop::Standby] {
+        let (address, listener, config) = listen();
+        let (state, log) = cast_against(dropping_receiver(listener, config, after), address);
+        assert_eq!(state, LiveState::Ended, "{log:#?}");
+        assert!(
+            !log.iter()
+                .any(|line| line.starts_with('1') && (line.ends_with(" LAUNCH") || line.ends_with(" STOP"))),
+            "{log:#?}"
+        );
+    }
 }
 
 #[test]
