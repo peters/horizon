@@ -219,6 +219,52 @@ fn focus_attaches_a_parked_cloud_at_once_and_a_stop_overrides_parking() {
 }
 
 #[test]
+fn a_middle_click_paste_into_a_parked_member_attaches_it_and_waits_for_its_terminal() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    assert_eq!(wait_of(&app, "two"), Some(CloudWait::Parked));
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .parking
+        .policy
+        .attach_dwell = Duration::from_hours(1);
+    let paste = crate::primary_selection::PrimarySelectionPaste {
+        panel_id: member(&app, "two"),
+        text: "synthetic paste".into(),
+    };
+    app.deliver_primary_pastes(vec![paste]);
+    assert_eq!(
+        app.board.focused,
+        Some(member(&app, "two")),
+        "the paste brings the member into use"
+    );
+    assert_eq!(
+        app.primary_selection.held.len(),
+        1,
+        "the placeholder must not take the paste"
+    );
+    app.deliver_primary_pastes(Vec::new());
+    assert_eq!(
+        app.primary_selection.held.len(),
+        1,
+        "it waits while the member is parked"
+    );
+
+    app.sync_cloud_parking();
+    app.sync_cloud_presentations();
+    assert!(attached(&app, "two"));
+    app.deliver_primary_pastes(Vec::new());
+    assert!(
+        app.primary_selection.held.is_empty(),
+        "the attached terminal takes the paste"
+    );
+}
+
+#[test]
 fn the_strip_names_the_reported_status() {
     let (_temp, mut app) = ready_cloud();
     app.board.focused = None;

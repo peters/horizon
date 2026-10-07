@@ -301,7 +301,7 @@ fn spawn_restore_failure_snapshot_terminal(
     replay_bytes: Vec<u8>,
 ) -> Result<Terminal> {
     let (program, args) = disconnected_snapshot_launch_command();
-    Terminal::spawn(TerminalSpawnOptions {
+    let mut terminal = Terminal::spawn(TerminalSpawnOptions {
         program,
         args,
         cwd: None,
@@ -314,7 +314,10 @@ fn spawn_restore_failure_snapshot_terminal(
         replay_bytes,
         env: HashMap::new(),
         kitty_keyboard: kitty_keyboard_for_kind(kind),
-    })
+    })?;
+    // Its shell exits at once; the PTY goes with it and the replayed screen stays.
+    terminal.release_when_exited();
+    Ok(terminal)
 }
 
 /// The terminal of a cloud placeholder for `panel` that says `wait`.

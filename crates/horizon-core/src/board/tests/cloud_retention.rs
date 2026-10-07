@@ -300,6 +300,15 @@ fn running_cloud_member_parks_with_its_last_screen() {
         "the placeholder screen must not reset the reported status"
     );
     assert!(text(&board).contains("AGENT SCREEN"), "{}", text(&board));
+    let released = |board: &Board| board.panel(member).unwrap().terminal().unwrap().pty_released();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !released(&board) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the placeholder must release its PTY"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 
     // A stop replaces the parked screen, and a later park says why the panel waits.
     let panel = board.panel_mut(member).unwrap();
@@ -307,6 +316,14 @@ fn running_cloud_member_parks_with_its_last_screen() {
     assert!(panel.park_cloud().unwrap());
     assert_eq!(panel.cloud_wait(), Some(CloudWait::Parked));
     assert!(text(&board).contains("This panel is parked."), "{}", text(&board));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !released(&board) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a parked placeholder must release its PTY"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 #[cfg(unix)]

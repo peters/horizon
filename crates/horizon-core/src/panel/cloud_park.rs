@@ -1,5 +1,5 @@
-//! Parking of cloud members. A parked member has no SSH client, PTY or terminal
-//! grid of its own; its agent continues in tmux on the worker.
+//! Parking of cloud members. A parked member has no SSH client or PTY; it keeps
+//! only a grid with its last screen. Its agent continues in tmux on the worker.
 use super::{CloudWait, Panel, spawn};
 use crate::{agents::AgentStatus, editor::PanelContent, error::Result};
 

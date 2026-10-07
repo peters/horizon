@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use egui::Context;
-use horizon_core::{ClipboardTarget, Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
+use horizon_core::{ClipboardTarget, CloudWait, Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
+use crate::primary_selection::PrimarySelectionPaste;
 use crate::theme;
 
 use super::HorizonApp;
@@ -156,10 +157,41 @@ impl HorizonApp {
     }
 
     fn poll_primary_selection_paste(&mut self) {
+        let mut pastes = Vec::new();
         while let Some(paste) = self.primary_selection.try_recv_paste() {
+            pastes.push(paste);
+        }
+        self.deliver_primary_pastes(pastes);
+    }
+
+    /// Writes `pastes` and the held ones to their terminals. A paste into a parked
+    /// cloud member focuses it, so it attaches at once, and waits for its terminal.
+    pub(super) fn deliver_primary_pastes(&mut self, pastes: Vec<PrimarySelectionPaste>) {
+        let held = std::mem::take(&mut self.primary_selection.held);
+        for (paste, was_held) in held
+            .into_iter()
+            .map(|paste| (paste, true))
+            .chain(pastes.into_iter().map(|paste| (paste, false)))
+        {
             let Some(panel) = self.board.panel_mut(paste.panel_id) else {
                 continue;
             };
+            match panel.cloud_wait() {
+                None => {}
+                Some(CloudWait::Parked) => {
+                    if !was_held {
+                        self.board.focus(paste.panel_id);
+                    }
+                    self.primary_selection.held.push(paste);
+                    continue;
+                }
+                // An attach that has to reconnect first keeps the paste until it is back.
+                Some(CloudWait::Reconnecting) if was_held => {
+                    self.primary_selection.held.push(paste);
+                    continue;
+                }
+                Some(_) => continue,
+            }
             let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
                 continue;
             };
