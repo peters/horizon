@@ -15,7 +15,7 @@ pub struct ParkPolicy {
 impl Default for ParkPolicy {
     fn default() -> Self {
         Self {
-            attach_dwell: Duration::from_millis(400),
+            attach_dwell: Duration::from_secs(1),
             park_grace: Duration::from_mins(2),
         }
     }
