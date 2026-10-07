@@ -133,7 +133,11 @@ fn run() -> Result<(), String> {
     let aac_frame = Duration::from_secs(1024) / 48_000;
     let mut next_audio = 0u32;
     let live = LiveCast::start(address, options).map_err(|e| e.to_string())?;
-    println!("serving {} ({:.2} s segments)", live.url(), segment.as_secs_f32());
+    if mirror {
+        println!("mirroring to {address}");
+    } else {
+        println!("serving {} ({:.2} s segments)", live.url(), segment.as_secs_f32());
+    }
     let started = Instant::now();
     let mut last_state = None;
     for (index, (unit, keyframe)) in units.iter().cycle().enumerate() {

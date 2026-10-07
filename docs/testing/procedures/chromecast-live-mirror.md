@@ -76,7 +76,7 @@ proves that sound plays and that a receiver restart does not end the cast.
    cargo run -p horizon-chromecast --example live -- --mirror <receiver-ip> live-test.h264 30
    ```
 
-   Result: The terminal shows `serving  (0.50 s segments)`, with no URL.
+   Result: The terminal shows `mirroring to <receiver-ip>:8009`.
 
 2. Look at the terminal.
 
