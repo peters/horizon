@@ -3,7 +3,10 @@ use super::{HorizonApp, Production};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, LayerId, Layout, Order, RichText, Stroke, TextEdit, Ui, Vec2};
-use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement};
+use horizon_core::{
+    ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement,
+    cloud_runtime::repository::launch::Configuration,
+};
 use std::path::{Path, PathBuf};
 
 pub(super) mod checks;
@@ -238,12 +241,15 @@ impl HorizonApp {
             form.pending_creation.is_none() && !form.launch.submitted && form.launch.watch.is_none(),
             |ui| {
                 actions.repository = fields(ui, form, &mut actions.create, refocus_repository);
-                if !form.launch.loading()
-                    && form.profiles.is_none()
-                    && !checks::source_step(form)
-                    && super::repository_setup::render(ui, form)
-                {
-                    actions.repository = RepositoryAction::Setup;
+                if !form.launch.loading() && form.profiles.is_none() && !checks::source_step(form) {
+                    match super::repository_setup::render(ui, form) {
+                        super::repository_setup::Choice::None => {}
+                        super::repository_setup::Choice::SetupAgent => actions.repository = RepositoryAction::Setup,
+                        super::repository_setup::Choice::QuickStart => {
+                            super::repository_setup::set_configuration(form, Configuration::QuickStart);
+                            actions.repository = RepositoryAction::Load;
+                        }
+                    }
                 }
             },
         );
@@ -359,6 +365,11 @@ impl HorizonApp {
         if form.repository != repository {
             form.repository = repository.into_owned();
             form.profiles = None;
+            // Quick start is chosen for one repository; another one is read as committed.
+            if form.launch.configuration == Configuration::QuickStart {
+                form.launch.configuration = Configuration::Committed;
+            }
+            form.launch.unconfigured = false;
             form.selected_profile.clear();
             form.size = None;
             form.placement = Placement::default();
@@ -476,6 +487,7 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         false
     } else if form.profiles.is_some() {
         profiles::field(ui, form);
+        super::repository_setup::quick_start_note(ui, form);
         ui.add_space(12.0);
         form.tailnets.choice(ui, &mut form.tailnet);
         ui.add_space(12.0);
@@ -551,19 +563,14 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
             .size(12.0)
             .color(theme::FG_SOFT()),
     );
-    let mut local =
-        form.launch.configuration == horizon_core::cloud_runtime::repository::launch::Configuration::LocalImageOnly;
+    let mut local = form.launch.configuration == Configuration::LocalImageOnly;
     if ui.checkbox(&mut local, "Use local image-only settings").changed() {
-        form.launch.configuration = if local {
-            horizon_core::cloud_runtime::repository::launch::Configuration::LocalImageOnly
+        let configuration = if local {
+            Configuration::LocalImageOnly
         } else {
-            horizon_core::cloud_runtime::repository::launch::Configuration::Committed
+            Configuration::Committed
         };
-        form.selected_profile.clear();
-        form.size = None;
-        form.placement = Placement::default();
-        form.provider = None;
-        form.launch.siblings = siblings::State::default();
+        super::repository_setup::set_configuration(form, configuration);
         changed = true;
     }
     if local {
@@ -580,6 +587,10 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
                 .corner_radius(8),
         )
         .clicked();
+    // Reading the file leaves quick start for the repository's own settings.
+    if load && form.launch.configuration == Configuration::QuickStart {
+        super::repository_setup::set_configuration(form, Configuration::Committed);
+    }
     if form.profiles.is_none() {
         ui.label(
             RichText::new("Read the repository settings to choose a profile.")
