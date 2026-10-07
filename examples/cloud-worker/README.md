@@ -254,6 +254,21 @@ running worker, so the check does not require them. The publishing workflow runs
 the same check on a minimal Ubuntu base with the artifact copied in, and pushes
 nothing if a marker is missing.
 
+## No SSH host keys in an image
+
+Each worker makes its own SSH host keys when it starts. An image must not contain
+host keys, because all workers from that image then use the same private key. The
+`openssh-server` package makes host keys when you install it. The example recipe
+removes them in the same layer. Before you push an image, do this check:
+
+```
+python3 examples/cloud-worker/check-host-keys.py <image>
+```
+
+The check reads all layers of the local image through `docker save`. A key that a
+later layer removes stays in the earlier layer, and the check finds it there. If
+the check finds a key, remove the key in the layer that makes it.
+
 ## Running on a rented virtual machine
 
 Providers that rent whole servers instead of containers run the same image under
