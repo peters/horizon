@@ -187,6 +187,14 @@ impl Session {
             .cloned()
     }
 
+    /// True when this session has a full desktop. Does not copy the pixels.
+    pub(super) fn has_latest_full(&self) -> bool {
+        self.latest_full
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+    }
+
     pub(super) fn recording_source(&self) -> impl Fn() -> Option<Arc<ColorImage>> + Send + 'static {
         let source = Arc::downgrade(&self.latest_full);
         let live = Arc::clone(&self.recording_live);

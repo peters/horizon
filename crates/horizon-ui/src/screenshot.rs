@@ -42,9 +42,9 @@ impl Screenshots {
         enabled: bool,
         image: impl FnOnce() -> Result<ColorImage, String>,
     ) -> bool {
-        let response = ui
-            .add_enabled(enabled, egui::Button::new("Copy screenshot"))
-            .on_hover_text("Copy the panel image to your clipboard at its source resolution");
+        let response =
+            crate::icon_button::icon_button(ui, enabled, "Copy screenshot", crate::icon_button::paint_screenshot)
+                .on_hover_text("Copy the panel image to your clipboard at its source resolution");
         let clicked = response.clicked();
         if clicked {
             let result = image().and_then(|image| {
@@ -190,6 +190,28 @@ mod tests {
             drop(output);
         }
         assert!(remaining.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn copy_button_keeps_its_name_when_enabled_and_disabled() {
+        let labels = |enabled| {
+            let mut screenshots = Screenshots::default();
+            crate::test_egui::accesskit_labels(|ui| {
+                screenshots.copy_button(ui, enabled, || Err("no image".into()));
+            })
+        };
+        let enabled = labels(true);
+        assert!(
+            enabled
+                .iter()
+                .any(|(label, disabled)| label == "Copy screenshot" && !disabled)
+        );
+        let disabled = labels(false);
+        assert!(
+            disabled
+                .iter()
+                .any(|(label, disabled)| label == "Copy screenshot" && *disabled)
+        );
     }
 
     #[test]

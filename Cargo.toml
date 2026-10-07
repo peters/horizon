@@ -44,8 +44,9 @@ unsafe_op_in_unsafe_fn = "warn"
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 struct_excessive_bools = "allow"
-# Keep empty-collection assertions usable for resource handles without PartialEq.
-# Rust 1.99 adds this diagnostic-only preference to the default lint group.
+# Pedantic lint new in Clippy 1.99. The tests deliberately use
+# `assert!(x.is_empty())`. Older Clippy reports the name as an unknown lint
+# (E0602), which `-D warnings` does not make an error.
 assert_is_empty = "allow"
 
 [workspace.dependencies]

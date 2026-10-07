@@ -197,7 +197,7 @@ impl Server {
 impl Server {
     #[tool(
         name = "device_doctor",
-        description = "Check the configured device, input/capture capabilities, desktop resize support, owner permission and limits."
+        description = "Check the configured device, input/capture capabilities, desktop resize support, owner permission and limits. If the X11 keymap has no unused keycode, this clears the oldest temporary text mapping."
     )]
     async fn doctor(&self) -> CallToolResult {
         self.execute(Command::Doctor, None).await

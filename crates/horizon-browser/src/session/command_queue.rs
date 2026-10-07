@@ -10,6 +10,7 @@ pub(super) const COMMAND_CAPACITY: usize = 512;
 struct QueueState {
     commands: VecDeque<BrowserCommand>,
     sender_open: bool,
+    receiver_open: bool,
 }
 
 pub(super) struct CommandSender {
@@ -30,6 +31,7 @@ pub(super) fn channel(frame_slot: Arc<FrameSlot>) -> (CommandSender, CommandRece
     let state = Arc::new(Mutex::new(QueueState {
         commands: VecDeque::with_capacity(COMMAND_CAPACITY),
         sender_open: true,
+        receiver_open: true,
     }));
     (
         CommandSender {
@@ -43,7 +45,7 @@ pub(super) fn channel(frame_slot: Arc<FrameSlot>) -> (CommandSender, CommandRece
 impl CommandSender {
     pub(super) fn send(&self, command: BrowserCommand) -> bool {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !state.sender_open {
+        if !state.receiver_open || !state.sender_open {
             return false;
         }
         if coalesce_tail(&mut state.commands, &command) {
@@ -69,6 +71,14 @@ impl CommandSender {
         state.commands.push_back(command);
         true
     }
+
+    /// The driver still holds [`CommandReceiver`].
+    pub(super) fn receiver_connected(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .receiver_open
+    }
 }
 
 impl Drop for CommandSender {
@@ -77,6 +87,15 @@ impl Drop for CommandSender {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .sender_open = false;
+    }
+}
+
+impl Drop for CommandReceiver {
+    fn drop(&mut self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .receiver_open = false;
     }
 }
 
@@ -445,5 +464,17 @@ mod tests {
             orientation: crate::remote::RemoteOrientation::Landscape
         }));
         assert_eq!(receiver.drain(COMMAND_CAPACITY + 1).commands.len(), COMMAND_CAPACITY);
+    }
+
+    #[test]
+    fn closed_receiver_rejects_new_commands() {
+        let frame_slot = Arc::new(FrameSlot::new());
+        let (sender, receiver) = channel(Arc::clone(&frame_slot));
+        assert!(sender.receiver_connected());
+        assert!(sender.send(BrowserCommand::Reload));
+        drop(receiver);
+        assert!(!sender.receiver_connected());
+        assert!(!sender.send(BrowserCommand::Reload));
+        assert_eq!(frame_slot.metrics().commands_rejected, 0);
     }
 }

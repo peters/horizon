@@ -262,17 +262,11 @@ fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
 }
 
 fn video_start_button(ui: &mut Ui, hover: &str, browser: &mut BrowserPanelState, interactive: bool) -> bool {
-    let response = ui.add_enabled(
-        interactive,
-        egui::Button::new(RichText::new("●").size(13.0).color(theme::PALETTE_RED()))
-            .min_size(vec2(22.0, 22.0))
-            .fill(theme::PANEL_BG_ALT())
-            .corner_radius(6)
-            .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE())),
-    );
-    let enabled = response.enabled();
-    response.widget_info(|| nav_widget_info("Record", enabled));
-    let response = response.on_hover_text_at_pointer(hover);
+    let can_record = interactive && browser.can_start_recording();
+    let response = crate::icon_button::icon_button(ui, can_record, "Record", |painter, rect, _color| {
+        crate::icon_button::paint_record(painter, rect, can_record);
+    })
+    .on_hover_text_at_pointer(hover);
     if response.clicked() {
         browser.video_error = None;
         if !browser.try_send(BrowserCommand::Video {
@@ -291,7 +285,18 @@ fn video_stop_button(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: 
         || "Stop recording".to_string(),
         |error| format!("Stop recording ({error})"),
     );
-    video_button(ui, "⏹", &label, browser, BrowserVideoOperation::Stop, interactive)
+    let response = crate::icon_button::icon_button(ui, interactive, "Stop recording", crate::icon_button::paint_stop)
+        .on_hover_text_at_pointer(label);
+    if response.clicked() {
+        if !browser.try_send(BrowserCommand::Video {
+            operation: BrowserVideoOperation::Stop,
+            options: None,
+        }) {
+            browser.video_error = Some(VIDEO_QUEUE_REJECTED.to_string());
+        }
+        return true;
+    }
+    false
 }
 
 fn video_button(
@@ -494,7 +499,7 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
 
 #[cfg(test)]
 mod tests {
-    use horizon_core::browser::{BackendKind, BrowserPanelState};
+    use horizon_core::browser::{BackendKind, BrowserPanelState, BrowserStatus};
 
     use super::{PickerState, REMOTE_PICKER_HINT, backend_picker, nav_widget_info, picker_state, sync_url_buffer};
     use crate::test_egui::DiscardTextures;
@@ -614,7 +619,7 @@ mod tests {
 
     #[test]
     fn navigation_widget_info_names_glyph_only_controls() {
-        for label in ["Back", "Forward", "Reload", "Record"] {
+        for label in ["Back", "Forward", "Reload"] {
             let info = nav_widget_info(label, true);
             assert_eq!(info.typ, egui::WidgetType::Button);
             assert!(info.enabled);
@@ -622,5 +627,62 @@ mod tests {
         }
 
         assert!(!nav_widget_info("Back", false).enabled);
+    }
+
+    fn disabled_label(labels: &[(String, bool)], name: &str) -> bool {
+        labels
+            .iter()
+            .find(|(label, _)| label == name)
+            .map_or_else(|| panic!("missing {name} in {labels:?}"), |(_, disabled)| *disabled)
+    }
+
+    #[test]
+    fn record_and_camera_icons_keep_accessibility_labels() {
+        let idle = |interactive| {
+            let mut browser = BrowserPanelState::inert();
+            let mut state = crate::browser_widget::BrowserUiState::default();
+            crate::test_egui::accesskit_labels(|ui| {
+                super::show(ui, horizon_core::PanelId(1), &mut browser, &mut state, interactive);
+            })
+        };
+
+        let stopped = idle(true);
+        assert!(
+            disabled_label(&stopped, "Record"),
+            "a stopped browser cannot accept a recording command"
+        );
+        assert!(
+            disabled_label(&stopped, "Copy screenshot"),
+            "the camera stays disabled until a browser frame exists"
+        );
+
+        for status in [BrowserStatus::Ready, BrowserStatus::Starting] {
+            let mut browser = BrowserPanelState::inert();
+            let name = format!("{status:?}");
+            browser.status = status;
+            let mut state = crate::browser_widget::BrowserUiState::default();
+            let labels = crate::test_egui::accesskit_labels(|ui| {
+                super::show(ui, horizon_core::PanelId(1), &mut browser, &mut state, true);
+            });
+            assert!(
+                disabled_label(&labels, "Record"),
+                "{name} without a command channel cannot record"
+            );
+            assert!(disabled_label(&labels, "Copy screenshot"));
+        }
+
+        let inactive = idle(false);
+        assert!(disabled_label(&inactive, "Record"));
+        assert!(disabled_label(&inactive, "Copy screenshot"));
+
+        let mut browser = BrowserPanelState::inert();
+        let enabled_stop = crate::test_egui::accesskit_labels(|ui| {
+            assert!(!super::video_stop_button(ui, &mut browser, true));
+        });
+        assert!(!disabled_label(&enabled_stop, "Stop recording"));
+        let disabled_stop = crate::test_egui::accesskit_labels(|ui| {
+            assert!(!super::video_stop_button(ui, &mut browser, false));
+        });
+        assert!(disabled_label(&disabled_stop, "Stop recording"));
     }
 }
