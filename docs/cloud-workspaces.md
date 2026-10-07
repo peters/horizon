@@ -324,7 +324,9 @@ Quick start runs a repository without `.horizon/cloud.yml` on the base image
 | Desktop | Yes |
 
 The base image is public. Thus the provider pulls it without a registry login,
-and Horizon does not build or push an image. The cloud card shows **Build locally**
+and Horizon does not build or push an image. Horizon never attaches a saved
+registry login to the base image, also if this computer has logins for the same
+registry. The cloud card shows **Build locally**
 and **Push image** as skipped. Horizon pins the base image by digest, thus each
 Horizon version starts the image that was tested with it. The
 [release flow](release-flow.md#update-the-quick-start-image) tells how a release

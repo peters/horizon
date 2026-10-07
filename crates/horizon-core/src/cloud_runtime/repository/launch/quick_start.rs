@@ -16,6 +16,18 @@ macro_rules! image {
 /// allocates compute.
 pub const IMAGE: &str = image!();
 
+/// The repository of the public base image. Anyone can pull it, so Horizon never
+/// attaches a registry login to it, whatever logins this machine has saved.
+pub const REPOSITORY: &str = "ghcr.io/peters/horizon-worker-base";
+
+/// Whether `image` is the public base image, at any tag or digest.
+#[must_use]
+pub fn is_public_base(image: &str) -> bool {
+    image
+        .strip_prefix(REPOSITORY)
+        .is_some_and(|rest| rest.starts_with(['@', ':']))
+}
+
 /// The name of the built-in profile.
 pub const PROFILE: &str = "quick-start";
 
@@ -109,13 +121,22 @@ mod tests {
     #[test]
     fn the_image_is_the_public_base_pinned_by_digest() {
         let (repository, digest) = IMAGE.split_once("@sha256:").unwrap();
-        assert_eq!(repository, "ghcr.io/peters/horizon-worker-base");
+        assert_eq!(repository, REPOSITORY);
         assert_eq!(digest.len(), 64);
         assert!(
             digest
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         );
+        assert!(is_public_base(IMAGE) && is_public_base("ghcr.io/peters/horizon-worker-base:cpu"));
+        for other in [
+            "ghcr.io/peters/horizon-worker-base-evil:cpu",
+            "ghcr.io/peters/horizon-worker-helpers:main",
+            "registry.example/ghcr.io/peters/horizon-worker-base:cpu",
+            REPOSITORY,
+        ] {
+            assert!(!is_public_base(other), "{other}");
+        }
     }
 
     #[test]

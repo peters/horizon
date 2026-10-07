@@ -97,6 +97,21 @@ fn exact_scope_rejects_neighbors_and_preserves_unbound_public_registries() {
 }
 
 #[test]
+fn the_public_base_image_never_takes_a_binding_of_its_registry() {
+    use crate::cloud_runtime::repository::launch::quick_start;
+    let (_root, mut settings) = fixture();
+    binding(&mut settings).repository = "ghcr.io/team/worker".into();
+    let config = settings.registries.as_ref().unwrap();
+    assert!(config.select("ghcr.io/team/other:latest").is_err());
+    assert!(config.select(quick_start::IMAGE).unwrap().is_none());
+    assert!(
+        Prepared::for_image(&settings, quick_start::IMAGE, None, false)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn duplicate_repository_aliases_are_rejected_but_distinct_paths_and_ports_are_allowed() {
     for (first, alias) in [
         ("docker.io/team/worker", "index.docker.io/team/worker"),

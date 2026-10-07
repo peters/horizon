@@ -79,6 +79,11 @@ impl Config {
 
     pub(super) fn select(&self, image: &str) -> Result<Option<&Binding>> {
         self.validate()?;
+        // The public base image needs no login. A binding for another repository on its
+        // registry must neither refuse it nor lend it a credential.
+        if super::repository::launch::quick_start::is_public_base(image) {
+            return Ok(None);
+        }
         let first = image.split('/').next().unwrap_or_default();
         if horizon_cloud::valid_image(image)
             && (!image.contains('/') || (!first.contains('.') && !first.contains(':') && first != "localhost"))
