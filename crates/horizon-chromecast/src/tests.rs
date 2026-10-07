@@ -865,79 +865,91 @@ fn mirroring_status(running: bool) -> Value {
 }
 
 /// A mirroring receiver: answers an OFFER with a UDP port, and acknowledges
-/// every complete frame that arrives there. Returns the control messages it
-/// saw and the number of frames.
-fn mirroring_receiver(listener: TcpListener, config: Arc<ServerConfig>) -> JoinHandle<(Vec<String>, usize)> {
+/// every complete frame that arrives there. With `drop`, it drops the first
+/// connection right after its ANSWER and shows that state to the second.
+/// Returns the control messages it saw (prefixed with the connection number)
+/// and the number of frames.
+fn mirroring_receiver(
+    listener: TcpListener,
+    config: Arc<ServerConfig>,
+    drop: Option<AfterDrop>,
+) -> JoinHandle<(Vec<String>, usize)> {
     std::thread::spawn(move || {
         let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        udp.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
         let udp_port = udp.local_addr().unwrap().port();
         let done = Arc::new(AtomicBool::new(false));
-        let frames = {
-            let done = done.clone();
-            std::thread::spawn(move || {
-                let (mut frames, mut buffer) = (0, [0u8; 2048]);
-                while !done.load(Ordering::Acquire) {
-                    let Ok((read, from)) = udp.recv_from(&mut buffer) else {
+        let frames = acknowledge_frames(udp, done.clone());
+        let mut log = Vec::new();
+        let mut running = false;
+        listener.set_nonblocking(true).unwrap();
+        let connections = if drop.is_some() { 2 } else { 1 };
+        'connections: for connection in 0..connections {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+                    Err(_) => break 'connections,
+                }
+            };
+            socket.set_nonblocking(false).unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            let mut stream = StreamOwned::new(ServerConnection::new(config.clone()).unwrap(), socket);
+            let after = drop.filter(|_| connection == 1);
+            if after.is_some() {
+                running = false;
+            }
+            let (mut inbound, mut chunk) = (Vec::new(), [0; 4096]);
+            'serve: loop {
+                let read = stream.read(&mut chunk).unwrap_or(0);
+                if read == 0 {
+                    break;
+                }
+                inbound.extend_from_slice(&chunk[..read]);
+                for message in proto::drain_frames(&mut inbound).unwrap() {
+                    let Payload::Text(text) = &message.payload else {
                         continue;
                     };
-                    // The last packet of a frame (marker bit) of an RTP stream.
-                    if read < 19 || buffer[1] & 0x80 == 0 || (200..=207).contains(&buffer[1]) {
-                        continue;
-                    }
-                    frames += 1;
-                    let mut ack = vec![0x8f, 206, 0, 4, 0, 0, 0, 1];
-                    ack.extend_from_slice(&buffer[8..12]);
-                    ack.extend_from_slice(b"CAST");
-                    ack.extend_from_slice(&[buffer[13], 0, 0, 100]);
-                    udp.send_to(&ack, from).unwrap();
-                }
-                frames
-            })
-        };
-        let mut stream = accept(&listener, config);
-        let (mut log, mut inbound, mut chunk, mut running) = (Vec::new(), Vec::new(), [0; 4096], false);
-        'serve: loop {
-            let read = stream.read(&mut chunk).unwrap_or(0);
-            if read == 0 {
-                break;
-            }
-            inbound.extend_from_slice(&chunk[..read]);
-            for message in proto::drain_frames(&mut inbound).unwrap() {
-                let Payload::Text(text) = &message.payload else {
-                    continue;
-                };
-                let request: Value = serde_json::from_str(text).unwrap();
-                let kind = request["type"].as_str().unwrap_or_default().to_owned();
-                log.push(format!("{} {} {kind}", message.namespace, message.destination));
-                let to = message.destination.as_str();
-                match (message.namespace.as_str(), kind.as_str()) {
-                    (NS_RECEIVER, "GET_STATUS" | "LAUNCH" | "STOP") => {
-                        running = match kind.as_str() {
-                            "LAUNCH" => {
-                                log.push(format!("launched {}", request["appId"]));
-                                true
+                    let request: Value = serde_json::from_str(text).unwrap();
+                    let kind = request["type"].as_str().unwrap_or_default().to_owned();
+                    log.push(format!(
+                        "{connection} {} {} {kind}",
+                        message.namespace, message.destination
+                    ));
+                    let to = message.destination.as_str();
+                    match (message.namespace.as_str(), kind.as_str()) {
+                        (NS_RECEIVER, "GET_STATUS" | "LAUNCH" | "STOP") => {
+                            running = match kind.as_str() {
+                                "LAUNCH" => {
+                                    log.push(format!("{connection} launched {}", request["appId"]));
+                                    true
+                                }
+                                "STOP" => false,
+                                _ => running,
+                            };
+                            let status = match after {
+                                Some(after) if !running => status_after(after),
+                                _ => mirroring_status(running),
+                            };
+                            send(&mut stream, to, NS_RECEIVER, &reply(&request, status));
+                        }
+                        ("urn:x-cast:com.google.cast.webrtc", "OFFER") => {
+                            let video = &request["offer"]["supportedStreams"][0];
+                            assert_eq!(video["codecName"], "h264");
+                            assert_eq!(video["targetDelay"], 100);
+                            let answer = json!({"type": "ANSWER", "seqNum": request["seqNum"], "result": "ok",
+                                "answer": {"udpPort": udp_port, "sendIndexes": [0], "ssrcs": [1]}});
+                            send(&mut stream, to, "urn:x-cast:com.google.cast.webrtc", &answer);
+                            if drop.is_some() && connection == 0 {
+                                // The TV restarts its cast runtime: no TLS close_notify.
+                                stream.sock.shutdown(std::net::Shutdown::Both).unwrap();
+                                running = false;
+                                break 'serve;
                             }
-                            "STOP" => false,
-                            _ => running,
-                        };
-                        send(
-                            &mut stream,
-                            to,
-                            NS_RECEIVER,
-                            &reply(&request, mirroring_status(running)),
-                        );
+                        }
+                        (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => break 'serve,
+                        _ => {}
                     }
-                    ("urn:x-cast:com.google.cast.webrtc", "OFFER") => {
-                        let video = &request["offer"]["supportedStreams"][0];
-                        assert_eq!(video["codecName"], "h264");
-                        assert_eq!(video["targetDelay"], 100);
-                        let answer = json!({"type": "ANSWER", "seqNum": request["seqNum"], "result": "ok",
-                            "answer": {"udpPort": udp_port, "sendIndexes": [0], "ssrcs": [1]}});
-                        send(&mut stream, to, "urn:x-cast:com.google.cast.webrtc", &answer);
-                    }
-                    (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => break 'serve,
-                    _ => {}
                 }
             }
         }
@@ -946,19 +958,51 @@ fn mirroring_receiver(listener: TcpListener, config: Arc<ServerConfig>) -> JoinH
     })
 }
 
-#[test]
-fn a_mirror_cast_offers_its_streams_and_plays_once_frames_are_acknowledged() {
-    let (address, listener, config) = listen();
-    let server = mirroring_receiver(listener, config);
-    let options = LiveOptions {
-        transport: Transport::Mirror,
-        ..LiveOptions::default()
+/// Acknowledges every complete frame that reaches `udp` with Cast feedback,
+/// until `done`; returns the number of frames.
+fn acknowledge_frames(udp: std::net::UdpSocket, done: Arc<AtomicBool>) -> JoinHandle<usize> {
+    udp.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+    std::thread::spawn(move || {
+        let (mut frames, mut buffer) = (0, [0u8; 2048]);
+        while !done.load(Ordering::Acquire) {
+            let Ok((read, from)) = udp.recv_from(&mut buffer) else {
+                continue;
+            };
+            // The last packet of a frame (marker bit) of an RTP stream.
+            if read < 19 || buffer[1] & 0x80 == 0 || (200..=207).contains(&buffer[1]) {
+                continue;
+            }
+            frames += 1;
+            let mut ack = vec![0x8f, 206, 0, 4, 0, 0, 0, 1];
+            ack.extend_from_slice(&buffer[8..12]);
+            ack.extend_from_slice(b"CAST");
+            ack.extend_from_slice(&[buffer[13], 0, 0, 100]);
+            udp.send_to(&ack, from).unwrap();
+        }
+        frames
+    })
+}
+
+/// The receiver status a sender finds after [`AfterDrop`], with nothing of ours running.
+fn status_after(after: AfterDrop) -> Value {
+    let (other, idle) = match after {
+        AfterDrop::TakenOver => ("233637DE", false),
+        _ => ("E8C28D3C", true),
     };
-    let live = LiveCast::start(address, options).unwrap();
-    assert!(live.url().is_empty(), "mirroring serves nothing over HTTP");
+    let mut status = mirroring_status(false);
+    status["status"]["applications"] = json!([{
+        "appId": other, "displayName": "Other", "sessionId": "other-1",
+        "transportId": "other-1", "isIdleScreen": idle, "namespaces": []
+    }]);
+    status["status"]["isStandBy"] = json!(after == AfterDrop::Standby);
+    status
+}
+
+/// Pushes test frames into `live` until it plays or `limit` passes.
+fn feed_until_playing(live: &LiveCast, limit: Duration) {
     let started = std::time::Instant::now();
     let mut frame = 0u64;
-    while live.state() != LiveState::Playing && started.elapsed() < Duration::from_secs(5) {
+    while live.state() != LiveState::Playing && started.elapsed() < limit {
         let pts = Duration::from_millis(frame * 33);
         let keyframe = live.wants_keyframe(pts);
         let unit: &[u8] = if keyframe {
@@ -970,19 +1014,80 @@ fn a_mirror_cast_offers_its_streams_and_plays_once_frames_are_acknowledged() {
         frame += 1;
         std::thread::sleep(Duration::from_millis(33));
     }
+}
+
+fn mirror_options() -> LiveOptions {
+    LiveOptions {
+        transport: Transport::Mirror,
+        ..LiveOptions::default()
+    }
+}
+
+#[test]
+fn a_mirror_cast_offers_its_streams_and_plays_once_frames_are_acknowledged() {
+    let (address, listener, config) = listen();
+    let server = mirroring_receiver(listener, config, None);
+    let live = LiveCast::start(address, mirror_options()).unwrap();
+    assert!(live.url().is_empty(), "mirroring serves nothing over HTTP");
+    feed_until_playing(&live, Duration::from_secs(5));
     assert_eq!(live.state(), LiveState::Playing);
     drop(live);
     let (log, frames) = server.join().unwrap();
-    assert!(log.contains(&format!("launched \"{MIRRORING_RECEIVER}\"")), "{log:#?}");
     assert!(
-        log.contains(&"urn:x-cast:com.google.cast.webrtc mirror-1 OFFER".to_owned()),
+        log.contains(&format!("0 launched \"{MIRRORING_RECEIVER}\"")),
         "{log:#?}"
     );
     assert!(
-        log.contains(&format!("{NS_RECEIVER} {PLATFORM_RECEIVER} STOP")),
+        log.contains(&"0 urn:x-cast:com.google.cast.webrtc mirror-1 OFFER".to_owned()),
+        "{log:#?}"
+    );
+    assert!(
+        log.contains(&format!("0 {NS_RECEIVER} {PLATFORM_RECEIVER} STOP")),
         "{log:#?}"
     );
     assert!(frames > 0);
+}
+
+#[test]
+fn a_mirror_cast_offers_again_after_the_receiver_restarts() {
+    let (address, listener, config) = listen();
+    let server = mirroring_receiver(listener, config, Some(AfterDrop::Restarted));
+    let live = LiveCast::start(address, mirror_options()).unwrap();
+    // The first session drops before any frame plays; the second must play.
+    feed_until_playing(&live, Duration::from_secs(8));
+    assert_eq!(live.state(), LiveState::Playing);
+    drop(live);
+    let (log, frames) = server.join().unwrap();
+    assert!(
+        log.contains(&format!("1 launched \"{MIRRORING_RECEIVER}\"")),
+        "{log:#?}"
+    );
+    assert!(
+        log.contains(&"1 urn:x-cast:com.google.cast.webrtc mirror-1 OFFER".to_owned()),
+        "{log:#?}"
+    );
+    assert!(frames > 0);
+}
+
+#[test]
+fn a_mirror_cast_never_offers_again_over_another_application_or_a_tv_in_standby() {
+    for after in [AfterDrop::TakenOver, AfterDrop::Standby] {
+        let (address, listener, config) = listen();
+        let server = mirroring_receiver(listener, config, Some(after));
+        let live = LiveCast::start(address, mirror_options()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while live.state() != LiveState::Ended && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(live.state(), LiveState::Ended);
+        drop(live);
+        let (log, _) = server.join().unwrap();
+        assert!(
+            !log.iter()
+                .any(|line| line.starts_with('1') && (line.ends_with(" LAUNCH") || line.ends_with(" STOP"))),
+            "{log:#?}"
+        );
+    }
 }
 
 #[test]

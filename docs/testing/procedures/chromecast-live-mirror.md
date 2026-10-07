@@ -153,6 +153,10 @@ proves that sound plays and that a receiver restart does not end the cast.
 
 ## 7. Cleanup
 
+> **Caution:** The next step deletes `live-test.h264` and `live-test.aac` from the
+> current directory. Check that both files are the ones this run made in task 4
+> setup, and not files you need.
+
 1. Remove the test files:
 
    ```bash

@@ -195,10 +195,20 @@ impl Shared {
             if stream.next_frame == 0 && !keyframe {
                 return;
             }
-            lock(&self.origin).get_or_insert(Origin {
-                at: Instant::now(),
-                media: pts,
-            });
+            // The first video frame sets the clock both streams report on;
+            // audio before it is dropped.
+            {
+                let mut origin = lock(&self.origin);
+                if origin.is_none() {
+                    if track != Track::Video {
+                        return;
+                    }
+                    *origin = Some(Origin {
+                        at: Instant::now(),
+                        media: pts,
+                    });
+                }
+            }
             let id = stream.next_frame;
             stream.next_frame += 1;
             let mut data = payload.to_vec();
@@ -218,12 +228,13 @@ impl Shared {
                 stream.setup.ssrc,
                 &mut stream.sequence,
             ));
-            for packet in packets.iter() {
-                stream.packets = stream.packets.wrapping_add(1);
-                stream.octets = stream
-                    .octets
-                    .wrapping_add(u32::try_from(packet.len()).unwrap_or(u32::MAX));
-            }
+            // Sender reports count RTP packets and payload octets, without headers.
+            stream.packets = stream
+                .packets
+                .wrapping_add(u32::try_from(packets.len()).unwrap_or(u32::MAX));
+            stream.octets = stream
+                .octets
+                .wrapping_add(u32::try_from(data.len()).unwrap_or(u32::MAX));
             let now = Instant::now();
             while stream
                 .history
@@ -365,10 +376,12 @@ impl Shared {
     }
 }
 
-/// `ENOBUFS`: Apple platforms report a full UDP send queue this way.
+/// `ENOBUFS` (`WSAENOBUFS` on Windows): a full UDP send queue.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const NO_BUFFER_SPACE: i32 = 55;
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(windows)]
+const NO_BUFFER_SPACE: i32 = 10055;
+#[cfg(not(any(target_os = "macos", target_os = "ios", windows)))]
 const NO_BUFFER_SPACE: i32 = 105;
 
 /// RTP timestamp units in `time`, wrapping at 32 bits.
@@ -466,6 +479,51 @@ mod tests {
         let (resent, _) = next_rtp(&socket);
         assert_eq!(resent, packets[1]);
         assert!(sender.last_feedback().is_some());
+    }
+
+    #[test]
+    fn audio_waits_for_the_first_video_frame_and_reports_count_payload_octets() {
+        let socket = receiver();
+        let audio = StreamSetup {
+            ssrc: SSRC + 1,
+            payload_type: 127,
+            clock_rate: 48_000,
+            cipher: FrameCipher::new(KEY, IV_MASK),
+            independent_frames: true,
+        };
+        let sender = Sender::start(
+            socket.local_addr().unwrap(),
+            vec![video(), audio],
+            &[0, 0],
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        sender.send_audio(&[5; 10], Duration::ZERO);
+        sender.send_video(&[1; 100], Duration::ZERO, true);
+        sender.send_audio(&[6; 10], Duration::from_millis(21));
+        let (first, _) = next_rtp(&socket);
+        assert_eq!(
+            &first[8..12],
+            &SSRC.to_be_bytes(),
+            "audio before the first video frame is dropped"
+        );
+        let (second, _) = next_rtp(&socket);
+        assert_eq!(&second[8..12], &(SSRC + 1).to_be_bytes());
+        assert_eq!(second[13], 0, "the dropped audio frame took no ID");
+        let mut buffer = [0u8; 2048];
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            assert!(Instant::now() < deadline, "no sender report for video");
+            let (read, _) = socket.recv_from(&mut buffer).unwrap();
+            if rtcp::is_rtcp(&buffer[..read]) && buffer[4..8] == SSRC.to_be_bytes() {
+                assert_eq!(
+                    &buffer[20..28],
+                    &[0, 0, 0, 1, 0, 0, 0, 100],
+                    "one packet, 100 payload octets"
+                );
+                break;
+            }
+        }
     }
 
     #[test]
