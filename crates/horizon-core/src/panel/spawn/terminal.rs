@@ -328,6 +328,13 @@ pub(in crate::panel) fn placeholder_terminal(panel: &Panel, rows: u16, cols: u16
     )
 }
 
+/// The terminal of a parked cloud member that shows `screen`, the last screen of the
+/// terminal it replaces.
+pub(in crate::panel) fn parked_terminal(panel: &Panel, rows: u16, cols: u16, screen: &str) -> Result<Terminal> {
+    let replay = screen.lines().collect::<Vec<_>>().join("\r\n");
+    spawn_restore_failure_snapshot_terminal(panel.id, panel.kind, rows, cols, replay.into_bytes())
+}
+
 fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8> {
     match placeholder {
         Placeholder::RestoreFailure(error_message) => format!(
@@ -354,6 +361,15 @@ fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8
                 "The cloud of this panel is stopped.\r\n\r\n",
                 "Panel: {title}\r\n\r\n",
                 "Choose Resume worker on the cloud card to restore this panel.\r\n"
+            ),
+            title = title
+        ),
+        Placeholder::Cloud(CloudWait::Parked) => format!(
+            concat!(
+                "This panel is parked.\r\n\r\n",
+                "Panel: {title}\r\n",
+                "Its agent continues on the worker.\r\n\r\n",
+                "The panel attaches again when it comes into view.\r\n"
             ),
             title = title
         ),

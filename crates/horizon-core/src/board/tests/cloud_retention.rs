@@ -252,3 +252,59 @@ fn a_restored_cloud_member_says_why_it_waits_instead_of_blaming_its_command() {
         "the member keeps its command"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn running_cloud_member_parks_with_its_last_screen() {
+    use crate::panel::CloudWait;
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut board = Board::new();
+    let workspace = board.create_workspace("cloud-space");
+    let member = board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Command,
+                command: Some("/bin/sh".into()),
+                args: vec!["-c".into(), "printf 'AGENT SCREEN\\n'; sleep 30".into()],
+                cwd: Some(temp.path().to_path_buf()),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .unwrap();
+    let text = |board: &Board| board.panel(member).unwrap().terminal().unwrap().last_lines_text(30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !text(&board).contains("AGENT SCREEN") {
+        assert!(std::time::Instant::now() < deadline, "the member must print its screen");
+        board.process_output();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let panel = board.panel_mut(member).unwrap();
+    panel.set_parked_agent_status(crate::agents::AgentStatus::Working);
+    assert_eq!(
+        panel.agent_status(),
+        crate::agents::AgentStatus::Idle,
+        "only a parked member takes it"
+    );
+    assert!(panel.park_cloud().unwrap());
+    assert_eq!(panel.cloud_wait(), Some(CloudWait::Parked));
+    assert!(!panel.park_cloud().unwrap(), "already parked");
+    panel.set_parked_agent_status(crate::agents::AgentStatus::Working);
+    assert_eq!(panel.agent_status(), crate::agents::AgentStatus::Working);
+    board.process_output();
+    assert_eq!(
+        board.panel(member).unwrap().agent_status(),
+        crate::agents::AgentStatus::Working,
+        "the placeholder screen must not reset the reported status"
+    );
+    assert!(text(&board).contains("AGENT SCREEN"), "{}", text(&board));
+
+    // A stop replaces the parked screen, and a later park says why the panel waits.
+    let panel = board.panel_mut(member).unwrap();
+    assert!(panel.show_cloud_wait(CloudWait::Stopped).unwrap());
+    assert!(panel.park_cloud().unwrap());
+    assert_eq!(panel.cloud_wait(), Some(CloudWait::Parked));
+    assert!(text(&board).contains("This panel is parked."), "{}", text(&board));
+}

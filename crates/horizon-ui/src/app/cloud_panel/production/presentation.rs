@@ -261,6 +261,9 @@ impl HorizonApp {
             for local in &group.panels {
                 if let Some(id) = self.board.panel_id_by_local_id(local)
                     && let Some(panel) = self.board.panel_mut(id)
+                    // A parked member is detached on purpose; only a stop changes what it says.
+                    && !(wait == horizon_core::CloudWait::Reconnecting
+                        && panel.cloud_wait() == Some(horizon_core::CloudWait::Parked))
                     && let Err(error) = panel.show_cloud_wait(wait)
                 {
                     shown = false;
@@ -290,8 +293,9 @@ impl HorizonApp {
             {
                 continue;
             }
+            let ready_now = runtime.needs_attach;
             let retry = runtime.prepare_attachments(&self.board, group);
-            let members = if retry {
+            let mut members = if retry {
                 runtime.pending_member_attachments.clone()
             } else {
                 std::collections::HashSet::default()
@@ -312,6 +316,9 @@ impl HorizonApp {
                 {
                     runtime.pending_session_attachments = pending;
                 }
+            }
+            if ready_now {
+                self.park_hidden_members_on_ready(index, &mut members);
             }
             self.restore_cloud_members(index, members);
             if discovered {

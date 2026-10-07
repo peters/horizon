@@ -132,7 +132,7 @@ impl HorizonApp {
 
     /// Whether the previous frame drew this panel in the root window, as the
     /// fullscreen panel, or in a detached workspace window.
-    fn panel_drawn_last_frame(&self, panel_id: PanelId) -> bool {
+    pub(in crate::app) fn panel_drawn_last_frame(&self, panel_id: PanelId) -> bool {
         let drawn_in_root = match self.fullscreen_panel {
             Some(fullscreen_panel) => fullscreen_panel == panel_id,
             None => self.panel_screen_rects.contains_key(&panel_id),

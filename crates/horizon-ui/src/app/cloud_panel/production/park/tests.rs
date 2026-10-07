@@ -1,0 +1,217 @@
+use super::*;
+use crate::app::cloud_panel::production::{Deployment, Runtime};
+use crate::app::test_support::test_app;
+use horizon_core::{
+    Board, PanelState, RuntimeState, WorkspaceState,
+    cloud_panel::{CloudConfig, CloudGroup, CloudLaunch},
+};
+
+const MEMBERS: [&str; 2] = ["one", "two"];
+
+/// A ready cloud with two shell members that wait to attach, as after a restart.
+fn ready_cloud() -> (tempfile::TempDir, HorizonApp) {
+    let (temp, mut app) = test_app();
+    let profile = CloudConfig::parse(
+        "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker\n    cpu: 4\n    memory_gb: 8\n",
+    )
+    .unwrap()
+    .profiles["dev"]
+        .clone();
+    let mut group = CloudGroup::new(1, "Cloud".into(), "workspace".into(), temp.path().into(), [0.0, 0.0]);
+    group.remote = Some(CloudLaunch {
+        deployment_started: true,
+        id: "fixture".into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile: profile.clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
+    });
+    group.panels = MEMBERS.iter().map(|local| (*local).to_owned()).collect();
+    let mut saved = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            local_id: "workspace".into(),
+            name: "Fixture".into(),
+            panels: MEMBERS
+                .iter()
+                .map(|local| PanelState {
+                    local_id: (*local).into(),
+                    kind: PanelKind::Shell,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    saved.cloud_groups.0.push(group);
+    app.board = Board::from_runtime_state(&saved).unwrap();
+    app.cloud_prototype.groups = saved.cloud_groups.clone();
+    app.cloud_prototype.root = Some(temp.path().into());
+    let state: Deployment = serde_json::from_value(serde_json::json!({
+        "version":1,"cloud_id":"fixture","repository":temp.path(),"revision":"a".repeat(40),"profile":profile,
+        "stage":"Ready","operation":{"state":"bound","worker_id":"fixture"},"spec":null,
+        "worker":{"id":"fixture","name":"fixture","imageName":"example/worker","desiredStatus":"RUNNING","publicIp":"127.0.0.1","portMappings":{"22":9}},
+        "sessions":[],"source_ready":true
+    }))
+    .unwrap();
+    let store = cloud_runtime::state::Store::lock(&temp.path().join("fixture")).unwrap();
+    store.save(&state).unwrap();
+    drop(store);
+    std::fs::write(
+        temp.path().join("settings.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "runpod_key_file":temp.path().join("unused-key"),"ssh_identity_file":temp.path().join("absent-identity"),
+            "docker_config":temp.path().join("docker"),"registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut runtime = Runtime {
+        state: Some(state),
+        stage: Some(Stage::Ready),
+        needs_attach: true,
+        ..Default::default()
+    };
+    runtime.parking.policy = ParkPolicy {
+        attach_dwell: Duration::ZERO,
+        park_grace: Duration::ZERO,
+    };
+    app.cloud_prototype.production.runtimes.insert(1, runtime);
+    (temp, app)
+}
+
+fn member(app: &HorizonApp, local: &str) -> PanelId {
+    app.board.panel_id_by_local_id(local).unwrap()
+}
+
+fn wait_of(app: &HorizonApp, local: &str) -> Option<CloudWait> {
+    app.board.panel(member(app, local)).unwrap().cloud_wait()
+}
+
+/// Whether the member runs the SSH client that attaches its tmux session.
+fn attached(app: &HorizonApp, local: &str) -> bool {
+    let panel = app.board.panel(member(app, local)).unwrap();
+    panel.cloud_wait().is_none() && panel.launch_command.as_deref() == Some("ssh")
+}
+
+fn show(app: &mut HorizonApp, local: &str) {
+    let id = member(app, local);
+    app.panel_screen_rects
+        .insert(id, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(10.0, 10.0)));
+}
+
+fn runtime(app: &HorizonApp) -> &Runtime {
+    &app.cloud_prototype.production.runtimes[&1]
+}
+
+#[test]
+fn a_cloud_out_of_view_at_ready_parks_without_opening_a_connection() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    for local in MEMBERS {
+        assert_eq!(wait_of(&app, local), Some(CloudWait::Parked), "{local}");
+    }
+    assert!(runtime(&app).pending_member_attachments.is_empty());
+    assert!(runtime(&app).parking.tracker.is_some_and(|tracker| tracker.is_parked()));
+    // A later reconnecting message does not hide why the member waits.
+    app.sync_cloud_member_waits();
+    assert_eq!(wait_of(&app, "one"), Some(CloudWait::Parked));
+}
+
+#[test]
+fn a_cloud_in_view_at_ready_attaches_as_before() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    show(&mut app, "two");
+    app.sync_cloud_presentations();
+    for local in MEMBERS {
+        assert!(attached(&app, local), "{local}");
+    }
+    assert!(
+        runtime(&app)
+            .parking
+            .tracker
+            .is_some_and(|tracker| !tracker.is_parked())
+    );
+}
+
+#[test]
+fn a_cloud_parks_out_of_view_and_attaches_again_in_view() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    show(&mut app, "one");
+    app.sync_cloud_presentations();
+    assert!(attached(&app, "one"));
+
+    app.panel_screen_rects.clear();
+    app.sync_cloud_parking();
+    app.sync_cloud_parking();
+    for local in MEMBERS {
+        assert_eq!(wait_of(&app, local), Some(CloudWait::Parked), "{local}");
+    }
+
+    show(&mut app, "one");
+    app.sync_cloud_parking();
+    app.sync_cloud_parking();
+    assert_eq!(runtime(&app).pending_member_attachments.len(), MEMBERS.len());
+    app.sync_cloud_presentations();
+    for local in MEMBERS {
+        assert!(attached(&app, local), "{local}");
+    }
+    assert!(runtime(&app).pending_member_attachments.is_empty());
+}
+
+#[test]
+fn focus_attaches_a_parked_cloud_at_once_and_a_stop_overrides_parking() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .parking
+        .policy
+        .attach_dwell = Duration::from_hours(1);
+    app.board.focused = Some(member(&app, "two"));
+    app.sync_cloud_parking();
+    assert_eq!(runtime(&app).pending_member_attachments.len(), MEMBERS.len());
+
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().stage = Some(Stage::Stopped);
+    app.sync_cloud_member_waits();
+    for local in MEMBERS {
+        assert_eq!(wait_of(&app, local), Some(CloudWait::Stopped), "{local}");
+    }
+}
+
+#[test]
+fn the_strip_names_the_reported_status() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    assert_eq!(
+        app.parked_strip_text("one"),
+        "Parked · the agent continues on the worker"
+    );
+    let parking = &mut app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().parking;
+    parking.statuses.insert(
+        "one".into(),
+        SessionStatus {
+            id: "one".into(),
+            activity: SessionActivity::Working,
+            quiet_for: None,
+            lines: vec!["✻ Working… (3s · esc to interrupt)".into()],
+        },
+    );
+    parking.error = Some("unreachable".into());
+    assert_eq!(
+        app.parked_strip_text("one"),
+        "Parked · Working · ✻ Working… (3s · esc to interrupt)"
+    );
+    assert_eq!(app.parked_strip_text("two"), "Parked · status unavailable");
+}
