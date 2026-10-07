@@ -347,7 +347,9 @@ print(json.dumps('complete' if tunnel else {'phase':'complete','success':True}),
         "backend".into(),
         Port::Managed(DeclaredBackend {
             start: vec!["synthetic".into()],
-            timeout_seconds: 2,
+            // Worker startup is not the deadline behavior under test. Allow loaded CI hosts
+            // to arm the synthetic child before the separately asserted lane deadline.
+            timeout_seconds: 10,
         }),
     );
     contract.launch_arguments.insert("BASE_URL".into(), base_url.into());

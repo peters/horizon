@@ -9,7 +9,8 @@ async fn blocked_mcp_progress_finishes_cancelled_report_without_retrying_the_que
         .permissions(std::fs::Permissions::from_mode(0o700))
         .tempdir()
         .unwrap();
-    let server = NativeMcp::new(actor.clone(), folder.path(), folder.path()).unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    let server = NativeMcp::new(actor.clone(), &root, &root).unwrap();
     let mut recipe = String::from("```yaml\ndevice-recipe:\n  version: 1\n  id: backpressure\n  steps:\n");
     for index in 0..64 {
         writeln!(recipe, "    - id: frame-{index}\n      action: screenshot").unwrap();
