@@ -372,15 +372,11 @@ impl Session {
                     }
                 }
             }
-            rejoins = if joined.elapsed() >= REJOIN_SETTLED {
-                1
-            } else {
-                rejoins + 1
-            };
+            rejoins = rejoins_after(rejoins, joined.elapsed());
             // The picture is gone until the rejoin succeeds.
             self.set(LiveState::Buffering);
             let rejoined = loop {
-                if rejoins > REJOIN_ATTEMPTS {
+                if !may_rejoin(rejoins) {
                     return Err(Error::Closed);
                 }
                 tracing::debug!(rejoins, "receiver dropped the connection; rejoining playback");
@@ -741,6 +737,20 @@ impl Session {
     }
 }
 
+/// Rejoins in a row after a connection that lasted `lasted`: one that held
+/// for `REJOIN_SETTLED` starts a fresh count.
+fn rejoins_after(previous: u8, lasted: Duration) -> u8 {
+    if lasted >= REJOIN_SETTLED {
+        1
+    } else {
+        previous.saturating_add(1)
+    }
+}
+
+fn may_rejoin(rejoins: u8) -> bool {
+    rejoins <= REJOIN_ATTEMPTS
+}
+
 /// What follows an attempt to return to normal speed: watching again, another
 /// attempt shortly, or `None` when the session must fail.
 fn after_restore(restored: bool, failures: u8, now: Instant) -> Option<CatchUp> {
@@ -790,5 +800,23 @@ mod catch_up_tests {
             Some(CatchUp::Until(now + RESTORE_RETRY, 2))
         );
         assert_eq!(after_restore(false, RESTORE_ATTEMPTS - 1, now), None);
+    }
+
+    #[test]
+    fn quick_drops_use_up_the_rejoins_and_a_settled_connection_restores_them() {
+        let quick = REJOIN_SETTLED.checked_sub(Duration::from_millis(1)).unwrap();
+        let mut rejoins = 0;
+        for _ in 0..REJOIN_ATTEMPTS {
+            rejoins = rejoins_after(rejoins, quick);
+            assert!(may_rejoin(rejoins));
+        }
+        rejoins = rejoins_after(rejoins, quick);
+        assert!(!may_rejoin(rejoins), "one drop too many fails the session");
+        assert_eq!(
+            rejoins_after(rejoins, REJOIN_SETTLED),
+            1,
+            "a settled connection starts over"
+        );
+        assert!(!may_rejoin(rejoins_after(u8::MAX, quick)), "the count saturates");
     }
 }
