@@ -83,15 +83,16 @@ fn script_reads_sessions_from_tmux_without_changing_them() {
         std::env::var("PATH").unwrap_or_default()
     );
     // Another test can fork while the stub is still open for writing, and then the
-    // stub cannot run for a moment (ETXTBSY). Such a run reports every session missing.
-    let mut status = Vec::new();
+    // stub cannot run for a moment (ETXTBSY), which fails the read.
+    let mut status = None;
     for _ in 0..5 {
         status = run_script(&path);
-        if status[0].activity != SessionActivity::Missing {
+        if status.is_some() {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+    let status = status.expect("the script must read the stub");
     assert_eq!(status[0].activity, SessionActivity::Idle);
     assert_eq!(status[0].lines, ["first", "last line"]);
     assert!(status[0].quiet_for.is_some());
@@ -107,8 +108,8 @@ fn script_reads_sessions_from_tmux_without_changing_them() {
 }
 
 #[cfg(unix)]
-fn run_script(path: &str) -> Vec<SessionStatus> {
-    let output = std::process::Command::new("python3")
+fn run_script(path: &str) -> Option<Vec<SessionStatus>> {
+    let output = std::process::Command::new(python())
         .arg("-")
         .args(["live", "gone"])
         .env("PATH", path)
@@ -121,6 +122,25 @@ fn run_script(path: &str) -> Vec<SessionStatus> {
             child.wait_with_output()
         })
         .unwrap();
-    assert!(output.status.success());
-    parse(&String::from_utf8(output.stdout).unwrap(), &ids(&["live", "gone"])).unwrap()
+    output
+        .status
+        .success()
+        .then(|| parse(&String::from_utf8(output.stdout).unwrap(), &ids(&["live", "gone"])).unwrap())
+}
+
+/// The absolute path of `python3`, so a test can run it with its own `PATH`.
+#[cfg(unix)]
+fn python() -> std::path::PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("python3"))
+        .find(|candidate| candidate.is_file())
+        .expect("python3 on PATH")
+}
+
+#[cfg(unix)]
+#[test]
+fn script_fails_when_tmux_cannot_start() {
+    let temp = tempfile::tempdir().unwrap();
+    // No tmux at all: the read must fail, not report the session as missing.
+    assert!(run_script(&temp.path().display().to_string()).is_none());
 }

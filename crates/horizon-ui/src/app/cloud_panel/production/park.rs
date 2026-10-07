@@ -113,6 +113,14 @@ impl HorizonApp {
             .collect()
     }
 
+    /// Whether the board panel with this local id is a terminal that can park.
+    fn is_parkable(&self, local: &str) -> bool {
+        self.board
+            .panel_id_by_local_id(local)
+            .and_then(|id| self.board.panel(id))
+            .is_some_and(|panel| parks(panel.kind))
+    }
+
     /// What the user sees of cloud `index` in the last frame.
     fn cloud_sight(&self, index: usize) -> Sight {
         let members = self.parkable_members(index);
@@ -191,13 +199,21 @@ impl HorizonApp {
                 && runtime.stage == Some(Stage::Ready);
             // Only terminal restores hold the tracker: a browser discovery or session
             // restore that keeps failing must not keep parked terminals parked.
-            if !ready || runtime.needs_attach || !runtime.pending_member_attachments.is_empty() {
+            if !ready || runtime.needs_attach {
                 continue;
             }
+            let pending = runtime.pending_member_attachments.clone();
+            if pending.iter().any(|local| self.is_parkable(local)) {
+                continue;
+            }
+            let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) else {
+                continue;
+            };
             let Some(tracker) = runtime.parking.tracker.as_mut() else {
                 continue;
             };
-            if attached && tracker.is_parked() {
+            // A hidden cloud is still observed, so a fast pan resets its dwell.
+            if attached && tracker.is_parked() && sight != Sight::Hidden {
                 continue;
             }
             let action = tracker.observe(sight, now, runtime.parking.policy);
@@ -252,6 +268,21 @@ impl HorizonApp {
     /// Starts a status read of the parked terminals of cloud `index` when one is
     /// due, and applies a finished one.
     fn read_parked_status(&mut self, index: usize, now: Instant) {
+        let issue = self.cloud_prototype.groups.0[index].issue;
+        let Some(parking) = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&issue)
+            .map(|runtime| &runtime.parking)
+        else {
+            return;
+        };
+        let due =
+            parking.tracker.is_some_and(|tracker| tracker.is_parked()) && parking.next_read.is_none_or(|at| now >= at);
+        if parking.reader.is_none() && !due {
+            return;
+        }
         let parked: HashMap<String, PanelId> = self
             .parkable_members(index)
             .into_iter()
@@ -356,6 +387,7 @@ impl HorizonApp {
     /// Draws a status strip at the bottom of each parked terminal on the canvas, in
     /// the panel's own layer so menus and dialogs stay above it.
     pub(in crate::app) fn render_parked_strips(&self, ctx: &egui::Context) {
+        let canvas = self.canvas_rect(ctx);
         for (&id, &body) in &self.terminal_body_screen_rects {
             let Some(panel) = self
                 .board
@@ -369,16 +401,22 @@ impl HorizonApp {
             } else {
                 egui::Order::Middle
             };
+            // The panel layer carries the canvas transform, so the strip is drawn in
+            // canvas coordinates and sized to stay the same on the screen.
+            let to_canvas = crate::app::view::canvas_scene_transform(canvas, self.canvas_view).inverse();
+            let scale = 1.0 / self.canvas_view.zoom.max(f32::EPSILON);
+            let body = to_canvas * body;
             let painter = ctx
                 .layer_painter(egui::LayerId::new(order, egui::Id::new(("panel", id.0))))
                 .with_clip_rect(body);
-            let strip = egui::Rect::from_min_max(egui::pos2(body.left(), body.bottom() - STRIP_HEIGHT), body.max);
+            let strip =
+                egui::Rect::from_min_max(egui::pos2(body.left(), body.bottom() - STRIP_HEIGHT * scale), body.max);
             painter.rect_filled(strip, 0.0, crate::theme::alpha(crate::theme::PANEL_BG_ALT(), 235));
             painter.text(
-                strip.left_center() + egui::vec2(8.0, 0.0),
+                strip.left_center() + egui::vec2(8.0 * scale, 0.0),
                 egui::Align2::LEFT_CENTER,
                 self.parked_strip_text(&panel.local_id),
-                egui::FontId::proportional(12.0),
+                egui::FontId::proportional(12.0 * scale),
                 crate::theme::FG_SOFT(),
             );
         }

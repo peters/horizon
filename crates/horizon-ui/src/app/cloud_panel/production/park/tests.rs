@@ -305,3 +305,26 @@ fn a_terminal_that_starts_in_a_parked_cloud_out_of_view_parks_too() {
     app.sync_cloud_parking();
     assert_eq!(wait_of(&app, "two"), Some(CloudWait::Parked));
 }
+
+#[test]
+fn a_pending_desktop_attachment_does_not_hold_the_terminals() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    // A Device panel whose desktop tunnel is not ready stays pending.
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .pending_member_attachments
+        .insert("desktop".into());
+    app.board.focused = Some(member(&app, "one"));
+    app.sync_cloud_parking();
+    assert!(
+        runtime(&app)
+            .pending_member_attachments
+            .iter()
+            .any(|local| local == "one")
+    );
+}

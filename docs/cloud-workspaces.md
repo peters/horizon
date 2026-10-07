@@ -625,9 +625,9 @@ the card restores the panel.
 ### Parked terminals
 
 When no terminal of a ready cloud is on the screen for 2 minutes, Horizon parks
-the terminals of that cloud. A parked terminal has no SSH client, PTY or
-terminal grid on this computer, and it shows its last screen. Its session
-continues in tmux on the worker. The focused panel and a panel that fills the
+the terminals of that cloud. A parked terminal has no SSH client and no live
+terminal on this computer. It shows a static snapshot of its last screen, and
+its session continues in tmux on the worker. The focused panel and a panel that fills the
 window do not park.
 
 The cloud attaches again after it stays in view for 1 second. It attaches at

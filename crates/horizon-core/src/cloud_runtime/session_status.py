@@ -26,10 +26,9 @@ def tmux_command():
 
 
 def tmux(*args):
-    try:
-        result = subprocess.run(tmux_command() + list(args), capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return None
+    # A tmux that cannot start or answer fails the whole read, so Horizon shows
+    # that the status is unavailable instead of a session that is missing.
+    result = subprocess.run(tmux_command() + list(args), capture_output=True, text=True, timeout=10)
     return result.stdout if result.returncode == 0 else None
 
 
