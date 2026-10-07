@@ -199,6 +199,7 @@ pub struct Terminal {
     pty_resized: bool,
     child_exited: bool,
     child_exit_status: Option<std::process::ExitStatus>,
+    answered_query: bool,
 }
 
 #[cfg(test)]

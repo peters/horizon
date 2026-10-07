@@ -60,6 +60,18 @@ impl Terminal {
         had_events
     }
 
+    /// Whether the terminal answered a program query since the last call.
+    /// A program that waits for the answer often sends its next query only
+    /// after it, so the caller should process events again soon.
+    pub fn take_answered_query(&mut self) -> bool {
+        std::mem::take(&mut self.answered_query)
+    }
+
+    fn answer_query(&mut self, bytes: &[u8]) {
+        self.write_protocol(bytes);
+        self.answered_query = true;
+    }
+
     pub(super) fn parse_horizon_title(title: &str) -> Option<HorizonOscTitle> {
         // Retired protocol: older `horizon-notify` skills may still emit it,
         // and it must not surface as the panel title.
@@ -120,16 +132,16 @@ impl Terminal {
             Event::ClipboardStore(clipboard, contents) => self.pending_clipboard.store(clipboard, contents),
             // OSC 52 reads are denied by the emulator config, and a program
             // running in the terminal must not read the system clipboard.
-            Event::ClipboardLoad(_, formatter) => self.write_protocol(formatter("").as_bytes()),
+            Event::ClipboardLoad(_, formatter) => self.answer_query(formatter("").as_bytes()),
             Event::ColorRequest(index, formatter) => {
                 let color = self.color_for_request(index);
-                self.write_protocol(formatter(color).as_bytes());
+                self.answer_query(formatter(color).as_bytes());
             }
             Event::PtyWrite(text) => {
-                self.write_protocol(text.as_bytes());
+                self.answer_query(text.as_bytes());
             }
             Event::TextAreaSizeRequest(formatter) => {
-                self.write_protocol(formatter(self.window_size()).as_bytes());
+                self.answer_query(formatter(self.window_size()).as_bytes());
             }
             Event::Exit => {
                 self.child_exited = true;

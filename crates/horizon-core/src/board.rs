@@ -458,6 +458,7 @@ impl Board {
             let panel_output: PanelProcessOutput = panel.process_output();
             output.activity.terminal |= panel_output.activity.terminal;
             output.activity.browser |= panel.visible && panel_output.activity.browser;
+            output.activity.answered_query |= panel_output.activity.answered_query;
             output.cwd_changed |= panel_output.cwd_changed;
             output.persisted_state_changed |= panel_output.persisted_state_changed;
             if let Some(terminal) = panel.terminal_mut() {

@@ -105,21 +105,43 @@ impl HorizonApp {
 
     /// Drain terminal and browser events, promoting persistence-relevant
     /// changes into the app's runtime dirty state.
+    ///
+    /// Returns whether the output needs a fast repaint. Terminal output counts
+    /// only for panels drawn in the previous frame, so a busy agent in a culled
+    /// or hidden panel does not hold the window at the output frame rate. An
+    /// answered terminal query always counts, because the program can wait
+    /// for the answer before it sends its next query.
     pub(super) fn drain_panel_output(&mut self) -> bool {
         let panel_output = self.board.process_output();
+        let mut on_screen_terminal_output = false;
         if panel_output.activity.terminal {
             // Output can arrive while a panel is culled. Invalidate now, before
             // the next quiet poll clears its one-frame activity flag.
             for panel in &self.board.panels {
                 if panel.had_recent_output() {
                     self.panel_render_caches.terminal_grid_cache.remove(&panel.id);
+                    on_screen_terminal_output |= self.panel_drawn_last_frame(panel.id);
                 }
             }
         }
         if panel_output.cwd_changed || panel_output.persisted_state_changed {
             self.mark_runtime_dirty();
         }
-        panel_output.activity.terminal || panel_output.activity.browser
+        on_screen_terminal_output || panel_output.activity.answered_query || panel_output.activity.browser
+    }
+
+    /// Whether the previous frame drew this panel in the root window, as the
+    /// fullscreen panel, or in a detached workspace window.
+    fn panel_drawn_last_frame(&self, panel_id: PanelId) -> bool {
+        let drawn_in_root = match self.fullscreen_panel {
+            Some(fullscreen_panel) => fullscreen_panel == panel_id,
+            None => self.panel_screen_rects.contains_key(&panel_id),
+        };
+        drawn_in_root
+            || self
+                .detached_workspaces
+                .values()
+                .any(|detached| detached.panel_screen_rects.contains_key(&panel_id))
     }
 
     /// Hand OSC 52 copy requests from terminal panels to the system, so TUIs

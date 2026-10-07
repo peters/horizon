@@ -89,6 +89,7 @@ impl Terminal {
             pending_pty_resize: None,
             pty_resized: false,
             child_exited: false,
+            answered_query: false,
             child_exit_status: None,
         };
         terminal.process_events();
