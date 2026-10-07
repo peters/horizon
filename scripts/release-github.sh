@@ -103,7 +103,21 @@ required_asset_names() {
     horizon-osx-x64.tar.gz \
     horizon-windows-x64.exe \
     SHA256SUMS.txt
+}
 
+prune_retired_installer_assets() {
+  local json="$1"
+  local name
+  for name in \
+    horizon-installer-linux-x64.bin \
+    horizon-installer-osx-arm64.bin \
+    horizon-installer-osx-x64.bin \
+    horizon-installer-win-x64.exe; do
+    if json_has_asset "$json" "$name"; then
+      printf 'Removing retired installer %s from draft %s.\n' "$name" "$TAG"
+      gh release delete-asset "$TAG" "$name" --repo "$REPO" --yes
+    fi
+  done
 }
 
 json_asset_digest() {
@@ -378,6 +392,8 @@ cmd_publish() {
     printf 'GitHub Release %s is already published with the required asset set.\n' "$TAG"
     return 0
   fi
+
+  prune_retired_installer_assets "$RELEASE_JSON"
 
   local edit_args=(release edit "$TAG" --repo "$REPO" --draft=false)
   if [ "$PRERELEASE" = "true" ]; then

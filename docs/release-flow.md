@@ -7,6 +7,8 @@ Horizon releases are tag-driven.
 - The Git tag is the source identity. Saving a draft GitHub Release for one of those tags, or dispatching the Release workflow with an existing tag, builds the deliverables.
 - The workflow uploads and verifies the required asset set while the GitHub Release is still a draft, then publishes it. A failed build therefore stays pending instead of advertising an empty public release.
 - Interrupted uploads resume from the recorded tag commit and existing asset digests. Matching files are skipped; changed files for the same commit are replaced. The workflow never retags.
+- Before publication, the workflow removes the four retired `horizon-installer-*` assets from a draft release.
+  If removal fails, the release stays a draft. The workflow keeps other assets and assets on published releases.
 - The same release workflow can also be started manually with an existing tag to recover a failed or incomplete release after fixing workflow automation, without bumping the version.
 - Releases publish four executable assets and `SHA256SUMS.txt`.
 - Stable releases update the `peters/homebrew-horizon` tap and open or update the WinGet PR for `Peters.Horizon`.

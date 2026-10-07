@@ -64,6 +64,8 @@ It tests the release guard, toolbar, startup and saved state.
 
    Result: All tests pass. A stable release needs four executable assets and `SHA256SUMS.txt`.
    A missing executable keeps the release in draft state. Installers are not required.
+   A resumed draft loses the four retired installer assets before publication.
+   A failed removal keeps the draft private. Other assets and published releases keep their assets.
 
 2. Examine `.github/workflows/release.yml`.
 
