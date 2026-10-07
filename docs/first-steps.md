@@ -165,6 +165,16 @@ Keep the files in `~/.horizon` or the corresponding user configuration directory
 The new executable uses the same configuration and session formats.
 Do not put the new executable inside the old managed application directory.
 
+Examine the old application shortcuts before you start Horizon again.
+
+CAUTION: Remove only the shortcut. Keep the configuration and session files.
+
+Change each shortcut to use the new installation, or remove the shortcut.
+On Windows, examine the desktop and Start Menu shortcuts.
+On macOS, examine the `Horizon.app` links in `~/Applications` and `~/Desktop`.
+On Linux, examine desktop shortcuts and pinned launchers.
+Start Horizon from the new installation to make sure you use the new executable.
+
 ## Build from source
 
 1. Install the tools for your platform:
