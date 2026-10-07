@@ -1,0 +1,89 @@
+---
+procedure: browser-cross-origin-frames
+feature: Browser semantic input in child frames
+platforms: [linux]
+cost: none
+destructive: no
+secrets: synthetic values only
+owner: peters
+---
+
+# Browser child-frame input test procedure
+
+## 1. Purpose
+
+This procedure tests form input in cross-origin frames through public MCP tools.
+It tests document references and the removal of secret values from audit records.
+
+## 2. Applicability
+
+- Use the candidate source checkout on Linux.
+- Test local Chromium and Firefox with geckodriver.
+- Safari and remote sessions do not support child-frame semantic input.
+- This procedure does not test the Horizon UI or remote device providers.
+
+## 3. Safety
+
+> **CAUTION:** USE ONLY THE SYNTHETIC FORM VALUES. Do not use account credentials.
+
+The HTTP fixture uses loopback servers and temporary browser profiles.
+The test does not use the developer's browser session.
+
+## 4. Equipment and preconditions
+
+- Rust and the workspace build prerequisites.
+- Local Chromium, Firefox and geckodriver on PATH.
+- Permission to bind loopback sockets and start headless browser processes.
+
+## 5. Setup
+
+1. Open a shell in the candidate checkout.
+2. Run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live -- --ignored --nocapture`.
+
+   Result: The test starts an isolated MCP process and each browser backend.
+
+## 6. Tasks
+
+### 6.1 FRAME-INPUT — Fill and submit the form
+
+1. Examine the completed test result.
+
+   Result: `browser_snapshot` returns an input reference from the cross-origin frame.
+   `browser_act` fills the user field through that reference.
+   `browser_query` returns the password field and submit button.
+   `browser_act` fills the password field and clicks the button.
+   The HTTP fixture records a trusted form submission.
+   The top-level input with the same ID retains its original value.
+   Each backend repeats the flow with a nested frame.
+
+### 6.2 FRAME-STALE — Replace the child document
+
+1. Examine the completed test result.
+
+   Result: The test reloads the child frame at the same URL.
+   A fill with the previous reference fails with `stale_reference`.
+   A new query returns a new valid reference.
+
+### 6.3 FRAME-AUDIT — Examine the audit
+
+1. Examine the completed test result.
+
+   Result: `browser_audit` returns no user or password fill value.
+
+## 7. Pass criteria
+
+- All test assertions pass on Chromium and Firefox.
+- The input, submission, reference and audit tasks pass through public MCP tools.
+- The test does not require a human handoff.
+
+## 8. Cleanup
+
+1. Wait for the test process to exit.
+
+   Result: The test stops its MCP processes, browser sessions and HTTP fixture.
+   Temporary profiles and coordination state are removed.
+
+## 9. Record of results
+
+Record the candidate commit, command, browser versions and result in the pull request.
+Keep private paths and machine information out of the pull request.

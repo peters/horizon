@@ -77,12 +77,7 @@ impl Driver {
         }
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
         let params = event.get("params").unwrap_or(&Value::Null);
-        if self.context_id.is_none()
-            && self.host.shared_context().is_none()
-            && let Some(context) = created_top_level_context(method, params)
-        {
-            self.context_id = Some(context.to_string());
-        }
+        self.observe_context_event(method, params);
         if !bidi_event_targets_context(method, params, self.context_id.as_deref()) {
             return;
         }
@@ -163,6 +158,22 @@ impl Driver {
                 self.host.context_destroyed();
                 self.advance_generation();
             }
+        }
+    }
+
+    fn observe_context_event(&mut self, method: &str, params: &Value) {
+        if self.context_id.is_none()
+            && self.host.shared_context().is_none()
+            && let Some(context) = created_top_level_context(method, params)
+        {
+            self.context_id = Some(context.to_string());
+        }
+        if matches!(
+            method,
+            "browsingContext.navigationStarted" | "browsingContext.contextDestroyed"
+        ) && let Some(context) = params.get("context").and_then(Value::as_str)
+        {
+            self.semantic.invalidate_bidi_frame(context);
         }
     }
 }

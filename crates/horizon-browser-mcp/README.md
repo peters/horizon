@@ -135,8 +135,15 @@ shell commands, files, or other MCP servers.
   Safari's classic WebDriver has no dispatch-only navigation, so there every
   wait returns once the page loaded or the bound elapsed.
 - `browser_snapshot` and `browser_query` return bounded semantic nodes with
-  short-lived refs. Snapshots keep iframe boundaries discoverable even when
-  cross-origin policy prevents inspecting the frame document.
+  short-lived refs. Local Chromium and Firefox scans include child frames,
+  including cross-origin frames. Use each returned ref with `browser_act`
+  `click` or `fill`; the ref retains its frame and document. A frame navigation
+  makes its old refs stale. Each scan shares its node limit across documents
+  and permits at most 64 frame contexts. Child nodes omit top-level bounds.
+  Direct selector actions, `browser_wait`, and `browser_evaluate` still target
+  the top-level document. Child refs return `unsupported_frame_action` for
+  `scroll` and `set_files`. Safari and remote sessions scan only the top-level
+  document.
 - `browser_act` clicks, fills, scrolls, reloads, or traverses history. Set
   `count: 2` on a click for a backend-native trusted double-click.
   Remote `fill` uses native Element Clear/Send Keys and reads the live field

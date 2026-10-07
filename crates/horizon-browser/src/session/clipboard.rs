@@ -30,7 +30,7 @@ pub(super) struct ClipboardState {
 }
 
 impl ClipboardState {
-    fn evaluation_targets(&self, page_session: &str) -> Vec<(String, Option<u64>)> {
+    pub(super) fn evaluation_targets(&self, page_session: &str) -> Vec<(String, Option<u64>)> {
         let sessions = std::iter::once(page_session).chain(self.iframe_sessions.iter().map(String::as_str));
         let mut targets = Vec::new();
         for session in sessions {
@@ -166,9 +166,11 @@ impl DriverState {
                     && let Some(contexts) = self.clipboard.default_contexts.get_mut(session)
                 {
                     contexts.remove(&context_id);
+                    self.semantic.invalidate_cdp_frame(session, Some(context_id));
                 }
             }
             "Runtime.executionContextsCleared" => {
+                self.semantic.invalidate_cdp_frame(session, None);
                 self.clipboard.default_contexts.remove(session);
             }
             _ => {}
@@ -205,6 +207,7 @@ impl DriverState {
         let Some(session) = target_event_session_id(event.params, event.session_id) else {
             return;
         };
+        self.semantic.invalidate_cdp_frame(session, None);
         self.clipboard.iframe_sessions.remove(session);
         self.clipboard.default_contexts.remove(session);
         self.forget_runtime_session(session);

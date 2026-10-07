@@ -69,11 +69,17 @@ one affects the others. Navigation and input are independent; forms, history,
 and live JavaScript state are not copied. This does not authorize helper panels
 as a workaround for iframe, popup, dialog, or consent interactions.
 
-Snapshots expose iframe boundaries as `iframe` nodes. If the current top-level
-semantic tools cannot reach the embedded frame content, use `browser_handoff`
-on the original panel only when its capabilities include `handoff`. Remote
-sessions do not support manual steering and return `unsupported_backend`;
-report that limitation. Do not open a separate panel for the frame.
+Snapshots expose iframe boundaries as `iframe` nodes. On local Chromium and
+Firefox, snapshots and queries also return child-frame nodes, including nodes
+inside cross-origin frames. Use their returned refs with `browser_act` `click`
+or `fill`. A frame navigation makes its old refs stale. Direct selector actions,
+`browser_wait`, and `browser_evaluate` target the top-level document. Child-frame
+refs do not support `scroll` or `set_files`. Safari and remote sessions scan only
+the top-level document. If these tools cannot reach the embedded frame content,
+use `browser_handoff` on the original panel only when its capabilities include
+`handoff`. Remote sessions do not support manual steering and return
+`unsupported_backend`; report that limitation. Do not open a separate panel for
+the frame.
 
 `browser_navigate` returns a typed outcome: by default it waits until the
 document committed and reports `committed_url`, `title` when known, `loading`,

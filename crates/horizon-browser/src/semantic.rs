@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use horizon_browser_protocol::{
@@ -38,7 +38,7 @@ impl TeachCapture {
 pub(crate) struct SemanticState {
     generation: u64,
     revision: u64,
-    references: HashMap<String, String>,
+    references: HashMap<String, ResolvedTarget>,
     teach_text_gesture: bool,
 }
 
@@ -65,6 +65,32 @@ impl SemanticState {
         self.revision = 0;
         self.references.clear();
         self.teach_text_gesture = false;
+    }
+
+    pub(crate) fn invalidate_cdp_frame(&mut self, session: &str, context: Option<u64>) {
+        self.references.retain(|_, target| {
+            !matches!(
+                &target.frame,
+                Some(FrameTarget::Cdp { session: stored, context: id })
+                    if stored == session && context.is_none_or(|context| context == *id)
+            )
+        });
+    }
+
+    pub(crate) fn invalidate_bidi_frame(&mut self, context: &str) {
+        self.references.retain(|_, target| {
+            !matches!(
+                &target.frame, Some(FrameTarget::Bidi { context: stored, .. }) if stored == context
+            )
+        });
+    }
+
+    pub(crate) fn bidi_frame_is_current(&self, frame: &FrameTarget) -> bool {
+        self.references.values().any(|target| matches!(
+            (&target.frame, frame),
+            (Some(FrameTarget::Bidi { context: stored_context, realm: stored_realm }), FrameTarget::Bidi { context, realm })
+                if stored_context == context && stored_realm == realm
+        ))
     }
 
     /// `Some(Click)` for a left press, `Some(Focused)` for the start of a
@@ -147,7 +173,13 @@ impl SemanticState {
         let mut nodes = Vec::with_capacity(response.nodes.len());
         for (index, scanned) in response.nodes.into_iter().enumerate() {
             let reference = format!("g{}s{}e{}", self.generation, self.revision, index + 1);
-            self.references.insert(reference.clone(), scanned.selector);
+            self.references.insert(
+                reference.clone(),
+                ResolvedTarget {
+                    selector: scanned.selector,
+                    frame: scanned.frame,
+                },
+            );
             nodes.push(BrowserNode {
                 reference,
                 role: truncate_utf8(scanned.role, MAX_NODE_STRING_BYTES),
@@ -162,17 +194,91 @@ impl SemanticState {
         Ok((self.generation, self.revision, nodes))
     }
 
-    pub(crate) fn resolve(&self, target: &BrowserTarget) -> Result<String, BrowserControlFailure> {
+    pub(crate) fn resolve_target(&self, target: &BrowserTarget) -> Result<ResolvedTarget, BrowserControlFailure> {
         match target {
-            BrowserTarget::Selector { selector } => Ok(selector.clone()),
+            BrowserTarget::Selector { selector } => Ok(ResolvedTarget {
+                selector: selector.clone(),
+                frame: None,
+            }),
             BrowserTarget::Ref { reference } => self.references.get(reference).cloned().ok_or_else(|| {
-                BrowserControlFailure::new(
-                    "stale_reference",
-                    format!("element reference {reference} is stale; take a new snapshot"),
-                )
+                BrowserControlFailure::new("stale_reference", "element reference is stale; take a new snapshot")
             }),
         }
     }
+
+    pub(crate) fn resolve(&self, target: &BrowserTarget) -> Result<String, BrowserControlFailure> {
+        let target = self.resolve_target(target)?;
+        if target.frame.is_some() {
+            return Err(BrowserControlFailure::new(
+                "unsupported_frame_action",
+                "this action does not support a child-frame reference",
+            ));
+        }
+        Ok(target.selector)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedTarget {
+    pub(crate) selector: String,
+    pub(crate) frame: Option<FrameTarget>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "backend", rename_all = "snake_case")]
+pub(crate) enum FrameTarget {
+    Cdp { session: String, context: u64 },
+    Bidi { context: String, realm: String },
+}
+
+pub(crate) const MAX_SEMANTIC_FRAMES: usize = 64;
+
+/// Frame routes are host-owned; ignore any route a page tried to return.
+pub(crate) fn clear_scan_frames(scan: &mut Value) -> Result<(), BrowserControlFailure> {
+    check_script_error(scan)?;
+    let nodes = scan
+        .get_mut("nodes")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| BrowserControlFailure::new("invalid_result", "page scan returned no nodes"))?;
+    for node in nodes {
+        node.as_object_mut()
+            .ok_or_else(|| BrowserControlFailure::new("invalid_result", "page scan returned an invalid node"))?
+            .remove("frame");
+    }
+    Ok(())
+}
+
+pub(crate) fn append_frame_scan(
+    scan: &mut Value,
+    mut child: Value,
+    frame: &FrameTarget,
+    max_nodes: u32,
+) -> Result<(), BrowserControlFailure> {
+    check_script_error(&child)?;
+    let nodes = child
+        .get_mut("nodes")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| BrowserControlFailure::new("invalid_result", "frame scan returned no nodes"))?;
+    for node in nodes.iter_mut() {
+        let node = node
+            .as_object_mut()
+            .ok_or_else(|| BrowserControlFailure::new("invalid_result", "frame scan returned an invalid node"))?;
+        node.insert(
+            "frame".to_owned(),
+            serde_json::to_value(frame)
+                .map_err(|_| BrowserControlFailure::new("invalid_result", "could not encode frame reference"))?,
+        );
+        // Frame-local rectangles cannot be used as top-level hit coordinates.
+        node.insert("bounds".to_owned(), Value::Null);
+    }
+    let output = scan
+        .get_mut("nodes")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| BrowserControlFailure::new("invalid_result", "page scan returned no nodes"))?;
+    let remaining = (max_nodes as usize).saturating_sub(output.len());
+    output.extend(nodes.drain(..).take(remaining));
+    bounded_control_value(scan.clone())?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -206,6 +312,8 @@ pub(crate) struct ScanSummary {
 #[derive(Deserialize)]
 struct ScannedNode {
     selector: String,
+    #[serde(default)]
+    frame: Option<FrameTarget>,
     #[serde(default)]
     role: String,
     #[serde(default)]
@@ -280,6 +388,14 @@ pub(crate) fn wait_scan_expression(selector: &str, max_nodes: u32) -> String {
 
 pub(crate) fn target_rect_expression(selector: &str, clear: bool) -> String {
     format!("({TARGET_RECT_FUNCTION})({}, {clear})", json_string(selector))
+}
+
+pub(crate) fn frame_fill_expression(selector: &str) -> String {
+    format!(
+        "(() => {{ const result = {}; if (!result.error && (document.activeElement !== document.querySelector({}))) return {{ error: {{ code: 'element_not_focused', message: 'the child field did not receive focus' }} }}; return result; }})()",
+        target_rect_expression(selector, true),
+        json_string(selector)
+    )
 }
 
 pub(crate) fn scroll_expression(selector: Option<&str>, delta_x: f64, delta_y: f64) -> String {
@@ -607,6 +723,91 @@ mod tests {
         assert_eq!(
             check_script_error(&value),
             Err(BrowserControlFailure::new("no_such_element", "missing"))
+        );
+    }
+    #[test]
+    fn child_routes_are_host_owned_bounded_and_expire_independently() {
+        let frame = FrameTarget::Cdp {
+            session: "page".into(),
+            context: 7,
+        };
+        let mut scan = serde_json::json!({"nodes":[{"selector":"#top","frame":{"backend":"bidi","context":"foreign","realm":"foreign"}}]});
+        clear_scan_frames(&mut scan).unwrap();
+        assert!(scan["nodes"][0].get("frame").is_none());
+        let child = serde_json::json!({"nodes":[{"selector":"#same","bounds":{"x":1,"y":2,"width":3,"height":4}},{"selector":"#extra"}]});
+        append_frame_scan(&mut scan, child, &frame, 2).unwrap();
+        assert_eq!(scan["nodes"].as_array().unwrap().len(), 2);
+        assert!(scan["nodes"][1]["bounds"].is_null());
+        let mut state = SemanticState::default();
+        let (_, _, nodes) = state.register_nodes(scan).unwrap();
+        let top = BrowserTarget::Ref {
+            reference: nodes[0].reference.clone(),
+        };
+        let child = BrowserTarget::Ref {
+            reference: nodes[1].reference.clone(),
+        };
+        assert_eq!(state.resolve(&child).unwrap_err().code, "unsupported_frame_action");
+        assert!(matches!(
+            state.resolve_target(&child).unwrap().frame,
+            Some(FrameTarget::Cdp { context: 7, .. })
+        ));
+        let generation = state.generation();
+        state.invalidate_cdp_frame("page", Some(7));
+        assert_eq!(state.resolve_target(&child).unwrap_err().code, "stale_reference");
+        assert_eq!(state.resolve(&top).unwrap(), "#top");
+        assert_eq!(state.generation(), generation);
+    }
+
+    #[test]
+    fn malformed_child_nodes_fail_without_panicking() {
+        let mut scan = serde_json::json!({"nodes":[]});
+        let frame = FrameTarget::Cdp {
+            session: "page".into(),
+            context: 7,
+        };
+        let child = serde_json::json!({"nodes":[null]});
+        assert_eq!(
+            append_frame_scan(&mut scan, child, &frame, 1).unwrap_err().code,
+            "invalid_result"
+        );
+    }
+    #[test]
+    fn bidi_navigation_invalidates_only_that_child_document() {
+        let frame = FrameTarget::Bidi {
+            context: "child".into(),
+            realm: "realm".into(),
+        };
+        let mut scan = serde_json::json!({"nodes":[{"selector":"#top"}]});
+        append_frame_scan(
+            &mut scan,
+            serde_json::json!({"nodes":[{"selector":"#field"}]}),
+            &frame,
+            2,
+        )
+        .unwrap();
+        let mut state = SemanticState::default();
+        let (_, _, nodes) = state.register_nodes(scan).unwrap();
+        assert!(state.bidi_frame_is_current(&frame));
+        state.invalidate_bidi_frame("foreign");
+        assert!(state.bidi_frame_is_current(&frame));
+        state.invalidate_bidi_frame("child");
+        assert!(!state.bidi_frame_is_current(&frame));
+        assert_eq!(
+            state
+                .resolve(&BrowserTarget::Ref {
+                    reference: nodes[0].reference.clone()
+                })
+                .unwrap(),
+            "#top"
+        );
+        assert_eq!(
+            state
+                .resolve_target(&BrowserTarget::Ref {
+                    reference: nodes[1].reference.clone()
+                })
+                .unwrap_err()
+                .code,
+            "stale_reference"
         );
     }
 }

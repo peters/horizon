@@ -54,11 +54,13 @@ fn copied_page_marker_cannot_preserve_refs_across_same_url_root_replacement() {
     ]);
     let (link, worker) = bidi_fixture(false, false);
     let mut driver = fixture_driver(&classic, link);
-    let BrowserControlValue::Nodes { generation, nodes, .. } = driver.semantic_query("#button", 1).unwrap() else {
+    let BrowserControlValue::Nodes { generation, nodes, .. } = driver.semantic_query("#button", 1, &events()).unwrap()
+    else {
         panic!("nodes")
     };
     let old_ref = nodes[0].reference.clone();
-    let BrowserControlValue::Nodes { generation: next, .. } = driver.semantic_query("#button", 1).unwrap() else {
+    let BrowserControlValue::Nodes { generation: next, .. } = driver.semantic_query("#button", 1, &events()).unwrap()
+    else {
         panic!("nodes")
     };
     assert!(next > generation);
@@ -116,7 +118,7 @@ fn replacement_during_scan_is_never_registered_under_the_new_anchor() {
     let (link, worker) = bidi_fixture(false, false);
     let mut driver = fixture_driver(&classic, link);
     assert_eq!(
-        driver.semantic_query("#button", 1).unwrap_err().code,
+        driver.semantic_query("#button", 1, &events()).unwrap_err().code,
         "document_navigation_invalidated"
     );
     drop(driver);
@@ -296,4 +298,12 @@ fn a_known_url_change_invalidates_even_when_replacement_verification_fails() {
     assert!(driver.remote_orientation.unwrap().applied.is_none());
     drop(driver);
     assert!(worker.join().unwrap().is_empty());
+}
+
+fn events() -> crate::session::BrowserEventSender {
+    crate::session::BrowserEventSender {
+        tx: std::sync::mpsc::channel().0,
+        wake: crate::session::BrowserEventWake::default(),
+        committed_url: crate::CommittedUrl::default(),
+    }
 }
