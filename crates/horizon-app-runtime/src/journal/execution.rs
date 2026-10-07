@@ -15,6 +15,7 @@ pub struct Workspace {
     owner: Uuid,
     root: PathBuf,
     _lease: Lease,
+    _root_lease: Lease,
     root_file: File,
     reconcile: bool,
 }
@@ -45,12 +46,17 @@ impl Workspace {
             return Err(Error::OwnershipRefused);
         }
         let lease = Lease(journal.store.claim(owner, &root, &root_file)?);
+        // The owner binding protects recovery identity; the directory lease also
+        // serializes different owners, accounts and state directories on one root.
+        let root_lease = Lease(root_file.try_clone().map_err(|_| Error::JournalUnavailable)?);
+        root_lease.0.try_lock().map_err(|_| Error::ExecutionBusy)?;
         let reconcile = journal.execution_pending(owner, &root)?;
         Ok(Self {
             journal,
             owner,
             root,
             _lease: lease,
+            _root_lease: root_lease,
             root_file,
             reconcile,
         })
@@ -115,12 +121,13 @@ impl Journal {
     fn execution_pending(&self, owner: Uuid, root: &Path) -> Result<bool> {
         self.store.access(false, |ledger| {
             let mut pending = false;
-            for record in ledger.records.values().filter(|record| record.owner == owner) {
-                if record.root != root {
+            for record in ledger.records.values() {
+                if record.owner == owner && record.root != root {
                     return Err(Error::OwnershipRefused);
                 }
-                if record.phase != Phase::Complete {
-                    if record.realm != self.realm {
+                if record.root == root && record.phase != Phase::Complete {
+                    // A new owner cannot reconcile or bypass another owner's work.
+                    if record.owner != owner || record.realm != self.realm {
                         return Err(Error::OwnershipRefused);
                     }
                     pending = true;
@@ -154,10 +161,53 @@ mod tests {
             Workspace::open(Arc::clone(&journal), owner, folder.path()),
             Err(Error::ExecutionBusy)
         ));
-        let other = Workspace::open(Arc::clone(&journal), Uuid::new_v4(), folder.path()).unwrap();
+        assert!(matches!(
+            Workspace::open(Arc::clone(&journal), Uuid::new_v4(), folder.path()),
+            Err(Error::ExecutionBusy)
+        ));
+        let other_root = canonical_temp();
+        let other = Workspace::open(Arc::clone(&journal), Uuid::new_v4(), other_root.path()).unwrap();
         drop(other);
         drop(first);
         Workspace::open(journal, owner, folder.path()).unwrap();
+    }
+
+    #[test]
+    fn different_owners_and_state_namespaces_cannot_claim_the_same_root_concurrently() {
+        let folder = canonical_temp();
+        let journal_a = Arc::new(journal(&folder.path().join("state-a"), 'a'));
+        let journal_b = Arc::new(journal(&folder.path().join("state-b"), 'b'));
+        let first = Workspace::open(journal_a, Uuid::new_v4(), folder.path()).unwrap();
+        let alias = folder.path().join("root-alias");
+        std::os::unix::fs::symlink(folder.path(), &alias).unwrap();
+        assert!(matches!(
+            Workspace::open(Arc::clone(&journal_b), Uuid::new_v4(), &alias),
+            Err(Error::ExecutionBusy)
+        ));
+        // Explicit directory unlock must not depend on the last inherited clone.
+        let inherited = first.root_directory().unwrap();
+        drop(first);
+        let next = Workspace::open(journal_b, Uuid::new_v4(), folder.path()).unwrap();
+        drop(inherited);
+        drop(next);
+    }
+
+    #[test]
+    fn changing_owner_cannot_bypass_unfinished_work_on_the_same_root() {
+        let folder = canonical_temp();
+        let journal = Arc::new(journal(&folder.path().join("state"), 'a'));
+        let owner = Uuid::new_v4();
+        let first = Workspace::open(Arc::clone(&journal), owner, folder.path()).unwrap();
+        let operation = first.start(Kind::Run, Duration::from_secs(30)).unwrap();
+        drop(first);
+        let other_owner = Uuid::new_v4();
+        assert!(matches!(
+            Workspace::open(Arc::clone(&journal), other_owner, folder.path()),
+            Err(Error::OwnershipRefused)
+        ));
+        journal.confirm_released(owner, operation.id).unwrap();
+        let other = Workspace::open(journal, other_owner, folder.path()).unwrap();
+        other.start(Kind::Run, Duration::from_secs(30)).unwrap();
     }
 
     #[test]

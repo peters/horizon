@@ -229,10 +229,14 @@ fn delayed_admission_and_arming_cannot_authorize_a_command_after_the_original_de
     use std::os::unix::fs::PermissionsExt;
     let (root, workspace, mut local) = fixture();
     let worker = root.path().join("delayed-guardian.py");
-    std::fs::write(
-        &worker,
-        r"#!/usr/bin/python3
-import json,os,pathlib,sys,time
+    // Resolve the real interpreter before starting the timed admission window: macOS may use an Xcode launcher.
+    let python = std::process::Command::new("python3")
+        .args(["-c", "import os,sys; print(os.path.realpath(sys.executable))"])
+        .output()
+        .unwrap();
+    assert!(python.status.success());
+    let python = String::from_utf8(python.stdout).unwrap();
+    let body = r"import json,os,pathlib,sys,time
 spec=json.loads(sys.stdin.readline())
 state=pathlib.Path(spec['state'])
 receipt={'operation':spec['operation'],'guardian_pid':os.getpid(),'complete':False}
@@ -248,9 +252,8 @@ if start=='start\n':
 receipt['complete']=True
 path.write_text(json.dumps(receipt))
 if start=='start\n':print(json.dumps({'phase':'complete','success':True}),flush=True)
-",
-    )
-    .unwrap();
+";
+    std::fs::write(&worker, format!("#!{}\n{body}", python.trim())).unwrap();
     std::fs::set_permissions(&worker, std::fs::Permissions::from_mode(0o700)).unwrap();
     // Use a second host configuration with the same trusted workspace but a deliberately delayed private worker.
     // No existing lease has started yet; the fixture's default actor is dropped first.

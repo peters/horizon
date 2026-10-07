@@ -73,6 +73,9 @@ A Windows build does not qualify process or tunnel execution.
 
 Clients for the same provider account must use the same state directory.
 Keep the owner UUID unchanged for recovery.
+The host locks the canonical project directory for the actor lifetime.
+Different owners, accounts and state directories cannot execute concurrently on the same directory.
+Retained unfinished records still require their original owner and private state for reconciliation.
 Do not replace it to bypass uncertain work.
 The host retains the project's directory identity.
 It reads declared files through that retained directory.
