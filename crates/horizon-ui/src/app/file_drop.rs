@@ -280,7 +280,9 @@ impl HorizonApp {
     ) -> Option<FileDropHighlight> {
         let hover_pos = hover_pos?;
         if let Some(panel) = self.browser_drop_panel(fullscreen_panel, Some(hover_pos), scope) {
-            return Some(FileDropHighlight::Browser(panel));
+            return self
+                .browser_drop_allowed(panel, hover_pos)
+                .then_some(FileDropHighlight::Browser(panel));
         }
 
         let all_editor = ctx.input(|input| {
