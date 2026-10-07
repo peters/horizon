@@ -542,3 +542,147 @@ fn local_preparation_and_unsent_replacements_preserve_mutation_evidence() {
         );
     }
 }
+
+/// A cloud of `profile` for `repository`, bound to synthetic machine files below `root`:
+/// a `RunPod` key, an SSH identity and a saved pull login that quick start must not use.
+fn quick_start_request(
+    root: &std::path::Path,
+    launch: &repository::launch::Prepared,
+    profile: horizon_cloud::Profile,
+) -> Request {
+    use std::os::unix::fs::PermissionsExt;
+    let private = |name: &str, contents: &str| {
+        let path = root.join(name);
+        std::fs::write(&path, contents).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    };
+    let settings = serde_json::from_value(serde_json::json!({
+        "runpod_key_file": private("compute-key", "synthetic-compute-key"),
+        "ssh_identity_file": private("identity", "synthetic-identity"),
+        "docker_config": root.join("docker"), "registry_pull_auth_id": "saved-pull-login",
+        "cpu_flavors": [], "gpu_types": []
+    }))
+    .unwrap();
+    std::fs::write(
+        root.join("identity.pub"),
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF2kk2kaQHcd1MHINbQ4muiDkEONuV3co+7ug6QOawIB fixture\n",
+    )
+    .unwrap();
+    Request::new(
+        super::super::new_id(),
+        launch.repository.clone(),
+        launch.revision.clone(),
+        profile,
+        root.join(format!("cloud-{}", super::super::new_id())),
+        settings,
+    )
+}
+
+/// Quick start reaches the provider request with no `docker` program and no Docker daemon:
+/// no digest lookup, no pull and no local contract check. The same image with another
+/// selection of tools keeps the local check, so it stops here and says that Docker is
+/// missing. The test cancels at Provision, before any provider request, so it allocates
+/// nothing.
+#[test]
+fn quick_start_reaches_allocation_without_local_docker() {
+    use repository::launch::{Configuration, quick_start};
+    if !super::super::image::without_docker::child(
+        "cloud_runtime::deployment::tests::quick_start_reaches_allocation_without_local_docker",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let plain = root.path().join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    std::fs::write(plain.join("README"), "Hello World!\n").unwrap();
+    for args in [
+        &["init", "--quiet"][..],
+        &["add", "README"],
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "First",
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&plain)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let cancel = Cancellation::default();
+    let quiet = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let launch = repository::launch::prepare_with_configuration(
+        plain.to_str().unwrap(),
+        "HEAD",
+        Configuration::QuickStart,
+        &quiet,
+    )
+    .unwrap();
+    let profile = launch.config.profiles[quick_start::PROFILE].clone();
+    let request = quick_start_request(root.path(), &launch, profile.clone());
+    let stages = std::cell::RefCell::new(Vec::new());
+    let output = std::cell::RefCell::new(Vec::new());
+    let emit = |event| match event {
+        Event::Stage(stage, _) => {
+            stages.borrow_mut().push(stage);
+            if stage == Stage::Provision {
+                cancel.cancel();
+            }
+        }
+        Event::Output(line) => output.borrow_mut().push(line),
+        _ => {}
+    };
+    let error = deploy(&request, &cancel, &emit).unwrap_err();
+    assert!(
+        matches!(error, Error::Provider(horizon_cloud::CloudError::Cancelled)),
+        "{error}"
+    );
+    assert_eq!(*stages.borrow(), [Stage::Validate, Stage::Provision]);
+    assert!(
+        output
+            .borrow()
+            .iter()
+            .any(|line| line.contains("does not run in local Docker")),
+        "{:?}",
+        output.borrow()
+    );
+    let state = Store::lock(&request.state_root).unwrap().load().unwrap().unwrap();
+    let spec = state.spec.unwrap();
+    assert_eq!(spec.image_digest, quick_start::IMAGE);
+    assert_eq!(spec.registry_auth_id, None);
+    assert!(
+        !request.state_root.join("workspace-volume.json").exists(),
+        "nothing reached the provider"
+    );
+
+    let mut other = profile;
+    other.capabilities.desktop = false;
+    let request = quick_start_request(root.path(), &launch, other);
+    let error = deploy(&request, &Cancellation::default(), &|_| {})
+        .unwrap_err()
+        .to_string();
+    assert!(error.starts_with("Docker is not installed on this computer"), "{error}");
+    assert!(
+        Store::lock(&request.state_root)
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap()
+            .spec
+            .is_none()
+    );
+}

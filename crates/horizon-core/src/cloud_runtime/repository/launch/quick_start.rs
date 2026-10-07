@@ -1,10 +1,12 @@
 //! A built-in image-only profile for a repository with no `.horizon/cloud.yml`: the
-//! public CPU base worker, which needs no registry login and no image build.
+//! public CPU base worker, which needs no registry login, no image build and no
+//! local Docker.
 use super::{CloudConfig, Error, Path, Runner};
+use horizon_cloud::Capabilities;
 
 // The pin, by digest, so a Horizon build always starts the image it was tested with.
 // The Worker images workflow publishes the base image from main and prints the line
-// to put here; docs/release-flow.md describes the update.
+// to put here; docs/release-flow.md describes the update, which also updates CONTRACT.
 macro_rules! image {
     () => {
         "ghcr.io/peters/horizon-worker-base@sha256:94d85a34632bec1b2819aaf982791b046fbaae70151f7f670e8816be05ed3c18"
@@ -12,9 +14,54 @@ macro_rules! image {
 }
 
 /// The public base worker image. Anonymous pulls work, so the provider needs no
-/// registry credential. Deployment still checks the worker contract before it
-/// allocates compute.
+/// registry credential. Its worker contract is [`CONTRACT`], so deployment needs no
+/// local Docker to check it before it allocates compute.
 pub const IMAGE: &str = image!();
+
+/// What the worker check of [`IMAGE`] reports for the capabilities of the built-in
+/// profile with `--git-auth`.
+///
+/// Horizon uses this report instead of running the check in local Docker, because
+/// nothing it could learn locally can differ: a digest names exactly one image, and
+/// the Worker images workflow runs this check, the marker check and the host key
+/// check on that image, with these capabilities, before it publishes it. The
+/// worker still runs its own check when it starts. An ignored test compares this
+/// report with the pinned image in local Docker.
+pub const CONTRACT: &str = "horizon-git-auth-contract=1
+horizon-git-auth-contract=2
+horizon-idle-stop-contract=1
+horizon-idle-report-contract=1
+horizon-siblings-contract=1
+horizon-session-env-contract=1
+horizon-gpu-lock-contract=1
+horizon-source-shallow-contract=1
+horizon-source-lfs-selection-contract=1
+horizon-tailnet-contract=1
+horizon-tailnet-contract=2
+horizon-worker-contract=1
+horizon-source-contract=1
+horizon-capabilities-contract=1
+horizon-session-restart-contract=1
+horizon-shared-checkout-contract=1
+horizon-prepare-checkout-contract=1
+";
+
+/// The worker check report Horizon uses for `image` with `capabilities` instead of a
+/// local check: [`CONTRACT`] for [`IMAGE`] with the capabilities of the built-in
+/// profile, which the publishing workflow checked. Any other image or selection,
+/// such as a committed profile that asks the base image for other tools, gets `None`
+/// and keeps the local check.
+#[must_use]
+pub fn trusted_contract(image: &str, capabilities: &Capabilities) -> Option<&'static str> {
+    (image == IMAGE
+        && builtin().is_ok_and(|config| {
+            config
+                .profiles
+                .get(PROFILE)
+                .is_some_and(|profile| profile.capabilities == *capabilities)
+        }))
+    .then_some(CONTRACT)
+}
 
 /// The repository of the public base image. Anyone can pull it, so Horizon never
 /// attaches a registry login to it, whatever logins this machine has saved.
@@ -183,6 +230,77 @@ mod tests {
         assert_eq!(value("agents"), agents);
         assert_eq!(value("browsers"), browsers);
         assert_eq!(value("desktop"), [capabilities.desktop.to_string()]);
+    }
+
+    #[test]
+    fn the_trusted_report_is_the_current_checker_contract_and_satisfies_the_builtin_profile() {
+        let checker = include_str!("../../../../../../examples/cloud-worker/horizon-worker-check");
+        let lines: Vec<_> = CONTRACT.lines().collect();
+        assert!(!lines.is_empty());
+        for line in &lines {
+            assert!(
+                line.starts_with("horizon-") && line.contains("-contract=") && checker.contains(line),
+                "{line} is a marker that the checker prints"
+            );
+        }
+        let unique: std::collections::BTreeSet<_> = lines.iter().collect();
+        assert_eq!(unique.len(), lines.len(), "each marker once");
+        let profile = &builtin().unwrap().profiles[PROFILE];
+        let report = trusted_contract(IMAGE, &profile.capabilities).unwrap();
+        crate::cloud_runtime::worker_contract::validate(report, &profile.capabilities, true, true).unwrap();
+        crate::cloud_runtime::worker_contract::validate_idle_report(report, true).unwrap();
+        let contract = crate::cloud_runtime::WorkerContract::reported(report);
+        assert!(contract.tailnet && contract.session_restart && contract.prepare_checkout);
+        assert!(contract.pinned_submodules && contract.lfs_selection);
+    }
+
+    #[test]
+    fn only_the_pin_with_the_checked_capabilities_is_trusted() {
+        let capabilities = builtin().unwrap().profiles[PROFILE].capabilities.clone();
+        assert!(trusted_contract(IMAGE, &capabilities).is_some());
+        let other_digest = format!("{REPOSITORY}@sha256:{}", "0".repeat(64));
+        for image in [
+            other_digest.as_str(),
+            "ghcr.io/peters/horizon-worker-base:cpu",
+            "registry.example/worker",
+        ] {
+            assert!(trusted_contract(image, &capabilities).is_none(), "{image}");
+        }
+        let mut fewer = capabilities.clone();
+        fewer.desktop = false;
+        let mut more = capabilities;
+        more.agents.insert(horizon_cloud::Agent::Grok);
+        for selection in [fewer, more, Capabilities::default()] {
+            assert!(trusted_contract(IMAGE, &selection).is_none(), "{selection:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "pulls the pinned image and runs its worker check in local Docker; run it when the pin changes"]
+    fn the_trusted_report_is_what_the_pinned_image_reports() {
+        let capabilities = &builtin().unwrap().profiles[PROFILE].capabilities;
+        let output = std::process::Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "--pull",
+                "missing",
+                "--platform",
+                "linux/amd64",
+                "--network=none",
+            ])
+            .args(["--entrypoint", "/usr/local/bin/horizon-worker-check", "--env"])
+            .arg(crate::cloud_runtime::worker_contract::environment(capabilities).unwrap())
+            .args([IMAGE, "--git-auth"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let report = std::str::from_utf8(&output.stdout).unwrap();
+        // With --nocapture, the report to put in CONTRACT when the pin changes.
+        println!("{report}");
+        let reported: std::collections::BTreeSet<_> = report.lines().map(str::to_owned).collect();
+        let trusted: std::collections::BTreeSet<_> = CONTRACT.lines().map(str::to_owned).collect();
+        assert_eq!(reported, trusted);
     }
 
     #[test]

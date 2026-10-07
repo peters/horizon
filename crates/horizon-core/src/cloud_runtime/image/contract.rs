@@ -1,5 +1,5 @@
 use super::{Duration, Error, Event, Images, Result, Runner};
-use crate::cloud_runtime::{WorkerContract, git_auth, siblings, worker_contract};
+use crate::cloud_runtime::{WorkerContract, git_auth, repository::launch::quick_start, siblings, worker_contract};
 use horizon_cloud::{Cancellation, Capabilities, CloudError, Profile};
 
 impl Images<'_> {
@@ -45,17 +45,16 @@ impl Images<'_> {
         if !horizon_cloud::valid_id(operation_id) {
             return Err(Error::Invalid("Invalid image operation identity"));
         }
+        if let Some(report) = quick_start::trusted_contract(image, capabilities) {
+            return validated(report, profile, git_auth, sibling_grants);
+        }
+        super::require_docker()?;
         let name = format!("horizon-contract-{operation_id}");
         // The durable operation identity also recovers an interrupted previous check.
         self.remove_contract(&name)?;
         let result = self
             .run_contract(image, &name, capabilities, git_auth)
-            .and_then(|output| {
-                worker_contract::validate(&output, capabilities, git_auth, profile.idle_stop_minutes.is_some())?;
-                worker_contract::validate_idle_report(&output, stopped_by_horizon(profile))?;
-                sibling_grants.map_or(Ok(()), |grants| validate_siblings(&output, grants))?;
-                Ok(WorkerContract::reported(&output))
-            });
+            .and_then(|output| validated(&output, profile, git_auth, sibling_grants));
         // Killing a Docker client does not stop its daemon-owned container.
         finish_cleanup(result, self.remove_contract(&name), self.runner.emit)
     }
@@ -115,6 +114,19 @@ impl Images<'_> {
         }
         Ok(())
     }
+}
+
+/// The features `output`, a worker check report, promises once it satisfies `profile`.
+fn validated(output: &str, profile: &Profile, git_auth: bool, sibling_grants: Option<bool>) -> Result<WorkerContract> {
+    worker_contract::validate(
+        output,
+        &profile.capabilities,
+        git_auth,
+        profile.idle_stop_minutes.is_some(),
+    )?;
+    worker_contract::validate_idle_report(output, stopped_by_horizon(profile))?;
+    sibling_grants.map_or(Ok(()), |grants| validate_siblings(output, grants))?;
+    Ok(WorkerContract::reported(output))
 }
 
 fn validate_siblings(output: &str, grants: bool) -> Result<()> {
