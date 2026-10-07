@@ -202,6 +202,8 @@ pub(super) struct Runtime {
     cancel: Option<horizon_core::cloud_runtime::Cancellation>,
     stage: Option<Stage>,
     progress: progress::Timeline,
+    /// The stages the deployment started here never runs; its record says so once saved.
+    launched_skips: &'static [Stage],
     logs: std::collections::VecDeque<LogLine>,
     /// Lines that arrived after the reader scrolled up. They join `logs` when
     /// follow mode resumes, so the visible history does not shift.
@@ -420,6 +422,7 @@ impl Runtime {
         }
         self.desktop = None;
         self.progress.reset();
+        self.launched_skips = cloud_runtime::image::skipped_stages(&request.profile);
         // A deployment or reconnect is its own operation; an earlier stop or resume that
         // failed no longer names this attempt's failure.
         self.operation = None;

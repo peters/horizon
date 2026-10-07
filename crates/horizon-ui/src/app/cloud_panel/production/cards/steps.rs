@@ -20,12 +20,16 @@ enum Mark {
     Running,
     Failed,
     Pending,
+    /// A step this cloud's deployment never runs, such as Build for an image-only profile.
+    Skipped,
 }
 
 fn mark(status: &Status, index: usize) -> Mark {
     let track = &status.track;
     if track.current == Some(index) {
         if track.failed { Mark::Failed } else { Mark::Running }
+    } else if track.skipped.contains(&track.stages[index]) {
+        Mark::Skipped
     } else if index < track.finished {
         Mark::Done
     } else {
@@ -65,6 +69,13 @@ fn paint_mark(ui: &egui::Ui, center: Pos2, mark: &Mark, stage: Stage, faded: boo
         Mark::Pending => {
             painter.circle_stroke(center, 5.5, Stroke::new(1.3, theme::BORDER_STRONG()));
         }
+        Mark::Skipped => {
+            painter.circle_stroke(center, 5.5, Stroke::new(1.3, theme::BORDER_SUBTLE()));
+            painter.line_segment(
+                [center - vec2(3.0, 0.0), center + vec2(3.0, 0.0)],
+                Stroke::new(1.5, theme::FG_DIM()),
+            );
+        }
     }
 }
 
@@ -93,6 +104,7 @@ fn spoken(stage: Stage, mark: &Mark, elapsed: Option<std::time::Duration>) -> St
         Mark::Running => "running",
         Mark::Failed => "failed",
         Mark::Pending => "pending",
+        Mark::Skipped => "skipped",
     };
     match elapsed {
         Some(elapsed) => format!("{}: {progress}, {}", stage.label(), short(elapsed)),
@@ -110,7 +122,15 @@ fn label_color(mark: &Mark) -> Color32 {
         Mark::Running => theme::FG(),
         Mark::Failed => theme::PALETTE_RED(),
         Mark::Done => theme::FG_SOFT(),
-        Mark::Pending => theme::FG_DIM(),
+        Mark::Pending | Mark::Skipped => theme::FG_DIM(),
+    }
+}
+
+/// The text in a step's time slot: its measured time, or that it is skipped.
+fn time_text(runtime: &Runtime, stage: Stage, mark: &Mark) -> Option<String> {
+    match mark {
+        Mark::Skipped => Some("skipped".to_owned()),
+        _ => runtime.progress.stage_duration(stage).map(short),
     }
 }
 
@@ -136,11 +156,11 @@ pub(super) fn vertical(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) ->
             FontId::proportional(14.5),
             label_color(&mark),
         );
-        if let Some(elapsed) = runtime.progress.stage_duration(*stage) {
+        if let Some(time) = time_text(runtime, *stage, &mark) {
             ui.painter().text(
                 pos2(rect.right(), rect.top() + 4.0),
                 Align2::RIGHT_TOP,
-                short(elapsed),
+                time,
                 FontId::monospace(12.5),
                 if open { theme::FG_SOFT() } else { theme::FG_DIM() },
             );
@@ -313,7 +333,7 @@ pub(super) fn horizontal(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) 
             Mark::Running => tone_color(Tone::Live),
             Mark::Failed => theme::PALETTE_RED(),
             Mark::Done => theme::FG_SOFT(),
-            Mark::Pending => theme::FG_DIM(),
+            Mark::Pending | Mark::Skipped => theme::FG_DIM(),
         };
         let clip = ui
             .painter()
@@ -327,14 +347,52 @@ pub(super) fn horizontal(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) 
                 color,
             );
         }
-        if let Some(elapsed) = runtime.progress.stage_duration(*stage) {
+        if let Some(time) = time_text(runtime, *stage, &mark) {
             clip.text(
                 center + vec2(0.0, 38.0),
                 Align2::CENTER_TOP,
-                short(elapsed),
+                time,
                 FontId::monospace(12.0),
                 theme::FG_DIM(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::status::Track;
+    use super::*;
+
+    #[test]
+    fn a_skipped_step_is_neither_done_nor_pending_and_says_so() {
+        let track = Track {
+            stages: &Stage::ALL,
+            current: Some(4),
+            finished: 4,
+            fraction: None,
+            failed: false,
+            faded: false,
+            skipped: &[Stage::Build, Stage::Push],
+        };
+        let status = Status {
+            tone: Tone::Live,
+            verb: String::new(),
+            numbers: String::new(),
+            tail: String::new(),
+            right: String::new(),
+            failure: None,
+            track,
+            primary: None,
+        };
+        let marks: Vec<_> = (0..Stage::ALL.len()).map(|index| mark(&status, index)).collect();
+        assert!(matches!(marks[0], Mark::Done));
+        assert!(matches!(marks[1], Mark::Skipped) && matches!(marks[2], Mark::Skipped));
+        assert!(matches!(marks[3], Mark::Done));
+        assert!(matches!(marks[4], Mark::Running));
+        assert_eq!(spoken(Stage::Build, &marks[1], None), "Build locally: skipped");
+        let runtime = Runtime::default();
+        assert_eq!(time_text(&runtime, Stage::Build, &marks[1]).as_deref(), Some("skipped"));
+        assert_eq!(time_text(&runtime, Stage::Validate, &marks[0]), None);
     }
 }
