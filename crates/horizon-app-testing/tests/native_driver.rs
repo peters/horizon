@@ -903,3 +903,24 @@ fn android_relaunch_uses_the_observed_owned_activity_and_preserves_launch_extras
     }
     Ok(())
 }
+
+#[test]
+fn direct_wait_rejects_unbounded_and_malformed_targets_without_provider_requests() -> Result<(), Error> {
+    let fake = Arc::new(Fake::default());
+    let mut driver = NativeDriver::allocate(fake.clone(), &launch(Platform::Ios)?)?;
+    let before = fake.calls.lock().unwrap().len();
+    for target in [
+        Target::Identifier("x".repeat(513)),
+        Target::Label("ø".repeat(257)),
+        Target::Identifier("invalid\nidentifier".into()),
+        Target::Ref("invalid ref".into()),
+        Target::Coordinates(horizon_app_testing::recipe::Point { x: 16_385, y: 0 }),
+    ] {
+        assert_eq!(
+            driver.wait(&target, State::Visible, Duration::from_millis(10)).err(),
+            Some(Error::RecipeInvalid)
+        );
+        assert_eq!(fake.calls.lock().unwrap().len(), before);
+    }
+    Ok(())
+}

@@ -263,7 +263,7 @@ impl Action {
 }
 
 impl Target {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         let valid = match self {
             Self::Identifier(s) | Self::Label(s) => printable(s, 512),
             Self::Ref(s) => identifier(s),

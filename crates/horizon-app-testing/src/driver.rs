@@ -232,6 +232,7 @@ impl NativeDriver {
     /// # Errors
     /// No element can satisfy enabled/disabled unless it exists; hidden may be absent.
     pub fn wait(&mut self, target: &Target, state: State, timeout: Duration) -> Result<()> {
+        target.validate()?;
         if timeout.is_zero() || timeout > Duration::from_secs(60) {
             return Err(Error::RecipeInvalid);
         }

@@ -48,7 +48,7 @@ pub(super) async fn execute(
             progress=receive.recv(),if open => {
                 if let Some(progress)=progress {
                     sequence=sequence.saturating_add(1);
-                    if let Some(token)=&token {
+                    if !cancelled && let Some(token)=&token {
                         let message=serde_json::to_string(&progress).map_err(|_|Error::Unavailable.to_string())?;
                         let notification=ProgressNotificationParam::new(token.clone(),f64::from(sequence)).with_message(message);
                         if !matches!(tokio::time::timeout(Duration::from_secs(2),context.peer.notify_progress(notification)).await,Ok(Ok(()))) {

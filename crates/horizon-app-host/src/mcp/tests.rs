@@ -172,6 +172,7 @@ async fn typed_mcp_transport_controls_owned_native_sessions_and_rejects_foreign_
         .await
         .unwrap();
     assert_eq!(foreign.is_error, Some(true));
+    bounded_wait_inputs(&client, &session).await;
     assert_private_audit_cursor(&client).await;
     actor.snapshot(handle(&session).unwrap()).unwrap();
     let invalid = client
@@ -389,3 +390,34 @@ async fn assert_private_audit_cursor(client: &rmcp::Peer<rmcp::RoleClient>) {
         assert_eq!(invalid.is_error, Some(true));
     }
 }
+
+async fn bounded_wait_inputs(
+    client: &rmcp::service::RunningService<rmcp::RoleClient, impl rmcp::ClientHandler>,
+    session: &str,
+) {
+    for target in [
+        json!({"by":"identifier","value":"x".repeat(513)}),
+        json!({"by":"label","value":"invalid\nlabel"}),
+        json!({"by":"ref","value":"invalid ref"}),
+    ] {
+        let response = client
+            .call_tool(
+                CallToolRequestParams::new("app_wait").with_arguments(
+                    json!({"session":session,"target":target,"state":"visible","timeout_millis":10})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.is_error, Some(true));
+        assert!(
+            serde_json::to_string(&response)
+                .unwrap()
+                .contains("device_recipe_invalid")
+        );
+    }
+}
+
+mod backpressure;
