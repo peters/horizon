@@ -2,7 +2,7 @@
 //! public CPU base worker, which needs no registry login, no image build and no
 //! local Docker.
 use super::{CloudConfig, Error, Path, Runner};
-use horizon_cloud::Capabilities;
+use horizon_cloud::{Capabilities, Profile};
 
 // The pin, by digest, so a Horizon build always starts the image it was tested with.
 // The Worker images workflow publishes the base image from main and prints the line
@@ -61,6 +61,13 @@ pub fn trusted_contract(image: &str, capabilities: &Capabilities) -> Option<&'st
                 .is_some_and(|profile| profile.capabilities == *capabilities)
         }))
     .then_some(CONTRACT)
+}
+
+/// Whether `profile` runs the public base image without a recipe, as a quick-start
+/// cloud does. Its rebuild moves it to [`IMAGE`], the image this Horizon version pins.
+#[must_use]
+pub fn on_public_base(profile: &Profile) -> bool {
+    profile.build.is_none() && is_public_base(&profile.image)
 }
 
 /// The repository of the public base image. Anyone can pull it, so Horizon never
@@ -273,6 +280,20 @@ mod tests {
         for selection in [fewer, more, Capabilities::default()] {
             assert!(trusted_contract(IMAGE, &selection).is_none(), "{selection:?}");
         }
+    }
+
+    #[test]
+    fn a_cloud_on_the_base_image_without_a_recipe_rebuilds_on_the_pin() {
+        let mut profile = builtin().unwrap().profiles[PROFILE].clone();
+        assert!(on_public_base(&profile));
+        profile.image = format!("{REPOSITORY}@sha256:{}", "0".repeat(64));
+        assert!(on_public_base(&profile), "an earlier pin");
+        profile.image = "registry.example/worker@sha256:".to_owned() + &"0".repeat(64);
+        assert!(!on_public_base(&profile));
+        profile.image = IMAGE.into();
+        profile.build =
+            Some(serde_json::from_value(serde_json::json!({"context": ".", "dockerfile": "Dockerfile"})).unwrap());
+        assert!(!on_public_base(&profile), "a recipe rebuilds from the repository");
     }
 
     #[test]

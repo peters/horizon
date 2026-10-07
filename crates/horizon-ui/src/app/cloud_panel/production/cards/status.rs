@@ -359,15 +359,18 @@ pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> St
     status
 }
 
-/// The deployment steps this cloud never runs, such as Build and Push for an
+/// The steps of `stages` this cloud never runs, such as Build and Push for an
 /// image-only profile, from its saved record or else the deployment started here.
+/// A deployment and the rebuild of a quick-start cloud both list them; a deletion does not.
 fn skipped(runtime: &Runtime, stages: &[Stage]) -> &'static [Stage] {
-    if stages != Stage::ALL.as_slice() {
-        return &[];
-    }
-    runtime.state.as_ref().map_or(runtime.launched_skips, |state| {
+    let skipped = runtime.state.as_ref().map_or(runtime.launched_skips, |state| {
         horizon_core::cloud_runtime::image::skipped_stages(&state.profile)
-    })
+    });
+    if skipped.iter().all(|stage| stages.contains(stage)) {
+        skipped
+    } else {
+        &[]
+    }
 }
 
 /// The status before the skipped stages are marked on its track.

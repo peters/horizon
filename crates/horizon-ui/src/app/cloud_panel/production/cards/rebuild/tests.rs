@@ -175,6 +175,54 @@ fn rebuild_confirmation_names_its_consequences_before_starting() {
     ));
 }
 
+/// A ready cloud on the public base image without a recipe, as quick start makes it.
+fn on_base() -> Runtime {
+    let mut runtime = ready(false, Phase::None);
+    let state = runtime.state.as_mut().unwrap();
+    state.profile.image = horizon_core::cloud_runtime::repository::launch::quick_start::IMAGE.into();
+    state.spec.as_mut().unwrap().profile = state.profile.clone();
+    runtime
+}
+
+#[test]
+fn a_quick_start_cloud_is_offered_a_restart_on_the_pinned_base_image() {
+    let ctx = egui::Context::default();
+    let mut runtime = on_base();
+    assert!(click(&ctx, &mut runtime, OFFER).is_none());
+    let confirming = texts(&ctx, &mut runtime);
+    let text = confirming
+        .iter()
+        .find(|text| text.starts_with("Restart the worker on the base image"))
+        .expect("the confirmation is drawn");
+    for consequence in [
+        "this Horizon version pins",
+        "Nothing is built",
+        "Running agent processes restart",
+        "Files under /workspace, including worktrees and agent logins, are kept",
+        "cannot change the cloud's size or capabilities",
+    ] {
+        assert!(text.contains(consequence), "{consequence}");
+    }
+    assert!(!confirming.iter().any(|text| text.contains("committed .horizon recipe")));
+    assert!(matches!(
+        click(&ctx, &mut runtime, "Rebuild and restart"),
+        Some(Action::Rebuild)
+    ));
+    let mut pending = on_base();
+    pending
+        .state
+        .as_mut()
+        .unwrap()
+        .begin_replacement(
+            horizon_core::cloud_runtime::state::OperationId::generate(),
+            "c".repeat(40),
+        )
+        .unwrap();
+    let notice = texts(&ctx, &mut pending);
+    assert!(has(&notice, "A switch to the pinned base image"), "{notice:?}");
+    assert!(!notice.iter().any(|text| text.contains("build the image")));
+}
+
 fn rebuilding(kind: Kind, stage: Stage) -> (Runtime, std::sync::mpsc::Sender<Event>) {
     let mut runtime = ready(true, Phase::None);
     let (sender, receiver) = std::sync::mpsc::channel();

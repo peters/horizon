@@ -1,19 +1,21 @@
 //! Production steps: Git, Docker and the registry build the image, the provider API
-//! switches the worker or releases its server, and SSH releases hosted devices.
+//! switches the worker or releases its server, and SSH releases hosted devices. A cloud
+//! on the public base image takes the pinned base image instead of a build.
 use super::{Head, Provider, Recipe, Server, Steps, pair};
 use crate::cloud_runtime::{
     Error, Event, Result, browser_auth,
     command::Runner,
     deployment::{Request, hetzner, image, storage},
     image::Images,
-    registry, repository,
+    registry,
+    repository::{self, launch::quick_start},
     settings::Settings,
     siblings,
     ssh::Connection,
     state::{Deployment, ReplacementImage, Store},
 };
 use horizon_cloud::{
-    Cancellation, CloudConfig, CloudError, CreateState, WorkerSpec,
+    Cancellation, CloudConfig, CloudError, CreateState, Profile, WorkerSpec,
     provider::{Description, Rebuild},
     runpod::{RunPod, replacement::Observed},
 };
@@ -182,22 +184,36 @@ impl<'a> Live<'a> {
         }
     }
 
-    /// A single-repository image from `source`, checked for Git grants when they are sent.
+    /// A single-repository image of `profile` from `source`, checked for Git grants when
+    /// they are sent.
     fn single(
         &self,
         registry: Option<&registry::Prepared>,
         state: &Deployment,
+        profile: &Profile,
         source: &Path,
         tag: &str,
     ) -> Result<String> {
         let digest = self
             .images(registry, true)
-            .prepare_tagged(&state.profile, source, &state.cloud_id, tag)?;
+            .prepare_tagged(profile, source, &state.cloud_id, tag)?;
         if self.git_auth {
             self.images(registry, false)
-                .validate_contract(&digest, &state.cloud_id, &state.profile, true)?;
+                .validate_contract(&digest, &state.cloud_id, profile, true)?;
         }
         Ok(digest)
+    }
+
+    /// The base image this Horizon version pins, for a cloud on the public base image. It
+    /// has no recipe and no registry login, and with the pin's own contract
+    /// (`quick_start::trusted_contract`) it needs no local Docker either.
+    fn pinned(&self, state: &Deployment, tag: &str) -> Result<ReplacementImage> {
+        let profile = Profile {
+            image: quick_start::IMAGE.to_owned(),
+            ..state.profile.clone()
+        };
+        let digest = self.single(self.registry.borrow().as_ref(), state, &profile, &state.repository, tag)?;
+        self.register(state, digest)
     }
 
     /// The image with the pull binding the worker will use, verified to read it.
@@ -267,6 +283,9 @@ impl Provider for Live<'_> {
 
 impl Steps for Live<'_> {
     fn build(&self, state: &Deployment, revision: &str, siblings: &[String], tag: &str) -> Result<ReplacementImage> {
+        if quick_start::on_public_base(&state.profile) {
+            return self.pinned(state, tag);
+        }
         if let Some(registry) = self.registry.borrow().as_ref() {
             registry.preflight(&self.runner)?;
         }
@@ -281,7 +300,7 @@ impl Steps for Live<'_> {
                 let images = self.images(registry.as_ref(), true);
                 image::build_layered(self.request, &images, state, siblings, &source, &layers, tag)?
             } else {
-                self.single(registry.as_ref(), state, &source, tag)?
+                self.single(registry.as_ref(), state, &state.profile, &source, tag)?
             }
         };
         self.register(state, digest)
