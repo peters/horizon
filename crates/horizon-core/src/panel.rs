@@ -271,6 +271,9 @@ pub struct PanelProcessActivity {
     /// Browser state/frame activity that requires repainting but must not
     /// trigger terminal-grid scans.
     pub browser: bool,
+    /// The terminal answered a program query, so the program may wait for
+    /// its next answer even when the panel is not on the screen.
+    pub answered_query: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -512,6 +515,7 @@ impl Panel {
                 activity: PanelProcessActivity {
                     terminal: false,
                     browser: browser_output.had_output,
+                    answered_query: false,
                 },
                 cwd_changed: false,
                 persisted_state_changed: browser_output.url_changed || browser_output.config_changed,
@@ -524,6 +528,7 @@ impl Panel {
             return PanelProcessOutput::default();
         };
         let had_output = terminal.process_events();
+        let answered_query = terminal.take_answered_query();
         let title_changed = self.terminal_title != terminal.title();
         if title_changed {
             self.terminal_title = terminal.title().to_string();
@@ -550,6 +555,7 @@ impl Panel {
             activity: PanelProcessActivity {
                 terminal: had_output,
                 browser: false,
+                answered_query,
             },
             cwd_changed,
             persisted_state_changed: cwd_changed,
