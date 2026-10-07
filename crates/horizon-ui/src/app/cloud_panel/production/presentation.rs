@@ -355,28 +355,45 @@ impl HorizonApp {
                     }
                     continue;
                 }
-                if browser.lost {
-                    continue;
-                }
-                let mut options = PanelOptions {
-                    kind: PanelKind::Browser,
-                    remote_target: browser.remote_target.clone(),
-                    visible: browser.visible,
-                    local_id: Some(browser.id),
-                    command: (!browser.url.is_empty()).then_some(browser.url),
-                    position: Some(self.cloud_prototype.groups.0[index].next_position(&self.board)),
-                    ..PanelOptions::default()
-                };
-                if self.prepare_cloud_remote_panel(index, &mut options).is_err() {
-                    continue;
-                }
-                if self.create_cloud_member(index, options, ws).is_ok() {
-                    if collapsed {
-                        self.cloud_prototype.groups.0[index].set_collapsed(&mut self.board, true);
-                    }
-                    self.save_cloud_prototype();
+                if !browser.lost {
+                    self.create_discovered_browser(index, browser, ws, collapsed);
                 }
             }
+        }
+    }
+    /// Creates the panel of a browser that discovery found on the worker. A browser
+    /// found for a cloud out of view does not take the focus: that would move the
+    /// view and attach the parked terminals of the cloud.
+    fn create_discovered_browser(
+        &mut self,
+        index: usize,
+        browser: horizon_core::browser::CloudViewState,
+        ws: horizon_core::WorkspaceId,
+        collapsed: bool,
+    ) {
+        let mut options = PanelOptions {
+            kind: PanelKind::Browser,
+            remote_target: browser.remote_target.clone(),
+            visible: browser.visible,
+            local_id: Some(browser.id),
+            command: (!browser.url.is_empty()).then_some(browser.url),
+            position: Some(self.cloud_prototype.groups.0[index].next_position(&self.board)),
+            ..PanelOptions::default()
+        };
+        if self.prepare_cloud_remote_panel(index, &mut options).is_err() {
+            return;
+        }
+        let hidden = self.cloud_sight(index) == horizon_core::cloud_panel::park::Sight::Hidden;
+        let (focused, active) = (self.board.focused, self.board.active_workspace);
+        if self.create_cloud_member(index, options, ws).is_ok() {
+            if hidden {
+                self.board.focused = focused;
+                self.board.active_workspace = active;
+            }
+            if collapsed {
+                self.cloud_prototype.groups.0[index].set_collapsed(&mut self.board, true);
+            }
+            self.save_cloud_prototype();
         }
     }
     fn restore_missing_cloud_browsers(

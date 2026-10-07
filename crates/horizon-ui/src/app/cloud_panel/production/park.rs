@@ -164,14 +164,8 @@ impl HorizonApp {
         groups
             .iter()
             .map(|group| {
-                // Only terminal restores hold the tracker: a browser discovery, a desktop
-                // tunnel or a session restore that keeps failing must not.
-                if !tracked(group)
-                    || production.runtimes[&group.issue]
-                        .pending_member_attachments
-                        .iter()
-                        .any(|local| panels.get(local.as_str()).is_some_and(|panel| parks(panel.kind)))
-                {
+                // Sight is tracked while attaches retry, so a cloud that leaves the view parks.
+                if !tracked(group) {
                     return None;
                 }
                 let mut observed = Observed {
@@ -193,7 +187,7 @@ impl HorizonApp {
     }
 
     /// What the user sees of cloud `index` in the last frame.
-    fn cloud_sight(&self, index: usize) -> Sight {
+    pub(super) fn cloud_sight(&self, index: usize) -> Sight {
         let members: Vec<PanelId> = self.cloud_prototype.groups.0[index]
             .panels
             .iter()
@@ -272,6 +266,20 @@ impl HorizonApp {
         }
     }
 
+    fn drop_pending_terminal_attachments(&mut self, index: usize) {
+        let terminals: Vec<String> = self
+            .parkable_members(index)
+            .into_iter()
+            .map(|(local, _)| local)
+            .collect();
+        let issue = self.cloud_prototype.groups.0[index].issue;
+        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) {
+            runtime
+                .pending_member_attachments
+                .retain(|local| !terminals.contains(local));
+        }
+    }
+
     fn park_member(&mut self, id: PanelId) {
         let Some(panel) = self.board.panel_mut(id) else {
             return;
@@ -317,6 +325,10 @@ impl HorizonApp {
             // A terminal that started while its cloud was parked, such as a session restored
             // at Ready, parks with the others while the cloud stays out of view.
             let park_live = live && action.is_none() && tracker.is_parked() && sight == Sight::Hidden;
+            if tracker.is_parked() && sight == Sight::Hidden && !runtime.pending_member_attachments.is_empty() {
+                // A retry of an attach that failed waits for the cloud to come into view again.
+                self.drop_pending_terminal_attachments(index);
+            }
             match action {
                 Some(ParkAction::Park) => {
                     for (_, id) in self.parkable_members(index) {

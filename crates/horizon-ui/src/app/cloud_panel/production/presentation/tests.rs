@@ -21,6 +21,27 @@ fn lost_cloud_browser_leaves_reconnecting_placeholder_without_recreating_identit
     restore_scenario(true);
 }
 
+#[test]
+#[cfg(unix)]
+fn a_browser_found_for_a_cloud_out_of_view_does_not_take_the_focus() {
+    let (_temp, mut app) = restore_fixture();
+    app.sync_cloud_presentations();
+    let elsewhere = app.board.create_workspace("elsewhere");
+    app.board.active_workspace = Some(elsewhere);
+    app.board.focused = None;
+    app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().browsers = Some(vec![CloudViewState {
+        id: "found".into(),
+        backend: BackendKind::ChromiumCdp,
+        visible: true,
+        ready: true,
+        ..Default::default()
+    }]);
+    app.sync_cloud_presentations();
+    assert!(app.board.panel_id_by_local_id("found").is_some());
+    assert_eq!(app.board.focused, None);
+    assert_eq!(app.board.active_workspace, Some(elsewhere));
+}
+
 #[cfg(unix)]
 fn restore_scenario(lost: bool) {
     let (_temp, mut app) = restore_fixture();

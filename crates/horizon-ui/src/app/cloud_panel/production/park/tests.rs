@@ -192,6 +192,33 @@ fn a_cloud_parks_out_of_view_and_attaches_again_in_view() {
 }
 
 #[test]
+fn a_cloud_whose_attach_keeps_failing_still_parks_out_of_view() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    show(&mut app, "one");
+    app.sync_cloud_presentations();
+    assert!(attached(&app, "one"));
+    // An attach of "two" failed and waits for a retry.
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .pending_member_attachments
+        .insert("two".into());
+    app.panel_screen_rects.clear();
+    app.sync_cloud_parking();
+    app.sync_cloud_parking();
+    for local in MEMBERS {
+        assert_eq!(wait_of(&app, local), Some(CloudWait::Parked), "{local}");
+    }
+    assert!(
+        runtime(&app).pending_member_attachments.is_empty(),
+        "the retry waits until the cloud is in view again"
+    );
+}
+
+#[test]
 fn focus_attaches_a_parked_cloud_at_once_and_a_stop_overrides_parking() {
     let (_temp, mut app) = ready_cloud();
     app.board.focused = None;
