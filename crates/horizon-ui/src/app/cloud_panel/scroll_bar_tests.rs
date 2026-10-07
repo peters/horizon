@@ -219,14 +219,18 @@ fn cloud_settings_press_on_a_lower_control_reaches_it() {
             _ => None,
         })
     };
+    // The first frame of a new context builds the font atlas: about 1.3 s in a debug build,
+    // and many seconds on a loaded host. That is not the settings load, so the limit starts
+    // after it. The load itself takes milliseconds; the limit catches one that hangs.
+    let mut output = frame(&mut app, Pos2::ZERO, Vec::new());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let hetzner = loop {
-        let output = frame(&mut app, Pos2::ZERO, Vec::new());
         if let Some(hetzner) = label(&output, "Use Hetzner Cloud for CPU clouds") {
             break hetzner;
         }
         assert!(std::time::Instant::now() < deadline, "the settings did not load");
         std::thread::yield_now();
+        output = frame(&mut app, Pos2::ZERO, Vec::new());
     };
     for pressed in [true, false] {
         let button = Event::PointerButton {
