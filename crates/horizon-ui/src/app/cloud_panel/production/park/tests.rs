@@ -395,3 +395,34 @@ fn a_later_session_restore_in_a_parked_cloud_starts_parked_without_focus() {
         "the cloud stays parked"
     );
 }
+
+#[test]
+fn a_cloud_in_view_at_a_later_ready_restores_missing_sessions_live() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    assert!(runtime(&app).parking.tracker.is_some_and(|tracker| tracker.is_parked()));
+    // The cloud becomes ready again, as after a resume, now in view and with a
+    // saved session whose panel is missing.
+    show(&mut app, "one");
+    let cloud = app.cloud_prototype.production.runtimes.get_mut(&1).unwrap();
+    cloud.needs_attach = true;
+    cloud.state.as_mut().unwrap().sessions.push(super::super::Session {
+        panel_id: "again".into(),
+        agent: "shell".into(),
+        tmux: "again".into(),
+        branch: String::new(),
+        worktree: "/workspace/checkout".into(),
+    });
+    app.sync_cloud_presentations();
+    assert!(attached(&app, "again"), "a cloud in view attaches its restored session");
+    for local in MEMBERS {
+        assert!(attached(&app, local), "{local}");
+    }
+    assert!(
+        runtime(&app)
+            .parking
+            .tracker
+            .is_some_and(|tracker| !tracker.is_parked())
+    );
+}

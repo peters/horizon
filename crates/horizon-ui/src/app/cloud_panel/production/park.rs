@@ -209,14 +209,18 @@ impl HorizonApp {
     /// Whether sessions restored now for cloud `index` start parked: the cloud is
     /// out of view as it becomes ready, or its terminals are parked already.
     pub(super) fn restores_parked(&self, index: usize, view: ReadyView) -> bool {
-        matches!(view, ReadyView::Hidden { .. })
-            || self
+        match view {
+            ReadyView::Hidden { .. } => true,
+            // A cloud in view as it becomes ready attaches, whatever it did before.
+            ReadyView::Visible => false,
+            ReadyView::Unchanged => self
                 .cloud_prototype
                 .production
                 .runtimes
                 .get(&self.cloud_prototype.groups.0[index].issue)
                 .and_then(|runtime| runtime.parking.tracker)
-                .is_some_and(|tracker| tracker.is_parked())
+                .is_some_and(|tracker| tracker.is_parked()),
+        }
     }
 
     /// What the user sees of cloud `index` as it becomes ready. When the cloud is out
@@ -335,6 +339,10 @@ impl HorizonApp {
                         runtime.parking.error = None;
                         // A read in flight answers for terminals that are attaching now.
                         runtime.parking.reader = None;
+                        // The restore runs in the next frame; an idle board would wait for its poll.
+                        if let Some(context) = &runtime.repaint_context {
+                            context.request_repaint();
+                        }
                     }
                     continue;
                 }
@@ -478,12 +486,14 @@ impl HorizonApp {
     /// the panel's own layer so menus and dialogs stay above it.
     pub(in crate::app) fn render_parked_strips(&self, ctx: &egui::Context) {
         let canvas = self.canvas_rect(ctx);
-        for (&id, &body) in &self.terminal_body_screen_rects {
-            let Some(panel) = self
-                .board
-                .panel(id)
-                .filter(|panel| panel.cloud_wait() == Some(CloudWait::Parked))
-            else {
+        for panel in self
+            .board
+            .panels
+            .iter()
+            .filter(|panel| panel.cloud_wait() == Some(CloudWait::Parked))
+        {
+            let id = panel.id;
+            let Some(&body) = self.terminal_body_screen_rects.get(&id) else {
                 continue;
             };
             let order = if self.board.focused == Some(id) {
