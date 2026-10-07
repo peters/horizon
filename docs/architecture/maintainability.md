@@ -958,7 +958,12 @@ are documented in [Linux casting](../casting.md).
 ## Native application testing
 
 `horizon-app-host::actor` owns upload leases, two device lanes, admission and
-expiry for every interface. `runner` executes project recipes through that actor;
+expiry for every interface. Its root module holds the shared state and run
+admission. Focused `backend`, `uploads`, `sessions`, `cleanup`, `expiry` and
+`media` leaves implement provider adaptation, immutable upload leases, serialized
+operations, acknowledged closure, bounded retirement and evidence export without
+introducing another ownership controller. `runner` executes project recipes
+through that actor;
 MCP, CLI, the RFB viewer and the packaged headless entry point are adapters.
 `horizon-app-testing` validates project declarations and native element actions;
 `horizon-app-provider` owns BrowserStack uploads, downloads and the restricted

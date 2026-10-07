@@ -1,6 +1,7 @@
 use super::*;
 use horizon_app_provider::api::Quota;
 use horizon_app_testing::contract::{Form, Platform};
+use horizon_browser::ClassicTransport;
 use horizon_browser::{WebDriverHttpError, remote::*};
 use horizon_core::remote_browser_credential::{
     CredentialLocator, CredentialStores, RemoteCredentialStore, SessionCredentialStore,
