@@ -7,7 +7,7 @@ use super::{CloudConfig, Error, Path, Runner};
 // to put here; docs/release-flow.md describes the update.
 macro_rules! image {
     () => {
-        "ghcr.io/peters/horizon-worker-base@sha256:b5d2f641e601999493e7e044196114aeda14c58ad9194a11e122227229436827"
+        "ghcr.io/peters/horizon-worker-base@sha256:94d85a34632bec1b2819aaf982791b046fbaae70151f7f670e8816be05ed3c18"
     };
 }
 
