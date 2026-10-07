@@ -42,7 +42,6 @@ fn parked_sessions(sessions: Vec<super::Session>, locals: &[String]) -> HashMap<
         .into_iter()
         .filter(|session| locals.contains(&session.panel_id))
         .map(|session| (session.tmux, session.panel_id))
-        .take(session_status::MAX_SESSIONS)
         .collect()
 }
 
@@ -70,13 +69,17 @@ fn read_statuses(
         .worker
         .as_ref()
         .ok_or(cloud_runtime::Error::Invalid("Cloud has no worker"))?;
-    let statuses = session_status::read(
-        worker,
-        &settings,
-        &directory,
-        &ids,
-        &cloud_runtime::Cancellation::default(),
-    )?;
+    // One command reads at most MAX_SESSIONS sessions, so larger clouds read in batches.
+    let mut statuses = Vec::with_capacity(ids.len());
+    for batch in ids.chunks(session_status::MAX_SESSIONS) {
+        statuses.extend(session_status::read(
+            worker,
+            &settings,
+            &directory,
+            batch,
+            &cloud_runtime::Cancellation::default(),
+        )?);
+    }
     Ok(statuses
         .into_iter()
         .filter_map(|status| Some((tmux.get(&status.id)?.clone(), status)))

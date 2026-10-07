@@ -261,6 +261,10 @@ fn a_status_read_asks_for_the_sessions_that_the_saved_record_holds() {
     ];
     let parked = parked_sessions(sessions, &["one".into(), "two".into(), "absent".into()]);
     assert_eq!(parked.len(), 2);
+    // More sessions than one command reads are all kept; the read goes in batches.
+    let many: Vec<_> = (0..150).map(|n| session(&format!("p{n}"), &format!("t{n}"))).collect();
+    let locals: Vec<String> = (0..150).map(|n| format!("p{n}")).collect();
+    assert_eq!(parked_sessions(many, &locals).len(), 150);
     assert_eq!(parked["tmux-1"], "one");
     assert_eq!(parked["tmux-2"], "two");
 }
