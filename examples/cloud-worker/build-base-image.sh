@@ -47,3 +47,8 @@ selection=$(python3 -c 'import json, sys; print(json.dumps({"agents": [a for a i
 docker run --rm --network=none --entrypoint /usr/local/bin/horizon-worker-check \
     --env HORIZON_WORKER_CAPABILITIES="$selection" "$tag" --git-auth > /dev/null
 python3 -B "$here/check-markers.py" "$tag"
+# A public image must not carry SSH host keys; each worker creates its own.
+if docker run --rm --network=none --entrypoint /bin/sh "$tag" -c 'ls /etc/ssh/ssh_host_* 2> /dev/null' | grep -q .; then
+    echo 'The image contains SSH host keys under /etc/ssh' >&2
+    exit 1
+fi
