@@ -1,7 +1,9 @@
 name: Worker images
 
 # Publishes ghcr.io/peters/horizon-worker-helpers: the worker helpers and scripts of
-# one main commit, for recipes to copy with COPY --from, pinned by digest. It runs
+# one main commit, for recipes to copy with COPY --from, pinned by digest, and
+# ghcr.io/peters/horizon-worker-base: the public CPU base worker built from those
+# helpers, which quick start runs a repository without its own image on. It runs
 # only for main, so no pull request or other branch can push an image.
 on:
   push:
@@ -44,6 +46,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
     defaults:
       run:
         shell: bash
@@ -67,6 +71,7 @@ jobs:
             --tag horizon-worker-helpers-probe - < examples/cloud-worker/Dockerfile.helpers
           python3 -B examples/cloud-worker/check-markers.py horizon-worker-helpers-probe
       - name: Publish
+        id: publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -77,10 +82,60 @@ jobs:
           docker push "$IMAGE:main"
           digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RUNNER_TEMP/push.log" | tail -n 1 | cut -d' ' -f2)
           test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
           {
             echo "Published \`$IMAGE:sha-$REVISION\` and \`$IMAGE:main\`."
             echo
             echo "Copy it into a worker recipe with:"
             echo
             echo "\`COPY --from=$IMAGE@$digest / /\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  base:
+    name: Publish CPU base worker
+    needs: helpers
+    if: github.repository == 'peters/horizon' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      IMAGE: ghcr.io/peters/horizon-worker-base
+      HELPERS: ghcr.io/peters/horizon-worker-helpers@${{ needs.helpers.outputs.digest }}
+      REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The script builds the generic recipe over the helpers just published, then
+      # checks the worker contract and that no layer has SSH host keys. Nothing is
+      # pushed if a check fails.
+      - name: Build and check
+        run: |
+          docker pull "$HELPERS"
+          examples/cloud-worker/build-base-image.sh "$HELPERS" "$IMAGE:sha-$REVISION-cpu"
+      # The package is public, so workers pull it without a registry login. Quick start
+      # uses the digest that a Horizon commit pins, never the moving cpu tag.
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker push "$IMAGE:sha-$REVISION-cpu" | tee "$RUNNER_TEMP/push.log"
+          digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RUNNER_TEMP/push.log" | tail -n 1 | cut -d' ' -f2)
+          test -n "$digest"
+          docker tag "$IMAGE:sha-$REVISION-cpu" "$IMAGE:cpu"
+          docker push "$IMAGE:cpu"
+          {
+            echo "Published \`$IMAGE:sha-$REVISION-cpu\` and \`$IMAGE:cpu\`."
+            echo
+            echo "To make quick start use this image, set the pin in"
+            echo "\`crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs\` to:"
+            echo
+            echo "\`$IMAGE@$digest\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -269,6 +269,28 @@ The check reads all layers of the local image through `docker save`. A key that 
 later layer removes stays in the earlier layer, and the check finds it there. If
 the check finds a key, remove the key in the layer that makes it.
 
+## Public CPU base image
+
+`ghcr.io/peters/horizon-worker-base` is a public CPU worker image for a repository
+that has no image of its own. Quick start in **New cloud** uses it. The image has
+Claude, Codex, Chromium and the desktop. After the helpers job of the Worker images
+workflow, the `base` job builds the image with `build-base-image.sh`. The script
+uses this recipe and the helper artifact that the job published. It then runs the
+full capability check, the marker check and the host key check. If a check fails,
+the job pushes nothing. The job tags the image `sha-<commit>-cpu` and moves the
+`cpu` tag to it.
+
+To make the same image locally, do this command. It pushes nothing:
+
+```
+examples/cloud-worker/build-base-image.sh ghcr.io/peters/horizon-worker-helpers@sha256:<digest> horizon-worker-base:local
+```
+
+Horizon does not use the `cpu` tag. Quick start uses the image digest that is pinned
+in `crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs`. The
+[release flow](../../docs/release-flow.md#update-the-quick-start-image) tells how to
+update the pin.
+
 ## Running on a rented virtual machine
 
 Providers that rent whole servers instead of containers run the same image under
