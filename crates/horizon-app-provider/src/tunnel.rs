@@ -10,14 +10,17 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tempfile::{NamedTempFile, TempPath};
+#[cfg(all(test, unix))]
+use tempfile::NamedTempFile;
+mod files;
+use files::OwnedFile;
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::{Error, Result};
 
 pub struct VerifiedBinary {
-    file: TempPath,
+    file: OwnedFile,
     checksum: String,
 }
 
@@ -33,7 +36,7 @@ impl VerifiedBinary {
         if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 128 * 1024 * 1024 {
             return Err(Error::TunnelBinaryRejected);
         }
-        let mut file = NamedTempFile::new().map_err(|_| Error::TunnelBinaryRejected)?;
+        let mut file = OwnedFile::new("").map_err(|_| Error::TunnelBinaryRejected)?;
         let mut hash = Sha256::new();
         let mut total = 0_u64;
         let mut buffer = [0; 8192];
@@ -65,13 +68,11 @@ impl VerifiedBinary {
                 .set_permissions(std::fs::Permissions::from_mode(0o700))
                 .map_err(|_| Error::TunnelBinaryRejected)?;
         }
-        Ok(Self {
-            file: file.into_temp_path(),
-            checksum: actual,
-        })
+        file.seal().map_err(|_| Error::TunnelBinaryRejected)?;
+        Ok(Self { file, checksum: actual })
     }
     pub(crate) fn copy_location(&self) -> (&Path, &str) {
-        (&self.file, &self.checksum)
+        (self.file.path(), &self.checksum)
     }
 }
 
@@ -115,7 +116,7 @@ pub struct Tunnel {
     cleanup_confirmed: Arc<AtomicBool>,
     stop: Option<mpsc::Sender<()>>,
     guardian: Option<std::thread::JoinHandle<()>>,
-    resources: Arc<Mutex<Option<(VerifiedBinary, NamedTempFile)>>>,
+    resources: Arc<Mutex<Option<(VerifiedBinary, OwnedFile)>>>,
 }
 
 impl Tunnel {
@@ -155,7 +156,7 @@ impl Tunnel {
             Ok(prepared) => prepared,
             Err(error) => {
                 binary.file.disable_cleanup(true);
-                retire_paths(&[binary.file.as_ref()])?;
+                binary.file.retire()?;
                 return Err(error);
             }
         };
@@ -327,7 +328,7 @@ fn terminate(child: &mut Child) -> Result<()> {
     horizon_app_process::stop_child_group(child).map_err(|_| Error::TunnelCleanupUncertain)
 }
 
-fn cleanup(child: &mut Child, files: &mut Option<(VerifiedBinary, NamedTempFile)>) -> Result<()> {
+fn cleanup(child: &mut Child, files: &mut Option<(VerifiedBinary, OwnedFile)>) -> Result<()> {
     terminate(child)?;
     if let Some((binary, config)) = files.as_mut() {
         retire_files(binary, config)?;
@@ -336,18 +337,9 @@ fn cleanup(child: &mut Child, files: &mut Option<(VerifiedBinary, NamedTempFile)
     Ok(())
 }
 
-fn retire_files(binary: &mut VerifiedBinary, config: &mut NamedTempFile) -> Result<()> {
-    retire_paths(&[config.path(), binary.file.as_ref()])
-}
-fn retire_paths(paths: &[&Path]) -> Result<()> {
-    for path in paths {
-        std::fs::remove_file(path).map_err(|_| Error::TunnelCleanupUncertain)?;
-        let parent = path.parent().ok_or(Error::TunnelCleanupUncertain)?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| Error::TunnelCleanupUncertain)?;
-    }
-    Ok(())
+fn retire_files(binary: &mut VerifiedBinary, config: &mut OwnedFile) -> Result<()> {
+    config.retire()?;
+    binary.file.retire()
 }
 
 fn spawn(
@@ -357,10 +349,10 @@ fn spawn(
     id: Uuid,
     deadline: Instant,
     journal: &impl Fn(ProcessRecord<'_>) -> Result<()>,
-) -> Result<(Child, NamedTempFile)> {
-    let Ok(mut config) = tempfile::Builder::new().suffix(".yml").tempfile() else {
+) -> Result<(Child, OwnedFile)> {
+    let Ok(mut config) = OwnedFile::new(".yml") else {
         binary.file.disable_cleanup(true);
-        retire_paths(&[binary.file.as_ref()])?;
+        binary.file.retire()?;
         return Err(Error::TunnelStartFailed);
     };
     // Hold exact paths on every failure, including before exec; only explicit retirement permits completion.
@@ -830,5 +822,38 @@ mod tests {
             std::fs::remove_file(binary).unwrap();
             std::fs::remove_file(config).unwrap();
         }
+    }
+
+    #[test]
+    fn replaced_config_during_startup_retains_uncertainty_and_never_unlinks_the_replacement() {
+        let folder = tempfile::tempdir().unwrap();
+        let moved = folder.path().join("moved-original.yml");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let paths = Mutex::new(None);
+        let result = Tunnel::start(
+            fixture(),
+            "synthetic-key",
+            vec![LocalPort {
+                address: listener.local_addr().unwrap(),
+                tls: false,
+            }],
+            Uuid::new_v4(),
+            Duration::from_secs(10),
+            |record| {
+                assert!(record.pid.is_none());
+                *paths.lock().unwrap() = Some((record.binary.to_owned(), record.config.to_owned()));
+                std::fs::rename(record.config, &moved).unwrap();
+                std::fs::write(record.config, b"unrelated replacement").unwrap();
+                Err(Error::ProviderFailed)
+            },
+        );
+        assert_eq!(result.err(), Some(Error::TunnelCleanupUncertain));
+        let (binary, config) = paths.into_inner().unwrap().unwrap();
+        assert_eq!(std::fs::read(&config).unwrap(), b"unrelated replacement");
+        assert!(std::fs::read_to_string(&moved).unwrap().contains("synthetic-key"));
+        assert!(binary.exists());
+        // Retire only these synthetic test-owned files; no child was authorized.
+        std::fs::remove_file(config).unwrap();
+        std::fs::remove_file(binary).unwrap();
     }
 }

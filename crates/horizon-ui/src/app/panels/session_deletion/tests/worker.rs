@@ -16,8 +16,8 @@ fn unchanged_picker_repaints_reuse_options_and_relevant_changes_rebuild_them() {
         )
         .expect("editor fixture");
     app.board.panel_mut(owner).expect("panel").kind = horizon_core::PanelKind::Codex;
-    assert!(app.picker_options_update(&ctx, owner).is_some());
     let before = AgentSessionCatalog::pending_deletion_revision();
+    assert!(app.picker_options_update(&ctx, owner).is_some());
     let update = app.picker_options_update(&ctx, owner);
     assert!(update.is_none() || before != AgentSessionCatalog::pending_deletion_revision());
     app.session_catalog_refresh

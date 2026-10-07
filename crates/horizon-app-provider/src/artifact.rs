@@ -40,7 +40,11 @@ impl Artifact {
         Self::capture_file(open_directory(root, &app.artifact)?, platform)
     }
 
-    fn capture_file(mut source: File, platform: Platform) -> Result<Self> {
+    fn capture_file(source: File, platform: Platform) -> Result<Self> {
+        Self::capture_with(source, platform, |_| ())
+    }
+
+    fn capture_with(mut source: File, platform: Platform, mut after_chunk: impl FnMut(u64)) -> Result<Self> {
         let before = source.metadata().map_err(|_| Error::ArtifactRejected)?;
         if !before.is_file() || !(4..=MAX_BYTES).contains(&before.len()) {
             return Err(Error::ArtifactRejected);
@@ -66,22 +70,40 @@ impl Artifact {
             captured
                 .write_all(&buffer[..count])
                 .map_err(|_| Error::ArtifactRejected)?;
+            after_chunk(total);
         }
         let after = source.metadata().map_err(|_| Error::ArtifactChanged)?;
-        if total != before.len() || before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+        if total != before.len() || !unchanged(&before, &after) {
+            return Err(Error::ArtifactChanged);
+        }
+        // Re-read the retained source; path replacement never changes the descriptor.
+        let digest = hash.finalize();
+        source.rewind().map_err(|_| Error::ArtifactChanged)?;
+        let mut verify = Sha256::new();
+        let mut verified = 0_u64;
+        loop {
+            let count = source.read(&mut buffer).map_err(|_| Error::ArtifactChanged)?;
+            if count == 0 {
+                break;
+            }
+            verified += count as u64;
+            if verified > MAX_BYTES {
+                return Err(Error::ArtifactChanged);
+            }
+            verify.update(&buffer[..count]);
+        }
+        let final_metadata = source.metadata().map_err(|_| Error::ArtifactChanged)?;
+        if verified != total || verify.finalize() != digest || !unchanged(&before, &final_metadata) {
             return Err(Error::ArtifactChanged);
         }
         if magic != b"PK\x03\x04" {
             return Err(Error::ArtifactRejected);
         }
         captured.seek(SeekFrom::Start(0)).map_err(|_| Error::ArtifactRejected)?;
-        let sha256 = hash
-            .finalize()
-            .iter()
-            .fold(String::with_capacity(64), |mut text, byte| {
-                let _ = write!(text, "{byte:02x}");
-                text
-            });
+        let sha256 = digest.iter().fold(String::with_capacity(64), |mut text, byte| {
+            let _ = write!(text, "{byte:02x}");
+            text
+        });
         Ok(Self {
             platform,
             sha256,
@@ -158,4 +180,63 @@ fn open_anchored(_root: &Path, _relative: &Path) -> Result<File> {
 #[cfg(not(unix))]
 fn open_directory(_root: &File, _relative: &Path) -> Result<File> {
     Err(Error::ArtifactRejected)
+}
+
+fn unchanged(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
+    if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // Unlike mtime, an unprivileged writer cannot restore the inode change timestamp.
+        (before.dev(), before.ino(), before.ctime(), before.ctime_nsec())
+            == (after.dev(), after.ino(), after.ctime(), after.ctime_nsec())
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+#[cfg(all(test, unix))]
+mod mutation_tests {
+    use super::*;
+    #[test]
+    fn same_size_rewrite_with_restored_mtime_cannot_publish_mixed_bytes() {
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        let mut bytes = vec![b'A'; 16384];
+        bytes[..4].copy_from_slice(b"PK\x03\x04");
+        source.write_all(&bytes).unwrap();
+        source.flush().unwrap();
+        let original = source.as_file().metadata().unwrap().modified().unwrap();
+        let path = source.path().to_owned();
+        let opened = File::open(&path).unwrap();
+        let mut changed = false;
+        let result = Artifact::capture_with(opened, Platform::Android, |total| {
+            if total == 8192 && !changed {
+                changed = true;
+                let mut writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+                writer.seek(SeekFrom::Start(8192)).unwrap();
+                writer.write_all(&vec![b'B'; 8192]).unwrap();
+                writer
+                    .set_times(std::fs::FileTimes::new().set_modified(original))
+                    .unwrap();
+                assert_eq!(writer.metadata().unwrap().modified().unwrap(), original);
+            }
+        });
+        assert!(changed);
+        assert!(matches!(result, Err(Error::ArtifactChanged)));
+    }
+    #[test]
+    fn verified_capture_remains_immutable_after_the_source_is_rewritten() {
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(b"PK\x03\x04stable").unwrap();
+        source.flush().unwrap();
+        let mut artifact = Artifact::capture_file(File::open(source.path()).unwrap(), Platform::Ios).unwrap();
+        std::fs::write(source.path(), b"PK\x03\x04other!").unwrap();
+        let mut captured = Vec::new();
+        artifact.reader().unwrap().read_to_end(&mut captured).unwrap();
+        assert_eq!(captured, b"PK\x03\x04stable");
+    }
 }

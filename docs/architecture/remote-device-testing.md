@@ -79,6 +79,10 @@ Retained unfinished records still require their original owner and private state
 Do not replace it to bypass uncertain work.
 The host retains the project's directory identity.
 It reads declared files through that retained directory.
+Artifact capture checks the opened inode change timestamp and verifies a second full read before upload.
+A changing source returns a typed refusal.
+Tunnel files retain their original file and parent descriptors for cleanup.
+An observed replacement entry retains uncertainty and is never removed as the owned file.
 
 7. Register the packaged executable as one MCP server.
 
