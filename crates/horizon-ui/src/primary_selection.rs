@@ -18,8 +18,6 @@ pub struct PrimarySelection {
     paste_tx: Sender<PrimarySelectionPaste>,
     #[cfg(target_os = "linux")]
     paste_rx: Receiver<PrimarySelectionPaste>,
-    /// Pastes into parked cloud members, written once they attach.
-    pub held: Vec<PrimarySelectionPaste>,
 }
 
 impl Default for PrimarySelection {
@@ -38,13 +36,12 @@ impl PrimarySelection {
                 owner_tx,
                 paste_tx,
                 paste_rx,
-                held: Vec::new(),
             }
         }
 
         #[cfg(not(target_os = "linux"))]
         {
-            Self { held: Vec::new() }
+            Self {}
         }
     }
 

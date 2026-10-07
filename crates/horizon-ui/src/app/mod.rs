@@ -213,8 +213,6 @@ pub struct PanelRenderCaches {
     pub(crate) browser_ui_state: HashMap<PanelId, crate::browser_widget::BrowserUiState>,
     pub(crate) device_ui_state: HashMap<PanelId, crate::device_widget::DeviceUiState>,
     pub(crate) editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
-    /// Input typed into a parked cloud member, given to it once it has attached.
-    pub(crate) held_input: crate::terminal_widget::HeldInput,
 }
 
 #[allow(clippy::struct_excessive_bools)]

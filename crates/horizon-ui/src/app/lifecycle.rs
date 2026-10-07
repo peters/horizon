@@ -157,50 +157,31 @@ impl HorizonApp {
     }
 
     fn poll_primary_selection_paste(&mut self) {
-        let mut pastes = Vec::new();
         while let Some(paste) = self.primary_selection.try_recv_paste() {
-            pastes.push(paste);
+            self.deliver_primary_paste(&paste);
         }
-        self.deliver_primary_pastes(pastes);
     }
 
-    /// Writes `pastes` and the held ones to their terminals. A paste into a parked
-    /// cloud member focuses it, so it attaches at once, and waits for its terminal.
-    pub(super) fn deliver_primary_pastes(&mut self, pastes: Vec<PrimarySelectionPaste>) {
-        self.panel_render_caches
-            .held_input
-            .forget_unless_focused(self.board.focused);
-        let held = std::mem::take(&mut self.primary_selection.held);
-        for (paste, was_held) in held
-            .into_iter()
-            .map(|paste| (paste, true))
-            .chain(pastes.into_iter().map(|paste| (paste, false)))
-        {
-            let Some(panel) = self.board.panel_mut(paste.panel_id) else {
-                continue;
-            };
-            match panel.cloud_wait() {
-                None => {}
-                Some(CloudWait::Parked) => {
-                    if !was_held {
-                        self.board.focus(paste.panel_id);
-                    }
-                    self.primary_selection.held.push(paste);
-                    continue;
-                }
-                // An attach that has to reconnect first keeps the paste until it is back.
-                Some(CloudWait::Reconnecting) if was_held => {
-                    self.primary_selection.held.push(paste);
-                    continue;
-                }
-                Some(_) => continue,
+    /// Writes a middle-click paste to its terminal. A parked cloud member takes no
+    /// input: the paste brings it into use, so it attaches at once, and is not sent.
+    /// Sent later, it could reach a program whose terminal modes are not set yet.
+    pub(super) fn deliver_primary_paste(&mut self, paste: &PrimarySelectionPaste) {
+        let Some(panel) = self.board.panel_mut(paste.panel_id) else {
+            return;
+        };
+        match panel.cloud_wait() {
+            None => {}
+            Some(CloudWait::Parked) => {
+                self.board.focus(paste.panel_id);
+                return;
             }
-            let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
-                continue;
-            };
-            let bytes = input::paste_bytes(&paste.text, mode, true);
-            panel.write_input(&bytes);
+            Some(_) => return,
         }
+        let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
+            return;
+        };
+        let bytes = input::paste_bytes(&paste.text, mode, true);
+        panel.write_input(&bytes);
     }
 
     #[profiling::function]

@@ -635,6 +635,12 @@ once when one of its panels gets focus. A cloud that becomes ready when it is
 not in view parks its terminals immediately, so a restart opens no connection
 for clouds that you do not look at. Browser panels and Device panels do not park.
 
+A parked terminal takes no input. Keys or a middle-click paste aimed at it are not
+sent; they make it attach at once, and you type or paste again when it is back.
+Horizon does not keep that input for later, because the program in the session
+may not have set its terminal modes yet, and a multi-line paste could then run
+as separate commands.
+
 While a cloud has parked terminals, Horizon reads the state of their sessions
 every 10 seconds through one SSH command. A parked panel shows this state in a
 strip at its bottom on the main canvas: working or idle, ended, or not found, with

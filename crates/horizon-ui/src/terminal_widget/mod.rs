@@ -1,4 +1,3 @@
-mod held_input;
 mod ime;
 mod input;
 mod layout;
@@ -8,7 +7,6 @@ mod scrollbar;
 use egui::{Context, FontId, Vec2};
 use horizon_core::Panel;
 
-pub(crate) use self::held_input::HeldInput;
 use self::ime::{clear_terminal_ime_state, publish_terminal_ime_output};
 pub(crate) use self::input::SSH_RECONNECT_SHORTCUT;
 pub(crate) use self::input::TerminalSelectionDragState;
@@ -32,7 +30,6 @@ pub struct TerminalKeyboardContext<'a> {
     pub primary_selection: &'a PrimarySelection,
     pub local_ssh_reconnect_enabled: bool,
     pub reconnect_requested: &'a mut bool,
-    pub held_input: &'a mut HeldInput,
 }
 
 impl<'a> TerminalView<'a> {
@@ -160,7 +157,6 @@ impl<'a> TerminalView<'a> {
                 keyboard.keyboard_events,
                 keyboard.primary_selection,
                 keyboard.local_ssh_reconnect_enabled,
-                keyboard.held_input,
             );
         }
 

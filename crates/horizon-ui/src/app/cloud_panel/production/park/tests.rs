@@ -219,7 +219,7 @@ fn focus_attaches_a_parked_cloud_at_once_and_a_stop_overrides_parking() {
 }
 
 #[test]
-fn a_middle_click_paste_into_a_parked_member_attaches_it_and_waits_for_its_terminal() {
+fn a_middle_click_paste_into_a_parked_member_attaches_it() {
     let (_temp, mut app) = ready_cloud();
     app.board.focused = None;
     app.sync_cloud_presentations();
@@ -232,119 +232,18 @@ fn a_middle_click_paste_into_a_parked_member_attaches_it_and_waits_for_its_termi
         .parking
         .policy
         .attach_dwell = Duration::from_hours(1);
-    let paste = crate::primary_selection::PrimarySelectionPaste {
+    app.deliver_primary_paste(&crate::primary_selection::PrimarySelectionPaste {
         panel_id: member(&app, "two"),
         text: "synthetic paste".into(),
-    };
-    app.deliver_primary_pastes(vec![paste]);
+    });
     assert_eq!(
         app.board.focused,
         Some(member(&app, "two")),
         "the paste brings the member into use"
     );
-    assert_eq!(
-        app.primary_selection.held.len(),
-        1,
-        "the placeholder must not take the paste"
-    );
-    app.deliver_primary_pastes(Vec::new());
-    assert_eq!(
-        app.primary_selection.held.len(),
-        1,
-        "it waits while the member is parked"
-    );
-
     app.sync_cloud_parking();
     app.sync_cloud_presentations();
-    assert!(attached(&app, "two"));
-    app.deliver_primary_pastes(Vec::new());
-    assert!(
-        app.primary_selection.held.is_empty(),
-        "the attached terminal takes the paste"
-    );
-}
-
-fn typed(event: egui::Event) -> crate::input::TerminalInputEvent {
-    crate::input::TerminalInputEvent {
-        event,
-        key_without_modifiers_text: None,
-        observed_key: None,
-    }
-}
-
-#[test]
-fn input_typed_into_a_focused_parked_member_waits_for_its_attached_terminal() {
-    let (_temp, mut app) = ready_cloud();
-    app.board.focused = None;
-    app.sync_cloud_presentations();
-    let id = member(&app, "two");
-    app.board.focus(id);
-    let paste = [typed(egui::Event::Paste("synthetic\nlines".into()))];
-    let routed = app
-        .panel_render_caches
-        .held_input
-        .route(app.board.panel(id).unwrap(), &paste);
-    assert!(routed.is_empty(), "the placeholder must not take the paste");
-
-    // The attach has to reconnect first; typing continues meanwhile.
-    app.board
-        .panel_mut(id)
-        .unwrap()
-        .show_cloud_wait(CloudWait::Reconnecting)
-        .unwrap();
-    let text = [typed(egui::Event::Text("x".into()))];
-    assert!(
-        app.panel_render_caches
-            .held_input
-            .route(app.board.panel(id).unwrap(), &text)
-            .is_empty()
-    );
-    assert_eq!(app.panel_render_caches.held_input.len(), 2);
-
-    app.sync_cloud_parking();
-    app.sync_cloud_presentations();
-    assert!(attached(&app, "two"));
-    let routed = app
-        .panel_render_caches
-        .held_input
-        .route(app.board.panel(id).unwrap(), &[]);
-    let events: Vec<_> = routed.iter().map(|input| input.event.clone()).collect();
-    assert_eq!(
-        events,
-        vec![paste[0].event.clone(), text[0].event.clone()],
-        "held input comes first, in order"
-    );
-    assert_eq!(app.panel_render_caches.held_input.len(), 0);
-
-    // A focus change or a stop drops what a parked member held.
-    let (_temp, mut app) = ready_cloud();
-    app.board.focused = None;
-    app.sync_cloud_presentations();
-    let id = member(&app, "two");
-    app.board.focus(id);
-    let _ = app
-        .panel_render_caches
-        .held_input
-        .route(app.board.panel(id).unwrap(), &text);
-    app.board.focus(member(&app, "one"));
-    app.deliver_primary_pastes(Vec::new());
-    assert_eq!(app.panel_render_caches.held_input.len(), 0);
-    app.board.focus(id);
-    let _ = app
-        .panel_render_caches
-        .held_input
-        .route(app.board.panel(id).unwrap(), &text);
-    app.board
-        .panel_mut(id)
-        .unwrap()
-        .show_cloud_wait(CloudWait::Stopped)
-        .unwrap();
-    let routed = app
-        .panel_render_caches
-        .held_input
-        .route(app.board.panel(id).unwrap(), &[]);
-    assert!(routed.is_empty());
-    assert_eq!(app.panel_render_caches.held_input.len(), 0);
+    assert!(attached(&app, "two"), "it attaches without the dwell");
 }
 
 #[test]
