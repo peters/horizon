@@ -2,15 +2,17 @@
 //! public CPU base worker, which needs no registry login and no image build.
 use super::{CloudConfig, Error, Path, Runner};
 
+// Pinned by digest so a Horizon build always starts the image it was tested with;
+// this is the prototype tag `proto-61b3f29`.
 macro_rules! image {
     () => {
-        "ghcr.io/peters/horizon-worker-base:proto-5108502"
+        "ghcr.io/peters/horizon-worker-base@sha256:b5d2f641e601999493e7e044196114aeda14c58ad9194a11e122227229436827"
     };
 }
 
 /// The public base worker image. Anonymous pulls work, so the provider needs no
-/// registry credential. Deployment still resolves and pins its digest and runs the
-/// worker contract check before it allocates compute.
+/// registry credential. Deployment still checks the worker contract before it
+/// allocates compute.
 pub const IMAGE: &str = image!();
 
 /// The smallest `RunPod` CPU size: 2 vCPU with 2 GB per vCPU (`cpu3c`) can hold

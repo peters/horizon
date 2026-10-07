@@ -303,8 +303,7 @@ image without a registry login, and Horizon does not build an image. Local Docke
 is still necessary: Horizon resolves the image digest and runs the worker contract
 check before it allocates compute. Quick start is not available for a commit that
 has a `.horizon/cloud.yml`. **Read .horizon/cloud.yml** goes back to the committed
-settings. (Prototype: the image tag is a prototype tag, and the package must be
-public before a worker can pull it.)
+settings. (Prototype: the profile pins a prototype image by its digest.)
 
 For the default launch path, commit `.horizon/cloud.yml` using the
 [example](../crates/horizon-cloud/examples/cloud.yml).
