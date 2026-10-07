@@ -239,6 +239,8 @@ receipt={'operation':spec['operation'],'guardian_pid':os.getpid(),'complete':Fal
 path=state/'process.json'
 path.write_text(json.dumps(receipt));path.chmod(0o600)
 time.sleep(3)
+receipt['armed_at_millis']=int(time.time()*1000)
+path.write_text(json.dumps(receipt))
 print(json.dumps({'phase':'armed'}),flush=True)
 start=sys.stdin.readline()
 if start=='start\n':
@@ -287,13 +289,20 @@ if start=='start\n':print(json.dumps({'phase':'complete','success':True}),flush=
     assert!(workspace.journal().pending(workspace.owner()).unwrap().is_empty());
     let completed = workspace.journal().completed(workspace.owner()).unwrap();
     assert_eq!(completed.len(), 1);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    // Measure the condition at arming, not after receipt/child cleanup on a loaded host.
+    let receipt: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            root.path()
+                .join("processes")
+                .join(completed[0].id.simple().to_string())
+                .join("process.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert!(
-        now < completed[0].deadline_seconds,
-        "regression must reach the expired monotonic deadline while the later journal deadline is still live"
+        receipt["armed_at_millis"].as_u64().unwrap() < completed[0].deadline_seconds * 1000,
+        "regression must arm after the original monotonic deadline but before the later journal deadline"
     );
 }
 

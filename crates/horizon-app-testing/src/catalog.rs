@@ -134,7 +134,12 @@ pub fn resolve(matrix: &[MatrixEntry], catalog: &[Device]) -> Result<Vec<Resolve
                             .as_ref()
                             .is_none_or(|model| model.eq_ignore_ascii_case(&device.model))
                 })
-                .filter_map(|device| version(&device.os_version).map(|v| (device, v)))
+                .filter_map(|device| {
+                    version(&device.os_version).map(|mut v| {
+                        v.resize(4, 0);
+                        (device, v)
+                    })
+                })
                 .collect();
             let wanted = if entry.os == "latest" || entry.os.starts_with("latest-") {
                 let majors: BTreeSet<_> = candidates.iter().map(|(_, v)| v[0]).collect();
@@ -177,7 +182,47 @@ pub fn same_os_version(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod version_tests {
-    use super::same_os_version;
+    use super::{Device, resolve, same_os_version};
+    use crate::contract::{Form, MatrixEntry, Platform};
+    #[test]
+    fn explicit_versions_match_catalogs_with_omitted_trailing_zero_components() {
+        let catalog = [Device {
+            platform: Platform::Ios,
+            form: Form::Phone,
+            model: "iPhone synthetic".into(),
+            os_version: "27".into(),
+        }];
+        for wanted in ["27", "27.0", "27.0.0", "27.0.0.0", "027.00"] {
+            let matrix = [MatrixEntry {
+                platform: Platform::Ios,
+                form: Form::Phone,
+                os: wanted.into(),
+                device: None,
+            }];
+            assert_eq!(resolve(&matrix, &catalog).unwrap()[0].device, catalog[0]);
+        }
+        for wanted in ["27.1", "27.0.1", "27.0.0.1", "26"] {
+            let matrix = [MatrixEntry {
+                platform: Platform::Ios,
+                form: Form::Phone,
+                os: wanted.into(),
+                device: None,
+            }];
+            assert!(resolve(&matrix, &catalog).is_err());
+        }
+        let matrix = [MatrixEntry {
+            platform: Platform::Ios,
+            form: Form::Phone,
+            os: "27".into(),
+            device: None,
+        }];
+        let mut newer = catalog[0].clone();
+        newer.os_version = "27.1".into();
+        assert_eq!(
+            resolve(&matrix, &[catalog[0].clone(), newer.clone()]).unwrap()[0].device,
+            newer
+        );
+    }
     #[test]
     fn provider_versions_allow_only_omitted_trailing_zeroes() {
         for (a, b) in [("27", "27.0"), ("27.0", "27.0.0"), ("16.1", "16.1.0")] {
