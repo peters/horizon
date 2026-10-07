@@ -13,6 +13,7 @@ use crate::{Error, Result};
 pub mod execution;
 pub mod local;
 pub mod recovery;
+mod retention;
 mod store;
 use store::Store;
 
@@ -158,7 +159,9 @@ impl Journal {
             return Err(Error::OperationInvalid);
         }
         let root = root.to_owned();
+        let mut retention_lease = None;
         self.edit(|ledger| {
+            retention_lease = retention::make_room(&self.store, ledger);
             if ledger.records.len() >= MAX_OPERATIONS {
                 return Err(Error::JournalUnavailable);
             }

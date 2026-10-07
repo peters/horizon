@@ -122,3 +122,47 @@ impl Store {
         Ok(lock)
     }
 }
+
+// Retain this nonblocking owner lease until the journal's history edit is durable.
+pub(in crate::journal) struct RetentionLease(Option<File>);
+impl Drop for RetentionLease {
+    fn drop(&mut self) {
+        if let Some(file) = &self.0 {
+            let _ = file.unlock();
+        }
+    }
+}
+impl Store {
+    pub(in crate::journal) fn inactive_owner(&self, owner: Uuid) -> Result<Option<RetentionLease>> {
+        let marker_name = format!("{}-owner-{owner}", self.namespace);
+        let lock_name = format!("execution-{owner}.lock");
+        let marker = match open_file(&self.registry, &marker_name, false) {
+            Ok(marker) => marker,
+            Err(Error::JournalMissing) => {
+                return match open_file(&self.directory, &lock_name, false) {
+                    Err(Error::JournalMissing) => Ok(Some(RetentionLease(None))),
+                    _ => Err(Error::JournalInvalid),
+                };
+            }
+            Err(error) => return Err(error),
+        };
+        let expected = bounded(&marker)?;
+        let lock = open_file(&self.directory, &lock_name, false).map_err(|_| Error::JournalInvalid)?;
+        if bounded(&lock)? != expected {
+            return Err(Error::JournalInvalid);
+        }
+        let binding: Binding = serde_json::from_slice(&expected).map_err(|_| Error::JournalInvalid)?;
+        if binding.version != 1
+            || binding.owner != owner
+            || binding.nonce.is_nil()
+            || binding.lock_identity != Identity::capture(&lock)?
+        {
+            return Err(Error::JournalInvalid);
+        }
+        match lock.try_lock() {
+            Ok(()) => Ok(Some(RetentionLease(Some(lock)))),
+            // Busy or unverified lock state protects history instead of assuming inactivity.
+            Err(_) => Ok(None),
+        }
+    }
+}

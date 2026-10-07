@@ -504,6 +504,16 @@ impl Plan<'_> {
                             owned.session = Some(replacement);
                             report.session = Some(replacement);
                             report.allocations.push(replacement);
+                            progress(Progress {
+                                run,
+                                matrix_index: Some(report.matrix_index),
+                                phase: "session_created",
+                                recipe: None,
+                                step: None,
+                                session: Some(replacement),
+                                view: None,
+                            })?;
+                            control.remaining()?;
                             replacement
                         }
                         None => session,

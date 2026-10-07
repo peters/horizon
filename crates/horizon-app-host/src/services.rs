@@ -40,7 +40,11 @@ pub(crate) fn start(
                 resources.insert(0, process);
                 let ready_by = deadline.min(Instant::now() + startup);
                 loop {
-                    match resources.first().ok_or(Error::Unavailable)?.next(budget(ready_by)?)? {
+                    match resources
+                        .first()
+                        .ok_or(Error::Unavailable)?
+                        .next(wait_budget(ready_by)?)?
+                    {
                         Event::Started {} => (),
                         Event::Ready { port } => break port,
                         _ => return Err(horizon_app_process::Error::Failed.into()),
@@ -89,4 +93,26 @@ fn budget(deadline: Instant) -> Result<Duration> {
         return Err(horizon_app_runtime::Error::OperationExpired.into());
     }
     Ok(remaining)
+}
+
+// Event waits accept fractional seconds; whole-second guardian APIs keep their separate floor.
+fn wait_budget(deadline: Instant) -> Result<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(horizon_app_runtime::Error::OperationExpired.into());
+    }
+    Ok(remaining)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn one_second_backend_can_wait_after_startup_elapsed_but_expired_waits_refuse() {
+        let ready_by = Instant::now() + Duration::from_millis(900);
+        assert!(budget(ready_by).is_err());
+        let remaining = wait_budget(ready_by).unwrap();
+        assert!(!remaining.is_zero() && remaining < Duration::from_secs(1));
+        assert!(wait_budget(Instant::now()).is_err());
+    }
 }

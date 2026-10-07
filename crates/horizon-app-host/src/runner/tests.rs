@@ -844,3 +844,62 @@ fn fixed_service_matrix_serializes_and_completes_every_declared_device() {
             .is_empty()
     );
 }
+
+#[test]
+fn reset_publishes_the_owned_replacement_before_capture_and_callback_failure_closes_it() {
+    for fail_progress in [false, true] {
+        let fake = Fake::default();
+        let control = Control::new(Duration::from_secs(10)).unwrap();
+        let recipes = [Recipe {
+            version: 1,
+            id: "reset-view".into(),
+            platforms: None,
+            steps: vec![horizon_app_testing::recipe::Step {
+                id: "fresh".into(),
+                action: Action::Reset {},
+            }],
+        }];
+        let plan = Plan {
+            targets: targets().into_iter().take(1).collect(),
+            recipes: &recipes,
+            parallel: 1,
+            screenshots: true,
+            video: false,
+            logs_on_failure: false,
+        };
+        let published = Mutex::new(Vec::new());
+        let report = plan
+            .execute(
+                &fake,
+                &control,
+                |session, _, _| {
+                    assert_eq!(published.lock().unwrap().last(), Some(&session));
+                    capture(session, CaptureKind::Screenshot, b"synthetic-private-png")
+                },
+                |event| {
+                    if event.phase == "session_created" {
+                        let session = event.session.unwrap();
+                        assert!(fake.sessions.lock().unwrap().contains_key(&session));
+                        let mut events = published.lock().unwrap();
+                        events.push(session);
+                        if fail_progress && events.len() == 2 {
+                            return Err(Error::Unavailable);
+                        }
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let published = published.into_inner().unwrap();
+        assert_eq!(published.len(), 2);
+        assert_ne!(published[0], published[1]);
+        let device = &report.devices[0];
+        assert_eq!(device.allocations, published);
+        assert_eq!(device.session, published.last().copied());
+        assert_eq!(device.steps[0].passed, !fail_progress);
+        assert!(device.cleanup_confirmed);
+        assert!(fake.sessions.lock().unwrap().is_empty());
+        assert_eq!(fake.active.load(Ordering::SeqCst), 0);
+        assert_eq!(fake.screenshots.load(Ordering::SeqCst), usize::from(!fail_progress));
+    }
+}

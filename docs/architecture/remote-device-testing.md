@@ -427,7 +427,12 @@ Reconciliation stops sessions and services before it retires uploads.
 Completed provider history retains 32 unreferenced records per owner, ordered by creation time.
 Active controller entries and unfinished cleanup remain protected.
 Local guardian history retains its separate directory-first retirement rule.
-Uncertain records and foreign owners remain unchanged.
+Uncertain records and all retained resources remain protected.
+At the shared 512-record admission limit, the host retires the oldest confirmed, resource-free record across inactive owners and credential realms.
+A retained nonblocking execution lease protects the selected owner until that history edit is durable.
+Active owners and unverified execution bindings remain protected.
+This global history policy does not stop a foreign resource or remove its files.
+A full journal of unfinished operations still refuses admission.
 A setup failure reports confirmed cleanup only after its exact cleanup acknowledgement.
 This rule also applies to the replacement session during reset.
 After confirmed cleanup, the original setup error stays in the step result.

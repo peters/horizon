@@ -241,10 +241,14 @@ impl Actor {
         }
         self.durable_active(lane.id, Kind::Session)?;
         remaining(lane.deadline)?;
-        for resource in &lane.resources {
-            if resource.id == lane.tunnel.ok_or(Error::SessionUnknown)? {
-                resource.tunnel_status()?;
-            }
+        let tunnel = lane.tunnel.ok_or(Error::SessionUnknown)?;
+        let resource = lane
+            .resources
+            .iter()
+            .find(|resource| resource.id == tunnel)
+            .ok_or(Error::SessionUnknown)?;
+        if !resource.tunnel_status()?.ready {
+            return Err(horizon_app_provider::Error::TunnelStartFailed.into());
         }
         let driver = lane.driver.as_mut().ok_or(Error::SessionUnknown)?;
         driver.limit_to_deadline(lane.deadline)?;

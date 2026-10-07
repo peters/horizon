@@ -302,7 +302,7 @@ pub(crate) fn actor(base_url: &str) -> (Fixture, Actor) {
         assert!(output.status.success());
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     });
-    let body = r"import json,os,pathlib,socket,sys
+    let body = r"import json,os,pathlib,select,socket,sys
 spec=json.loads(sys.stdin.readline())
 path=pathlib.Path(spec['state'])/'process.json'
 receipt={'operation':spec['operation'],'guardian_pid':os.getpid(),'complete':False}
@@ -324,7 +324,11 @@ if sys.stdin.readline()=='start\n':
         ports.chmod(0o600)
         print(json.dumps({'phase':'started'}),flush=True)
         print(json.dumps({'phase':'ready','port':sock.getsockname()[1]}),flush=True)
-    sys.stdin.read()
+    if tunnel:
+        while not (path.parent.parent.parent/'stop-tunnel').exists():
+            if select.select([sys.stdin],[],[],0.05)[0]:
+                sys.stdin.read();break
+    else:sys.stdin.read()
 if sock:sock.close()
 receipt['complete']=True
 path.write_text(json.dumps(receipt))
@@ -1161,4 +1165,48 @@ pub(crate) fn actor_with_fixed_backend(port: u16) -> (Fixture, Actor) {
         matrix,
     );
     (fixture, actor)
+}
+
+#[test]
+fn completed_tunnel_guardian_refuses_native_requests_before_provider_dispatch() {
+    let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+    let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
+    let session = actor.create(0, app.id, Duration::from_secs(20)).unwrap();
+    std::fs::write(fixture.root.path().join("stop-tunnel"), b"owned fixture only").unwrap();
+    let until = Instant::now() + Duration::from_secs(5);
+    while actor.tunnel_status(session.id).unwrap().ready {
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mutations = fixture.fake.transport.mutations.load(Ordering::SeqCst);
+    assert!(matches!(
+        actor.snapshot(session.id),
+        Err(Error::Provider(horizon_app_provider::Error::TunnelStartFailed))
+    ));
+    assert!(matches!(
+        actor.act(session.id, &Action::Launch {}),
+        Err(Error::Provider(horizon_app_provider::Error::TunnelStartFailed))
+    ));
+    assert!(
+        actor
+            .wait(
+                session.id,
+                &Target::Identifier("menu.open".into()),
+                horizon_app_testing::recipe::State::Visible,
+                Duration::from_secs(1)
+            )
+            .is_err()
+    );
+    assert!(actor.screenshot(session.id).is_err());
+    assert_eq!(fixture.fake.transport.mutations.load(Ordering::SeqCst), mutations);
+    actor.close(session.id).unwrap();
+    actor.release_upload(app.id).unwrap();
+    assert!(
+        fixture
+            .workspace
+            .journal()
+            .pending(fixture.workspace.owner())
+            .unwrap()
+            .is_empty()
+    );
 }
