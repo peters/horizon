@@ -108,11 +108,14 @@ when it comes into view, and that it then shows the output of the session.
 
    Result: The count is 1 or more. Record it as ATTACHED.
 
-2. Click an empty part of the canvas, so that no cloud panel has focus.
+2. In the sidebar, click the name of a local panel, for example `Device input test`.
 
-   Result: No cloud panel shows the focus border.
+   Result: The canvas moves to the local panel, and it has the focus. A click on
+   empty canvas does not remove the focus from a panel, and a focused panel does
+   not park.
 
-3. Drag the canvas until the cloud workspace is fully out of view.
+3. If a panel of the cloud is still on the screen, drag the empty canvas until
+   no panel of the cloud is on the screen.
 
    Result: No panel of the cloud is on the screen.
 
