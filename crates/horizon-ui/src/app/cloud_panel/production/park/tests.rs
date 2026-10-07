@@ -328,3 +328,32 @@ fn a_pending_desktop_attachment_does_not_hold_the_terminals() {
             .any(|local| local == "one")
     );
 }
+
+#[test]
+fn a_session_recreated_while_its_cloud_is_hidden_parks_and_keeps_the_focus() {
+    let (_temp, mut app) = ready_cloud();
+    let elsewhere = app.board.create_workspace("elsewhere");
+    app.board.focused = None;
+    app.board.active_workspace = Some(elsewhere);
+    // A saved session whose panel is not on the board, as after it was closed locally.
+    let cloud = app.cloud_prototype.production.runtimes.get_mut(&1).unwrap();
+    cloud.state.as_mut().unwrap().sessions.push(super::super::Session {
+        panel_id: "three".into(),
+        agent: "shell".into(),
+        tmux: "three".into(),
+        branch: String::new(),
+        worktree: "/workspace/checkout".into(),
+    });
+    app.sync_cloud_presentations();
+    let three = app
+        .board
+        .panel_id_by_local_id("three")
+        .expect("the missing session gets a panel");
+    assert_eq!(app.board.panel(three).unwrap().cloud_wait(), Some(CloudWait::Parked));
+    for local in MEMBERS {
+        assert_eq!(wait_of(&app, local), Some(CloudWait::Parked), "{local}");
+    }
+    assert_eq!(app.board.focused, None, "a hidden cloud does not take the focus");
+    assert_eq!(app.board.active_workspace, Some(elsewhere));
+    assert!(runtime(&app).pending_member_attachments.is_empty());
+}

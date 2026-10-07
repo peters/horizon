@@ -328,10 +328,10 @@ pub(in crate::panel) fn placeholder_terminal(panel: &Panel, rows: u16, cols: u16
     )
 }
 
-/// The terminal of a parked cloud member that shows `screen`, the last screen of the
-/// terminal it replaces.
-pub(in crate::panel) fn parked_terminal(panel: &Panel, rows: u16, cols: u16, screen: &str) -> Result<Terminal> {
-    let replay = screen.lines().collect::<Vec<_>>().join("\r\n");
+/// The terminal of a parked cloud member that shows `screen`, the rows of the last
+/// viewport of the terminal it replaces.
+pub(in crate::panel) fn parked_terminal(panel: &Panel, rows: u16, cols: u16, screen: &[String]) -> Result<Terminal> {
+    let replay = screen.join("\r\n");
     spawn_restore_failure_snapshot_terminal(panel.id, panel.kind, rows, cols, replay.into_bytes())
 }
 

@@ -92,6 +92,19 @@ fn agent_status(status: Option<&SessionStatus>) -> AgentStatus {
     }
 }
 
+/// What the user saw of a cloud as it became ready.
+#[derive(Clone, Copy)]
+pub(super) enum ReadyView {
+    /// The cloud did not just become ready.
+    Unchanged,
+    Visible,
+    /// Out of view, with the focus to give back after missing sessions are recreated.
+    Hidden {
+        focused: Option<PanelId>,
+        workspace: Option<horizon_core::WorkspaceId>,
+    },
+}
+
 /// What the user saw of a tracked cloud, and whether one of its terminals runs live.
 #[derive(Clone, Copy)]
 struct Observed {
@@ -192,25 +205,45 @@ impl HorizonApp {
     /// Called when cloud `index` becomes ready and `members` are about to attach. When
     /// the cloud is out of view, its terminals park instead and are removed from
     /// `members`, so a restart opens no connection for clouds that nobody looks at.
-    pub(super) fn park_hidden_members_on_ready(&mut self, index: usize, members: &mut HashSet<String>) {
-        let parked = self.cloud_sight(index) == Sight::Hidden;
-        let issue = self.cloud_prototype.groups.0[index].issue;
-        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) {
-            runtime.parking.tracker = Some(if parked {
-                ParkTracker::parked()
-            } else {
-                ParkTracker::attached()
-            });
+    pub(super) fn ready_view(&self, index: usize, ready_now: bool) -> ReadyView {
+        if !ready_now {
+            ReadyView::Unchanged
+        } else if self.cloud_sight(index) == Sight::Hidden {
+            ReadyView::Hidden {
+                focused: self.board.focused,
+                workspace: self.board.active_workspace,
+            }
+        } else {
+            ReadyView::Visible
         }
-        if !parked {
+    }
+
+    /// Applies what the user saw of cloud `index` when it became ready. A hidden
+    /// cloud gets back the focus that a recreated session took, and all its
+    /// terminals park: the waiting ones leave `members`, and recreated live ones
+    /// detach again.
+    pub(super) fn apply_ready_view(&mut self, index: usize, view: ReadyView, members: &mut HashSet<String>) {
+        let issue = self.cloud_prototype.groups.0[index].issue;
+        let tracker = match view {
+            ReadyView::Unchanged => return,
+            ReadyView::Visible => ParkTracker::attached(),
+            ReadyView::Hidden { focused, workspace } => {
+                self.board.focused = focused;
+                self.board.active_workspace = workspace;
+                ParkTracker::parked()
+            }
+        };
+        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) {
+            runtime.parking.tracker = Some(tracker);
+        }
+        if !tracker.is_parked() {
             return;
         }
         for (local, id) in self.parkable_members(index) {
-            if members.remove(&local) {
-                self.park_member(id);
-                if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) {
-                    runtime.pending_member_attachments.remove(&local);
-                }
+            members.remove(&local);
+            self.park_member(id);
+            if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) {
+                runtime.pending_member_attachments.remove(&local);
             }
         }
     }

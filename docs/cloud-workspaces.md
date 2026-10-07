@@ -637,8 +637,10 @@ for clouds that you do not look at. Browser panels and Device panels do not park
 
 While a cloud has parked terminals, Horizon reads the state of their sessions
 every 10 seconds through one SSH command. A parked panel shows this state in a
-strip at its bottom: working or idle, ended, or not found, with the last line of
-the session. The worker needs only Python 3 and tmux for this.
+strip at its bottom on the main canvas: working or idle, ended, or not found, with
+the last line of the session. In a detached window or a fullscreen cloud, a parked
+panel shows only its snapshot until it attaches. The worker needs only Python 3
+and tmux for this.
 
 A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
 runtime card. Compute replacement retains the same network workspace but stops

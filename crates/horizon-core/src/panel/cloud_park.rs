@@ -22,7 +22,7 @@ impl Panel {
             return Ok(false);
         };
         let (rows, cols) = (terminal.rows(), terminal.cols());
-        let screen = terminal.last_lines_text(usize::from(rows));
+        let screen = terminal.viewport_text();
         let replacement = spawn::parked_terminal(self, rows, cols, &screen)?;
         if let PanelContent::Terminal(mut old) =
             std::mem::replace(&mut self.content, PanelContent::Terminal(replacement))

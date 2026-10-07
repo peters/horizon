@@ -306,6 +306,8 @@ impl HorizonApp {
             let browsers = runtime.browsers.clone().unwrap_or_default();
             let workspace = group.workspace.clone();
             let collapsed = group.collapsed;
+            // Decided before missing sessions are recreated: a new panel takes the focus.
+            let view = self.ready_view(index, ready_now);
             if retry && !pending_sessions.is_empty() {
                 let pending = self.restore_missing_cloud_sessions(index, &pending_sessions);
                 if let Some(runtime) = self
@@ -317,7 +319,7 @@ impl HorizonApp {
                     runtime.pending_session_attachments = pending;
                 }
             }
-            self.restore_or_park_members(index, members, ready_now);
+            self.restore_or_park_members(index, members, view);
             if discovered {
                 self.restore_missing_cloud_browsers(index, &pending_browsers, &browsers);
             }
@@ -405,11 +407,9 @@ impl HorizonApp {
         &mut self,
         index: usize,
         mut members: std::collections::HashSet<String>,
-        ready_now: bool,
+        view: super::park::ReadyView,
     ) {
-        if ready_now {
-            self.park_hidden_members_on_ready(index, &mut members);
-        }
+        self.apply_ready_view(index, view, &mut members);
         self.restore_cloud_members(index, members);
     }
     fn restore_cloud_members(&mut self, index: usize, members: std::collections::HashSet<String>) {
