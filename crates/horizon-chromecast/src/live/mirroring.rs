@@ -24,24 +24,37 @@ impl Session {
             self.set(LiveState::Buffering);
             let result = self.mirror(&client, &app, stream);
             stream.disconnect();
+            let played = *super::lock(&self.state) == LiveState::Playing;
+            let retry = !self.stopped() && relaunches < RELAUNCH_ATTEMPTS;
             match result {
                 Ok(true) => {
                     let _ = client.stop_application(&app.session_id);
                     return Ok(());
                 }
+                // A TV can close the mirroring application again right after
+                // its first launch from idle. Before anything played, launch
+                // again on the same connection, if nothing else runs.
+                Ok(false) if !played && retry => {
+                    relaunches += 1;
+                    if !idle(&client)? {
+                        return Ok(());
+                    }
+                    tracing::debug!(
+                        relaunches,
+                        "receiver closed the mirroring session early; offering again"
+                    );
+                }
                 // The receiver dropped us, as a TV does when it restarts its
                 // cast runtime: offer again on a fresh connection, but only to a
                 // receiver showing nothing but its idle screen. A mirroring
                 // session still running may now be another sender's.
-                Err(Error::Closed) if !self.stopped() && relaunches < RELAUNCH_ATTEMPTS => {
+                Err(Error::Closed) if retry => {
                     relaunches += 1;
                     self.set(LiveState::Buffering);
                     let Some(fresh) = self.connect()? else {
                         return Ok(());
                     };
-                    let status = fresh.receiver_status()?;
-                    let busy = status.applications.iter().any(|running| !running.is_idle_screen);
-                    if status.is_stand_by || busy {
+                    if !idle(&fresh)? {
                         return Ok(());
                     }
                     tracing::debug!(relaunches, "receiver dropped the mirroring session; offering again");
@@ -102,4 +115,11 @@ impl Session {
             }
         }
     }
+}
+
+/// The receiver shows nothing but its idle screen and is not in standby, so a
+/// new mirroring session replaces nobody's application and wakes no TV.
+fn idle(client: &CastClient) -> Result<bool> {
+    let status = client.receiver_status()?;
+    Ok(!status.is_stand_by && status.applications.iter().all(|running| running.is_idle_screen))
 }

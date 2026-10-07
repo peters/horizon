@@ -130,12 +130,11 @@ impl MirrorStream {
             });
             offsets.push(*offset);
         }
-        let history = (playout_delay * 2).max(Duration::from_secs(1));
         let sender = Arc::new(Sender::start(
-            SocketAddr::new(address.ip(), answer.udp_port),
+            udp_target(address, answer.udp_port),
             setups,
             &offsets,
-            history,
+            resend_history(playout_delay),
         )?);
         *self.lock() = Some(sender.clone());
         Ok(sender)
@@ -151,6 +150,19 @@ impl MirrorStream {
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Arc<Sender>>> {
         self.sender.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// How long sent frames stay available for resending: twice the playout
+/// delay, and at least a second.
+fn resend_history(playout_delay: Duration) -> Duration {
+    playout_delay.saturating_mul(2).max(Duration::from_secs(1))
+}
+
+/// The receiver's address with the port it answered. Keeps an IPv6 scope, so
+/// a link-local receiver stays reachable.
+fn udp_target(mut address: SocketAddr, port: u16) -> SocketAddr {
+    address.set_port(port);
+    address
 }
 
 /// `frame` behind a 7-byte ADTS header (AAC-LC, no CRC), or `None` for a
@@ -203,5 +215,25 @@ mod tests {
         // 44.1 kHz is index 4; 1007 bytes = 0b11_1110_1111.
         assert_eq!(&long[..7], &[0xff, 0xf1, 0x50, 0x40, 0x7d, 0xff, 0xfc]);
         assert!(adts(stereo, &vec![0; 8192]).is_none());
+    }
+
+    #[test]
+    fn resend_history_covers_the_playout_delay_without_overflow() {
+        assert_eq!(resend_history(Duration::from_millis(100)), Duration::from_secs(1));
+        assert_eq!(resend_history(Duration::from_secs(3)), Duration::from_secs(6));
+        assert_eq!(resend_history(Duration::MAX), Duration::MAX);
+    }
+
+    #[test]
+    fn the_udp_target_keeps_an_ipv6_scope() {
+        let scoped = SocketAddr::V6(std::net::SocketAddrV6::new("fe80::1".parse().unwrap(), 8009, 0, 3));
+        let SocketAddr::V6(target) = udp_target(scoped, 47439) else {
+            panic!("IPv6 stays IPv6");
+        };
+        assert_eq!((target.port(), target.scope_id()), (47439, 3));
+        assert_eq!(
+            udp_target("192.0.2.1:8009".parse().unwrap(), 5000).to_string(),
+            "192.0.2.1:5000"
+        );
     }
 }

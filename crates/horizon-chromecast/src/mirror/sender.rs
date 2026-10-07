@@ -1,6 +1,7 @@
 //! The UDP side of a Cast Streaming session. It encrypts and packetizes
-//! frames, keeps the last second of them for retransmission, sends sender
-//! reports, and acts on the receiver's feedback.
+//! frames, keeps recent ones for retransmission, sends sender reports, and
+//! acts on the receiver's feedback. A transmit thread does the sending, so the
+//! host's encoder and audio threads never wait on the network.
 use super::{
     crypto::FrameCipher,
     rtcp::{self, Feedback, SenderReport},
@@ -13,6 +14,7 @@ use std::{
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -30,6 +32,10 @@ const KEYFRAME_GRACE: Duration = Duration::from_millis(300);
 /// (the receiver then asks for it again).
 const SEND_RETRIES: u32 = 40;
 const SEND_RETRY: Duration = Duration::from_micros(250);
+/// Frames and resends waiting for the transmit thread: about a second of 60
+/// fps video with its audio. When it is full, a frame is dropped before it is
+/// sent, and the receiver asks for it like any lost frame.
+const QUEUE: usize = 128;
 
 /// One stream the receiver accepted.
 pub(crate) struct StreamSetup {
@@ -51,6 +57,8 @@ struct SentFrame {
 struct StreamState {
     setup: StreamSetup,
     next_frame: u32,
+    /// Timestamp of the last frame sent; later frames must come after it.
+    last_pts: Option<Duration>,
     sequence: u16,
     rtp_offset: u32,
     packets: u32,
@@ -65,8 +73,15 @@ struct Origin {
     media: Duration,
 }
 
+/// Datagrams for the transmit thread.
+enum Outgoing {
+    Frame(Arc<Vec<Vec<u8>>>),
+    Resend(Arc<Vec<Vec<u8>>>, usize),
+}
+
 struct Shared {
     socket: UdpSocket,
+    queue: SyncSender<Outgoing>,
     streams: Mutex<Vec<StreamState>>,
     origin: Mutex<Option<Origin>>,
     /// How long sent frames stay available for resending.
@@ -80,7 +95,7 @@ struct Shared {
 
 pub(crate) struct Sender {
     shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
+    threads: Vec<JoinHandle<()>>,
 }
 
 /// Which accepted stream a frame belongs to.
@@ -116,6 +131,7 @@ impl Sender {
             .map(|(setup, rtp_offset)| StreamState {
                 setup,
                 next_frame: 0,
+                last_pts: None,
                 sequence: 0,
                 rtp_offset,
                 packets: 0,
@@ -123,8 +139,10 @@ impl Sender {
                 history: VecDeque::new(),
             })
             .collect();
+        let (queue, outgoing) = mpsc::sync_channel(QUEUE);
         let shared = Arc::new(Shared {
             socket,
+            queue,
             streams: Mutex::new(streams),
             origin: Mutex::new(None),
             history,
@@ -133,16 +151,27 @@ impl Sender {
             last_feedback: Mutex::new(None),
             stop: AtomicBool::new(false),
         });
-        let thread = {
+        let feedback = {
             let shared = shared.clone();
             std::thread::Builder::new()
                 .name("chromecast-mirror".to_owned())
                 .spawn(move || shared.run())?
         };
-        Ok(Self {
-            shared,
-            thread: Some(thread),
-        })
+        let transmit = {
+            let shared = shared.clone();
+            std::thread::Builder::new()
+                .name("chromecast-mirror-send".to_owned())
+                .spawn(move || shared.transmit_queue(&outgoing))
+        };
+        let threads = match transmit {
+            Ok(transmit) => vec![feedback, transmit],
+            Err(error) => {
+                shared.stop.store(true, Ordering::Release);
+                let _ = feedback.join();
+                return Err(error);
+            }
+        };
+        Ok(Self { shared, threads })
     }
 
     /// Sends one Annex B access unit. The receiver can only start on a key
@@ -173,7 +202,7 @@ impl Sender {
 impl Drop for Sender {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
-        if let Some(thread) = self.thread.take() {
+        for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
     }
@@ -195,6 +224,10 @@ impl Shared {
             if stream.next_frame == 0 && !keyframe {
                 return;
             }
+            // RTP time must not run backwards: drop a frame out of order.
+            if stream.last_pts.is_some_and(|last| pts <= last) {
+                return;
+            }
             // The first video frame sets the clock both streams report on;
             // audio before it is dropped.
             {
@@ -211,6 +244,7 @@ impl Shared {
             }
             let id = stream.next_frame;
             stream.next_frame += 1;
+            stream.last_pts = Some(pts);
             let mut data = payload.to_vec();
             stream.setup.cipher.apply(id, &mut data);
             let independent = keyframe || stream.setup.independent_frames;
@@ -254,8 +288,17 @@ impl Shared {
         if keyframe && track == Track::Video {
             *lock(&self.last_keyframe) = Some(Instant::now());
         }
-        for packet in packets.iter() {
-            self.transmit(packet);
+        let _ = self.queue.try_send(Outgoing::Frame(packets));
+    }
+
+    fn transmit_queue(&self, outgoing: &Receiver<Outgoing>) {
+        while !self.stop.load(Ordering::Acquire) {
+            match outgoing.recv_timeout(RECEIVE_POLL) {
+                Ok(Outgoing::Frame(packets)) => packets.iter().for_each(|packet| self.transmit(packet)),
+                Ok(Outgoing::Resend(packets, index)) => self.transmit(&packets[index]),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
         }
     }
 
@@ -341,7 +384,7 @@ impl Shared {
                     }
                 }
                 for (packets, packet) in resend {
-                    self.transmit(&packets[packet]);
+                    let _ = self.queue.try_send(Outgoing::Resend(packets, packet));
                 }
             }
         }
@@ -524,6 +567,26 @@ mod tests {
                 break;
             }
         }
+    }
+
+    #[test]
+    fn a_frame_that_goes_back_in_time_is_dropped() {
+        let socket = receiver();
+        let sender = Sender::start(
+            socket.local_addr().unwrap(),
+            vec![video()],
+            &[0],
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        sender.send_video(&[1], Duration::from_millis(100), true);
+        sender.send_video(&[2], Duration::from_millis(50), false);
+        sender.send_video(&[3], Duration::from_millis(133), false);
+        let (first, _) = next_rtp(&socket);
+        let (second, _) = next_rtp(&socket);
+        assert_eq!(first[13], 0);
+        assert_eq!(second[13], 1, "the frame from the past took no ID");
+        assert_eq!(&second[4..8], &(133u32 * 90).to_be_bytes());
     }
 
     #[test]

@@ -864,23 +864,35 @@ fn mirroring_status(running: bool) -> Value {
     json!({"type": "RECEIVER_STATUS", "status": {"applications": applications, "volume": {"level": 0.5}}})
 }
 
+/// What a [`mirroring_receiver`] does with the first session after its ANSWER.
+#[derive(Clone, Copy, PartialEq)]
+enum FirstSession {
+    Plays,
+    /// Drops the connection and shows this state to the second one.
+    Dropped(AfterDrop),
+    /// Closes the mirroring application, as a TV can right after its first launch.
+    Closed,
+}
+
 /// A mirroring receiver: answers an OFFER with a UDP port, and acknowledges
-/// every complete frame that arrives there. With `drop`, it drops the first
-/// connection right after its ANSWER and shows that state to the second.
-/// Returns the control messages it saw (prefixed with the connection number)
-/// and the number of frames.
+/// every complete frame that arrives there. Returns the control messages it
+/// saw (prefixed with the connection number) and the number of frames.
 fn mirroring_receiver(
     listener: TcpListener,
     config: Arc<ServerConfig>,
-    drop: Option<AfterDrop>,
+    first: FirstSession,
 ) -> JoinHandle<(Vec<String>, usize)> {
+    let drop = match first {
+        FirstSession::Dropped(after) => Some(after),
+        _ => None,
+    };
     std::thread::spawn(move || {
         let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let udp_port = udp.local_addr().unwrap().port();
         let done = Arc::new(AtomicBool::new(false));
         let frames = acknowledge_frames(udp, done.clone());
         let mut log = Vec::new();
-        let mut running = false;
+        let (mut running, mut offers) = (false, 0);
         listener.set_nonblocking(true).unwrap();
         let connections = if drop.is_some() { 2 } else { 1 };
         'connections: for connection in 0..connections {
@@ -940,6 +952,13 @@ fn mirroring_receiver(
                             let answer = json!({"type": "ANSWER", "seqNum": request["seqNum"], "result": "ok",
                                 "answer": {"udpPort": udp_port, "sendIndexes": [0], "ssrcs": [1]}});
                             send(&mut stream, to, "urn:x-cast:com.google.cast.webrtc", &answer);
+                            offers += 1;
+                            if first == FirstSession::Closed && offers == 1 {
+                                running = false;
+                                let closed = json!({"type": "RECEIVER_STATUS", "requestId": 0,
+                                    "status": {"applications": [], "volume": {"level": 0.5}}});
+                                send(&mut stream, PLATFORM_RECEIVER, NS_RECEIVER, &closed);
+                            }
                             if drop.is_some() && connection == 0 {
                                 // The TV restarts its cast runtime: no TLS close_notify.
                                 stream.sock.shutdown(std::net::Shutdown::Both).unwrap();
@@ -1026,7 +1045,7 @@ fn mirror_options() -> LiveOptions {
 #[test]
 fn a_mirror_cast_offers_its_streams_and_plays_once_frames_are_acknowledged() {
     let (address, listener, config) = listen();
-    let server = mirroring_receiver(listener, config, None);
+    let server = mirroring_receiver(listener, config, FirstSession::Plays);
     let live = LiveCast::start(address, mirror_options()).unwrap();
     assert!(live.url().is_empty(), "mirroring serves nothing over HTTP");
     feed_until_playing(&live, Duration::from_secs(5));
@@ -1051,7 +1070,7 @@ fn a_mirror_cast_offers_its_streams_and_plays_once_frames_are_acknowledged() {
 #[test]
 fn a_mirror_cast_offers_again_after_the_receiver_restarts() {
     let (address, listener, config) = listen();
-    let server = mirroring_receiver(listener, config, Some(AfterDrop::Restarted));
+    let server = mirroring_receiver(listener, config, FirstSession::Dropped(AfterDrop::Restarted));
     let live = LiveCast::start(address, mirror_options()).unwrap();
     // The first session drops before any frame plays; the second must play.
     feed_until_playing(&live, Duration::from_secs(8));
@@ -1070,10 +1089,24 @@ fn a_mirror_cast_offers_again_after_the_receiver_restarts() {
 }
 
 #[test]
+fn a_mirror_cast_launches_again_when_the_receiver_closes_it_before_it_plays() {
+    let (address, listener, config) = listen();
+    let server = mirroring_receiver(listener, config, FirstSession::Closed);
+    let live = LiveCast::start(address, mirror_options()).unwrap();
+    feed_until_playing(&live, Duration::from_secs(8));
+    assert_eq!(live.state(), LiveState::Playing);
+    drop(live);
+    let (log, frames) = server.join().unwrap();
+    let launches = log.iter().filter(|line| line.contains("launched")).count();
+    assert_eq!(launches, 2, "{log:#?}");
+    assert!(frames > 0);
+}
+
+#[test]
 fn a_mirror_cast_never_offers_again_over_another_application_or_a_tv_in_standby() {
     for after in [AfterDrop::TakenOver, AfterDrop::Standby] {
         let (address, listener, config) = listen();
-        let server = mirroring_receiver(listener, config, Some(after));
+        let server = mirroring_receiver(listener, config, FirstSession::Dropped(after));
         let live = LiveCast::start(address, mirror_options()).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(8);
         while live.state() != LiveState::Ended && std::time::Instant::now() < deadline {
