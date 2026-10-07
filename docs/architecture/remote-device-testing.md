@@ -81,6 +81,8 @@ The host retains the project's directory identity.
 It reads declared files through that retained directory.
 Artifact capture checks the opened inode change timestamp and verifies a second full read before upload.
 A changing source returns a typed refusal.
+HTTP and WebSocket launch arguments must also use one consistent TLS mode for each declared tunnel port, including fixed and managed bindings; conflicts fail during contract validation before builds or backend setup.
+
 Tunnel files retain their original file and parent descriptors for cleanup.
 An observed replacement entry retains uncertainty and is never removed as the owned file.
 
@@ -208,6 +210,8 @@ It returns this record after cleanup completes.
 ```
 
 A missing or incorrect nonce keeps cleanup uncertain.
+
+A managed backend has a bounded ten-second cooperative cleanup window after receiving its fresh cleanup nonce and parent EOF. This allows its nested writers and isolated namespaces to close before the guardian signals the helper group. A missing or mismatched final acknowledgement still retains an uncertain receipt; grace alone never confirms cleanup.
 Foreground commands must not daemonize or escape guardian ownership.
 A remote build needs its own finite remote guardian.
 Local SSH process cleanup alone cannot stop a remote Xcode build.

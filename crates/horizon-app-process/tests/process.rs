@@ -560,3 +560,27 @@ fn original_guardian_lifetime_includes_a_delayed_durable_handshake() {
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
     process.close().unwrap();
 }
+
+#[test]
+fn cooperative_backend_cleanup_can_acknowledge_after_more_than_two_seconds() {
+    let root = private_temp().unwrap();
+    let state = private_temp().unwrap();
+    let argv = backend()
+        .into_iter()
+        .map(|arg| arg.replace("time.sleep(.1)", "time.sleep(3)"))
+        .collect();
+    let mut process = Process::start(
+        worker(),
+        Request::new(root.path(), state.path(), argv, Kind::Backend, 2, 10).unwrap(),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    let port = ready(&mut process);
+    let started = Instant::now();
+    process.close().unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(3));
+    assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
+    let receipt: Value = serde_json::from_slice(&std::fs::read(state.path().join("process.json")).unwrap()).unwrap();
+    assert_eq!(receipt["complete"], true);
+    assert!(!Path::new(receipt["task"].as_str().unwrap()).exists());
+}

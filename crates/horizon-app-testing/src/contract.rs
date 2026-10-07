@@ -221,11 +221,16 @@ impl Contract {
                 }
             }
         }
+        let mut tls_modes = BTreeMap::new();
         for (name, value) in &self.launch_arguments {
             if !identifier(name) || secret_name(name) || !printable(value, 2048) {
                 return Err(invalid());
             }
-            self.validate_value(value)?;
+            if let Some((port, tls)) = self.validate_value(value)?
+                && tls_modes.insert(port, tls).is_some_and(|previous| previous != tls)
+            {
+                return Err(invalid());
+            }
         }
         let mut recipes = BTreeSet::new();
         for recipe in &self.recipes {
@@ -255,7 +260,7 @@ impl Contract {
     /// # Errors
     /// Host-only resolution requires every declared nonzero port, no extras, and unchanged fixed bindings.
     pub fn resolve_value_with_ports(&self, value: &str, ports: &BTreeMap<String, u16>) -> Result<String> {
-        self.validate_value(value)?;
+        let _ = self.validate_value(value)?;
         if ports.len() != self.tunnel.ports.len() {
             return Err(Error::ContractInvalid);
         }
@@ -269,7 +274,7 @@ impl Contract {
         resolve(value, ports)
     }
 
-    fn validate_value(&self, value: &str) -> Result<()> {
+    fn validate_value(&self, value: &str) -> Result<Option<(u16, bool)>> {
         for (name, spec) in &self.tunnel.ports {
             let template = format!("{{tunnel.port.{name}}}");
             if matches!(spec, Port::Managed(_)) && value.contains(&template) {
@@ -325,8 +330,11 @@ impl Contract {
             if !static_binding && !managed_template {
                 return Err(Error::ContractInvalid);
             }
+            if matches!(url.scheme(), "http" | "https" | "ws" | "wss") {
+                return Ok(Some((port, matches!(url.scheme(), "https" | "wss"))));
+            }
         }
-        Ok(())
+        Ok(None)
     }
 }
 

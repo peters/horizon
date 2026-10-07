@@ -599,3 +599,43 @@ fn refuses_missing_and_empty_tunnel_before_any_session_can_start() {
     contract.tunnel.ports.clear();
     assert_eq!(contract.validate(), Err(Error::ContractInvalid));
 }
+
+#[test]
+fn one_tunnel_port_requires_a_consistent_tls_mode_across_launch_arguments() {
+    for declaration in ["8080", "{start: [python3, backend.py], timeout_seconds: 900}"] {
+        let agents = AGENTS.replace("ports: {backend: 8080}", &format!("ports: {{backend: {declaration}}}"));
+        for (first, second, accepted) in [
+            ("http", "https", false),
+            ("http", "wss", false),
+            ("ws", "https", false),
+            ("ws", "wss", false),
+            ("http", "ws", true),
+            ("https", "wss", true),
+        ] {
+            let agents = agents.replace(
+                "http://localhost:{tunnel.port.backend}",
+                &format!("{first}://localhost:{{tunnel.port.backend}}"),
+            );
+            let mut contract = Contract::from_agents(&agents).unwrap();
+            contract.launch_arguments.insert(
+                "SECOND_URL".into(),
+                format!("{second}://127.0.0.1:{{tunnel.port.backend}}/other"),
+            );
+            assert_eq!(contract.validate().is_ok(), accepted, "{declaration}: {first}/{second}");
+        }
+    }
+    let mut contract = Contract::from_agents(AGENTS).unwrap();
+    contract
+        .launch_arguments
+        .insert("SECOND_URL".into(), "https://127.0.0.1:8080/other".into());
+    assert_eq!(contract.validate(), Err(Error::ContractInvalid));
+    contract
+        .tunnel
+        .ports
+        .insert("secure".into(), horizon_app_testing::contract::Port::Fixed(8443));
+    contract.launch_arguments.insert(
+        "SECOND_URL".into(),
+        "https://127.0.0.1:{tunnel.port.secure}/other".into(),
+    );
+    assert_eq!(contract.validate(), Ok(()));
+}

@@ -238,7 +238,8 @@ fn stop_child(child: &mut Child, spec: &Spec, readers: &Readers) -> Result<()> {
     };
     child.stdin.take();
     if matches!(spec.kind, Kind::Backend) {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // Allow bounded cooperative namespace cleanup before signalling its subprocesses.
+        let deadline = Instant::now() + Duration::from_secs(10);
         while !exited(child)? && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
