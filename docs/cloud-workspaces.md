@@ -194,6 +194,9 @@ On narrow windows, Cloud appears in the toolbar overflow.
 Cloud allocation requires a saved session so worker identity survives reconnect.
 An isolated test instance can use its own disposable saved session and private home.
 
+[Quick start](#quick-start) needs only Git and OpenSSH on this computer. For other
+clouds, install Docker with BuildKit/buildx too.
+
 Install Git (and Git LFS for repositories that use it), OpenSSH, and Docker with BuildKit/buildx. Configure Docker registry
 authentication in a private configuration directory using `docker login` with
 `--password-stdin`. Use separate repository-scoped push and pull credentials;
@@ -332,10 +335,40 @@ Horizon version starts the image that was tested with it. The
 [release flow](release-flow.md#update-the-quick-start-image) tells how a release
 updates the pin.
 
-Quick start needs a RunPod API key, the SSH identity of this computer and local
-Docker. Before Horizon allocates compute, it uses local Docker to resolve the image
-digest and to do the worker contract check. The first check downloads the base
-image, about 0.8 GB compressed.
+Quick start needs a RunPod API key and the SSH identity of this computer. It does
+not need Docker on this computer. Before Horizon allocates compute, it does not get
+the digest from the registry. It also does not download the image or do the worker
+contract check in local Docker. A local check of the pinned image cannot find a
+different result, because:
+
+- The pin is a digest. A digest identifies one image, and the contents of that image
+  do not change.
+- Before the **Worker images** workflow publishes the image, it does the worker
+  contract check with the capabilities of the profile `quick-start`. It also does
+  the marker check and the host key check. If a check fails, the workflow publishes
+  nothing.
+- Horizon keeps the result of the contract check beside the pin, in `CONTRACT` in
+  `quick_start.rs`. Horizon examines this result against the cloud as it examines
+  the result of a local check. Thus the same refusals apply, for example for a Git
+  credential or a tailnet.
+
+Horizon uses the kept result only for the pinned image with the capabilities of the
+profile `quick-start`. For each other image or set of capabilities, Horizon does the
+local check in Docker as before. This includes a committed `.horizon/cloud.yml` that
+names the base image at another tag or digest, or with other capabilities. It also
+includes the pin of an earlier Horizon version. Thus a cloud from an earlier version
+needs Docker when it gets a new worker, for example after **Delete** and a new
+deploy. To prevent this, rebuild the ready cloud on the current pin first. If Docker
+is not on this computer, the check stops with an error that tells you so.
+
+The kept result does not prove that the registry still has the image. If the
+provider cannot pull the image, the readiness check times out.
+
+The worker also does its own contract check when it starts. If that check fails, the
+worker stops before it starts its SSH service. Then the cloud card shows **Worker
+readiness timed out** after the readiness time of the profile, 15 minutes for quick
+start. The log of the worker container in the RunPod console shows the cause:
+`Worker validation failed`. This is the same for each image.
 
 Quick start has these limits:
 
@@ -343,8 +376,9 @@ Quick start has these limits:
   this file, **New cloud** reads the committed settings instead, and
   `cloud_deploy --quick-start` stops with an error. An uncommitted file does not
   count.
-- **Rebuild image & restart** refuses a quick start cloud, because its profile has
-  no `build` section.
+- **Rebuild image & restart** builds nothing for a quick start cloud. It restarts the
+  worker on the base image that this Horizon version pins. See
+  [Rebuilding a cloud's image](#rebuilding-a-clouds-image).
 - A quick start cloud has no companions and no siblings.
 - The profile names RunPod. If this computer also has a Hetzner token, **Provider**
   also offers Hetzner. Quick start is tested on RunPod only.
@@ -841,6 +875,7 @@ The development example `cargo run -p horizon-core --example cloud_deploy -- ...
 uses the same coordinator. Run it without arguments for its command synopsis.
 With `--quick-start`, `deploy` and `prepare-image` use the built-in quick start
 profile, as **New cloud** does. Then the profile argument must be `quick-start`.
+These commands and `rebuild` of a quick start cloud do not use Docker.
 It supports image preparation without allocation, deployment, stop, resume,
 reconnect, endpoint, deletion, `rebuild SETTINGS STATE_ROOT PROFILE` with `continue-rebuild` and
 `cancel-rebuild`, and `reconcile SETTINGS STATE_ROOT [WORKER_ID]`. Reconciliation prints a
@@ -897,10 +932,24 @@ changes are not used) and reads `.horizon/cloud.yml` there. It refuses when the
 cloud's profile is missing there or differs from the one the cloud was created
 with, naming the change: a running worker's size, capabilities, image repository
 and build section are fixed. A CPU cloud's vCPU and memory are chosen when the
-cloud is created, so different committed values for them are not a change. A
-profile without a build section has no recipe to rebuild. Otherwise Horizon builds the recipe with the newest agent CLIs under a
-new tag, validates the worker contract, pushes the image and verifies the
-worker's pull binding. An unchanged image digest is reported, and nothing restarts.
+cloud is created, so different committed values for them are not a change. For a
+profile with a build section, Horizon builds the recipe with the newest agent CLIs
+under a new tag. It then validates the worker contract, pushes the image and verifies
+the worker's pull binding. An unchanged image digest is reported, and nothing restarts.
+A profile without a build section has no recipe to rebuild. The next paragraph tells
+the only exception.
+
+A cloud on the public base image without a `build` section can also rebuild. A quick
+start cloud is an example. Its latest commit must have no `.horizon/cloud.yml`. If it
+has one, Horizon refuses the rebuild, because it never ignores committed settings.
+The rebuild builds nothing. Horizon switches the worker to the base image that this
+Horizon version pins. Thus after an upgrade that changes the pin, **Rebuild image &
+restart** moves the cloud to the new image. If the cloud has the capabilities of the
+current `quick-start` profile, the contract check uses the kept result, as
+[Quick start](#quick-start) tells. Then this rebuild does not need Docker. Otherwise
+Horizon checks the image in local Docker. The workspace volume, the profile and the
+sessions stay, as in each other rebuild. If the cloud already runs the pin, Horizon
+reports an unchanged image and restarts nothing.
 
 Horizon then releases any hosted devices and switches the existing worker to the
 new image through the provider's pod update, which keeps the worker ID. A Hetzner
@@ -921,9 +970,10 @@ only while the worker still reports its previous image. Cancelling it drops an
 unsent update or switches the worker back and relaunches its sessions. Deletion
 stays available throughout.
 
-On the runtime card of a Ready cloud whose profile has a build section,
-**Rebuild image & restart…** asks for confirmation and names these consequences
-first. While it runs, the card lists the rebuild's steps with their durations and
+On the runtime card of a Ready cloud, **Rebuild image & restart…** asks for
+confirmation and names these consequences first. The card shows it if the profile
+has a build section or runs the base image. For a cloud on the base image, **Build
+locally** and **Push image** show as skipped. While it runs, the card lists the rebuild's steps with their durations and
 offers **Cancel rebuild** only until the image switch is requested. A rebuild
 cancelled while its committed recipe is read leaves nothing pending, and the card
 offers **Reconnect cloud**; cancelled later, it stays pending. A pending replacement shows a notice with **Continue
