@@ -5,7 +5,8 @@ use crate::cloud_panel::CloudGroups;
 use std::{collections::BTreeSet, path::Path, process::Command, time::Duration};
 
 /// # Errors
-/// The source must remain in the current owning workspace and have committed configuration.
+/// The source must remain in the current owning workspace. A source commit without
+/// `.horizon/cloud.yml` declares no companions; an unreadable one is an error.
 pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Result<Context> {
     let runner = Runner {
         cancel,
@@ -35,12 +36,17 @@ pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Re
             declaration: Declaration::new(repository, launch.profile_name.clone()),
         };
         if launch.id == owner.cloud_id {
-            let prepared = repository::launch::prepare(&group.cwd.to_string_lossy(), &launch.revision, &runner)?;
-            let declarations = prepared
-                .config
-                .cloud_companions()
-                .map(|(alias, declaration)| (alias.to_owned(), declaration.clone()))
-                .collect();
+            let declarations =
+                match repository::launch::prepare(&group.cwd.to_string_lossy(), &launch.revision, &runner) {
+                    Ok(prepared) => prepared
+                        .config
+                        .cloud_companions()
+                        .map(|(alias, declaration)| (alias.to_owned(), declaration.clone()))
+                        .collect(),
+                    // A commit without settings, as a quick start runs, declares no companions.
+                    Err(error) if repository::launch::is_missing_config(&error) => std::collections::BTreeMap::new(),
+                    Err(error) => return Err(error),
+                };
             source = Some((target.clone(), declarations));
         }
         inventory.push(target);
@@ -160,6 +166,59 @@ mod tests {
             prepare(&owner, &groups, &Cancellation::default()),
             Err(Error::Invalid("Cloud identity is ambiguous"))
         ));
+    }
+
+    #[test]
+    fn a_source_without_committed_settings_declares_no_companions() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(temp.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap()
+        };
+        git(&["init", "--quiet"]);
+        git(&["remote", "add", "origin", "https://github.com/example/app.git"]);
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "Application without cloud settings",
+        ]);
+        let revision = git(&["rev-parse", "HEAD"]).trim().to_owned();
+        let owner = Owner {
+            scope: horizon_cloud::companions::Scope {
+                session_id: "session".into(),
+                workspace_id: "workspace".into(),
+            },
+            cloud_id: "source".into(),
+        };
+        let mut group = crate::cloud_panel::CloudGroup::new(
+            1,
+            "Quick start".into(),
+            "workspace".into(),
+            temp.path().into(),
+            [0.0, 0.0],
+        );
+        group.remote = Some(
+            serde_json::from_value(serde_json::json!({
+                "id": "source", "revision": revision, "profile_name": "quick-start",
+                "profile": {"provider": "runpod", "image": "example/worker", "cpu": 2, "memory_gb": 4}
+            }))
+            .unwrap(),
+        );
+        let context = prepare(&owner, &CloudGroups(vec![group]), &Cancellation::default()).unwrap();
+        assert!(context.declarations.is_empty());
+        assert_eq!(context.source.cloud_id, "source");
     }
 
     #[test]
