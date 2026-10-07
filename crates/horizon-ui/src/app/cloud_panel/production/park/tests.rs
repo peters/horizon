@@ -150,6 +150,14 @@ fn a_cloud_parks_out_of_view_and_attaches_again_in_view() {
     for local in MEMBERS {
         assert_eq!(wait_of(&app, local), Some(CloudWait::Parked), "{local}");
     }
+    // The status read of the parked sessions fails here: the fixture worker refuses SSH.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while runtime(&app).parking.error.is_none() {
+        assert!(std::time::Instant::now() < deadline, "the status read must finish");
+        app.sync_cloud_parking();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(app.parked_strip_text("one"), "Parked · status unavailable");
 
     show(&mut app, "one");
     app.sync_cloud_parking();
@@ -214,4 +222,24 @@ fn the_strip_names_the_reported_status() {
         "Parked · Working · ✻ Working… (3s · esc to interrupt)"
     );
     assert_eq!(app.parked_strip_text("two"), "Parked · status unavailable");
+}
+
+#[test]
+fn a_status_read_asks_for_the_sessions_that_the_saved_record_holds() {
+    let session = |panel: &str, tmux: &str| super::super::Session {
+        panel_id: panel.into(),
+        agent: "shell".into(),
+        tmux: tmux.into(),
+        branch: String::new(),
+        worktree: "/workspace/checkout".into(),
+    };
+    let sessions = vec![
+        session("one", "tmux-1"),
+        session("two", "tmux-2"),
+        session("other", "tmux-3"),
+    ];
+    let parked = parked_sessions(sessions, &["one".into(), "two".into(), "absent".into()]);
+    assert_eq!(parked.len(), 2);
+    assert_eq!(parked["tmux-1"], "one");
+    assert_eq!(parked["tmux-2"], "two");
 }

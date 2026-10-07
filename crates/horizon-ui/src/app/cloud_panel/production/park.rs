@@ -3,7 +3,7 @@
 //! grid on this computer; its agent continues in tmux on the worker. While a cloud
 //! has parked terminals, Horizon reads a short status of their sessions, which the
 //! parked panels show in a strip and as their agent status.
-use super::{HorizonApp, PanelKind, Settings, Stage, cloud_runtime};
+use super::{HorizonApp, PanelKind, Settings, Stage, Store, cloud_runtime};
 use horizon_core::{
     AgentStatus, CloudWait, PanelId,
     cloud_panel::park::{ParkAction, ParkPolicy, ParkTracker, Sight},
@@ -19,7 +19,8 @@ use std::{
 const STATUS_INTERVAL: Duration = Duration::from_secs(10);
 const STRIP_HEIGHT: f32 = 22.0;
 
-type StatusRead = cloud_runtime::Result<Vec<SessionStatus>>;
+/// The statuses of a finished read, by the local id of each parked panel.
+type StatusRead = cloud_runtime::Result<Vec<(String, SessionStatus)>>;
 
 /// The park state of one cloud.
 #[derive(Default)]
@@ -32,6 +33,17 @@ pub(super) struct Parking {
     next_read: Option<Instant>,
     error: Option<String>,
     policy: ParkPolicy,
+}
+
+/// The tmux session of each parked panel in `locals`, by session id, from the
+/// sessions that the cloud's record holds.
+fn parked_sessions(sessions: Vec<super::Session>, locals: &[String]) -> HashMap<String, String> {
+    sessions
+        .into_iter()
+        .filter(|session| locals.contains(&session.panel_id))
+        .map(|session| (session.tmux, session.panel_id))
+        .take(session_status::MAX_SESSIONS)
+        .collect()
 }
 
 /// Panels that a cloud can park: terminals, not browsers or desktops.
@@ -187,19 +199,10 @@ impl HorizonApp {
                 Ok(result) => {
                     runtime.parking.reader = None;
                     runtime.parking.next_read = Some(now + STATUS_INTERVAL);
-                    let tmux_to_local: HashMap<String, String> = runtime
-                        .state
-                        .iter()
-                        .flat_map(|state| &state.sessions)
-                        .map(|session| (session.tmux.clone(), session.panel_id.clone()))
-                        .collect();
                     match result {
                         Ok(statuses) => {
                             runtime.parking.error = None;
-                            runtime.parking.statuses = statuses
-                                .into_iter()
-                                .filter_map(|status| Some((tmux_to_local.get(&status.id)?.clone(), status)))
-                                .collect();
+                            runtime.parking.statuses = statuses.into_iter().collect();
                         }
                         Err(error) => runtime.parking.error = Some(error.to_string()),
                     }
@@ -231,14 +234,7 @@ impl HorizonApp {
         if parked.is_empty() || runtime.parking.next_read.is_some_and(|at| now < at) {
             return;
         }
-        let ids: Vec<String> = runtime
-            .state
-            .iter()
-            .flat_map(|state| &state.sessions)
-            .filter(|session| parked.contains_key(&session.panel_id))
-            .map(|session| session.tmux.clone())
-            .take(session_status::MAX_SESSIONS)
-            .collect();
+        let locals: Vec<String> = parked.into_keys().collect();
         let (Some(worker), Some(root), Some(launch)) = (
             runtime.state.as_ref().and_then(|state| state.worker.clone()),
             root,
@@ -247,9 +243,6 @@ impl HorizonApp {
             return;
         };
         runtime.parking.next_read = Some(now + STATUS_INTERVAL);
-        if ids.is_empty() {
-            return;
-        }
         let (tx, rx) = channel();
         runtime.parking.reader = Some(rx);
         let repaint = runtime.repaint_context.clone();
@@ -257,13 +250,28 @@ impl HorizonApp {
             let result = (|| {
                 let settings = Settings::load(&root.join("settings.json"))?;
                 let directory = cloud_runtime::state::cloud_directory(&root, &launch.id)?;
-                session_status::read(
+                // The saved record, not the copy from when the cloud became ready: a panel
+                // opened since then records its session only there.
+                let sessions = Store::lock(&directory)?
+                    .load()?
+                    .map(|state| state.sessions)
+                    .unwrap_or_default();
+                let tmux = parked_sessions(sessions, &locals);
+                if tmux.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let ids: Vec<String> = tmux.keys().cloned().collect();
+                let statuses = session_status::read(
                     &worker,
                     &settings,
                     &directory,
                     &ids,
                     &cloud_runtime::Cancellation::default(),
-                )
+                )?;
+                Ok(statuses
+                    .into_iter()
+                    .filter_map(|status| Some((tmux.get(&status.id)?.clone(), status)))
+                    .collect())
             })();
             if tx.send(result).is_ok()
                 && let Some(context) = repaint
