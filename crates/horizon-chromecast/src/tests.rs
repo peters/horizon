@@ -696,6 +696,121 @@ fn a_confirmed_unload_after_playing_ends_the_cast_without_stop() {
     assert!(!log.iter().any(|line| line.ends_with(" STOP")), "{log:#?}");
 }
 
+/// A receiver that drops the sender's TCP connection, without a TLS
+/// `close_notify`, right after the first LOAD reply, as a TV can mid-playback.
+/// The second connection finds the application still running unless the
+/// receiver `restarted`; it never drops again.
+fn dropping_receiver(listener: TcpListener, config: Arc<ServerConfig>, restarted: bool) -> JoinHandle<Vec<String>> {
+    std::thread::spawn(move || {
+        let mut log = Vec::new();
+        listener.set_nonblocking(true).unwrap();
+        let mut running = false;
+        for connection in 0..2 {
+            // A sender that never rejoins must fail the test, not hang it.
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+                    Err(_) => return log,
+                }
+            };
+            socket.set_nonblocking(false).unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            let mut stream = StreamOwned::new(ServerConnection::new(config.clone()).unwrap(), socket);
+            let (mut inbound, mut chunk) = (Vec::new(), [0; 4096]);
+            if connection == 1 && restarted {
+                running = false;
+            }
+            'messages: loop {
+                let read = stream.read(&mut chunk).unwrap_or(0);
+                if read == 0 {
+                    return log;
+                }
+                inbound.extend_from_slice(&chunk[..read]);
+                for message in proto::drain_frames(&mut inbound).unwrap() {
+                    let Payload::Text(text) = &message.payload else {
+                        continue;
+                    };
+                    let request: Value = serde_json::from_str(text).unwrap();
+                    let kind = request["type"].as_str().unwrap_or_default().to_owned();
+                    log.push(format!(
+                        "{connection} {} {} {kind}",
+                        message.namespace, message.destination
+                    ));
+                    let to = message.destination.as_str();
+                    let playing =
+                        json!({"type": "MEDIA_STATUS", "status": [{"mediaSessionId": 9, "playerState": "PLAYING"}]});
+                    match (message.namespace.as_str(), kind.as_str()) {
+                        (NS_RECEIVER, "GET_STATUS" | "LAUNCH" | "STOP") => {
+                            running = match kind.as_str() {
+                                "LAUNCH" => true,
+                                "STOP" => false,
+                                _ => running,
+                            };
+                            send(&mut stream, to, NS_RECEIVER, &reply(&request, app_status(running)));
+                        }
+                        (NS_MEDIA, "LOAD") if connection == 0 => {
+                            send(&mut stream, to, NS_MEDIA, &reply(&request, playing));
+                            stream.sock.shutdown(std::net::Shutdown::Both).unwrap();
+                            break 'messages;
+                        }
+                        (NS_MEDIA, "LOAD") => {
+                            // A relaunched receiver answers with a bare IDLE before it plays.
+                            let idle = json!({"type": "MEDIA_STATUS", "status": [{"mediaSessionId": 9, "playerState": "IDLE"}]});
+                            send(&mut stream, to, NS_MEDIA, &reply(&request, idle));
+                            send(
+                                &mut stream,
+                                to,
+                                NS_MEDIA,
+                                &json!({"type": "MEDIA_STATUS", "requestId": 0, "status": playing["status"]}),
+                            );
+                        }
+                        (NS_MEDIA, "GET_STATUS" | "SET_PLAYBACK_RATE") => {
+                            send(&mut stream, to, NS_MEDIA, &reply(&request, playing));
+                        }
+                        (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => return log,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        log
+    })
+}
+
+#[test]
+fn a_dropped_connection_is_rejoined_and_playback_goes_on() {
+    let (address, listener, config) = listen();
+    let (state, log) = cast_against(dropping_receiver(listener, config, false), address);
+    assert_eq!(state, LiveState::Playing, "{log:#?}");
+    assert!(
+        log.contains(&format!("1 {NS_MEDIA} transport-1 GET_STATUS")),
+        "{log:#?}"
+    );
+    assert!(
+        !log.iter()
+            .any(|line| line.starts_with('1') && line.ends_with(" LAUNCH")),
+        "{log:#?}"
+    );
+    assert!(
+        log.contains(&format!("1 {NS_RECEIVER} {PLATFORM_RECEIVER} STOP")),
+        "{log:#?}"
+    );
+}
+
+#[test]
+fn a_receiver_that_restarts_under_the_cast_is_launched_and_loaded_again() {
+    let (address, listener, config) = listen();
+    let (state, log) = cast_against(dropping_receiver(listener, config, true), address);
+    assert_eq!(state, LiveState::Playing, "{log:#?}");
+    assert!(
+        log.contains(&format!("1 {NS_RECEIVER} {PLATFORM_RECEIVER} LAUNCH")),
+        "{log:#?}"
+    );
+    assert!(log.contains(&format!("1 {NS_MEDIA} transport-1 LOAD")), "{log:#?}");
+}
+
 #[test]
 fn live_options_must_keep_three_target_durations() {
     let address: SocketAddr = "127.0.0.1:9".parse().unwrap();

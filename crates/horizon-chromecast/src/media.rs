@@ -71,6 +71,17 @@ impl CastClient {
             media_session_id: None,
         }
     }
+
+    /// Controls a media session that is already loaded, for example after
+    /// reconnecting to the receiver.
+    #[must_use]
+    pub fn media_session(&self, app: &Application, media_session_id: i64) -> MediaController<'_> {
+        MediaController {
+            client: self,
+            transport_id: app.transport_id.clone(),
+            media_session_id: Some(media_session_id),
+        }
+    }
 }
 
 impl MediaController<'_> {

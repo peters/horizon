@@ -62,6 +62,12 @@ const RESTORE_ATTEMPTS: u8 = 3;
 const RESTORE_RETRY: Duration = Duration::from_millis(500);
 const CONNECT_ATTEMPTS: u32 = 3;
 const CONNECT_RETRY: Duration = Duration::from_secs(2);
+/// Receivers can drop a sender's connection while playback goes on. A
+/// connection that lasted this long earns a fresh allowance of rejoins.
+const REJOIN_SETTLED: Duration = Duration::from_secs(10);
+/// Rejoins in a row, each closed again within `REJOIN_SETTLED`, before the
+/// session fails.
+const REJOIN_ATTEMPTS: u8 = 3;
 
 /// How the stream reaches the receiver.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -312,6 +318,12 @@ pub(crate) struct Session {
     next_lag_check: Cell<Instant>,
 }
 
+/// Our application on the receiver and the media session it plays.
+struct Playback {
+    app: Application,
+    media_session_id: i64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum CatchUp {
     Watching,
@@ -335,29 +347,80 @@ impl Session {
     }
 
     fn cast(&self) -> Result<()> {
-        let Some(client) = self.connect()? else {
+        let Some(mut client) = self.connect()? else {
             return Ok(());
         };
+        let Some((mut playback, mut outcome)) = self.start(&client)? else {
+            return Ok(());
+        };
+        let mut rejoins = 0;
+        loop {
+            let joined = Instant::now();
+            let result = self.follow_playback(&client, &playback, outcome);
+            if !matches!(result, Err(Error::Closed)) || self.stopped() {
+                match result {
+                    // The receiver ended playback or was taken over: leave it alone.
+                    Ok(false) => return Ok(()),
+                    // Stopping the application also ends its media session, in one round trip.
+                    result => {
+                        let _ = client.stop_application(&playback.app.session_id);
+                        return result.map(|_| ());
+                    }
+                }
+            }
+            rejoins = if joined.elapsed() >= REJOIN_SETTLED {
+                1
+            } else {
+                rejoins + 1
+            };
+            if rejoins > REJOIN_ATTEMPTS {
+                return Err(Error::Closed);
+            }
+            tracing::debug!(rejoins, "receiver dropped the connection; rejoining playback");
+            let Some(rejoined) = self.connect()? else {
+                return Ok(());
+            };
+            client = rejoined;
+            outcome = if let Some(outcome) = self.resume(&client, &playback)? {
+                outcome
+            } else {
+                // A dropped connection without our application means the
+                // receiver restarted its runtime under us: start over.
+                let Some((fresh, outcome)) = self.start(&client)? else {
+                    return Ok(());
+                };
+                playback = fresh;
+                outcome
+            };
+        }
+    }
+
+    /// Launches the media receiver and loads the stream once it can start.
+    /// `None` when the session was stopped, or the application closed or was
+    /// replaced before LOAD.
+    fn start(&self, client: &CastClient) -> Result<Option<(Playback, Result<bool>)>> {
         let app = client.launch(DEFAULT_MEDIA_RECEIVER)?;
         self.set(LiveState::Buffering);
         while !self.ready_to_load() {
             if self.stopped() {
                 let _ = client.stop_application(&app.session_id);
-                return Ok(());
+                return Ok(None);
             }
             if !client.is_open() {
                 return Err(Error::Closed);
             }
             // The application can close or be replaced before LOAD; then leave it be.
             if let Some(event) = client.next_event(BUFFER_POLL)?
-                && !self.follow_confirmed(&client, &event, &app, NO_MEDIA_SESSION)?
+                && !self.follow_confirmed(client, &event, &app, NO_MEDIA_SESSION)?
             {
-                return Ok(());
+                return Ok(None);
             }
         }
-        let mut media = client.media(&app);
-        let load = media.load(&self.media_load());
-        let loaded = match load {
+        // A fresh media session has not played yet, even when an earlier one did.
+        self.started.set(false);
+        self.buffering_since.set(None);
+        self.catch_up.set(CatchUp::Watching);
+        let loaded = match client.media(&app).load(&self.media_load()) {
             Ok(status) => status,
             Err(error) => {
                 let _ = client.stop_application(&app.session_id);
@@ -365,36 +428,59 @@ impl Session {
             }
         };
         // The LOAD reply is consumed by its request, so apply its status here.
-        let mut outcome = self.apply(&loaded, None);
-        let result = loop {
-            match outcome {
-                Ok(true) => {}
-                // The receiver ended playback or was taken over: leave it alone.
-                Ok(false) => return Ok(()),
-                Err(error) => break Err(error),
+        let outcome = self.apply(&loaded, None);
+        let playback = Playback {
+            app,
+            media_session_id: loaded.media_session_id,
+        };
+        Ok(Some((playback, outcome)))
+    }
+
+    /// Follows our media session until it ends (`Ok(false)`), the session is
+    /// stopped (`Ok(true)`) or the connection fails.
+    fn follow_playback(&self, client: &CastClient, playback: &Playback, mut outcome: Result<bool>) -> Result<bool> {
+        let Playback { app, media_session_id } = playback;
+        let media = client.media_session(app, *media_session_id);
+        loop {
+            if !outcome? {
+                return Ok(false);
             }
             if self.stopped() {
-                break Ok(());
+                return Ok(true);
             }
             outcome = if self.stalled() {
-                self.check_stall(&client, &app, loaded.media_session_id)
+                self.check_stall(client, app, *media_session_id)
             } else {
                 Ok(true)
             };
             if !matches!(outcome, Ok(true)) {
                 continue;
             }
-            if let Err(error) = self.keep_up(&media) {
-                break Err(error);
-            }
+            self.keep_up(&media)?;
             outcome = match client.next_event(EVENT_POLL)? {
-                Some(event) => self.follow_confirmed(&client, &event, &app, loaded.media_session_id),
+                Some(event) => self.follow_confirmed(client, &event, app, *media_session_id),
                 None => Ok(true),
             };
-        };
-        // Stopping the application also ends its media session, in one round trip.
-        let _ = client.stop_application(&app.session_id);
-        result
+        }
+    }
+
+    /// Picks up our application and media session on a fresh connection to a
+    /// receiver that dropped the last one. `None` when the application is gone;
+    /// `Ok(false)` inside when it now plays something else, which we leave be.
+    fn resume(&self, client: &CastClient, playback: &Playback) -> Result<Option<Result<bool>>> {
+        let running = client
+            .receiver_status()?
+            .applications
+            .iter()
+            .any(|running| running.session_id == playback.app.session_id);
+        if !running {
+            return Ok(None);
+        }
+        client.connect_virtual(&playback.app.transport_id)?;
+        Ok(match client.media(&playback.app).status()? {
+            Some(status) if status.media_session_id == playback.media_session_id => Some(self.apply(&status, None)),
+            _ => Some(Ok(false)),
+        })
     }
 
     /// Applies one receiver event; `Ok(false)` means the session is over.
