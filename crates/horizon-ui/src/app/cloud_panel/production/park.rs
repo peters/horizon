@@ -92,6 +92,13 @@ fn agent_status(status: Option<&SessionStatus>) -> AgentStatus {
     }
 }
 
+/// What the user saw of a tracked cloud, and whether one of its terminals runs live.
+#[derive(Clone, Copy)]
+struct Observed {
+    sight: Sight,
+    live: bool,
+}
+
 /// Panels that a cloud can park: terminals, not browsers or desktops.
 fn parks(kind: PanelKind) -> bool {
     !matches!(kind, PanelKind::Browser | PanelKind::Device)
@@ -113,12 +120,60 @@ impl HorizonApp {
             .collect()
     }
 
-    /// Whether the board panel with this local id is a terminal that can park.
-    fn is_parkable(&self, local: &str) -> bool {
-        self.board
-            .panel_id_by_local_id(local)
-            .and_then(|id| self.board.panel(id))
-            .is_some_and(|panel| parks(panel.kind))
+    /// What the user saw of each tracked ready cloud in the last frame, by group
+    /// index; `None` for a cloud that the tracker does not observe now. One pass over
+    /// the board serves every cloud, and nothing is built while no cloud is tracked.
+    fn observe_clouds(&self) -> Vec<Option<Observed>> {
+        let production = &self.cloud_prototype.production;
+        let groups = &self.cloud_prototype.groups.0;
+        let tracked = |group: &horizon_core::cloud_panel::CloudGroup| {
+            group.remote.is_some()
+                && !production.closing(group.issue)
+                && production.runtimes.get(&group.issue).is_some_and(|runtime| {
+                    runtime.parking.tracker.is_some()
+                        && !runtime.needs_attach
+                        && runtime.stage == Some(Stage::Ready)
+                        && runtime.state.as_ref().is_some_and(|state| state.stage == Stage::Ready)
+                })
+        };
+        if !groups.iter().any(tracked) {
+            return vec![None; groups.len()];
+        }
+        let terminals: HashMap<&str, &horizon_core::Panel> = self
+            .board
+            .panels
+            .iter()
+            .filter(|panel| parks(panel.kind))
+            .map(|panel| (panel.local_id.as_str(), panel))
+            .collect();
+        groups
+            .iter()
+            .map(|group| {
+                // Only terminal restores hold the tracker: a browser discovery, a desktop
+                // tunnel or a session restore that keeps failing must not.
+                if !tracked(group)
+                    || production.runtimes[&group.issue]
+                        .pending_member_attachments
+                        .iter()
+                        .any(|local| terminals.contains_key(local.as_str()))
+                {
+                    return None;
+                }
+                let mut observed = Observed {
+                    sight: Sight::Hidden,
+                    live: false,
+                };
+                for panel in group.panels.iter().filter_map(|local| terminals.get(local.as_str())) {
+                    observed.live |= panel.cloud_wait().is_none();
+                    if self.board.focused == Some(panel.id) || self.fullscreen_panel == Some(panel.id) {
+                        observed.sight = Sight::InUse;
+                    } else if observed.sight == Sight::Hidden && self.panel_drawn_last_frame(panel.id) {
+                        observed.sight = Sight::Visible;
+                    }
+                }
+                Some(observed)
+            })
+            .collect()
     }
 
     /// What the user sees of cloud `index` in the last frame.
@@ -185,27 +240,12 @@ impl HorizonApp {
     pub(super) fn sync_cloud_parking(&mut self) {
         let now = Instant::now();
         let mut attached = false;
-        for index in 0..self.cloud_prototype.groups.0.len() {
-            let group = &self.cloud_prototype.groups.0[index];
-            if group.remote.is_none() || self.cloud_prototype.production.closing(group.issue) {
-                continue;
-            }
-            let issue = group.issue;
-            let sight = self.cloud_sight(index);
-            let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) else {
+        let observed = self.observe_clouds();
+        for (index, observed) in observed.into_iter().enumerate() {
+            let Some(Observed { sight, live }) = observed else {
                 continue;
             };
-            let ready = runtime.state.as_ref().is_some_and(|state| state.stage == Stage::Ready)
-                && runtime.stage == Some(Stage::Ready);
-            // Only terminal restores hold the tracker: a browser discovery or session
-            // restore that keeps failing must not keep parked terminals parked.
-            if !ready || runtime.needs_attach {
-                continue;
-            }
-            let pending = runtime.pending_member_attachments.clone();
-            if pending.iter().any(|local| self.is_parkable(local)) {
-                continue;
-            }
+            let issue = self.cloud_prototype.groups.0[index].issue;
             let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) else {
                 continue;
             };
@@ -219,7 +259,7 @@ impl HorizonApp {
             let action = tracker.observe(sight, now, runtime.parking.policy);
             // A terminal that started while its cloud was parked, such as a session restored
             // at Ready, parks with the others while the cloud stays out of view.
-            let park_live = action.is_none() && tracker.is_parked() && sight == Sight::Hidden;
+            let park_live = live && action.is_none() && tracker.is_parked() && sight == Sight::Hidden;
             match action {
                 Some(ParkAction::Park) => {
                     for (_, id) in self.parkable_members(index) {
