@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Envelope",
+  "type": "object",
+  "properties": {
+    "remote-device-testing": {
+      "$ref": "#/$defs/Contract"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "remote-device-testing"
+  ],
+  "$defs": {
+    "App": {
+      "type": "object",
+      "properties": {
+        "artifact": {
+          "type": "string"
+        },
+        "build": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bundle_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "build",
+        "artifact"
+      ]
+    },
+    "Backend": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timeout_seconds": {
+          "description": "Startup budget includes seeding and frontend/backend readiness.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "timeout_seconds"
+      ]
+    },
+    "Contract": {
+      "type": "object",
+      "properties": {
+        "apps": {
+          "type": "object",
+          "properties": {
+            "android": {
+              "$ref": "#/$defs/App"
+            },
+            "ios": {
+              "$ref": "#/$defs/App"
+            }
+          },
+          "additionalProperties": false
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence",
+          "default": {
+            "logs_on_failure": true,
+            "screenshots": true,
+            "video": true
+          }
+        },
+        "launch_arguments": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "matrix": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MatrixEntry"
+          }
+        },
+        "max_parallel": {
+          "type": "integer",
+          "format": "uint",
+          "default": 16,
+          "minimum": 0
+        },
+        "provider": {
+          "type": "string",
+          "const": "browserstack"
+        },
+        "recipes": {
+          "description": "Exact project-relative recipe files. Markdown recipes contain a device-recipe YAML fence.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reset": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "tunnel": {
+          "$ref": "#/$defs/Tunnel"
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "provider",
+        "apps",
+        "tunnel",
+        "matrix",
+        "recipes"
+      ]
+    },
+    "Evidence": {
+      "type": "object",
+      "properties": {
+        "logs_on_failure": {
+          "type": "boolean",
+          "default": true
+        },
+        "screenshots": {
+          "type": "boolean",
+          "default": true
+        },
+        "video": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "Form": {
+      "type": "string",
+      "enum": [
+        "phone",
+        "tablet"
+      ]
+    },
+    "MatrixEntry": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "form": {
+          "$ref": "#/$defs/Form"
+        },
+        "os": {
+          "type": "string",
+          "default": "latest"
+        },
+        "platform": {
+          "$ref": "#/$defs/Platform"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "form"
+      ]
+    },
+    "Platform": {
+      "type": "string",
+      "enum": [
+        "ios",
+        "android"
+      ]
+    },
+    "Port": {
+      "description": "A fixed loopback port or one private foreground backend per device.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        {
+          "$ref": "#/$defs/Backend"
+        }
+      ]
+    },
+    "Tunnel": {
+      "type": "object",
+      "properties": {
+        "ports": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Port"
+          },
+          "maxProperties": 16,
+          "minProperties": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ports"
+      ]
+    }
+  }
+}

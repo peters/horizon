@@ -39,6 +39,7 @@ documents that are not yet STE.
 | [device-type-multi-chunk](procedures/device-type-multi-chunk.md) | `horizon-device` text input in several `type` actions | none |
 | [local-network-bridge-agent-access](procedures/local-network-bridge-agent-access.md) | Local Network Bridge, agent access on the worker | rents compute |
 | [new-cloud-catalog-refresh](procedures/new-cloud-catalog-refresh.md) | New cloud dialog, background price refresh and layout height | none |
+| [native-app-automate](procedures/native-app-automate.md) | Native app matrix, MCP, CLI and exact cleanup | paid device |
 | [new-cloud-picker](procedures/new-cloud-picker.md) | New cloud dialog, worker list, filters, picks and data centers | none |
 | [tailnet-stable-device-name](procedures/tailnet-stable-device-name.md) | Cloud tailnet device name after stop and resume | rents compute |
 | [vnc-recording](procedures/vnc-recording.md) | Device panel video | none |

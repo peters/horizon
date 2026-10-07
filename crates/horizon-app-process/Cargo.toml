@@ -1,0 +1,27 @@
+[package]
+name = "horizon-app-process"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Private guarded native build and backend processes"
+
+[lints]
+workspace = true
+
+[dependencies]
+horizon-app-testing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+tempfile.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["time"] }
+
+[[bin]]
+name = "horizon-app-process"
+path = "src/main.rs"

@@ -29,6 +29,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+horizon-app-host.workspace = true
 horizon-browser.workspace = true
 vnc.workspace = true
 thiserror.workspace = true

@@ -1,0 +1,35 @@
+[package]
+name = "horizon-app-provider"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Host-owned native app artifacts and restricted provider access"
+
+[lints]
+workspace = true
+
+[dependencies]
+horizon-app-process.workspace = true
+horizon-app-testing.workspace = true
+horizon-browser.workspace = true
+ureq.workspace = true
+serde.workspace = true
+schemars.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+base64.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+tempfile.workspace = true
+url.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[[bin]]
+name = "horizon-app-provider"
+path = "src/main.rs"

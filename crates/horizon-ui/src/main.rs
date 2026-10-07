@@ -43,6 +43,9 @@ use horizon_core::{
 use tracing_subscriber::fmt::format::FmtSpan;
 
 fn main() -> eframe::Result {
+    if horizon_app_host::entry::run_if_requested() {
+        return Ok(());
+    }
     if agent_work_hook::run_if_requested() {
         return Ok(());
     }

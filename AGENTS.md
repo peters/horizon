@@ -147,6 +147,27 @@ GPU profile requires GPU capacity; a CPU result cannot qualify that lane.
   unsupported cases explicitly. Do not silently defer CLI/MCP support or require
   the settings UI to be open for an agent-facing capability to work.
 
+### Native app testing
+
+Use [the native runbook](docs/architecture/remote-device-testing.md) for iOS/Android App Automate work.
+The runbook and [test procedure](docs/testing/procedures/native-app-automate.md) follow the repository's STE100 rules.
+
+1. Read the selected app's and companion backend's `AGENTS.md`.
+   Result: The builds, synthetic services, matrix and recipes are declared.
+> **CAUTION:** USE ONLY THE APPROVED DEVICE QUOTA AND DECLARED LOOPBACK PORTS.
+> Device runs consume paid capacity and delete their owned resources.
+
+2. Use `device_test_run`, the `app_*` MCP tools or `horizon --native-run`.
+   Result: All interfaces use the same native controller. Credentials stay in Horizon.
+3. Use one immutable artifact for each platform per run.
+   Result: The host builds and uploads each platform once. Each lane uses its own isolated backend.
+4. Run at most two lanes within the current native quota.
+   Result: Browser quota does not replace App Automate quota.
+5. Observe live sessions through public `device_panel` viewers.
+   Result: Displayed frames, app requests, step evidence and cleanup have separate proof.
+6. Preserve the original owner and private state after uncertainty.
+   Result: Exact reconciliation cannot bypass an unresolved operation.
+
 ### Configuration Changes
 
 - When changing default presets, CLI flags, or any config-related code in `horizon-core/src/config.rs`, always sync the user's local config file (`~/.horizon/config.yaml`) to match
