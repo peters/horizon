@@ -42,6 +42,11 @@ fn is_spinner_glyph(ch: char) -> bool {
     ('\u{2800}'..='\u{28FF}').contains(&ch) || ('\u{2737}'..='\u{273B}').contains(&ch)
 }
 
+/// A working indicator that receives no terminal output for this long is
+/// treated as stale: the agent finished without a final repaint, hung, or the
+/// TUI stopped redrawing.
+pub const WORKING_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// A terminal line counts as a working indicator when it starts with an
 /// animated spinner glyph and carries a working keyword or the usual
 /// interrupt/stop/cancel hint. Requiring the spinner prefix keeps ordinary

@@ -102,8 +102,11 @@ pub fn parse(output: &str, ids: &[String]) -> Result<Vec<SessionStatus>> {
                 .map(|line| clean(line))
                 .filter(|line| !line.is_empty())
                 .collect();
+            let quiet_for = entry.activity_age_seconds.map(Duration::from_secs);
+            // A working indicator without recent output is stale, as on an attached panel.
+            let fresh = quiet_for.is_none_or(|quiet| quiet <= crate::agents::WORKING_STALE_AFTER);
             let activity = match entry.state.as_str() {
-                "running" if lines.iter().any(|line| crate::agents::is_agent_working_line(line)) => {
+                "running" if fresh && lines.iter().any(|line| crate::agents::is_agent_working_line(line)) => {
                     SessionActivity::Working
                 }
                 "running" => SessionActivity::Idle,
@@ -113,7 +116,7 @@ pub fn parse(output: &str, ids: &[String]) -> Result<Vec<SessionStatus>> {
             SessionStatus {
                 id: entry.id,
                 activity,
-                quiet_for: entry.activity_age_seconds.map(Duration::from_secs),
+                quiet_for,
                 lines,
             }
         })

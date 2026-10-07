@@ -7,7 +7,11 @@ impl HorizonApp {
         &mut self,
         index: usize,
         pending: &HashSet<String>,
+        view: super::park::ReadyView,
     ) -> HashSet<String> {
+        // A cloud that is out of view gets its missing sessions as parked
+        // placeholders: no SSH client starts, and the focus stays where it is.
+        let parked = self.restores_parked(index, view);
         let group = &self.cloud_prototype.groups.0[index];
         let Some(workspace) = self.board.workspace_id_by_local_id(&group.workspace) else {
             return pending.clone();
@@ -43,12 +47,12 @@ impl HorizonApp {
                 transcript_root: self.transcript_root.clone(),
                 ..PanelOptions::default()
             };
-            if let Err(error) = self.prepare_cloud_remote_panel(index, &mut options) {
+            if !parked && let Err(error) = self.prepare_cloud_remote_panel(index, &mut options) {
                 self.cloud_prototype.error = Some(error.to_string());
                 remaining.insert(session.panel_id);
                 continue;
             }
-            match self.create_cloud_member(index, options, workspace) {
+            match self.create_cloud_member_as(index, options, workspace, parked) {
                 Ok(_) => {}
                 Err(error) => {
                     self.cloud_prototype.error = Some(error.to_string());

@@ -506,11 +506,26 @@ impl HorizonApp {
         options: PanelOptions,
         workspace: WorkspaceId,
     ) -> horizon_core::Result<PanelId> {
+        self.create_cloud_member_as(index, options, workspace, false)
+    }
+
+    /// As [`Self::create_cloud_member`]; a `parked` member is a placeholder that
+    /// runs nothing and does not take the focus.
+    pub(super) fn create_cloud_member_as(
+        &mut self,
+        index: usize,
+        options: PanelOptions,
+        workspace: WorkspaceId,
+        parked: bool,
+    ) -> horizon_core::Result<PanelId> {
         self.sync_board_cloud_groups();
         let before = self.board.workspace_frame_rect(workspace);
-        let child = self
-            .board
-            .create_panel_preserving_workspace_layout(options, workspace)?;
+        let child = if parked {
+            self.board.create_parked_cloud_member(options, workspace)?
+        } else {
+            self.board
+                .create_panel_preserving_workspace_layout(options, workspace)?
+        };
         self.cloud_panel_created(index, child);
         let scope: Vec<_> = self.board.workspaces.iter().map(|workspace| workspace.id).collect();
         self.board

@@ -24,22 +24,29 @@ fn command_carries_the_script_and_only_valid_ids() {
 #[test]
 fn parse_classifies_and_bounds_each_session() {
     let output = serde_json::json!({"sessions": [
-        {"id": "busy", "state": "running", "activity_age_seconds": 3,
+        {"id": "busy", "state": "running", "activity_age_seconds": 1,
          "lines": ["building", "✻ Working… (12s · esc to interrupt)"]},
         {"id": "quiet", "state": "running", "activity_age_seconds": 400,
          "lines": ["done.", "\u{1b}[31m> \u{7}", ""]},
         {"id": "ended", "state": "exited", "exit_status": 2, "lines": ["boom"]},
         {"id": "gone", "state": "missing"},
+        {"id": "stale", "state": "running", "activity_age_seconds": 400,
+         "lines": ["✻ Working… (12s · esc to interrupt)"]},
         {"id": "stranger", "state": "running", "lines": ["not asked for"]},
         {"id": "long", "state": "running",
          "lines": (0..20).map(|n| format!("{n}{}", "x".repeat(500))).collect::<Vec<_>>()}
     ]})
     .to_string();
-    let status = parse(&output, &ids(&["busy", "quiet", "ended", "gone", "long"])).unwrap();
+    let status = parse(&output, &ids(&["busy", "quiet", "ended", "gone", "long", "stale"])).unwrap();
     let by_id = |id: &str| status.iter().find(|s| s.id == id).unwrap();
-    assert_eq!(status.len(), 5);
+    assert_eq!(status.len(), 6);
+    assert_eq!(
+        by_id("stale").activity,
+        SessionActivity::Idle,
+        "an old working indicator is stale"
+    );
     assert_eq!(by_id("busy").activity, SessionActivity::Working);
-    assert_eq!(by_id("busy").quiet_for, Some(Duration::from_secs(3)));
+    assert_eq!(by_id("busy").quiet_for, Some(Duration::from_secs(1)));
     assert_eq!(by_id("quiet").activity, SessionActivity::Idle);
     assert_eq!(by_id("quiet").last_line(), Some("[31m>"));
     assert_eq!(by_id("ended").activity, SessionActivity::Exited(Some(2)));

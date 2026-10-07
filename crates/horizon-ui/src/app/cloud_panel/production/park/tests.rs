@@ -350,10 +350,48 @@ fn a_session_recreated_while_its_cloud_is_hidden_parks_and_keeps_the_focus() {
         .panel_id_by_local_id("three")
         .expect("the missing session gets a panel");
     assert_eq!(app.board.panel(three).unwrap().cloud_wait(), Some(CloudWait::Parked));
+    assert_ne!(
+        app.board.panel(three).unwrap().launch_command.as_deref(),
+        Some("ssh"),
+        "a hidden cloud starts no SSH client for a recreated session"
+    );
     for local in MEMBERS {
         assert_eq!(wait_of(&app, local), Some(CloudWait::Parked), "{local}");
     }
     assert_eq!(app.board.focused, None, "a hidden cloud does not take the focus");
     assert_eq!(app.board.active_workspace, Some(elsewhere));
     assert!(runtime(&app).pending_member_attachments.is_empty());
+}
+
+#[test]
+fn a_later_session_restore_in_a_parked_cloud_starts_parked_without_focus() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    assert!(runtime(&app).parking.tracker.is_some_and(|tracker| tracker.is_parked()));
+    // A restore that failed at Ready is retried later, when the cloud is parked.
+    let cloud = app.cloud_prototype.production.runtimes.get_mut(&1).unwrap();
+    cloud.state.as_mut().unwrap().sessions.push(super::super::Session {
+        panel_id: "late".into(),
+        agent: "shell".into(),
+        tmux: "late".into(),
+        branch: String::new(),
+        worktree: "/workspace/checkout".into(),
+    });
+    cloud.pending_session_attachments.insert("late".into());
+    cloud.next_attachment_attempt = None;
+    app.sync_cloud_presentations();
+    let late = app
+        .board
+        .panel_id_by_local_id("late")
+        .expect("the session gets a panel");
+    let panel = app.board.panel(late).unwrap();
+    assert_eq!(panel.cloud_wait(), Some(CloudWait::Parked));
+    assert_ne!(panel.launch_command.as_deref(), Some("ssh"));
+    assert_eq!(app.board.focused, None);
+    app.sync_cloud_parking();
+    assert!(
+        runtime(&app).parking.tracker.is_some_and(|tracker| tracker.is_parked()),
+        "the cloud stays parked"
+    );
 }

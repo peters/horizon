@@ -309,7 +309,7 @@ impl HorizonApp {
             // Decided before missing sessions are recreated: a new panel takes the focus.
             let view = self.ready_view(index, ready_now);
             if retry && !pending_sessions.is_empty() {
-                let pending = self.restore_missing_cloud_sessions(index, &pending_sessions);
+                let pending = self.restore_missing_cloud_sessions(index, &pending_sessions, view);
                 if let Some(runtime) = self
                     .cloud_prototype
                     .production

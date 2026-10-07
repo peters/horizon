@@ -205,6 +205,19 @@ impl HorizonApp {
     /// Called when cloud `index` becomes ready and `members` are about to attach. When
     /// the cloud is out of view, its terminals park instead and are removed from
     /// `members`, so a restart opens no connection for clouds that nobody looks at.
+    /// Whether sessions restored now for cloud `index` start parked: the cloud is
+    /// out of view as it becomes ready, or its terminals are parked already.
+    pub(super) fn restores_parked(&self, index: usize, view: ReadyView) -> bool {
+        matches!(view, ReadyView::Hidden { .. })
+            || self
+                .cloud_prototype
+                .production
+                .runtimes
+                .get(&self.cloud_prototype.groups.0[index].issue)
+                .and_then(|runtime| runtime.parking.tracker)
+                .is_some_and(|tracker| tracker.is_parked())
+    }
+
     pub(super) fn ready_view(&self, index: usize, ready_now: bool) -> ReadyView {
         if !ready_now {
             ReadyView::Unchanged
