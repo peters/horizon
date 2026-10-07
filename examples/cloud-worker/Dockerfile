@@ -14,9 +14,12 @@ RUN node -e 'const fs=require("fs"); const out="/output/usr/local/bin"; fs.mkdir
 FROM tailscale/tailscale:v1.102.5@sha256:c507f3a2a6ab1cabd8d809b98edeb41edbd5c3fb6ad9632ffd098b4c7d0b4065 AS tailscale-runtime
 FROM ${BASE_IMAGE}
 ARG DEBIAN_FRONTEND=noninteractive
+# Package installation generates SSH host keys; remove them in the same layer so no
+# image layer carries a shared private key. Worker start creates per-volume keys.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server tmux git git-lfs gh rsync ca-certificates curl python3 tini util-linux \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/ssh/ssh_host_*
 COPY --from=tailscale-runtime /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
 RUN groupadd --gid 10001 horizon-agent \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /bin/bash horizon-agent

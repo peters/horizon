@@ -180,14 +180,40 @@ pub(super) fn prepare_image(
         image_digest: digest,
         profile: state.profile.clone(),
         public_key,
-        registry_auth_id: horizon_cloud::provider::Description::of(&state.profile)
-            .registry_auth
-            .then(|| request.settings.registry_pull_auth_id.clone())
-            .flatten(),
+        registry_auth_id: pull_auth(&state.profile, &request.settings),
         gpu_types: request.settings.gpu_types.clone(),
         cpu_flavors,
         data_centers,
         startup_metadata: None,
     });
     store.save(state)
+}
+
+/// The provider registry login for the image of `profile`. The public base image gets
+/// none: anyone can pull it, and a stale saved login could make the provider refuse it.
+fn pull_auth(profile: &horizon_cloud::Profile, settings: &crate::cloud_runtime::settings::Settings) -> Option<String> {
+    (horizon_cloud::provider::Description::of(profile).registry_auth
+        && !crate::cloud_runtime::repository::launch::quick_start::is_public_base(&profile.image))
+    .then(|| settings.registry_pull_auth_id.clone())
+    .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cloud_runtime::repository::launch::quick_start;
+
+    #[test]
+    fn a_saved_pull_login_never_reaches_the_public_base_image() {
+        let settings: crate::cloud_runtime::settings::Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file": "/absent", "ssh_identity_file": "/absent", "docker_config": "/absent",
+            "registry_pull_auth_id": "saved-pull-login", "cpu_flavors": [], "gpu_types": []
+        }))
+        .unwrap();
+        let config = quick_start::builtin().unwrap();
+        let mut profile = config.profiles[quick_start::PROFILE].clone();
+        assert_eq!(pull_auth(&profile, &settings), None);
+        profile.image = "registry.example/team/worker@sha256:".to_owned() + &"a".repeat(64);
+        assert_eq!(pull_auth(&profile, &settings).as_deref(), Some("saved-pull-login"));
+    }
 }

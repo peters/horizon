@@ -105,7 +105,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 
 ## 6. Tasks
 
-### 6.1 B01 — Offer the setup agent for a repository without cloud.yml
+### 6.1 B01 — Offer quick start and the setup agent for a repository without cloud.yml
 
 1. Click **Cloud** in the menu bar.
 
@@ -119,9 +119,12 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: The dialog reads the repository. It finds no `.horizon/cloud.yml`.
 
-4. Expand **No cloud configuration yet?**.
+4. Examine the section **This commit has no .horizon/cloud.yml**.
 
-   Result: The section shows **Codex**, **Claude** and **Open setup agent**.
+   Result: The section is open. It shows **Quick start on the public base
+   image**, **Codex**, **Claude** and **Open setup agent**. The dialog shows no
+   red error. Do not click quick start. The
+   [quick start procedure](../cloud-quick-start.md) tests it.
 
 5. Click **Claude**.
 
@@ -344,7 +347,8 @@ bind of S02 alone does not change the socket that the candidate uses.
 
 ## 7. Pass criteria
 
-- B01 shows **No cloud configuration yet?** with Codex and Claude.
+- B01 shows **This commit has no .horizon/cloud.yml** with quick start, Codex
+  and Claude, and no error.
 - B02 lists the six profiles from the committed file.
 - B03 shows the error and clears the profiles.
 - B04 refuses a build default and offers only profiles without `build`.

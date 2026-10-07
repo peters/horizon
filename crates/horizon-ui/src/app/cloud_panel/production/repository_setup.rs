@@ -1,6 +1,13 @@
-//! A real local agent can prepare missing repository settings before any allocation.
+//! A repository without cloud settings: quick start on the public base image, or a
+//! real local agent prepares the settings, before any allocation.
 use super::{HorizonApp, PanelKind, PanelOptions, Production};
+use crate::app::cloud_panel::runtime::action_button;
 use crate::theme;
+use egui::{Frame, RichText, Stroke, Vec2};
+use horizon_core::{
+    cloud_panel::Placement,
+    cloud_runtime::repository::launch::{Configuration, quick_start},
+};
 
 fn prompt(agents: &[horizon_core::cloud_runtime::setup::Agent]) -> String {
     let selection = agents.iter().map(|agent| agent.as_str()).collect::<Vec<_>>().join(", ");
@@ -9,18 +16,116 @@ fn prompt(agents: &[horizon_core::cloud_runtime::setup::Agent]) -> String {
     )
 }
 
-pub(super) fn render(ui: &mut egui::Ui, form: &mut Production) -> bool {
+/// What the person chose for a repository without cloud settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Choice {
+    None,
+    QuickStart,
+    SetupAgent,
+}
+
+/// The next steps for a repository without cloud settings. A commit with no
+/// `.horizon/cloud.yml` is a normal start, not a fault, so both choices show open as
+/// guidance; after another read failure the setup agent stays behind a section.
+pub(super) fn render(ui: &mut egui::Ui, form: &mut Production) -> Choice {
     ui.add_space(12.0);
-    ui.collapsing("No cloud configuration yet?", |ui| {
-        ui.label("Let a local agent inspect this repository and prepare its worker image and cloud.yml. Review and commit the files, then return here and reload.");
-        ui.small("This setup terminal uses your local agent login. Cloud settings configure authentication on remote workers.");
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Codex), "Codex");
-            ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Claude), "Claude");
+    if form.launch.unconfigured {
+        return unconfigured(ui, form);
+    }
+    ui.collapsing("No cloud configuration yet?", |ui| setup_agent(ui, form))
+        .body_returned
+        .unwrap_or(Choice::None)
+}
+
+fn unconfigured(ui: &mut egui::Ui, form: &mut Production) -> Choice {
+    let mut choice = Choice::None;
+    Frame::new()
+        .fill(theme::PANEL_BG_ALT())
+        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+        .corner_radius(10)
+        .inner_margin(14)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                RichText::new("This commit has no .horizon/cloud.yml")
+                    .size(15.0)
+                    .strong()
+                    .color(theme::FG()),
+            );
+            ui.label(
+                RichText::new("Choose how this repository starts in the cloud.")
+                    .size(13.0)
+                    .color(theme::FG_SOFT()),
+            );
+            ui.add_space(10.0);
+            if ui
+                .add(action_button("Quick start on the public base image").min_size(Vec2::new(0.0, 34.0)))
+                .clicked()
+            {
+                choice = Choice::QuickStart;
+            }
+            ui.label(RichText::new(QUICK_START_DETAIL).size(12.0).color(theme::FG_SOFT()));
+            ui.add_space(14.0);
+            ui.label(
+                RichText::new("Or prepare the repository's own settings")
+                    .size(13.0)
+                    .strong()
+                    .color(theme::FG()),
+            );
+            if setup_agent(ui, form) == Choice::SetupAgent {
+                choice = Choice::SetupAgent;
+            }
         });
-        ui.add_enabled(!form.repository.trim().is_empty() && form.setup_agent.is_some(),
-            egui::Button::new("Open setup agent").fill(theme::PANEL_BG_ALT())).clicked()
-    }).body_returned.unwrap_or(false)
+    choice
+}
+
+const QUICK_START_DETAIL: &str = "A 2 vCPU, 4 GB RunPod worker with Claude, Codex, Chromium and a desktop. It needs no registry login and no image build.";
+
+fn setup_agent(ui: &mut egui::Ui, form: &mut Production) -> Choice {
+    ui.label("Let a local agent inspect this repository and prepare its worker image and cloud.yml. Review and commit the files, then return here and reload.");
+    ui.small(
+        "This setup terminal uses your local agent login. Cloud settings configure authentication on remote workers.",
+    );
+    ui.horizontal_wrapped(|ui| {
+        ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Codex), "Codex");
+        ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Claude), "Claude");
+    });
+    let open = ui
+        .add_enabled(
+            !form.repository.trim().is_empty() && form.setup_agent.is_some(),
+            egui::Button::new("Open setup agent").fill(theme::PANEL_BG_ALT()),
+        )
+        .clicked();
+    if open { Choice::SetupAgent } else { Choice::None }
+}
+
+/// Under the profile of a quick start: which image runs and how to leave it.
+pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &Production) {
+    if form.launch.configuration != Configuration::QuickStart || form.profiles.is_none() {
+        return;
+    }
+    let (image, digest) = quick_start::IMAGE
+        .split_once("@sha256:")
+        .unwrap_or((quick_start::IMAGE, ""));
+    ui.label(
+        RichText::new(format!(
+            "Quick start on the public base image {image}, digest {}. No registry login and no image build. To use the repository's own settings, choose Read .horizon/cloud.yml in More options.",
+            digest.get(..12).unwrap_or(digest)
+        ))
+        .size(12.0)
+        .color(theme::FG_SOFT()),
+    );
+}
+
+/// Switches where the profiles come from. A profile, size, place or sibling chosen
+/// from the previous settings no longer applies.
+pub(super) fn set_configuration(form: &mut Production, configuration: Configuration) {
+    form.launch.configuration = configuration;
+    form.selected_profile.clear();
+    form.size = None;
+    form.placement = Placement::default();
+    form.provider = None;
+    form.launch.siblings = super::creation::siblings::State::default();
 }
 
 impl HorizonApp {
@@ -64,6 +169,23 @@ const PROMPT: &str = "Prepare this repository for Horizon Cloud Workspaces. Firs
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_quick_start_detail_describes_the_builtin_profile() {
+        let config = quick_start::builtin().unwrap();
+        let profile = &config.profiles[quick_start::PROFILE];
+        let detail = QUICK_START_DETAIL.to_lowercase();
+        assert_eq!(profile.provider, "runpod");
+        assert!(detail.contains("runpod"));
+        assert!(detail.contains(&format!("{} vcpu, {} gb", profile.cpu, profile.memory_gb)));
+        for agent in &profile.capabilities.agents {
+            assert!(detail.contains(agent.as_str()), "{agent:?}");
+        }
+        for browser in &profile.capabilities.browsers {
+            assert!(detail.contains(browser.as_str()), "{browser:?}");
+        }
+        assert_eq!(detail.contains("desktop"), profile.capabilities.desktop);
+    }
+
     #[test]
     fn selected_agent_preference_is_passed_without_machine_bindings() {
         let text = prompt(&[horizon_core::cloud_runtime::setup::Agent::Claude]);

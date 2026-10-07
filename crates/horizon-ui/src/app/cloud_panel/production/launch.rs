@@ -24,6 +24,9 @@ pub(super) struct State {
     cancel: cloud_runtime::Cancellation,
     pub revision: Option<String>,
     pub configuration: Configuration,
+    /// The last read found no `.horizon/cloud.yml` in the selected commit: the dialog
+    /// offers quick start and the setup agent instead of an error.
+    pub unconfigured: bool,
     pub submitted: bool,
     pub watch: Option<cloud_runtime::prices::watch::Selection>,
     /// The hourly compute price shown when the watch started.
@@ -96,6 +99,7 @@ impl HorizonApp {
         form.launch.cancel.cancel();
         form.launch.cancel = cloud_runtime::Cancellation::default();
         form.launch.revision = None;
+        form.launch.unconfigured = false;
         form.launch.accounts_checked = false;
         form.launch.ready_profiles.clear();
         form.profiles = None;
@@ -190,7 +194,18 @@ impl HorizonApp {
                     form.placement = Placement::default();
                     form.provider = None;
                     form.launch.siblings = super::creation::siblings::State::default();
-                    self.cloud_prototype.error = Some(error.to_string());
+                    form.launch.unconfigured = cloud_runtime::repository::launch::is_missing_config(&error);
+                    if form.launch.configuration == Configuration::QuickStart
+                        && cloud_runtime::repository::launch::quick_start::is_refused(&error)
+                    {
+                        // This commit has its own settings, so they apply instead of quick start.
+                        super::repository_setup::set_configuration(form, Configuration::Committed);
+                        self.read_cloud_profiles(ctx);
+                        return;
+                    }
+                    if !form.launch.unconfigured {
+                        self.cloud_prototype.error = Some(error.to_string());
+                    }
                 }
             }
         }

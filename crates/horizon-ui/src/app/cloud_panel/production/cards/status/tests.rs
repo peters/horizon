@@ -5,6 +5,8 @@ use horizon_core::cloud_runtime::progress::{Progress, Unit};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
+mod skipped;
+
 fn deployment(
     stage: &str,
     operation: &serde_json::Value,

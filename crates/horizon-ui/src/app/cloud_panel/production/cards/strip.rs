@@ -310,7 +310,11 @@ pub(super) fn paint_track(ui: &egui::Ui, rect: Rect, track: &Track) {
         );
         painter.rect_filled(segment, radius, theme::BORDER_SUBTLE());
         let color = stage_color(*stage);
-        if index < track.finished && track.current != Some(index) {
+        if track.skipped.contains(stage) && track.current != Some(index) {
+            // A step that never runs: a thin rule through the empty segment, not a colour.
+            let rule = Rect::from_center_size(segment.center(), vec2(width, 1.0_f32.min(rect.height())));
+            painter.rect_filled(rule, 0, theme::FG_DIM());
+        } else if index < track.finished && track.current != Some(index) {
             let color = if track.faded {
                 theme::blend(color, theme::PANEL_BG(), 0.45)
             } else {
@@ -340,7 +344,12 @@ pub(super) fn paint_track(ui: &egui::Ui, rect: Rect, track: &Track) {
             .iter()
             .position(|segment| segment.x_range().contains(pointer.x))
     {
-        hover.on_hover_text_at_pointer(track.stages[index].label());
+        let stage = track.stages[index];
+        if track.skipped.contains(&stage) {
+            hover.on_hover_text_at_pointer(format!("{} · skipped", stage.label()));
+        } else {
+            hover.on_hover_text_at_pointer(stage.label());
+        }
     }
 }
 

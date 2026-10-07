@@ -170,6 +170,9 @@ pub(super) struct Track {
     pub failed: bool,
     /// A stopped or disconnected cloud keeps its finished stages, faded.
     pub faded: bool,
+    /// Stages this cloud's deployment never runs, such as Build and Push for an
+    /// image-only profile. They show as skipped, not as done.
+    pub skipped: &'static [Stage],
 }
 
 impl Track {
@@ -182,6 +185,7 @@ impl Track {
             fraction: None,
             failed: false,
             faded: false,
+            skipped: &[],
         }
     }
 
@@ -193,6 +197,7 @@ impl Track {
             fraction: None,
             failed: false,
             faded,
+            skipped: &[],
         }
     }
 
@@ -349,6 +354,24 @@ pub(super) fn keep(runtime: &mut Runtime, status: Status, frame: u64) {
 }
 
 pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> Status {
+    let mut status = unmarked(runtime, occupancy, now);
+    status.track.skipped = skipped(runtime, status.track.stages);
+    status
+}
+
+/// The deployment steps this cloud never runs, such as Build and Push for an
+/// image-only profile, from its saved record or else the deployment started here.
+fn skipped(runtime: &Runtime, stages: &[Stage]) -> &'static [Stage] {
+    if stages != Stage::ALL.as_slice() {
+        return &[];
+    }
+    runtime.state.as_ref().map_or(runtime.launched_skips, |state| {
+        horizon_core::cloud_runtime::image::skipped_stages(&state.profile)
+    })
+}
+
+/// The status before the skipped stages are marked on its track.
+fn unmarked(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> Status {
     if let Some(status) = exceptional(runtime) {
         return status;
     }

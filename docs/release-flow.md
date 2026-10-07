@@ -80,6 +80,30 @@ Then it:
 - in the canonical `peters/horizon` repo only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
 - in the canonical `peters/horizon` repo only, updates the `Peters.Horizon` manifests in the configured `winget-pkgs` fork and opens or reuses the upstream PR against `microsoft/winget-pkgs`
 
+## Update The Quick-Start Image
+
+Quick start in **New cloud** uses the public base worker image
+`ghcr.io/peters/horizon-worker-base`. Horizon pins this image by digest in
+`crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs`. Thus each
+Horizon build starts the image that was tested with it. The `cpu` tag moves, and
+Horizon does not use it.
+
+The image changes only when the pin changes. Update the pin when the worker helpers,
+the worker contract or the agent CLIs in the base image must change for a release:
+
+1. Open the newest successful run of the **Worker images** workflow on `main`.
+2. In the summary of the **Publish CPU base worker** job, find the image reference
+   that has `@sha256:`.
+3. In `quick_start.rs`, set the value of the `image!` macro to that reference.
+4. Run `cargo test -p horizon-core quick_start`.
+
+   The tests make sure that the value is a digest of the public base image and that
+   the base image recipe builds the capabilities of the built-in profile.
+5. CAUTION: The next step rents compute from RunPod.
+6. Do the [quick start test procedure](testing/procedures/cloud-quick-start.md)
+   with the new pin.
+7. Merge the change in a normal PR before you save the draft release.
+
 ## CLI Alternative
 
 If you prefer the CLI over the GitHub UI:

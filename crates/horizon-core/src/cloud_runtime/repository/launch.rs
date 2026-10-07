@@ -4,12 +4,16 @@ use horizon_cloud::CloudConfig;
 use std::{path::Path, process::Command, time::Duration};
 
 mod local;
+pub mod quick_start;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Configuration {
     #[default]
     Committed,
     LocalImageOnly,
+    /// The built-in profile on the public base image, for a commit without
+    /// `.horizon/cloud.yml`.
+    QuickStart,
 }
 
 pub struct Prepared {
@@ -47,10 +51,11 @@ pub fn prepare_with_configuration(
     let repository = Path::new(root.trim_end_matches(['\r', '\n'])).canonicalize()?;
     let revision = resolve_with_runner(&repository, if revision.is_empty() { "HEAD" } else { revision }, runner)?;
     let config = match configuration {
-        Configuration::Committed => committed_config(&repository, &revision, runner)?.ok_or(Error::Invalid(
-            "The selected commit has no readable .horizon/cloud.yml. Commit the cloud configuration, choose another revision, or use local image-only settings in More options.",
-        ))?,
+        Configuration::Committed => {
+            committed_config(&repository, &revision, runner)?.ok_or(Error::Invalid(MISSING_CONFIG))?
+        }
         Configuration::LocalImageOnly => local::read(&repository, runner)?,
+        Configuration::QuickStart => quick_start::config(&repository, &revision, runner)?,
     };
     let config = creatable(config)?;
     Ok(Prepared {
@@ -73,6 +78,16 @@ fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
         ))?;
     }
     Ok(config)
+}
+
+/// The answer for a commit without `.horizon/cloud.yml`. It is not a fault: New cloud
+/// shows it as guidance next to quick start and the setup agent.
+pub const MISSING_CONFIG: &str = "The selected commit has no readable .horizon/cloud.yml. Quick start on the public base image, let a setup agent prepare the repository, choose another revision, or use local image-only settings in More options.";
+
+/// Whether `error` says only that the commit has no `.horizon/cloud.yml`.
+#[must_use]
+pub fn is_missing_config(error: &Error) -> bool {
+    matches!(error, Error::Invalid(message) if *message == MISSING_CONFIG)
 }
 
 /// The refusal of a committed `.horizon/cloud.yml` that does not parse.
@@ -389,17 +404,17 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         git(temp.path(), &["add", "-u"]);
         commit(temp.path());
-        assert!(
-            read(temp.path())
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("no readable .horizon/cloud.yml")
-        );
+        let missing = read(temp.path()).err().unwrap();
+        assert!(is_missing_config(&missing), "{missing}");
         std::fs::write(path, "private-invalid-marker").unwrap();
         git(temp.path(), &["add", "."]);
         commit(temp.path());
-        let error = read(temp.path()).err().unwrap().to_string();
+        let error = read(temp.path()).err().unwrap();
+        assert!(
+            !is_missing_config(&error),
+            "an invalid file is a fault, not a missing one"
+        );
+        let error = error.to_string();
         assert!(error.contains("Invalid .horizon/cloud.yml"));
         assert!(!error.contains("private-invalid-marker"));
         // A read that fails for another reason is not reported as a missing file.

@@ -12,6 +12,18 @@ use std::{
     time::Duration,
 };
 const TIMEOUT: Duration = Duration::from_mins(30);
+
+/// The deployment stages that preparing `profile` never runs: an image-only profile has
+/// nothing to build or push, so [`Images::prepare_layered`] reports neither stage.
+#[must_use]
+pub fn skipped_stages(profile: &Profile) -> &'static [Stage] {
+    if profile.build.is_none() {
+        &[Stage::Build, Stage::Push]
+    } else {
+        &[]
+    }
+}
+
 pub struct Images<'a> {
     pub docker_host: Option<&'a str>,
     pub isolated_registry: bool,

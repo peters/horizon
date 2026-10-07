@@ -36,7 +36,7 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--worker-choice OFFER_JSON_FILE] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume.",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml.",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -79,17 +79,15 @@ fn run() -> cloud_runtime::Result<()> {
     }
     let (args, worker_choice) = choice::arguments(&args)?;
     let (args, siblings) = sibling_bindings(&args)?;
+    let quick_start = args.iter().any(|arg| arg == "--quick-start");
+    let args: Vec<_> = args.into_iter().filter(|arg| arg != "--quick-start").collect();
     if !matches!(args[0].as_str(), "deploy" | "prepare-image")
         || !(6..=7).contains(&args.len())
-        || (args[0] == "prepare-image" && !siblings.is_empty())
+        || ((args[0] == "prepare-image" || quick_start) && !siblings.is_empty())
     {
         return Err(cloud_runtime::Error::Invalid("Invalid deployment arguments"));
     }
-    let repository = PathBuf::from(&args[2]).canonicalize()?;
-    let revision = repository::resolve(&repository, args.get(6).map_or("HEAD", String::as_str))?;
-    let yaml = std::fs::read_to_string(repository.join(".horizon/cloud.yml"))?;
-    let config = horizon_core::cloud_panel::CloudConfig::parse(&yaml)
-        .map_err(|_| cloud_runtime::Error::Invalid("Invalid cloud profile file"))?;
+    let (repository, revision, config) = launch_config(&args[2], args.get(6), quick_start, &cancel)?;
     let profile = config
         .profiles
         .get(&args[3])
@@ -115,6 +113,37 @@ fn run() -> cloud_runtime::Result<()> {
         deployment::deploy_with_siblings(&request, &siblings, &cancel, &print_event)?;
     }
     Ok(())
+}
+
+/// The repository, revision and configuration a `deploy` or `prepare-image` launches:
+/// the working tree's `.horizon/cloud.yml`, or with `--quick-start` the built-in
+/// profile, which New cloud refuses as well for a commit with its own configuration.
+fn launch_config(
+    directory: &str,
+    revision: Option<&String>,
+    quick_start: bool,
+    cancel: &Cancellation,
+) -> cloud_runtime::Result<(PathBuf, String, horizon_core::cloud_panel::CloudConfig)> {
+    let revision = revision.map_or("HEAD", String::as_str);
+    if quick_start {
+        let prepared = repository::launch::prepare_with_configuration(
+            directory,
+            revision,
+            repository::launch::Configuration::QuickStart,
+            &cloud_runtime::command::Runner {
+                cancel,
+                emit: &print_event,
+                secrets: Vec::new(),
+            },
+        )?;
+        return Ok((prepared.repository, prepared.revision, prepared.config));
+    }
+    let repository = PathBuf::from(directory).canonicalize()?;
+    let revision = repository::resolve(&repository, revision)?;
+    let yaml = std::fs::read_to_string(repository.join(".horizon/cloud.yml"))?;
+    let config = horizon_core::cloud_panel::CloudConfig::parse(&yaml)
+        .map_err(|_| cloud_runtime::Error::Invalid("Invalid cloud profile file"))?;
+    Ok((repository, revision, config))
 }
 
 /// Checks the recorded worker with the provider without creating, starting or deleting anything.

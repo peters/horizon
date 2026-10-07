@@ -285,15 +285,74 @@ is checked; they do not mean a worker is missing or authorize a replacement.
 
 ## Repository setup and deployment
 
-If the repository has no `.horizon/cloud.yml`, enter its directory in
-**Cloud > New cloud**, expand **No cloud configuration yet?**, and open a setup
-agent. This is a normal local agent panel using its existing local login; remote
-worker API-key bindings are not automatically exported to it. The agent inspects
-repository requirements and proposes the selected capabilities before preparing
-files. Review its changes and prerequisites, run the repository's checks, and
-commit the setup. Return to New cloud and choose **Read .horizon/cloud.yml**.
-Changing the repository or encountering invalid YAML clears previously loaded
-profiles, so a stale profile cannot be deployed accidentally.
+If the selected commit has no `.horizon/cloud.yml`, **New cloud** shows
+**This commit has no .horizon/cloud.yml**. This is not an error. The dialog then
+shows two choices:
+
+- **Quick start on the public base image** starts the repository on the base image.
+  See [Quick start](#quick-start).
+- **Open setup agent** opens a local agent panel that prepares the settings of the
+  repository.
+
+The setup agent is a normal local agent panel with its existing local login.
+Horizon does not export the API-key bindings of remote workers to it. The agent
+examines the repository requirements and proposes the capabilities before it
+prepares files. Review its changes and prerequisites, run the repository checks
+and commit the setup. Then go back to **New cloud** and choose **Read
+.horizon/cloud.yml**. A change of the repository or YAML that is not valid clears
+the profiles that the dialog read before. Thus you cannot deploy an old profile
+by accident.
+
+If the read fails for a different cause, for example a committed
+`.horizon/cloud.yml` that is not valid, the dialog shows the error. The setup agent
+is then in the section **No cloud configuration yet?**.
+
+### Quick start
+
+Quick start runs a repository without `.horizon/cloud.yml` on the base image
+`ghcr.io/peters/horizon-worker-base`. Horizon uses the built-in image-only profile
+`quick-start`:
+
+| Setting | Value |
+|---|---|
+| Provider | RunPod |
+| Minimum size | 2 vCPU and 4 GB memory |
+| Container disk | 20 GB |
+| Workspace volume | 20 GB |
+| Agents | Claude and Codex |
+| Browsers | Chromium |
+| Desktop | Yes |
+
+The base image is public. Thus the provider pulls it without a registry login,
+and Horizon does not build or push an image. Horizon never attaches a saved
+registry login to the base image, also if this computer has logins for the same
+registry. The cloud card shows **Build locally**
+and **Push image** as skipped. Horizon pins the base image by digest, thus each
+Horizon version starts the image that was tested with it. The
+[release flow](release-flow.md#update-the-quick-start-image) tells how a release
+updates the pin.
+
+Quick start needs a RunPod API key, the SSH identity of this computer and local
+Docker. Before Horizon allocates compute, it uses local Docker to resolve the image
+digest and to do the worker contract check. The first check downloads the base
+image, about 0.8 GB compressed.
+
+Quick start has these limits:
+
+- Quick start is only for a commit without `.horizon/cloud.yml`. If the commit has
+  this file, **New cloud** reads the committed settings instead, and
+  `cloud_deploy --quick-start` stops with an error. An uncommitted file does not
+  count.
+- **Rebuild image & restart** refuses a quick start cloud, because its profile has
+  no `build` section.
+- A quick start cloud has no companions and no siblings.
+- The profile names RunPod. If this computer also has a Hetzner token, **Provider**
+  also offers Hetzner. Quick start is tested on RunPod only.
+
+To go back to the committed settings, open **More options** and choose **Read
+.horizon/cloud.yml**. A different repository also ends quick start. The
+`cloud_deploy` harness has the same choice, `--quick-start`. Cloud creation has no
+MCP operation, thus quick start has no MCP operation either.
 
 For the default launch path, commit `.horizon/cloud.yml` using the
 [example](../crates/horizon-cloud/examples/cloud.yml).
@@ -780,6 +839,8 @@ It does not substitute a browser viewer or depend on the laptop for device input
 
 The development example `cargo run -p horizon-core --example cloud_deploy -- ...`
 uses the same coordinator. Run it without arguments for its command synopsis.
+With `--quick-start`, `deploy` and `prepare-image` use the built-in quick start
+profile, as **New cloud** does. Then the profile argument must be `quick-start`.
 It supports image preparation without allocation, deployment, stop, resume,
 reconnect, endpoint, deletion, `rebuild SETTINGS STATE_ROOT PROFILE` with `continue-rebuild` and
 `cancel-rebuild`, and `reconcile SETTINGS STATE_ROOT [WORKER_ID]`. Reconciliation prints a

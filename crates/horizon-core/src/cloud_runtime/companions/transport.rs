@@ -128,7 +128,7 @@ impl<'a> Live<'a> {
         if self.worker(cloud)?.is_none_or(|worker| worker.status != Status::Ready) {
             return Ok(Published::NotReady);
         }
-        self.exchange(
+        self.exchange_released(
             cloud,
             "horizon-cloud-worker cloud-offers publish",
             snapshot,
@@ -153,7 +153,7 @@ impl<'a> Live<'a> {
         if self.worker(cloud)?.is_none_or(|worker| worker.status != Status::Ready) {
             return Ok(Published::NotReady);
         }
-        self.exchange(
+        self.exchange_released(
             cloud,
             "horizon-cloud-worker cloud-offers publish-hetzner",
             snapshot,
@@ -172,7 +172,7 @@ impl<'a> Live<'a> {
         if self.worker(cloud)?.is_none_or(|worker| worker.status != Status::Ready) {
             return Ok(Published::NotReady);
         }
-        self.exchange(
+        self.exchange_released(
             cloud,
             "horizon-cloud-worker cloud-offers clear-runpod",
             &serde_json::json!({}),
@@ -181,6 +181,18 @@ impl<'a> Live<'a> {
         Ok(Published::Sent)
     }
 
+    /// The worker the record of `cloud` names, read while this transport holds the cloud.
+    fn recorded_worker(&mut self, cloud: &str) -> Result<horizon_cloud::Worker> {
+        self.load(cloud)?
+            .as_ref()
+            .ok_or(Error::Invalid("Companion cloud has no worker"))?
+            .worker
+            .clone()
+            .ok_or(Error::Invalid("Companion worker is missing"))
+    }
+
+    /// A companion exchange: the cloud stays held, so no lifecycle operation runs on it
+    /// until the transport releases it.
     fn exchange(
         &mut self,
         cloud: &str,
@@ -188,15 +200,34 @@ impl<'a> Live<'a> {
         payload: &impl serde::Serialize,
         timeout: Duration,
     ) -> Result<String> {
-        let state = self
-            .load(cloud)?
-            .as_ref()
-            .ok_or(Error::Invalid("Companion cloud has no worker"))?;
-        let worker = state
-            .worker
-            .clone()
-            .ok_or(Error::Invalid("Companion worker is missing"))?;
-        let connection = Connection::new(&worker, self.settings, &cloud_directory(self.root, cloud)?)?;
+        let worker = self.recorded_worker(cloud)?;
+        self.exchange_with(cloud, &worker, command, payload, timeout)
+    }
+
+    /// An exchange of advisory data, such as prices, that releases the cloud before SSH
+    /// starts. A panel, stop or resize that starts meanwhile is not refused as busy; the
+    /// pinned host key still binds the exchange to the recorded worker.
+    fn exchange_released(
+        &mut self,
+        cloud: &str,
+        command: &str,
+        payload: &impl serde::Serialize,
+        timeout: Duration,
+    ) -> Result<String> {
+        let worker = self.recorded_worker(cloud)?;
+        self.states.remove(cloud);
+        self.exchange_with(cloud, &worker, command, payload, timeout)
+    }
+
+    fn exchange_with(
+        &self,
+        cloud: &str,
+        worker: &horizon_cloud::Worker,
+        command: &str,
+        payload: &impl serde::Serialize,
+        timeout: Duration,
+    ) -> Result<String> {
+        let connection = Connection::new(worker, self.settings, &cloud_directory(self.root, cloud)?)?;
         // Companion access extends an already verified owner connection; never establish new trust here.
         let mut args = connection.args();
         for arg in &mut args {
@@ -313,6 +344,68 @@ mod tests {
         live.release("target");
         assert!(Store::lock(&root.path().join("target")).is_ok());
         assert!(Store::lock(&root.path().join("source")).is_err());
+    }
+
+    /// Prices go to ready workers every few seconds. Holding the cloud for the SSH
+    /// exchange refused a panel added meanwhile with "Another controller owns this cloud
+    /// operation".
+    #[test]
+    fn a_price_send_leaves_the_cloud_free_while_ssh_runs() {
+        use crate::cloud_runtime::offer_publication::{Snapshot, VERSION};
+        use std::{net::TcpListener, thread, time::Instant};
+        let root = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"cloud","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+            "stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},"spec":null,"sessions":[],
+            "source_ready":true,"worker":{"id":"worker1","name":"w","imageName":"i","desiredStatus":"RUNNING",
+            "publicIp":"127.0.0.1","portMappings":{"22":port}}
+        }))
+        .unwrap();
+        let cloud = root.path().join("cloud");
+        Store::lock(&cloud).unwrap().save(&state).unwrap();
+        let snapshot = Snapshot {
+            version: VERSION,
+            observed_at_millis: 1,
+            list: horizon_cloud::prices::PriceList {
+                provider: "RunPod",
+                cpu: Vec::new(),
+                gpus: Vec::new(),
+                data_centers: Vec::new(),
+                regions: BTreeMap::new(),
+                storage: horizon_cloud::runpod::prices::STORAGE,
+            },
+            preferences: horizon_cloud::prices::Preferences::default(),
+        };
+        let path = root.path().to_owned();
+        let identity = root.path().join("missing-test-key");
+        let send = thread::spawn(move || {
+            let settings = serde_json::from_value(serde_json::json!({
+                "runpod_key_file":"/absent", "ssh_identity_file":identity, "docker_config":"/absent",
+                "cpu_flavors":[], "gpu_types":[]
+            }))
+            .unwrap();
+            Live::new(&path, &settings, &Cancellation::default()).send_offers("cloud", &snapshot)
+        });
+        // The SSH client connecting is the moment the exchange is under way.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let stream = loop {
+            if let Ok((stream, _)) = listener.accept() {
+                break stream;
+            }
+            assert!(Instant::now() < deadline, "the price send never reached SSH");
+            thread::sleep(Duration::from_millis(5));
+        };
+        let held = Store::lock(&cloud).map(drop);
+        drop(stream);
+        assert!(send.join().unwrap().is_err(), "the closed connection fails the send");
+        assert!(
+            held.is_ok(),
+            "a price send must not hold the cloud while SSH runs: {held:?}"
+        );
     }
 
     #[test]
