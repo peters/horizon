@@ -247,7 +247,7 @@ impl Terminal {
     }
 
     /// Whether the event loop has ended and its PTY is closed.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn pty_released(&self) -> bool {
         self.event_loop_handle.is_none() && self.shutdown_complete.load(Ordering::Acquire)
     }

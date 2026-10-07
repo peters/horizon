@@ -194,6 +194,7 @@ struct PanelBodyContext<'a> {
     local_ssh_reconnect_enabled: bool,
     primary_selection: &'a PrimarySelection,
     reconnect_requested: &'a mut bool,
+    held_input: &'a mut crate::terminal_widget::HeldInput,
     terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
     browser_ui_state: Option<&'a mut crate::browser_widget::BrowserUiState>,
@@ -252,6 +253,7 @@ fn show_panel_body_contents(
                 primary_selection: body_context.primary_selection,
                 local_ssh_reconnect_enabled: body_context.local_ssh_reconnect_enabled,
                 reconnect_requested: body_context.reconnect_requested,
+                held_input: body_context.held_input,
             },
         ),
     }
@@ -429,6 +431,7 @@ impl HorizonApp {
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
                                     reconnect_requested: &mut reconnect_requested,
+                                    held_input: &mut self.panel_render_caches.held_input,
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
                                     browser_ui_state: browser_state,
@@ -780,6 +783,7 @@ impl HorizonApp {
                         let terminal_grid_cache = &mut self.panel_render_caches.terminal_grid_cache;
                         let browser_ui_state = &mut self.panel_render_caches.browser_ui_state;
                         let device_ui_state = &mut self.panel_render_caches.device_ui_state;
+                        let held_input = &mut self.panel_render_caches.held_input;
                         let terminal_selection_drag = &mut self.terminal_selection_drag;
                         if let Some(panel) = board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
@@ -812,6 +816,7 @@ impl HorizonApp {
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
                                     reconnect_requested: &mut reconnect_requested,
+                                    held_input,
                                     terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
                                     browser_ui_state: browser_state,

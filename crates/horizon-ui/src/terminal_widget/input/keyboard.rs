@@ -19,10 +19,13 @@ pub(crate) fn handle_terminal_keyboard_input(
     events: &[TerminalInputEvent],
     primary_selection: &PrimarySelection,
     local_ssh_reconnect_enabled: bool,
+    held_input: &mut super::super::HeldInput,
 ) -> bool {
     if local_ssh_reconnect_enabled && disconnected_ssh_reconnect_requested(panel.kind, panel.ssh_status(), events) {
         return true;
     }
+    let events = held_input.route(panel, events);
+    let events = events.as_ref();
 
     let Some(terminal) = panel.terminal_mut() else {
         return false;

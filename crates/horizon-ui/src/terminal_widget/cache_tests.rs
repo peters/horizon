@@ -93,6 +93,7 @@ impl TerminalHarness {
                         &mut self.selection_drag,
                         TerminalKeyboardContext {
                             keyboard_events: &[],
+                            held_input: &mut crate::terminal_widget::HeldInput::default(),
                             primary_selection: &self.primary_selection,
                             local_ssh_reconnect_enabled: false,
                             reconnect_requested: &mut false,
@@ -175,6 +176,7 @@ fn tab_does_not_steal_focus_from_another_text_field() {
                     &mut harness.selection_drag,
                     TerminalKeyboardContext {
                         keyboard_events: &[],
+                        held_input: &mut crate::terminal_widget::HeldInput::default(),
                         primary_selection: &harness.primary_selection,
                         local_ssh_reconnect_enabled: false,
                         reconnect_requested: &mut false,

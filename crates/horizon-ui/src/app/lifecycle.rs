@@ -167,6 +167,9 @@ impl HorizonApp {
     /// Writes `pastes` and the held ones to their terminals. A paste into a parked
     /// cloud member focuses it, so it attaches at once, and waits for its terminal.
     pub(super) fn deliver_primary_pastes(&mut self, pastes: Vec<PrimarySelectionPaste>) {
+        self.panel_render_caches
+            .held_input
+            .forget_unless_focused(self.board.focused);
         let held = std::mem::take(&mut self.primary_selection.held);
         for (paste, was_held) in held
             .into_iter()
