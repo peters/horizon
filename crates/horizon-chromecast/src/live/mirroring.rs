@@ -25,11 +25,14 @@ impl Session {
             let result = self.mirror(&client, &app, stream);
             stream.disconnect();
             match result {
-                // The receiver closed the session or another sender took it over: leave it alone.
-                Ok(false) => return Ok(()),
+                Ok(true) => {
+                    let _ = client.stop_application(&app.session_id);
+                    return Ok(());
+                }
                 // The receiver dropped us, as a TV does when it restarts its
-                // cast runtime: offer again on a fresh connection, unless that
-                // would replace someone else's application or wake the TV.
+                // cast runtime: offer again on a fresh connection, but only to a
+                // receiver showing nothing but its idle screen. A mirroring
+                // session still running may now be another sender's.
                 Err(Error::Closed) if !self.stopped() && relaunches < RELAUNCH_ATTEMPTS => {
                     relaunches += 1;
                     self.set(LiveState::Buffering);
@@ -37,25 +40,22 @@ impl Session {
                         return Ok(());
                     };
                     let status = fresh.receiver_status()?;
-                    let taken = status
-                        .applications
-                        .iter()
-                        .any(|running| !running.is_idle_screen && running.session_id != app.session_id);
-                    if status.is_stand_by || taken {
+                    let busy = status.applications.iter().any(|running| !running.is_idle_screen);
+                    if status.is_stand_by || busy {
                         return Ok(());
                     }
                     tracing::debug!(relaunches, "receiver dropped the mirroring session; offering again");
                     client = fresh;
                 }
-                result => {
-                    let _ = client.stop_application(&app.session_id);
-                    return result.map(|_| ());
-                }
+                // Ended by the receiver or another sender, or failed: leave the
+                // receiver alone. Another sender may have joined the mirroring
+                // session, which shows as our feedback stopping.
+                result => return result.map(|_| ()),
             }
         }
     }
 
-    /// Offers the streams and follows the session until it is stopped
+    /// Offers the streams and follows the session until the host stops it
     /// (`Ok(true)`) or the receiver ends it (`Ok(false)`).
     fn mirror(&self, client: &CastClient, app: &Application, stream: &MirrorStream) -> Result<bool> {
         let proposal = stream.propose()?;
@@ -80,7 +80,7 @@ impl Session {
                 return Ok(false);
             }
         };
-        let sender = stream.connect(self.receiver, &proposal, &answer)?;
+        let sender = stream.connect(self.receiver, &proposal, &answer, self.options.playout_delay)?;
         let sending = Instant::now();
         loop {
             if self.stopped() {

@@ -97,11 +97,18 @@ impl MirrorStream {
         Ok(Proposal { streams, rtp_offsets })
     }
 
-    /// Starts sending to the receiver at `address` as it answered `proposal`.
+    /// Starts sending to the receiver at `address` as it answered `proposal`,
+    /// keeping frames for resending well past `playout_delay`.
     /// # Errors
     /// Fails when the receiver accepted no video stream, or no UDP socket opens.
-    pub(crate) fn connect(&self, address: SocketAddr, proposal: &Proposal, answer: &Answer) -> Result<Arc<Sender>> {
-        let accepted = |index: u32| answer.accepted.iter().any(|(at, _)| *at == index);
+    pub(crate) fn connect(
+        &self,
+        address: SocketAddr,
+        proposal: &Proposal,
+        answer: &Answer,
+        playout_delay: Duration,
+    ) -> Result<Arc<Sender>> {
+        let accepted = |index: u32| answer.accepted.contains(&index);
         let mut setups = Vec::new();
         let mut offsets = Vec::new();
         for (stream, offset) in proposal.streams.iter().zip(&proposal.rtp_offsets) {
@@ -123,10 +130,12 @@ impl MirrorStream {
             });
             offsets.push(*offset);
         }
+        let history = (playout_delay * 2).max(Duration::from_secs(1));
         let sender = Arc::new(Sender::start(
             SocketAddr::new(address.ip(), answer.udp_port),
             setups,
             &offsets,
+            history,
         )?);
         *self.lock() = Some(sender.clone());
         Ok(sender)
@@ -134,7 +143,9 @@ impl MirrorStream {
 
     /// Stops sending; the session's sender closes once its last user lets go.
     pub(crate) fn disconnect(&self) {
-        self.lock().take();
+        // Dropped outside the lock: closing waits for the feedback thread.
+        let sender = self.lock().take();
+        drop(sender);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Arc<Sender>>> {

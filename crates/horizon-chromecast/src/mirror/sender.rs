@@ -18,12 +18,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Frames older than this are past any playout delay a mirroring session uses.
-const HISTORY: Duration = Duration::from_secs(1);
 const REPORT_INTERVAL: Duration = Duration::from_millis(500);
 const RECEIVE_POLL: Duration = Duration::from_millis(20);
-/// A packet just resent is not resent again for a repeated loss report.
-const RESEND_GAP: Duration = Duration::from_millis(15);
+/// A packet just resent is not resent again for a loss report that went out
+/// before the resend could arrive.
+const RESEND_GAP: Duration = Duration::from_millis(50);
+/// Receivers repeat a picture loss report until a key frame arrives; reports
+/// within this time of the last key frame ask for that same key frame.
+const KEYFRAME_GRACE: Duration = Duration::from_millis(300);
 /// A full send buffer is retried this often before the packet is dropped
 /// (the receiver then asks for it again).
 const SEND_RETRIES: u32 = 40;
@@ -42,7 +44,7 @@ pub(crate) struct StreamSetup {
 struct SentFrame {
     id: u32,
     at: Instant,
-    packets: Vec<Vec<u8>>,
+    packets: Arc<Vec<Vec<u8>>>,
     resent: Vec<Option<Instant>>,
 }
 
@@ -67,7 +69,11 @@ struct Shared {
     socket: UdpSocket,
     streams: Mutex<Vec<StreamState>>,
     origin: Mutex<Option<Origin>>,
+    /// How long sent frames stay available for resending.
+    history: Duration,
     keyframe_wanted: AtomicBool,
+    last_keyframe: Mutex<Option<Instant>>,
+    /// The receiver's last report on the video stream.
     last_feedback: Mutex<Option<Instant>>,
     stop: AtomicBool,
 }
@@ -86,10 +92,16 @@ pub(crate) enum Track {
 
 impl Sender {
     /// Starts sending to `target`. `streams` holds the video stream first,
-    /// then the audio stream if the receiver accepted one.
+    /// then the audio stream if the receiver accepted one. Frames stay
+    /// available for resending for `history`.
     /// # Errors
     /// Fails when no UDP socket can be opened towards `target`.
-    pub(crate) fn start(target: SocketAddr, streams: Vec<StreamSetup>, rtp_offsets: &[u32]) -> std::io::Result<Self> {
+    pub(crate) fn start(
+        target: SocketAddr,
+        streams: Vec<StreamSetup>,
+        rtp_offsets: &[u32],
+        history: Duration,
+    ) -> std::io::Result<Self> {
         let local: SocketAddr = if target.is_ipv4() {
             ([0, 0, 0, 0], 0).into()
         } else {
@@ -115,7 +127,9 @@ impl Sender {
             socket,
             streams: Mutex::new(streams),
             origin: Mutex::new(None),
+            history,
             keyframe_wanted: AtomicBool::new(true),
+            last_keyframe: Mutex::new(None),
             last_feedback: Mutex::new(None),
             stop: AtomicBool::new(false),
         });
@@ -150,7 +164,7 @@ impl Sender {
         self.shared.keyframe_wanted.load(Ordering::Acquire)
     }
 
-    /// When the receiver last reported on our streams.
+    /// When the receiver last reported on the video stream.
     pub(crate) fn last_feedback(&self) -> Option<Instant> {
         *lock(&self.shared.last_feedback)
     }
@@ -166,68 +180,72 @@ impl Drop for Sender {
 }
 
 impl Shared {
+    /// Encrypts and packetizes under the lock, then sends without it, so the
+    /// encoder, the audio and the feedback threads never wait on the network.
     fn send(&self, track: Track, payload: &[u8], pts: Duration, keyframe: bool) {
-        lock(&self.origin).get_or_insert(Origin {
-            at: Instant::now(),
-            media: pts,
-        });
-        let mut streams = lock(&self.streams);
         let index = match track {
             Track::Video => 0,
             Track::Audio => 1,
         };
-        let Some(stream) = streams.get_mut(index) else {
-            return;
+        let packets = {
+            let mut streams = lock(&self.streams);
+            let Some(stream) = streams.get_mut(index) else {
+                return;
+            };
+            if stream.next_frame == 0 && !keyframe {
+                return;
+            }
+            lock(&self.origin).get_or_insert(Origin {
+                at: Instant::now(),
+                media: pts,
+            });
+            let id = stream.next_frame;
+            stream.next_frame += 1;
+            let mut data = payload.to_vec();
+            stream.setup.cipher.apply(id, &mut data);
+            let independent = keyframe || stream.setup.independent_frames;
+            let frame = Frame {
+                id,
+                referenced: if independent { id } else { id.wrapping_sub(1) },
+                keyframe: independent,
+                rtp_timestamp: stream.rtp_offset.wrapping_add(ticks(pts, stream.setup.clock_rate)),
+                playout_delay_ms: None,
+                payload: &data,
+            };
+            let packets = Arc::new(rtp::packetize(
+                &frame,
+                stream.setup.payload_type,
+                stream.setup.ssrc,
+                &mut stream.sequence,
+            ));
+            for packet in packets.iter() {
+                stream.packets = stream.packets.wrapping_add(1);
+                stream.octets = stream
+                    .octets
+                    .wrapping_add(u32::try_from(packet.len()).unwrap_or(u32::MAX));
+            }
+            let now = Instant::now();
+            while stream
+                .history
+                .front()
+                .is_some_and(|old| now.duration_since(old.at) > self.history || stream.history.len() >= 255)
+            {
+                stream.history.pop_front();
+            }
+            stream.history.push_back(SentFrame {
+                id,
+                at: now,
+                packets: packets.clone(),
+                resent: vec![None; packets.len()],
+            });
+            packets
         };
-        if stream.next_frame == 0 && !keyframe {
-            return;
+        if keyframe && track == Track::Video {
+            *lock(&self.last_keyframe) = Some(Instant::now());
         }
-        let id = stream.next_frame;
-        stream.next_frame += 1;
-        let mut data = payload.to_vec();
-        stream.setup.cipher.apply(id, &mut data);
-        let referenced = if keyframe || stream.setup.independent_frames {
-            id
-        } else {
-            id.wrapping_sub(1)
-        };
-        let rtp_timestamp = stream.rtp_offset.wrapping_add(ticks(pts, stream.setup.clock_rate));
-        let frame = Frame {
-            id,
-            referenced,
-            keyframe: keyframe || stream.setup.independent_frames,
-            rtp_timestamp,
-            playout_delay_ms: None,
-            payload: &data,
-        };
-        let packets = rtp::packetize(
-            &frame,
-            stream.setup.payload_type,
-            stream.setup.ssrc,
-            &mut stream.sequence,
-        );
-        for packet in &packets {
+        for packet in packets.iter() {
             self.transmit(packet);
-            stream.packets = stream.packets.wrapping_add(1);
-            stream.octets = stream
-                .octets
-                .wrapping_add(u32::try_from(packet.len()).unwrap_or(u32::MAX));
         }
-        let now = Instant::now();
-        while stream
-            .history
-            .front()
-            .is_some_and(|old| now.duration_since(old.at) > HISTORY || stream.history.len() >= 255)
-        {
-            stream.history.pop_front();
-        }
-        let resent = vec![None; packets.len()];
-        stream.history.push_back(SentFrame {
-            id,
-            at: now,
-            packets,
-            resent,
-        });
     }
 
     fn transmit(&self, packet: &[u8]) {
@@ -258,67 +276,92 @@ impl Shared {
             }
             let now = Instant::now();
             if now >= next_report {
-                self.report(now);
-                next_report = now + REPORT_INTERVAL;
+                // Until the first frame there is no clock to report: try again
+                // on the next pass, so the first report follows it closely.
+                next_report = if self.report(now) { now + REPORT_INTERVAL } else { now };
             }
         }
     }
 
     fn apply(&self, feedback: &Feedback) {
-        let mut streams = lock(&self.streams);
         match feedback {
             Feedback::PictureLoss { media_ssrc } => {
-                if streams.first().is_some_and(|video| video.setup.ssrc == *media_ssrc) {
+                let video = lock(&self.streams)
+                    .first()
+                    .is_some_and(|video| video.setup.ssrc == *media_ssrc);
+                let underway = lock(&self.last_keyframe).is_some_and(|at| at.elapsed() < KEYFRAME_GRACE);
+                if video && !underway {
                     self.keyframe_wanted.store(true, Ordering::Release);
                 }
             }
             Feedback::Cast { media_ssrc, losses, .. } => {
-                let Some(stream) = streams.iter_mut().find(|stream| stream.setup.ssrc == *media_ssrc) else {
-                    return;
-                };
-                *lock(&self.last_feedback) = Some(Instant::now());
-                for loss in losses {
-                    let Some(frame) = stream
-                        .history
+                let mut resend = Vec::new();
+                {
+                    let mut streams = lock(&self.streams);
+                    let Some((index, stream)) = streams
                         .iter_mut()
-                        .rev()
-                        .find(|frame| frame.id.to_be_bytes()[3] == loss.frame)
+                        .enumerate()
+                        .find(|(_, stream)| stream.setup.ssrc == *media_ssrc)
                     else {
-                        continue;
+                        return;
                     };
-                    let last = u16::try_from(frame.packets.len() - 1).unwrap_or(u16::MAX);
                     let now = Instant::now();
-                    for packet in loss.packets(last) {
-                        let index = usize::from(packet);
-                        if frame.resent[index].is_some_and(|at| now.duration_since(at) < RESEND_GAP) {
-                            continue;
-                        }
-                        frame.resent[index] = Some(now);
-                        self.transmit(&frame.packets[index]);
+                    if index == 0 {
+                        *lock(&self.last_feedback) = Some(now);
                     }
+                    for loss in losses {
+                        let Some(frame) = stream
+                            .history
+                            .iter_mut()
+                            .rev()
+                            .find(|frame| frame.id.to_be_bytes()[3] == loss.frame)
+                        else {
+                            continue;
+                        };
+                        let last = u16::try_from(frame.packets.len() - 1).unwrap_or(u16::MAX);
+                        for packet in loss.packets(last) {
+                            let packet = usize::from(packet);
+                            if frame.resent[packet].is_some_and(|at| now.duration_since(at) < RESEND_GAP) {
+                                continue;
+                            }
+                            frame.resent[packet] = Some(now);
+                            resend.push((frame.packets.clone(), packet));
+                        }
+                    }
+                }
+                for (packets, packet) in resend {
+                    self.transmit(&packets[packet]);
                 }
             }
         }
     }
 
-    /// Maps the current media time to wall clock time for every stream that has sent.
-    fn report(&self, now: Instant) {
+    /// Maps the current media time to wall clock time for every stream that
+    /// has sent. False before the first frame.
+    fn report(&self, now: Instant) -> bool {
         let Some(origin) = *lock(&self.origin) else {
-            return;
+            return false;
         };
         let media = origin.media + now.saturating_duration_since(origin.at);
         let ntp = rtcp::ntp_now();
-        let streams = lock(&self.streams);
-        for stream in streams.iter().filter(|stream| stream.next_frame > 0) {
-            let report = SenderReport {
-                ssrc: stream.setup.ssrc,
-                ntp,
-                rtp_timestamp: stream.rtp_offset.wrapping_add(ticks(media, stream.setup.clock_rate)),
-                packets: stream.packets,
-                octets: stream.octets,
-            };
-            self.transmit(&report.encode());
+        let reports: Vec<[u8; 28]> = lock(&self.streams)
+            .iter()
+            .filter(|stream| stream.next_frame > 0)
+            .map(|stream| {
+                SenderReport {
+                    ssrc: stream.setup.ssrc,
+                    ntp,
+                    rtp_timestamp: stream.rtp_offset.wrapping_add(ticks(media, stream.setup.clock_rate)),
+                    packets: stream.packets,
+                    octets: stream.octets,
+                }
+                .encode()
+            })
+            .collect();
+        for report in &reports {
+            self.transmit(report);
         }
+        true
     }
 }
 
@@ -388,7 +431,13 @@ mod tests {
     #[test]
     fn frames_arrive_encrypted_in_packets_and_lost_packets_are_resent() {
         let socket = receiver();
-        let sender = Sender::start(socket.local_addr().unwrap(), vec![video()], &[1000]).unwrap();
+        let sender = Sender::start(
+            socket.local_addr().unwrap(),
+            vec![video()],
+            &[1000],
+            Duration::from_secs(1),
+        )
+        .unwrap();
         // Delta frames before the first key frame cannot be decoded: dropped.
         sender.send_video(&[9; 50], Duration::ZERO, false);
         assert!(sender.wants_keyframe());
@@ -422,7 +471,13 @@ mod tests {
     #[test]
     fn picture_loss_asks_for_a_key_frame_and_reports_map_the_clock() {
         let socket = receiver();
-        let sender = Sender::start(socket.local_addr().unwrap(), vec![video()], &[0]).unwrap();
+        let sender = Sender::start(
+            socket.local_addr().unwrap(),
+            vec![video()],
+            &[0],
+            Duration::from_secs(1),
+        )
+        .unwrap();
         sender.send_video(&[1, 2, 3], Duration::from_secs(5), true);
         let (_, from) = next_rtp(&socket);
         let mut buffer = [0u8; 2048];
@@ -440,6 +495,11 @@ mod tests {
         assert!(!sender.wants_keyframe());
         let mut picture_loss = vec![0x81, 206, 0, 2, 0, 0, 0, 1];
         picture_loss.extend_from_slice(&SSRC.to_be_bytes());
+        // Right after a key frame, a picture loss report asks for that key frame.
+        socket.send_to(&picture_loss, from).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!sender.wants_keyframe());
+        std::thread::sleep(KEYFRAME_GRACE);
         socket.send_to(&picture_loss, from).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         while !sender.wants_keyframe() && Instant::now() < deadline {

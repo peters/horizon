@@ -2,8 +2,8 @@
 //! the RTP header and the Cast header: key frame flag, frame ID, packet ID,
 //! last packet ID and the frame it depends on.
 
-/// One Ethernet frame over IPv4 and UDP.
-pub(crate) const MAX_PACKET: usize = 1500 - 20 - 8;
+/// One Ethernet frame over UDP, with room for an IPv6 header.
+pub(crate) const MAX_PACKET: usize = 1500 - 40 - 8;
 /// RTP header (12 bytes) plus the Cast header with a reference frame ID (7).
 const HEADER: usize = 12 + 7;
 const RTP_VERSION_2: u8 = 0x80;

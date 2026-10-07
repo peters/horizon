@@ -98,8 +98,8 @@ pub(crate) fn offer(seq: u64, streams: &[StreamOffer], target_delay: Duration) -
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Answer {
     pub udp_port: u16,
-    /// Accepted stream indexes, each with the SSRC the receiver reports from.
-    pub accepted: Vec<(u32, u32)>,
+    /// Indexes of the accepted streams.
+    pub accepted: Vec<u32>,
 }
 
 #[derive(Deserialize)]
@@ -108,8 +108,6 @@ struct AnswerBody {
     udp_port: u16,
     #[serde(default)]
     send_indexes: Vec<u32>,
-    #[serde(default)]
-    ssrcs: Vec<u32>,
 }
 
 /// The receiver's reply to OFFER `seq`, or `None` for any other message.
@@ -135,7 +133,7 @@ pub(crate) fn answer(payload: &Value, seq: u64) -> Option<Result<Answer>> {
         .and_then(|body| Ok(AnswerBody::deserialize(body)?));
     Some(body.map(|body| Answer {
         udp_port: body.udp_port,
-        accepted: body.send_indexes.into_iter().zip(body.ssrcs).collect(),
+        accepted: body.send_indexes,
     }))
 }
 
@@ -194,14 +192,14 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_pairs_accepted_streams_with_receiver_ssrcs() {
+    fn an_answer_lists_the_accepted_streams() {
         let reply = json!({"type": "ANSWER", "seqNum": 3, "result": "ok",
             "answer": {"udpPort": 47439, "sendIndexes": [0, 1], "ssrcs": [12, 13], "castMode": "mirroring"}});
         assert_eq!(
             answer(&reply, 3).unwrap().unwrap(),
             Answer {
                 udp_port: 47439,
-                accepted: vec![(0, 12), (1, 13)]
+                accepted: vec![0, 1]
             }
         );
         assert!(answer(&reply, 4).is_none(), "an answer to another offer");
