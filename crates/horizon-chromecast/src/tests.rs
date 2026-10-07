@@ -1,7 +1,7 @@
 //! Control flow against a synthetic receiver over loopback TLS.
 use crate::{
-    CastClient, DEFAULT_MEDIA_RECEIVER, Error, LiveCast, LiveOptions, LiveState, MediaLoad, MediaStatus, StreamType,
-    Transport,
+    CastClient, DEFAULT_MEDIA_RECEIVER, Error, LiveCast, LiveOptions, LiveState, MIRRORING_RECEIVER, MediaLoad,
+    MediaStatus, StreamType, Transport,
     client::{NS_CONNECTION, NS_HEARTBEAT, PLATFORM_RECEIVER},
     live::STALL_GRACE,
     media::NS_MEDIA,
@@ -847,6 +847,142 @@ fn a_dropped_connection_never_relaunches_over_another_application_or_a_tv_in_sta
             "{log:#?}"
         );
     }
+}
+
+fn mirroring_status(running: bool) -> Value {
+    let applications = if running {
+        json!([{
+            "appId": MIRRORING_RECEIVER,
+            "displayName": "Mirroring",
+            "sessionId": "mirror-1",
+            "transportId": "mirror-1",
+            "namespaces": [{"name": "urn:x-cast:com.google.cast.webrtc"}]
+        }])
+    } else {
+        json!([])
+    };
+    json!({"type": "RECEIVER_STATUS", "status": {"applications": applications, "volume": {"level": 0.5}}})
+}
+
+/// A mirroring receiver: answers an OFFER with a UDP port, and acknowledges
+/// every complete frame that arrives there. Returns the control messages it
+/// saw and the number of frames.
+fn mirroring_receiver(listener: TcpListener, config: Arc<ServerConfig>) -> JoinHandle<(Vec<String>, usize)> {
+    std::thread::spawn(move || {
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        udp.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+        let udp_port = udp.local_addr().unwrap().port();
+        let done = Arc::new(AtomicBool::new(false));
+        let frames = {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                let (mut frames, mut buffer) = (0, [0u8; 2048]);
+                while !done.load(Ordering::Acquire) {
+                    let Ok((read, from)) = udp.recv_from(&mut buffer) else {
+                        continue;
+                    };
+                    // The last packet of a frame (marker bit) of an RTP stream.
+                    if read < 19 || buffer[1] & 0x80 == 0 || (200..=207).contains(&buffer[1]) {
+                        continue;
+                    }
+                    frames += 1;
+                    let mut ack = vec![0x8f, 206, 0, 4, 0, 0, 0, 1];
+                    ack.extend_from_slice(&buffer[8..12]);
+                    ack.extend_from_slice(b"CAST");
+                    ack.extend_from_slice(&[buffer[13], 0, 0, 100]);
+                    udp.send_to(&ack, from).unwrap();
+                }
+                frames
+            })
+        };
+        let mut stream = accept(&listener, config);
+        let (mut log, mut inbound, mut chunk, mut running) = (Vec::new(), Vec::new(), [0; 4096], false);
+        'serve: loop {
+            let read = stream.read(&mut chunk).unwrap_or(0);
+            if read == 0 {
+                break;
+            }
+            inbound.extend_from_slice(&chunk[..read]);
+            for message in proto::drain_frames(&mut inbound).unwrap() {
+                let Payload::Text(text) = &message.payload else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(text).unwrap();
+                let kind = request["type"].as_str().unwrap_or_default().to_owned();
+                log.push(format!("{} {} {kind}", message.namespace, message.destination));
+                let to = message.destination.as_str();
+                match (message.namespace.as_str(), kind.as_str()) {
+                    (NS_RECEIVER, "GET_STATUS" | "LAUNCH" | "STOP") => {
+                        running = match kind.as_str() {
+                            "LAUNCH" => {
+                                log.push(format!("launched {}", request["appId"]));
+                                true
+                            }
+                            "STOP" => false,
+                            _ => running,
+                        };
+                        send(
+                            &mut stream,
+                            to,
+                            NS_RECEIVER,
+                            &reply(&request, mirroring_status(running)),
+                        );
+                    }
+                    ("urn:x-cast:com.google.cast.webrtc", "OFFER") => {
+                        let video = &request["offer"]["supportedStreams"][0];
+                        assert_eq!(video["codecName"], "h264");
+                        assert_eq!(video["targetDelay"], 100);
+                        let answer = json!({"type": "ANSWER", "seqNum": request["seqNum"], "result": "ok",
+                            "answer": {"udpPort": udp_port, "sendIndexes": [0], "ssrcs": [1]}});
+                        send(&mut stream, to, "urn:x-cast:com.google.cast.webrtc", &answer);
+                    }
+                    (NS_CONNECTION, "CLOSE") if to == PLATFORM_RECEIVER => break 'serve,
+                    _ => {}
+                }
+            }
+        }
+        done.store(true, Ordering::Release);
+        (log, frames.join().unwrap())
+    })
+}
+
+#[test]
+fn a_mirror_cast_offers_its_streams_and_plays_once_frames_are_acknowledged() {
+    let (address, listener, config) = listen();
+    let server = mirroring_receiver(listener, config);
+    let options = LiveOptions {
+        transport: Transport::Mirror,
+        ..LiveOptions::default()
+    };
+    let live = LiveCast::start(address, options).unwrap();
+    assert!(live.url().is_empty(), "mirroring serves nothing over HTTP");
+    let started = std::time::Instant::now();
+    let mut frame = 0u64;
+    while live.state() != LiveState::Playing && started.elapsed() < Duration::from_secs(5) {
+        let pts = Duration::from_millis(frame * 33);
+        let keyframe = live.wants_keyframe(pts);
+        let unit: &[u8] = if keyframe {
+            &[0, 0, 0, 1, 0x65, 1]
+        } else {
+            &[0, 0, 0, 1, 0x41, 2]
+        };
+        live.push_annexb(unit, pts, keyframe);
+        frame += 1;
+        std::thread::sleep(Duration::from_millis(33));
+    }
+    assert_eq!(live.state(), LiveState::Playing);
+    drop(live);
+    let (log, frames) = server.join().unwrap();
+    assert!(log.contains(&format!("launched \"{MIRRORING_RECEIVER}\"")), "{log:#?}");
+    assert!(
+        log.contains(&"urn:x-cast:com.google.cast.webrtc mirror-1 OFFER".to_owned()),
+        "{log:#?}"
+    );
+    assert!(
+        log.contains(&format!("{NS_RECEIVER} {PLATFORM_RECEIVER} STOP")),
+        "{log:#?}"
+    );
+    assert!(frames > 0);
 }
 
 #[test]

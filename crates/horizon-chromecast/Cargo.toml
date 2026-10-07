@@ -20,7 +20,9 @@ encoder = ["horizon-media/encoder"]
 workspace = true
 
 [dependencies]
+aes.workspace = true
 horizon-media.workspace = true
+ring.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
