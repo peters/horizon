@@ -125,3 +125,87 @@ fn entering_the_card_scroll_area_keeps_lower_controls_under_the_pointer() {
         );
     }
 }
+
+/// The texts that `output` draws.
+fn drawn(output: &egui::FullOutput) -> Vec<String> {
+    output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_stage_segment_shows_its_own_hover_text_over_the_card_hint() {
+    use crate::app::cloud_panel::render::CARD_HINT;
+    let (temp, ctx, mut app) = ready_card(1.0);
+    app.cloud_prototype.initialized = true;
+    app.cloud_prototype.production.session_id = app.active_session.as_ref().map(|session| session.session_id.clone());
+    app.cloud_prototype.root = Some(temp.path().into());
+    let workspace = app.board.create_workspace("Cloud fixture");
+    app.cloud_prototype.groups.0[0].workspace = app.board.workspace(workspace).unwrap().local_id.clone();
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&ID).unwrap();
+    runtime.drawer = None;
+    runtime.confirmation = super::super::super::Confirmation::None;
+    // An image-only cloud, so the hover text of Build locally ends with `skipped`, a
+    // text that only the hover text draws.
+    runtime.state.as_mut().unwrap().profile.build = None;
+    let size = Vec2::new(1600.0, 1000.0);
+    let mut time = 0.0;
+    // One frame; a pointer that does not move sends no event, as on a real screen.
+    let mut render = |moved: Option<Pos2>| {
+        time += 0.05;
+        let input = match moved {
+            Some(position) => input(size, time, position, Vec::new()),
+            None => egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, size)),
+                time: Some(time),
+                ..egui::RawInput::default()
+            },
+        };
+        ctx.run_ui(input, |ui| app.render_active_view(ui, false))
+            .discard_textures()
+    };
+    for _ in 0..4 {
+        render(Some(Pos2::ZERO));
+    }
+    let layer = LayerId::new(Order::Middle, Id::new(("cloud-header", ID)));
+    let header = ctx
+        .memory(|memory| memory.area_rect(layer.id))
+        .expect("the card header");
+    let to_screen = ctx.layer_transform_to_global(layer).unwrap_or_default();
+    // Rests the pointer at `at` for a second, longer than the hover text delay.
+    let mut rest = |at: Pos2| {
+        let mut output = render(Some(to_screen * at));
+        for _ in 0..20 {
+            output = render(None);
+        }
+        drawn(&output)
+    };
+    // The track spans the header 1 pt in from each side along its bottom edge, one segment
+    // for each deployment stage with 2 pt between them (`strip::paint_track`).
+    let stages = crate::app::util::usize_to_f32(Stage::ALL.len());
+    let index = crate::app::util::usize_to_f32(Stage::ALL.iter().position(|stage| *stage == Stage::Build).unwrap());
+    let segment = (header.width() - 2.0 - 2.0 * (stages - 1.0)) / stages;
+    let build = Pos2::new(
+        header.left() + 1.0 + index * (segment + 2.0) + segment / 2.0,
+        header.bottom() - 2.0,
+    );
+    let on_segment = rest(build);
+    assert!(
+        on_segment.iter().any(|text| text == "Build locally · skipped"),
+        "the segment names its stage: {on_segment:?}"
+    );
+    assert!(!on_segment.iter().any(|text| text == CARD_HINT), "{on_segment:?}");
+    let away = rest(Pos2::new(header.center().x, header.bottom() + 400.0));
+    assert!(!away.iter().any(|text| text == CARD_HINT || text.ends_with("· skipped")));
+    let on_title = rest(Pos2::new(header.left() + 140.0, header.top() + 22.0));
+    assert!(
+        on_title.iter().any(|text| text == CARD_HINT),
+        "the card keeps its hint elsewhere: {on_title:?}"
+    );
+    assert!(!on_title.iter().any(|text| text.ends_with("· skipped")));
+}

@@ -135,7 +135,7 @@ impl HorizonApp {
                     }
                     let drag = early_drag.unwrap_or_else(|| drag_area(ui, drag_rect, editing));
                     cloud_context(&drag, group, &mut action);
-                    drag.on_hover_text("Double-click to rename. Drag to move this cloud.")
+                    card_hint(drag)
                 })
                 .inner;
             if response.dragged() {
@@ -336,6 +336,19 @@ fn rename_field(
     } else {
         edit
     }
+}
+
+/// The hover text of the card itself.
+pub(super) const CARD_HINT: &str = "Double-click to rename. Drag to move this cloud.";
+
+/// Shows the card's hint only while the pointer is on the card alone. On a stage segment
+/// or a control of the header, that one's own hover text applies: egui shows one hover
+/// text for each layer, and the card's would otherwise keep the place.
+fn card_hint(drag: egui::Response) -> egui::Response {
+    let alone = drag
+        .ctx
+        .interaction_snapshot(|snapshot| snapshot.hovered.iter().all(|id| *id == drag.id));
+    if alone { drag.on_hover_text(CARD_HINT) } else { drag }
 }
 
 fn drag_area(ui: &egui::Ui, rect: Rect, editing: bool) -> egui::Response {
