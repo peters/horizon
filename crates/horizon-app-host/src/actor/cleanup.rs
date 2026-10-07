@@ -9,6 +9,8 @@ impl Actor {
     /// Explicit normal-host shutdown does not depend on the last viewer/request Arc disappearing.
     pub fn shutdown(&self) -> Result<()> {
         self.stopping.store(true, std::sync::atomic::Ordering::Release);
+        // An in-flight matrix owns its handles through report cleanup. Wait before clearing them.
+        let _run = self.run.write().map_err(|_| Error::CleanupUncertain)?;
         let _uploads = self.upload_admission.lock().map_err(|_| Error::CleanupUncertain)?;
         let _admission = self.admission.lock().map_err(|_| Error::CleanupUncertain)?;
         let lanes = self

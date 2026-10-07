@@ -468,3 +468,5 @@ IPv6 loopback URLs are refused during contract validation because provider forwa
 and managed services use IPv4 loopback. Closed native sessions synchronously signal
 their live views, so later matrix lanes do not wait for the capture polling interval
 to reclaim the two-stream capacity.
+
+Normal host shutdown first stops new admission, then waits for the active matrix run lease before closing remaining resources. The run retains its upload handles through its own final report cleanup, so transport EOF cannot clear those handles underneath the runner.

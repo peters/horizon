@@ -1210,3 +1210,37 @@ fn completed_tunnel_guardian_refuses_native_requests_before_provider_dispatch() 
             .is_empty()
     );
 }
+
+#[test]
+fn shutdown_waits_for_the_matrix_lease_before_clearing_upload_handles() {
+    let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+    let actor = Arc::new(actor);
+    let run = actor.begin_run().unwrap();
+    let app = actor
+        .upload_until(Platform::Ios, Instant::now() + Duration::from_secs(60))
+        .unwrap();
+    let stopping = Arc::clone(&actor);
+    let (sent, received) = std::sync::mpsc::channel();
+    let shutdown = std::thread::spawn(move || sent.send(stopping.shutdown()).unwrap());
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !actor.stopping.load(Ordering::Acquire) {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(actor.uploaded(app.id).is_ok());
+    assert_eq!(fixture.fake.upload_deletes.load(Ordering::SeqCst), 0);
+    assert!(matches!(received.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+    actor.release_upload(app.id).unwrap();
+    drop(run);
+    received.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    shutdown.join().unwrap();
+    assert_eq!(fixture.fake.upload_deletes.load(Ordering::SeqCst), 1);
+    assert!(
+        fixture
+            .workspace
+            .journal()
+            .pending(fixture.workspace.owner())
+            .unwrap()
+            .is_empty()
+    );
+}
