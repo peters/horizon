@@ -103,13 +103,7 @@ required_asset_names() {
     horizon-osx-x64.tar.gz \
     horizon-windows-x64.exe \
     SHA256SUMS.txt
-  if [ "${PRERELEASE:-true}" = "false" ]; then
-    printf '%s\n' \
-      horizon-installer-linux-x64.bin \
-      horizon-installer-osx-arm64.bin \
-      horizon-installer-osx-x64.bin \
-      horizon-installer-win-x64.exe
-  fi
+
 }
 
 json_asset_digest() {

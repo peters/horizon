@@ -13,7 +13,7 @@ use crate::{branding, theme};
 impl HorizonApp {
     pub(in crate::app) fn render_toolbar(&mut self, ctx: &Context) {
         let viewport = util::viewport_local_rect(ctx);
-        let layout = root_toolbar_layout(viewport, self.has_available_update());
+        let layout = root_toolbar_layout(viewport);
 
         egui::Area::new(Id::new("toolbar"))
             .fixed_pos(viewport.min)
@@ -178,17 +178,6 @@ impl HorizonApp {
                         .open_remote_hosts
                         .display_label(util::primary_shortcut_label()),
                 ),
-            ToolbarAction::Update => {
-                let response = ui.add(
-                    util::primary_button(action.label())
-                        .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
-                );
-                if let Some(tooltip) = self.available_update_hover_text() {
-                    response.on_hover_text(tooltip)
-                } else {
-                    response
-                }
-            }
             #[cfg(feature = "cloud-workspaces")]
             ToolbarAction::Cloud => return,
             ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
@@ -233,7 +222,6 @@ impl HorizonApp {
             ToolbarAction::QuickNav => self.open_command_palette(),
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
             ToolbarAction::Sessions => self.toggle_session_manager(),
-            ToolbarAction::Update => self.open_available_update(),
             ToolbarAction::Settings => self.toggle_settings(),
             #[cfg(feature = "cloud-workspaces")]
             ToolbarAction::Cloud => self.open_cloud_accounts(ctx, false),
@@ -252,7 +240,6 @@ fn action_button_width(action: ToolbarAction) -> f32 {
         #[cfg(feature = "cloud-workspaces")]
         ToolbarAction::Cloud => 72.0,
         ToolbarAction::Sessions => 94.0,
-        ToolbarAction::Update => 84.0,
         ToolbarAction::Settings => 92.0,
     }
 }

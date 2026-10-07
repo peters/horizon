@@ -74,7 +74,6 @@ class DetectionTests(unittest.TestCase):
 
     def test_packaging_changes_gate_the_snap_build(self):
         for path in ["snap/snapcraft.yaml", "packaging/linux/horizon.desktop",
-                     "scripts/build-surge-toolchain.sh", "scripts/stage-surge-artifacts.sh",
                      ".github/workflows/release.yml"]:
             with self.subTest(path=path):
                 self.setUp()

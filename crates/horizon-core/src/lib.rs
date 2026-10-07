@@ -20,7 +20,6 @@ pub mod git_watcher;
 mod horizon_home;
 mod layout;
 mod local_store;
-mod managed_install;
 mod opencode_paths;
 mod panel;
 pub mod remote_browser_credential;
@@ -64,7 +63,6 @@ pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, Fil
 pub use git_watcher::GitWatcher;
 pub use horizon_home::{HorizonHome, browser_mcp_executable};
 pub use local_store::{codex_home_dir, grok_home_dir, user_home_dir};
-pub use managed_install::ManagedInstall;
 pub use panel::{
     CloudWait, DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions,
     PanelResume, browser_actor,

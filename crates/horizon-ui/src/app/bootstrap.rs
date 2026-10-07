@@ -7,8 +7,7 @@ use std::time::Instant;
 use egui::Context;
 use horizon_core::remote_browser_credential::CredentialWorkbench;
 use horizon_core::{
-    AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, ManagedInstall, RemoteHostCatalog, SessionStore,
-    StartupDecision,
+    AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, RemoteHostCatalog, SessionStore, StartupDecision,
 };
 
 use super::{
@@ -33,8 +32,6 @@ struct AppBootstrap {
     board: Board,
     resolved_theme: theme::ResolvedTheme,
     config_last_mtime: Option<std::time::SystemTime>,
-    managed_install: Option<ManagedInstall>,
-    next_surge_update_check_at: Option<Instant>,
     shortcuts: AppShortcuts,
     action_commands_cache: Vec<CommandEntry>,
 }
@@ -75,7 +72,6 @@ impl HorizonApp {
         theme::set_theme(resolved_theme);
 
         let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
-        let (managed_install, next_surge_update_check_at) = managed_install_state();
 
         let bootstrap = AppBootstrap {
             config_path,
@@ -84,8 +80,6 @@ impl HorizonApp {
             board,
             resolved_theme,
             config_last_mtime,
-            managed_install,
-            next_surge_update_check_at,
             shortcuts,
             action_commands_cache,
         };
@@ -97,8 +91,6 @@ impl HorizonApp {
             StartupDecision::Ephemeral { runtime_state } => app.activate_ephemeral_session(&runtime_state),
             StartupDecision::Choose(chooser) => app.startup_chooser = Some(StartupChooserState::new(chooser)),
         }
-
-        app.maybe_start_update_check();
 
         app
     }
@@ -113,8 +105,6 @@ impl HorizonApp {
             board,
             resolved_theme,
             config_last_mtime,
-            managed_install,
-            next_surge_update_check_at,
             shortcuts,
             action_commands_cache,
         }: AppBootstrap,
@@ -182,10 +172,6 @@ impl HorizonApp {
             settings: None, remote_browser_credentials: spawn_remote_browser_credentials(config),
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,
-            managed_install,
-            surge_update_check_rx: None,
-            surge_available_update: None,
-            next_surge_update_check_at,
             canvas_gesture: super::canvas_gesture::CanvasGesture::default(), pending_preset_pick: None,
             dir_picker: None,
             command_palette: None,
@@ -226,17 +212,6 @@ fn spawn_remote_browser_credentials(config: &Config) -> CredentialWorkbench {
     let mut workbench = CredentialWorkbench::spawn_platform();
     workbench.load_environment_bindings(&config.browser.remote);
     workbench
-}
-
-fn managed_install_state() -> (Option<ManagedInstall>, Option<Instant>) {
-    let managed_install = std::env::current_exe()
-        .ok()
-        .and_then(|current_exe| ManagedInstall::discover(&current_exe));
-    let next_surge_update_check_at = managed_install
-        .as_ref()
-        .filter(|install| install.uses_stable_channel() && install.uses_github_releases())
-        .map(|_| Instant::now());
-    (managed_install, next_surge_update_check_at)
 }
 
 fn configure_fonts() -> egui::FontDefinitions {

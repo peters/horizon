@@ -25,12 +25,7 @@ PRERELEASE_ASSETS = [
     "horizon-windows-x64.exe",
     "SHA256SUMS.txt",
 ]
-STABLE_ASSETS = PRERELEASE_ASSETS + [
-    "horizon-installer-linux-x64.bin",
-    "horizon-installer-osx-arm64.bin",
-    "horizon-installer-osx-x64.bin",
-    "horizon-installer-win-x64.exe",
-]
+STABLE_ASSETS = PRERELEASE_ASSETS
 
 FAKE_GH = r'''#!/usr/bin/env python3
 import hashlib
@@ -393,12 +388,12 @@ class ReleaseGithubTests(unittest.TestCase):
         self.assertTrue(any("--draft=false" in command for command in self.commands()))
         self.assertFalse(any(command[:1] == ["tag"] for command in self.commands()))
 
-    def test_publish_requires_stable_installers_before_going_public(self):
-        self.write_assets(PRERELEASE_ASSETS)
+    def test_stable_publish_requires_all_binaries_before_going_public(self):
+        self.write_assets(STABLE_ASSETS[:-2] + ["SHA256SUMS.txt"])
         self.ensure_pending(tag=STABLE_TAG, prerelease="false")
         self.upload_assets(tag=STABLE_TAG)
         result = self.publish(tag=STABLE_TAG, prerelease="false", expect=1)
-        self.assertIn("horizon-installer-linux-x64.bin", result.stderr)
+        self.assertIn("horizon-windows-x64.exe", result.stderr)
         self.assertTrue(self.release(STABLE_TAG)["isDraft"])
 
         self.write_assets(STABLE_ASSETS)

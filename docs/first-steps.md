@@ -35,7 +35,6 @@ These functions are available:
 | Route | Use it when | Speech |
 |---|---|---|
 | Release binary | You want to start quickly, and v0.2.7 has the functions that you need. | No |
-| Surge installer | You want the in-app update prompt. | No |
 | Homebrew (macOS, Linux x64) | You use Homebrew. | No |
 | WinGet (Windows) | You use WinGet. | No |
 | Source build | You want the functions in this guide, speech or GPU encoder features. | Yes, with a feature |
@@ -139,87 +138,6 @@ A raw binary does not update itself. Download a new release to update it.
 
    Result: Horizon opens an empty board.
 
-## Install with the Surge installer on Linux or macOS
-
-The Surge installer gives the in-app update prompt.
-
-1. Open the [latest release](https://github.com/peters/horizon/releases/latest).
-2. Download the installer for your platform:
-
-   | Platform | File |
-   |---|---|
-   | Linux x64 | `horizon-installer-linux-x64.bin` |
-   | macOS arm64 | `horizon-installer-osx-arm64.bin` |
-   | macOS x64 | `horizon-installer-osx-x64.bin` |
-
-3. Download `SHA256SUMS.txt` from the same release to the same directory.
-
-> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The checksum
-> finds an incomplete or damaged download. It does not prove who made the
-> file, because the release and `SHA256SUMS.txt` are not signed.
-
-4. If you use Linux, examine the checksum:
-
-   ```bash
-   sha256sum -c --ignore-missing SHA256SUMS.txt
-   ```
-
-5. If you use macOS, examine the checksum:
-
-   ```bash
-   shasum -a 256 -c --ignore-missing SHA256SUMS.txt
-   ```
-
-   Result: The command shows `OK` for the installer.
-
-6. If the command does not show `OK`, delete the installer.
-7. Make the installer executable. Replace `<installer>` with its name:
-
-   ```bash
-   chmod +x <installer>
-   ```
-
-8. If you use macOS, remove the quarantine attribute from the installer:
-
-   ```bash
-   xattr -d com.apple.quarantine <installer>
-   ```
-
-9. Start the installer:
-
-   ```bash
-   ./<installer>
-   ```
-
-10. Follow the steps in the installer.
-11. Start Horizon.
-
-    Result: Horizon opens an empty board. Horizon shows an update prompt when a
-    new stable release is available.
-
-## Install with the Surge installer on Windows
-
-1. Open the [latest release](https://github.com/peters/horizon/releases/latest).
-2. Download `horizon-installer-win-x64.exe`.
-3. Download `SHA256SUMS.txt` from the same release.
-4. In PowerShell, get the checksum of the installer:
-
-   ```powershell
-   Get-FileHash horizon-installer-win-x64.exe
-   ```
-
-5. Compare the hash with the line for `horizon-installer-win-x64.exe` in
-   `SHA256SUMS.txt`.
-
-   Result: The two hashes are the same.
-
-6. If the hashes are not the same, delete the installer.
-7. Open `horizon-installer-win-x64.exe`.
-8. Follow the steps in the installer.
-9. Start Horizon.
-
-   Result: Horizon opens an empty board.
-
 ## Install with a package manager
 
 On macOS or Linux x64, install Horizon with Homebrew:
@@ -234,8 +152,18 @@ On Windows, install Horizon with WinGet:
 winget install Peters.Horizon
 ```
 
-Use the same package manager to update Horizon. The in-app update prompt is
-for Surge installs only.
+Use the same package manager to update Horizon. Horizon has no in-app update prompt.
+
+## Update an older installation
+
+Horizon has no in-app updater. Use your package manager to update a package installation.
+For a release binary, close Horizon and replace the executable with the new release binary.
+
+Older Surge installations do not get new update packages.
+Close the old application and install a release binary in a separate directory, or use a package manager.
+Keep the files in `~/.horizon` or the corresponding user configuration directory.
+The new executable uses the same configuration and session formats.
+Do not put the new executable inside the old managed application directory.
 
 ## Build from source
 

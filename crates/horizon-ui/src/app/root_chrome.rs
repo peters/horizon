@@ -25,7 +25,6 @@ pub(super) enum ToolbarAction {
     #[cfg(feature = "cloud-workspaces")]
     Cloud,
     Sessions,
-    Update,
     Settings,
 }
 
@@ -43,7 +42,6 @@ impl ToolbarAction {
             #[cfg(feature = "cloud-workspaces")]
             Self::Cloud => "Cloud",
             Self::Sessions => "Sessions",
-            Self::Update => "Update",
             Self::Settings => "Settings",
         }
     }
@@ -89,7 +87,7 @@ pub(super) fn effective_sidebar_width(viewport_width: f32) -> f32 {
     (viewport_width * SIDEBAR_WIDTH_RATIO).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH)
 }
 
-pub(super) fn root_toolbar_layout(viewport: Rect, show_update: bool) -> RootToolbarLayout {
+pub(super) fn root_toolbar_layout(viewport: Rect) -> RootToolbarLayout {
     let content_rect = Rect::from_min_max(
         Pos2::new(
             viewport.min.x + ROOT_TOOLBAR_HORIZONTAL_PAD,
@@ -108,17 +106,10 @@ pub(super) fn root_toolbar_layout(viewport: Rect, show_update: bool) -> RootTool
         (false, 1_usize, false),
         (false, 0_usize, false),
     ];
-    let mut fallback = layout_candidate(viewport, content_rect, false, 0, false, show_update);
+    let mut fallback = layout_candidate(viewport, content_rect, false, 0, false);
 
     for (show_tagline, secondary_visible, show_fps) in states {
-        let candidate = layout_candidate(
-            viewport,
-            content_rect,
-            show_tagline,
-            secondary_visible,
-            show_fps,
-            show_update,
-        );
+        let candidate = layout_candidate(viewport, content_rect, show_tagline, secondary_visible, show_fps);
         if candidate.search_available >= ROOT_TOOLBAR_SEARCH_MIN_WIDTH {
             return candidate.layout;
         }
@@ -134,7 +125,6 @@ fn layout_candidate(
     show_tagline: bool,
     secondary_visible: usize,
     show_fps: bool,
-    show_update: bool,
 ) -> RootToolbarCandidate {
     let brand_width = ROOT_TOOLBAR_NAME_WIDTH
         + if show_tagline {
@@ -160,9 +150,6 @@ fn layout_candidate(
         .collect::<Vec<_>>();
     if !overflow_actions.is_empty() {
         visible_items.push(ToolbarItem::OverflowMenu);
-    }
-    if show_update {
-        visible_items.push(ToolbarItem::Action(ToolbarAction::Update));
     }
     visible_items.push(ToolbarItem::Action(ToolbarAction::Sessions));
     visible_items.push(ToolbarItem::Action(ToolbarAction::Settings));
@@ -228,7 +215,7 @@ mod tests {
     #[test]
     fn toolbar_keeps_short_tagline_when_search_still_fits() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1280.0, 768.0));
-        let layout = root_toolbar_layout(viewport, false);
+        let layout = root_toolbar_layout(viewport);
 
         assert!(layout.show_tagline);
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
@@ -241,23 +228,9 @@ mod tests {
     }
 
     #[test]
-    fn toolbar_prioritizes_available_update_over_tagline() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1024.0, 768.0));
-        let layout = root_toolbar_layout(viewport, true);
-
-        assert!(!layout.show_tagline);
-        assert!(
-            layout
-                .visible_items
-                .contains(&ToolbarItem::Action(ToolbarAction::Update))
-        );
-        assert!(layout.search_rect.width() >= 180.0);
-    }
-
-    #[test]
     fn toolbar_hides_tagline_before_collapsing_actions() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(960.0, 768.0));
-        let layout = root_toolbar_layout(viewport, false);
+        let layout = root_toolbar_layout(viewport);
 
         assert!(!layout.show_tagline);
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
@@ -267,7 +240,7 @@ mod tests {
     #[test]
     fn toolbar_moves_secondary_actions_into_overflow_on_tighter_widths() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 768.0));
-        let layout = root_toolbar_layout(viewport, false);
+        let layout = root_toolbar_layout(viewport);
 
         assert!(!layout.show_tagline);
         assert_eq!(layout.overflow_actions, ToolbarAction::SECONDARY);
@@ -279,7 +252,7 @@ mod tests {
     #[test]
     fn toolbar_keeps_primary_actions_visible_at_min_window_width() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(760.0, 600.0));
-        let layout = root_toolbar_layout(viewport, false);
+        let layout = root_toolbar_layout(viewport);
 
         assert!(
             layout
@@ -299,41 +272,26 @@ mod tests {
     }
 
     #[test]
-    fn toolbar_keeps_update_visible_when_present() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
-        let layout = root_toolbar_layout(viewport, true);
-
-        assert!(
-            layout
-                .visible_items
-                .contains(&ToolbarItem::Action(ToolbarAction::Update))
-        );
-        assert_eq!(layout.overflow_actions, ToolbarAction::SECONDARY);
-    }
-
-    #[test]
     fn secondary_and_existing_actions_remain_reachable_at_every_width() {
         for width in [760.0, 800.0, 900.0, 1024.0, 1280.0] {
-            for update in [false, true] {
-                let layout = root_toolbar_layout(Rect::from_min_max(Pos2::ZERO, Pos2::new(width, 768.0)), update);
-                for action in [
-                    ToolbarAction::RemoteHosts,
-                    #[cfg(feature = "cloud-workspaces")]
-                    ToolbarAction::Cloud,
-                    ToolbarAction::Sessions,
-                    ToolbarAction::Settings,
-                ] {
-                    let visible = layout
-                        .visible_items
-                        .iter()
-                        .filter(|item| **item == ToolbarItem::Action(action))
-                        .count();
-                    let overflow = layout.overflow_actions.iter().filter(|item| **item == action).count();
-                    assert_eq!(visible + overflow, 1, "{width}, {update}, {action:?}");
-                }
-                assert!(layout.brand_rect.max.x <= layout.search_rect.min.x);
-                assert!(layout.search_rect.max.x <= layout.actions_rect.min.x);
+            let layout = root_toolbar_layout(Rect::from_min_max(Pos2::ZERO, Pos2::new(width, 768.0)));
+            for action in [
+                ToolbarAction::RemoteHosts,
+                #[cfg(feature = "cloud-workspaces")]
+                ToolbarAction::Cloud,
+                ToolbarAction::Sessions,
+                ToolbarAction::Settings,
+            ] {
+                let visible = layout
+                    .visible_items
+                    .iter()
+                    .filter(|item| **item == ToolbarItem::Action(action))
+                    .count();
+                let overflow = layout.overflow_actions.iter().filter(|item| **item == action).count();
+                assert_eq!(visible + overflow, 1, "{width}, {action:?}");
             }
+            assert!(layout.brand_rect.max.x <= layout.search_rect.min.x);
+            assert!(layout.search_rect.max.x <= layout.actions_rect.min.x);
         }
     }
 }

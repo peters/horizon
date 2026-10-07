@@ -103,16 +103,14 @@ the same PR.
 | Function | Linux | macOS | Windows |
 |---|---|---|---|
 | Release binary (note 12) | x64 | arm64 and x64 | x64 |
-| Surge installer and in-app update | x64 | arm64 and x64 | x64 |
 | Homebrew | x64 | Yes | No |
 | WinGet | No | No | Yes |
 | Snap Store | Partial (note 13) | No | No |
 | Code signing and notarization in the release | n/a | No (note 14) | No (note 14) |
 
 12. The release assets, the Homebrew tap and the WinGet manifest come from the
-    release workflow. See [the release flow](release-flow.md) and
-    `crates/horizon-ui/src/app/updates.rs:229-236` for the Surge platforms.
-13. The Snap publish job has `if: false` (`.github/workflows/release.yml:569-573`).
+    release workflow. See [the release flow](release-flow.md).
+13. The Snap publish job has `if: false` in `.github/workflows/release.yml`.
     The store can still hold an older release. New releases do not go to the store.
 14. The release workflow and the packaging scripts have no signing or
     notarization step.
