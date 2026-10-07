@@ -216,7 +216,7 @@ impl Shared {
             Track::Video => 0,
             Track::Audio => 1,
         };
-        let packets = {
+        {
             let mut streams = lock(&self.streams);
             let Some(stream) = streams.get_mut(index) else {
                 return;
@@ -262,13 +262,18 @@ impl Shared {
                 stream.setup.ssrc,
                 &mut stream.sequence,
             ));
-            // Sender reports count RTP packets and payload octets, without headers.
-            stream.packets = stream
-                .packets
-                .wrapping_add(u32::try_from(packets.len()).unwrap_or(u32::MAX));
-            stream.octets = stream
-                .octets
-                .wrapping_add(u32::try_from(data.len()).unwrap_or(u32::MAX));
+            // A full queue drops the frame unsent; the history below still
+            // serves the receiver's request for it.
+            if self.queue.try_send(Outgoing::Frame(packets.clone())).is_ok() {
+                // Sender reports count first transmissions only: RTP packets and
+                // payload octets, without headers.
+                stream.packets = stream
+                    .packets
+                    .wrapping_add(u32::try_from(packets.len()).unwrap_or(u32::MAX));
+                stream.octets = stream
+                    .octets
+                    .wrapping_add(u32::try_from(data.len()).unwrap_or(u32::MAX));
+            }
             let now = Instant::now();
             while stream
                 .history
@@ -283,12 +288,10 @@ impl Shared {
                 packets: packets.clone(),
                 resent: vec![None; packets.len()],
             });
-            packets
-        };
+        }
         if keyframe && track == Track::Video {
             *lock(&self.last_keyframe) = Some(Instant::now());
         }
-        let _ = self.queue.try_send(Outgoing::Frame(packets));
     }
 
     fn transmit_queue(&self, outgoing: &Receiver<Outgoing>) {
