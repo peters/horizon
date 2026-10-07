@@ -152,11 +152,10 @@ impl HorizonApp {
         if !groups.iter().any(tracked) {
             return vec![None; groups.len()];
         }
-        let terminals: HashMap<&str, &horizon_core::Panel> = self
+        let panels: HashMap<&str, &horizon_core::Panel> = self
             .board
             .panels
             .iter()
-            .filter(|panel| parks(panel.kind))
             .map(|panel| (panel.local_id.as_str(), panel))
             .collect();
         groups
@@ -168,7 +167,7 @@ impl HorizonApp {
                     || production.runtimes[&group.issue]
                         .pending_member_attachments
                         .iter()
-                        .any(|local| terminals.contains_key(local.as_str()))
+                        .any(|local| panels.get(local.as_str()).is_some_and(|panel| parks(panel.kind)))
                 {
                     return None;
                 }
@@ -176,8 +175,9 @@ impl HorizonApp {
                     sight: Sight::Hidden,
                     live: false,
                 };
-                for panel in group.panels.iter().filter_map(|local| terminals.get(local.as_str())) {
-                    observed.live |= panel.cloud_wait().is_none();
+                // Any panel of the cloud shows that the user looks at it; only terminals park.
+                for panel in group.panels.iter().filter_map(|local| panels.get(local.as_str())) {
+                    observed.live |= parks(panel.kind) && panel.cloud_wait().is_none();
                     if self.board.focused == Some(panel.id) || self.fullscreen_panel == Some(panel.id) {
                         observed.sight = Sight::InUse;
                     } else if observed.sight == Sight::Hidden && self.panel_drawn_last_frame(panel.id) {
@@ -191,20 +191,21 @@ impl HorizonApp {
 
     /// What the user sees of cloud `index` in the last frame.
     fn cloud_sight(&self, index: usize) -> Sight {
-        let members = self.parkable_members(index);
+        let members: Vec<PanelId> = self.cloud_prototype.groups.0[index]
+            .panels
+            .iter()
+            .filter_map(|local| self.board.panel_id_by_local_id(local))
+            .collect();
         let in_use = |id: PanelId| self.board.focused == Some(id) || self.fullscreen_panel == Some(id);
-        if members.iter().any(|(_, id)| in_use(*id)) {
+        if members.iter().any(|id| in_use(*id)) {
             Sight::InUse
-        } else if members.iter().any(|(_, id)| self.panel_drawn_last_frame(*id)) {
+        } else if members.iter().any(|id| self.panel_drawn_last_frame(*id)) {
             Sight::Visible
         } else {
             Sight::Hidden
         }
     }
 
-    /// Called when cloud `index` becomes ready and `members` are about to attach. When
-    /// the cloud is out of view, its terminals park instead and are removed from
-    /// `members`, so a restart opens no connection for clouds that nobody looks at.
     /// Whether sessions restored now for cloud `index` start parked: the cloud is
     /// out of view as it becomes ready, or its terminals are parked already.
     pub(super) fn restores_parked(&self, index: usize, view: ReadyView) -> bool {
@@ -218,6 +219,9 @@ impl HorizonApp {
                 .is_some_and(|tracker| tracker.is_parked())
     }
 
+    /// What the user sees of cloud `index` as it becomes ready. When the cloud is out
+    /// of view, its terminals park instead of attaching, so a restart opens no
+    /// connection for clouds that nobody looks at.
     pub(super) fn ready_view(&self, index: usize, ready_now: bool) -> ReadyView {
         if !ready_now {
             ReadyView::Unchanged

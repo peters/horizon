@@ -433,6 +433,8 @@ fn missing_durable_session_retries_after_store_lock_is_released() {
             worktree: "/workspace/agents/missing-shell".into(),
         });
     let lock = cloud_runtime::state::Store::lock(&temp.path().join("fixture")).unwrap();
+    // In view: missing sessions attach live, so they need the store.
+    show_member(&mut app, "firefox");
     app.sync_cloud_presentations();
     assert!(
         app.cloud_prototype.production.runtimes[&1]
@@ -514,6 +516,8 @@ fn pending_session_retry_does_not_reopen_a_closed_healthy_view() {
         .unwrap()
         .sessions = sessions.into();
     let lock = cloud_runtime::state::Store::lock(&temp.path().join("fixture")).unwrap();
+    // In view: missing sessions attach live, so they need the store.
+    show_member(&mut app, "healthy-shell");
     app.sync_cloud_presentations();
     assert_eq!(
         app.cloud_prototype.production.runtimes[&1].pending_session_attachments,
@@ -746,4 +750,12 @@ fn a_restored_member_of_a_stopped_cloud_names_resume_worker_until_the_cloud_runs
     runtime.stage = Some(cloud_runtime::Stage::Provision);
     app.sync_cloud_member_waits();
     assert!(text(&app).contains("Horizon is reconnecting the cloud of this panel."));
+}
+
+/// Marks a member of the fixture cloud as drawn in the last frame.
+#[cfg(unix)]
+fn show_member(app: &mut HorizonApp, local: &str) {
+    let id = app.board.panel_id_by_local_id(local).unwrap();
+    app.panel_screen_rects
+        .insert(id, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(10.0, 10.0)));
 }
