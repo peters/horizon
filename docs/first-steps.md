@@ -391,9 +391,9 @@ A first cloud needs these items today:
 | Item | Need | Where |
 |---|---|---|
 | RunPod API key or Hetzner API token | Required | **Cloud > Cloud settings** |
-| Worker image in a registry | Required. There is no public default image. | Build it from [`examples/cloud-worker`](../examples/cloud-worker/README.md) |
+| Worker image in a registry | Required, except for quick start. Quick start uses the public base image on RunPod. | Build it from [`examples/cloud-worker`](../examples/cloud-worker/README.md) |
 | Git, OpenSSH, Docker with buildx | Required | This computer |
-| `.horizon/cloud.yml` in the selected commit | Required, or local image-only settings in **More options** | The repository. **New cloud** can open a setup agent that writes it. See [Repository setup](cloud-workspaces.md#repository-setup-and-deployment) |
+| `.horizon/cloud.yml` in the selected commit | Required, except for quick start or local image-only settings in **More options** | The repository. **New cloud** can open a setup agent that writes it. See [Repository setup](cloud-workspaces.md#repository-setup-and-deployment) |
 | Registry push and pull logins | Required for a private image | **Cloud settings > Container registry** |
 | Agent API key or subscription login | One for each agent | **Cloud settings** |
 | Tailscale auth key | Optional | **Settings > Tailnets** |
@@ -415,12 +415,18 @@ from `origin` before deploy. Commit and update the branch before you start.
 4. If the code is on a Git server, paste the repository link.
 5. If the code is on this computer, click **Browse…**.
 6. If you clicked **Browse…**, select the folder.
-7. Select a worker in the catalog.
+7. If the dialog shows **This commit has no .horizon/cloud.yml**, click **Quick
+   start on the public base image**.
+
+   Result: The dialog shows the profile `quick-start`. See
+   [Quick start](cloud-workspaces.md#quick-start).
+
+8. Select a worker in the catalog.
 
    Result: The summary shows the compute price for each hour and an estimated
    cost for the run. The default run time is one hour.
 
-8. Click **Start cloud**.
+9. Click **Start cloud**.
 
    Result: The cloud card shows each stage with its time.
 
