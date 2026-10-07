@@ -95,14 +95,16 @@ the worker contract or the agent CLIs in the base image must change for a releas
 2. In the summary of the **Publish CPU base worker** job, find the image reference
    that has `@sha256:`.
 3. In `quick_start.rs`, set the value of the `image!` macro to that reference.
-4. In the log of the **Build and check** step of the same job, find the lines after
-   `Worker check report for the quick-start capabilities:`.
+4. In the log of the **Build and check** step of the same job, find the lines between
+   `Worker check report for the quick-start capabilities:` and
+   `End of the worker check report.`
 
-   Result: Each line is one contract marker of the new image.
+   Result: Each line is one contract marker, for example
+   `horizon-source-contract=1`. Do not copy the two boundary lines.
 5. CAUTION: SET `CONTRACT` ONLY FROM THE REPORT OF THE NEW IMAGE. Horizon uses
    `CONTRACT` instead of a local check of the pinned image. A wrong value lets
    Horizon accept an image that the worker refuses when it starts.
-6. In `quick_start.rs`, set `CONTRACT` to these lines.
+6. In `quick_start.rs`, set `CONTRACT` to these marker lines.
 7. Run `cargo test -p horizon-core quick_start`.
 
    Result: The tests pass. They make sure of these items:

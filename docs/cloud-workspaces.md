@@ -875,7 +875,8 @@ The development example `cargo run -p horizon-core --example cloud_deploy -- ...
 uses the same coordinator. Run it without arguments for its command synopsis.
 With `--quick-start`, `deploy` and `prepare-image` use the built-in quick start
 profile, as **New cloud** does. Then the profile argument must be `quick-start`.
-These commands and `rebuild` of a quick start cloud do not use Docker.
+These commands do not use Docker. A `rebuild` of a quick start cloud does not use
+Docker either, if the cloud has the capabilities of the current `quick-start` profile.
 It supports image preparation without allocation, deployment, stop, resume,
 reconnect, endpoint, deletion, `rebuild SETTINGS STATE_ROOT PROFILE` with `continue-rebuild` and
 `cancel-rebuild`, and `reconcile SETTINGS STATE_ROOT [WORKER_ID]`. Reconciliation prints a

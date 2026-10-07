@@ -51,6 +51,7 @@ selection=$(python3 -c 'import json, sys; print(json.dumps({"agents": sys.argv[1
 echo "Worker check report for the quick-start capabilities:"
 docker run --rm --network=none --entrypoint /usr/local/bin/horizon-worker-check \
     --env HORIZON_WORKER_CAPABILITIES="$selection" "$tag" --git-auth
+echo "End of the worker check report."
 python3 -B "$here/check-markers.py" "$tag"
 # A public image must not carry SSH host keys in any layer; each worker makes its own.
 python3 -B "$here/check-host-keys.py" "$tag"
