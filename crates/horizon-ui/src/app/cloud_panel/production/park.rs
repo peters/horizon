@@ -46,6 +46,52 @@ fn parked_sessions(sessions: Vec<super::Session>, locals: &[String]) -> HashMap<
         .collect()
 }
 
+/// Reads the status of the parked panels `locals` of the cloud `cloud_id` on the worker of `deployment`.
+fn read_statuses(
+    deployment: &super::Deployment,
+    root: &std::path::Path,
+    cloud_id: &str,
+    locals: &[String],
+) -> StatusRead {
+    let settings = Settings::load(&root.join("settings.json"))?;
+    let directory = cloud_runtime::state::cloud_directory(root, cloud_id)?;
+    // The saved record, not the copy from when the cloud became ready: a panel opened
+    // since then records its session only there.
+    let sessions = Store::lock(&directory)?
+        .load()?
+        .map(|state| state.sessions)
+        .unwrap_or_default();
+    let tmux = parked_sessions(sessions, locals);
+    if tmux.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<String> = tmux.keys().cloned().collect();
+    let worker = deployment
+        .worker
+        .as_ref()
+        .ok_or(cloud_runtime::Error::Invalid("Cloud has no worker"))?;
+    let statuses = session_status::read(
+        worker,
+        &settings,
+        &directory,
+        &ids,
+        &cloud_runtime::Cancellation::default(),
+    )?;
+    Ok(statuses
+        .into_iter()
+        .filter_map(|status| Some((tmux.get(&status.id)?.clone(), status)))
+        .collect())
+}
+
+/// The agent status that a parked panel shows for its last session status.
+fn agent_status(status: Option<&SessionStatus>) -> AgentStatus {
+    if status.is_some_and(|status| status.activity == SessionActivity::Working) {
+        AgentStatus::Working
+    } else {
+        AgentStatus::Idle
+    }
+}
+
 /// Panels that a cloud can park: terminals, not browsers or desktops.
 fn parks(kind: PanelKind) -> bool {
     !matches!(kind, PanelKind::Browser | PanelKind::Device)
@@ -116,6 +162,13 @@ impl HorizonApp {
             }
             Err(error) => self.cloud_prototype.error = Some(error.to_string()),
         }
+    }
+
+    /// Attaches, restores and parks the members of each cloud, and shows why a member waits.
+    pub(super) fn sync_cloud_members(&mut self) {
+        self.sync_cloud_presentations();
+        self.sync_cloud_member_waits();
+        self.sync_cloud_parking();
     }
 
     /// Parks or attaches the terminals of each ready cloud as its sight changes, and
@@ -232,21 +285,7 @@ impl HorizonApp {
                     }
                     let reported: Vec<(PanelId, AgentStatus)> = parked
                         .iter()
-                        .map(|(local, id)| {
-                            let working = runtime
-                                .parking
-                                .statuses
-                                .get(local)
-                                .is_some_and(|status| status.activity == SessionActivity::Working);
-                            (
-                                *id,
-                                if working {
-                                    AgentStatus::Working
-                                } else {
-                                    AgentStatus::Idle
-                                },
-                            )
-                        })
+                        .map(|(local, id)| (*id, agent_status(runtime.parking.statuses.get(local))))
                         .collect();
                     for (id, status) in reported {
                         if let Some(panel) = self.board.panel_mut(id) {
@@ -263,8 +302,8 @@ impl HorizonApp {
             return;
         }
         let locals: Vec<String> = parked.into_keys().collect();
-        let (Some(worker), Some(root), Some(launch)) = (
-            runtime.state.as_ref().and_then(|state| state.worker.clone()),
+        let (Some(deployment), Some(root), Some(launch)) = (
+            runtime.state.clone().filter(|state| state.worker.is_some()),
             root,
             launch,
         ) else {
@@ -275,32 +314,7 @@ impl HorizonApp {
         runtime.parking.reader = Some(rx);
         let repaint = runtime.repaint_context.clone();
         std::thread::spawn(move || {
-            let result = (|| {
-                let settings = Settings::load(&root.join("settings.json"))?;
-                let directory = cloud_runtime::state::cloud_directory(&root, &launch.id)?;
-                // The saved record, not the copy from when the cloud became ready: a panel
-                // opened since then records its session only there.
-                let sessions = Store::lock(&directory)?
-                    .load()?
-                    .map(|state| state.sessions)
-                    .unwrap_or_default();
-                let tmux = parked_sessions(sessions, &locals);
-                if tmux.is_empty() {
-                    return Ok(Vec::new());
-                }
-                let ids: Vec<String> = tmux.keys().cloned().collect();
-                let statuses = session_status::read(
-                    &worker,
-                    &settings,
-                    &directory,
-                    &ids,
-                    &cloud_runtime::Cancellation::default(),
-                )?;
-                Ok(statuses
-                    .into_iter()
-                    .filter_map(|status| Some((tmux.get(&status.id)?.clone(), status)))
-                    .collect())
-            })();
+            let result = read_statuses(&deployment, &root, &launch.id, &locals);
             if tx.send(result).is_ok()
                 && let Some(context) = repaint
             {

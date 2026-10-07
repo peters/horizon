@@ -295,7 +295,7 @@ impl HorizonApp {
             }
             let ready_now = runtime.needs_attach;
             let retry = runtime.prepare_attachments(&self.board, group);
-            let mut members = if retry {
+            let members = if retry {
                 runtime.pending_member_attachments.clone()
             } else {
                 std::collections::HashSet::default()
@@ -317,10 +317,7 @@ impl HorizonApp {
                     runtime.pending_session_attachments = pending;
                 }
             }
-            if ready_now {
-                self.park_hidden_members_on_ready(index, &mut members);
-            }
-            self.restore_cloud_members(index, members);
+            self.restore_or_park_members(index, members, ready_now);
             if discovered {
                 self.restore_missing_cloud_browsers(index, &pending_browsers, &browsers);
             }
@@ -401,6 +398,19 @@ impl HorizonApp {
                 runtime.pending_browser_attachments.remove(local);
             }
         }
+    }
+    /// Restores `members`; when the cloud just became ready out of view, its
+    /// terminals park instead.
+    fn restore_or_park_members(
+        &mut self,
+        index: usize,
+        mut members: std::collections::HashSet<String>,
+        ready_now: bool,
+    ) {
+        if ready_now {
+            self.park_hidden_members_on_ready(index, &mut members);
+        }
+        self.restore_cloud_members(index, members);
     }
     fn restore_cloud_members(&mut self, index: usize, members: std::collections::HashSet<String>) {
         for local in members {

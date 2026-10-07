@@ -595,9 +595,7 @@ impl HorizonApp {
         self.reconnect_resumed(resumed, ctx);
         self.remove_closed_cloud_browsers(removed);
         self.sync_resized_profiles();
-        self.sync_cloud_presentations();
-        self.sync_cloud_member_waits();
-        self.sync_cloud_parking();
+        self.sync_cloud_members();
         self.start_first_cloud_panels(ctx);
         self.cloud_prototype.groups.reconcile(&mut self.board);
         self.sync_board_cloud_groups();

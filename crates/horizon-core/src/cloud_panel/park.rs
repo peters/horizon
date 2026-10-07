@@ -147,7 +147,7 @@ mod tests {
         );
         assert!(tracker.is_parked());
         assert_eq!(
-            tracker.observe(Sight::Hidden, start + Duration::from_secs(900), POLICY),
+            tracker.observe(Sight::Hidden, start + Duration::from_mins(15), POLICY),
             None
         );
     }
