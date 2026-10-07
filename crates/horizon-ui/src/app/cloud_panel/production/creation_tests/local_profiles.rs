@@ -100,6 +100,43 @@ fn local_choice_loads_untracked_settings_and_captures_the_profile_for_creation()
 }
 
 #[test]
+fn quick_start_offers_the_builtin_profile_for_a_repository_without_settings() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    fixture(temp.path());
+    std::fs::remove_dir_all(temp.path().join(".horizon")).unwrap();
+    app.cloud_prototype.production.creating = true;
+    app.cloud_prototype.production.repository = temp.path().to_string_lossy().into();
+    app.cloud_prototype.production.title = "Quick start".into();
+    app.read_cloud_profiles(&ctx);
+    finish_read(&ctx, &mut app);
+    assert!(app.cloud_prototype.error.as_ref().unwrap().contains("quick start"));
+    for _ in 0..4 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    click(&ctx, &mut app, label_position(&output, "No cloud configuration yet?"));
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    click(
+        &ctx,
+        &mut app,
+        label_position(&output, "Quick start on the public base image"),
+    );
+    finish_read(&ctx, &mut app);
+    let form = &app.cloud_prototype.production;
+    assert_eq!(form.launch.configuration, Configuration::QuickStart);
+    assert_eq!(form.selected_profile, "quick-start");
+    let profile = &form.profiles.as_ref().unwrap().profiles["quick-start"];
+    assert_eq!(
+        profile.image,
+        horizon_core::cloud_runtime::repository::launch::quick_start::IMAGE
+    );
+    assert!(profile.build.is_none());
+    assert!(app.cloud_prototype.error.is_none());
+}
+
+#[test]
 fn invalid_local_reload_clears_the_previous_profile_and_placement() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),

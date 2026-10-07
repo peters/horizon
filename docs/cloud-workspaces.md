@@ -295,6 +295,17 @@ commit the setup. Return to New cloud and choose **Read .horizon/cloud.yml**.
 Changing the repository or encountering invalid YAML clears previously loaded
 profiles, so a stale profile cannot be deployed accidentally.
 
+To start without settings, expand **No cloud configuration yet?** and select
+**Quick start on the public base image**. Horizon then uses a built-in image-only
+profile: provider `runpod`, the public image `ghcr.io/peters/horizon-worker-base`,
+2 vCPU and 4 GB, Claude, Codex, Chromium and the desktop. The provider pulls the
+image without a registry login, and Horizon does not build an image. Local Docker
+is still necessary: Horizon resolves the image digest and runs the worker contract
+check before it allocates compute. Quick start is not available for a commit that
+has a `.horizon/cloud.yml`. **Read .horizon/cloud.yml** goes back to the committed
+settings. (Prototype: the image tag is a prototype tag, and the package must be
+public before a worker can pull it.)
+
 For the default launch path, commit `.horizon/cloud.yml` using the
 [example](../crates/horizon-cloud/examples/cloud.yml).
 

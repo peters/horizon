@@ -9,18 +9,40 @@ fn prompt(agents: &[horizon_core::cloud_runtime::setup::Agent]) -> String {
     )
 }
 
-pub(super) fn render(ui: &mut egui::Ui, form: &mut Production) -> bool {
+/// What the person chose in the setup section for a repository without cloud settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Choice {
+    None,
+    Agent,
+    QuickStart,
+}
+
+pub(super) fn render(ui: &mut egui::Ui, form: &mut Production) -> Choice {
     ui.add_space(12.0);
     ui.collapsing("No cloud configuration yet?", |ui| {
-        ui.label("Let a local agent inspect this repository and prepare its worker image and cloud.yml. Review and commit the files, then return here and reload.");
+        ui.label("Quick start runs this repository on the public base worker image: Claude, Codex, Chromium and a desktop on the smallest CPU worker. It needs no registry login and no image build.");
+        let repository = !form.repository.trim().is_empty();
+        if ui
+            .add_enabled(repository, egui::Button::new("Quick start on the public base image").fill(theme::PANEL_BG_ALT()))
+            .clicked()
+        {
+            return Choice::QuickStart;
+        }
+        ui.add_space(8.0);
+        ui.label("Or let a local agent inspect this repository and prepare its worker image and cloud.yml. Review and commit the files, then return here and reload.");
         ui.small("This setup terminal uses your local agent login. Cloud settings configure authentication on remote workers.");
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Codex), "Codex");
             ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Claude), "Claude");
         });
-        ui.add_enabled(!form.repository.trim().is_empty() && form.setup_agent.is_some(),
+        if ui.add_enabled(repository && form.setup_agent.is_some(),
             egui::Button::new("Open setup agent").fill(theme::PANEL_BG_ALT())).clicked()
-    }).body_returned.unwrap_or(false)
+        {
+            Choice::Agent
+        } else {
+            Choice::None
+        }
+    }).body_returned.unwrap_or(Choice::None)
 }
 
 impl HorizonApp {

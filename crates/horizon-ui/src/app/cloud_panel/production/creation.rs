@@ -3,7 +3,10 @@ use super::{HorizonApp, Production};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, LayerId, Layout, Order, RichText, Stroke, TextEdit, Ui, Vec2};
-use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement};
+use horizon_core::{
+    ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement,
+    cloud_runtime::repository::launch::Configuration,
+};
 use std::path::{Path, PathBuf};
 
 pub(super) mod checks;
@@ -238,12 +241,15 @@ impl HorizonApp {
             form.pending_creation.is_none() && !form.launch.submitted && form.launch.watch.is_none(),
             |ui| {
                 actions.repository = fields(ui, form, &mut actions.create, refocus_repository);
-                if !form.launch.loading()
-                    && form.profiles.is_none()
-                    && !checks::source_step(form)
-                    && super::repository_setup::render(ui, form)
-                {
-                    actions.repository = RepositoryAction::Setup;
+                if !form.launch.loading() && form.profiles.is_none() && !checks::source_step(form) {
+                    match super::repository_setup::render(ui, form) {
+                        super::repository_setup::Choice::None => {}
+                        super::repository_setup::Choice::Agent => actions.repository = RepositoryAction::Setup,
+                        super::repository_setup::Choice::QuickStart => {
+                            set_configuration(form, Configuration::QuickStart);
+                            actions.repository = RepositoryAction::Load;
+                        }
+                    }
                 }
             },
         );
@@ -551,19 +557,16 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
             .size(12.0)
             .color(theme::FG_SOFT()),
     );
-    let mut local =
-        form.launch.configuration == horizon_core::cloud_runtime::repository::launch::Configuration::LocalImageOnly;
+    let mut local = form.launch.configuration == Configuration::LocalImageOnly;
     if ui.checkbox(&mut local, "Use local image-only settings").changed() {
-        form.launch.configuration = if local {
-            horizon_core::cloud_runtime::repository::launch::Configuration::LocalImageOnly
-        } else {
-            horizon_core::cloud_runtime::repository::launch::Configuration::Committed
-        };
-        form.selected_profile.clear();
-        form.size = None;
-        form.placement = Placement::default();
-        form.provider = None;
-        form.launch.siblings = siblings::State::default();
+        set_configuration(
+            form,
+            if local {
+                Configuration::LocalImageOnly
+            } else {
+                Configuration::Committed
+            },
+        );
         changed = true;
     }
     if local {
@@ -573,6 +576,16 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
                 .color(theme::FG_SOFT()),
         );
     }
+    if form.launch.configuration == Configuration::QuickStart {
+        ui.label(
+            RichText::new(format!(
+                "Quick start: the built-in profile on the public base image {}. No registry login or image build.",
+                horizon_core::cloud_runtime::repository::launch::quick_start::IMAGE
+            ))
+            .size(12.0)
+            .color(theme::FG_SOFT()),
+        );
+    }
     let load = ui
         .add(
             Button::new(RichText::new("Read .horizon/cloud.yml").size(13.0))
@@ -580,6 +593,10 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
                 .corner_radius(8),
         )
         .clicked();
+    // Reading the file leaves quick start for the repository's own settings.
+    if load && form.launch.configuration == Configuration::QuickStart {
+        set_configuration(form, Configuration::Committed);
+    }
     if form.profiles.is_none() {
         ui.label(
             RichText::new("Read the repository settings to choose a profile.")
@@ -592,6 +609,17 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
     } else {
         RepositoryAction::None
     }
+}
+
+/// Switches where the profiles come from; a profile, size or sibling chosen from the
+/// previous source no longer applies.
+fn set_configuration(form: &mut Production, configuration: Configuration) {
+    form.launch.configuration = configuration;
+    form.selected_profile.clear();
+    form.size = None;
+    form.placement = Placement::default();
+    form.provider = None;
+    form.launch.siblings = siblings::State::default();
 }
 
 fn title_requirement(ui: &mut Ui, form: &Production) {
