@@ -151,6 +151,23 @@ fn a_cloud_parks_out_of_view_and_attaches_again_in_view() {
         assert_eq!(wait_of(&app, local), Some(CloudWait::Parked), "{local}");
     }
     // The status read of the parked sessions fails here: the fixture worker refuses SSH.
+    // An older status must not stay on screen as if it were current.
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .parking
+        .statuses
+        .insert(
+            "one".into(),
+            SessionStatus {
+                id: "one".into(),
+                activity: SessionActivity::Working,
+                quiet_for: None,
+                lines: vec!["old".into()],
+            },
+        );
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while runtime(&app).parking.error.is_none() {
         assert!(std::time::Instant::now() < deadline, "the status read must finish");
@@ -242,4 +259,49 @@ fn a_status_read_asks_for_the_sessions_that_the_saved_record_holds() {
     assert_eq!(parked.len(), 2);
     assert_eq!(parked["tmux-1"], "one");
     assert_eq!(parked["tmux-2"], "two");
+}
+
+#[test]
+fn a_pending_browser_discovery_does_not_keep_terminals_parked() {
+    let (_temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    assert_eq!(wait_of(&app, "one"), Some(CloudWait::Parked));
+    // Discovery that never answers leaves a browser attachment pending.
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .pending_browser_attachments
+        .insert("browser".into());
+    app.board.focused = Some(member(&app, "one"));
+    app.sync_cloud_parking();
+    assert_eq!(runtime(&app).pending_member_attachments.len(), MEMBERS.len());
+}
+
+#[test]
+fn a_terminal_that_starts_in_a_parked_cloud_out_of_view_parks_too() {
+    let (temp, mut app) = ready_cloud();
+    app.board.focused = None;
+    app.sync_cloud_presentations();
+    let id = member(&app, "two");
+    let workspace = app.board.panel(id).unwrap().workspace_id;
+    let live = horizon_core::Panel::spawn(
+        id,
+        workspace,
+        horizon_core::PanelOptions {
+            kind: PanelKind::Shell,
+            local_id: Some("two".into()),
+            command: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "sleep 30".into()],
+            cwd: Some(temp.path().into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    *app.board.panel_mut(id).unwrap() = live;
+    assert_eq!(wait_of(&app, "two"), None);
+    app.sync_cloud_parking();
+    assert_eq!(wait_of(&app, "two"), Some(CloudWait::Parked));
 }

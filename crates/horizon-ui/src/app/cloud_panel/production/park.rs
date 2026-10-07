@@ -136,7 +136,9 @@ impl HorizonApp {
             };
             let ready = runtime.state.as_ref().is_some_and(|state| state.stage == Stage::Ready)
                 && runtime.stage == Some(Stage::Ready);
-            if !ready || runtime.attaching() {
+            // Only terminal restores hold the tracker: a browser discovery or session
+            // restore that keeps failing must not keep parked terminals parked.
+            if !ready || runtime.needs_attach || !runtime.pending_member_attachments.is_empty() {
                 continue;
             }
             let Some(tracker) = runtime.parking.tracker.as_mut() else {
@@ -145,7 +147,11 @@ impl HorizonApp {
             if attached && tracker.is_parked() {
                 continue;
             }
-            match tracker.observe(sight, now, runtime.parking.policy) {
+            let action = tracker.observe(sight, now, runtime.parking.policy);
+            // A terminal that started while its cloud was parked, such as a session restored
+            // at Ready, parks with the others while the cloud stays out of view.
+            let park_live = action.is_none() && tracker.is_parked() && sight == Sight::Hidden;
+            match action {
                 Some(ParkAction::Park) => {
                     for (_, id) in self.parkable_members(index) {
                         self.park_member(id);
@@ -168,6 +174,20 @@ impl HorizonApp {
                         runtime.next_attachment_attempt = None;
                         runtime.parking.statuses.clear();
                         runtime.parking.error = None;
+                        // A read in flight answers for terminals that are attaching now.
+                        runtime.parking.reader = None;
+                    }
+                    continue;
+                }
+                None if park_live => {
+                    let live: Vec<PanelId> = self
+                        .parkable_members(index)
+                        .into_iter()
+                        .filter(|(_, id)| self.board.panel(*id).is_some_and(|panel| panel.cloud_wait().is_none()))
+                        .map(|(_, id)| id)
+                        .collect();
+                    for id in live {
+                        self.park_member(id);
                     }
                 }
                 None => {}
@@ -204,20 +224,28 @@ impl HorizonApp {
                             runtime.parking.error = None;
                             runtime.parking.statuses = statuses.into_iter().collect();
                         }
-                        Err(error) => runtime.parking.error = Some(error.to_string()),
+                        Err(error) => {
+                            // An old status is not shown as current.
+                            runtime.parking.error = Some(error.to_string());
+                            runtime.parking.statuses.clear();
+                        }
                     }
                     let reported: Vec<(PanelId, AgentStatus)> = parked
                         .iter()
-                        .filter_map(|(local, id)| {
-                            let status = runtime.parking.statuses.get(local)?;
-                            Some((
+                        .map(|(local, id)| {
+                            let working = runtime
+                                .parking
+                                .statuses
+                                .get(local)
+                                .is_some_and(|status| status.activity == SessionActivity::Working);
+                            (
                                 *id,
-                                if status.activity == SessionActivity::Working {
+                                if working {
                                     AgentStatus::Working
                                 } else {
                                     AgentStatus::Idle
                                 },
-                            ))
+                            )
                         })
                         .collect();
                     for (id, status) in reported {

@@ -82,6 +82,32 @@ fn script_reads_sessions_from_tmux_without_changing_them() {
         temp.path().display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    // Another test can fork while the stub is still open for writing, and then the
+    // stub cannot run for a moment (ETXTBSY). Such a run reports every session missing.
+    let mut status = Vec::new();
+    for _ in 0..5 {
+        status = run_script(&path);
+        if status[0].activity != SessionActivity::Missing {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(status[0].activity, SessionActivity::Idle);
+    assert_eq!(status[0].lines, ["first", "last line"]);
+    assert!(status[0].quiet_for.is_some());
+    assert_eq!(status[1].activity, SessionActivity::Missing);
+    let calls = std::fs::read_to_string(log).unwrap();
+    assert!(
+        calls
+            .lines()
+            .all(|call| call.starts_with("-L horizon-cloud display-message")
+                || call.starts_with("-L horizon-cloud capture-pane")),
+        "{calls}"
+    );
+}
+
+#[cfg(unix)]
+fn run_script(path: &str) -> Vec<SessionStatus> {
     let output = std::process::Command::new("python3")
         .arg("-")
         .args(["live", "gone"])
@@ -96,17 +122,5 @@ fn script_reads_sessions_from_tmux_without_changing_them() {
         })
         .unwrap();
     assert!(output.status.success());
-    let status = parse(&String::from_utf8(output.stdout).unwrap(), &ids(&["live", "gone"])).unwrap();
-    assert_eq!(status[0].activity, SessionActivity::Idle);
-    assert_eq!(status[0].lines, ["first", "last line"]);
-    assert!(status[0].quiet_for.is_some());
-    assert_eq!(status[1].activity, SessionActivity::Missing);
-    let calls = std::fs::read_to_string(log).unwrap();
-    assert!(
-        calls
-            .lines()
-            .all(|call| call.starts_with("-L horizon-cloud display-message")
-                || call.starts_with("-L horizon-cloud capture-pane")),
-        "{calls}"
-    );
+    parse(&String::from_utf8(output.stdout).unwrap(), &ids(&["live", "gone"])).unwrap()
 }
