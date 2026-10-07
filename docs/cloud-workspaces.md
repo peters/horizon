@@ -622,6 +622,24 @@ then, the panel shows that Horizon reconnects the cloud. When the cloud is
 stopped, the panel shows that the cloud is stopped and that **Resume worker** on
 the card restores the panel.
 
+### Parked terminals
+
+When no terminal of a ready cloud is on the screen for 2 minutes, Horizon parks
+the terminals of that cloud. A parked terminal has no SSH client, PTY or
+terminal grid on this computer, and it shows its last screen. Its session
+continues in tmux on the worker. The focused panel and a panel that fills the
+window do not park.
+
+The cloud attaches again after it stays in view for 1 second. It attaches at
+once when one of its panels gets focus. A cloud that becomes ready when it is
+not in view parks its terminals immediately, so a restart opens no connection
+for clouds that you do not look at. Browser panels and Device panels do not park.
+
+While a cloud has parked terminals, Horizon reads the state of their sessions
+every 10 seconds through one SSH command. A parked panel shows this state in a
+strip at its bottom: working or idle, ended, or not found, with the last line of
+the session. The worker needs only Python 3 and tmux for this.
+
 A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
 runtime card. Compute replacement retains the same network workspace but stops
 processes, discards temporary container files and reconnects recorded sessions on
