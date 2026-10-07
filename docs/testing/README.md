@@ -26,6 +26,7 @@ documents that are not yet STE.
 | Procedure | Feature | Cost |
 |---|---|---|
 | [browser-recording](procedures/browser-recording.md) | Browser panel video and toolbar icons | none |
+| [chromecast-live-mirror](procedures/chromecast-live-mirror.md) | Chromecast live cast, mirror transport | none |
 | [chromecast-live-progressive](procedures/chromecast-live-progressive.md) | Chromecast live cast, progressive transport | none |
 | [cloud-agent-browser](procedures/cloud-agent-browser.md) | Browser tools of an agent panel in a cloud with agent isolation | rents compute |
 | [cloud-agent-panel-start](procedures/cloud-agent-panel-start.md) | Agent panel start in a cloud, host instance and browser runtime root owner | rents compute |
