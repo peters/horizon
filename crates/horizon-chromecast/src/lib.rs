@@ -1,5 +1,6 @@
 //! Google Cast sender. Discovers receivers, controls them over Cast v2 and
-//! serves live H.264 to them. Capture, encoding and UI belong to the host.
+//! streams live H.264 to them: served over HTTP, or mirrored over UDP.
+//! Capture, encoding and UI belong to the host.
 #![forbid(unsafe_code)]
 
 mod channel;
@@ -8,6 +9,7 @@ mod client;
 mod discovery;
 mod live;
 mod media;
+mod mirror;
 mod proto;
 mod receiver;
 #[cfg(test)]
@@ -20,6 +22,7 @@ pub use discovery::{Receiver, discover};
 pub use live::LiveCastSink;
 pub use live::{AudioFormat, LiveCast, LiveOptions, LiveState, Transport, avcc_to_annexb};
 pub use media::{MediaController, MediaLoad, MediaStatus, StreamType};
+pub use mirror::MIRRORING_RECEIVER;
 pub use receiver::{Application, DEFAULT_MEDIA_RECEIVER, ReceiverStatus, Volume};
 
 /// Port Cast receivers listen on unless discovery reports another one.

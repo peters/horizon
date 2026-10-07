@@ -2452,8 +2452,10 @@ dependencies = [
 name = "horizon-chromecast"
 version = "0.2.7"
 dependencies = [
+ "aes",
  "horizon-media",
  "rcgen",
+ "ring",
  "rustls",
  "serde",
  "serde_json",

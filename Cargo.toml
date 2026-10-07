@@ -54,6 +54,8 @@ rustls = { version = "0.23.45", default-features = false, features = ["ring", "s
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 crypto-bigint = { version = "0.7.5", default-features = false, features = ["zeroize"] }
 ring = "0.17.14"
+# AES-128 block cipher for Cast Streaming frame encryption (counter mode on top).
+aes = "0.9.3"
 ed25519-dalek = { version = "3.0.0", features = ["zeroize"] }
 horizon-cloud-protocol = { path = "crates/horizon-cloud-protocol", version = "0.2.7" }
 # Licensed decoder fixes shared by the native viewer and optional resize adapter.

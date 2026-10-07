@@ -3,7 +3,8 @@
 //! either as one progressive fragmented MP4 stream (low latency) or as HLS.
 mod hls;
 mod http;
-mod mp4;
+mod mirroring;
+pub(crate) mod mp4;
 mod progressive;
 #[cfg(feature = "encoder")]
 mod sink;
@@ -23,6 +24,7 @@ pub fn avcc_to_annexb(sample: &[u8], length_size: usize, parameter_sets: &[&[u8]
 #[cfg(feature = "encoder")]
 pub use sink::LiveCastSink;
 
+use crate::mirror::MirrorStream;
 use crate::{
     Application, CastClient, DEFAULT_MEDIA_RECEIVER, Error, Event, MediaController, MediaLoad, MediaStatus, Result,
     StreamType, client::NS_CONNECTION, media::NS_MEDIA, receiver::NS_RECEIVER,
@@ -81,6 +83,9 @@ pub enum Transport {
     Progressive,
     /// Rolling HLS of MPEG-TS segments; about three seconds behind live.
     Hls,
+    /// Cast Streaming to the receiver's screen mirroring application:
+    /// encrypted RTP over UDP, played [`LiveOptions::playout_delay`] behind.
+    Mirror,
 }
 
 /// An AAC-LC audio track: up to 48 kHz, mono or stereo.
@@ -94,8 +99,8 @@ pub struct AudioFormat {
 pub struct LiveOptions {
     pub transport: Transport,
     /// Declares an AAC-LC track fed through [`LiveCast::push_aac`]
-    /// (progressive only). Once declared, feed audio continuously, silence
-    /// included: receivers wait for both tracks before they play.
+    /// (progressive and mirror). Once declared, feed audio continuously,
+    /// silence included: receivers wait for both tracks before they play.
     pub audio: Option<AudioFormat>,
     /// Target segment length; segments are cut on the first keyframe after it.
     /// Progressive streams ask for a keyframe this often so receivers can join.
@@ -105,6 +110,9 @@ pub struct LiveOptions {
     /// Completed segments required before the receiver is asked to play (HLS only).
     pub preroll: usize,
     pub title: String,
+    /// How far behind the sender a mirroring receiver plays (mirror only).
+    /// Lost packets must be resent within it.
+    pub playout_delay: Duration,
 }
 
 impl Default for LiveOptions {
@@ -119,6 +127,7 @@ impl Default for LiveOptions {
             window: 10,
             preroll: 2,
             title: "Live".to_owned(),
+            playout_delay: Duration::from_millis(100),
         }
     }
 }
@@ -129,8 +138,8 @@ impl LiveOptions {
             return Err(Error::InvalidOptions("segment duration must be positive"));
         }
         if let Some(format) = self.audio {
-            if self.transport != Transport::Progressive {
-                return Err(Error::InvalidOptions("audio needs the progressive transport"));
+            if self.transport == Transport::Hls {
+                return Err(Error::InvalidOptions("audio needs the progressive or mirror transport"));
             }
             if mp4::audio_specific_config(format).is_none() {
                 return Err(Error::InvalidOptions(
@@ -138,8 +147,11 @@ impl LiveOptions {
                 ));
             }
         }
-        // The progressive stream has no playlist: window and pre-roll are HLS only.
-        if self.transport == Transport::Progressive {
+        if self.transport == Transport::Mirror && self.playout_delay.is_zero() {
+            return Err(Error::InvalidOptions("playout delay must be positive"));
+        }
+        // Only HLS has a playlist: window and pre-roll are HLS only.
+        if self.transport != Transport::Hls {
             return Ok(());
         }
         if self.preroll == 0 {
@@ -175,6 +187,7 @@ pub enum LiveState {
 enum Sink {
     Hls(Arc<Mutex<Segmenter>>),
     Progressive(Arc<Stream>),
+    Mirror(Arc<MirrorStream>),
 }
 
 impl Sink {
@@ -182,20 +195,16 @@ impl Sink {
         match options.transport {
             Transport::Hls => Self::Hls(Arc::new(Mutex::new(Segmenter::new(options.segment, options.window)))),
             Transport::Progressive => Self::Progressive(Arc::new(Stream::new(options.segment, options.audio))),
+            Transport::Mirror => Self::Mirror(Arc::new(MirrorStream::new(options.audio))),
         }
     }
 
-    fn source(&self) -> Source {
+    /// What the HTTP server serves, with its file name; mirroring needs none.
+    fn served(&self) -> Option<(Source, &'static str)> {
         match self {
-            Self::Hls(segmenter) => Source::Hls(segmenter.clone()),
-            Self::Progressive(stream) => Source::Progressive(stream.clone()),
-        }
-    }
-
-    fn file(&self) -> &'static str {
-        match self {
-            Self::Hls(_) => "live.m3u8",
-            Self::Progressive(_) => "live.mp4",
+            Self::Hls(segmenter) => Some((Source::Hls(segmenter.clone()), "live.m3u8")),
+            Self::Progressive(stream) => Some((Source::Progressive(stream.clone()), "live.mp4")),
+            Self::Mirror(_) => None,
         }
     }
 }
@@ -206,7 +215,7 @@ pub struct LiveCast {
     stop: Arc<AtomicBool>,
     control: Option<JoinHandle<()>>,
     url: String,
-    _server: HttpServer,
+    _server: Option<HttpServer>,
 }
 
 impl LiveCast {
@@ -217,10 +226,16 @@ impl LiveCast {
     /// the local HTTP server cannot start.
     pub fn start(receiver: SocketAddr, options: LiveOptions) -> Result<Self> {
         options.validate()?;
-        let local = http::route_address(receiver)?;
         let sink = Sink::new(&options);
-        let server = HttpServer::start(sink.source())?;
-        let url = format!("http://{local}:{}/{}/{}", server.port(), server.token(), sink.file());
+        let (server, url) = match sink.served() {
+            Some((source, file)) => {
+                let local = http::route_address(receiver)?;
+                let server = HttpServer::start(source)?;
+                let url = format!("http://{local}:{}/{}/{file}", server.port(), server.token());
+                (Some(server), url)
+            }
+            None => (None, String::new()),
+        };
         let state = Arc::new(Mutex::new(LiveState::Connecting));
         let stop = Arc::new(AtomicBool::new(false));
         let control = {
@@ -254,8 +269,10 @@ impl LiveCast {
     /// in [`LiveOptions::audio`], timed on the same clock as the video.
     /// Ignored without a declared audio track, and before the first video unit.
     pub fn push_aac(&self, frame: &[u8], pts: Duration) {
-        if let Sink::Progressive(stream) = &self.sink {
-            stream.push_audio(frame, pts);
+        match &self.sink {
+            Sink::Progressive(stream) => stream.push_audio(frame, pts),
+            Sink::Mirror(stream) => stream.push_audio(frame, pts),
+            Sink::Hls(_) => {}
         }
     }
 
@@ -266,15 +283,18 @@ impl LiveCast {
         match &self.sink {
             Sink::Hls(segmenter) => lock(segmenter).push(annexb, pts, keyframe),
             Sink::Progressive(stream) => stream.push(annexb, pts, keyframe),
+            Sink::Mirror(stream) => stream.push_video(annexb, pts, keyframe),
         }
     }
 
-    /// True when the next frame should be a keyframe so the open segment can close.
+    /// True when the next frame should be a keyframe: so the open segment
+    /// can close, or because a mirroring receiver lost the picture.
     #[must_use]
     pub fn wants_keyframe(&self, pts: Duration) -> bool {
         match &self.sink {
             Sink::Hls(segmenter) => lock(segmenter).wants_keyframe(pts),
             Sink::Progressive(stream) => stream.wants_keyframe(pts),
+            Sink::Mirror(stream) => stream.wants_keyframe(),
         }
     }
 
@@ -283,7 +303,7 @@ impl LiveCast {
         lock(&self.state).clone()
     }
 
-    /// Stream URL handed to the receiver.
+    /// Stream URL handed to the receiver; empty for mirroring, which sends over UDP.
     #[must_use]
     pub fn url(&self) -> &str {
         &self.url
@@ -295,8 +315,10 @@ impl LiveCast {
         if let Some(control) = self.control.take() {
             let _ = control.join();
         }
-        if let Sink::Progressive(stream) = &self.sink {
-            stream.close();
+        match &self.sink {
+            Sink::Progressive(stream) => stream.close(),
+            Sink::Mirror(stream) => stream.disconnect(),
+            Sink::Hls(_) => {}
         }
     }
 }
@@ -351,6 +373,9 @@ impl Session {
     }
 
     fn cast(&self) -> Result<()> {
+        if let Sink::Mirror(stream) = &self.sink {
+            return self.cast_mirror(&stream.clone());
+        }
         let Some(mut client) = self.connect()? else {
             return Ok(());
         };
@@ -654,6 +679,8 @@ impl Session {
         match &self.sink {
             Sink::Hls(segmenter) => lock(segmenter).ready_segments() >= self.options.preroll,
             Sink::Progressive(stream) => stream.ready(),
+            // Mirroring never loads a URL.
+            Sink::Mirror(_) => true,
         }
     }
 

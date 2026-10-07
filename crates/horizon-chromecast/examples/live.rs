@@ -1,7 +1,8 @@
-//! Live stream probe: `live <ip[:port]> <file.h264> [fps] [audio.aac]`. Plays
-//! an Annex B H.264 file (one access unit delimiter per picture) in a loop in
-//! real time, with an optional 48 kHz stereo ADTS AAC file as sound.
-use horizon_chromecast::{AudioFormat, DEFAULT_PORT, LiveCast, LiveOptions};
+//! Live stream probe: `live [--mirror] <ip[:port]> <file.h264> [fps] [audio.aac]`.
+//! Plays an Annex B H.264 file (one access unit delimiter per picture) in a
+//! loop in real time, with an optional 48 kHz stereo ADTS AAC file as sound.
+//! `--mirror` sends it as a screen mirroring session instead of a media stream.
+use horizon_chromecast::{AudioFormat, DEFAULT_PORT, LiveCast, LiveOptions, Transport};
 use horizon_media::h264::{AnnexBReader, Unit};
 use std::{net::SocketAddr, process::ExitCode, time::Duration, time::Instant};
 
@@ -94,8 +95,9 @@ fn aac_frames(data: &[u8]) -> Result<Vec<&[u8]>, String> {
 }
 
 fn run() -> Result<(), String> {
-    let mut args = std::env::args().skip(1);
-    let usage = "usage: live <ip[:port]> <file.h264> [fps] [audio.aac]";
+    let mirror = std::env::args().any(|arg| arg == "--mirror");
+    let mut args = std::env::args().skip(1).filter(|arg| arg != "--mirror");
+    let usage = "usage: live [--mirror] <ip[:port]> <file.h264> [fps] [audio.aac]";
     let target = args.next().ok_or(usage)?;
     let address: SocketAddr = target
         .parse()
@@ -116,6 +118,11 @@ fn run() -> Result<(), String> {
     // A file cannot be asked for keyframes, so segments follow its IDR spacing.
     let segment = frame * segment_frames(&units)?;
     let options = LiveOptions {
+        transport: if mirror {
+            Transport::Mirror
+        } else {
+            Transport::Progressive
+        },
         segment,
         audio: audio.as_ref().map(|_| AudioFormat {
             sample_rate: 48_000,
@@ -126,7 +133,11 @@ fn run() -> Result<(), String> {
     let aac_frame = Duration::from_secs(1024) / 48_000;
     let mut next_audio = 0u32;
     let live = LiveCast::start(address, options).map_err(|e| e.to_string())?;
-    println!("serving {} ({:.2} s segments)", live.url(), segment.as_secs_f32());
+    if mirror {
+        println!("mirroring to {address}");
+    } else {
+        println!("serving {} ({:.2} s segments)", live.url(), segment.as_secs_f32());
+    }
     let started = Instant::now();
     let mut last_state = None;
     for (index, (unit, keyframe)) in units.iter().cycle().enumerate() {
