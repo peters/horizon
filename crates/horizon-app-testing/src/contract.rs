@@ -277,7 +277,7 @@ impl Contract {
                     .split_once("://")
                     .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or(""));
                 if value.matches(&template).count() != 1
-                    || !["localhost", "127.0.0.1", "[::1]"]
+                    || !["localhost", "127.0.0.1"]
                         .iter()
                         .any(|host| authority == Some(format!("{host}:{template}").as_str()))
                 {
@@ -317,7 +317,7 @@ impl Contract {
                 matches!(spec, Port::Managed(_))
                     && value.split_once("://").is_some_and(|(_, rest)| {
                         let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-                        ["localhost", "127.0.0.1", "[::1]"]
+                        ["localhost", "127.0.0.1"]
                             .iter()
                             .any(|host| authority == format!("{host}:{{tunnel.port.{name}}}"))
                     })
@@ -360,7 +360,7 @@ fn resolve(value: &str, ports: &BTreeMap<String, u16>) -> Result<String> {
     {
         let url = parsed_url.map_err(|_| Error::ContractInvalid)?;
         let port = url.port_or_known_default().ok_or(Error::ContractInvalid)?;
-        if !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+        if !matches!(url.host_str(), Some("localhost" | "127.0.0.1"))
             || !url.username().is_empty()
             || url.password().is_some()
             || !ports.values().any(|declared| *declared == port)

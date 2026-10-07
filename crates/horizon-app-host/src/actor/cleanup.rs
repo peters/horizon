@@ -78,6 +78,7 @@ impl Actor {
         claims: &Mutex<BTreeMap<u16, Uuid>>,
         lane: &mut Lane,
     ) -> Result<()> {
+        lane.view_closed.store(true, std::sync::atomic::Ordering::Release);
         if lane.cleanup == Cleanup::Complete {
             return Ok(());
         }

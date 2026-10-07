@@ -38,7 +38,7 @@ impl Registry {
     /// Reuse the exact owned session's viewer; at most two live streams exist per host.
     pub fn open(&self, session: Uuid) -> Result<Handle> {
         let mut views = self.views.lock().map_err(|_| Error::Unavailable)?;
-        views.retain(|_, view| !view.stop.load(Ordering::Acquire));
+        views.retain(|_, view| !view.stop.load(Ordering::Acquire) && !view.closed.load(Ordering::Acquire));
         if let Some(view) = views.get(&session) {
             return Ok(view.handle());
         }
@@ -46,16 +46,21 @@ impl Registry {
             return Err(Error::Unavailable);
         }
         drop(views);
-        let first = self.actor.upgrade().ok_or(Error::SessionUnknown)?.screenshot(session)?;
+        let actor = self.actor.upgrade().ok_or(Error::SessionUnknown)?;
+        let closed = actor.view_lifetime(session)?;
+        let first = actor.screenshot(session)?;
         let mut views = self.views.lock().map_err(|_| Error::Unavailable)?;
-        views.retain(|_, view| !view.stop.load(Ordering::Acquire));
+        views.retain(|_, view| !view.stop.load(Ordering::Acquire) && !view.closed.load(Ordering::Acquire));
         if let Some(view) = views.get(&session) {
             return Ok(view.handle());
         }
         if views.len() >= 2 {
             return Err(Error::Unavailable);
         }
-        let view = View::new(self.actor.clone(), session, &first)?;
+        if closed.load(Ordering::Acquire) {
+            return Err(Error::SessionUnknown);
+        }
+        let view = View::new(self.actor.clone(), session, &first, closed)?;
         let handle = view.handle();
         views.insert(session, view);
         Ok(handle)
@@ -64,10 +69,11 @@ impl Registry {
 struct View {
     endpoint: String,
     stop: Arc<AtomicBool>,
+    closed: Arc<AtomicBool>,
     client: Arc<Mutex<Option<TcpStream>>>,
 }
 impl View {
-    fn new(actor: Weak<Actor>, session: Uuid, first: &[u8]) -> Result<Self> {
+    fn new(actor: Weak<Actor>, session: Uuid, first: &[u8], closed: Arc<AtomicBool>) -> Result<Self> {
         let frame = Arc::new(Mutex::new(pixels(first)?));
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|_| Error::Unavailable)?;
         listener.set_nonblocking(true).map_err(|_| Error::Unavailable)?;
@@ -75,6 +81,7 @@ impl View {
         let view = Self {
             endpoint,
             stop: Arc::new(AtomicBool::new(false)),
+            closed: Arc::clone(&closed),
             client: Arc::new(Mutex::new(None)),
         };
         let retained_stop = Arc::clone(&view.stop);
@@ -121,7 +128,8 @@ impl View {
             .spawn(move || {
                 while !stop.load(Ordering::Acquire) {
                     for _ in 0..20 {
-                        if stop.load(Ordering::Acquire) {
+                        if stop.load(Ordering::Acquire) || closed.load(Ordering::Acquire) {
+                            stop_view(&stop, &capture_client);
                             return;
                         }
                         std::thread::sleep(Duration::from_millis(50));
@@ -346,6 +354,41 @@ mod tests {
         let mut byte = [0];
         assert!(matches!(client.read(&mut byte), Ok(0)));
         assert!(start.elapsed() < Duration::from_secs(3));
+        actor.release_upload(app.id).unwrap();
+    }
+    #[test]
+    #[cfg(unix)]
+    fn closed_view_releases_capacity_before_the_capture_thread_observes_closure() {
+        let (_fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
+        let actor = Arc::new(actor);
+        let app = actor
+            .upload(horizon_app_testing::contract::Platform::Ios, Duration::from_secs(60))
+            .unwrap();
+        let first = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
+        let second = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
+        let registry = Registry::new(&actor);
+        // Retain two streams whose capture threads have not published stop. This
+        // models the one-second polling window without depending on scheduling.
+        for (session, port) in [(first.id, 10001), (second.id, 10002)] {
+            registry.views.lock().unwrap().insert(
+                session,
+                View {
+                    endpoint: format!("127.0.0.1:{port}"),
+                    stop: Arc::new(AtomicBool::new(false)),
+                    closed: actor.view_lifetime(session).unwrap(),
+                    client: Arc::new(Mutex::new(None)),
+                },
+            );
+        }
+        actor.close(first.id).unwrap();
+        assert!(!registry.views.lock().unwrap()[&first.id].stop.load(Ordering::Acquire));
+        let third = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
+        assert!(registry.open(third.id).is_ok());
+        assert_eq!(registry.open(second.id).unwrap().endpoint, "127.0.0.1:10002");
+        assert_eq!(registry.views.lock().unwrap().len(), 2);
+        assert!(!registry.views.lock().unwrap().contains_key(&first.id));
+        actor.close(second.id).unwrap();
+        actor.close(third.id).unwrap();
         actor.release_upload(app.id).unwrap();
     }
     #[test]

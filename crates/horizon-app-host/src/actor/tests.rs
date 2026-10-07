@@ -104,6 +104,7 @@ impl ClassicTransport for Transport {
 pub(crate) struct Fake {
     pub(crate) transport: Arc<Transport>,
     pub(crate) reject_verification: AtomicBool,
+    pub(crate) refuse_driver: AtomicBool,
     after_verification: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     pub(crate) delay_capacity: AtomicBool,
     before_driver_return: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -157,6 +158,9 @@ impl Backend for Fake {
         .map_err(Error::from)
     }
     fn driver(&self) -> Result<Arc<dyn ClassicTransport>> {
+        if self.refuse_driver.load(Ordering::SeqCst) {
+            return Err(horizon_app_provider::Error::DeviceUnverified.into());
+        }
         if let Some(hook) = self.before_driver_return.lock().unwrap().take() {
             hook();
         }
@@ -264,6 +268,7 @@ fn fixture() -> Fixture {
     let fake = Arc::new(Fake {
         transport: Arc::new(Transport::default()),
         reject_verification: AtomicBool::new(false),
+        refuse_driver: AtomicBool::new(false),
         after_verification: Mutex::new(None),
         delay_capacity: AtomicBool::new(false),
         before_driver_return: Mutex::new(None),
@@ -284,10 +289,20 @@ use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 pub(crate) fn actor(base_url: &str) -> (Fixture, Actor) {
+    static PYTHON: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     let fixture = fixture();
     let root = fixture.root.path().canonicalize().unwrap();
-    let script = r"#!/usr/bin/python3
-import json,os,pathlib,socket,sys
+    // Resolve the real interpreter once before timed guardian startup. On macOS
+    // /usr/bin/python3 is an Xcode launcher, not the Python executable itself.
+    let python = PYTHON.get_or_init(|| {
+        let output = std::process::Command::new("python3")
+            .args(["-c", "import os,sys; print(os.path.realpath(sys.executable))"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    });
+    let body = r"import json,os,pathlib,socket,sys
 spec=json.loads(sys.stdin.readline())
 path=pathlib.Path(spec['state'])/'process.json'
 receipt={'operation':spec['operation'],'guardian_pid':os.getpid(),'complete':False}
@@ -315,8 +330,9 @@ receipt['complete']=True
 path.write_text(json.dumps(receipt))
 print(json.dumps('complete' if tunnel else {'phase':'complete','success':True}),flush=True)
 ";
+    let script = format!("#!{python}\n{body}");
     let worker = root.join("synthetic-guardian.py");
-    std::fs::write(&worker, script).unwrap();
+    std::fs::write(&worker, &script).unwrap();
     std::fs::set_permissions(&worker, std::fs::Permissions::from_mode(0o700)).unwrap();
     let state = root.join("local");
     std::fs::create_dir(&state).unwrap();

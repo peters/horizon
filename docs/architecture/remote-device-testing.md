@@ -446,3 +446,9 @@ An anonymous shell test does not qualify those workflows.
 `app_act` refuses the recipe-only screenshot action.
 Use `app_screenshot` to receive the image and retained evidence.
 A failed CLI progress sink cancels the shared run before later allocation.
+
+Launch URLs support `localhost` and `127.0.0.1` with declared forwarded ports.
+IPv6 loopback URLs are refused during contract validation because provider forwarding
+and managed services use IPv4 loopback. Closed native sessions synchronously signal
+their live views, so later matrix lanes do not wait for the capture polling interval
+to reclaim the two-stream capacity.

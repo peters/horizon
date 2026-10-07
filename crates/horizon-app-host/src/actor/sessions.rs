@@ -209,6 +209,7 @@ impl Actor {
             held_local: None,
             cleanup: Cleanup::Active,
             cleanup_inflight: false,
+            view_closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }));
         self.lanes
             .lock()
@@ -223,6 +224,16 @@ impl Actor {
             .get(&id)
             .cloned()
             .ok_or(Error::SessionUnknown)
+    }
+    // A read-only viewer keeps this closure signal even after completed lanes are pruned.
+    pub(crate) fn view_lifetime(&self, id: Uuid) -> Result<Arc<std::sync::atomic::AtomicBool>> {
+        let lane = self.lane(id)?;
+        let lane = lane.lock().map_err(|_| Error::Unavailable)?;
+        if lane.cleanup != Cleanup::Active || lane.view_closed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(Error::SessionUnknown);
+        }
+        remaining(lane.deadline)?;
+        Ok(Arc::clone(&lane.view_closed))
     }
     pub(super) fn active<'a>(&self, lane: &'a mut Lane) -> Result<&'a mut NativeDriver> {
         if lane.cleanup != Cleanup::Active {

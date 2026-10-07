@@ -7,7 +7,9 @@ lanes: [ios-phone-current, ios-phone-older, ios-tablet, android-phone]
 issue: https://github.com/peters/horizon/issues/1255
 ---
 
-# Final native app preflight, 6 October 2026
+# Historical interim native app preflight, 6 October 2026
+
+This dated interim report applies only to its recorded candidate. It does not qualify later commits or authorize merge.
 
 ## 1. Summary
 
@@ -49,7 +51,7 @@ This report does not mark that tier as passed.
 The historical matrix report records earlier candidates and its own live-view limits.
 
 Automatic approval review refused the source and client configuration transfer to the existing Mac build host.
-The operator's answer remains pending.
+The operator's answer was pending at this preflight. On 7 October the operator approved the transfer to the trusted build host and the temporary private app/evidence uploads to the device provider. The subsequent remote guardian EOF test and rebuilt unsigned iOS and Android artifacts passed. These later results do not turn this interim report into physical-device qualification of later host commits.
 The existing artifacts did not provide enough source evidence to replace that build.
 The fresh paid matrix and its media, backend requests and cleanup remain unqualified.
 

@@ -655,14 +655,15 @@ fn oversized_evidence_run_is_rejected_before_any_resource_operation() {
 #[test]
 #[cfg(unix)]
 fn cleaned_setup_refusal_keeps_the_original_error_and_reports_confirmed_cleanup() {
-    let (fixture, actor) = crate::actor::tests::actor("http://[::1]:{tunnel.port.backend}");
+    let (fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
+    fixture.fake.refuse_driver.store(true, Ordering::SeqCst);
     let report = run(&actor, &Control::new(Duration::from_secs(30)).unwrap(), capture, |_| {
         Ok(())
     })
     .unwrap();
     let device = &report.devices[0];
     assert!(
-        device.error.as_deref().unwrap().contains("tunnel_port_refused"),
+        device.error.as_deref().unwrap().contains("device_unverified"),
         "{:?} builds {:?}",
         device.error,
         report.builds.iter().map(|build| &build.error).collect::<Vec<_>>()

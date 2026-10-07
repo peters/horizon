@@ -73,6 +73,7 @@ struct Lane {
     held_local: Option<Uuid>,
     cleanup: Cleanup,
     cleanup_inflight: bool,
+    view_closed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Opaque handles select only this controller's resources. Each lane serializes independently.

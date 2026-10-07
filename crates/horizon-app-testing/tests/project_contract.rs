@@ -137,12 +137,14 @@ fn refuses_external_endpoints_undeclared_ports_and_unresolved_templates() -> Res
         "http://localhost:{tunnel.port.other}",
         "{env.TOKEN}",
         "http://localhost:0",
+        "http://[::1]:8080/path",
+        "http://[::1]:{tunnel.port.backend}/path",
     ] {
         assert_eq!(contract.resolve_value(value).err(), Some(Error::ContractInvalid));
     }
     assert_eq!(
-        contract.resolve_value("http://[::1]:8080/path")?,
-        "http://[::1]:8080/path"
+        contract.resolve_value("http://localhost:8080/path")?,
+        "http://localhost:8080/path"
     );
     Ok(())
 }
@@ -489,6 +491,8 @@ fn published_schema_matches_the_project_contract_wire_types() {
 #[test]
 fn endpoint_references_require_an_explicit_validated_scheme() {
     for endpoint in [
+        "http://[::1]:8080/path",
+        "http://[::1]:{tunnel.port.backend}/path",
         "//example.com:8080",
         " //example.com:8080",
         "192.168.1.1:8080",
