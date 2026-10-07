@@ -158,6 +158,14 @@ pub enum BrowserControlAction {
         delta_x: f64,
         delta_y: f64,
     },
+    /// Deliver host-local files to a drop target. Audit records contain the
+    /// file count, but no paths or file contents.
+    DropFiles {
+        target: BrowserTarget,
+        paths: Vec<std::path::PathBuf>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sources: Vec<std::path::PathBuf>,
+    },
     /// Attach host-local files to an `input[type=file]` through the backend's
     /// file-chooser bypass. The paths are audited; file contents never are.
     SetFiles {
@@ -201,6 +209,21 @@ pub enum BrowserControlAction {
 }
 
 impl BrowserControlAction {
+    #[must_use]
+    pub fn attachment_paths(&self) -> Option<&[std::path::PathBuf]> {
+        match self {
+            Self::SetFiles { paths, .. } | Self::DropFiles { paths, .. } => Some(paths),
+            _ => None,
+        }
+    }
+
+    pub fn replace_attachments(&mut self, files: Vec<std::path::PathBuf>, originals: Vec<std::path::PathBuf>) {
+        if let Self::SetFiles { paths, sources, .. } | Self::DropFiles { paths, sources, .. } = self {
+            *paths = files;
+            *sources = originals;
+        }
+    }
+
     /// Evaluation bound used when an older caller does not provide one.
     pub const DEFAULT_EVALUATION_TIMEOUT_MILLIS: u64 = 15_000;
     /// Longest evaluation accepted by the engine.
@@ -222,15 +245,7 @@ impl BrowserControlAction {
             Self::Resize {
                 viewport,
                 timeout_millis,
-            } => {
-                if viewport.is_some_and(|size| size.into_iter().any(|axis| !(320..=8000).contains(&axis))) {
-                    return Err("viewport axes must be between 320 and 8000 CSS pixels");
-                }
-                if !(1..=60_000).contains(timeout_millis) {
-                    return Err("resize timeout must be between 1 and 60000 ms");
-                }
-                Ok(())
-            }
+            } => validate_resize(*viewport, *timeout_millis),
             Self::Navigate {
                 url, timeout_millis, ..
             } => {
@@ -276,7 +291,9 @@ impl BrowserControlAction {
                 }
                 Ok(())
             }
-            Self::SetFiles { target, paths, sources } => validate_set_files(target, paths, sources),
+            Self::SetFiles { target, paths, sources } | Self::DropFiles { target, paths, sources } => {
+                validate_set_files(target, paths, sources)
+            }
             Self::Evaluate {
                 expression,
                 timeout_millis,
@@ -330,6 +347,7 @@ impl BrowserControlAction {
             | Self::Fill { .. }
             | Self::Scroll { .. }
             | Self::SetFiles { .. }
+            | Self::DropFiles { .. }
             | Self::Evaluate { .. }
             | Self::Network { .. }
             | Self::Video { .. }
@@ -345,6 +363,16 @@ pub struct AgentAction {
     pub actor: String,
     pub requested_at_millis: i64,
     pub action: BrowserControlAction,
+}
+
+fn validate_resize(viewport: Option<[u32; 2]>, timeout_millis: u64) -> Result<(), &'static str> {
+    if viewport.is_some_and(|size| size.into_iter().any(|axis| !(320..=8000).contains(&axis))) {
+        return Err("viewport axes must be between 320 and 8000 CSS pixels");
+    }
+    if !(1..=60_000).contains(&timeout_millis) {
+        return Err("resize timeout must be between 1 and 60000 ms");
+    }
+    Ok(())
 }
 
 fn validate_set_files(

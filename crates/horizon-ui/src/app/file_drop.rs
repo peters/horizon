@@ -6,6 +6,8 @@ use horizon_core::{PanelId, PanelKind, PanelOptions, WorkspaceId};
 
 use crate::input;
 
+mod browser;
+
 use super::HorizonApp;
 use super::util::editor_panel_size_for_file;
 
@@ -57,6 +59,7 @@ impl TerminalDropTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FileDropHighlight {
     Panel(PanelId),
+    Browser(PanelId),
     Workspace(WorkspaceId),
 }
 
@@ -187,6 +190,9 @@ impl HorizonApp {
             fullscreen_panel,
             scope,
         } = view;
+        if self.handle_browser_file_drop(ctx, fullscreen_panel, screen_pos, scope, dropped) {
+            return;
+        }
         let (editor_drops, non_editor_drops) = partition_dropped_files(dropped);
 
         if let Some(target) =
@@ -273,6 +279,9 @@ impl HorizonApp {
         scope: FileDropScope,
     ) -> Option<FileDropHighlight> {
         let hover_pos = hover_pos?;
+        if let Some(panel) = self.browser_drop_panel(fullscreen_panel, Some(hover_pos), scope) {
+            return Some(FileDropHighlight::Browser(panel));
+        }
 
         let all_editor = ctx.input(|input| {
             let paths: Vec<_> = input.raw.hovered_files.iter().filter_map(|f| f.path.clone()).collect();

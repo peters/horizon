@@ -4,6 +4,12 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+/// Apply the same extension and MIME policy used by browser attachments.
+#[must_use]
+pub fn accepts_file(accept: &str, path: &std::path::Path) -> bool {
+    crate::semantic_files::accept_allows(accept, path)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FileChooserStatus {
@@ -90,6 +96,7 @@ impl FileChooserHandle {
                     | crate::BrowserControlAction::Fill { .. }
                     | crate::BrowserControlAction::Scroll { .. }
                     | crate::BrowserControlAction::SetFiles { .. }
+                    | crate::BrowserControlAction::DropFiles { .. }
                     | crate::BrowserControlAction::Evaluate { .. }
                     | crate::BrowserControlAction::Navigate { .. }
                     | crate::BrowserControlAction::Reload

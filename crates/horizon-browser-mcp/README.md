@@ -190,6 +190,17 @@ shell commands, files, or other MCP servers.
   every backend; an unsupported remote platform is then refused with `unsupported_backend`
   before the paths are opened, so a missing path on an unsupported remote panel reports
   `unsupported_backend`.
+  `drop_files` uses the same path authorization, private copies, size limits,
+  retention, and ownership checks as `set_files`. Query the page's drop zone
+  and pass its `ref` or `selector` with `files`. The action sends the files to
+  the center of the target. Local Chromium uses native drag events. Local
+  Firefox uses context-bound BiDi file selection and DOM drag events; the drop zone must
+  cancel `dragover`. Firefox does not support cross-origin frame drops.
+  Safari and remote sessions omit `drop_files` from capabilities and refuse
+  it with `unsupported_backend` before opening host files. Use `set_files`
+  on those backends when supported. A completed drop confirms event delivery;
+  inspect the page to confirm attachment or upload. The CLI plan runner uses
+  the same `browser_act` tool and contract.
   BrowserStack desktop sessions transfer a single-file ZIP through the Selenium
   upload endpoint before selection; BrowserStack Android sessions use Appium Push File.
   Each remote request is limited to 16 MiB per file and 32 MiB total.

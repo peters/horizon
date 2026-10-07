@@ -176,6 +176,8 @@ pub(crate) enum ControlError {
         "browser set_files failed (unsupported_backend): this remote session does not support transferring host files; iOS native file pickers are not supported"
     )]
     RemoteAttachmentUnsupported,
+    #[error("browser drop_files failed (unsupported_backend): file drops require local Chromium or Firefox")]
+    FileDropUnsupported,
     #[error("browser action {action_id} failed ({code}): {message}")]
     Browser {
         action_id: String,
@@ -526,7 +528,7 @@ impl BrowserController {
         let deadline = Instant::now() + Duration::from_millis(timeout_millis);
         self.validate_attachment_target(panel_id, &action)?;
         self.ensure_claim(panel_id)?;
-        let action_id = if matches!(action, BrowserControlAction::SetFiles { .. }) {
+        let action_id = if action.attachment_paths().is_some() {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .filter(|remaining| !remaining.is_zero())
@@ -612,8 +614,14 @@ impl BrowserController {
         panel_id: &str,
         action: &BrowserControlAction,
     ) -> Result<(), ControlError> {
-        if matches!(action, BrowserControlAction::SetFiles { .. }) {
-            require_attachment_target(&self.authorized_manifest(panel_id)?)?;
+        if action.attachment_paths().is_some() {
+            let panel = self.authorized_manifest(panel_id)?;
+            if matches!(action, BrowserControlAction::DropFiles { .. })
+                && (panel.remote_target.is_some() || panel.backend == horizon_browser::BackendKind::SafariWebDriver)
+            {
+                return Err(ControlError::FileDropUnsupported);
+            }
+            require_attachment_target(&panel)?;
         }
         Ok(())
     }
@@ -856,30 +864,25 @@ fn authorize_and_enqueue_attachments(
     panel_id: &str,
     actor: &str,
     host_instance: Option<&str>,
-    action: BrowserControlAction,
+    mut action: BrowserControlAction,
 ) -> Result<String, AttachmentEnqueueError> {
     action
         .validate()
         .map_err(|message| AttachmentEnqueueError::Invalid(message.to_string()))?;
-    let BrowserControlAction::SetFiles { target, paths, .. } = action else {
+    let Some(paths) = action.attachment_paths() else {
         return manifest::enqueue_action(panel_id, AgentIdentity::new(actor, host_instance), action)
             .map_err(AttachmentEnqueueError::Queue);
     };
     let paths = horizon_browser_control::AttachmentPolicy::from_environment()
-        .authorize(&paths)
+        .authorize(paths)
         .map_err(AttachmentEnqueueError::Policy)?
         .iter()
         .map(|file| file.path().to_path_buf())
         .collect();
-    manifest::enqueue_action(
-        panel_id,
-        AgentIdentity::new(actor, host_instance),
-        BrowserControlAction::SetFiles {
-            target,
-            paths,
-            sources: Vec::new(),
-        },
-    )
+    manifest::enqueue_action(panel_id, AgentIdentity::new(actor, host_instance), {
+        action.replace_attachments(paths, Vec::new());
+        action
+    })
     .map_err(AttachmentEnqueueError::Queue)
 }
 

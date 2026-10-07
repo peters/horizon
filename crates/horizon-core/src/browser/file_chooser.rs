@@ -3,12 +3,16 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 
+mod picker;
+pub use picker::{FilePickerState, FileSelectionError};
+
 pub use horizon_browser::{FileChooserAnswer, FileChooserHandle, FileChooserRequest};
 
 #[derive(Debug)]
 pub struct DirectoryEntry {
     pub path: PathBuf,
     pub directory: bool,
+    pub size: u64,
 }
 
 #[derive(Debug)]
@@ -42,6 +46,7 @@ pub fn read_directory(
                     entries.push(DirectoryEntry {
                         path: entry.path(),
                         directory: metadata.is_dir(),
+                        size: metadata.len(),
                     });
                 }
             }

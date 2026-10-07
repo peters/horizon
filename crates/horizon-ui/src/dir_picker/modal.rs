@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use egui::text::{CCursor, CCursorRange};
 use egui::{
-    Align, Button, Color32, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke, StrokeKind,
+    Align, Button, Color32, Context, CornerRadius, Id, Layout, Margin, Order, Rect, Sense, Stroke, StrokeKind,
     UiBuilder, Vec2,
 };
 
@@ -13,7 +13,6 @@ const PICKER_MAX_HEIGHT: f32 = 460.0;
 const INPUT_HEIGHT: f32 = 44.0;
 const ROW_HEIGHT: f32 = 34.0;
 const MAX_VISIBLE_ROWS: usize = 12;
-const MAX_RENDERED_ROWS: usize = 36;
 
 pub struct PickerModalState {
     query: String,
@@ -21,6 +20,7 @@ pub struct PickerModalState {
     opened_at: Instant,
     caret_to_end: bool,
     focus_on_open: bool,
+    scroll_to_selected: bool,
 }
 
 pub enum PickerModalAction {
@@ -61,6 +61,7 @@ impl PickerModalState {
             opened_at: Instant::now(),
             caret_to_end: true,
             focus_on_open: true,
+            scroll_to_selected: true,
         }
     }
 
@@ -71,6 +72,8 @@ impl PickerModalState {
     pub fn set_query(&mut self, query: impl Into<String>) {
         self.query = query.into();
         self.caret_to_end = true;
+        self.selected = 0;
+        self.scroll_to_selected = true;
     }
 
     pub fn selected_index(&self) -> usize {
@@ -80,6 +83,7 @@ impl PickerModalState {
     pub fn clamp_selected(&mut self, len: usize) {
         if self.selected >= len {
             self.selected = 0;
+            self.scroll_to_selected = true;
         }
     }
 
@@ -90,12 +94,37 @@ impl PickerModalState {
         results: &[Item],
         mut render_row: impl FnMut(&mut egui::Ui, f32, usize, &Item, bool) -> bool,
     ) -> PickerModalAction {
-        let layout = picker_layout(ctx.input(egui::InputState::viewport_rect));
+        self.show_with_footer(
+            ctx,
+            config,
+            results,
+            &mut render_row,
+            |ui| {
+                if render_footer(ui, config.footer_action_label) {
+                    PickerModalAction::FooterAction
+                } else {
+                    PickerModalAction::None
+                }
+            },
+            36.0,
+        )
+    }
+
+    pub fn show_with_footer<Item>(
+        &mut self,
+        ctx: &Context,
+        config: &PickerModalConfig<'_>,
+        results: &[Item],
+        mut render_row: impl FnMut(&mut egui::Ui, f32, usize, &Item, bool) -> bool,
+        mut footer: impl FnMut(&mut egui::Ui) -> PickerModalAction,
+        footer_height: f32,
+    ) -> PickerModalAction {
+        let mut layout = picker_layout(ctx.input(egui::InputState::viewport_rect));
+        layout.footer_height = footer_height;
         if self.show_backdrop(ctx, layout.screen, config.id_source) {
             return PickerModalAction::Cancelled;
         }
-
-        self.show_modal(ctx, &layout, config, results, &mut render_row)
+        self.show_modal(ctx, &layout, config, results, &mut render_row, &mut footer)
     }
 
     fn show_backdrop(&self, ctx: &Context, screen_rect: Rect, id_source: &str) -> bool {
@@ -123,6 +152,7 @@ impl PickerModalState {
         config: &PickerModalConfig<'_>,
         results: &[Item],
         render_row: &mut impl FnMut(&mut egui::Ui, f32, usize, &Item, bool) -> bool,
+        footer: &mut impl FnMut(&mut egui::Ui) -> PickerModalAction,
     ) -> PickerModalAction {
         let mut action = PickerModalAction::None;
         egui::Area::new(Id::new((config.id_source, "modal")))
@@ -136,7 +166,7 @@ impl PickerModalState {
                         .max_rect(layout.inner)
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
-                        action = self.show_modal_contents(ui, ctx, layout, config, results, render_row);
+                        action = self.show_modal_contents(ui, layout, config, results, render_row, footer);
                     },
                 );
             });
@@ -147,11 +177,11 @@ impl PickerModalState {
     fn show_modal_contents<Item>(
         &mut self,
         ui: &mut egui::Ui,
-        ctx: &Context,
         layout: &PickerLayout,
         config: &PickerModalConfig<'_>,
         results: &[Item],
         render_row: &mut impl FnMut(&mut egui::Ui, f32, usize, &Item, bool) -> bool,
+        footer: &mut impl FnMut(&mut egui::Ui) -> PickerModalAction,
     ) -> PickerModalAction {
         ui.label(
             egui::RichText::new(config.heading)
@@ -162,9 +192,7 @@ impl PickerModalState {
         ui.add_space(10.0);
 
         self.render_query_input(ui, layout.inner, config);
-        if let Some(action) = self.handle_keyboard(ctx, results.len()) {
-            return action;
-        }
+        let keyboard_action = self.handle_keyboard(ui.ctx(), results.len());
 
         ui.allocate_space(Vec2::new(layout.inner.width(), INPUT_HEIGHT));
         ui.add_space(8.0);
@@ -174,17 +202,19 @@ impl PickerModalState {
             ui.add_space(6.0);
         }
 
-        if let Some(index) = self.render_results(ui, layout, results, render_row) {
+        let clicked = self.render_results(ui, layout, results, render_row);
+        if let Some(index) = clicked {
             self.selected = index;
-            return PickerModalAction::ClickedRow(index);
         }
-
         render_empty_state(ui, &config.empty_state, results.is_empty());
-        if render_footer(ui, config.footer_action_label) {
-            return PickerModalAction::FooterAction;
+        let footer_action = footer(ui);
+        if !matches!(footer_action, PickerModalAction::None) {
+            return footer_action;
         }
-
-        PickerModalAction::None
+        clicked
+            .map(PickerModalAction::ClickedRow)
+            .or(keyboard_action)
+            .unwrap_or(PickerModalAction::None)
     }
 
     fn render_query_input(&mut self, ui: &mut egui::Ui, inner_rect: Rect, config: &PickerModalConfig<'_>) {
@@ -249,9 +279,11 @@ impl PickerModalState {
         }
         if up && self.selected > 0 {
             self.selected -= 1;
+            self.scroll_to_selected = true;
         }
         if down && result_count > 0 && self.selected < result_count - 1 {
             self.selected += 1;
+            self.scroll_to_selected = true;
         }
         if tab && result_count > 0 {
             return Some(PickerModalAction::CompleteSelection);
@@ -276,19 +308,25 @@ impl PickerModalState {
 
         let mut clicked_row = None;
         let max_results_height = usize_to_f32(MAX_VISIBLE_ROWS) * ROW_HEIGHT;
-        let scroll_height = max_results_height.min(layout.inner.max.y - ui.cursor().min.y - layout.footer_height - 8.0);
+        let scroll_height = max_results_height
+            .min(layout.inner.max.y - ui.cursor().min.y - layout.footer_height - 8.0)
+            .max(34.0);
 
-        egui::ScrollArea::vertical()
+        let mut scroll = egui::ScrollArea::vertical()
             .max_height(scroll_height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_min_width(layout.inner.width());
-                for (index, item) in results.iter().enumerate().take(MAX_RENDERED_ROWS) {
-                    if render_row(ui, layout.inner.width(), index, item, self.selected == index) {
-                        clicked_row = Some(index);
-                    }
+            .auto_shrink([false, false]);
+        if std::mem::take(&mut self.scroll_to_selected) {
+            scroll =
+                scroll.vertical_scroll_offset(usize_to_f32(self.selected) * (ROW_HEIGHT + ui.spacing().item_spacing.y));
+        }
+        scroll.show_rows(ui, ROW_HEIGHT, results.len(), |ui, range| {
+            ui.set_min_width(layout.inner.width());
+            for index in range {
+                if render_row(ui, layout.inner.width(), index, &results[index], self.selected == index) {
+                    clicked_row = Some(index);
                 }
-            });
+            }
+        });
 
         clicked_row
     }
@@ -335,11 +373,14 @@ fn picker_layout(screen_rect: Rect) -> PickerLayout {
     let footer_height = 36.0;
     let max_results_height = usize_to_f32(MAX_VISIBLE_ROWS) * ROW_HEIGHT;
     let card_height = (INPUT_HEIGHT + 16.0 + max_results_height + footer_height + 44.0).min(PICKER_MAX_HEIGHT);
-    let card_min = Pos2::new(
-        (screen_rect.width() - PICKER_WIDTH) * 0.5,
-        (screen_rect.height() - card_height) * 0.35,
-    );
-    let card = Rect::from_min_size(card_min, Vec2::new(PICKER_WIDTH, card_height));
+    let width = PICKER_WIDTH.min((screen_rect.width() - 24.0).max(200.0));
+    let height = card_height.min((screen_rect.height() - 24.0).max(200.0));
+    let card_min = screen_rect.min
+        + Vec2::new(
+            (screen_rect.width() - width) * 0.5,
+            (screen_rect.height() - height) * 0.35,
+        );
+    let card = Rect::from_min_size(card_min, Vec2::new(width, height));
 
     PickerLayout {
         screen: screen_rect,
@@ -429,6 +470,45 @@ mod tests {
                 modal.show(ui.ctx(), &CONFIG, &[] as &[()], |_, _, _, (), _| false);
             })
             .discard_textures();
+    }
+
+    #[test]
+    fn keyboard_selection_scrolls_to_results_beyond_the_original_row_limit() {
+        let ctx = egui::Context::default();
+        let mut modal = PickerModalState::new("");
+        let results: Vec<_> = (0..100).collect();
+        let mut rendered = Vec::new();
+        for step in 0..46 {
+            let events = if step > 0 {
+                vec![Event::Key {
+                    key: egui::Key::ArrowDown,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: step > 1,
+                    modifiers: egui::Modifiers::NONE,
+                }]
+            } else {
+                Vec::new()
+            };
+            let input = RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0))),
+                events,
+                ..RawInput::default()
+            };
+            rendered.clear();
+            let _ = ctx
+                .run_ui(input, |ui| {
+                    modal.show(ui.ctx(), &CONFIG, &results, |ui, width, index, _, _| {
+                        ui.allocate_space(egui::vec2(width, super::ROW_HEIGHT));
+                        rendered.push(index);
+                        false
+                    });
+                })
+                .discard_textures();
+        }
+        assert_eq!(modal.selected_index(), 45);
+        assert!(rendered.contains(&45));
+        assert!(rendered.len() < results.len(), "only visible results are rendered");
     }
 
     #[test]

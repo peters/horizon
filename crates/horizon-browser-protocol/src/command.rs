@@ -17,6 +17,12 @@ pub enum BrowserCommand {
         orientation: crate::remote::RemoteOrientation,
     },
     Input(BrowserInput),
+    /// Deliver host files at a point in the page viewport.
+    DropFiles {
+        x: f64,
+        y: f64,
+        paths: Vec<std::path::PathBuf>,
+    },
     /// Start, pause, resume, inspect, or stop page-pixel `WebM` capture.
     Video {
         operation: BrowserVideoOperation,

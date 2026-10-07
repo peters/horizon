@@ -31,6 +31,7 @@ the same PR.
 | Agent panels | Yes | Yes | Not tested (note 2) |
 | Browser panels: Chromium and Firefox | Yes | Yes | Yes |
 | Browser panels: Safari | No (note 3) | Yes | No (note 3) |
+| File drops into local Chromium and Firefox panels | Yes | Not tested | Not tested |
 | BrowserStack browsers and phones | Yes | Yes | Yes |
 | Device panels (VNC viewer) | Yes | Yes | Yes |
 | Agent input to an isolated desktop | Partial (note 4) | No (note 4) | No (note 4) |

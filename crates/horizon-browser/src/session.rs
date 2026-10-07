@@ -29,6 +29,7 @@ mod command_queue;
 mod commands;
 mod events;
 mod file_chooser;
+pub(crate) mod file_drop;
 mod handle;
 mod http_auth;
 mod http_bodies;

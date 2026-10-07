@@ -91,6 +91,21 @@ impl DriverState {
                 delta_x,
                 delta_y,
             } => self.semantic_scroll(link, event_tx, frame_slot, target.as_ref(), *delta_x, *delta_y),
+            BrowserControlAction::DropFiles { target, paths, .. } => (|| {
+                let generation = self.semantic.generation();
+                let selector = self.semantic.resolve(target)?;
+                let value =
+                    self.evaluate_json(link, event_tx, frame_slot, &target_rect_expression(&selector, false))?;
+                if generation != self.semantic.generation() {
+                    return Err(BrowserControlFailure::new(
+                        "drop_navigation_invalidated",
+                        "The page changed before the file drop",
+                    ));
+                }
+                let (x, y) = parse_target_rect(&value)?;
+                self.drop_files(link, event_tx, frame_slot, x, y, paths)?;
+                Ok(BrowserControlValue::Accepted)
+            })(),
             BrowserControlAction::SetFiles { target, paths, .. } => {
                 self.semantic_set_files(link, event_tx, frame_slot, target, paths)
             }

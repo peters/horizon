@@ -19,6 +19,7 @@ mod bidi;
 mod coordination;
 mod document;
 mod file_chooser;
+mod file_drop;
 mod frames;
 pub(super) mod handshake;
 mod http_auth;
@@ -516,6 +517,16 @@ impl Driver {
                 Ok(false)
             }
             BrowserCommand::Input(input) => self.perform_input(input, events).map(|()| false),
+            BrowserCommand::DropFiles { x, y, paths } => {
+                let result = self.drop_files(x, y, &paths, events);
+                if let Err(error) = &result {
+                    let _ = events.send(crate::BrowserEvent::NavigationFailed(format!(
+                        "File drop failed: {}",
+                        error.message
+                    )));
+                }
+                result.map(|()| false).map_err(|error| error.message)
+            }
             BrowserCommand::NativeSelectChoose { index } => {
                 self.apply_native_select_choice(events, index).map(|()| false)
             }

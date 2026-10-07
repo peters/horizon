@@ -92,9 +92,33 @@ pub struct BrowserUiState {
     /// True after a blur dismiss was queued so we do not spam Escape.
     select_popup_dismissed: bool,
     file_picker: Option<file_chooser::FilePicker>,
+    pub(crate) drop_geometry: Option<(egui::Rect, [f32; 2])>,
 }
 
 impl BrowserUiState {
+    fn update_drop_geometry(
+        &mut self,
+        body: &render::BodyOutput,
+        interactive: bool,
+        fixed: bool,
+        explicit: Option<(u32, u32)>,
+    ) {
+        self.drop_geometry = if interactive
+            && matches!(
+                pointer_viewport_state(
+                    fixed,
+                    body.frame_size,
+                    explicit.or(body.viewport_size),
+                    explicit.unwrap_or(self.last_viewport)
+                ),
+                input::PointerViewportState::Ready
+            ) {
+            body.image_rect.zip(body.frame_size)
+        } else {
+            None
+        };
+    }
+
     pub(crate) fn reset_rendering(&mut self) {
         *self = Self {
             screenshots: std::mem::take(&mut self.screenshots),
@@ -248,6 +272,7 @@ impl<'a> BrowserView<'a> {
             if !fixed_viewport {
                 synchronize_viewport(ui, browser, state, &body, explicit_viewport);
             }
+            state.update_drop_geometry(&body, interactive, fixed_viewport, explicit_viewport);
             input::handle(
                 ui,
                 browser,
