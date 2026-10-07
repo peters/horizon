@@ -42,7 +42,7 @@ the panel shows its latest output when it comes back into view.
 
    ```sh
    cargo build --profile profiling --features trace-profiling
-   cargo build -p horizon-device
+   cargo build -p horizon-device --features cli
    ```
 
    Result: The build completes without errors.

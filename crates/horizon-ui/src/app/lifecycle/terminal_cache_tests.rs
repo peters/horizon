@@ -136,8 +136,13 @@ fn offscreen_output_invalidates_terminal_cache_without_a_fast_repaint() {
 #[test]
 fn fullscreen_and_detached_panels_count_as_drawn() {
     let (temp, _ctx, mut app) = offscreen_test_app();
-    let fullscreen = spawn_script(&mut app, &temp, "printf 'FULLSCREEN-OUTPUT'; sleep 30");
-    let detached = spawn_script(&mut app, &temp, "printf 'DETACHED-OUTPUT'; sleep 30");
+    let script = |marker: &str| format!("stty -echo; printf 'READY'; read -r line; printf '{marker}'; sleep 30");
+    let fullscreen = spawn_script(&mut app, &temp, &script("FULLSCREEN-OUTPUT"));
+    let detached = spawn_script(&mut app, &temp, &script("DETACHED-OUTPUT"));
+    // Both terminals must be quiet before each one gets its own output phase,
+    // or one drain could consume the other panel's activity.
+    drain_until_text(&mut app, fullscreen, "READY");
+    drain_until_text(&mut app, detached, "READY");
     // A stale root rect must not count while another panel covers the window.
     app.panel_screen_rects.insert(detached, egui::Rect::EVERYTHING);
     app.fullscreen_panel = Some(fullscreen);
@@ -151,14 +156,26 @@ fn fullscreen_and_detached_panels_count_as_drawn() {
     app.detached_workspaces.insert("detached-test".into(), detached_state);
     assert!(app.panel_drawn_last_frame(detached));
 
-    assert!(
-        drain_until_text(&mut app, fullscreen, "FULLSCREEN-OUTPUT"),
-        "output from the fullscreen panel must request a fast repaint"
-    );
-    assert!(
-        drain_until_text(&mut app, detached, "DETACHED-OUTPUT"),
-        "output from a panel in a detached window must request a fast repaint"
-    );
+    for (panel_id, marker, message) in [
+        (
+            fullscreen,
+            "FULLSCREEN-OUTPUT",
+            "output from the fullscreen panel must request a fast repaint",
+        ),
+        (
+            detached,
+            "DETACHED-OUTPUT",
+            "output from a panel in a detached window must request a fast repaint",
+        ),
+    ] {
+        app.board
+            .panel(panel_id)
+            .expect("panel")
+            .terminal()
+            .expect("terminal")
+            .write_input(b"go\n");
+        assert!(drain_until_text(&mut app, panel_id, marker), "{message}");
+    }
 }
 
 #[test]
