@@ -35,10 +35,10 @@ const PREPARE: &str = r"function(x, y, selector) {
         x -= rect.left + target.clientLeft; y -= rect.top + target.clientTop; doc = next;
     }
     }
-    const input = doc.createElement('input');
+    const input = document.createElement('input');
     input.type = 'file'; input.multiple = true; input.hidden = true;
     input._dropTarget = target; input._dropPoint = [x, y];
-    doc.documentElement.appendChild(input);
+    document.documentElement.appendChild(input);
     return input;
 }";
 

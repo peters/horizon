@@ -291,8 +291,11 @@ impl BrowserControlAction {
                 }
                 Ok(())
             }
-            Self::SetFiles { target, paths, sources } | Self::DropFiles { target, paths, sources } => {
-                validate_set_files(target, paths, sources)
+            Self::SetFiles { target, paths, sources } => {
+                validate_attachments(target, paths, sources, AttachmentAction::SetFiles)
+            }
+            Self::DropFiles { target, paths, sources } => {
+                validate_attachments(target, paths, sources, AttachmentAction::DropFiles)
             }
             Self::Evaluate {
                 expression,
@@ -375,17 +378,24 @@ fn validate_resize(viewport: Option<[u32; 2]>, timeout_millis: u64) -> Result<()
     Ok(())
 }
 
-fn validate_set_files(
+#[derive(Clone, Copy)]
+enum AttachmentAction {
+    SetFiles,
+    DropFiles,
+}
+
+fn validate_attachments(
     target: &BrowserTarget,
     paths: &[std::path::PathBuf],
     sources: &[std::path::PathBuf],
+    action: AttachmentAction,
 ) -> Result<(), &'static str> {
     validate_target(target)?;
-    validate_attachment_paths(paths)?;
+    validate_attachment_paths(paths, action)?;
     if sources.is_empty() {
         Ok(())
     } else {
-        validate_attachment_paths(sources)
+        validate_attachment_paths(sources, action)
     }
 }
 
@@ -467,12 +477,18 @@ fn validate_selector(selector: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn validate_attachment_paths(paths: &[std::path::PathBuf]) -> Result<(), &'static str> {
+fn validate_attachment_paths(paths: &[std::path::PathBuf], action: AttachmentAction) -> Result<(), &'static str> {
     if paths.is_empty() {
-        return Err("set_files requires at least one file path");
+        return Err(match action {
+            AttachmentAction::SetFiles => "set_files requires at least one file path",
+            AttachmentAction::DropFiles => "drop_files requires at least one file path",
+        });
     }
     if paths.len() > MAX_ATTACHMENT_FILES {
-        return Err("set_files accepts at most 32 file paths");
+        return Err(match action {
+            AttachmentAction::SetFiles => "set_files accepts at most 32 file paths",
+            AttachmentAction::DropFiles => "drop_files accepts at most 32 file paths",
+        });
     }
     for path in paths {
         let Some(text) = path.to_str() else {
@@ -633,6 +649,33 @@ fn validate_text(text: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drop_file_count_errors_identify_the_drop_action_for_paths_and_sources() {
+        let absolute = std::env::temp_dir().join("synthetic.pdf");
+        for (paths, sources, message) in [
+            (Vec::new(), Vec::new(), "drop_files requires at least one file path"),
+            (
+                vec![absolute.clone(); MAX_ATTACHMENT_FILES + 1],
+                Vec::new(),
+                "drop_files accepts at most 32 file paths",
+            ),
+            (
+                vec![absolute.clone()],
+                vec![absolute; MAX_ATTACHMENT_FILES + 1],
+                "drop_files accepts at most 32 file paths",
+            ),
+        ] {
+            let action = BrowserControlAction::DropFiles {
+                target: BrowserTarget::Selector {
+                    selector: "#drop-zone".into(),
+                },
+                paths,
+                sources,
+            };
+            assert_eq!(action.validate(), Err(message));
+        }
+    }
     use crate::{BrowserButton, BrowserModifiers};
 
     #[test]

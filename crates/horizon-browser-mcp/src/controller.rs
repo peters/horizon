@@ -125,14 +125,14 @@ pub(crate) enum ControlError {
     #[error("browser action {action_id} timed out after {timeout_millis} ms; inspect browser_audit before retrying")]
     Timeout { action_id: String, timeout_millis: u64 },
     #[error(
-        "browser set_files timed out after {timeout_millis} ms while its files were being staged; the staging may still finish and queue the action, so inspect browser_audit before retrying"
+        "browser attachment timed out after {timeout_millis} ms while its files were being staged; the staging may still finish and queue the action, so inspect browser_audit before retrying"
     )]
     StagingTimeout { timeout_millis: u64 },
-    #[error("browser set_files refused (invalid_input): {message}")]
+    #[error("browser attachment refused (invalid_input): {message}")]
     InvalidAttachmentRequest { message: String },
-    #[error("browser set_files refused (attachment_policy): {message}")]
+    #[error("browser attachment refused (attachment_policy): {message}")]
     AttachmentRefused { message: String },
-    #[error("browser set_files refused (file_too_large): {message}")]
+    #[error("browser attachment refused (file_too_large): {message}")]
     AttachmentTooLarge { message: String },
     #[error(
         "browser create request {action_id} timed out after {timeout_millis} ms; call browser_list before retrying because a late panel may still be visible"
