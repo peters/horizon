@@ -10,7 +10,7 @@ tested_patch_sha256: 4a1e38e5ccc112df1ea04a1905f7895dc43593e5dd1b5e3719a1ca1ebe9
 
 # CPU qualification on a 4 vCPU / 8 GB worker
 
-## 1. Current result
+## 1. Summary
 
 The recorded CPU workload passed every mandatory tier on one 4 vCPU / 8 GB worker.
 The pedantic advisory tier failed on unchanged source.
@@ -18,7 +18,26 @@ The full command returned exit code 101 because that advisory tier also stops th
 One worker cannot establish the cheapest qualified offer across providers.
 The [worker value procedure](../procedures/cloud-worker-value.md) defines a comparable cost test.
 
-## 2. Candidate and worker
+## 2. Results
+
+The following table maps the retained evidence to the procedure's task IDs.
+The procedure and this mapping were added after the worker run.
+The CPU qualification passed CV3. The complete cost comparison remained blocked.
+
+| Task ID | Result | Note | Defect |
+| --- | --- | --- | --- |
+| CV1 | blocked | Source, runtime and concurrency were recorded. No complete cold/warm sample plan was declared before this qualification. | — |
+| CV2 | blocked | One provider's offer snapshot and allocated capacity were recorded. Comparable offers and complete billing inputs for other providers were not recorded. | — |
+| CV3 | pass | The repaired worker's final warm/mixed CPU sample passed every mandatory tier. Earlier failed attempts and environment deviations were preserved. | — |
+| CV4 | pass | Memory scopes, limits, swap and OOM results were recorded. The disk peak and continuous end-to-end timing were explicitly unavailable. | — |
+| CV5 | pass | Provider 404 responses confirmed deletion. No task-owned resource was retained; copied access material was removed. | — |
+| CV6 | blocked | No continuous allocation-to-cleanup timer or full attempt-cost calculation existed. Hourly rates remained estimates, not a completed-task cost. | — |
+| CV7 | blocked | One qualified worker did not supply a comparable multi-provider cost ranking or a repeatability result. | — |
+
+The blocked tasks limit the value comparison. They do not change the mandatory CPU check results below.
+The startup and fixture defects are described in §5.
+
+## 3. Candidate and worker
 
 | Field | Recorded value |
 | --- | --- |
@@ -46,7 +65,7 @@ The checkout selected `stable` through `rust-toolchain.toml`.
 The actual compiler fingerprint records Rust 1.99.0.
 The report and procedure were added after the run and were not copied to the worker.
 
-## 3. Mandatory checks
+## 4. Mandatory checks
 
 The final run used the unchanged `.horizon/validate.sh cpu` command.
 
@@ -67,7 +86,7 @@ Stage times use one-second observation intervals.
 The GPU lane and paid native mobile tests were outside this CPU run.
 This report does not qualify protected agent execution, GPU rendering or an untested repository workload.
 
-## 4. Failures and deviations
+## 5. Defects and deviations from the procedure
 
 The pinned public image had a startup ownership defect.
 Its version check created private agent directories as root after the first ownership handoff.
@@ -106,7 +125,7 @@ A separate catalog regression passed on the same worker.
 Its explicit worker type remained usable after fallback preferences excluded that type.
 The existing worker and volume stayed in use; the test allocated no replacement.
 
-## 5. Measurements and cost
+## 6. Measurements and cost
 
 | Measurement | Current result |
 | --- | --- |
@@ -145,7 +164,7 @@ The sampled worker memory estimate is `MemTotal - MemAvailable`.
 The cgroup peak includes file cache and earlier attempts.
 These measurements have different scopes.
 
-## 6. Cleanup and evidence
+## 7. Cleanup
 
 The final native progress capture completed before cleanup.
 The supported deletion harness removed only the recorded task-owned resources.
@@ -158,6 +177,8 @@ The native endpoint is unavailable.
 The copied credentials and temporary Rescue password response were removed.
 Cleanup completed on 2026-10-08 after the final evidence capture.
 No provider invoice was collected.
+
+## 8. Evidence
 
 Private logs, source hashes, resource records and failed-attempt evidence remain outside the repository.
 This report contains no credentials, private network addresses or provider resource IDs.
