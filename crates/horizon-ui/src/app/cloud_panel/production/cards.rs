@@ -88,12 +88,15 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
         ui,
         "Redeploy",
         "Start a new worker and workspace storage from the current commit.",
-        |ui| ui.add(section::row_button(action_button("Redeploy cloud…"))).clicked(),
+        |ui| {
+            ui.add(section::row_button(ui, action_button("Redeploy cloud…")))
+                .clicked()
+        },
     ) {
         runtime.confirmation = Confirmation::Redeploy;
     }
     section::row(ui, "Remove", "Remove this card. Nothing is left to bill.", |ui| {
-        ui.add(section::row_button(danger_button("Remove cloud"))).clicked()
+        ui.add(section::row_button(ui, danger_button("Remove cloud"))).clicked()
     })
     .then_some(Action::Remove)
 }
@@ -178,7 +181,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
             ui,
             "Remove",
             "Removes this card. Nothing was allocated, so nothing is billed.",
-            |ui| ui.add(section::row_button(danger_button("Remove cloud"))).clicked(),
+            |ui| ui.add(section::row_button(ui, danger_button("Remove cloud"))).clicked(),
         ) {
             return Some(Action::Remove);
         }
@@ -230,7 +233,7 @@ fn operation_action(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Actio
             )
         };
         if section::row(ui, title, detail, |ui| {
-            ui.add(section::row_button(action_button(label))).clicked()
+            ui.add(section::row_button(ui, action_button(label))).clicked()
         }) {
             action = Some(Action::Deploy);
         }
@@ -304,7 +307,7 @@ fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Acti
             ui,
             "Worker",
             "Running and billed for compute. Stopping keeps the workspace for a resume.",
-            |ui| ui.add(section::row_button(danger_button("Stop worker…"))).clicked(),
+            |ui| ui.add(section::row_button(ui, danger_button("Stop worker…"))).clicked(),
         )
     {
         runtime.confirmation = Confirmation::Stop;
@@ -384,7 +387,7 @@ fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
         "Delete",
         "Deletes the worker and its storage. Charges end; files are gone.",
         |ui| {
-            ui.add(section::row_button(danger_button("Delete cloud resources…")))
+            ui.add(section::row_button(ui, danger_button("Delete cloud resources…")))
                 .clicked()
         },
     ) {
@@ -428,7 +431,7 @@ fn desktop_button(ui: &mut egui::Ui, runtime: &super::Runtime) -> bool {
         .is_some_and(|state| state.profile.capabilities.desktop);
     ui.add_enabled(
         enabled && runtime.desktop.is_some(),
-        section::row_button(action_button("Add desktop viewer")),
+        section::row_button(ui, action_button("Add desktop viewer")),
     )
     .on_disabled_hover_text(if enabled {
         "Desktop tunnel is not connected"

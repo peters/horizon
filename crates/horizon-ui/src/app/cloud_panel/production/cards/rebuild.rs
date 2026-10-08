@@ -233,9 +233,12 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
             "Build the committed recipe and restart; the workspace stays."
         };
         if super::section::row(ui, "Image", detail, |ui| {
-            ui.add(super::section::row_button(danger_button("Rebuild image & restart…")))
-                .on_hover_text(offer)
-                .clicked()
+            ui.add(super::section::row_button(
+                ui,
+                danger_button("Rebuild image & restart…"),
+            ))
+            .on_hover_text(offer)
+            .clicked()
         }) {
             runtime.confirmation = Confirmation::Rebuild;
         }

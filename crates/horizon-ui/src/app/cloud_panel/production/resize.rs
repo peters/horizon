@@ -120,7 +120,7 @@ pub(super) fn controls(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime) -> Opt
             current.0, current.1
         );
         if row(ui, "Compute", &compute, |ui: &mut egui::Ui| {
-            ui.add(button(action_button("Resize compute…"))).clicked()
+            ui.add(button(ui, action_button("Resize compute…"))).clicked()
         }) {
             runtime.resize.draft = Some(ResizeTarget::Compute {
                 cpu: current.0,
@@ -129,7 +129,7 @@ pub(super) fn controls(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime) -> Opt
         }
         let storage = format!("{workspace} GB network volume. It can only grow.");
         if row(ui, "Workspace", &storage, |ui: &mut egui::Ui| {
-            ui.add_enabled(workspace < max_workspace, button(action_button("Grow workspace…")))
+            ui.add_enabled(workspace < max_workspace, button(ui, action_button("Grow workspace…")))
                 .clicked()
         }) {
             runtime.resize.draft = Some(ResizeTarget::Workspace {

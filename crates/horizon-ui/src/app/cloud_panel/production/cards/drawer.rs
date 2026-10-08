@@ -268,14 +268,15 @@ fn status(
             });
         return;
     }
-    let top = ui.min_rect().bottom();
+    // The drawer ui is sized to the whole drawer up front, so measure from the cursor.
+    let top = ui.cursor().top();
     solid_scroll_area(ui)
         .id_salt(("cloud-drawer-status", id))
         .max_height(room - OUTPUT_ROOM)
         .show(ui, |ui| overview(ui, id, runtime, context, response));
     ui.add_space(10.0);
     output_heading(ui, runtime);
-    let left = room - (ui.min_rect().bottom() - top);
+    let left = room - (ui.cursor().top() - top);
     super::output::show(ui, id, "drawer", runtime, left, failure);
 }
 
@@ -416,7 +417,7 @@ fn manage(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'
             ("Full screen", "Show only this cloud and its panels.")
         };
         response.fullscreen = section::row(ui, "Focus", detail, |ui| {
-            ui.add(section::row_button(action_button(label))).clicked()
+            ui.add(section::row_button(ui, action_button(label))).clicked()
         });
     });
     let chosen = section::show(ui, "Cloud", |ui| runtime_actions(ui, id, runtime));
