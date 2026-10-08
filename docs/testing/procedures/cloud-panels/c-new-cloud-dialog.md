@@ -574,28 +574,29 @@ changes:
    Result: The row names the family with the least memory for each vCPU that
    holds the size. It does not name another family.
 
-### 6.15 C15 — Show only the configured Hetzner types and locations
+### 6.15 C15 — Show the complete Hetzner catalog in permitted locations
 
-1. Do task [C15](../new-cloud-picker.md#64-c15--hetzner-allowlist) of the New cloud picker procedure.
+1. Do task [C15](../new-cloud-picker.md#64-c15--complete-hetzner-catalog) of the New cloud picker procedure.
 
    Result: The list shows only Hetzner rows. Each row names a server type and a location.
 
 2. Read `server_types` and `locations` from the `hetzner` section of the settings file.
 
-   Result: You have the allowed types and locations.
+   Result: You have the fallback type preferences and the permitted locations.
 
 3. Calculate the expected rows from the Hetzner catalog of the setup.
 
-   Result: For each allowed type and location, the catalog has a price there and
-   the type meets the profile minimums. Each such pair is one expected row.
+   Result: Each expected pair has a current x86 type, a permitted location and a price there.
+   The type fits the worker image and meets the profile requirements.
+   Each pair is one expected row. `server_types` does not limit the pairs.
 
 4. Compare the rows of the dialog with the expected rows.
 
-   Result: Each expected pair shows one row. No other type or location shows.
+   Result: Each expected pair shows one row. No location outside `locations` shows.
 
-5. Record that the dialog does not say which catalog types the settings exclude.
+5. If the catalog has a compatible type outside `server_types`, find its row.
 
-   Result: The report links [issue #1305](https://github.com/peters/horizon/issues/1305).
+   Result: The row shows the type and a permitted location. The fallback preferences do not hide the row.
 
 ### 6.16 C16 — Keep the unlisted Hetzner rows under In stock only
 
