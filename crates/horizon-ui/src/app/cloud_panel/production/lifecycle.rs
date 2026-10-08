@@ -25,12 +25,13 @@ pub(super) enum Action {
 mod tests;
 
 impl Runtime {
-    /// Takes the saved record a report carries. The record keeps Validate while the
-    /// image is built and pushed, so its step does not replace Build locally, Push image
-    /// or Replace image of the live attempt: a failure there stays on that step.
+    /// Takes the saved record a report carries. While an image is built, pushed or
+    /// switched, the record still says Validate for a new deployment and Ready for a
+    /// rebuild of a running cloud, so neither replaces Build locally, Push image or
+    /// Replace image of the live attempt: a failure there stays on that step.
     pub(super) fn adopt_snapshot(&mut self, state: cloud_runtime::state::Deployment) {
         let image_step = matches!(self.stage, Some(Stage::Build | Stage::Push | Stage::Replace));
-        if !(image_step && state.stage == Stage::Validate) {
+        if !(image_step && matches!(state.stage, Stage::Validate | Stage::Ready)) {
             self.stage = Some(state.stage);
         }
         self.state = Some(state);

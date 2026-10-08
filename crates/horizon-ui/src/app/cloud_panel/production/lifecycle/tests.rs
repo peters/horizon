@@ -904,11 +904,17 @@ fn a_failed_push_stays_on_its_step_when_the_saved_record_still_says_validate() {
 }
 
 #[test]
-fn a_saved_record_still_sets_the_step_outside_the_image_steps() {
+fn a_saved_record_sets_the_step_except_a_lagging_one_during_image_steps() {
     for (live, saved, shown) in [
         (Stage::Provision, "Validate", Stage::Validate),
         (Stage::Push, "Provision", Stage::Provision),
         (Stage::Readiness, "Ready", Stage::Ready),
+        // A rebuild of a running cloud keeps its record at Ready while it builds,
+        // pushes and switches the image.
+        (Stage::Build, "Ready", Stage::Build),
+        (Stage::Push, "Ready", Stage::Push),
+        (Stage::Replace, "Ready", Stage::Replace),
+        (Stage::Replace, "Validate", Stage::Replace),
     ] {
         let mut runtime = Runtime {
             stage: Some(live),
