@@ -192,28 +192,40 @@ class Store:
     def write(self, state):
         """Writes `state` as it is; returns whether the volume holds it."""
         data = json.dumps(state, separators=(',', ':'))
-        for directory, persistent, other in ((self.persistent, True, self.runtime),
-                                             (self.runtime, False, self.persistent)):
-            try:
-                if persistent:
-                    private_directory(directory.parent, create=True)
-                write_private(private_directory(directory, create=True), STATE, data)
-            except (OSError, ValueError):
-                continue
+        try:
+            private_directory(self.persistent.parent, create=True)
+            write_private(private_directory(self.persistent, create=True), STATE, data)
+        except (OSError, ValueError):
+            pass
+        else:
+            # A tmpfs copy is older, and a restart removes it anyway.
             with contextlib.suppress(OSError):
-                (other / STATE).unlink(missing_ok=True)
-            return persistent
-        raise ValueError('No private GitHub storage accepted the token chain')
+                (self.runtime / STATE).unlink(missing_ok=True)
+            return True
+        # The volume refused the write. An older chain left there would be served again after a
+        # restart empties tmpfs, so tmpfs takes the chain only when the volume holds none.
+        with contextlib.suppress(OSError):
+            (self.persistent / STATE).unlink(missing_ok=True)
+        if os.path.lexists(self.persistent / STATE):
+            raise ValueError('An older GitHub token chain on the volume cannot be removed')
+        try:
+            write_private(private_directory(self.runtime, create=True), STATE, data)
+        except (OSError, ValueError):
+            raise ValueError('No private GitHub storage accepted the token chain') from None
+        return False
 
-    def save(self, state):
-        """Durably stores `state` with the next serial; returns whether the volume holds it."""
+    def save(self, state, retain=True):
+        """Durably stores `state` with the next serial; returns whether the volume holds it.
+        When no storage accepts it, `retain` keeps it as the pending write: a refresh must,
+        because GitHub already cancelled the stored chain; a failed install must not."""
         current, _ = self.load()
         # Clock based, so an install by another process also wins over this process's memory.
         state = dict(state, serial=max(current['serial'] + 1 if current else 1, time.time_ns()))
         try:
             persistent = self.write(state)
         except ValueError:
-            self.pending = state
+            if retain:
+                self.pending = state
             raise
         self.pending = None
         return persistent

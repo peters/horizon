@@ -415,7 +415,7 @@ def install(value, store, now=time.time, configure=run_configure):
         if value.get('login'):
             state['login'] = value['login']
         store.save(dict(state, version=1, state='ok', installed_at=int(now()), last_refresh_at=None,
-                        last_error=None))
+                        last_error=None), retain=False)
     return status(store)
 
 

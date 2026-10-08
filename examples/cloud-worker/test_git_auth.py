@@ -71,6 +71,19 @@ class GitAuthenticationTests(unittest.TestCase):
         self.assertEqual(env['GH_REPO'], 'example/project')
         self.assertEqual(env['GH_HOST'], 'github.com')
 
+    def test_a_service_token_does_not_outlive_the_service_in_a_nested_gh(self):
+        # The service stopped answering and its chain replaced the static file: a nested gh must
+        # drop the token an outer wrapped gh injected, but keep a token the caller set.
+        for inherited, expected in [({'GH_TOKEN': 'ghu_from_service', auth.INJECTED: '1'}, None),
+                                    ({'GH_TOKEN': 'own-token'}, 'own-token')]:
+            with mock.patch.dict(auth.os.environ, dict(inherited, GH_REPO='example/project'), clear=True), \
+                    mock.patch.object(auth.sys, 'argv', ['gh', 'pr', 'list']), \
+                    mock.patch.object(auth.os, 'execve') as execute:
+                auth.main()
+            env = execute.call_args.args[2]
+            self.assertEqual(env.get('GH_TOKEN'), expected, inherited)
+            self.assertNotIn(auth.INJECTED, env)
+
     def test_malformed_and_non_private_bindings_are_refused_without_secret_diagnostics(self):
         for key, value in [('repository', '../repo'), ('author_name', 'name\ninjection'),
                            ('token', 'token\nsecret')]:

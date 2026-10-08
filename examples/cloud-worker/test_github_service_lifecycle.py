@@ -106,3 +106,40 @@ class StartTests(ServiceTestCase):
                 mock.patch.object(service.sys, 'stdin', source), self.assertRaisesRegex(ValueError, 'isolation'):
             service.main(['install'])
         self.assertIsNone(self.stored())
+
+
+class VolumeCopyTests(ServiceTestCase):
+    def fail_volume_writes(self):
+        real = common.write_private
+
+        def write(directory, name, data):
+            if directory == self.store.persistent:
+                raise OSError('volume refused the write')
+            return real(directory, name, data)
+        return mock.patch.object(common, 'write_private', side_effect=write)
+
+    def test_an_older_volume_chain_is_removed_before_tmpfs_takes_a_new_one(self):
+        self.install()
+        old = self.store.persistent / service.STATE
+        with self.fail_volume_writes():
+            report = self.install(installation(chain=chain(access='ghu_synthetic-new')))
+        self.assertFalse(report['persistent'])
+        self.assertFalse(old.exists())
+        self.assertEqual(self.stored()['chain']['access_token'], 'ghu_synthetic-new')
+        restarted = service.Store(self.store.persistent, self.root / 'run/after-restart')
+        self.assertIsNone(restarted.load()[0], 'a restart must not bring the older chain back')
+
+    def test_tmpfs_refuses_a_chain_while_an_older_volume_chain_stays(self):
+        self.install()
+        old = self.store.persistent / service.STATE
+        real_unlink = type(old).unlink
+
+        def unlink(path, missing_ok=False):
+            if path == old:
+                raise PermissionError('volume refused the removal')
+            return real_unlink(path, missing_ok=missing_ok)
+        with self.fail_volume_writes(), mock.patch.object(type(old), 'unlink', unlink), \
+                self.assertRaisesRegex(ValueError, 'older GitHub token chain'):
+            self.install(installation(chain=chain(access='ghu_synthetic-new')))
+        self.assertFalse((self.store.runtime / service.STATE).exists())
+        self.assertEqual(self.stored()['chain'], chain(), 'the install failed, so the stored chain is unchanged')

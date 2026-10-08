@@ -446,10 +446,17 @@ def service_environment(env, argv, ask=ask_service):
         env.update({'GH_TOKEN': reply['token'], 'GH_REPO': reply['repository'], 'GH_HOST': 'github.com',
                     INJECTED: '1'})
         return env
+    print('horizon: no Git grant for this repository; gh runs without Horizon credentials', file=sys.stderr)
+    return without_injected(env)
+
+
+def without_injected(env):
+    """The environment without a token that an outer wrapped gh took from the chain service;
+    a token that the caller set without the marker stays."""
+    env = dict(env)
     if env.pop(INJECTED, None) is not None:
         for variable in TOKEN_VARIABLES:
             env.pop(variable, None)
-    print('horizon: no Git grant for this repository; gh runs without Horizon credentials', file=sys.stderr)
     return env
 
 
@@ -457,7 +464,8 @@ def main():
     if Path(sys.argv[0]).name == 'gh':
         env = service_environment(os.environ, sys.argv[1:])
         if env is None:
-            env = gh_environment(read_grants(), os.environ, sys.argv[1:])
+            # The service does not answer: a token an outer gh took from it must not outlive it.
+            env = gh_environment(read_grants(), without_injected(os.environ), sys.argv[1:])
         os.execve('/usr/bin/gh', ['/usr/bin/gh', *sys.argv[1:]], env)
         return
     operation = sys.argv[1] if len(sys.argv) > 1 else ''

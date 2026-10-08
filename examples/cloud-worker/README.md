@@ -793,7 +793,9 @@ atomically and syncs it to disk. It examines the actual modes after it creates
 the directory and the file, because some provider volumes accept `chmod` and
 still show other modes. If the volume does not keep private modes, the chain goes
 to `/run/horizon-github/` instead, and `status` reports `"persistent": false`.
-That copy is lost when the container stops, so Horizon must install the chain
+First the service removes an older chain from the volume, because a restart would
+serve it again; if it cannot remove it, the write fails.
+The tmpfs copy is lost when the container stops, so Horizon must install the chain
 again. Anyone who can read the volume at the provider can read a persistent
 chain, so use `clear` (or revoke the sign-in on GitHub) when you no longer
 want the worker to have access.
