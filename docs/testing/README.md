@@ -43,6 +43,7 @@ documents that are not yet STE.
 | [new-cloud-picker](procedures/new-cloud-picker.md) | New cloud dialog, worker list, filters, picks and data centers | none |
 | [tailnet-stable-device-name](procedures/tailnet-stable-device-name.md) | Cloud tailnet device name after stop and resume | rents compute |
 | [vnc-recording](procedures/vnc-recording.md) | Device panel video | none |
+| [worker-github-chain](procedures/worker-github-chain.md) | Worker GitHub access with a token chain that refreshes on the worker | none |
 
 ## Reports
 

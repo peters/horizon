@@ -3,17 +3,20 @@
 import json
 import os
 from pathlib import Path
-import os, sys
-if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists():
-    os.chdir('/workspace')
-    os.execv('/usr/local/bin/horizon-worker-tailnet', ['horizon-worker-tailnet', 'agent', '/usr/local/bin/horizon-worker-git-auth', *sys.argv[1:]])
 import re
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
 
 CREDENTIAL = Path('/run/horizon-credentials/github.json')
+# horizon-worker-github: a root service that holds a refreshing token chain and answers
+# agents with short-lived access tokens. While it holds a chain, it replaces the file above.
+SERVICE_SOCKET = Path('/run/horizon-worker/github.sock')
+SERVICE_TIMEOUT = 10
+# Set by the gh wrapper when it injects a service token, so a nested gh can drop it.
+INJECTED = 'HORIZON_GH_TOKEN_INJECTED'
 GIT_DIR = Path('/workspace/repository.git')
 SIBLINGS = Path('/workspace/siblings')
 HOME = '/workspace/home'
@@ -46,22 +49,32 @@ GITHUB_HOSTS = ('github.com', 'www.github.com', 'api.github.com')
 TOKEN_VARIABLES = ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN')
 
 
-def validate(value):
-    if not isinstance(value, dict) or set(value) != FIELDS:
+def valid_repository(repository):
+    parts = repository.split('/') if isinstance(repository, str) else []
+    return len(parts) == 2 and all(re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', part) and part not in ('.', '..')
+                                   for part in parts)
+
+
+def valid_token(token):
+    return isinstance(token, str) and 0 < len(token) <= 2048 and all(33 <= ord(c) <= 126 for c in token)
+
+
+def valid_identity(item):
+    return (isinstance(item, str) and 0 < len(item.encode()) <= 200
+            and not any(ord(c) < 32 or ord(c) == 127 for c in item))
+
+
+def validate(value, fields=FIELDS):
+    if not isinstance(value, dict) or set(value) != fields:
         raise ValueError('Invalid Git binding')
     if not all(isinstance(item, str) for item in value.values()):
         raise ValueError('Invalid Git binding')
-    parts = value['repository'].split('/')
-    if len(parts) != 2 or any(not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', part)
-                              or part in ('.', '..') for part in parts):
+    if not valid_repository(value['repository']):
         raise ValueError('Invalid Git repository')
-    token = value['token']
-    if not token or len(token) > 2048 or any(ord(c) < 33 or ord(c) > 126 for c in token):
+    if 'token' in fields and not valid_token(value['token']):
         raise ValueError('Invalid Git credential')
-    for key in ('author_name', 'author_email'):
-        item = value[key]
-        if not item or len(item.encode()) > 200 or any(ord(c) < 32 or ord(c) == 127 for c in item):
-            raise ValueError('Invalid Git identity')
+    if not (valid_identity(value['author_name']) and valid_identity(value['author_email'])):
+        raise ValueError('Invalid Git identity')
     return value
 
 
@@ -83,21 +96,25 @@ def grants(value):
         return 1, [dict(validate(value), target='primary')]
     if set(value) != {'version', 'grants'} or type(value['version']) is not int or value['version'] != 2:
         raise ValueError('Unsupported Git binding version')
-    entries = value['grants']
-    if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_GRANTS:
+    return 2, checked_grants(value['grants'])
+
+
+def checked_grants(entries, fields=FIELDS, minimum=1):
+    """Grants with `fields` and a target; their repositories and targets are unique."""
+    if not isinstance(entries, list) or not minimum <= len(entries) <= MAX_GRANTS:
         raise ValueError('Invalid Git grant list')
     repositories, targets = set(), set()
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != FIELDS | {'target'}:
+        if not isinstance(entry, dict) or set(entry) != fields | {'target'}:
             raise ValueError('Invalid Git grant')
-        validate({key: entry[key] for key in FIELDS})
+        validate({key: entry[key] for key in fields}, fields)
         target_directory(entry['target'])
         repository = entry['repository'].casefold()
         if repository in repositories or entry['target'] in targets:
             raise ValueError('Duplicate Git grant')
         repositories.add(repository)
         targets.add(entry['target'])
-    return 2, entries
+    return entries
 
 
 def unique_keys(pairs):
@@ -176,6 +193,13 @@ def forget_identities(env, previous):
 
 def install(value):
     version, entries = grants(value)
+    configure(version, entries, [previous_grants()])
+    write_private(value)
+
+
+def configure(version, entries, previous):
+    """Point each target repository at a clean HTTPS origin with its grant's identity, after
+    removing the identities that each install in `previous` wrote."""
     directories = [target_directory(entry['target']) for entry in entries]
     env = dict(os.environ, HOME=HOME)
     # Refuse before any configuration or token write when a target is absent or not a bare repository.
@@ -184,7 +208,8 @@ def install(value):
             and all(git_output(env, '--git-dir=' + str(path), 'rev-parse', '--is-bare-repository') == 'true'
                     for path in directories)):
         raise ValueError('Git grant target repository is missing')
-    forget_identities(env, previous_grants())
+    for earlier in previous:
+        forget_identities(env, earlier)
     git(env, 'config', '--global', 'credential.https://github.com.useHttpPath', 'true')
     git(env, 'config', '--global', '--replace-all', 'credential.https://github.com.helper',
         '/usr/local/bin/horizon-worker-git-auth')
@@ -199,7 +224,21 @@ def install(value):
         # A leftover push URL would take precedence and route pushes to another repository.
         if git_output(env, *repository, '--get-all', 'remote.origin.pushurl') is not None:
             git(env, *repository, '--unset-all', 'remote.origin.pushurl')
-    write_private(value)
+
+
+IDENTITY_FIELDS = FIELDS - {'token'}
+
+
+def configure_chain(value):
+    """Git configuration for a horizon-worker-github chain; no token reaches this helper. The
+    service sends its grants with their identity and the grants of the chain it replaces."""
+    if not isinstance(value, dict) or set(value) != {'grants', 'previous'}:
+        raise ValueError('Invalid Git configuration')
+    entries = checked_grants(value['grants'], IDENTITY_FIELDS)
+    previous = checked_grants(value['previous'], IDENTITY_FIELDS, minimum=0)
+    configure(2, entries, [previous_grants(), (2, previous)])
+    # The service is now the only source of tokens; a static binding would outlive a revocation.
+    CREDENTIAL.unlink(missing_ok=True)
 
 
 def write_private(value):
@@ -363,9 +402,58 @@ def gh_environment(loaded, env, argv=()):
     return env
 
 
+def ask_service(request):
+    """The chain service's reply, or None when no service answers or it holds no chain, so
+    the caller falls back to the private file."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(SERVICE_TIMEOUT)
+            connection.connect(str(SERVICE_SOCKET))
+            connection.sendall((json.dumps(request) + '\n').encode())
+            with connection.makefile('rb') as stream:
+                reply = json.loads(stream.readline(65536))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(reply, dict) or reply.get('state') == 'absent':
+        return None
+    return reply
+
+
+def service_credential(request, ask=ask_service):
+    """Git's credential from the chain service, '' when it refuses, or None without a chain."""
+    fields = dict(line.split('=', 1) for line in request.splitlines() if '=' in line)
+    reply = ask({'request': 'credential', **{key: fields.get(key, '') for key in ('protocol', 'host', 'path')}})
+    if reply is None:
+        return None
+    if reply.get('ok') is True and valid_token(reply.get('password')):
+        return 'username=x-access-token\npassword=' + reply['password'] + '\n\n'
+    return ''
+
+
+def service_environment(env, argv, ask=ask_service):
+    """gh's environment with the chain service's token for the targeted repository, or None
+    without a chain. A refusal drops a token that an outer wrapped gh injected."""
+    reply = ask({'request': 'gh-token', 'repository': gh_repository(env, list(argv)) or ''})
+    if reply is None:
+        return None
+    env = dict(env)
+    if (reply.get('ok') is True and valid_token(reply.get('token'))
+            and valid_repository(reply.get('repository'))):
+        env.update({'GH_TOKEN': reply['token'], 'GH_REPO': reply['repository'], 'GH_HOST': 'github.com',
+                    INJECTED: '1'})
+        return env
+    if env.pop(INJECTED, None) is not None:
+        for variable in TOKEN_VARIABLES:
+            env.pop(variable, None)
+    print('horizon: no Git grant for this repository; gh runs without Horizon credentials', file=sys.stderr)
+    return env
+
+
 def main():
     if Path(sys.argv[0]).name == 'gh':
-        env = gh_environment(read_grants(), os.environ, sys.argv[1:])
+        env = service_environment(os.environ, sys.argv[1:])
+        if env is None:
+            env = gh_environment(read_grants(), os.environ, sys.argv[1:])
         os.execve('/usr/bin/gh', ['/usr/bin/gh', *sys.argv[1:]], env)
         return
     operation = sys.argv[1] if len(sys.argv) > 1 else ''
@@ -374,11 +462,20 @@ def main():
         if len(source.encode()) > MAX_BYTES:
             raise ValueError('Git binding is too large')
         install(parse(source))
+    elif operation == 'configure':
+        source = sys.stdin.read(MAX_BYTES + 1)
+        if len(source.encode()) > MAX_BYTES:
+            raise ValueError('Git configuration is too large')
+        configure_chain(parse(source))
     elif operation == 'clear':
         CREDENTIAL.unlink(missing_ok=True)
     elif operation == 'get':
-        loaded = read_grants()
-        sys.stdout.write(credential_reply(loaded[1] if loaded else None, sys.stdin.read(8192)))
+        request = sys.stdin.read(8192)
+        reply = service_credential(request)
+        if reply is None:
+            loaded = read_grants()
+            reply = credential_reply(loaded[1] if loaded else None, request)
+        sys.stdout.write(reply)
     elif operation in ('store', 'erase'):
         pass  # Caller-managed binding: Git cannot overwrite it or remove it after a transient failure.
     elif operation == 'check':
@@ -388,6 +485,12 @@ def main():
 
 
 if __name__ == '__main__':
+    # The agents own their Git configuration and files, so root runs this helper as the agent.
+    # Only the script entry re-executes; horizon-worker-github imports these functions as root.
+    if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists():
+        os.chdir('/workspace')
+        os.execv('/usr/local/bin/horizon-worker-tailnet', ['horizon-worker-tailnet', 'agent',
+                                                           '/usr/local/bin/horizon-worker-git-auth', *sys.argv[1:]])
     try:
         main()
     except (ValueError, OSError, RecursionError, subprocess.SubprocessError):

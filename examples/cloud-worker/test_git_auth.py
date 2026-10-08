@@ -28,6 +28,10 @@ class GitAuthenticationTests(unittest.TestCase):
         self.credential = mock.patch.object(auth, 'CREDENTIAL', self.path / 'credentials/github.json')
         self.credential.start()
         self.addCleanup(self.credential.stop)
+        # No chain service answers, so the helper uses its private file.
+        service = mock.patch.object(auth, 'SERVICE_SOCKET', self.path / 'no-service.sock')
+        service.start()
+        self.addCleanup(service.stop)
 
     def test_git_receives_token_only_for_exact_https_repository(self):
         for path in ('example/project', 'example/project.git', 'Example/Project.git'):
@@ -126,6 +130,7 @@ class GitGrantTests(unittest.TestCase):
                         GIT_TERMINAL_PROMPT='0')
         (self.path / 'home').mkdir()
         for name, value in [('CREDENTIAL', self.path / 'credentials/github.json'),
+                            ('SERVICE_SOCKET', self.path / 'no-service.sock'),
                             ('GIT_DIR', self.path / 'repository.git'),
                             ('SIBLINGS', self.path / 'siblings'), ('HOME', str(self.path / 'home'))]:
             patcher = mock.patch.object(auth, name, value)

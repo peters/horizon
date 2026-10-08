@@ -83,6 +83,18 @@ class CapabilitiesTests(unittest.TestCase):
             self.assertEqual(status, 0, output)
             self.assertEqual('horizon-idle-report-contract=1' in output.splitlines(), expected, (reported, missing))
 
+    def test_github_chain_is_reported_only_with_the_service_and_a_supervisor_that_starts_it(self):
+        marker = 'horizon-github-chain-contract=1'
+        declared = {'horizon-worker-supervise': (marker + '\n').encode()}
+        for reported, missing, args, expected in [(declared, (), ('--git-auth',), True),
+                                                  ({'horizon-worker-supervise': b''}, (), ('--git-auth',), False),
+                                                  (declared, ('horizon-worker-github',), ('--git-auth',), False),
+                                                  (declared, (), (), False)]:
+            with mock.patch('os.readlink', return_value='/usr/local/bin/horizon-worker-git-auth'):
+                status, output, _ = self.run_check(*args, missing=missing, reported=reported)
+            self.assertEqual(status, 0, output)
+            self.assertEqual(marker in output.splitlines(), expected, (reported, missing, args))
+
     def test_source_features_are_reported_only_when_the_source_helper_declares_them(self):
         for option, marker in [('--shallow-contract', 'horizon-source-shallow-contract=1'),
                                ('--lfs-selection-contract', 'horizon-source-lfs-selection-contract=1')]:

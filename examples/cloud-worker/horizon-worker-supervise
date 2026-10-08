@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import shutil
 import signal
 import socket
 import subprocess
@@ -19,8 +20,12 @@ RUNTIME = Path('/run/horizon-worker')
 WORKSPACE = Path('/workspace')
 DESKTOP = {'xvfb', 'openbox', 'vnc'}
 SERVICES = {'control', 'sshd'}
-# Started only when the worker was created with an idle period.
-OPTIONAL = {'idle'}
+# Started only when the worker was created with an idle period, or when the image has the
+# GitHub token chain service.
+OPTIONAL = {'idle', 'github'}
+# Root services: every other service runs as the agent under agent isolation.
+PRIVILEGED = {'sshd', 'idle', 'github'}
+GITHUB_CHAIN_CONTRACT = 'horizon-github-chain-contract=1'
 DESKTOP_UNHEALTHY_SECONDS = 10
 # Present when agents run as UID 10001: horizon-worker-tailnet isolate, before this supervisor.
 AGENT_ISOLATION = Path('/run/horizon-tailnet/agent-isolation')
@@ -191,7 +196,7 @@ class Supervisor:
     def start(self, name, command, environment=None):
         # With agent isolation the control service is the agents' browser host, so it runs as
         # their account like the desktop: it never writes their files as root.
-        if name not in {'sshd', 'idle'} and AGENT_ISOLATION.exists():
+        if name not in PRIVILEGED and AGENT_ISOLATION.exists():
             command = ['/usr/local/bin/horizon-worker-tailnet', 'agent', *command]
         with (self.workspace / (name + '.log')).open('ab') as log:
             child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
@@ -275,6 +280,10 @@ class Supervisor:
             self.start('vnc', ['x11vnc', '-display', ':99', '-localhost', '-rfbport', '5900',
                                '-forever', '-shared', '-viewonly', '-nopw'])
             self.wait_until(vnc_ready, 'Worker desktop transport did not become ready')
+        # Always running when installed: it answers that no chain exists until the host installs
+        # one, and a chain stored on the volume is served again after a container restart.
+        if shutil.which('horizon-worker-github'):
+            self.start('github', ['horizon-worker-github', 'serve'])
         self.configure(['horizon-worker-configure'])
         self.start_control()
         self.await_control()
@@ -323,9 +332,14 @@ def main():
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--idle-stop-contract', action='store_true',
                         help='report that this supervisor starts horizon-worker-idle for an idle period')
+    parser.add_argument('--github-chain-contract', action='store_true',
+                        help='report that this supervisor starts horizon-worker-github')
     args = parser.parse_args()
     if args.idle_stop_contract:
         print('horizon-idle-stop-contract=1')
+        return 0
+    if args.github_chain_contract:
+        print(GITHUB_CHAIN_CONTRACT)
         return 0
     try:
         if args.check:

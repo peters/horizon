@@ -1,0 +1,589 @@
+#!/usr/bin/python3
+"""Root service that keeps a GitHub App user token chain fresh while the host is offline and
+gives agents the short-lived access token of their granted repositories over a Unix socket.
+Agents never read the chain. Never prints a token. Operations: install (JSON on stdin),
+serve (started by horizon-worker-supervise), status (JSON without secrets) and clear."""
+import contextlib
+import fcntl
+import http.client
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import random
+import re
+import socket
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def load_git_auth(path):
+    """The Git helper's validation and configuration, shared rather than duplicated."""
+    loader = importlib.machinery.SourceFileLoader('horizon_worker_git_auth', str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+GIT_AUTH = Path(__file__).resolve().with_name('horizon-worker-git-auth')
+auth = load_git_auth(GIT_AUTH)
+
+# Root-owned on the workspace volume, so the chain survives a container restart. Agent
+# isolation leaves the volume's top level to root, so no agent can reach or replace it.
+PERSISTENT = Path('/workspace/.horizon-root/github')
+# Root-only fallback on tmpfs, for volumes that do not keep POSIX permissions. It also holds
+# the lock and the request log. /run/horizon-credentials belongs to the agent under isolation.
+RUNTIME = Path('/run/horizon-github')
+SOCKET = Path('/run/horizon-worker/github.sock')
+STATE = 'state.json'
+LOG = 'requests.log'
+LOG_LIMIT = 1 << 20
+# Root, and the agent identity that horizon-worker-tailnet isolate gives every session.
+ALLOWED_UIDS = (0, 10001)
+MAX_INSTALL = 65536
+MAX_STATE = 131072
+MAX_REQUEST = 8192
+REFRESH_MARGIN = 30 * 60
+# A token this close to its expiry is refused: Git or gh would fail with it mid-operation.
+SERVE_MARGIN = 60
+POLL_SECONDS = 60
+RETRY_BASE_SECONDS = 15
+RETRY_MAX_SECONDS = 15 * 60
+CONNECTIONS = 16
+GITHUB = 'https://github.com'
+# Tests only: a fake GitHub on the loopback address. Nothing else is accepted.
+TEST_URL = 'HORIZON_WORKER_GITHUB_TEST_URL'
+CLIENT_ID = re.compile(r'[A-Za-z0-9._-]{1,128}')
+ERROR_CODE = re.compile(r'[a-z0-9_]{1,64}')
+INSTALL_FIELDS = {'version', 'client_id', 'client_secret', 'author_name', 'author_email', 'grants', 'chain'}
+CHAIN_FIELDS = {'access_token', 'access_expires_at', 'refresh_token', 'refresh_expires_at'}
+GRANT_FIELDS = {'repository', 'target', 'access'}
+ACCESS = ('push', 'read')
+
+
+class Transient(Exception):
+    """A refresh that did not reach GitHub or got no usable reply; it is retried."""
+
+
+def timestamp(value):
+    return type(value) is int and 0 < value < 1 << 40
+
+
+def validate_chain(chain):
+    if not isinstance(chain, dict) or set(chain) != CHAIN_FIELDS:
+        raise ValueError('Invalid GitHub token chain')
+    if not (auth.valid_token(chain['access_token']) and auth.valid_token(chain['refresh_token'])
+            and timestamp(chain['access_expires_at']) and timestamp(chain['refresh_expires_at'])):
+        raise ValueError('Invalid GitHub token chain')
+    return chain
+
+
+def validate_install(value, now):
+    if not isinstance(value, dict) or not INSTALL_FIELDS - {'client_secret'} <= set(value) <= INSTALL_FIELDS:
+        raise ValueError('Invalid GitHub chain installation')
+    if type(value['version']) is not int or value['version'] != 1:
+        raise ValueError('Unsupported GitHub chain installation version')
+    if not isinstance(value['client_id'], str) or not CLIENT_ID.fullmatch(value['client_id']):
+        raise ValueError('Invalid GitHub App client')
+    if 'client_secret' in value and not auth.valid_token(value['client_secret']):
+        raise ValueError('Invalid GitHub App client')
+    chain = validate_chain(value['chain'])
+    if chain['refresh_expires_at'] <= now:
+        raise ValueError('The GitHub token chain expired')
+    grants = value['grants']
+    if not isinstance(grants, list) or not 1 <= len(grants) <= auth.MAX_GRANTS:
+        raise ValueError('Invalid GitHub grant list')
+    repositories, targets = set(), set()
+    for grant in grants:
+        if not isinstance(grant, dict) or set(grant) != GRANT_FIELDS or grant['access'] not in ACCESS:
+            raise ValueError('Invalid GitHub grant')
+        # The Git helper's own checks: repository, token characters and identity.
+        auth.validate({'repository': grant['repository'], 'token': chain['access_token'],
+                       'author_name': value['author_name'], 'author_email': value['author_email']})
+        auth.target_directory(grant['target'])
+        if grant['repository'].casefold() in repositories or grant['target'] in targets:
+            raise ValueError('Duplicate GitHub grant')
+        repositories.add(grant['repository'].casefold())
+        targets.add(grant['target'])
+    return value
+
+
+def private_directory(path, create):
+    """A real directory that only this (root) process can enter, checked after creation:
+    some provider volumes accept chmod and still report other modes."""
+    if create:
+        with contextlib.suppress(FileExistsError):
+            path.mkdir(mode=0o700)
+        if path.is_symlink():
+            raise ValueError('Private GitHub storage must not be a link')
+        os.chmod(path, 0o700)
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise ValueError('GitHub storage does not keep private permissions')
+    return path
+
+
+def write_private(directory, name, data):
+    fd, temporary = tempfile.mkstemp(prefix='.' + name + '-', dir=directory)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            info = os.fstat(output.fileno())
+            if info.st_mode & 0o077 or info.st_uid != os.geteuid():
+                raise ValueError('GitHub storage does not keep private permissions')
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, directory / name)
+        folder = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def read_private(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd, 'rb') as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.geteuid()
+                or info.st_size > MAX_STATE):
+            raise ValueError('GitHub state must be private')
+        state = json.loads(source.read(MAX_STATE + 1))
+    if (not isinstance(state, dict) or state.get('version') != 1 or state.get('state') not in ('ok', 'revoked')
+            or type(state.get('serial')) is not int):
+        raise ValueError('Malformed GitHub state')
+    validate_chain(state.get('chain'))
+    return state
+
+
+class Store:
+    """The chain on the persistent volume when it keeps private permissions, else on tmpfs.
+    Every save carries a higher serial, so the newest copy wins if both exist."""
+
+    def __init__(self, persistent=PERSISTENT, runtime=RUNTIME):
+        self.persistent = persistent
+        self.runtime = runtime
+        # Last resort in the serving process: a rotated chain that no storage accepted.
+        self.memory = None
+
+    @contextlib.contextmanager
+    def lock(self):
+        private_directory(self.runtime, create=True)
+        fd = os.open(self.runtime / 'state.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+    def copies(self):
+        found = []
+        for directory, persistent in ((self.persistent, True), (self.runtime, False)):
+            # A copy that is not private or not well formed is never served; the next save
+            # replaces it.
+            try:
+                private_directory(directory, create=False)
+                state = read_private(directory / STATE)
+            except (OSError, ValueError, RecursionError):
+                continue
+            if state is not None:
+                found.append((state, persistent))
+        if self.memory is not None:
+            found.append((self.memory, False))
+        return found
+
+    def load(self):
+        """(state, persistent) for the newest copy, or (None, False) without a chain."""
+        found = self.copies()
+        return max(found, key=lambda copy: copy[0]['serial']) if found else (None, False)
+
+    def save(self, state):
+        """Durably stores `state` with the next serial; returns whether the volume holds it."""
+        current, _ = self.load()
+        # Clock based, so an install by another process also wins over this process's memory.
+        state = dict(state, serial=max(current['serial'] + 1 if current else 1, time.time_ns()))
+        data = json.dumps(state, separators=(',', ':'))
+        for directory, persistent, other in ((self.persistent, True, self.runtime),
+                                             (self.runtime, False, self.persistent)):
+            try:
+                if persistent:
+                    private_directory(directory.parent, create=True)
+                write_private(private_directory(directory, create=True), STATE, data)
+            except (OSError, ValueError):
+                continue
+            self.memory = None
+            with contextlib.suppress(OSError):
+                (other / STATE).unlink(missing_ok=True)
+            return persistent
+        self.memory = state
+        raise ValueError('No private GitHub storage accepted the token chain')
+
+    def clear(self):
+        self.memory = None
+        for directory in (self.persistent, self.runtime):
+            (directory / STATE).unlink(missing_ok=True)
+
+
+def token_endpoint(environ):
+    override = environ.get(TEST_URL)
+    if override is None:
+        return GITHUB + '/login/oauth/access_token', False
+    if not re.fullmatch(r'http://127\.0\.0\.1:[0-9]{1,5}', override):
+        raise ValueError('The GitHub test address must be a loopback port')
+    return override + '/login/oauth/access_token', True
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def post_refresh(form, environ=os.environ, timeout=30):
+    """GitHub's JSON reply to one refresh. OAuth errors arrive as HTTP 200 with `error`."""
+    url, loopback = token_endpoint(environ)
+    handlers = [NoRedirect()] + ([urllib.request.ProxyHandler({})] if loopback else [])
+    request = urllib.request.Request(url, data=urllib.parse.urlencode(form).encode(), method='POST', headers={
+        'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'horizon-worker-github/1'})
+    try:
+        with urllib.request.build_opener(*handlers).open(request, timeout=timeout) as response:
+            body = response.read(MAX_REQUEST * 8 + 1)
+    except (OSError, http.client.HTTPException) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
+        raise Transient('transport') from None
+    try:
+        reply = json.loads(body) if len(body) <= MAX_REQUEST * 8 else None
+    except ValueError:
+        reply = None
+    if not isinstance(reply, dict):
+        raise Transient('malformed_reply')
+    return reply
+
+
+def rotated_chain(reply, now):
+    access, refresh = reply.get('access_token'), reply.get('refresh_token')
+    lifetime, refresh_lifetime = reply.get('expires_in'), reply.get('refresh_token_expires_in')
+    if (not auth.valid_token(access) or not auth.valid_token(refresh)
+            or not timestamp(lifetime) or not timestamp(refresh_lifetime)
+            or str(reply.get('token_type', 'bearer')).lower() != 'bearer'):
+        raise Transient('malformed_reply')
+    return {'access_token': access, 'access_expires_at': now + lifetime,
+            'refresh_token': refresh, 'refresh_expires_at': now + refresh_lifetime}
+
+
+def refresh_once(store, now=time.time, post=post_refresh):
+    """One refresh check: 'absent', 'revoked', 'fresh', 'refreshed' or 'retry'."""
+    with store.lock():
+        state, _ = store.load()
+        if state is None:
+            return 'absent'
+        if state['state'] != 'ok':
+            return 'revoked'
+        started = int(now())
+        chain = state['chain']
+        if chain['refresh_expires_at'] <= started:
+            store.save(dict(state, state='revoked', last_error='refresh_expired'))
+            return 'revoked'
+        if chain['access_expires_at'] - started > REFRESH_MARGIN:
+            return 'fresh'
+        form = {'client_id': state['client_id'], 'grant_type': 'refresh_token',
+                'refresh_token': chain['refresh_token']}
+        # Only a chain from a web sign-in carries a secret; a device flow chain refreshes without one.
+        if state.get('client_secret'):
+            form['client_secret'] = state['client_secret']
+        try:
+            reply = post(form)
+            error = reply.get('error')
+            if error is None:
+                rotated = rotated_chain(reply, started)
+        except Transient as failure:
+            store.save(dict(state, last_error=str(failure)))
+            return 'retry'
+        if error is not None:
+            code = error if isinstance(error, str) and ERROR_CODE.fullmatch(error) else 'unknown_error'
+            if code == 'bad_refresh_token':
+                store.save(dict(state, state='revoked', last_error=code))
+                return 'revoked'
+            store.save(dict(state, last_error=code))
+            return 'retry'
+        # GitHub already invalidated the old chain: store the new one before any agent can use it.
+        store.save(dict(state, chain=rotated, last_refresh_at=started, last_error=None))
+        return 'refreshed'
+
+
+def retry_delay(failures, jitter=random.random):
+    ceiling = min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * 2 ** min(failures - 1, 16))
+    return ceiling * (0.5 + jitter() / 2)
+
+
+def next_check(store, now):
+    state, _ = store.load()
+    if state is None or state['state'] != 'ok':
+        return POLL_SECONDS
+    due = state['chain']['access_expires_at'] - REFRESH_MARGIN - now
+    return max(1, min(POLL_SECONDS, due))
+
+
+def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=random.random, log=print):
+    """One refresh check; returns (delay before the next check, consecutive failures)."""
+    try:
+        outcome = refresh_once(store, now, post)
+    # Storage or lock failures are retried; the refresh thread must never end.
+    except Exception as error:
+        log('GitHub refresh failed: ' + type(error).__name__, flush=True)
+        outcome = 'retry'
+    if outcome == 'retry':
+        failures += 1
+        return retry_delay(failures, jitter), failures
+    if outcome in ('refreshed', 'revoked'):
+        log('GitHub token chain ' + outcome, flush=True)
+    return next_check(store, now()), 0
+
+
+def refresh_loop(store, sleep=time.sleep):
+    failures = 0
+    while True:
+        delay, failures = refresh_step(store, failures)
+        sleep(delay)
+
+
+def refusal(state, message):
+    return {'ok': False, 'state': state, 'message': message}
+
+
+def request_path(path):
+    """(repository path, whether it names a push) for a credential request path."""
+    path = path.strip('/')
+    push = False
+    for suffix in ('/info/refs', '/git-receive-pack', '/git-upload-pack'):
+        if path.endswith(suffix):
+            push = push or suffix == '/git-receive-pack'
+            path = path[:-len(suffix)]
+    if '?' in path:
+        path, query = path.split('?', 1)
+        push = push or 'git-receive-pack' in query
+    return path.removesuffix('.git'), push
+
+
+def granted(state, repository):
+    if not isinstance(repository, str):
+        return None
+    return next((grant for grant in state['grants'] if auth.same_repository(repository, grant['repository'])), None)
+
+
+def answer(request, state, now):
+    """The reply to one agent request, and the repository it named for the log."""
+    if not isinstance(request, dict) or request.get('request') not in ('credential', 'gh-token'):
+        return refusal('refused', 'Malformed GitHub credential request.'), None
+    if state is None:
+        return refusal('absent', 'No GitHub token chain is installed on this worker.'), None
+    if state['state'] != 'ok':
+        return refusal('revoked', 'GitHub access on this worker was revoked; connect GitHub again in Horizon.'), None
+    chain = state['chain']
+    if chain['access_expires_at'] - now <= SERVE_MARGIN:
+        return refusal('ok', 'The GitHub access token expired; this worker cannot refresh it now.'), None
+    if request['request'] == 'credential':
+        if request.get('protocol') != 'https' or request.get('host') != 'github.com':
+            return refusal('ok', 'Only HTTPS access to github.com is granted.'), None
+        repository, push = request_path(str(request.get('path', '')))
+        grant = granted(state, repository)
+        if grant is None:
+            return refusal('ok', 'This repository has no GitHub grant on this worker.'), repository
+        if push and grant['access'] != 'push':
+            return refusal('ok', 'This repository is granted for reading only.'), repository
+        return {'ok': True, 'state': 'ok', 'username': 'x-access-token', 'password': chain['access_token'],
+                'expires_at': chain['access_expires_at']}, grant['repository']
+    grant = granted(state, request.get('repository'))
+    if grant is None:
+        return refusal('ok', 'This repository has no GitHub grant on this worker.'), request.get('repository')
+    return {'ok': True, 'state': 'ok', 'token': chain['access_token'], 'repository': grant['repository'],
+            'access': grant['access'], 'expires_at': chain['access_expires_at']}, grant['repository']
+
+
+def peer(connection):
+    """(pid, uid) of the connecting process, as the kernel reports them."""
+    pid, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                            struct.calcsize('3i')))
+    return pid, uid
+
+
+def log_request(directory, record):
+    """One line per request without any token, in a root-only log that keeps two files."""
+    path = directory / LOG
+    with contextlib.suppress(FileNotFoundError):
+        if path.lstat().st_size > LOG_LIMIT:
+            os.replace(path, directory / (LOG + '.1'))
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    with os.fdopen(fd, 'a') as output:
+        output.write(json.dumps(record, separators=(',', ':')) + '\n')
+
+
+def handle(connection, store):
+    pid, uid = peer(connection)
+    connection.settimeout(5)
+    with connection.makefile('rb') as stream:
+        line = stream.readline(MAX_REQUEST + 1)
+    try:
+        request = json.loads(line) if len(line) <= MAX_REQUEST else None
+    except ValueError:
+        request = None
+    now = time.time()
+    if uid not in ALLOWED_UIDS:
+        reply, repository = refusal('refused', 'This account may not use GitHub access on this worker.'), None
+    else:
+        reply, repository = answer(request, store.load()[0], now)
+    kind = request.get('request') if isinstance(request, dict) else None
+    with contextlib.suppress(OSError):
+        log_request(store.runtime, {'at': int(now), 'uid': uid, 'pid': pid,
+                                    'request': kind if kind in ('credential', 'gh-token') else 'invalid',
+                                    'repository': repository if auth.valid_repository(repository) else None,
+                                    'granted': reply['ok']})
+    connection.sendall((json.dumps(reply) + '\n').encode())
+
+
+def listen(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(path))
+    # Any account may connect; the kernel's peer credentials decide who gets an answer.
+    path.chmod(0o666)
+    server.listen(CONNECTIONS)
+    return server
+
+
+def accept_forever(server, store):
+    slots = threading.BoundedSemaphore(CONNECTIONS)
+
+    def run(connection):
+        try:
+            with connection:
+                handle(connection, store)
+        # One bad client must not end the service.
+        except Exception as error:
+            print('GitHub request failed: ' + type(error).__name__, flush=True)
+        finally:
+            slots.release()
+
+    while True:
+        try:
+            connection, _ = server.accept()
+        except OSError as error:
+            if server.fileno() < 0:
+                return
+            print('GitHub socket accept failed: ' + type(error).__name__, flush=True)
+            time.sleep(1)
+            continue
+        slots.acquire()
+        threading.Thread(target=run, args=(connection,), daemon=True).start()
+
+
+def serve(store=None, path=SOCKET):
+    """Runs for the worker's life: horizon-worker-supervise treats an exit as a failure."""
+    store = store or Store()
+    try:
+        token_endpoint(os.environ)
+        private_directory(store.runtime, create=True)
+        server = listen(path)
+    except (OSError, ValueError) as error:
+        print('GitHub access unavailable: ' + type(error).__name__, flush=True)
+        while True:
+            time.sleep(3600)
+    threading.Thread(target=refresh_loop, args=(store,), daemon=True).start()
+    accept_forever(server, store)
+
+
+def run_configure(payload):
+    # The Git helper runs as the agent under isolation, because the agent owns the repositories.
+    subprocess.run([str(GIT_AUTH), 'configure'], input=json.dumps(payload).encode(), check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+
+
+def identity_grants(state):
+    return [{'repository': grant['repository'], 'target': grant['target'],
+             'author_name': state['author_name'], 'author_email': state['author_email']}
+            for grant in (state or {}).get('grants', [])]
+
+
+def install(value, store, now=time.time, configure=run_configure):
+    """Validates, configures each target repository, then stores the chain. Returns status."""
+    validate_install(value, int(now()))
+    with store.lock():
+        try:
+            previous, _ = store.load()
+        except (OSError, ValueError):
+            previous = None
+        configure({'grants': identity_grants(value), 'previous': identity_grants(previous)})
+        state = {key: value[key] for key in ('client_id', 'author_name', 'author_email', 'grants', 'chain')}
+        if value.get('client_secret'):
+            state['client_secret'] = value['client_secret']
+        store.save(dict(state, version=1, state='ok', installed_at=int(now()), last_refresh_at=None,
+                        last_error=None))
+    return status(store)
+
+
+def status(store):
+    state, persistent = store.load()
+    if state is None:
+        return {'version': 1, 'state': 'absent', 'persistent': False, 'access_expires_at': None,
+                'refresh_expires_at': None, 'last_refresh_at': None, 'last_error': None, 'repositories': []}
+    return {'version': 1, 'state': state['state'], 'persistent': persistent,
+            'access_expires_at': state['chain']['access_expires_at'],
+            'refresh_expires_at': state['chain']['refresh_expires_at'],
+            'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
+            'repositories': [{key: grant[key] for key in ('repository', 'target', 'access')}
+                             for grant in state['grants']]}
+
+
+def clear(store):
+    with store.lock():
+        store.clear()
+
+
+def main(argv):
+    if len(argv) != 1 or argv[0] not in ('install', 'serve', 'status', 'clear'):
+        print('Usage: horizon-worker-github install|serve|status|clear', file=sys.stderr)
+        return 2
+    if os.geteuid() != 0:
+        print('horizon-worker-github runs as root only.', file=sys.stderr)
+        return 1
+    os.umask(0o077)
+    store = Store()
+    if argv[0] == 'serve':
+        serve(store)
+    elif argv[0] == 'install':
+        source = sys.stdin.buffer.read(MAX_INSTALL + 1)
+        if len(source) > MAX_INSTALL:
+            raise ValueError('GitHub chain installation is too large')
+        print(json.dumps(install(auth.parse(source.decode()), store), separators=(',', ':')))
+    elif argv[0] == 'status':
+        print(json.dumps(status(store), separators=(',', ':')))
+    else:
+        clear(store)
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (ValueError, OSError, RecursionError, UnicodeDecodeError, subprocess.SubprocessError):
+        print('Worker GitHub access failed; inspect the chain installation, target repositories and '
+              'private storage.', file=sys.stderr)
+        sys.exit(1)

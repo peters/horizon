@@ -224,6 +224,11 @@ try:
             raise ValueError('Worker Git wrapper is missing')
         # Contract 2: per-repository grants for the primary and its same-worker siblings.
         print('horizon-git-auth-contract=1\nhorizon-git-auth-contract=2')
+        # A refreshing GitHub App token chain held by a root service. The service alone is not
+        # enough: the supervisor must declare that it starts it.
+        if shutil.which('horizon-worker-github') and helper_declares(
+                'horizon-worker-supervise', '--github-chain-contract', 'horizon-github-chain-contract=1'):
+            print('horizon-github-chain-contract=1')
     if args.ready:
         active = capabilities(json.loads(runtime.read_text()))
         if active != selected:
