@@ -248,8 +248,29 @@ fn an_exact_worker_choice_survives_plain_policy_reload_without_fallback() {
     assert_eq!(placements.len(), 1);
     assert_eq!(placements[0].server_type, "cx33");
     assert!(fit(&offers[..1], &saved, &current.server_types, "hel1").is_err());
-    assert!(allowing(&["hel1"], &["cpx32"]).for_spec(&saved).is_err());
+    let changed_preferences = allowing(&["hel1"], &["cpx32"]).for_spec(&saved).unwrap();
+    assert_eq!(changed_preferences.server_types, ["cx33"]);
+    assert_eq!(changed_preferences.locations, ["hel1"]);
     assert!(allowing(&["nbg1"], &["cx33"]).for_spec(&saved).is_err());
+    for name in ["", "BadType", "cx53/other", "cx53;echo", "cx53\n"] {
+        let mut invalid = saved.clone();
+        invalid.cpu_flavors = vec![name.into()];
+        assert!(current.for_spec(&invalid).is_err(), "{name:?}");
+    }
+    for names in [Vec::new(), vec!["cx33".into(), "cpx32".into()]] {
+        let mut invalid = saved.clone();
+        invalid.cpu_flavors = names;
+        assert!(current.for_spec(&invalid).is_err());
+    }
+    for locations in [
+        Vec::new(),
+        vec!["hel1".into(), "nbg1".into()],
+        vec!["hel1/other".into()],
+    ] {
+        let mut invalid = saved.clone();
+        invalid.data_centers = locations;
+        assert!(current.for_spec(&invalid).is_err());
+    }
     // Old records retain their configured fallback semantics and wire shape.
     chosen.exact_placement = false;
     assert_eq!(current.for_spec(&chosen).unwrap(), current);

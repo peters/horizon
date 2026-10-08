@@ -74,9 +74,8 @@ the UI and the agents must agree.
       gpu: true
   ```
 
-The reference counts in this procedure come from the test account of
-issue #1264. If the provider catalog changes, write the new counts in the
-report.
+Provider catalogs change. Record the current counts and worker identities in the
+report. Hetzner counts include current x86 types outside the configured fallback list.
 
 ## 5. Setup
 
@@ -111,7 +110,7 @@ report.
 
 6. Type the server types `cx33`, `cx43` and `cpx42`.
 
-   Result: The dialog shows the three server types.
+   Result: The dialog shows three fallback preferences. They do not restrict the catalog.
 
 7. Type the locations `fsn1`, `hel1` and `nbg1`.
 
@@ -154,7 +153,8 @@ this order. Each task starts with the result of the task before it.
 
 2. Read the text **Showing N of M workers** above the worker list.
 
-   Result: The text shows **Showing 24 of 24 workers**.
+   Result: N counts visible workers. M also includes workers below the profile requirements.
+   Record both counts and the number of hidden workers.
 
 ### 6.2 C13 — RunPod size grid
 
@@ -182,7 +182,7 @@ this order. Each task starts with the result of the task before it.
 
    Result: The price starts with **up to**.
 
-### 6.4 C15 — Hetzner allowlist
+### 6.4 C15 — Complete Hetzner catalog
 
 1. Click **Hetzner**.
 
@@ -190,11 +190,18 @@ this order. Each task starts with the result of the task before it.
 
 2. Count the rows in the worker list.
 
-   Result: The list has 9 rows.
+   Result: The count includes all compatible current x86 types in the permitted locations.
+   Record the count.
 
 3. Examine the server type and the location of each row.
 
-   Result: Each row has `cx33`, `cx43` or `cpx42`, in `fsn1`, `hel1` or `nbg1`.
+   Result: Each location is `fsn1`, `hel1` or `nbg1`. Server types outside the
+   fallback list also appear when they meet the profile requirements.
+
+4. Call `cloud_offers` with `{"min_vcpu": 2, "min_memory_gb": 4, "limit": 50}`.
+
+   Result: Hetzner offers include types outside `cx33`, `cx43` and `cpx42`.
+   The UI contains each returned type and location. MCP limits can shorten the answer.
 
 ### 6.5 C16 — Unlisted Hetzner offers
 
@@ -264,6 +271,9 @@ this order. Each task starts with the result of the task before it.
    Result: The text above the list shows a number of rows **below requirements
    hidden**.
 
+   Hetzner rows outside the fallback list remain visible if they meet 8 vCPU and 32 GB.
+   With a complete comparison, the **Cheapest** card shows the lowest comparable total.
+
 3. Check **Show workers below requirements**.
 
    Result: The list shows more rows. The added rows are disabled.
@@ -280,6 +290,22 @@ this order. Each task starts with the result of the task before it.
 6. Select the profile `small`.
 
    Result: The filters go back to their default values.
+
+7. Select the profile `large`.
+
+   Result: The list again shows compatible Hetzner types outside the fallback list.
+
+8. Click one of these Hetzner rows.
+
+   Result: The summary shows its exact server type and location. Record both values.
+
+9. Wait until the next frame appears in the Device panel.
+
+   Result: The explicit worker choice remains selected. No worker is rented.
+
+10. Select the profile `small`.
+
+    Result: The filters go back to their default values.
 
 ### 6.8 C19 — Search
 
@@ -338,7 +364,8 @@ this order. Each task starts with the result of the task before it.
 
 3. Examine the first row.
 
-   Result: The row shows Hetzner `cx33`.
+   Result: The row has the lowest comparable estimated total. Record its provider,
+   worker identity and location.
 
 4. Call the `cloud_offers` MCP tool with this request:
 
@@ -350,7 +377,7 @@ this order. Each task starts with the result of the task before it.
 
 5. Compare the order of `comparison.offers` with the order of the rows.
 
-   Result: The order is the same.
+   Result: The shared identities have the same order. The MCP limit can shorten its list.
 
 6. Check **In stock only**.
 
@@ -360,11 +387,11 @@ this order. Each task starts with the result of the task before it.
 
 1. Examine the **Cheapest** card.
 
-   Result: The card shows Hetzner `cx33`.
+   Result: The card shows the worker with the lowest comparable estimated total.
 
 2. Examine the **Most powerful** card.
 
-   Result: The card shows **32 vCPU · 256 GB** from RunPod.
+   Result: The card shows the most capable eligible worker. Record its resources and provider.
 
 3. Call the `cloud_offers` MCP tool with `{"min_vcpu": 2, "min_memory_gb": 4}`.
 
@@ -372,7 +399,7 @@ this order. Each task starts with the result of the task before it.
 
 4. Examine the first offer in `comparison.offers`.
 
-   Result: The offer is Hetzner `cx33`, the same as the **Cheapest** card.
+   Result: The offer identity is the same as the **Cheapest** card.
 
 ### 6.12 C23 — Totals for 730 hours
 
@@ -529,13 +556,16 @@ this order. Each task starts with the result of the task before it.
 
 ## 7. Pass criteria
 
-- C12 shows 24 workers. C13 shows 15 RunPod rows. C15 shows 9 Hetzner rows.
+- C12 records the current catalog counts. C13 shows 15 RunPod rows.
+- C15 includes current x86 Hetzner types outside the fallback list, only in permitted locations.
 - In C21, the rows are in the order of their estimated totals, and each row
   shows its total. The MCP comparison has the same order.
 - In C16, **In stock only** keeps each row that shows **Unlisted ·
   advisory**, and the cards can show these rows.
 - The hidden count in C17 is the number of sold-out rows.
-- In C18, a row below the requirements cannot be selected.
+- In C18, a row below the requirements cannot be selected. A compatible Hetzner
+  type outside the fallback list can be selected for the 8 vCPU, 32 GB profile.
+- The C18 summary retains the selected Hetzner type and location. No worker is rented.
 - The search, the currencies, the picks and the totals agree with C19, C20, C22 and C23.
 - The MCP answer in C22 has the same cheapest offer as the **Cheapest** card.
 - The data center chips and the region chips agree with C24, C25 and C27.

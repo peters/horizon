@@ -49,7 +49,7 @@ pub struct Settings {
 #[serde(deny_unknown_fields)]
 pub struct Hetzner {
     pub token_file: PathBuf,
-    /// Server types to try, in order, such as `cx43`.
+    /// Fallback server types to try, in order, when no exact catalog worker is chosen.
     pub server_types: Vec<String>,
     /// Locations to try, in order, such as `hel1`.
     pub locations: Vec<String>,
@@ -158,17 +158,7 @@ impl Hetzner {
                 "Credential bindings must use absolute machine-local paths",
             ));
         }
-        let names = |values: &[String]| {
-            !values.is_empty()
-                && values.iter().all(|value| {
-                    !value.is_empty()
-                        && value.len() <= 64
-                        && value
-                            .bytes()
-                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-                })
-        };
-        if !names(&self.server_types) || !names(&self.locations) {
+        if !provider_names(&self.server_types) || !provider_names(&self.locations) {
             return Err(Error::Invalid(
                 "Hetzner settings need server types and locations such as cx43 and hel1",
             ));
@@ -207,16 +197,16 @@ impl Hetzner {
         Ok(chosen)
     }
 
-    /// Explicit worker choices must remain allowed on every allocation and resume.
+    /// An exact catalog choice takes precedence over the fallback preferences.
     /// # Errors
-    /// Rejects any selected type outside the machine's server-type policy.
+    /// Rejects malformed server type names before any provider request.
     pub fn types_for(&self, placement: Option<&crate::cloud_panel::Placement>) -> Result<Vec<String>> {
         let Some(placement) = placement.filter(|placement| !placement.cpu_types.is_empty()) else {
             return Ok(self.server_types.clone());
         };
-        if placement.cpu_types.iter().any(|name| !self.server_types.contains(name)) {
+        if !provider_names(&placement.cpu_types) {
             return Err(Error::Invalid(
-                "This cloud's chosen server type is not allowed in the Hetzner settings",
+                "This cloud's chosen server type must be a valid Hetzner name",
             ));
         }
         Ok(placement.cpu_types.clone())
@@ -265,6 +255,13 @@ impl Hetzner {
         }
         Credential::new(token.to_owned()).map_err(Error::from)
     }
+}
+
+fn provider_names(values: &[String]) -> bool {
+    !values.is_empty()
+        && values
+            .iter()
+            .all(|value| horizon_cloud::hetzner::cloud::valid_placement_name(value))
 }
 
 /// A secret file's bytes in a wiped buffer sized up front for the largest
