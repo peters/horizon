@@ -386,3 +386,21 @@ fn only_the_unscoped_slot_resize_moves_other_workspaces() {
     let pushed = board.workspace(neighbour).expect("neighbour").position;
     assert!(!crate::board::vec2_eq(pushed, before), "everything is in scope");
 }
+
+#[test]
+fn a_cloud_moves_up_when_the_panels_before_it_close() {
+    let (mut board, workspace, panels, _) = desk(0);
+    let first = board.panel(panels[0]).expect("panel").layout.position;
+    assert_eq!(cloud(&board).slot, Some(2), "the empty cloud follows both panels");
+    // The UI keeps a workspace that holds a cloud when its last panel closes.
+    board.retain_workspace_when_empty(workspace);
+    board.close_panel(panels[0]);
+    assert_eq!(cloud(&board).slot, Some(1), "one panel before it is left");
+    board.close_panel(panels[1]);
+    assert_eq!(cloud(&board).slot, Some(0));
+    assert!(
+        near(cloud(&board).position, first),
+        "no gap where the panels were: {:?}",
+        cloud(&board).position
+    );
+}
