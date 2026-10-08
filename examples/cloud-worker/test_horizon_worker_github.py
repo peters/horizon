@@ -93,10 +93,11 @@ class ServiceTestCase(unittest.TestCase):
         (self.root / 'run').mkdir()
         self.store = service.Store(self.root / 'workspace/.horizon-root/github', self.root / 'run/github')
         self.configured = []
+        self.retired = []
 
     def install(self, value=None, now=NOW):
         return service.install(value or installation(), self.store, now=lambda: now,
-                               configure=self.configured.append)
+                               configure=self.configured.append, retire=lambda: self.retired.append(True))
 
     def fake_github(self, *replies):
         github = FakeGitHub()
@@ -180,6 +181,43 @@ class InstallationTests(ServiceTestCase):
         self.assertEqual(service.status(self.store)['login'], 'octo-cat')
         self.assertIsNone(service.status(service.Store(self.root / 'none', self.root / 'none-run'))['login'])
 
+    def test_a_failed_configuration_puts_the_previous_chain_back_and_keeps_the_static_binding(self):
+        self.install()
+        before = self.stored()
+
+        def refuse(payload):
+            raise subprocess.CalledProcessError(1, 'configure')
+        with self.assertRaises(subprocess.CalledProcessError):
+            service.install(installation(author_name='Other Author', chain=chain(access='ghu_other')), self.store,
+                            now=lambda: NOW, configure=refuse, retire=lambda: self.retired.append(True))
+        # The rollback writes the previous chain again, under a new storage serial.
+        without_serial = lambda state: {key: value for key, value in state.items() if key != 'serial'}
+        self.assertEqual(without_serial(self.stored()), without_serial(before))
+        self.assertEqual(self.retired, [True], 'only the first, successful install retired the static binding')
+
+    def test_a_failed_first_configuration_leaves_no_chain(self):
+        def refuse(payload):
+            raise subprocess.CalledProcessError(1, 'configure')
+        with self.assertRaises(subprocess.CalledProcessError):
+            service.install(installation(), self.store, now=lambda: NOW, configure=refuse,
+                            retire=lambda: self.retired.append(True))
+        self.assertIsNone(self.stored())
+        self.assertEqual(self.retired, [])
+
+    def test_a_failed_save_configures_nothing_and_retires_nothing(self):
+        with mock.patch.object(self.store, 'save', side_effect=OSError('read-only')), \
+                self.assertRaises(OSError):
+            self.install()
+        self.assertEqual((self.configured, self.retired), ([], []))
+
+    def test_a_static_binding_that_stays_does_not_fail_the_install(self):
+        def stuck():
+            raise OSError('busy')
+        with contextlib.redirect_stderr(io.StringIO()):
+            report = service.install(installation(), self.store, now=lambda: NOW,
+                                     configure=self.configured.append, retire=stuck)
+        self.assertEqual(report['state'], 'ok')
+
     def test_a_chain_survives_a_restart_and_clear_removes_it(self):
         self.install()
         restarted = service.Store(self.store.persistent, self.root / 'run/fresh-tmpfs')
@@ -227,7 +265,8 @@ class InstallationTests(ServiceTestCase):
                                 ('HOME', env['HOME'])]:
                 stack.enter_context(mock.patch.object(auth, name, value))
             stack.enter_context(mock.patch.dict(auth.os.environ, {'HOME': env['HOME'], 'GIT_CONFIG_NOSYSTEM': '1'}))
-            service.install(installation(), self.store, now=lambda: NOW, configure=auth.configure_chain)
+            service.install(installation(), self.store, now=lambda: NOW, configure=auth.configure_chain,
+                            retire=lambda: auth.CREDENTIAL.unlink(missing_ok=True))
             with self.assertRaises(ValueError):
                 auth.configure_chain({'grants': [dict(self.configured_grant(), token=ACCESS)], 'previous': []})
         self.assertFalse(static.exists())

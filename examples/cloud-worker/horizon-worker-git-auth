@@ -237,8 +237,8 @@ def configure_chain(value):
     entries = checked_grants(value['grants'], IDENTITY_FIELDS)
     previous = checked_grants(value['previous'], IDENTITY_FIELDS, minimum=0)
     configure(2, entries, [previous_grants(), (2, previous)])
-    # The service is now the only source of tokens; a static binding would outlive a revocation.
-    CREDENTIAL.unlink(missing_ok=True)
+    # The static binding stays until the service has stored its chain and configured every
+    # repository; horizon-worker-github then removes it with `clear`.
 
 
 def write_private(value):

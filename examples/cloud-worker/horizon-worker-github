@@ -394,21 +394,31 @@ def run_configure(payload):
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
 
 
+def run_retire():
+    # The static binding belongs to the agent under isolation, so the Git helper removes it.
+    subprocess.run([str(GIT_AUTH), 'clear'], check=True, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=60)
+
+
 def identity_grants(state):
     return [{'repository': grant['repository'], 'target': grant['target'],
              'author_name': state['author_name'], 'author_email': state['author_email']}
             for grant in (state or {}).get('grants', [])]
 
 
-def install(value, store, now=time.time, configure=run_configure):
-    """Validates, configures each target repository, then stores the chain. Returns status."""
+def install(value, store, now=time.time, configure=run_configure, retire=run_retire):
+    """Stores the chain, configures each target repository, then retires the static binding.
+
+    Each step keeps a usable credential when it fails: a failed save changes nothing, a failed
+    configuration puts the previous chain back, and the static binding is removed last. A
+    static binding that cannot be removed stays as a fallback, which the service overrides
+    whenever it answers. Returns status."""
     validate_install(value, int(now()))
     with store.lock():
         try:
             previous, _ = store.load()
         except (OSError, ValueError):
             previous = None
-        configure({'grants': identity_grants(value), 'previous': identity_grants(previous)})
         state = {key: value[key] for key in ('client_id', 'author_name', 'author_email', 'grants', 'chain')}
         if value.get('client_secret'):
             state['client_secret'] = value['client_secret']
@@ -416,6 +426,19 @@ def install(value, store, now=time.time, configure=run_configure):
             state['login'] = value['login']
         store.save(dict(state, version=1, state='ok', installed_at=int(now()), last_refresh_at=None,
                         last_error=None), retain=False)
+        try:
+            configure({'grants': identity_grants(value), 'previous': identity_grants(previous)})
+        except BaseException:
+            if previous is not None:
+                store.save(previous, retain=False)
+            else:
+                store.clear()
+            raise
+        try:
+            retire()
+        except (OSError, subprocess.SubprocessError):
+            print('horizon-worker-github: the static Git binding could not be removed; the service '
+                  'still answers first.', file=sys.stderr)
     return status(store)
 
 
