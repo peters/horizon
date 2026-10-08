@@ -197,6 +197,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   `terminal/` leaf modules. `terminal/logical_line.rs` assembles the text under
   a click from soft-wrapped rows and from URL rows a program hard-wrapped; its
   row-shape heuristics are tested under `terminal/logical_line/tests/`.
+  Terminal destruction sends shutdown, then a helper thread joins and destroys
+  the PTY. A finished thread handle can still own a PTY that waits for its child.
+  The bounded regression for this case lives in `terminal/lifecycle/tests.rs`.
 - `browser/mod.rs` maps engine sessions/events into Horizon panel state and
   retry/teardown behavior. `browser/manifest.rs` reexports the shared
   `horizon-browser-control::manifest` implementation so existing host callers
