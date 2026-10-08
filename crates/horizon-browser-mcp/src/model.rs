@@ -535,6 +535,8 @@ pub(crate) enum ActKind {
     Scroll,
     /// Attach host files to an `input[type=file]`.
     SetFiles,
+    /// Drop host files on a visible element (local Chromium or Firefox).
+    DropFiles,
     Reload,
     Back,
     Forward,
@@ -558,10 +560,11 @@ pub(crate) struct ActInput {
     pub(crate) delta_y: Option<f64>,
     /// Consecutive trusted clicks for `click` (1-3, default 1).
     pub(crate) count: Option<u32>,
-    /// Absolute host paths for `set_files` (1-32). Each must resolve to a
+    /// Absolute host paths for `set_files` or `drop_files` (1-32). Each must resolve to a
     /// regular file under the agent work root (`HORIZON_WORK_ROOT`, else the
     /// server's working directory) or a root in
-    /// `HORIZON_BROWSER_ATTACHMENT_ROOTS`. Paths are audited; contents are not.
+    /// `HORIZON_BROWSER_ATTACHMENT_ROOTS`. Set-files paths and drop-file counts
+    /// are audited; contents are not.
     pub(crate) files: Option<Vec<String>>,
     /// Per-action timeout in milliseconds (1-60000).
     pub(crate) timeout_millis: Option<u64>,
@@ -574,8 +577,8 @@ impl ActInput {
         if !matches!(self.action, ActKind::Click) && self.count.is_some() {
             return Err("count is only accepted for click".to_string());
         }
-        if !matches!(self.action, ActKind::SetFiles) && self.files.is_some() {
-            return Err("files is only accepted for set_files".to_string());
+        if !matches!(self.action, ActKind::SetFiles | ActKind::DropFiles) && self.files.is_some() {
+            return Err("files is only accepted for set_files or drop_files".to_string());
         }
         match self.action {
             ActKind::Click => {
@@ -597,26 +600,40 @@ impl ActInput {
                 delta_x: self.delta_x.unwrap_or(0.0),
                 delta_y: self.delta_y.unwrap_or(0.0),
             }),
-            ActKind::SetFiles => {
+            ActKind::SetFiles | ActKind::DropFiles => {
+                let name = if matches!(self.action, ActKind::DropFiles) {
+                    "drop_files"
+                } else {
+                    "set_files"
+                };
                 if self.value.is_some() || self.delta_x.is_some() || self.delta_y.is_some() {
-                    return Err("set_files does not accept value or deltas".to_string());
+                    return Err(format!("{name} does not accept value or deltas"));
                 }
                 let files = self
                     .files
                     .as_deref()
                     .filter(|files| !files.is_empty())
-                    .ok_or_else(|| "set_files requires files".to_string())?;
+                    .ok_or_else(|| format!("{name} requires files"))?;
                 if files.len() > horizon_browser::MAX_ATTACHMENT_FILES {
-                    return Err("set_files accepts at most 32 files".to_string());
+                    return Err(format!("{name} accepts at most 32 files"));
                 }
                 let paths = files.iter().map(std::path::PathBuf::from).collect::<Vec<_>>();
                 if paths.iter().any(|path| !path.is_absolute()) {
-                    return Err("set_files paths must be absolute".to_string());
+                    return Err(format!("{name} paths must be absolute"));
                 }
-                Ok(BrowserControlAction::SetFiles {
-                    target: required_target(self.reference.as_deref(), self.selector.as_deref())?,
-                    paths,
-                    sources: Vec::new(),
+                let target = required_target(self.reference.as_deref(), self.selector.as_deref())?;
+                Ok(if matches!(self.action, ActKind::DropFiles) {
+                    BrowserControlAction::DropFiles {
+                        target,
+                        paths,
+                        sources: Vec::new(),
+                    }
+                } else {
+                    BrowserControlAction::SetFiles {
+                        target,
+                        paths,
+                        sources: Vec::new(),
+                    }
                 })
             }
             ActKind::Reload => no_target_or_value(self, BrowserControlAction::Reload),
@@ -963,6 +980,9 @@ fn semantic_capabilities(
             .map(str::to_string),
         );
     }
+    if !remote && matches!(backend, BackendKind::ChromiumCdp | BackendKind::FirefoxBidi) {
+        capabilities.push("drop_files".into());
+    }
     if remote
         && orientation.is_some_and(|state| state.support == horizon_browser::remote::OrientationSupport::Supported)
     {
@@ -1120,6 +1140,28 @@ mod tests {
     }
 
     #[test]
+    fn file_drop_requires_an_absolute_attachment_and_a_visible_target() {
+        let mut drop = act(ActKind::DropFiles);
+        drop.selector = Some("#drop-zone".into());
+        assert!(drop.build_action().is_err());
+        drop.files = Some(vec!["relative.txt".into()]);
+        assert!(drop.build_action().is_err());
+        let path = std::env::temp_dir().join("synthetic.txt");
+        drop.files = Some(vec![path.display().to_string()]);
+        let action = drop.build_action().expect("drop action");
+        assert!(matches!(
+            action,
+            horizon_browser::BrowserControlAction::DropFiles { .. }
+        ));
+        assert_eq!(action.attachment_paths(), Some([path].as_slice()));
+        assert!(semantic_capabilities(BackendKind::ChromiumCdp, false, false, None).contains(&"drop_files".into()));
+        assert!(
+            !semantic_capabilities(BackendKind::SafariWebDriver, false, false, None).contains(&"drop_files".into())
+        );
+        assert!(!semantic_capabilities(BackendKind::FirefoxBidi, true, true, None).contains(&"drop_files".into()));
+    }
+
+    #[test]
     fn set_files_requires_a_target_and_absolute_paths_and_is_the_only_taker_of_files() {
         let absolute = if cfg!(windows) {
             "C:\\uploads\\a.pdf"
@@ -1155,7 +1197,7 @@ mod tests {
         fill.files = Some(vec![absolute.to_string()]);
         assert_eq!(
             fill.build_action(),
-            Err("files is only accepted for set_files".to_string())
+            Err("files is only accepted for set_files or drop_files".to_string())
         );
     }
 

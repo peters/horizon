@@ -193,6 +193,9 @@ impl DriverState {
                 Ok(false)
             }
             BrowserCommand::Input(input) => self.dispatch_page_input(link, event_tx, frame_slot, input),
+            BrowserCommand::DropFiles { x, y, paths } => {
+                self.dispatch_file_drop(link, event_tx, frame_slot, x, y, &paths)
+            }
             BrowserCommand::NativeSelectChoose { index } => {
                 self.apply_native_select_choice(link, event_tx, frame_slot, index);
                 Ok(false)

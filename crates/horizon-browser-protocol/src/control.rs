@@ -158,6 +158,14 @@ pub enum BrowserControlAction {
         delta_x: f64,
         delta_y: f64,
     },
+    /// Deliver host-local files to a drop target. Audit records contain the
+    /// file count, but no paths or file contents.
+    DropFiles {
+        target: BrowserTarget,
+        paths: Vec<std::path::PathBuf>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sources: Vec<std::path::PathBuf>,
+    },
     /// Attach host-local files to an `input[type=file]` through the backend's
     /// file-chooser bypass. The paths are audited; file contents never are.
     SetFiles {
@@ -201,6 +209,21 @@ pub enum BrowserControlAction {
 }
 
 impl BrowserControlAction {
+    #[must_use]
+    pub fn attachment_paths(&self) -> Option<&[std::path::PathBuf]> {
+        match self {
+            Self::SetFiles { paths, .. } | Self::DropFiles { paths, .. } => Some(paths),
+            _ => None,
+        }
+    }
+
+    pub fn replace_attachments(&mut self, files: Vec<std::path::PathBuf>, originals: Vec<std::path::PathBuf>) {
+        if let Self::SetFiles { paths, sources, .. } | Self::DropFiles { paths, sources, .. } = self {
+            *paths = files;
+            *sources = originals;
+        }
+    }
+
     /// Evaluation bound used when an older caller does not provide one.
     pub const DEFAULT_EVALUATION_TIMEOUT_MILLIS: u64 = 15_000;
     /// Longest evaluation accepted by the engine.
@@ -222,15 +245,7 @@ impl BrowserControlAction {
             Self::Resize {
                 viewport,
                 timeout_millis,
-            } => {
-                if viewport.is_some_and(|size| size.into_iter().any(|axis| !(320..=8000).contains(&axis))) {
-                    return Err("viewport axes must be between 320 and 8000 CSS pixels");
-                }
-                if !(1..=60_000).contains(timeout_millis) {
-                    return Err("resize timeout must be between 1 and 60000 ms");
-                }
-                Ok(())
-            }
+            } => validate_resize(*viewport, *timeout_millis),
             Self::Navigate {
                 url, timeout_millis, ..
             } => {
@@ -276,7 +291,12 @@ impl BrowserControlAction {
                 }
                 Ok(())
             }
-            Self::SetFiles { target, paths, sources } => validate_set_files(target, paths, sources),
+            Self::SetFiles { target, paths, sources } => {
+                validate_attachments(target, paths, sources, AttachmentAction::SetFiles)
+            }
+            Self::DropFiles { target, paths, sources } => {
+                validate_attachments(target, paths, sources, AttachmentAction::DropFiles)
+            }
             Self::Evaluate {
                 expression,
                 timeout_millis,
@@ -330,6 +350,7 @@ impl BrowserControlAction {
             | Self::Fill { .. }
             | Self::Scroll { .. }
             | Self::SetFiles { .. }
+            | Self::DropFiles { .. }
             | Self::Evaluate { .. }
             | Self::Network { .. }
             | Self::Video { .. }
@@ -347,17 +368,34 @@ pub struct AgentAction {
     pub action: BrowserControlAction,
 }
 
-fn validate_set_files(
+fn validate_resize(viewport: Option<[u32; 2]>, timeout_millis: u64) -> Result<(), &'static str> {
+    if viewport.is_some_and(|size| size.into_iter().any(|axis| !(320..=8000).contains(&axis))) {
+        return Err("viewport axes must be between 320 and 8000 CSS pixels");
+    }
+    if !(1..=60_000).contains(&timeout_millis) {
+        return Err("resize timeout must be between 1 and 60000 ms");
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum AttachmentAction {
+    SetFiles,
+    DropFiles,
+}
+
+fn validate_attachments(
     target: &BrowserTarget,
     paths: &[std::path::PathBuf],
     sources: &[std::path::PathBuf],
+    action: AttachmentAction,
 ) -> Result<(), &'static str> {
     validate_target(target)?;
-    validate_attachment_paths(paths)?;
+    validate_attachment_paths(paths, action)?;
     if sources.is_empty() {
         Ok(())
     } else {
-        validate_attachment_paths(sources)
+        validate_attachment_paths(sources, action)
     }
 }
 
@@ -439,12 +477,18 @@ fn validate_selector(selector: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn validate_attachment_paths(paths: &[std::path::PathBuf]) -> Result<(), &'static str> {
+fn validate_attachment_paths(paths: &[std::path::PathBuf], action: AttachmentAction) -> Result<(), &'static str> {
     if paths.is_empty() {
-        return Err("set_files requires at least one file path");
+        return Err(match action {
+            AttachmentAction::SetFiles => "set_files requires at least one file path",
+            AttachmentAction::DropFiles => "drop_files requires at least one file path",
+        });
     }
     if paths.len() > MAX_ATTACHMENT_FILES {
-        return Err("set_files accepts at most 32 file paths");
+        return Err(match action {
+            AttachmentAction::SetFiles => "set_files accepts at most 32 file paths",
+            AttachmentAction::DropFiles => "drop_files accepts at most 32 file paths",
+        });
     }
     for path in paths {
         let Some(text) = path.to_str() else {
@@ -605,6 +649,33 @@ fn validate_text(text: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drop_file_count_errors_identify_the_drop_action_for_paths_and_sources() {
+        let absolute = std::env::temp_dir().join("synthetic.pdf");
+        for (paths, sources, message) in [
+            (Vec::new(), Vec::new(), "drop_files requires at least one file path"),
+            (
+                vec![absolute.clone(); MAX_ATTACHMENT_FILES + 1],
+                Vec::new(),
+                "drop_files accepts at most 32 file paths",
+            ),
+            (
+                vec![absolute.clone()],
+                vec![absolute; MAX_ATTACHMENT_FILES + 1],
+                "drop_files accepts at most 32 file paths",
+            ),
+        ] {
+            let action = BrowserControlAction::DropFiles {
+                target: BrowserTarget::Selector {
+                    selector: "#drop-zone".into(),
+                },
+                paths,
+                sources,
+            };
+            assert_eq!(action.validate(), Err(message));
+        }
+    }
     use crate::{BrowserButton, BrowserModifiers};
 
     #[test]

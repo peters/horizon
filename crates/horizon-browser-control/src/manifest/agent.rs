@@ -189,12 +189,12 @@ pub fn request_handoff(panel_local_id: &str, identity: AgentIdentity<'_>, reason
 /// because resolution can change a pathname. Every other action passes
 /// through.
 fn authorize_attachments(
-    action: BrowserControlAction,
+    mut action: BrowserControlAction,
     panel_local_id: &str,
     action_id: &str,
     remote: bool,
 ) -> std::io::Result<(BrowserControlAction, BrowserAuditAction, Option<StagedAttachments>)> {
-    let BrowserControlAction::SetFiles { target, paths, .. } = action else {
+    let Some(paths) = action.attachment_paths() else {
         let summary = BrowserAuditAction::from_control(&action);
         return Ok((action, summary, None));
     };
@@ -202,7 +202,7 @@ fn authorize_attachments(
     // its typed classification from this authoritative pass too.
     let refused = |error: crate::AttachmentPolicyError| std::io::Error::new(error.io_kind(), error);
     let authorized = crate::AttachmentPolicy::from_environment()
-        .authorize(&paths)
+        .authorize(paths)
         .map_err(refused)?;
     if remote {
         crate::attachments::check_remote_budget(&authorized).map_err(refused)?;
@@ -211,11 +211,8 @@ fn authorize_attachments(
         .iter()
         .map(|file| file.path().to_path_buf())
         .collect::<Vec<_>>();
-    let summary = BrowserAuditAction::from_control(&BrowserControlAction::SetFiles {
-        target: target.clone(),
-        paths: sources.clone(),
-        sources: Vec::new(),
-    });
+    action.replace_attachments(sources.clone(), Vec::new());
+    let summary = BrowserAuditAction::from_control(&action);
     let reserved_bytes =
         crate::attachments::check_panel_budget(&authorized, crate::attachments::MAX_RETAINED_ATTACHMENT_BYTES)
             .map_err(refused)?;
@@ -256,7 +253,7 @@ fn authorize_attachments(
     let paths = crate::attachments::stage_attachments(&attachments_dir, panel_local_id, action_id, &authorized)
         .map_err(refused)?;
     // Engines read the staged copies; every audit record shows the sources.
-    let action = BrowserControlAction::SetFiles { target, paths, sources };
+    action.replace_attachments(paths, sources);
     action
         .validate()
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
@@ -339,7 +336,7 @@ pub fn enqueue_action(
         .validate()
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
     let action_id = new_action_id();
-    let remote = if matches!(action, BrowserControlAction::SetFiles { .. }) {
+    let remote = if action.attachment_paths().is_some() {
         // Refuse ineligible callers before any filesystem work, and carry
         // the target's transfer limits into the authoritative authorization.
         check_enqueue_eligibility(panel_local_id, identity, agent_name)?
@@ -488,7 +485,7 @@ fn release_rejected_attachments(attachments_dir: &Path, panel_local_id: &str, ac
     // All of these actions left the queue without reaching a driver. Release
     // every staging directory even if recording an audit entry later fails.
     for request in actions {
-        if matches!(request.action, BrowserControlAction::SetFiles { .. }) {
+        if request.action.attachment_paths().is_some() {
             crate::attachments::release_attachments(attachments_dir, panel_local_id, &request.action_id);
         }
     }
@@ -571,6 +568,12 @@ mod tests {
 
     #[test]
     fn ownership_rejection_releases_only_the_rejected_attachment_staging() {
+        for drop_files in [false, true] {
+            ownership_rejection_releases_staging(drop_files);
+        }
+    }
+
+    fn ownership_rejection_releases_staging(drop_files: bool) {
         let root = tempfile::tempdir().expect("root");
         let source = root.path().join("notes.txt");
         std::fs::write(&source, "fixture").expect("source");
@@ -593,23 +596,27 @@ mod tests {
                 action_id: id.into(),
                 actor: actor.into(),
                 requested_at_millis: now_millis(),
-                action: BrowserControlAction::SetFiles {
-                    target: horizon_browser::BrowserTarget::Selector {
-                        selector: "#file".into(),
-                    },
-                    paths,
-                    sources: Vec::new(),
+                action: if drop_files {
+                    BrowserControlAction::DropFiles {
+                        target: horizon_browser::BrowserTarget::Selector {
+                            selector: "#file".into(),
+                        },
+                        paths,
+                        sources: Vec::new(),
+                    }
+                } else {
+                    BrowserControlAction::SetFiles {
+                        target: horizon_browser::BrowserTarget::Selector {
+                            selector: "#file".into(),
+                        },
+                        paths,
+                        sources: Vec::new(),
+                    }
                 },
             });
         }
-        let kept_path = match &manifest.actions[0].action {
-            BrowserControlAction::SetFiles { paths, .. } => paths[0].clone(),
-            _ => unreachable!(),
-        };
-        let rejected_path = match &manifest.actions[1].action {
-            BrowserControlAction::SetFiles { paths, .. } => paths[0].clone(),
-            _ => unreachable!(),
-        };
+        let kept_path = manifest.actions[0].action.attachment_paths().unwrap()[0].clone();
+        let rejected_path = manifest.actions[1].action.attachment_paths().unwrap()[0].clone();
         let (ready, rejected) = take_ready_actions(&mut manifest);
         assert_eq!(ready.len(), 1);
         assert_eq!(rejected.len(), 1);

@@ -96,9 +96,15 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 - `file_chooser` owns manual upload requests and answers shared with the host.
   The CDP and BiDi session leaf modules bind each request to its original input
   and retire stale requests. `horizon-core::browser::file_chooser` performs bounded
-  directory reads off the render thread; `horizon-ui::browser_widget::file_chooser`
-  presents the host dialog. Public panel metadata reports support and pending
+  directory reads off the render thread. Its `picker` leaf owns file filtering,
+  selection, and validation. `horizon-ui::browser_widget::file_chooser` uses the
+  shared `dir_picker::modal` for the host dialog. Public panel metadata reports support and pending
   selection without exposing selected paths.
+- `session::file_drop` sends native Chromium file drops. The WebDriver
+  `session::file_drop` leaf delivers local Firefox file drops. The UI
+  `app::file_drop::browser` leaf routes desktop drops to page coordinates.
+  CLI and MCP attachment actions share authorization and private file staging
+  in `horizon-browser-control`.
 - Owns browser processes, CDP/WebDriver/BiDi transports, frame delivery,
   optional WebM page-pixel recording (`video/`, enabled by `video-capture`), and
   deterministic shutdown. Default builds omit the AV1 encoder; Horizon and its

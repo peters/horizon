@@ -147,6 +147,11 @@ pub enum BrowserAuditAction {
         delta_x: f64,
         delta_y: f64,
     },
+    /// File drop: only the target summary and file count are recorded.
+    DropFiles {
+        target: String,
+        file_count: usize,
+    },
     /// File attachment: the host paths are recorded, the contents never are.
     SetFiles {
         target: String,
@@ -278,6 +283,10 @@ impl BrowserAuditAction {
                 delta_x: *delta_x,
                 delta_y: *delta_y,
             },
+            BrowserControlAction::DropFiles { target, paths, .. } => Self::DropFiles {
+                target: audit_target(target),
+                file_count: paths.len(),
+            },
             BrowserControlAction::SetFiles { target, paths, sources } => Self::SetFiles {
                 target: audit_target(target),
                 // A host queue that staged private copies audits the
@@ -345,6 +354,10 @@ impl BrowserAuditAction {
                 orientation: *orientation,
             },
             BrowserCommand::Input(input) => Self::from_input(input),
+            BrowserCommand::DropFiles { paths, .. } => Self::DropFiles {
+                target: "page drop".into(),
+                file_count: paths.len(),
+            },
             BrowserCommand::Video { operation, options } => Self::Video {
                 operation: *operation,
                 quality: options.as_ref().and_then(|options| options.quality),
@@ -542,6 +555,19 @@ pub fn redact_url(url: &str) -> String {
 mod tests {
     use super::*;
     use crate::NavigationWait;
+
+    #[test]
+    fn file_drop_audits_count_without_private_names_or_contents() {
+        let action = BrowserAuditAction::from_command(&BrowserCommand::DropFiles {
+            x: 1.0,
+            y: 2.0,
+            paths: vec![std::path::PathBuf::from("/private/confidential.txt")],
+        });
+        let encoded = serde_json::to_string(&action).expect("audit");
+        assert!(encoded.contains("file_count"));
+        assert!(!encoded.contains("confidential"));
+        assert!(!encoded.contains("private"));
+    }
 
     #[test]
     fn audits_redact_navigation_secrets_and_text_content() {

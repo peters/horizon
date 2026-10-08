@@ -10,7 +10,8 @@ use horizon_browser_protocol::BrowserCommand;
 /// Whether a user-originated command should temporarily pause agent actions.
 pub(crate) fn is_user_activity(command: &BrowserCommand) -> bool {
     match command {
-        BrowserCommand::Navigate(_)
+        BrowserCommand::DropFiles { .. }
+        | BrowserCommand::Navigate(_)
         | BrowserCommand::Reload
         | BrowserCommand::Back
         | BrowserCommand::Forward

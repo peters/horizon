@@ -240,6 +240,11 @@ impl Driver {
                 delta_x,
                 delta_y,
             } => self.semantic_scroll(target.as_ref(), *delta_x, *delta_y),
+            BrowserControlAction::DropFiles { target, paths, .. } => {
+                let selector = self.semantic.resolve(target)?;
+                self.drop_files_on_target(&selector, paths, event_tx)?;
+                Ok(BrowserControlValue::Accepted)
+            }
             BrowserControlAction::SetFiles { target, paths, .. } => self.semantic_set_files(target, paths),
             BrowserControlAction::Evaluate {
                 expression,
