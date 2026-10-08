@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub mod connect;
+pub mod requests;
 mod signin;
 #[cfg(test)]
 mod tests;

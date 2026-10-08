@@ -389,12 +389,20 @@ impl HorizonApp {
                 let response = drawer_area(ctx, &layer, group, runtime, context);
                 chosen.record(group.issue, &response);
             }
+            if (!runtime.github_requests.list.is_empty() || runtime.github_requests.refused.is_some())
+                && let Some((request, decision)) = requests_area(ctx, &layer, group, runtime)
+            {
+                chosen.github.push((group.issue, request, decision));
+            }
             status::keep(runtime, status, frame);
         }
         self.apply_chosen(chosen, ctx);
     }
 
     fn apply_chosen(&mut self, chosen: Chosen, ctx: &egui::Context) {
+        for (id, request, decision) in chosen.github {
+            self.decide_github_request(id, request, decision, ctx);
+        }
         for (id, action) in chosen.actions {
             self.apply_card_action(id, action, ctx);
         }
@@ -427,6 +435,8 @@ struct Chosen {
     fullscreen: Option<u32>,
     layout: Option<(u32, Option<horizon_core::WorkspaceLayout>)>,
     resize: Option<(u32, (u16, u16))>,
+    /// A decision on an agent's GitHub access request: cloud, request, decision.
+    github: Vec<(u32, String, horizon_core::cloud_runtime::github::requests::Decision)>,
 }
 
 impl Chosen {
@@ -469,6 +479,27 @@ fn body_area(
         })
         .inner;
     step.and_then(|step| drawer::step_action(step, status, ctx))
+}
+
+/// The GitHub access requests of the cloud's agents, at the top right over its panels.
+fn requests_area(
+    ctx: &egui::Context,
+    layer: &Layer,
+    group: &CloudGroup,
+    runtime: &Runtime,
+) -> Option<(String, horizon_core::cloud_runtime::github::requests::Decision)> {
+    let rect = body_rect(group);
+    let at = rect.right_top() + egui::vec2(-(super::github::REQUESTS_WIDTH + 16.0), 16.0);
+    egui::Area::new(Id::new(("cloud-github-requests", group.issue)))
+        .order(Order::Foreground)
+        .fixed_pos(at)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ctx.set_transform_layer(ui.layer_id(), layer.transform);
+            ui.set_clip_rect(layer.clip);
+            super::github::requests(ui, runtime)
+        })
+        .inner
 }
 
 /// The drawer over the cloud's panels, above them in the Foreground order.

@@ -341,3 +341,33 @@ fn only_a_redirect_with_the_state_yields_the_manifest_code() {
     assert!(connect::redirect_code("code=a%2Fb&state=s1", "s1").is_none());
     assert!(connect::redirect_code("state=s1", "s1").is_none());
 }
+
+#[test]
+fn requests_keep_only_well_formed_entries() {
+    let listed = requests::parse_list(
+        "{\"requests\":[\
+         {\"id\":\"r1\",\"repository\":\"acme/design-system\",\"access\":\"push\",\"reason\":\"Shared fix\",\"session\":\"panel-2\",\"agent\":\"claude\",\"created_at\":1},\
+         {\"id\":\"r 2\",\"repository\":\"acme/x\",\"access\":\"push\",\"reason\":\"x\"},\
+         {\"id\":\"r3\",\"repository\":\"acme/x\",\"access\":\"admin\",\"reason\":\"x\"},\
+         {\"id\":\"r4\",\"repository\":\"acme/x\",\"access\":\"read\",\"reason\":\"line\\nbreak\"}]}",
+    );
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].repository, "acme/design-system");
+    assert_eq!(listed[0].agent, "claude");
+    assert!(requests::parse_list("not json").is_empty());
+}
+
+#[test]
+fn a_refused_decision_is_explained() {
+    assert_eq!(requests::parse_decision("{\"id\":\"r1\",\"state\":\"allowed\"}"), None);
+    assert!(
+        requests::parse_decision("{\"error\":\"not_installed\"}")
+            .unwrap()
+            .contains("not installed")
+    );
+    assert_eq!(
+        requests::parse_decision("{\"error\":\"Weird Text\"}").unwrap(),
+        "The worker refused the decision."
+    );
+    assert!(requests::parse_decision("").is_some());
+}

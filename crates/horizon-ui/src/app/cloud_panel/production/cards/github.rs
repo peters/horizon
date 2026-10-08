@@ -6,7 +6,7 @@ use crate::{
     theme,
 };
 use egui::{RichText, Stroke, vec2};
-use horizon_core::cloud_runtime::github::{self, Prompt};
+use horizon_core::cloud_runtime::github::{self, Prompt, requests::Decision};
 
 /// The height of the sign-in box, with the gap below it.
 pub(super) const PROMPT_HEIGHT: f32 = 168.0;
@@ -106,6 +106,77 @@ fn web(ui: &mut egui::Ui, cloud_id: &str) {
     }
 }
 
+/// The width of the request box over the cloud's panels.
+pub(super) const REQUESTS_WIDTH: f32 = 380.0;
+/// At most this many requests show at once; the rest wait their turn.
+const SHOWN: usize = 3;
+
+/// The access requests of the cloud's agents, newest last. Returns the request and
+/// the decision when the person clicked one.
+pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, Decision)> {
+    let state = &runtime.github_requests;
+    let mut chosen = None;
+    ui.set_width(REQUESTS_WIDTH);
+    for request in state.list.iter().take(SHOWN) {
+        egui::Frame::new()
+            .fill(theme::PANEL_BG())
+            .stroke(Stroke::new(1.0, theme::alpha(theme::ACCENT(), 150)))
+            .corner_radius(12)
+            .inner_margin(egui::Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let who = match (request.agent.as_str(), request.session.as_str()) {
+                    ("", "") => "An agent".to_owned(),
+                    (agent, "") | ("", agent) => agent.to_owned(),
+                    (agent, session) => format!("{agent} in {session}"),
+                };
+                ui.label(
+                    RichText::new(format!("{who} asks for GitHub access"))
+                        .size(12.0)
+                        .color(theme::FG_DIM()),
+                );
+                let verb = if request.access == "push" { "Push to" } else { "Read" };
+                ui.label(
+                    RichText::new(format!("{verb} {}", request.repository))
+                        .size(15.0)
+                        .strong()
+                        .color(theme::FG()),
+                );
+                if !request.reason.is_empty() {
+                    ui.label(
+                        RichText::new(format!("\u{201c}{}\u{201d}", request.reason))
+                            .size(12.5)
+                            .color(theme::FG_SOFT()),
+                    );
+                }
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add(primary_button("Allow for this task")).clicked() {
+                        chosen = Some((request.id.clone(), Decision::AllowTask));
+                    }
+                    if ui.add(chrome_button("Always for this cloud")).clicked() {
+                        chosen = Some((request.id.clone(), Decision::AllowCloud));
+                    }
+                    if ui.add(chrome_button("Deny")).clicked() {
+                        chosen = Some((request.id.clone(), Decision::Deny));
+                    }
+                });
+            });
+        ui.add_space(8.0);
+    }
+    if state.list.len() > SHOWN {
+        ui.label(
+            RichText::new(format!("{} more requests wait.", state.list.len() - SHOWN))
+                .size(12.0)
+                .color(theme::FG_DIM()),
+        );
+    }
+    if let Some(refused) = &state.refused {
+        ui.label(RichText::new(refused).size(12.0).color(theme::PALETTE_RED()));
+    }
+    chosen
+}
+
 /// One line for the steps card: who the cloud acts as on GitHub, or why it has no access.
 pub(super) fn summary(runtime: &Runtime) -> Option<(String, bool)> {
     match runtime.github.as_ref()? {
@@ -129,6 +200,7 @@ pub(super) fn summary(runtime: &Runtime) -> Option<(String, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_egui::DiscardTextures;
 
     #[test]
     fn the_steps_card_names_the_account_or_why_there_is_no_access() {
@@ -147,6 +219,48 @@ mod tests {
             summary(&runtime),
             Some(("GitHub: Skipped: this cloud has no GitHub access.".into(), false))
         );
+    }
+
+    #[test]
+    fn requests_show_who_asks_what_and_why() {
+        use horizon_core::cloud_runtime::github::requests::Request;
+        let mut runtime = Runtime::default();
+        runtime.github_requests.list = (0..5)
+            .map(|n| Request {
+                id: format!("r{n}"),
+                repository: "acme/design-system".into(),
+                access: "push".into(),
+                reason: "The shared Button needs the same fix".into(),
+                session: "panel-2".into(),
+                agent: "claude".into(),
+            })
+            .collect();
+        let texts: Vec<String> = egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                assert!(requests(ui, &runtime).is_none(), "nothing is chosen without a click");
+            })
+            .discard_textures()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "claude in panel-2 asks for GitHub access")
+        );
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|text| *text == "Push to acme/design-system")
+                .count(),
+            SHOWN
+        );
+        assert!(texts.iter().any(|text| text == "2 more requests wait."));
+        assert!(texts.iter().any(|text| text == "Allow for this task"));
     }
 
     #[test]

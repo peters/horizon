@@ -8,6 +8,7 @@ mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
 mod first_panel;
+mod github_requests;
 mod idle;
 mod launch;
 mod lifecycle;
@@ -195,6 +196,8 @@ pub(super) struct Runtime {
     drawer: Option<cards::Tab>,
     /// The latest GitHub sign-in prompt or outcome of this cloud's deployment.
     github: Option<cloud_runtime::github::Prompt>,
+    /// The GitHub access requests this cloud's agents wait on.
+    github_requests: github_requests::State,
     receiver: Option<Receiver<Event>>,
     recovery_receiver: Option<Receiver<cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>>>,
     recovery_worker_id: String,
@@ -508,6 +511,7 @@ impl Runtime {
 impl HorizonApp {
     pub(super) fn prepare_production_clouds(&mut self, ctx: &egui::Context) {
         self.sync_cloud_companion_session(ctx);
+        self.poll_github_requests(ctx);
         if self.pending_startup_runtime_state.is_some() || self.startup_receiver.is_some() {
             return;
         }
