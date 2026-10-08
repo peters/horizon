@@ -286,4 +286,24 @@ fn a_production_cloud_renames_from_a_click_on_its_title() {
     render(&mut app, title, Vec::new());
     assert_eq!(app.cloud_prototype.renaming, None);
     assert_eq!(app.cloud_prototype.groups.0[0].title, "Renamed cloud");
+    // A drag that starts on the title still moves the card and opens no editor.
+    let before = app.cloud_prototype.groups.0[0].position;
+    let press = |pos, pressed| Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    render(&mut app, title, vec![press(title, true)]);
+    for step in 1u8..=6 {
+        render(&mut app, title + Vec2::new(10.0 * f32::from(step), 0.0), Vec::new());
+    }
+    let end = title + Vec2::new(60.0, 0.0);
+    render(&mut app, end, vec![press(end, false)]);
+    render(&mut app, end, Vec::new());
+    assert_eq!(app.cloud_prototype.renaming, None);
+    assert!(
+        app.cloud_prototype.groups.0[0].position[0] > before[0] + 20.0,
+        "the card moved"
+    );
 }
