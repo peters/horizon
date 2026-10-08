@@ -59,13 +59,19 @@ impl HorizonApp {
             (in_viewport && browser.frame_slot.file_chooser().request().is_some())
                 .then(|| (panel.id, browser.frame_slot.file_chooser().clone()))
         });
-        if let Some((panel, handle)) = candidate
-            && self
-                .panel_render_caches
-                .browser_ui_state
-                .entry(panel)
-                .or_default()
-                .show_file_chooser(ctx, panel, &handle)
+        let Some((panel, handle)) = candidate else {
+            return;
+        };
+        #[cfg(target_os = "linux")]
+        if self.observed_keyboard_inputs.is_wayland_backend() {
+            resolve_native_picker_drops(ctx, &self.observed_keyboard_inputs);
+        }
+        if self
+            .panel_render_caches
+            .browser_ui_state
+            .entry(panel)
+            .or_default()
+            .show_file_chooser(ctx, panel, &handle)
         {
             self.consume_navigation_key(
                 ctx,
@@ -82,6 +88,43 @@ impl HorizonApp {
 mod tests {
     use super::*;
     use crate::app::test_support;
+
+    #[test]
+    fn detached_picker_resolves_its_current_viewport_native_batch() {
+        use crate::test_egui::DiscardTextures;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("Overview.pdf");
+        std::fs::write(&path, b"synthetic detached picker bytes").unwrap();
+        let observed = crate::input::ObservedKeyboardInputs::default();
+        observed.set_wayland_backend(true);
+        observed.native_window_seen(20);
+        let token = observed
+            .native_drop_position(20, [300.0, 200.0], vec![path.clone()])
+            .unwrap();
+        let viewport = egui::ViewportId::from_hash_of("detached-upload");
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            dropped_files: vec![test_support::dropped_file(token.clone())],
+            ..Default::default()
+        };
+        input.viewports.insert(viewport, egui::ViewportInfo::default());
+        let ctx = egui::Context::default();
+        let _ = ctx
+            .run_ui(input, |ui| {
+                assert_eq!(ui.ctx().viewport_id(), viewport);
+                resolve_native_picker_drops(ui.ctx(), &observed);
+                let files = ui.ctx().input(|input| input.raw.dropped_files.clone());
+                assert_eq!(files.len(), 1);
+                assert_eq!(files[0].path(), path);
+                assert_eq!(files[0].bytes().unwrap(), b"synthetic detached picker bytes");
+            })
+            .discard_textures();
+        assert!(
+            observed
+                .take_native_drop_batches(viewport, &[test_support::dropped_file(token)])
+                .is_empty()
+        );
+    }
 
     #[test]
     fn picker_resolves_native_tokens_before_drop_state_is_discarded() {

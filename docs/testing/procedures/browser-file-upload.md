@@ -144,7 +144,11 @@ It checks file contents, selection, navigation, themes, and the public browser c
 
    Result: The picker selects the file and waits for **Upload**.
 
-7. Pan the canvas. Change its zoom. Repeat steps 1 and 2 at each view.
+7. Repeat step 6 in a detached workspace. Include native Wayland on Linux when available.
+
+   Result: The picker selects the real file and waits for **Upload**. The page receives its expected SHA-256 digest after confirmation.
+
+8. Pan the canvas. Change its zoom. Repeat steps 1 and 2 at each view.
 
    Result: The highlight follows the page image. The file reaches the drop area under the pointer and has the correct bytes.
 
