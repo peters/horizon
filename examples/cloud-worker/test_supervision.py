@@ -341,11 +341,30 @@ class SupervisionTests(unittest.TestCase):
             self.assertIn(service, json.loads((self.root / 'services.json').read_text())['services'])
             CHECK(self.root, self.root)
             self.stop_unreaped(child)
-            with self.assertRaisesRegex(ValueError, service):
+            if service == 'github':
+                # The worker keeps running without it and publishes its services again.
                 self.supervisor.assert_running()
-            with self.assertRaisesRegex(ValueError, 'exited'):
+                self.assertNotIn(service, self.supervisor.children)
+                self.assertNotIn(service, json.loads((self.root / 'services.json').read_text())['services'])
                 CHECK(self.root, self.root)
+            else:
+                with self.assertRaisesRegex(ValueError, service):
+                    self.supervisor.assert_running()
+                with self.assertRaisesRegex(ValueError, 'exited'):
+                    CHECK(self.root, self.root)
             self.supervisor.close()
+
+    def test_the_github_service_starts_only_with_agent_isolation(self):
+        isolation = self.root / 'agent-isolation'
+        started = []
+        with mock.patch.dict(Supervisor.start.__globals__, AGENT_ISOLATION=isolation), \
+                mock.patch.object(MODULE['shutil'], 'which', return_value='/usr/local/bin/horizon-worker-github'), \
+                mock.patch.object(self.supervisor, 'start', side_effect=lambda *args: started.append(args)):
+            self.supervisor.start_github()
+            self.assertEqual(started, [], 'agents would run as root and could read the chain')
+            isolation.touch()
+            self.supervisor.start_github()
+        self.assertEqual(started, [('github', ['horizon-worker-github', 'serve'])])
 
     def test_window_manager_must_own_its_live_root_registration(self):
         good = '_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x20020b'

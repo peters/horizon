@@ -25,6 +25,9 @@ SERVICES = {'control', 'sshd'}
 OPTIONAL = {'idle', 'github'}
 # Root services: every other service runs as the agent under agent isolation.
 PRIVILEGED = {'sshd', 'idle', 'github'}
+# A service whose exit ends only that service: the worker stays up and drops it from its
+# published services. Without the GitHub service, Git falls back to the static token file.
+DISPENSABLE = {'github'}
 GITHUB_CHAIN_CONTRACT = 'horizon-github-chain-contract=1'
 DESKTOP_UNHEALTHY_SECONDS = 10
 # Present when agents run as UID 10001: horizon-worker-tailnet isolate, before this supervisor.
@@ -192,6 +195,8 @@ class Supervisor:
         self.children = {}
         self.identities = {}
         self.stopping = False
+        # The desktop selection of the published services, once they are published.
+        self.published = None
 
     def start(self, name, command, environment=None):
         # With agent isolation the control service is the agents' browser host, so it runs as
@@ -210,11 +215,32 @@ class Supervisor:
     def assert_running(self, configuring=False):
         if self.stopping:
             raise ValueError('Worker shutdown requested')
-        for name, child in self.children.items():
+        for name, child in list(self.children.items()):
             if configuring and name == 'configure':
                 continue
             if child.returncode is not None or exited(child) is not None:
+                if name in DISPENSABLE:
+                    self.retire(name)
+                    continue
                 raise ValueError('Required worker service exited: ' + name)
+
+    def start_github(self):
+        # Always running when installed: it answers that no chain exists until the host installs
+        # one, and a chain stored on the volume is served again after a container restart. Only
+        # agent isolation keeps agents out of its root-only chain, so it needs that.
+        if shutil.which('horizon-worker-github') and AGENT_ISOLATION.exists():
+            self.start('github', ['horizon-worker-github', 'serve'])
+
+    def retire(self, name):
+        """Ends a dispensable service that exited and publishes the services without it."""
+        child, identity = self.children.pop(name), self.identities.pop(name)
+        print('Worker service exited and is not restarted: ' + name, file=sys.stderr, flush=True)
+        try:
+            stop_groups([(child, identity)])
+        except ValueError as error:
+            print('Worker service cleanup: ' + str(error), file=sys.stderr, flush=True)
+        if self.published is not None:
+            self.publish(self.published)
 
     def wait_until(self, predicate, message, timeout=30, configuring=False):
         deadline = time.monotonic() + timeout
@@ -263,6 +289,7 @@ class Supervisor:
 
     def publish(self, desktop):
         self.assert_running(configuring=True)
+        self.published = desktop
         names = SERVICES | (DESKTOP if desktop else set()) | (OPTIONAL & set(self.children))
         state = {'supervisor': process_identity(os.getpid()),
                  'services': {name: self.identities[name] for name in sorted(names)}}
@@ -280,10 +307,7 @@ class Supervisor:
             self.start('vnc', ['x11vnc', '-display', ':99', '-localhost', '-rfbport', '5900',
                                '-forever', '-shared', '-viewonly', '-nopw'])
             self.wait_until(vnc_ready, 'Worker desktop transport did not become ready')
-        # Always running when installed: it answers that no chain exists until the host installs
-        # one, and a chain stored on the volume is served again after a container restart.
-        if shutil.which('horizon-worker-github'):
-            self.start('github', ['horizon-worker-github', 'serve'])
+        self.start_github()
         self.configure(['horizon-worker-configure'])
         self.start_control()
         self.await_control()

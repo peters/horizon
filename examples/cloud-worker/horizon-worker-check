@@ -225,8 +225,10 @@ try:
         # Contract 2: per-repository grants for the primary and its same-worker siblings.
         print('horizon-git-auth-contract=1\nhorizon-git-auth-contract=2')
         # A refreshing GitHub App token chain held by a root service. The service alone is not
-        # enough: the supervisor must declare that it starts it.
-        if shutil.which('horizon-worker-github') and helper_declares(
+        # enough: the supervisor must declare that it starts it, and the image must isolate
+        # agents (the launcher's identity is checked below), because both refuse to run without
+        # agent isolation.
+        if shutil.which('horizon-worker-github') and shutil.which('horizon-worker-tailnet') and helper_declares(
                 'horizon-worker-supervise', '--github-chain-contract', 'horizon-github-chain-contract=1'):
             print('horizon-github-chain-contract=1')
     if args.ready:

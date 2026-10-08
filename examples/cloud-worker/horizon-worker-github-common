@@ -1,0 +1,261 @@
+"""Shared parts of horizon-worker-github: private storage, the token chain checks and the
+GitHub addresses. A module that horizon-worker-github loads, not a command."""
+import contextlib
+import fcntl
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import tempfile
+import time
+import urllib.request
+
+
+def load_sibling(name, module):
+    """A helper next to this file, loaded one time per process so its classes stay the same."""
+    if module in sys.modules:
+        return sys.modules[module]
+    loader = importlib.machinery.SourceFileLoader(module, str(Path(__file__).resolve().with_name(name)))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    loaded = importlib.util.module_from_spec(spec)
+    sys.modules[module] = loaded
+    try:
+        loader.exec_module(loaded)
+    except BaseException:
+        del sys.modules[module]
+        raise
+    return loaded
+
+
+GIT_AUTH = Path(__file__).resolve().with_name('horizon-worker-git-auth')
+auth = load_sibling('horizon-worker-git-auth', 'horizon_worker_git_auth')
+
+# Root-owned on the workspace volume, so the chain survives a container restart. Agent
+# isolation leaves the volume's top level to root, so no agent can reach or replace it.
+PERSISTENT = Path('/workspace/.horizon-root/github')
+# Root-only fallback on tmpfs, for volumes that do not keep POSIX permissions. It also holds
+# the lock, the request log and the clear marker. /run/horizon-credentials belongs to the
+# agent under isolation.
+RUNTIME = Path('/run/horizon-github')
+# Agents run as UID 10001 only when horizon-worker-tailnet isolate set this marker. Without
+# it they run as root and could read the chain, so the service refuses to run.
+AGENT_ISOLATION = Path('/run/horizon-tailnet/agent-isolation')
+STATE = 'state.json'
+# Written by clear: no copy older than this time is served, in any process.
+CLEARED = 'cleared'
+MAX_STATE = 131072
+# Tests only: a fake GitHub on the loopback address. Nothing else is accepted.
+TEST_URL = 'HORIZON_WORKER_GITHUB_TEST_URL'
+CHAIN_FIELDS = {'access_token', 'access_expires_at', 'refresh_token', 'refresh_expires_at'}
+
+
+def timestamp(value):
+    return type(value) is int and 0 < value < 1 << 40
+
+
+def validate_chain(chain):
+    if not isinstance(chain, dict) or set(chain) != CHAIN_FIELDS:
+        raise ValueError('Invalid GitHub token chain')
+    if not (auth.valid_token(chain['access_token']) and auth.valid_token(chain['refresh_token'])
+            and timestamp(chain['access_expires_at']) and timestamp(chain['refresh_expires_at'])):
+        raise ValueError('Invalid GitHub token chain')
+    return chain
+
+
+def private_directory(path, create):
+    """A real directory that only this (root) process can enter, checked after creation:
+    some provider volumes accept chmod and still report other modes."""
+    if create:
+        with contextlib.suppress(FileExistsError):
+            path.mkdir(mode=0o700)
+        if path.is_symlink():
+            raise ValueError('Private GitHub storage must not be a link')
+        os.chmod(path, 0o700)
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise ValueError('GitHub storage does not keep private permissions')
+    return path
+
+
+def write_private(directory, name, data):
+    fd, temporary = tempfile.mkstemp(prefix='.' + name + '-', dir=directory)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            info = os.fstat(output.fileno())
+            if info.st_mode & 0o077 or info.st_uid != os.geteuid():
+                raise ValueError('GitHub storage does not keep private permissions')
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, directory / name)
+        folder = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def read_json(path, limit=MAX_STATE):
+    """A private regular file's JSON, or None when it does not exist."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd, 'rb') as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.geteuid()
+                or info.st_size > limit):
+            raise ValueError('GitHub state must be private')
+        return json.loads(source.read(limit + 1))
+
+
+def read_private(path):
+    state = read_json(path)
+    if state is None:
+        return None
+    if (not isinstance(state, dict) or state.get('version') != 1 or state.get('state') not in ('ok', 'revoked')
+            or type(state.get('serial')) is not int):
+        raise ValueError('Malformed GitHub state')
+    validate_chain(state.get('chain'))
+    return state
+
+
+@contextlib.contextmanager
+def locked(directory, name):
+    private_directory(directory, create=True)
+    fd = os.open(directory / name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+class Store:
+    """The chain on the persistent volume when it keeps private permissions, else on tmpfs.
+    Every save carries a higher serial, so the newest copy wins if both exist.
+
+    A rotated chain that no storage accepted is kept in `pending`: GitHub already cancelled
+    the stored one, so the serving process uses it and writes it again on every refresh
+    check until a write succeeds. `clear` in any process ends it through the clear marker."""
+
+    def __init__(self, persistent=PERSISTENT, runtime=RUNTIME):
+        self.persistent = persistent
+        self.runtime = runtime
+        self.pending = None
+
+    def lock(self):
+        return locked(self.runtime, 'state.lock')
+
+    def cleared(self):
+        """The serial below which no copy counts, written by the latest clear."""
+        try:
+            value = read_json(self.runtime / CLEARED)
+        except (OSError, ValueError, RecursionError):
+            return 0
+        return value if type(value) is int else 0
+
+    def copies(self):
+        found = []
+        for directory, persistent in ((self.persistent, True), (self.runtime, False)):
+            # A copy that is not private or not well formed is never served; the next save
+            # replaces it.
+            try:
+                private_directory(directory, create=False)
+                state = read_private(directory / STATE)
+            except (OSError, ValueError, RecursionError):
+                continue
+            if state is not None:
+                found.append((state, persistent))
+        if self.pending is not None:
+            found.append((self.pending, False))
+        floor = self.cleared()
+        return [copy for copy in found if copy[0]['serial'] > floor]
+
+    def load(self):
+        """(state, persistent) for the newest copy, or (None, False) without a chain."""
+        found = self.copies()
+        return max(found, key=lambda copy: copy[0]['serial']) if found else (None, False)
+
+    def pending_write(self):
+        """Whether the newest chain exists only in this process's memory."""
+        state, _ = self.load()
+        return state is not None and state is self.pending
+
+    def write(self, state):
+        """Writes `state` as it is; returns whether the volume holds it."""
+        data = json.dumps(state, separators=(',', ':'))
+        for directory, persistent, other in ((self.persistent, True, self.runtime),
+                                             (self.runtime, False, self.persistent)):
+            try:
+                if persistent:
+                    private_directory(directory.parent, create=True)
+                write_private(private_directory(directory, create=True), STATE, data)
+            except (OSError, ValueError):
+                continue
+            with contextlib.suppress(OSError):
+                (other / STATE).unlink(missing_ok=True)
+            return persistent
+        raise ValueError('No private GitHub storage accepted the token chain')
+
+    def save(self, state):
+        """Durably stores `state` with the next serial; returns whether the volume holds it."""
+        current, _ = self.load()
+        # Clock based, so an install by another process also wins over this process's memory.
+        state = dict(state, serial=max(current['serial'] + 1 if current else 1, time.time_ns()))
+        try:
+            persistent = self.write(state)
+        except ValueError:
+            self.pending = state
+            raise
+        self.pending = None
+        return persistent
+
+    def retry_pending(self):
+        """Writes a pending chain again. Returns True when nothing is left in memory only."""
+        if self.pending is not None and self.pending['serial'] <= self.cleared():
+            self.pending = None
+        if self.pending is None:
+            return True
+        self.write(self.pending)
+        self.pending = None
+        return True
+
+    def clear(self):
+        """Removes every copy, also the memory of a serving process, which reads the marker."""
+        self.pending = None
+        private_directory(self.runtime, create=True)
+        write_private(self.runtime, CLEARED, str(time.time_ns()))
+        for directory in (self.persistent, self.runtime):
+            (directory / STATE).unlink(missing_ok=True)
+
+
+def github_bases(environ):
+    """(sign-in base, API base, loopback) for github.com, or for a loopback fake in tests."""
+    override = environ.get(TEST_URL)
+    if override is None:
+        return 'https://github.com', 'https://api.github.com', False
+    if not re.fullmatch(r'http://127\.0\.0\.1:[0-9]{1,5}', override):
+        raise ValueError('The GitHub test address must be a loopback port')
+    return override, override, True
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def opener(loopback):
+    """HTTPS to GitHub without redirects; a loopback fake also skips any proxy."""
+    return urllib.request.build_opener(NoRedirect(), *([urllib.request.ProxyHandler({})] if loopback else []))
+
+
+if __name__ == '__main__':
+    sys.exit('horizon-worker-github-common is a module of horizon-worker-github, not a command.')

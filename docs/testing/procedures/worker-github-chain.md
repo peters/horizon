@@ -183,7 +183,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> horizon-worker-github status
    ```
 
-   Result: The JSON shows `"state":"absent"` and an empty `repositories` list.
+   Result: The JSON shows `"state":"absent"`, `"serving":true` and an empty
+   `repositories` list.
 
 ### 6.3 C2: Install
 

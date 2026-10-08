@@ -29,6 +29,7 @@ def load(name, module):
 
 service = load('horizon-worker-github', 'worker_github')
 auth = service.auth
+common = service.common
 NOW = 1_800_000_000
 ACCESS = 'ghu_synthetic-access-one'
 REFRESH = 'ghr_synthetic-refresh-one'
@@ -206,7 +207,7 @@ class InstallationTests(ServiceTestCase):
         # A file whose effective mode is not private is refused before any token is written.
         shared = os.stat_result((0o100666, 0, 0, 1, os.geteuid(), 0, 0, 0, 0, 0))
         with mock.patch.object(service.os, 'fstat', return_value=shared), self.assertRaises(ValueError):
-            service.write_private(self.store.runtime, 'probe', ACCESS)
+            common.write_private(self.store.runtime, 'probe', ACCESS)
         self.assertEqual(sorted(path.name for path in self.store.runtime.iterdir()), ['state.json', 'state.lock'])
 
     def test_git_helper_configures_repositories_and_replaces_the_static_binding(self):
@@ -269,7 +270,7 @@ class RefreshTests(ServiceTestCase):
         self.assertEqual(reply['token'], 'ghu_synthetic-access-2')
         # Without any storage the rotated chain stays in memory and is still served.
         later = on_disk['access_expires_at'] - 60 * 10
-        with mock.patch.object(service, 'write_private', side_effect=OSError):
+        with mock.patch.object(common, 'write_private', side_effect=OSError):
             with self.assertRaises(ValueError):
                 service.refresh_once(self.store, lambda: later, post)
         self.assertEqual(self.stored()['chain']['refresh_token'], 'ghr_synthetic-refresh-3')

@@ -89,6 +89,8 @@ class CapabilitiesTests(unittest.TestCase):
         for reported, missing, args, expected in [(declared, (), ('--git-auth',), True),
                                                   ({'horizon-worker-supervise': b''}, (), ('--git-auth',), False),
                                                   (declared, ('horizon-worker-github',), ('--git-auth',), False),
+                                                  # Without the agent isolation launcher the service would refuse to run.
+                                                  (declared, ('horizon-worker-tailnet',), ('--git-auth',), False),
                                                   (declared, (), (), False)]:
             with mock.patch('os.readlink', return_value='/usr/local/bin/horizon-worker-git-auth'):
                 status, output, _ = self.run_check(*args, missing=missing, reported=reported)

@@ -402,21 +402,25 @@ def gh_environment(loaded, env, argv=()):
     return env
 
 
-def ask_service(request):
-    """The chain service's reply, or None when no service answers or it holds no chain, so
-    the caller falls back to the private file."""
+def call_service(request, path=None):
+    """The chain service's reply as an object, or None when no service answers."""
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(SERVICE_TIMEOUT)
-            connection.connect(str(SERVICE_SOCKET))
+            connection.connect(str(path or SERVICE_SOCKET))
             connection.sendall((json.dumps(request) + '\n').encode())
             with connection.makefile('rb') as stream:
                 reply = json.loads(stream.readline(65536))
     except (OSError, ValueError):
         return None
-    if not isinstance(reply, dict) or reply.get('state') == 'absent':
-        return None
-    return reply
+    return reply if isinstance(reply, dict) else None
+
+
+def ask_service(request):
+    """The chain service's reply, or None when no service answers or it holds no chain, so
+    the caller falls back to the private file."""
+    reply = call_service(request)
+    return None if reply is None or reply.get('state') == 'absent' else reply
 
 
 def service_credential(request, ask=ask_service):

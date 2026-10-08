@@ -798,9 +798,26 @@ again. Anyone who can read the volume at the provider can read a persistent
 chain, so use `clear` (or revoke the sign-in on GitHub) when you no longer
 want the worker to have access.
 
+If no storage accepts a refreshed chain, the service keeps it in memory, because
+GitHub already cancelled the stored one. It uses that chain and tries to write it
+again at every check, about once a minute, until a write succeeds. Until then
+`status` reports `"pending_write": true` and `"persistent": false`, and a
+restart of the service loses the chain.
+
+**Agent isolation is required.** Without agent isolation, agents run as root and
+could read the chain. The supervisor starts the service only when
+`horizon-worker-tailnet isolate` marked the worker as isolated, and `install`
+refuses a chain without that mark. `horizon-worker-check --git-auth` reports the
+service only for an image that has the isolation launcher.
+
 **Refresh.** `horizon-worker-github serve` runs as root for the life of the
-worker. `horizon-worker-supervise` starts it whenever the image contains it. It
-refreshes the chain when the access token expires in 30 minutes or less:
+worker. `horizon-worker-supervise` starts it whenever the image contains it and
+agents are isolated. If the service cannot open its socket, it tries five times
+with doubled waits from 2 seconds and then stops. The supervisor then removes it
+from the published services and the worker keeps running; Git and `gh` fall
+back to the static token file, and `status` reports `"serving": false`. The
+service is not started again until the worker restarts. It refreshes the chain
+when the access token expires in 30 minutes or less:
 
 - A network failure, a GitHub server error or an unusable reply is retried after
   15 seconds, then with doubled waits up to 15 minutes, each with random jitter.
@@ -851,15 +868,19 @@ expired token; start `gh` again to get the current one.
 
 ```bash
 horizon-worker-github status
-# {"version":1,"state":"ok","persistent":true,"access_expires_at":...,
-#  "refresh_expires_at":...,"last_refresh_at":...,"last_error":null,
-#  "repositories":[{"repository":"owner/name","target":"primary","access":"push"}]}
+# {"version":1,"state":"ok","persistent":true,"pending_write":false,"login":"octocat",
+#  "access_expires_at":...,"refresh_expires_at":...,"last_refresh_at":...,"last_error":null,
+#  "repositories":[{"repository":"owner/name","target":"primary","access":"push"}],"serving":true}
 horizon-worker-github clear
 ```
 
-`state` is `ok`, `revoked` or `absent`. `clear` removes every copy of the chain.
-The service keeps running and answers that no chain exists. It does not revoke
-the sign-in on GitHub. Images with this service report
+`state` is `ok`, `revoked` or `absent`. `status` asks the running service over
+the socket, as root, so it also sees a chain that only the service's memory
+holds. Without an answer it reads the stored copies and reports
+`"serving": false`. `clear` removes every copy of the chain and writes a root-only
+clear mark that the running service reads, so the service also drops a chain
+that only its memory holds. The service keeps running and answers that no chain
+exists. It does not revoke the sign-in on GitHub. Images with this service report
 `horizon-github-chain-contract=1` from `horizon-worker-check --git-auth`. The
 [test procedure](../../docs/testing/procedures/worker-github-chain.md) checks the
 service with a fake GitHub and with a real GitHub App.
