@@ -25,6 +25,17 @@ pub(super) enum Action {
 mod tests;
 
 impl Runtime {
+    /// Takes the saved record a report carries. The record keeps Validate while the
+    /// image is built and pushed, so its step does not replace Build locally, Push image
+    /// or Replace image of the live attempt: a failure there stays on that step.
+    pub(super) fn adopt_snapshot(&mut self, state: cloud_runtime::state::Deployment) {
+        let image_step = matches!(self.stage, Some(Stage::Build | Stage::Push | Stage::Replace));
+        if !(image_step && state.stage == Stage::Validate) {
+            self.stage = Some(state.stage);
+        }
+        self.state = Some(state);
+    }
+
     /// Shows the failure an operation reported. Whether it may be a stop Horizon did
     /// not make is decided now, while a resize that failed still shows as running.
     pub(super) fn show_failure(&mut self, error: String, at: std::time::Instant) {
