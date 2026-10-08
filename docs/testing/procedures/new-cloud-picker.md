@@ -124,7 +124,7 @@ report.
    Note: If you close the dialog without **Save settings**, Horizon discards
    the key, the token and the lists.
 
-9. Open **Cloud › New cloud…**.
+9. Open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens.
 

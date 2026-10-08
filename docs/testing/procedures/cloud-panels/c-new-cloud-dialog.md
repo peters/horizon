@@ -95,7 +95,7 @@ runs in the place that the dialog showed.
 The tasks from C04 use an open New cloud dialog for `<home>/smoke/app`. If the
 dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
-### 6.1 C01 — Open New cloud from the panel picker, the toolbar and the overflow menu
+### 6.1 C01 — Open New cloud from the panel picker and the toolbar menu
 
 1. In a workspace, open the panel picker.
 
@@ -109,9 +109,9 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
    Result: The dialog closes. No cloud starts.
 
-4. Click **Cloud** in the menu bar.
+4. In the toolbar, click **Menu**, then **Cloud**.
 
-   Result: The Cloud menu opens.
+   Result: The Cloud submenu opens.
 
 5. Click **New cloud…**.
 
@@ -127,9 +127,9 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
    DISPLAY=<display> xdotool search --pid <child-pid> --name '^Horizon$' windowsize %1 800 900
    ```
 
-   Result: The toolbar shows **More** instead of **Cloud**.
+   Result: The toolbar shows **Dependencies** and **Menu**.
 
-8. Open **More › Cloud › New cloud…**.
+8. Open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens in one column.
 
@@ -139,7 +139,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
 10. Set the window back to its first size.
 
-    Result: The toolbar shows **Cloud** again.
+    Result: The toolbar shows **Dependencies** and **Menu** again.
 
 ### 6.2 C02 — Refuse a cloud in a detached workspace
 
@@ -159,7 +159,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
    Result: The detached workspace is the active workspace.
 
-5. Open **Cloud › New cloud…**.
+5. Open **Menu › Cloud › New cloud…**.
 
    Result: The dialog shows `Move this workspace to the main window before creating
    a cloud`. No worker, cloud or session starts.
@@ -193,7 +193,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
    Result: The Device panel shows a live view.
 
-3. In the second fixture, open **Cloud › New cloud…**.
+3. In the second fixture, open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens.
 
@@ -220,7 +220,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
 ### 6.4 C04 — Combine RunPod and Hetzner and show the three picks
 
-1. Open **Cloud › New cloud…**.
+1. Open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens.
 
@@ -307,7 +307,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
    Result: The dialog closes. No cloud starts.
 
-10. Open **Cloud › New cloud…** again.
+10. Open **Menu › Cloud › New cloud…** again.
 
     Result: **In stock only** is selected again. The search field is empty.
 
@@ -360,7 +360,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
     Result: Only the key file of the fixture contains the RunPod key.
 
-12. Open **Cloud › New cloud…**.
+12. Open **Menu › Cloud › New cloud…**.
 
     Result: The New cloud dialog opens.
 
@@ -419,7 +419,7 @@ For a detailed check of the refresh, use the
 
 ### 6.9 C09 — List None and the saved networks in the tailnet chooser
 
-1. Open **Cloud › New cloud…**.
+1. Open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens.
 
@@ -921,7 +921,7 @@ This task uses the clouds of D01 and D02. Do not start other clouds.
 
 ## 7. Pass criteria
 
-- C01 opens the dialog from the panel picker, the toolbar and **More**.
+- C01 opens the dialog from the panel picker and from **Menu › Cloud** at two window sizes.
 - C02 refuses a cloud in a detached workspace. C03 refuses a cloud in an unsaved session.
 - C04 to C11 show the picks, the prices, the filters, the refresh, the watch,
   the tailnet chooser, the siblings and the fields as written.

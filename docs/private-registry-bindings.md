@@ -1,6 +1,6 @@
 # Private registry bindings
 
-Open **Cloud > Cloud settings > Private container images**. Add the exact image
+Open **Menu > Cloud > Cloud settings > Private container images**. Add the exact image
 repository, for example `ghcr.io/example-team/worker`, and separate publishing and
 worker-pull logins. Publishing is optional for existing images. Confirm that the
 pull grant is read-only and limited to the intended repository. Expiry is optional

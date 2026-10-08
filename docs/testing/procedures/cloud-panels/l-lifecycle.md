@@ -332,7 +332,7 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
 ### 6.7 L07 — Make sure that idle stop works
 
-1. Open **Cloud › New cloud…**.
+1. Open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens.
 
@@ -590,7 +590,7 @@ Use `smoke-r`.
 L05 is the last task that uses the `<build-repository>` entry of A08. Steps 3
 to 12 revoke it while the fixture runs.
 
-3. Open **Cloud › Cloud settings…**.
+3. Open **Menu › Cloud › Cloud settings…**.
 
    Result: The Cloud settings dialog opens.
 

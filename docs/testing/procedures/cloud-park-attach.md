@@ -76,7 +76,7 @@ when it comes into view, and that it then shows the output of the session.
 
    Result: The candidate shows a new saved session. A cloud needs a saved session.
 
-4. Open **Cloud › New cloud…**. Type the path of the synthetic repository and a
+4. Open **Menu › Cloud › New cloud…**. Type the path of the synthetic repository and a
    title. Select the profile `hetzner-shell`.
 
    Result: The dialog shows a Hetzner offer and three passed checks.

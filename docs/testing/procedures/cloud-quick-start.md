@@ -104,9 +104,9 @@ items:
 
 ### 6.1 Q01 — Guidance for a commit without cloud.yml
 
-1. Click **Cloud** in the menu bar.
+1. In the toolbar, click **Menu**, then **Cloud**.
 
-   Result: The Cloud menu opens.
+   Result: The Cloud submenu opens.
 
 2. Click **New cloud…**.
 

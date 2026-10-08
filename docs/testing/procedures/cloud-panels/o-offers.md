@@ -140,7 +140,7 @@ a worker below the profile minimum cannot be selected.
 
 ### 6.3 O03 — Make sure that a worker below the minimum cannot be selected
 
-1. Open **Cloud › New cloud…**.
+1. Open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens.
 

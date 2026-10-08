@@ -328,7 +328,7 @@ A first cloud needs these items today:
 
 | Item | Need | Where |
 |---|---|---|
-| RunPod API key or Hetzner API token | Required | **Cloud > Cloud settings** |
+| RunPod API key or Hetzner API token | Required | **Menu > Cloud > Cloud settings** |
 | Worker image in a registry | Required, except for quick start. Quick start uses the public base image on RunPod. | Build it from [`examples/cloud-worker`](../examples/cloud-worker/README.md) |
 | Git and OpenSSH | Required | This computer |
 | Docker with buildx | Required, except for quick start. Quick start does not use Docker. | This computer |
@@ -346,7 +346,7 @@ Deploy sends committed source only. Horizon does not fetch your local clone
 from `origin` before deploy. Commit and update the branch before you start.
 
 1. Open a workspace in a Git repository.
-2. Click **Cloud**.
+2. In the toolbar, click **Menu**, then **Cloud**.
 3. Click **New cloud…**.
 
    Result: The **Where is your code?** step opens.

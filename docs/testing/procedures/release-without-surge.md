@@ -88,7 +88,7 @@ It tests the release guard, toolbar, startup and saved state.
 
 4. Resize the candidate window to its minimum width.
 
-   Result: Quick Nav, Sessions and Settings remain accessible. Secondary actions remain accessible through More.
+   Result: The toolbar shows **Dependencies** and **Menu**. Quick Nav, Remote Hosts, Cloud, Sessions and Settings remain accessible through **Menu**.
 
 5. Restore the original window size.
 
