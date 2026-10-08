@@ -1,6 +1,6 @@
 ---
 procedure: cast-workspace-clouds
-feature: Casting a workspace that contains clouds
+feature: Casting a workspace that contains clouds, and one cloud card
 platforms: [linux]
 cost: none
 destructive: no
@@ -13,7 +13,7 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that a cast of a workspace shows the cloud cards in
-that workspace.
+that workspace, and that a cast of one cloud card shows only that card.
 
 ## 2. Applicability
 
@@ -21,9 +21,9 @@ that workspace.
   workspace bounds.
 - Platforms: Linux, with the local device fixture and one Apple TV on the same
   network. The Cast picker finds Apple TV receivers only.
-- This procedure does not test: the cast of one cloud card as its own source,
-  a workspace with only clouds (it has no Cast entry until the cloud card gets
-  one; a unit test covers its bounds), pairing, or the encoder.
+- This procedure does not test: a workspace with only clouds (a unit test
+  covers its bounds), a cloud source started through MCP (unit tests cover the
+  source list), pairing, or the encoder.
 
 ## 3. Safety
 
@@ -87,12 +87,29 @@ that workspace.
    source is no longer visible`. The receiver never shows the foreign
    terminal.
 
+### 6.4 CLOUD — One cloud card
+
+1. Open the drawer of the cloud card and select the **Manage** tab. In the
+   **View** section, click **Cast…** beside **Full screen**.
+
+   Result: The Cast picker opens with the title of the cloud as its source.
+
+2. Select the receiver. Click **Start**.
+
+   Result: The receiver shows the cloud card and its drawer. It does not show
+   the terminal beside the cloud.
+
+3. Click **Stop** in the cast controls.
+
+   Result: The receiver stops showing Horizon.
+
 ## 7. Pass criteria
 
 - A workspace cast shows its cloud cards and their drawers.
 - The cloud's own header, body and drawer, and a panel's own resize grip, do
   not stop the cast as covering it.
 - A foreign panel over the cloud stops the cast.
+- A cloud cast from the Manage tab shows only that cloud card.
 
 ## 8. Cleanup
 

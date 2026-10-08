@@ -69,8 +69,18 @@ impl Drop for CastOperation {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CastSource {
-    Panel { id: String },
-    Workspace { id: String },
+    Panel {
+        id: String,
+    },
+    /// A workspace with its panels and cloud cards.
+    Workspace {
+        id: String,
+    },
+    /// One cloud card with its panels and open drawer, by the cloud ID that
+    /// `cloud_companions` reports.
+    Cloud {
+        id: String,
+    },
     Application {},
 }
 
@@ -408,6 +418,17 @@ mod tests {
         assert!(
             serde_json::from_value::<CastSource>(serde_json::json!({"kind":"application","id":"desktop"})).is_err()
         );
+    }
+    #[test]
+    fn a_cloud_source_names_its_cloud() {
+        let source = serde_json::json!({"kind":"cloud","id":"synthetic-cloud"});
+        assert_eq!(
+            serde_json::from_value::<CastSource>(source).expect("cloud"),
+            CastSource::Cloud {
+                id: "synthetic-cloud".into()
+            }
+        );
+        assert!(serde_json::from_value::<CastSource>(serde_json::json!({"kind":"cloud"})).is_err());
     }
     #[test]
     fn isolates_hosts_and_claims_a_request_once() {

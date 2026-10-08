@@ -384,6 +384,7 @@ impl HorizonApp {
                     region_of: &region_of,
                     body,
                     fullscreen: fullscreen_active,
+                    cast: cfg!(target_os = "linux"),
                     teasers,
                 };
                 let response = drawer_area(ctx, &layer, group, runtime, context);
@@ -400,6 +401,10 @@ impl HorizonApp {
         }
         if let Some(id) = chosen.fullscreen {
             self.toggle_cloud_fullscreen(ctx, id);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(id) = chosen.cast {
+            self.open_cloud_cast_picker(id, ctx);
         }
         if let Some((id, size)) = chosen.resize {
             self.resize_production_cloud(id, size);
@@ -425,6 +430,7 @@ struct Layer {
 struct Chosen {
     actions: Vec<(u32, Action)>,
     fullscreen: Option<u32>,
+    cast: Option<u32>,
     layout: Option<(u32, Option<horizon_core::WorkspaceLayout>)>,
     resize: Option<(u32, (u16, u16))>,
 }
@@ -442,6 +448,9 @@ impl Chosen {
         }
         if response.fullscreen {
             self.fullscreen = Some(id);
+        }
+        if response.cast {
+            self.cast = Some(id);
         }
     }
 }

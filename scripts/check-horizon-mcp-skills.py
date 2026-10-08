@@ -129,6 +129,10 @@ def check():
             count += 1
     for source in SOURCES.keys() - discovered_sources:
         errors.append(f'{source}: coverage route no longer names an MCP server')
+    cast_document = documents.get('horizon-cast', '')
+    for name in enum_variants((ROOT / 'crates/horizon-browser-control/src/manifest/cast.rs').read_text(), 'CastSource'):
+        if f'`kind: {snake_case(name)}`' not in cast_document:
+            errors.append(f'CastSource.{name}: source kind missing from horizon-cast')
     for source, enum, skill, excluded, api in OPERATIONS:
         declarations = re.findall(r'`' + re.escape(api) + r'` operations are ([^.]+)\.', documents[skill])
         if len(declarations) != 1:

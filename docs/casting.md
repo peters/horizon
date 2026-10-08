@@ -1,9 +1,10 @@
 # Linux casting
 
-Horizon can mirror a selected panel, workspace or its entire main window to a
-modern Apple TV. Casting
+Horizon can mirror a selected panel, workspace, cloud card or its entire main
+window to a modern Apple TV. Casting
 is Linux-only. The Cast icon appears beside the recording/microphone controls
-on supported builds. It opens source, receiver, orientation and resolution
+on supported builds, and a cloud card has **Cast…** beside **Full screen** in
+its Manage tab. It opens source, receiver, orientation and resolution
 selection, plus status and stop controls. Each TV allows one session, including
 pairing and teardown; different TVs can have independent sessions.
 
@@ -84,6 +85,11 @@ never credentials. Pairing PINs must not be written to durable plans or logs.
 Panels and workspaces must be fully visible and unobscured in Horizon's main
 window. Fit the whole source into view first. A workspace source includes the
 cloud cards in that workspace, with their headers, bodies and open drawers. A
+cloud source, `{ "kind": "cloud", "id": "<cloud ID>" }` with the ID that
+`cloud_companions` reports, shows one deployed cloud card with its panels and
+open drawer; panels beside it are left out, and another panel or cloud over it
+refuses the source. A cloud ID that two cards share is refused, as companion
+access refuses it. A
 cloud's own chrome and a panel's own resize grip do not count as covering the
 source. Hidden, clipped, detached, deleted
 or covered panel/workspace sources stop casting. Entire Horizon captures the

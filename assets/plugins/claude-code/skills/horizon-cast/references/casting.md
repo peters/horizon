@@ -14,9 +14,11 @@
 | `stop` | Stop that receiver's session. Repeated stops are safe. |
 | `forget` | Delete that receiver's saved pairing. An active session prevents it. |
 
-Use returned receiver IDs and source objects. Sources have `kind: panel` or
-`kind: workspace` with an `id`, or `kind: application` without an ID.
-Panel and workspace sources belong to the calling agent's workspace.
+Use returned receiver IDs and source objects. Sources have `kind: panel`,
+`kind: workspace` or `kind: cloud` with an `id`, or `kind: application` without an ID.
+Panel, workspace and cloud sources belong to the calling agent's workspace.
+A workspace source includes its cloud cards. A cloud source's `id` is the cloud ID
+that `cloud_companions` reports; it shows that cloud card with its panels and open drawer.
 Application capture contains the main Horizon window and its dialogs. It excludes
 the desktop and detached windows. The person's grant applies to one workspace,
 is not saved, and can be revoked. Revocation stops agent-controlled application casts.

@@ -31,11 +31,15 @@ impl HorizonApp {
         let canvas = self.canvas_rect(ctx);
         let source_rect = self.cast_source_rect(picker.workspace, &picker.source, ctx).ok();
         let source = source_rect
-            .or_else(|| self.panel_screen_rects.get(&picker.anchor).copied())
+            .or_else(|| {
+                picker
+                    .anchor
+                    .and_then(|anchor| self.panel_screen_rects.get(&anchor).copied())
+            })
             .unwrap_or(canvas);
-        let source = self
-            .panel_screen_rects
-            .get(&picker.anchor)
+        let source = picker
+            .anchor
+            .and_then(|anchor| self.panel_screen_rects.get(&anchor))
             .map_or(source, |anchor| source.union(*anchor));
         let position = *picker.position.get_or_insert_with(|| {
             super::popup::initial_position(
@@ -156,7 +160,11 @@ impl HorizonApp {
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cast panel or workspace")
                         });
-                        let selected = self.casting.picker.as_ref().is_some_and(|picker| picker.anchor == id);
+                        let selected = self
+                            .casting
+                            .picker
+                            .as_ref()
+                            .is_some_and(|picker| picker.anchor == Some(id));
                         let active = self
                             .casting
                             .sessions
@@ -188,41 +196,10 @@ impl HorizonApp {
                     response.response.layer_id,
                 );
                 if response.inner.clicked() {
-                    if self.casting.picker.as_ref().is_some_and(|picker| picker.anchor == id) {
-                        self.casting.close_picker(ctx);
-                        continue;
-                    }
-                    self.casting.close_picker(ctx);
-                    let session = self
-                        .casting
-                        .sessions
-                        .iter()
-                        .rev()
-                        .find(|session| session.workspace == workspace && !session.worker.finished())
-                        .or_else(|| {
-                            self.casting
-                                .sessions
-                                .iter()
-                                .rev()
-                                .find(|session| session.workspace == workspace)
-                        });
-                    self.casting.picker = Some(Picker {
-                        anchor: id,
-                        workspace,
-                        source: session.map_or_else(
-                            || CastSource::Panel {
-                                id: panel.local_id.clone(),
-                            },
-                            |session| session.source.clone(),
-                        ),
-                        receiver: session.map(|session| session.receiver_id.clone()),
-                        orientation: session.map_or(CastOrientation::Landscape, |session| session.orientation),
-                        resolution: session.map_or(CastResolution::default(), |session| session.resolution),
-                        pin: zeroize::Zeroizing::new(String::new()),
-                        position: None,
-                        binding: session.map(super::popup::SessionBinding::from_session),
-                    });
-                    self.casting.discover();
+                    let source = CastSource::Panel {
+                        id: panel.local_id.clone(),
+                    };
+                    self.casting.toggle_picker(Some(id), workspace, source, ctx);
                 }
             }
         }
@@ -629,7 +606,7 @@ mod tests {
     fn receiver_menu_stays_above_picker_after_window_is_raised() {
         let ctx = Context::default();
         let mut picker = Picker {
-            anchor: horizon_core::PanelId(1),
+            anchor: Some(horizon_core::PanelId(1)),
             workspace: WorkspaceId(1),
             source: CastSource::Panel { id: "synthetic".into() },
             receiver: None,

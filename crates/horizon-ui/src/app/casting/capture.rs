@@ -1,4 +1,5 @@
 use super::super::HorizonApp;
+use super::cloud::Clouds;
 #[cfg(test)]
 use super::scaling::letterbox;
 use egui::{Context, Id, LayerId, Order, Rect, ViewportId};
@@ -99,7 +100,7 @@ impl HorizonApp {
                 continue;
             }
             match self.cast_source_rect(session.workspace, &session.source, ctx) {
-                Ok(rect) if !self.cast_obscured(&session.source, rect, ctx) => {
+                Ok(rect) if !self.cast_obscured(session.workspace, &session.source, rect, ctx) => {
                     if !self.cast_geometry_settled(session.workspace, &session.source, ctx) {
                         continue;
                     }
@@ -160,7 +161,55 @@ impl HorizonApp {
         {
             return Err("Source must be visible in the main Horizon window".into());
         }
-        let selected: Vec<_> = match source {
+        let selected = self.cast_selected_panels(workspace, source)?;
+        // Workspace and cloud casts show their clouds, and a workspace may hold only clouds.
+        let clouds = match source {
+            CastSource::Workspace { .. } => self.cast_cloud_rects(workspace, Clouds::All, ctx)?,
+            CastSource::Cloud { id } => self.cast_cloud_rects(workspace, Clouds::One(id), ctx)?,
+            CastSource::Panel { .. } | CastSource::Application {} => Vec::new(),
+        };
+        if selected.is_empty() && clouds.is_empty() {
+            return Err("Source has no visible content".into());
+        }
+        let mut bounds = clouds.into_iter().fold(Rect::NOTHING, Rect::union);
+        for id in &selected {
+            bounds = bounds.union(self.cast_visible_panel_rect(*id, ctx)?);
+        }
+        for panel in &self.board.panels {
+            if !selected.contains(&panel.id)
+                && self
+                    .panel_screen_rects
+                    .get(&panel.id)
+                    .is_some_and(|rect| rect.intersects(bounds))
+            {
+                return Err("Another panel overlaps this source; move it before casting".into());
+            }
+        }
+        if let CastSource::Cloud { id } = source
+            && self.cast_other_cloud_over(workspace, id, bounds, ctx)
+        {
+            return Err("Another cloud overlaps this source; move it before casting".into());
+        }
+        if matches!(source, CastSource::Workspace { .. } | CastSource::Cloud { .. })
+            && self
+                .workspace_screen_rects
+                .iter()
+                .any(|(id, rect)| *id != workspace && rect.intersects(bounds))
+        {
+            return Err("Another workspace overlaps this source".into());
+        }
+        if !bounds.is_finite() || bounds.width() < 4.0 || bounds.height() < 4.0 {
+            return Err("Source has no drawable area".into());
+        }
+        Ok(bounds.shrink(1.0))
+    }
+    /// The panels a panel, workspace or cloud source shows.
+    fn cast_selected_panels(
+        &self,
+        workspace: WorkspaceId,
+        source: &CastSource,
+    ) -> Result<Vec<horizon_core::PanelId>, String> {
+        Ok(match source {
             CastSource::Application {} => return Err("Invalid application capture context".into()),
             CastSource::Panel { id } => self
                 .board
@@ -180,46 +229,28 @@ impl HorizonApp {
                 self.board
                     .panels
                     .iter()
-                    .filter(|panel| panel.workspace_id == workspace)
+                    .filter(|panel| panel.workspace_id == workspace && panel.visible)
                     .map(|panel| panel.id)
                     .collect()
             }
-        };
-        // A workspace cast shows its clouds too, and a workspace may hold only clouds.
-        let clouds = if matches!(source, CastSource::Workspace { .. }) {
-            self.cast_cloud_rects(workspace, ctx)?
-        } else {
-            Vec::new()
-        };
-        if selected.is_empty() && clouds.is_empty() {
-            return Err("Source has no visible content".into());
-        }
-        let mut bounds = clouds.into_iter().fold(Rect::NOTHING, Rect::union);
-        for id in &selected {
-            bounds = bounds.union(self.cast_visible_panel_rect(*id, ctx)?);
-        }
-        for panel in &self.board.panels {
-            if !selected.contains(&panel.id)
-                && self
-                    .panel_screen_rects
-                    .get(&panel.id)
-                    .is_some_and(|rect| rect.intersects(bounds))
-            {
-                return Err("Another panel overlaps this source; move it before casting".into());
+            CastSource::Cloud { id } => {
+                // Companion access refuses a duplicated cloud ID too; one source is one card.
+                if self.cast_cloud_duplicated(id) {
+                    return Err("This cloud's identity is duplicated; it cannot be cast".into());
+                }
+                let members = self
+                    .cast_cloud_members(workspace, id)
+                    .ok_or("Source is outside the current workspace")?;
+                self.board
+                    .panels
+                    .iter()
+                    .filter(|panel| {
+                        panel.workspace_id == workspace && panel.visible && members.contains(&panel.local_id)
+                    })
+                    .map(|panel| panel.id)
+                    .collect()
             }
-        }
-        if matches!(source, CastSource::Workspace { .. })
-            && self
-                .workspace_screen_rects
-                .iter()
-                .any(|(id, rect)| *id != workspace && rect.intersects(bounds))
-        {
-            return Err("Another workspace overlaps this source".into());
-        }
-        if !bounds.is_finite() || bounds.width() < 4.0 || bounds.height() < 4.0 {
-            return Err("Source has no drawable area".into());
-        }
-        Ok(bounds.shrink(1.0))
+        })
     }
     fn cast_visible_panel_rect(&self, id: horizon_core::PanelId, ctx: &Context) -> Result<Rect, String> {
         if !self.panel_screen_rects.contains_key(&id) {
@@ -253,7 +284,15 @@ impl HorizonApp {
                     geometry.settled(ctx.content_rect(), ctx.pixels_per_point(), Instant::now())
                 });
         }
-        if matches!(source, CastSource::Workspace { .. }) && !self.cast_clouds_settled(workspace, ctx) {
+        let (clouds, members) = match source {
+            CastSource::Workspace { .. } => (Some(Clouds::All), Vec::new()),
+            CastSource::Cloud { id } => (
+                Some(Clouds::One(id)),
+                self.cast_cloud_members(workspace, id).unwrap_or_default(),
+            ),
+            CastSource::Panel { .. } | CastSource::Application {} => (None, Vec::new()),
+        };
+        if clouds.is_some_and(|clouds| !self.cast_clouds_settled(workspace, clouds, ctx)) {
             return false;
         }
         self.board
@@ -263,7 +302,8 @@ impl HorizonApp {
                 panel.workspace_id == workspace
                     && match source {
                         CastSource::Panel { id } => panel.local_id == *id,
-                        CastSource::Workspace { .. } => true,
+                        CastSource::Workspace { .. } => panel.visible,
+                        CastSource::Cloud { .. } => panel.visible && members.contains(&panel.local_id),
                         CastSource::Application {} => false,
                     }
             })
@@ -296,7 +336,7 @@ impl HorizonApp {
     pub(super) fn is_cast_control_layer(&self, layer: LayerId) -> bool {
         layer == cast_picker_layer() || self.casting.control_menus.is_some_and(|menus| menus.contains(&layer))
     }
-    fn cast_obscured(&self, source: &CastSource, rect: Rect, ctx: &Context) -> bool {
+    fn cast_obscured(&self, workspace: WorkspaceId, source: &CastSource, rect: Rect, ctx: &Context) -> bool {
         if self.pending_session_switch.is_some() {
             return true;
         }
@@ -306,16 +346,26 @@ impl HorizonApp {
         if self.host_content_dialog_open() {
             return true;
         }
-        let cast_workspace = match source {
-            CastSource::Workspace { id } => self.board.workspace_id_by_local_id(id),
-            _ => None,
+        let (cast_clouds, members) = match source {
+            CastSource::Workspace { id } => (
+                self.board
+                    .workspace_id_by_local_id(id)
+                    .map(|workspace| (workspace, Clouds::All)),
+                Vec::new(),
+            ),
+            // The session's workspace, not a lookup by ID: the source was validated there.
+            CastSource::Cloud { id } => (
+                Some((workspace, Clouds::One(id))),
+                self.cast_cloud_members(workspace, id).unwrap_or_default(),
+            ),
+            CastSource::Panel { .. } | CastSource::Application {} => (None, Vec::new()),
         };
         ctx.memory(|memory| {
             memory.areas().visible_layer_ids().into_iter().any(|layer| {
                 if layer.order == Order::Background
                     || self.is_cast_control_layer(layer)
                     || memory.areas().parent_layer(layer) == Some(cast_picker_layer())
-                    || cast_workspace.is_some_and(|workspace| self.cast_cloud_layer(workspace, layer))
+                    || cast_clouds.is_some_and(|(workspace, clouds)| self.cast_cloud_layer(workspace, clouds, layer))
                 {
                     return false;
                 }
@@ -326,6 +376,10 @@ impl HorizonApp {
                         .board
                         .workspace(panel.workspace_id)
                         .is_some_and(|value| value.local_id == *id),
+                    CastSource::Cloud { .. } => {
+                        cast_clouds.is_some_and(|(workspace, _)| panel.workspace_id == workspace)
+                            && members.contains(&panel.local_id)
+                    }
                 });
                 // A selected panel's own layers, including sublayers such as its resize grip,
                 // are part of the picture.
@@ -365,7 +419,7 @@ impl HorizonApp {
                     .is_ok_and(|rect| rect == frame.rect)
                 && self.cast_geometry_settled(session.workspace, &session.source, ctx)
                 && !self.cast_controls_cover(frame.rect, ctx)
-                && !self.cast_obscured(&session.source, frame.rect, ctx)
+                && !self.cast_obscured(session.workspace, &session.source, frame.rect, ctx)
             {
                 let _ = session.worker.submit_source(frame.width, frame.height, frame.rgba);
             }
@@ -418,7 +472,7 @@ impl HorizonApp {
                 if current != *rect
                     || !self.cast_geometry_settled(session.workspace, &session.source, ctx)
                     || self.cast_controls_cover(current, ctx)
-                    || self.cast_obscured(&session.source, current, ctx)
+                    || self.cast_obscured(session.workspace, &session.source, current, ctx)
                 {
                     continue;
                 }

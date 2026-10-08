@@ -82,6 +82,8 @@ pub(super) struct Response {
     /// Set when a layout button was chosen in Manage.
     pub layout: LayoutChoice,
     pub fullscreen: bool,
+    /// Set when Cast was chosen in Manage.
+    pub cast: bool,
 }
 
 pub(super) struct Context<'a> {
@@ -95,6 +97,8 @@ pub(super) struct Context<'a> {
     pub root: Option<&'a std::path::Path>,
     pub body: bool,
     pub fullscreen: bool,
+    /// Whether this build can cast to an Apple TV.
+    pub cast: bool,
     pub teasers: [String; Tab::COUNT],
 }
 
@@ -411,13 +415,35 @@ fn manage(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'
                 response.layout = LayoutChoice::Set(selected);
             }
         }
+        // A cast shows the canvas, so it is offered beside Full screen, not inside it.
+        let cast = context.cast && !context.fullscreen;
         let (label, detail) = if context.fullscreen {
             ("Exit full screen", "Return to the whole canvas.")
+        } else if cast {
+            (
+                "Full screen",
+                "Show only this cloud and its panels, here or on an Apple TV.",
+            )
         } else {
             ("Full screen", "Show only this cloud and its panels.")
         };
-        response.fullscreen = section::row(ui, "Focus", detail, |ui| {
-            ui.add(section::row_button(ui, action_button(label))).clicked()
+        (response.fullscreen, response.cast) = section::row(ui, "Focus", detail, |ui| {
+            if !cast {
+                return (ui.add(section::row_button(ui, action_button(label))).clicked(), false);
+            }
+            let width = section::ROW_BUTTON_WIDTH.min(ui.available_width());
+            let half = (width - ui.spacing().item_spacing.x) / 2.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, 30.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    let size = egui::vec2(half, 30.0);
+                    let fullscreen = ui.add(action_button(label).min_size(size)).clicked();
+                    let cast = ui.add(action_button("Cast…").min_size(size)).clicked();
+                    (fullscreen, cast)
+                },
+            )
+            .inner
         });
     });
     let chosen = section::show(ui, "Cloud", |ui| runtime_actions(ui, id, runtime));

@@ -47,7 +47,8 @@ struct Session {
     agent_controlled: bool,
 }
 struct Picker {
-    anchor: horizon_core::PanelId,
+    /// The panel whose cast icon opened the picker; `None` when a cloud's Manage tab did.
+    anchor: Option<horizon_core::PanelId>,
     workspace: WorkspaceId,
     source: CastSource,
     receiver: Option<String>,
