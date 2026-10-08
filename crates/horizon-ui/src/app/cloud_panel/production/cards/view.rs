@@ -64,21 +64,21 @@ fn body_rect(group: &CloudGroup) -> Rect {
     )
 }
 
-fn teasers(group: &CloudGroup, runtime: &Runtime, status: &Status, occupancy: Occupancy) -> [String; 6] {
+fn teasers(group: &CloudGroup, runtime: &Runtime, status: &Status, occupancy: Occupancy) -> [String; Tab::COUNT] {
     let profile = runtime
         .state
         .as_ref()
         .map(|state| &state.profile)
         .or_else(|| group.remote.as_ref().map(|launch| &launch.profile));
     let stages = status.track.stages.len();
+    let size = profile.map(|profile| format!("{} vCPU", profile.cpu));
+    let cost = Some(super::cost::teaser(runtime)).filter(|cost| !cost.is_empty() && cost != "—");
     [
         status.track.current.map_or_else(
             || format!("{}/{stages}", status.track.finished),
             |index| format!("{}/{stages}", index + 1),
         ),
-        format!("{} lines", runtime.logs.len() + runtime.pending_logs.len()),
-        profile.map_or_else(String::new, |profile| format!("{} vCPU", profile.cpu)),
-        super::cost::teaser(runtime),
+        size.into_iter().chain(cost).collect::<Vec<_>>().join(" · "),
         format!("{}/{}", occupancy.running, occupancy.terminals),
         String::new(),
     ]
@@ -114,6 +114,23 @@ pub(super) fn layout_controls(
 ) -> Option<strip::LayoutControls> {
     let usable = status.tone == status::Tone::Ready || (occupancy.panels > 0 && status.tone != status::Tone::Failed);
     usable.then(|| strip::LayoutControls {
+        selected: group.layout,
+        color: theme::workspace_accent(group.issue.saturating_sub(101) as usize),
+    })
+}
+
+/// The layouts Manage offers: those the header has no room for, because the cloud is
+/// narrower than the header needs or a failure keeps the row, while panels can be arranged.
+pub(super) fn manage_layout_controls(
+    group: &CloudGroup,
+    status: &Status,
+    occupancy: Occupancy,
+) -> Option<strip::LayoutControls> {
+    let header = layout_controls(group, status, occupancy);
+    if header.is_some() && strip::header_fits_layout(group.size[0]) {
+        return None;
+    }
+    (header.is_some() || occupancy.panels > 0).then(|| strip::LayoutControls {
         selected: group.layout,
         color: theme::workspace_accent(group.issue.saturating_sub(101) as usize),
     })
@@ -234,7 +251,7 @@ impl HorizonApp {
     }
 
     /// Resuming is watched, not managed: the steps are in view instead of the Manage tab.
-    /// A cloud without panels shows them as its body; one with panels shows them in Overview,
+    /// A cloud without panels shows them as its body; one with panels shows them in Status,
     /// and a collapsed one opens first so either is visible.
     fn show_steps_for_resume(&mut self, id: u32) {
         let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
@@ -247,7 +264,7 @@ impl HorizonApp {
         let closing = self.cloud_prototype.production.closing(id);
         let steps_in_body = body_visible(&self.cloud_prototype.groups.0[index], closing);
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
-            runtime.drawer = (!steps_in_body).then_some(Tab::Overview);
+            runtime.drawer = (!steps_in_body).then_some(Tab::Status);
         }
     }
 
@@ -408,8 +425,7 @@ impl Chosen {
         if let Some(size) = response.resize {
             self.resize = Some((id, size));
         }
-        if let drawer::LayoutChoice::Set(selected) = &response.layout {
-            let selected = *selected;
+        if let drawer::LayoutChoice::Set(selected) = response.layout {
             self.layout = Some((id, selected));
         }
         if response.fullscreen {

@@ -134,6 +134,15 @@ impl HorizonApp {
                             rename_field(ui, header, cost_width, &mut self.cloud_prototype.title_draft, transform);
                     }
                     let drag = early_drag.unwrap_or_else(|| drag_area(ui, drag_rect, editing));
+                    // Registered over the drag area: it takes the clicks, and drags fall
+                    // through to the header so the card still moves from its title.
+                    if !editing {
+                        let title = title_target(ui, group, header, cost_width);
+                        if title.clicked() {
+                            action = Some(Action::Rename(group.issue));
+                        }
+                        cloud_context(&title, group, &mut action);
+                    }
                     cloud_context(&drag, group, &mut action);
                     card_hint(drag)
                 })
@@ -340,7 +349,32 @@ fn rename_field(
 }
 
 /// The hover text of the card itself.
-pub(super) const CARD_HINT: &str = "Double-click to rename. Drag to move this cloud.";
+pub(super) const CARD_HINT: &str = "Click the title to rename. Drag to move this cloud.";
+
+/// The title text as its own button: a click starts a rename, assistive technology finds
+/// it as "Rename …", and the pointer shows a text cursor over it. The galley comes from
+/// egui's layout cache, which painting the title just filled.
+fn title_target(ui: &egui::Ui, group: &CloudGroup, header: Rect, reserved: f32) -> egui::Response {
+    let room = (header.width() - 64.0 - reserved).max(0.0);
+    let width = ui
+        .painter()
+        .layout_no_wrap(group.title.clone(), FontId::proportional(21.0), theme::FG())
+        .size()
+        .x;
+    let title = Rect::from_min_size(header.min + Vec2::new(64.0, 16.0), Vec2::new(width.min(room), 30.0));
+    let response = ui.interact(title, ui.id().with("title"), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            format!("Rename {}", group.title),
+        )
+    });
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
+    response.on_hover_text(CARD_HINT)
+}
 
 /// Shows the card's hint only while the pointer is on the card alone. On a stage segment
 /// or a control of the header, that one's own hover text applies: egui shows one hover

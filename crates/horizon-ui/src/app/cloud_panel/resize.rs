@@ -1,10 +1,9 @@
 //! Corner handle that resizes a cloud frame on the canvas.
-use egui::{Id, Order, Pos2, Rect, Sense, Stroke, Vec2};
+use egui::{Id, Order, Pos2, Rect, Sense, Vec2};
 use horizon_core::WorkspaceId;
 
 use super::super::HorizonApp;
 use crate::app::view::canvas_scene_transform;
-use crate::theme;
 
 impl HorizonApp {
     pub(in crate::app) fn render_cloud_resize_handles(&mut self, ctx: &egui::Context) {
@@ -45,7 +44,6 @@ impl HorizonApp {
                     self.apply_canvas_layer_transform(ui, canvas);
                     ui.set_clip_rect(clip);
                     let (local, _) = ui.allocate_exact_size(corner.size(), Sense::hover());
-                    paint_corner(ui, local);
                     let response = ui.interact(
                         local,
                         ui.id().with("resize"),
@@ -55,6 +53,8 @@ impl HorizonApp {
                             Sense::hover()
                         },
                     );
+                    let active = interactive && (response.hovered() || response.dragged());
+                    crate::app::panels::paint_grip(ui, local, active, zoom);
                     if response.hovered() || response.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
                     }
@@ -166,33 +166,6 @@ impl HorizonApp {
 fn corner_span(frame: [f32; 2], zoom: f32) -> f32 {
     let extent = frame[0].min(frame[1]).max(1.0);
     (super::super::RESIZE_HANDLE_SIZE / zoom.max(0.05)).min(extent)
-}
-
-fn paint_corner(ui: &egui::Ui, rect: Rect) {
-    let weight = rect.width().min(rect.height()) * 0.08;
-    let stroke = Stroke::new(weight, theme::alpha(theme::FG_DIM(), 190));
-    let inset = rect.width().min(rect.height()) * 0.12;
-    let span = rect.width().min(rect.height()) * 0.62;
-    let corner = rect.right_bottom() - Vec2::splat(inset);
-    ui.painter()
-        .line_segment([corner, corner - Vec2::new(span, 0.0)], stroke);
-    ui.painter()
-        .line_segment([corner, corner - Vec2::new(0.0, span)], stroke);
-    let inner = span * 0.55;
-    ui.painter().line_segment(
-        [
-            corner - Vec2::splat(inner * 0.45),
-            corner - Vec2::new(inner, inner * 0.45),
-        ],
-        stroke,
-    );
-    ui.painter().line_segment(
-        [
-            corner - Vec2::splat(inner * 0.45),
-            corner - Vec2::new(inner * 0.45, inner),
-        ],
-        stroke,
-    );
 }
 
 #[cfg(test)]

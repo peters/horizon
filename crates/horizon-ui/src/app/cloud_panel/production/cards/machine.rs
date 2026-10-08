@@ -1,7 +1,5 @@
 //! The worker as the provider last described it, under the profile in the Machine tab.
 use super::super::Runtime;
-use crate::theme;
-use egui::RichText;
 
 /// Label and value rows for the bound worker; empty before one is requested.
 pub(super) fn facts(runtime: &Runtime) -> Vec<(&'static str, String)> {
@@ -47,16 +45,11 @@ pub(super) fn worker(ui: &mut egui::Ui, runtime: &Runtime) {
         ui.small("Worker details appear once the provider reports a worker.");
         return;
     }
-    egui::Grid::new("cloud-worker-facts")
-        .num_columns(2)
-        .spacing([18.0, 6.0])
-        .show(ui, |ui| {
-            for (label, value) in rows {
-                ui.add(egui::Label::new(RichText::new(label).size(13.0).color(theme::FG_DIM())).extend());
-                ui.add(egui::Label::new(RichText::new(value).size(14.0).color(theme::FG())).wrap());
-                ui.end_row();
-            }
-        });
+    super::section::facts(ui, "cloud-worker-facts", |ui| {
+        for (label, value) in rows {
+            super::section::fact(ui, label, value);
+        }
+    });
 }
 
 /// `host:port`, with an IPv6 host bracketed so its colons do not run into the port's.

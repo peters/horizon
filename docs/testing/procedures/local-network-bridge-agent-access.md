@@ -78,7 +78,8 @@ the private control socket of the helper, and must not stop the bridge.
 
    Result: The output is `10001`.
 
-5. Make sure that **Share local network** is off on the card of the cloud.
+5. On the card of the cloud, open the details with the chevron, click
+   **Connections** and make sure that **Share local network** in **Access** is off.
 
    Result: The card shows the switch in the off position.
 
@@ -108,7 +109,8 @@ the private control socket of the helper, and must not stop the bridge.
 > **CAUTION:** SHARE ONLY A NETWORK THAT YOU CONTROL. The next step exposes the
 > local network to the worker.
 
-1. On the card of the cloud, switch on **Share local network**.
+1. In **Connections** on the card of the cloud, switch on **Share local network**
+   in **Access**.
 
    Result: The card shows **Sharing `<subnet>`** in 10 seconds or less.
 
@@ -283,7 +285,8 @@ the private control socket of the helper, and must not stop the bridge.
    Result: The output shows a `worker_port`. In this procedure, `<new forward>`
    is this value.
 
-2. On the card of the cloud, switch off **Share local network**.
+2. In **Connections** on the card of the cloud, switch off **Share local network**
+   in **Access**.
 
    Result: The card does not show **Sharing `<subnet>`**.
 
@@ -325,7 +328,8 @@ the private control socket of the helper, and must not stop the bridge.
 > **CAUTION:** SHARE ONLY A NETWORK THAT YOU CONTROL. The next step exposes the
 > local network to the worker again.
 
-1. On the card of the cloud, switch on **Share local network**.
+1. In **Connections** on the card of the cloud, switch on **Share local network**
+   in **Access**.
 
    Result: The card shows **Sharing `<subnet>`**.
 
@@ -338,7 +342,8 @@ the private control socket of the helper, and must not stop the bridge.
    Result: The output shows `"active": true` and a `proxy` value. The `forwards`
    list is empty.
 
-3. On the card of the cloud, switch off **Share local network**.
+3. In **Connections** on the card of the cloud, switch off **Share local network**
+   in **Access**.
 
    Result: The card shows the switch in the off position.
 
@@ -358,7 +363,8 @@ the private control socket of the helper, and must not stop the bridge.
 
 ## 8. Cleanup
 
-1. Make sure that **Share local network** is off on the card of the cloud.
+1. In **Connections** on the card of the cloud, make sure that **Share local
+   network** in **Access** is off.
 
    Result: The card shows the switch in the off position.
 

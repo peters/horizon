@@ -113,24 +113,29 @@ pub(super) fn controls(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime) -> Opt
     let current = (profile.cpu, profile.memory_gb);
     let workspace = profile.storage.volume_gb;
     let max_workspace = u16::try_from(cloud_runtime::provider::RUNPOD.cpu_volume_gb.1).unwrap_or(u16::MAX);
-    ui.label(format!("Workspace: {workspace} GB"));
     let Some(mut target) = runtime.resize.draft else {
-        ui.horizontal_wrapped(|ui| {
-            if ui.add(action_button("Resize compute…")).clicked() {
-                runtime.resize.draft = Some(ResizeTarget::Compute {
-                    cpu: current.0,
-                    memory_gb: current.1,
-                });
-            }
-            if ui
-                .add_enabled(workspace < max_workspace, action_button("Grow workspace…"))
+        use super::cards::section::{row, row_button as button};
+        let compute = format!(
+            "{} vCPU · {} GB. Changing it replaces the worker.",
+            current.0, current.1
+        );
+        if row(ui, "Compute", &compute, |ui: &mut egui::Ui| {
+            ui.add(button(ui, action_button("Resize compute…"))).clicked()
+        }) {
+            runtime.resize.draft = Some(ResizeTarget::Compute {
+                cpu: current.0,
+                memory_gb: current.1,
+            });
+        }
+        let storage = format!("{workspace} GB network volume. It can only grow.");
+        if row(ui, "Workspace", &storage, |ui: &mut egui::Ui| {
+            ui.add_enabled(workspace < max_workspace, button(ui, action_button("Grow workspace…")))
                 .clicked()
-            {
-                runtime.resize.draft = Some(ResizeTarget::Workspace {
-                    size_gb: workspace.saturating_add(10).min(max_workspace),
-                });
-            }
-        });
+        }) {
+            runtime.resize.draft = Some(ResizeTarget::Workspace {
+                size_gb: workspace.saturating_add(10).min(max_workspace),
+            });
+        }
         return None;
     };
     if runtime.resize.confirming {

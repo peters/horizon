@@ -6,10 +6,17 @@ use super::CanvasClippedArea;
 use crate::theme;
 
 const HANDLE_SCREEN_SIZE: f32 = 32.0;
-const GRIP_DOT_RADIUS: f32 = 1.45;
-/// Positions in the 32-point handle, measured from its top-left.
-const GRIP_DOT_COLUMNS: [f32; 2] = [18.0, 24.0];
-const GRIP_DOT_ROWS: [f32; 3] = [17.0, 21.5, 26.0];
+const GRIP_DOT_RADIUS: f32 = 1.6;
+/// Dot centers in the 32-point handle, measured from its top-left: a triangle of three,
+/// two and one dots that points into the corner.
+const GRIP_DOTS: [(f32, f32); 6] = [
+    (26.0, 16.0),
+    (21.0, 21.0),
+    (26.0, 21.0),
+    (16.0, 26.0),
+    (21.0, 26.0),
+    (26.0, 26.0),
+];
 
 pub(super) fn drag_delta(response: &Response) -> Vec2 {
     if response.drag_started() {
@@ -68,28 +75,20 @@ pub(super) fn show_resize_control(
 /// shifts the mark into the corner. It scales the mark down only when the corner
 /// cannot hold the full dots.
 fn grip_screen_geometry(screen_span: f32) -> ([Vec2; 6], f32) {
-    let from_right = GRIP_DOT_COLUMNS.map(|column| HANDLE_SCREEN_SIZE - column);
-    let from_bottom = GRIP_DOT_ROWS.map(|row| HANDLE_SCREEN_SIZE - row);
-    let column_span = from_right[0] - from_right[1];
-    let row_span = from_bottom[0] - from_bottom[2];
-    let cluster = column_span.max(row_span) + 2.0 * GRIP_DOT_RADIUS;
+    let inward = GRIP_DOTS.map(|(x, y)| Vec2::new(HANDLE_SCREEN_SIZE - x, HANDLE_SCREEN_SIZE - y));
+    let nearest = inward
+        .iter()
+        .fold(Vec2::splat(f32::MAX), |least, offset| least.min(*offset));
+    let farthest = inward.iter().fold(Vec2::ZERO, |most, offset| most.max(*offset));
+    let cluster = (farthest - nearest).max_elem() + 2.0 * GRIP_DOT_RADIUS;
     let scale = if screen_span < cluster {
         (screen_span / cluster).max(0.0)
     } else {
         1.0
     };
     let radius = GRIP_DOT_RADIUS * scale;
-    let shift_x = (from_right[0] * scale + radius - screen_span).max(0.0);
-    let shift_y = (from_bottom[0] * scale + radius - screen_span).max(0.0);
-    let mut offsets = [Vec2::ZERO; 6];
-    let mut index = 0;
-    for row in from_bottom {
-        for column in from_right {
-            offsets[index] = Vec2::new(column * scale - shift_x, row * scale - shift_y);
-            index += 1;
-        }
-    }
-    (offsets, radius)
+    let shift = (farthest * scale + Vec2::splat(radius - screen_span)).max(Vec2::ZERO);
+    (inward.map(|offset| offset * scale - shift), radius)
 }
 
 fn grip_dots(rect: Rect, zoom: f32) -> ([Pos2; 6], f32) {
@@ -110,14 +109,28 @@ fn grip_dots(rect: Rect, zoom: f32) -> ([Pos2; 6], f32) {
 
 fn paint_control(ui: &Ui, rect: Rect, response: &Response, interactive: bool, zoom: f32) {
     let active = interactive && (response.hovered() || response.dragged());
-    let color = if active { theme::ACCENT() } else { theme::FG_DIM() };
-    let (centers, radius) = grip_dots(rect, zoom);
-    let painter = ui.painter();
-    for center in centers {
-        painter.circle_filled(center, radius, color);
-    }
+    paint_grip(ui, rect, active, zoom);
     if active {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeNwSe);
+    }
+}
+
+/// The corner grip of panels and clouds: dots that brighten to the accent over a soft
+/// backing while the grip is hovered or dragged.
+pub(in crate::app) fn paint_grip(ui: &Ui, rect: Rect, active: bool, zoom: f32) {
+    let (centers, radius) = grip_dots(rect, zoom);
+    let painter = ui.painter();
+    if active {
+        let dots = Rect::from_points(&centers).expand(radius * 3.0);
+        painter.rect_filled(dots.intersect(rect), radius * 2.0, theme::alpha(theme::ACCENT(), 40));
+    }
+    let color = if active {
+        theme::ACCENT()
+    } else {
+        theme::alpha(theme::FG_SOFT(), 190)
+    };
+    for center in centers {
+        painter.circle_filled(center, radius, color);
     }
 }
 

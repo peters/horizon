@@ -1,44 +1,41 @@
 //! The drawer under a production cloud's header: everything the header summarizes,
 //! one tab at a time, over the cloud's panels.
+mod connections;
+
 use super::super::{Runtime, companions};
 use super::status::Status;
 use super::steps::{self, StepAction};
-use super::{Action, danger_button, profile_details, runtime_actions};
+use super::{Action, profile_details, runtime_actions, section};
 use crate::app::cloud_panel::runtime::{action_button, readable_runtime_style, solid_scroll_area};
 use crate::theme;
 use egui::{Align2, FontId, Rect, RichText, Sense, Stroke, pos2, vec2};
 use horizon_core::cloud_panel::{CloudGroup, CloudLaunch};
 use horizon_core::{Board, WorkspaceLayout};
 
+#[cfg(test)]
+pub(super) use connections::access;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::app::cloud_panel) enum Tab {
+    /// The steps, what runs now and the output under them.
     #[default]
-    Overview,
-    Output,
+    Status,
+    /// The profile, the worker and what it costs.
     Machine,
-    Cost,
     Connections,
     Manage,
 }
 
 impl Tab {
-    const ALL: [Self; 6] = [
-        Self::Overview,
-        Self::Output,
-        Self::Machine,
-        Self::Cost,
-        Self::Connections,
-        Self::Manage,
-    ];
+    pub(super) const COUNT: usize = 4;
+    const ALL: [Self; Self::COUNT] = [Self::Status, Self::Machine, Self::Connections, Self::Manage];
     /// Steps and output are already in the body of a cloud without panels.
-    const BESIDE_BODY: [Self; 4] = [Self::Machine, Self::Cost, Self::Connections, Self::Manage];
+    const BESIDE_BODY: [Self; 3] = [Self::Machine, Self::Connections, Self::Manage];
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Overview => "Overview",
-            Self::Output => "Output",
+            Self::Status => "Status",
             Self::Machine => "Machine",
-            Self::Cost => "Cost",
             Self::Connections => "Connections",
             Self::Manage => "Manage",
         }
@@ -52,11 +49,9 @@ impl Tab {
 
     pub(super) fn height(self) -> f32 {
         match self {
-            Self::Overview => 360.0,
-            Self::Output => Self::TALLEST,
-            Self::Machine | Self::Manage => 420.0,
-            Self::Cost => 340.0,
-            Self::Connections => 460.0,
+            Self::Status | Self::Machine => Self::TALLEST,
+            Self::Connections => 480.0,
+            Self::Manage => 440.0,
         }
     }
 
@@ -76,6 +71,7 @@ impl Tab {
 pub(super) enum LayoutChoice {
     #[default]
     Unchanged,
+    /// `None` inside is manual placement.
     Set(Option<WorkspaceLayout>),
 }
 
@@ -83,7 +79,7 @@ pub(super) enum LayoutChoice {
 pub(super) struct Response {
     pub action: Option<Action>,
     pub resize: Option<(u16, u16)>,
-    /// Set when a layout button was chosen; `None` inside is manual placement.
+    /// Set when a layout button was chosen in Manage.
     pub layout: LayoutChoice,
     pub fullscreen: bool,
 }
@@ -99,7 +95,7 @@ pub(super) struct Context<'a> {
     pub root: Option<&'a std::path::Path>,
     pub body: bool,
     pub fullscreen: bool,
-    pub teasers: [String; 6],
+    pub teasers: [String; Tab::COUNT],
 }
 
 /// Draws the open drawer at `rect`'s top and returns what was chosen in it.
@@ -129,23 +125,23 @@ pub(super) fn show(ui: &mut egui::Ui, rect: Rect, runtime: &mut Runtime, mut con
         let id = context.group.issue;
         match tab {
             // The log scrolls by itself and keeps its own follow position.
-            Tab::Output => super::output::show(ui, id, "drawer", runtime, room, context.status.failure.as_ref()),
+            Tab::Status => status(ui, id, runtime, &context, &mut response, room),
             _ => {
                 solid_scroll_area(ui)
                     .id_salt(("cloud-drawer", id, tab as u8))
                     .max_height(room)
                     .min_scrolled_height(room)
                     .show(ui, |ui| match tab {
-                        Tab::Overview => overview(ui, id, runtime, &context, &mut response),
                         Tab::Machine => {
-                            response.resize = profile_details(ui, id, context.launch, runtime, context.region_of);
-                            ui.add_space(8.0);
-                            super::machine::worker(ui, runtime);
+                            section::show(ui, "Machine", |ui| {
+                                response.resize = profile_details(ui, id, context.launch, runtime, context.region_of);
+                            });
+                            section::show(ui, "Worker", |ui| super::machine::worker(ui, runtime));
+                            section::show(ui, "Cost", |ui| super::cost::show(ui, runtime));
                         }
-                        Tab::Cost => super::cost::show(ui, runtime),
-                        Tab::Connections => connections(ui, runtime, &mut context, &mut response),
+                        Tab::Connections => connections::show(ui, runtime, &mut context, &mut response),
                         Tab::Manage => manage(ui, id, runtime, &context, &mut response),
-                        Tab::Output => {}
+                        Tab::Status => {}
                     });
             }
         }
@@ -158,7 +154,7 @@ const TAB_GAP: f32 = 6.0;
 
 /// Where each tab goes in `width`: with teasers when all fit on one row, else without,
 /// wrapping onto more rows when even the names do not fit.
-fn tab_layout(ui: &egui::Ui, tabs: &[Tab], teasers: &[String; 6], width: f32) -> (bool, Vec<Rect>) {
+fn tab_layout(ui: &egui::Ui, tabs: &[Tab], teasers: &[String; Tab::COUNT], width: f32) -> (bool, Vec<Rect>) {
     let measure = |text: &str, size: f32| {
         ui.painter()
             .layout_no_wrap(text.to_owned(), FontId::proportional(size), theme::FG())
@@ -219,7 +215,7 @@ fn tabs(ui: &mut egui::Ui, active: Tab, context: &Context<'_>) -> Option<Tab> {
         );
         let teaser = &context.teasers[tab as usize];
         if with_teasers && !teaser.is_empty() {
-            let color = if tab == Tab::Output && context.status.failure.is_some() {
+            let color = if tab == Tab::Status && context.status.failure.is_some() {
                 theme::PALETTE_RED()
             } else {
                 theme::FG_DIM()
@@ -245,6 +241,56 @@ fn tabs(ui: &mut egui::Ui, active: Tab, context: &Context<'_>) -> Option<Tab> {
     );
     ui.add_space(8.0);
     chosen
+}
+
+/// What runs now over the output it writes; the output takes the room the summary leaves.
+fn status(
+    ui: &mut egui::Ui,
+    id: u32,
+    runtime: &mut Runtime,
+    context: &Context<'_>,
+    response: &mut Response,
+    room: f32,
+) {
+    /// The log's share of a drawer: its heading and a few lines.
+    const OUTPUT_ROOM: f32 = 180.0;
+    let failure = context.status.failure.as_ref();
+    if room < 2.0 * OUTPUT_ROOM {
+        // Too short to split: the summary and a short log scroll together inside the drawer.
+        solid_scroll_area(ui)
+            .id_salt(("cloud-drawer-status", id))
+            .max_height(room)
+            .show(ui, |ui| {
+                overview(ui, id, runtime, context, response);
+                ui.add_space(10.0);
+                output_heading(ui, runtime);
+                super::output::show(ui, id, "drawer", runtime, OUTPUT_ROOM, failure);
+            });
+        return;
+    }
+    // The drawer ui is sized to the whole drawer up front, so measure from the cursor.
+    let top = ui.cursor().top();
+    solid_scroll_area(ui)
+        .id_salt(("cloud-drawer-status", id))
+        .max_height(room - OUTPUT_ROOM)
+        .show(ui, |ui| overview(ui, id, runtime, context, response));
+    ui.add_space(10.0);
+    output_heading(ui, runtime);
+    let left = room - (ui.cursor().top() - top);
+    super::output::show(ui, id, "drawer", runtime, left, failure);
+}
+
+fn output_heading(ui: &mut egui::Ui, runtime: &Runtime) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Output").size(12.0).color(theme::FG_DIM()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                RichText::new(format!("{} lines", runtime.logs.len() + runtime.pending_logs.len()))
+                    .size(12.0)
+                    .color(theme::FG_DIM()),
+            );
+        });
+    });
 }
 
 fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'_>, response: &mut Response) {
@@ -292,9 +338,6 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
                     }
                     if ui.add(action_button("Copy error")).clicked() {
                         ui.ctx().copy_text(copy.clone());
-                    }
-                    if ui.add(action_button("Open output")).clicked() {
-                        runtime.drawer = Some(Tab::Output);
                     }
                 });
             });
@@ -350,81 +393,35 @@ fn current(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) {
     });
 }
 
-fn connections(ui: &mut egui::Ui, runtime: &mut Runtime, context: &mut Context<'_>, response: &mut Response) {
-    if let Some(root) = context.root {
-        context.tailnets.cloud(
-            ui,
-            root,
-            &context.launch.id,
-            runtime.receiver.is_some() || runtime.state.as_ref().is_some_and(|s| s.spec.is_some()),
-        );
-        ui.add_space(12.0);
-        ui.separator();
-    }
-    ui.label(super::attachment_summary(context.group, runtime, context.board))
-        .on_hover_text("Local terminal processes are counted separately from deployment. A running process alone does not confirm the remote connection; check the terminal output.");
-    if let Some(state) = &runtime.state {
-        for session in &state.sessions {
-            let tmux = format!("tmux {}", session.tmux);
-            ui.small(
-                [
-                    session.agent.as_str(),
-                    session.branch.as_str(),
-                    session.worktree.as_str(),
-                    tmux.as_str(),
-                ]
-                .into_iter()
-                .filter(|part| !part.trim().is_empty())
-                .collect::<Vec<_>>()
-                .join(" · "),
-            );
-        }
-    }
-    ui.small("Sessions continue while disconnected.");
-    ui.add_space(6.0);
-    if super::desktop_button(ui, runtime) {
-        response.action = Some(Action::Desktop);
-    }
-    if let Some(action) = super::super::local_network::show(ui, runtime) {
-        response.action = Some(action);
-    }
-    if runtime.can_release_remote_devices()
-        && ui
-            .add(danger_button("Release devices and remove remote credentials"))
-            .on_hover_text("Stops this cloud’s hosted browser sessions and private tunnel, then deletes its copied credentials. Reconnect transfers them again only while the local grant remains configured.")
-            .clicked()
-    {
-        response.action = Some(Action::RevokeBrowserstack);
-    }
-    context.companions.render(ui, &context.launch.id);
-}
-
 fn manage(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'_>, response: &mut Response) {
     if super::confirming_stop(runtime) {
         response.action = runtime_actions(ui, id, runtime).or(response.action.take());
         return;
     }
-    ui.label(RichText::new("Workspace").size(12.0).color(theme::FG_DIM()));
-    ui.horizontal_wrapped(|ui| {
-        let mut selected = context.group.layout;
-        if crate::app::workspace::workspace_layout_buttons(
-            ui,
-            &mut selected,
-            theme::workspace_accent(context.group.issue.saturating_sub(101) as usize),
-        ) {
-            response.layout = LayoutChoice::Set(selected);
+    let occupancy = super::view::occupancy(context.group, context.board);
+    let layout = super::view::manage_layout_controls(context.group, context.status, occupancy);
+    section::show(ui, "View", |ui| {
+        if let Some(controls) = layout {
+            let mut selected = controls.selected;
+            if section::row(ui, "Layout", "How the panels in this cloud are arranged.", |ui| {
+                // Left to right inside the right-aligned column, so Default comes first.
+                ui.horizontal(|ui| crate::app::workspace::workspace_layout_buttons(ui, &mut selected, controls.color))
+                    .inner
+            }) {
+                response.layout = LayoutChoice::Set(selected);
+            }
         }
-        response.fullscreen = ui
-            .add(action_button(if context.fullscreen {
-                "Exit full screen"
-            } else {
-                "Full screen"
-            }))
-            .clicked();
+        let (label, detail) = if context.fullscreen {
+            ("Exit full screen", "Return to the whole canvas.")
+        } else {
+            ("Full screen", "Show only this cloud and its panels.")
+        };
+        response.fullscreen = section::row(ui, "Focus", detail, |ui| {
+            ui.add(section::row_button(ui, action_button(label))).clicked()
+        });
     });
-    ui.add_space(6.0);
-    ui.label(RichText::new("Cloud").size(12.0).color(theme::FG_DIM()));
-    response.action = runtime_actions(ui, id, runtime).or(response.action.take());
+    let chosen = section::show(ui, "Cloud", |ui| runtime_actions(ui, id, runtime));
+    response.action = chosen.or(response.action.take());
 }
 
 /// Carries a step action from the body into the same handling as the drawer's.
@@ -460,9 +457,7 @@ mod tests {
     fn tabs_stay_inside_the_drawer_at_every_width() {
         let teasers = [
             "8/8".to_owned(),
-            "150 lines".to_owned(),
-            "8 vCPU".to_owned(),
-            "$0.32/h".to_owned(),
+            "8 vCPU · $0.32/h".to_owned(),
             "1/1".to_owned(),
             String::new(),
         ];

@@ -166,7 +166,8 @@ real request.
 
 ### 6.5 E05 — Open a live desktop viewer
 
-1. On the card of `smoke-a`, click **Add desktop viewer**.
+1. On the card of `smoke-a`, open the details with the chevron, click **Connections**
+   and then click **Add desktop viewer** in **Access**.
 
    Result: A Device panel opens in the cloud and shows the worker desktop.
 

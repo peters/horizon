@@ -127,6 +127,40 @@ fn layouts_are_offered_while_the_cloud_takes_or_holds_panels_but_not_beside_a_fa
 }
 
 #[test]
+fn manage_offers_the_layouts_the_header_has_no_room_for() {
+    let mut group = horizon_core::cloud_panel::CloudGroup::new(101, "test".into(), "ws".into(), ".".into(), [0.0, 0.0]);
+    let none = status::Occupancy::default();
+    let some = status::Occupancy { panels: 1, ..none };
+    let failed = status::of(
+        &super::super::super::Runtime {
+            stage: Some(Stage::Push),
+            error: Some("Push failed".into()),
+            ..Default::default()
+        },
+        none,
+        std::time::SystemTime::now(),
+    );
+    group.size[0] = 1200.0;
+    assert!(
+        view::manage_layout_controls(&group, &ready_status(), none).is_none(),
+        "a wide header shows them"
+    );
+    assert!(
+        view::manage_layout_controls(&group, &failed, some).is_some(),
+        "a failed cloud with panels keeps them in Manage"
+    );
+    assert!(
+        view::manage_layout_controls(&group, &failed, none).is_none(),
+        "nothing to arrange"
+    );
+    group.size[0] = 560.0;
+    assert!(
+        view::manage_layout_controls(&group, &ready_status(), none).is_some(),
+        "a narrow header leaves them to Manage"
+    );
+}
+
+#[test]
 fn a_narrow_header_keeps_its_sentence_and_leaves_layouts_to_manage() {
     let ctx = egui::Context::default();
     let (_, texts) = frame(&ctx, 548.0, &ready_status(), &idle_indicators(), vec![]);

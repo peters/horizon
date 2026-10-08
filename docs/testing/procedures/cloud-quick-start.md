@@ -209,7 +209,8 @@ This task allocates nothing.
 5. Examine the steps of the card while it validates.
 
    Result: **Build locally** and **Push image** show `skipped`. They do not show
-   a check mark.
+   a check mark. Under the output, the card shows no hint text. The header
+   shows no terminal count and no **Desktop** indicator.
 
 6. Write the new pod and the new network volume in the resource ledger.
 
@@ -221,6 +222,14 @@ This task allocates nothing.
    card has the line `Worker contract: the pinned quick-start image passed this
    check when it was published`. It has no image download.
 
+   Before the first panel opens, the card shows the hint `Starting your first
+   panel…` under the output. The hint is inside the card frame and does not
+   touch its bottom edge.
+
+   When the first panel runs, the header shows the terminal count `1/1` and
+   **Desktop**. Put the pointer on each of them: the hover texts are
+   `1 of 1 terminals running` and `Desktop tunnel connected`.
+
 8. Examine the stage track of the card.
 
    Result: The segments of **Build locally** and **Push image** show a thin
@@ -229,7 +238,7 @@ This task allocates nothing.
 9. Put the pointer on the segment of **Build locally** and wait one second.
 
    Result: The hover text is `Build locally · skipped`. The text
-   `Double-click to rename. Drag to move this cloud.` does not show.
+   `Click the title to rename. Drag to move this cloud.` does not show.
 
 10. Put the pointer on the segment of **Provision worker** and wait one second.
 
@@ -237,9 +246,26 @@ This task allocates nothing.
 
 11. Put the pointer on the title of the card and wait one second.
 
-    Result: The hover text is `Double-click to rename. Drag to move this cloud.`
+    Result: The hover text is `Click the title to rename. Drag to move this cloud.`
+    The pointer shows a text cursor on the title.
 
-12. In the RunPod console, examine the pod of this cloud.
+12. Click the title of the card once.
+
+    Result: An editor opens on the title, with the title text in it.
+
+13. Select all text in the editor, type `Quick start renamed` and press Enter.
+
+    Result: The editor closes. The card title is `Quick start renamed`.
+
+14. Click the subtitle of the card, under the title.
+
+    Result: No editor opens. The title does not change.
+
+15. Drag the card by the empty part of its header.
+
+    Result: The card moves with the pointer. No editor opens.
+
+16. In the RunPod console, examine the pod of this cloud.
 
     Result: The image is `ghcr.io/peters/horizon-worker-base@sha256:` with the
     pinned digest. The pod has no registry login.
@@ -350,6 +376,11 @@ This task allocates nothing.
 - Q04 reaches **Ready** on the pinned digest with no registry login. **Build
   locally** and **Push image** show as skipped. Each stage segment shows its own
   hover text, and the card title shows the card hint.
+- Q04 shows no body hint and no header indicators while the cloud starts, the
+  first-panel hint inside the frame at **Ready**, and the terminal count and
+  **Desktop** only while they are active.
+- Q04 renames the card with one click on its title. A click on the subtitle
+  opens no editor, and a header drag moves the card.
 - Q05 opens each worker shell the first time.
 - Q06 reports an unchanged image for the same pin. It switches the pod to the
   other pin and back, and keeps the pod, the volume and `/workspace`. No candidate

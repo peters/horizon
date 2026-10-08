@@ -44,6 +44,12 @@ pub(super) enum Sharing {
 }
 
 impl Sharing {
+    /// Paused by a disconnect or stopped by a network move: the switch stays so it can be
+    /// turned off while the cloud is not connected.
+    pub(super) fn held(&self) -> bool {
+        matches!(self, Self::Paused { .. } | Self::Moved { .. })
+    }
+
     fn stop(&mut self) {
         if matches!(self, Self::On(_)) {
             *self = Self::Off;
@@ -354,7 +360,7 @@ impl Runtime {
         self.shared = None;
     }
 
-    fn connected_and_ready(&self) -> bool {
+    pub(super) fn connected_and_ready(&self) -> bool {
         self.stage == Some(Stage::Ready) && self.receiver.is_some()
     }
 }
@@ -406,8 +412,7 @@ impl HorizonApp {
 /// The switch and, while it is on, what the bridge is doing.
 pub(super) fn show(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
     // A disconnected card offers Reconnect instead; a paused switch stays so it can be turned off.
-    let paused = matches!(runtime.sharing, Sharing::Paused { .. } | Sharing::Moved { .. });
-    if !runtime.connected_and_ready() && !paused {
+    if !runtime.connected_and_ready() && !runtime.sharing.held() {
         return None;
     }
     let mut sharing = runtime.sharing.intended();

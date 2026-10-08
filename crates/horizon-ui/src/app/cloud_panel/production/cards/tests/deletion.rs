@@ -283,8 +283,8 @@ fn resuming_shows_the_steps_instead_of_manage() {
     app.apply_card_action(7, Action::Resume, &ctx);
     assert_eq!(
         app.cloud_prototype.production.runtimes[&7].drawer,
-        Some(Tab::Overview),
-        "with panels the steps open in Overview"
+        Some(Tab::Status),
+        "with panels the steps open in Status"
     );
 
     let (_temp, mut app) = crate::app::test_support::test_app();
@@ -303,7 +303,7 @@ fn resuming_shows_the_steps_instead_of_manage() {
         !app.cloud_prototype.groups.0[0].collapsed,
         "a collapsed cloud opens to show it"
     );
-    assert_eq!(app.cloud_prototype.production.runtimes[&7].drawer, Some(Tab::Overview));
+    assert_eq!(app.cloud_prototype.production.runtimes[&7].drawer, Some(Tab::Status));
 }
 
 #[test]
@@ -321,7 +321,7 @@ fn a_pending_stop_replaces_the_whole_manage_drawer() {
     for step in 1..4 {
         output = frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
     }
-    for shown in ["Workspace", "Full screen", "Stop worker…"] {
+    for shown in ["View", "Full screen", "Stop worker…"] {
         assert!(
             label_pos(&output, shown).is_some(),
             "{shown} is in the usual Manage tab"
@@ -340,14 +340,7 @@ fn a_pending_stop_replaces_the_whole_manage_drawer() {
     for shown in ["Stop worker", "Keep running"] {
         assert!(label_pos(&output, shown).is_some(), "{shown} is asked");
     }
-    for hidden in [
-        "Workspace",
-        "Default",
-        "Full screen",
-        "Cloud",
-        "Stop worker…",
-        "Reconnect cloud",
-    ] {
+    for hidden in ["View", "Full screen", "Cloud", "Stop worker…", "Reconnect cloud"] {
         assert!(
             label_pos(&output, hidden).is_none(),
             "{hidden} waits behind the question in the real Manage drawer"
@@ -373,4 +366,33 @@ fn manage_offers_no_reconnect_or_second_check_while_the_idle_watch_asks_the_prov
     reports.send(Report::Confirmed).unwrap();
     runtime.poll_idle();
     assert!(has(&action_texts(&ctx, &mut runtime), "Reconnect cloud"));
+}
+
+#[test]
+fn manage_keeps_the_layouts_only_for_a_header_too_narrow_to_show_them() {
+    use super::scrolling::{frame, label_pos, verbose_card};
+    for (width, in_manage) in [(1200.0, false), (560.0, true)] {
+        let (_temp, ctx, mut app) = verbose_card();
+        let ready = ready_bound_runtime();
+        {
+            let runtime = app.cloud_prototype.production.runtimes.entry(901).or_default();
+            runtime.stage = ready.stage;
+            runtime.state = ready.state;
+            runtime.drawer = Some(Tab::Manage);
+            // Connected, so the cloud is Ready and its layouts apply.
+            runtime.receiver = Some(std::sync::mpsc::channel().1);
+        }
+        app.cloud_prototype.groups.0[0].size[0] = width;
+        let mut output = frame(&ctx, &mut app, 0.0, Pos2::ZERO, 0.0);
+        for step in 1..4 {
+            output = frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
+        }
+        assert_eq!(label_pos(&output, "Layout").is_some(), in_manage, "at {width}");
+        if in_manage {
+            assert!(
+                label_pos(&output, "Rows").is_some(),
+                "Manage offers the layouts at {width}"
+            );
+        }
+    }
 }

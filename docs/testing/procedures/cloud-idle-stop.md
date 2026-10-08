@@ -126,7 +126,7 @@ the two lanes at the same time.
    Result: The card does not show **Operation failed**. The card does not show
    **Local operation timed out**.
 
-9. Open the **Output** tab of the card.
+9. Open the **Status** tab of the card and read its output.
 
    Result: The last line starts with
    `No agent activity for 30 minutes, so this worker stopped itself.` The line
@@ -188,7 +188,7 @@ the two lanes at the same time.
    Result: The card does not show **Operation failed**, **Provisioning failed**
    or **Reconnect**.
 
-7. Open the **Output** tab of the card.
+7. Open the **Status** tab of the card and read its output.
 
    Result: The last line starts with
    `The provider reports that this worker is stopped. Horizon did not stop it;`
@@ -238,7 +238,7 @@ the two lanes at the same time.
    Result: The card shows **Stopped after 30 idle minutes** and
    **Storage kept · billable**. The header button is **Resume worker**.
 
-5. Open the **Output** tab of the card.
+5. Open the **Status** tab of the card and read its output.
 
    Result: The last line starts with `No agent activity for <N> minutes, so
    Horizon stopped this cloud.` `<N>` is the measured idle time. It is 30 or
