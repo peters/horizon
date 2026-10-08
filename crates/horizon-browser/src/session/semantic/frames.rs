@@ -441,14 +441,16 @@ mod tests {
     }
     #[test]
     fn multi_frame_scan_rejects_an_earlier_child_invalidated_during_a_later_scan() {
-        for (event, affected) in [
-            (None, "child"),
-            (Some("Runtime.executionContextDestroyed"), "child"),
-            (Some("Runtime.executionContextsCleared"), "child"),
-            (Some("Target.detachedFromTarget"), "child"),
-            (Some("Runtime.executionContextDestroyed"), "foreign"),
-            (Some("Runtime.executionContextsCleared"), "foreign"),
-            (Some("Target.detachedFromTarget"), "foreign"),
+        for (event, affected, context_id) in [
+            (None, "child", 7),
+            (Some("Runtime.executionContextDestroyed"), "child", 7),
+            (Some("Runtime.executionContextsCleared"), "child", 7),
+            (Some("Target.detachedFromTarget"), "child", 7),
+            (Some("Runtime.executionContextDestroyed"), "foreign", 7),
+            (Some("Runtime.executionContextsCleared"), "foreign", 7),
+            (Some("Target.detachedFromTarget"), "foreign", 7),
+            (Some("Runtime.executionContextDestroyed"), "child", 9),
+            (Some("Runtime.executionContextDestroyed"), "page", 9),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("ws://{}/", listener.local_addr().unwrap());
@@ -465,7 +467,7 @@ mod tests {
                     if session == "later"
                         && let Some(method) = event
                     {
-                        socket.send(Message::Text(json!({"method":method,"sessionId":affected,"params":{"sessionId":affected,"executionContextId":7}}).to_string().into())).unwrap();
+                        socket.send(Message::Text(json!({"method":method,"sessionId":affected,"params":{"sessionId":affected,"executionContextId":context_id}}).to_string().into())).unwrap();
                     }
                     let value = if session == "page" {
                         Value::Null
@@ -481,11 +483,13 @@ mod tests {
             state.clipboard.iframe_sessions.insert("later".into());
             for session in ["page", "child", "later"] {
                 state.runtime_enable_requested.insert(session.into());
-                state.note_clipboard_execution_context(&CdpEvent {
-                    method: "Runtime.executionContextCreated",
-                    session_id: Some(session),
-                    params: &json!({"context":{"id":7,"auxData":{"isDefault":true}}}),
-                });
+                for (id, default) in [(7, true), (9, false)] {
+                    state.note_clipboard_execution_context(&CdpEvent {
+                        method: "Runtime.executionContextCreated",
+                        session_id: Some(session),
+                        params: &json!({"context":{"id":id,"auxData":{"isDefault":default}}}),
+                    });
+                }
             }
             let (generation, _, nodes) = state
                 .semantic
@@ -493,7 +497,7 @@ mod tests {
                 .unwrap();
             let mut link = CdpLink::connect_with_timeout(&url, Duration::from_millis(10)).unwrap();
             let result = state.frame_scan(&mut link, &events, &slot, None, 10);
-            if event.is_some() && affected == "child" {
+            if event.is_some() && affected == "child" && context_id == 7 {
                 assert_eq!(result.unwrap_err().code, "stale_reference");
             } else {
                 assert_eq!(result.unwrap()["nodes"].as_array().unwrap().len(), 2);

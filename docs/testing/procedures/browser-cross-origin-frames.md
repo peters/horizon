@@ -84,6 +84,8 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
    Existing top-level references remain valid.
    A scan with no document change returns both child nodes.
    Navigation, context removal and detach events for unrelated pages do not interrupt the scan.
+   The Chromium fixture also sends destruction events for isolated execution contexts in parent and child sessions.
+   These events do not interrupt the scan.
 
 ### 6.3 FRAME-AUDIT — Examine the audit
 

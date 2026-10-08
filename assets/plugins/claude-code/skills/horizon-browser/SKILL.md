@@ -75,6 +75,7 @@ inside cross-origin frames. Use their returned refs with `browser_act` `click`
 or `fill`. A frame navigation makes its old refs stale. If a frame changes during
 a scan, the scan returns `stale_reference`; take a new snapshot or query.
 Context events from unrelated pages do not invalidate this scan.
+Chromium ignores destruction of isolated execution contexts during a scan.
 Direct selector actions, `browser_wait`, and `browser_evaluate` target the
 top-level document. Child-frame
 refs do not support `scroll` or `set_files`. Safari and remote sessions scan only

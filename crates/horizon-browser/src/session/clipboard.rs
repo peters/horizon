@@ -198,8 +198,8 @@ impl DriverState {
                     .get("executionContextId")
                     .and_then(serde_json::Value::as_u64)
                     && let Some(contexts) = self.clipboard.default_contexts.get_mut(session)
+                    && contexts.remove(&context_id)
                 {
-                    contexts.remove(&context_id);
                     self.semantic.invalidate_cdp_frame(session, Some(context_id));
                 }
             }
