@@ -658,6 +658,30 @@ outline).
 - **Section card** (settings): `PANEL_BG`, 1 px `BORDER_SUBTLE`, radius 10,
   margin 16, followed by 12 of space; heading above it 13 strong `FG_SOFT`.
 
+### Dependencies panel
+
+The Dependencies panel (`crates/horizon-ui/src/dependencies_widget/`) reuses the
+recipes above and adds three patterns. Its text is a step larger than dense chrome
+(13-14 body, 22 title) because people read it zoomed out on the canvas.
+
+- **Setup step card**: `PANEL_BG_ALT`, 1 px `BORDER_SUBTLE`, radius 12, margin 18. The
+  step that needs the person has a `blend(PANEL_BG_ALT, ACCENT, 0.08)` fill and a
+  `blend(BORDER_SUBTLE, ACCENT, 0.5)` outline. A 30 px number badge is solid
+  `ACCENT` with a `BG` digit for that step, a `PALETTE_GREEN` tint with a check mark
+  for a done step, and a 1.5 px `BORDER_STRONG` ring with an `FG_SOFT` digit for a
+  locked step. The status line is a dot plus words in `FG`; the step title of a
+  locked step is `FG_SOFT`. One primary button per card, at most one current card.
+- **Filter tile**: a selectable card (radius 10) with a state dot, a 13 label and a
+  26 monospace count. Selected: `blend(PANEL_BG_ALT, ACCENT, 0.14)` and a 1.5 px
+  `ACCENT` outline. A zero count is `FG_DIM`; a non-zero attention count is
+  `PALETTE_YELLOW`. Clicking the selected tile returns to all repositories.
+- **Pipeline bar**: one 8 px row of segments, radius 3, 3 px apart, each in its
+  state color, with a legend of dots and `FG_SOFT` counts. Color is never the only
+  carrier: the legend names every segment.
+
+Status pills in the table and detail use the pill recipe with a leading dot; neutral
+states (`FG_DIM`, `BORDER_STRONG`) take `FG_SOFT` text so they stay readable.
+
 ### Panels and workspaces
 
 - Terminal panel: body `PANEL_BG` blended with its accent by 0.06 when

@@ -101,6 +101,16 @@ GitHub and chooses its repositories; agents cannot set it up.
 - When the cloud has no GitHub access, do not ask the person for a token. Say that
   GitHub is not connected for this cloud.
 
+## Dependencies panel
+
+The person's **Dependencies** panel (toolbar **Dependencies**) observes a dependency
+worker that keeps Dependabot pull requests moving across repositories. It has no MCP
+tool. Its setup locks every step until the person connects GitHub in Cloud settings.
+This version cannot start that worker in a cloud; only the test worker in
+`scripts/dependencies-fixture` connects, through `HORIZON_MAINTENANCE_FIXTURE`. Never
+present the test worker's simulated GitHub, CI or merges as real results, and do not
+connect GitHub or start the test worker for the person without being asked.
+
 ## Development-only registry
 
 The source example `cloud_deploy registry-mcp <registry-path>` exposes

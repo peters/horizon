@@ -313,6 +313,22 @@ Codex and Grok panels.
 Device panels need a source build from `main`. A Device panel needs a VNC target in the configuration. See
 [Watch an app over VNC](../README.md#watch-an-app-over-vnc).
 
+## Keep dependencies up to date
+
+The **Dependencies** panel shows a worker that keeps Dependabot pull requests
+moving across your repositories. It needs a GitHub connection.
+
+1. Click **Dependencies** in the toolbar.
+
+   Result: The panel shows three setup steps.
+
+2. Click **Connect GitHub…** and follow [Connect GitHub](cloud-workspaces.md#connect-github).
+
+   Result: The first step shows **Connected**. The next steps unlock.
+
+This version cannot start a dependency worker in a cloud. See
+[Dependencies](dependencies.md) for the steps, the portfolio and the test worker.
+
 ## Start a first cloud
 
 Clouds work on Linux and macOS, with a source build from `main`. Read
