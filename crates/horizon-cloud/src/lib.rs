@@ -4,6 +4,7 @@
 
 mod capabilities;
 pub mod companions;
+pub mod github;
 pub mod hetzner;
 pub mod host;
 pub mod offers;
