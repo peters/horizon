@@ -788,10 +788,10 @@ mod tests {
                 assert!(rect.contains(pointer));
                 assert!(!rect.contains(egui::pos2(700.0, 40.0)));
                 let offset = pointer - rect.min;
-                assert_eq!(
-                    [offset.x / rect.width() * size[0], offset.y / rect.height() * size[1]],
-                    [600.0, 100.0]
-                );
+                let coordinates = [offset.x / rect.width() * size[0], offset.y / rect.height() * size[1]];
+                for (actual, expected) in coordinates.into_iter().zip([600.0, 100.0]) {
+                    assert!((actual - expected).abs() <= f32::EPSILON);
+                }
             })
             .discard_textures();
     }
