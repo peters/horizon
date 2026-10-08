@@ -484,8 +484,8 @@ This task rents no compute. The deployment stops before Horizon requests a worke
    rm -rf <docker_config> && mv <docker_config>.d06-backup <docker_config>
    ```
 
-   Result: `docker --config <docker_config> login ghcr.io --get-login 2>/dev/null`
-   or the directory listing shows the same state as before step 4.
+   Result: `<docker_config>` exists again and `<docker_config>.d06-backup` does not.
+   Its `config.json` is the same as before step 4.
 
 10. Go back to the branch of the run and delete the scratch branch.
 
