@@ -194,6 +194,16 @@ pub fn discard(root: &Path, settings: &Settings) {
 fn write_private(path: &Path, value: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
+        // Private before the secret goes in, whatever the umask: nobody else may replace or
+        // redirect an entry in it. A link in its place is refused, not followed.
+        if std::fs::symlink_metadata(parent)?.file_type().is_symlink() {
+            return Err(Error::Invalid("The GitHub secret directory must not be a link"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
     }
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -243,4 +253,28 @@ pub fn device_flow_enabled(settings: &Settings) -> std::result::Result<bool, Git
 #[must_use]
 pub fn settings_url(settings: &Settings) -> String {
     format!("https://github.com/settings/apps/{}", settings.slug)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::write_private;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn the_secret_directory_is_private_whatever_the_umask_and_never_a_link() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("credentials");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o777)).unwrap();
+        write_private(&directory.join("github-app-x"), "synthetic").unwrap();
+        let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&directory), 0o700);
+        assert_eq!(mode(&directory.join("github-app-x")), 0o600);
+        let elsewhere = root.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let link = root.path().join("linked");
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+        assert!(write_private(&link.join("github-app-x"), "synthetic").is_err());
+        assert!(!elsewhere.join("github-app-x").exists());
+    }
 }
