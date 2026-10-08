@@ -1,5 +1,7 @@
 //! Rebuilds a dedicated cloud's image from its latest committed recipe and switches the
-//! bound worker to it. Each provider mutation is journaled first (`ImageReplacement`), and
+//! bound worker to it. A cloud on the public base image without a recipe, such as a
+//! quick-start cloud, switches to the base image this Horizon version pins instead.
+//! Each provider mutation is journaled first (`ImageReplacement`), and
 //! the steps outside the record sit behind `Steps` so every persistence boundary is
 //! tested offline. Only dedicated clouds have a `deployment.json` record; a migrated
 //! allocation does not load here.
@@ -16,7 +18,7 @@ use super::{
     },
     Error, Event, Request, Result, Stage, Store,
 };
-use crate::cloud_runtime::command::Runner;
+use crate::cloud_runtime::{command::Runner, repository::launch::quick_start};
 use horizon_cloud::{
     Cancellation, CloudConfig, CloudError, CreateState, Profile, WorkerSpec,
     provider::{Description, Rebuild},
@@ -32,10 +34,11 @@ use std::{
 
 const NOTHING_PENDING: &str = "No image replacement is pending";
 const NOT_READY: &str = "Only a ready, running cloud without a pending replacement can rebuild its image";
-const NO_RECIPE: &str = "This cloud's profile has no build section, so there is no recipe to rebuild its image from";
+const NO_RECIPE: &str = "This cloud's profile has no build section and does not run the public base image, so there is no recipe to rebuild its image from";
 const NO_CONFIG: &str =
     "The latest commit has no readable .horizon/cloud.yml; commit the cloud configuration to rebuild";
 const NO_PROFILE: &str = "The latest commit's .horizon/cloud.yml no longer defines this cloud's profile";
+const COMMITTED_BASE: &str = "This cloud runs the public base image without a build section, and the latest commit has its own .horizon/cloud.yml. Only a cloud of a repository without one moves to the pinned base image; create a new cloud to use the committed settings.";
 const UNSETTLED: &str =
     "The provider has not reported the switched image yet; the replacement stays pending. Continue or cancel it.";
 const RELAUNCH_STATUS: &str = "horizon-relaunch-status=";
@@ -137,6 +140,9 @@ enum Driven {
 /// that rebuilds in place keeps the worker ID; one that rebuilds on a new server
 /// (`provider::Rebuild::NewServer`) releases its server and starts a new one with a new
 /// ID on the same workspace volume. `/workspace` is kept either way; the container is reset.
+/// A cloud on the public base image without a recipe ([`rebuildable`]), whose latest commit
+/// has no `.horizon/cloud.yml`, moves to the base image this Horizon version pins and
+/// builds nothing.
 /// # Errors
 /// Refuses unless the cloud is ready with nothing pending and the committed profile named
 /// `profile_name` equals the bound one. After a failure the journal stays, so the
@@ -350,9 +356,16 @@ fn same_worker(state: &Deployment) -> Result<()> {
     Ok(())
 }
 
+/// Whether a cloud of `profile` can rebuild its image: from its committed recipe, or, on the
+/// public base image without one, by moving to the base image this Horizon version pins.
+#[must_use]
+pub fn rebuildable(profile: &Profile) -> bool {
+    profile.build.is_some() || quick_start::on_public_base(profile)
+}
+
 fn ready(state: &Deployment) -> Result<()> {
     state.refuse_pending_replacement()?;
-    if state.profile.build.is_none() {
+    if !rebuildable(&state.profile) {
         return Err(Error::Invalid(NO_RECIPE));
     }
     if !matches!(state.operation, CreateState::Bound { .. })
@@ -366,7 +379,10 @@ fn ready(state: &Deployment) -> Result<()> {
 }
 
 /// The committed recipes to rebuild, once the profile named `profile_name` equals the
-/// bound one: the primary's latest commit and each sibling's.
+/// bound one: the primary's latest commit and each sibling's. A cloud on the public base
+/// image has no recipe; while the latest commit has no `.horizon/cloud.yml`, as for quick
+/// start, its image is the pin of this Horizon version. Committed settings are never
+/// passed over: with them such a cloud is refused.
 fn committed_recipes(
     recipe: &impl Recipe,
     state: &Deployment,
@@ -375,6 +391,16 @@ fn committed_recipes(
 ) -> Result<Recipes> {
     emit(activity("Reading the latest committed recipe"));
     let head = recipe.head(&state.repository)?;
+    if quick_start::on_public_base(&state.profile) {
+        if head.config.is_some() {
+            return Err(Error::Invalid(COMMITTED_BASE));
+        }
+        emit(activity("Using the base image that this Horizon version pins"));
+        return Ok(Recipes {
+            revision: head.revision,
+            siblings: Vec::new(),
+        });
+    }
     unchanged_profile(&state.profile, head.config.as_ref(), profile_name)?;
     let (Some(set), Some(config)) = (&state.siblings, &head.config) else {
         return Ok(Recipes {

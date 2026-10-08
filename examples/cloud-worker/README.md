@@ -288,8 +288,10 @@ examples/cloud-worker/build-base-image.sh ghcr.io/peters/horizon-worker-helpers@
 
 Horizon does not use the `cpu` tag. Quick start uses the image digest that is pinned
 in `crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs`. The
+contract check result of that image is kept beside the pin, as `CONTRACT`. Thus quick
+start does no local check and needs no Docker. The
 [release flow](../../docs/release-flow.md#update-the-quick-start-image) tells how to
-update the pin.
+update the pin and its result.
 
 ## Running on a rented virtual machine
 

@@ -324,7 +324,7 @@ mod tests {
         let error = super::super::deployment::replacement::rebuild(&request, "cpu", &cancel, &|_| {}).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "This cloud's profile has no build section, so there is no recipe to rebuild its image from"
+            "This cloud's profile has no build section and does not run the public base image, so there is no recipe to rebuild its image from"
         );
         let store = Store::lock(root.path()).unwrap();
         assert_eq!(

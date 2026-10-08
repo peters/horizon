@@ -1,8 +1,11 @@
-//! Local Docker/BuildKit image preparation, kept outside horizon-cloud.
+//! Local Docker/BuildKit image preparation, kept outside horizon-cloud. The pinned
+//! quick-start image needs none of it (`quick_start::trusted_contract`).
 pub mod agents;
 mod contract;
 mod layers;
-use super::{Error, Event, Result, Stage, command::Runner, progress::Progress};
+#[cfg(all(test, unix))]
+pub(super) mod without_docker;
+use super::{Error, Event, Result, Stage, command::Runner, progress::Progress, repository::launch::quick_start};
 use horizon_cloud::{Capabilities, Profile, valid_image};
 pub use layers::Layer;
 use layers::{Builder, Recipe};
@@ -45,6 +48,8 @@ impl Images<'_> {
     /// # Errors
     /// Builds and checks locally, then pushes and resolves the registry digest.
     /// Never performs a provider allocation. `BuildKit` handles cache/.dockerignore.
+    /// The pinned quick-start image is already a digest with a known contract, so it
+    /// uses no Docker at all.
     pub fn prepare(&self, profile: &Profile, source: &Path, operation_id: &str) -> Result<String> {
         self.prepare_tagged(profile, source, operation_id, &default_tag(operation_id))
     }
@@ -82,6 +87,12 @@ impl Images<'_> {
         if !layers.is_empty() && profile.build.is_none() {
             return Err(super::siblings::SiblingError::PrimaryImageOnly.into());
         }
+        if profile.build.is_none() && quick_start::trusted_contract(&profile.image, &profile.capabilities).is_some() {
+            (self.runner.emit)(Event::Output(TRUSTED.into()));
+            self.validate(&profile.image, operation_id, profile)?;
+            return Ok(profile.image.clone());
+        }
+        require_docker()?;
         let image = if profile.build.is_some() {
             format!("{}:{tag}", repository_name(&profile.image))
         } else {
@@ -193,6 +204,21 @@ impl Images<'_> {
         Ok(reference)
     }
 }
+/// Said instead of the digest lookup, download and local check of the pinned quick-start image.
+const TRUSTED: &str = "Worker contract: the pinned quick-start image passed this check when it was published, so it does not run in local Docker";
+
+/// Refused before the first Docker command when no `docker` program is on `PATH`, so the
+/// person reads what is missing rather than a failed process start.
+const DOCKER_MISSING: &str = "Docker is not installed on this computer or not on its PATH, and this cloud's image needs a local Docker build or check. Install Docker. Quick start on the base image that this Horizon version pins needs none.";
+
+fn require_docker() -> Result<()> {
+    let program = if cfg!(windows) { "docker.exe" } else { "docker" };
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|directory| directory.join(program).is_file()))
+        .then_some(())
+        .ok_or(Error::Invalid(DOCKER_MISSING))
+}
+
 /// The tag `prepare` publishes a cloud's first image under.
 #[must_use]
 pub fn default_tag(operation_id: &str) -> String {

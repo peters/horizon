@@ -31,3 +31,16 @@ fn a_deletion_of_an_image_only_cloud_skips_no_step() {
     assert_eq!(status.track.stages, &Stage::DELETION);
     assert!(status.track.skipped.is_empty());
 }
+
+#[test]
+fn the_rebuild_of_an_image_only_cloud_skips_build_and_push_too() {
+    let (mut runtime, _sender) = live(Stage::Replace);
+    runtime.rebuild = Some(super::super::super::super::rebuild::Attempt::new(
+        super::super::super::super::rebuild::Kind::Rebuild,
+    ));
+    runtime.state = Some(deployment("Ready", &bound(), &running_worker()));
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.track.stages[1..3], [Stage::Build, Stage::Push]);
+    assert_eq!(status.track.skipped, [Stage::Build, Stage::Push]);
+    assert_eq!(status.track.current, Some(3), "Replace");
+}

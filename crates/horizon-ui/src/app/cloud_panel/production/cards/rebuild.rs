@@ -26,6 +26,12 @@ const STAGES: [Stage; 7] = [
 ];
 
 const CONFIRMATION: &str = "Rebuild the image from the latest committed .horizon recipe with the newest agent CLIs, then restart the worker on it? Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept. Uncommitted changes are not used, and this cannot change the cloud's size or capabilities.";
+/// For a cloud on the public base image, such as a quick-start cloud: no recipe, no build.
+const CONFIRMATION_BASE: &str = "Restart the worker on the base image that this Horizon version pins? Nothing is built, and an image that is already the pin restarts nothing. Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept, and this cannot change the cloud's size or capabilities.";
+const OFFER: &str = "Rebuild this cloud's image from its committed recipe and restart the worker on it.";
+const OFFER_BASE: &str = "Restart the worker on the base image that this Horizon version pins.";
+const PREPARED_BASE: &str = "A switch to the pinned base image was being prepared and did not finish; the worker keeps its current image. Continue to restart the worker on the pinned base image, or cancel the rebuild.";
+const BUILT_BASE: &str = "The pinned base image is ready, but the worker has not switched to it. Continue to restart the worker on it, or cancel to keep the current image.";
 const PREPARED: &str = "An image rebuild was being prepared and did not finish; the worker keeps its current image. Continue to build the image and restart the worker on it, or cancel the rebuild.";
 const BUILT: &str = "A rebuilt image is ready, but the worker has not switched to it. Continue to restart the worker on it, or cancel to keep the current image.";
 const REQUESTED: &str = "The worker's image switch may be in progress. Continue to finish it, or cancel to switch the worker back to its previous image.";
@@ -35,6 +41,15 @@ const NEW_SERVER: &str =
     " The server is released and a new one starts on the same workspace volume, with a new address.";
 const REQUESTED_NEW_SERVER: &str = "The rebuild may have released the server. Continue to start a new server on the rebuilt image, or cancel to start one on the previous image; before the release the cloud keeps its server.";
 const CANCEL_REQUESTED_NEW_SERVER: &str = "Cancel the rebuild? If the server was already released, a new one starts on the previous image on the same workspace volume. Running agent processes restart; files under /workspace are kept.";
+
+/// Whether the cloud runs the public base image without a recipe, so its rebuild moves
+/// it to the pinned base image instead of building one.
+fn on_public_base(runtime: &Runtime) -> bool {
+    runtime
+        .state
+        .as_ref()
+        .is_some_and(|state| cloud_runtime::repository::launch::quick_start::on_public_base(&state.profile))
+}
 
 /// Whether the cloud's provider rebuilds on a new server rather than in place.
 fn new_server(runtime: &Runtime) -> bool {
@@ -127,11 +142,18 @@ fn cancel_before_switch(ui: &mut egui::Ui, runtime: &Runtime) {
 pub(super) fn pending_notice(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
     let requested = match &pending(runtime.state.as_ref())?.phase {
         ReplacementPhase::Prepared {} => {
-            notice(ui, PREPARED);
+            notice(
+                ui,
+                if on_public_base(runtime) {
+                    PREPARED_BASE
+                } else {
+                    PREPARED
+                },
+            );
             false
         }
         ReplacementPhase::Built(_) => {
-            notice(ui, BUILT);
+            notice(ui, if on_public_base(runtime) { BUILT_BASE } else { BUILT });
             false
         }
         ReplacementPhase::Requested(_) => {
@@ -199,10 +221,15 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
     if !can_rebuild(runtime) {
         return None;
     }
+    let (offer, confirmation) = if on_public_base(runtime) {
+        (OFFER_BASE, CONFIRMATION_BASE)
+    } else {
+        (OFFER, CONFIRMATION)
+    };
     if runtime.confirmation != Confirmation::Rebuild {
         if ui
             .add(danger_button("Rebuild image & restart…"))
-            .on_hover_text("Rebuild this cloud's image from its committed recipe and restart the worker on it.")
+            .on_hover_text(offer)
             .clicked()
         {
             runtime.confirmation = Confirmation::Rebuild;
@@ -210,9 +237,9 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
         return None;
     }
     if new_server(runtime) {
-        ui.label(format!("{CONFIRMATION}{NEW_SERVER}"));
+        ui.label(format!("{confirmation}{NEW_SERVER}"));
     } else {
-        ui.label(CONFIRMATION);
+        ui.label(confirmation);
     }
     if ui.add(danger_button("Rebuild and restart")).clicked() {
         return Some(Action::Rebuild);
@@ -234,7 +261,7 @@ fn can_rebuild(runtime: &Runtime) -> bool {
             matches!(state.operation, CreateState::Bound { .. })
                 && state.stage == Stage::Ready
                 && !state.stop_requested
-                && state.profile.build.is_some()
+                && cloud_runtime::deployment::replacement::rebuildable(&state.profile)
                 && state.image_replacement.is_none()
                 && state.session_restart.is_none()
         })

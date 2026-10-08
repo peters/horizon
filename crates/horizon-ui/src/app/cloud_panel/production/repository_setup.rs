@@ -79,7 +79,7 @@ fn unconfigured(ui: &mut egui::Ui, form: &mut Production) -> Choice {
     choice
 }
 
-const QUICK_START_DETAIL: &str = "A 2 vCPU, 4 GB RunPod worker with Claude, Codex, Chromium and a desktop. It needs no registry login and no image build.";
+const QUICK_START_DETAIL: &str = "A 2 vCPU, 4 GB RunPod worker with Claude, Codex, Chromium and a desktop. It needs no registry login, no image build and no Docker on this computer.";
 
 fn setup_agent(ui: &mut egui::Ui, form: &mut Production) -> Choice {
     ui.label("Let a local agent inspect this repository and prepare its worker image and cloud.yml. Review and commit the files, then return here and reload.");
@@ -109,7 +109,7 @@ pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &Production) {
         .unwrap_or((quick_start::IMAGE, ""));
     ui.label(
         RichText::new(format!(
-            "Quick start on the public base image {image}, digest {}. No registry login and no image build. To use the repository's own settings, choose Read .horizon/cloud.yml in More options.",
+            "Quick start on the public base image {image}, digest {}. No registry login, no image build and no Docker on this computer. To use the repository's own settings, choose Read .horizon/cloud.yml in More options.",
             digest.get(..12).unwrap_or(digest)
         ))
         .size(12.0)

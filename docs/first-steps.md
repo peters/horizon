@@ -392,7 +392,8 @@ A first cloud needs these items today:
 |---|---|---|
 | RunPod API key or Hetzner API token | Required | **Cloud > Cloud settings** |
 | Worker image in a registry | Required, except for quick start. Quick start uses the public base image on RunPod. | Build it from [`examples/cloud-worker`](../examples/cloud-worker/README.md) |
-| Git, OpenSSH, Docker with buildx | Required | This computer |
+| Git and OpenSSH | Required | This computer |
+| Docker with buildx | Required, except for quick start. Quick start does not use Docker. | This computer |
 | `.horizon/cloud.yml` in the selected commit | Required, except for quick start or local image-only settings in **More options** | The repository. **New cloud** can open a setup agent that writes it. See [Repository setup](cloud-workspaces.md#repository-setup-and-deployment) |
 | Registry push and pull logins | Required for a private image | **Cloud settings > Container registry** |
 | Agent API key or subscription login | One for each agent | **Cloud settings** |

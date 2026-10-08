@@ -9,6 +9,7 @@ use std::{
 };
 
 mod new_server;
+mod quick_start;
 
 const CRASH: &str = "simulated crash";
 
@@ -117,6 +118,8 @@ struct Script {
     /// The sibling revisions each build layered.
     built_siblings: RefCell<Vec<Vec<String>>>,
     built: String,
+    /// The pull login and registry generation the built image gets, if any.
+    built_login: Option<(String, String)>,
     fail_at: Cell<Option<Boundary>>,
     calls: RefCell<Vec<String>>,
     pauses: Cell<u32>,
@@ -135,6 +138,7 @@ impl Script {
             sibling_heads: Some(Vec::new()),
             built_siblings: RefCell::default(),
             built: digest('b'),
+            built_login: Some(("pull-b".into(), "generation-b".into())),
             fail_at: Cell::new(None),
             calls: RefCell::default(),
             pauses: Cell::new(0),
@@ -213,8 +217,8 @@ impl Steps for Script {
         self.log("build");
         Ok(ReplacementImage {
             digest: self.built.clone(),
-            registry_auth_id: Some("pull-b".into()),
-            registry_generation: Some("generation-b".into()),
+            registry_auth_id: self.built_login.as_ref().map(|(login, _)| login.clone()),
+            registry_generation: self.built_login.as_ref().map(|(_, generation)| generation.clone()),
         })
     }
 
