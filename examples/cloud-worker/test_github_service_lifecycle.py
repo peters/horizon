@@ -201,6 +201,25 @@ class VolumeCopyTests(ServiceTestCase):
             self.install(installation(chain=chain(access='ghu_synthetic-new')))
         self.assertEqual(self.stored()['chain']['access_token'], 'ghu_synthetic-new')
         self.assertTrue((self.store.runtime / service.STATE).exists(), 'tmpfs keeps a second copy')
+        self.assertFalse(service.status(self.store)['persistent'], 'an unsynced volume copy is not reported durable')
+
+    def test_removal_never_follows_a_swapped_directory_link(self):
+        victim = self.root / 'elsewhere'
+        victim.mkdir()
+        (victim / service.STATE).write_text('{}')
+        self.store.persistent.parent.mkdir(parents=True, exist_ok=True)
+        if self.store.persistent.exists():
+            self.store.persistent.rmdir()
+        self.store.persistent.symlink_to(victim)
+        common.remove_durably(self.store.persistent, service.STATE)
+        self.assertTrue((victim / service.STATE).exists(), 'root never removes a file behind a link')
+
+    def test_a_memory_only_chain_is_never_served(self):
+        self.install()
+        self.store.pending = dict(self.stored(), serial=self.stored()['serial'] + 1,
+                                  chain=chain(access='ghu_synthetic-unwritten'))
+        self.assertEqual(self.store.load()[0]['chain']['access_token'], 'ghu_synthetic-unwritten')
+        self.assertEqual(self.store.load(serving=True)[0]['chain'], chain())
 
     def test_a_full_tmpfs_leaves_the_older_volume_chain_usable(self):
         self.install()
@@ -219,14 +238,13 @@ class VolumeCopyTests(ServiceTestCase):
 
     def test_tmpfs_refuses_a_chain_while_an_older_volume_chain_stays(self):
         self.install()
-        old = self.store.persistent / service.STATE
-        real_unlink = type(old).unlink
+        real_unlink = common.os.unlink
 
-        def unlink(path, missing_ok=False):
-            if path == old:
+        def unlink(path, *args, dir_fd=None, **kwargs):
+            if dir_fd is not None and path == service.STATE:
                 raise PermissionError('volume refused the removal')
-            return real_unlink(path, missing_ok=missing_ok)
-        with self.fail_volume_writes(), mock.patch.object(type(old), 'unlink', unlink), \
+            return real_unlink(path, *args, dir_fd=dir_fd, **kwargs)
+        with self.fail_volume_writes(), mock.patch.object(common.os, 'unlink', unlink), \
                 self.assertRaisesRegex(ValueError, 'older GitHub token chain'):
             self.install(installation(chain=chain(access='ghu_synthetic-new')))
         self.assertFalse((self.store.runtime / service.STATE).exists())

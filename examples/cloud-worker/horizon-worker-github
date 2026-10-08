@@ -312,7 +312,7 @@ def handle(connection, store):
         reply = dict(status(store), ok=True) if uid == ROOT_UID else refusal('refused', 'Only root reads the status.')
         repository = None
     else:
-        reply, repository = answer(request, store.load()[0], now)
+        reply, repository = answer(request, store.load(serving=True)[0], now)
     kind = request.get('request') if isinstance(request, dict) else None
     with contextlib.suppress(OSError):
         log_request(store.runtime, {'at': int(now), 'uid': uid, 'pid': pid,

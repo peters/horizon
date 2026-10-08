@@ -1,6 +1,7 @@
 """Shared parts of horizon-worker-github: private storage, the token chain checks and the
 GitHub addresses. A module that horizon-worker-github loads, not a command."""
 import contextlib
+import errno
 import fcntl
 import importlib.machinery
 import importlib.util
@@ -114,12 +115,46 @@ def fsync_directory(directory):
         os.close(folder)
 
 
+def open_directory(path):
+    """A descriptor for the real directory `path`, opened component by component without
+    following any symbolic link, or None when a component is missing or is not a directory."""
+    parts = Path(path).parts
+    if not parts or parts[0] != '/' or '..' in parts:
+        raise ValueError('GitHub storage paths must be absolute')
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts[1:]:
+            try:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except (FileNotFoundError, NotADirectoryError):
+                os.close(fd)
+                return None
+            except OSError as error:
+                if error.errno == errno.ELOOP:
+                    os.close(fd)
+                    return None
+                raise
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def remove_durably(directory, name):
-    """Removes `directory/name` and makes the removal durable. Raises OSError when either
-    fails; a missing directory has nothing to remove."""
-    if not os.path.isdir(directory):
+    """Removes `directory/name` and makes the removal durable. The directory is reached without
+    following symbolic links, so a swapped link never makes root remove another file; such a
+    path, or a missing one, has nothing of this service to remove. Raises OSError when the
+    removal or its sync fails."""
+    fd = open_directory(directory)
+    if fd is None:
         return
-    (directory / name).unlink(missing_ok=True)
+    try:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(name, dir_fd=fd)
+    finally:
+        os.close(fd)
     fsync_directory(directory)
 
 
@@ -219,10 +254,13 @@ class Store:
         floor = self.cleared()
         return [copy for copy in found if copy[0]['serial'] > floor]
 
-    def load(self):
-        """(state, persistent) for the newest copy, or (None, False) without a chain."""
-        found = self.copies()
-        return max(found, key=lambda copy: copy[0]['serial']) if found else (None, False)
+    def load(self, serving=False):
+        """(state, persistent) for the newest copy, or (None, False) without a chain. A chain
+        that only memory holds is left out when `serving`: no agent gets a token whose refresh
+        token is not stored yet. On an equal serial the tmpfs copy wins, so a volume copy whose
+        directory sync failed is not reported as persistent."""
+        found = [copy for copy in self.copies() if not (serving and copy[0] is self.pending)]
+        return max(found, key=lambda copy: (copy[0]['serial'], not copy[1])) if found else (None, False)
 
     def pending_write(self):
         """Whether the newest chain exists only in this process's memory."""
