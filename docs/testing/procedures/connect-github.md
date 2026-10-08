@@ -227,15 +227,15 @@ the access requests of agents.
 
 4. Click **Authorize**.
 
-   Result: The browser shows **GitHub is connected for this cloud. You can close
-   this page.** The `gh-auto` card shows **Ready** and
+   Result: The browser shows **Horizon received GitHub's answer and is finishing
+   the sign-in. You can close this page.** The `gh-auto` card shows **Ready** and
    **GitHub: signed in as <login> · 1 repository**. It showed no code.
 
 5. Start a new cloud `gh-auto-2` from the same checkout.
 
-   Result: The browser opens a page from GitHub and then shows **GitHub is
-   connected for this cloud.** without a click. The card shows **Ready** and the
-   GitHub line.
+   Result: The browser opens a page from GitHub and then shows **Horizon received
+   GitHub's answer** without a click. The card shows **Ready** and the GitHub
+   line.
 
 ### 6.8 G08 — Disconnect
 

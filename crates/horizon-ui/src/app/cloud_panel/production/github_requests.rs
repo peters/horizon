@@ -13,9 +13,10 @@ use std::{
 /// How often a ready cloud's worker is asked for new requests.
 const POLL: Duration = Duration::from_secs(15);
 
-/// The pending requests, and for a decision whether the worker refused it (`Some(None)`
-/// when it applied the decision); a list-only poll leaves the last refusal as it is.
-type Answer = (Vec<Request>, Option<Option<String>>);
+/// The pending requests (`None` when they could not be listed, which keeps the shown
+/// list), and for a decision whether the worker refused it or it did not arrive
+/// (`Some(None)` when the worker applied it); a list-only poll leaves the last refusal.
+type Answer = (Option<Vec<Request>>, Option<Option<String>>);
 
 /// A cloud's pending requests and the last decision the worker refused.
 #[derive(Default)]
@@ -37,7 +38,9 @@ impl State {
         let Some(rx) = &self.inflight else { return };
         match rx.try_recv() {
             Ok((list, decided)) => {
-                self.list = list;
+                if let Some(list) = list {
+                    self.list = list;
+                }
                 if let Some(refused) = decided {
                     self.refused = refused;
                 }
@@ -133,34 +136,43 @@ fn spawn(
 ) -> Receiver<Answer> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let answer = (|| -> cloud_runtime::Result<Answer> {
+        let connected = (|| -> cloud_runtime::Result<cloud_runtime::ssh::Connection> {
             let settings = Settings::load(&root.join("settings.json"))?;
             let state_root = cloud_runtime::state::cloud_directory(&root, &cloud_id)?;
             let worker = state
                 .worker
                 .as_ref()
                 .ok_or(cloud_runtime::Error::Invalid("Cloud has no worker"))?;
-            let connection = cloud_runtime::ssh::Connection::new(worker, &settings, &state_root)?;
-            let cancel = cloud_runtime::Cancellation::default();
-            let runner = cloud_runtime::command::Runner {
-                cancel: &cancel,
-                emit: &|_| {},
-                secrets: Vec::new(),
-            };
-            let refused = match decision {
-                Some((id, decision)) => Some(requests::decide(&connection, &runner, &id, decision)?),
-                None => None,
-            };
-            Ok((requests::list(&connection, &runner)?, refused))
+            cloud_runtime::ssh::Connection::new(worker, &settings, &state_root)
         })();
-        if let Ok(answer) = answer {
-            let _ = tx.send(answer);
-        }
-        // A failure drops the sender; the repaint lets the card see that and poll again.
+        let cancel = cloud_runtime::Cancellation::default();
+        let runner = cloud_runtime::command::Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        // A decision's outcome is delivered whatever happens to the list after it, so the
+        // request that left the card is always explained.
+        let answer = match connected {
+            Ok(connection) => {
+                let decided = decision.map(|(id, decision)| {
+                    requests::decide(&connection, &runner, &id, decision).unwrap_or_else(|error| Some(unsent(&error)))
+                });
+                (requests::list(&connection, &runner).ok(), decided)
+            }
+            Err(error) => (None, decision.map(|_| Some(unsent(&error)))),
+        };
+        let _ = tx.send(answer);
         drop(tx);
         ctx.request_repaint();
     });
     rx
+}
+
+/// Why a decision has no outcome from the worker; the request shows again at the next
+/// poll when it still waits there.
+fn unsent(error: &cloud_runtime::Error) -> String {
+    format!("The decision did not reach the worker: {error}")
 }
 
 #[cfg(test)]
@@ -176,8 +188,7 @@ mod tests {
         };
         state.receive();
         assert!(state.busy(), "no answer yet");
-        tx.send((Vec::new(), Some(Some("This request expired.".into()))))
-            .unwrap();
+        tx.send((None, Some(Some("This request expired.".into())))).unwrap();
         state.receive();
         assert!(!state.busy());
         assert_eq!(state.refused.as_deref(), Some("This request expired."));

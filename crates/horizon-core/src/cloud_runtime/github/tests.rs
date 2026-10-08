@@ -620,3 +620,19 @@ fn a_secret_stays_when_the_settings_file_already_names_its_app() {
     connect::discard(root.path(), &settings(Mode::Ask, &secret));
     assert!(!secret.exists(), "no settings file names nothing");
 }
+
+#[test]
+fn a_cancelled_connect_flow_ends_without_an_app() {
+    let root = tempfile::tempdir().unwrap();
+    let cancel = Cancellation::default();
+    let created = connect::start(root.path(), "Horizon synthetic", |_| Ok(()), cancel.clone()).unwrap();
+    cancel.cancel();
+    let outcome = created
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the flow ends at once");
+    assert!(outcome.is_err());
+    assert!(
+        std::fs::read_dir(root.path()).unwrap().next().is_none(),
+        "no secret is written"
+    );
+}

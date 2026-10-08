@@ -21,6 +21,17 @@ pub(in crate::app::cloud_panel) struct Card {
     /// `None` until checked. A failed check is retried only by Check again.
     device_flow: Option<Result<bool, String>>,
     message: Option<String>,
+    /// Ends a Connect flow under way when the card goes, such as on Cancel.
+    abort: Option<Abort>,
+}
+
+/// Cancels its flow when dropped.
+struct Abort(horizon_core::cloud_runtime::Cancellation);
+
+impl Drop for Abort {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 struct Connected {
@@ -41,10 +52,20 @@ impl Card {
         let (tx, rx) = channel();
         self.connecting = Some(rx);
         self.message = None;
+        let cancel = horizon_core::cloud_runtime::Cancellation::default();
+        self.abort = Some(Abort(cancel.clone()));
         std::thread::spawn(move || {
             let name = connect::app_name();
-            let result = connect::start(&root, &name, horizon_core::open_url)
+            let result = connect::start(&root, &name, horizon_core::open_url, cancel.clone())
                 .and_then(|created| created.recv().map_err(|_| horizon_core::cloud_runtime::Error::Busy)?)
+                // Settings closed meanwhile: nothing is saved, and the app's secret goes.
+                .and_then(|settings| match cancel.check() {
+                    Ok(()) => Ok(settings),
+                    Err(error) => {
+                        connect::discard(&root, &settings);
+                        Err(error.into())
+                    }
+                })
                 .and_then(|settings| match setup::save_github(&root, Some(settings.clone())) {
                     Ok(committed) => Ok((committed, settings)),
                     Err(error) => {

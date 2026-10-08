@@ -223,7 +223,7 @@ pub(super) fn callback(mut stream: TcpStream, state: &str) -> Option<Secret> {
         .ok()
         .and_then(|request| matching_code(request, state));
     let body = if code.is_some() {
-        "GitHub is connected for this cloud. You can close this page."
+        "Horizon received GitHub's answer and is finishing the sign-in. You can close this page."
     } else {
         "Horizon did not expect this request."
     };

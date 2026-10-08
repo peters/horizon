@@ -34,7 +34,12 @@ pub fn app_name() -> String {
 /// the new app's settings once GitHub created it.
 /// # Errors
 /// The loopback port could not be opened.
-pub fn start(root: &Path, name: &str, open: fn(&str) -> std::io::Result<()>) -> Result<Receiver<Result<Settings>>> {
+pub fn start(
+    root: &Path,
+    name: &str,
+    open: fn(&str) -> std::io::Result<()>,
+    cancel: crate::cloud_runtime::Cancellation,
+) -> Result<Receiver<Result<Settings>>> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     let state = uuid::Uuid::new_v4().simple().to_string();
@@ -42,19 +47,30 @@ pub fn start(root: &Path, name: &str, open: fn(&str) -> std::io::Result<()>) -> 
     let name = name.to_owned();
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let _ = tx.send(serve(&listener, port, &state, &name, &root));
+        let _ = tx.send(serve(&listener, port, &state, &name, &root, &cancel));
     });
     open(&format!("http://127.0.0.1:{port}/"))?;
     Ok(rx)
 }
 
-fn serve(listener: &TcpListener, port: u16, state: &str, name: &str, root: &Path) -> Result<Settings> {
+/// Serves the start page and waits for GitHub's redirect, until `cancel` ends it; a
+/// cancelled flow keeps no app.
+fn serve(
+    listener: &TcpListener,
+    port: u16,
+    state: &str,
+    name: &str,
+    root: &Path,
+    cancel: &crate::cloud_runtime::Cancellation,
+) -> Result<Settings> {
     listener.set_nonblocking(true)?;
     let deadline = Instant::now() + TIMEOUT;
     loop {
+        cancel.check()?;
         match listener.accept() {
             Ok((stream, _)) => {
                 if let Some(code) = answer(stream, port, state, name) {
+                    cancel.check()?;
                     return created(&code, root);
                 }
             }

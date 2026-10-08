@@ -1,9 +1,10 @@
 //! Requests agents make for more GitHub access, and the person's decisions.
 //!
 //! An agent asks with the worker's `github_access` tool. The worker keeps the request;
-//! Horizon lists it on the cloud card, and the person allows it for the task, for the
-//! cloud, or denies it. The worker checks that the repository is reachable before it
-//! allows anything, and enforces the grant on every credential answer.
+//! Horizon lists it on the cloud card, and the person allows it for the cloud or
+//! denies it. The worker checks that the repository is reachable before it allows
+//! anything. Access is per cloud: every agent session of the cloud uses the same token,
+//! and the worker's grants route credentials rather than isolate sessions (#1393).
 use super::{Result, Runner};
 use crate::cloud_runtime::ssh::Connection;
 use serde::Deserialize;
