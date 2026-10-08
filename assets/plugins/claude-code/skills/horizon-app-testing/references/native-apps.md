@@ -50,9 +50,9 @@ It stops on session closure, expiry, or host exit.
 Targets use identifiers, labels, refs, or finite device coordinates.
 A ref belongs to one session and one fresh snapshot. Another snapshot invalidates
 it. Android named-element resolution also takes a new snapshot. Input requires
-one exact match and unchanged native identity. Action kinds are `tap`, `long_press`, `type`, `clear`, `swipe`, `scroll`,
+one exact match and unchanged native identity. `native recipe` operations are `tap`, `long_press`, `type`, `clear`, `swipe`, `scroll`,
 `wait`, `assert`, `back`, `home`, `rotate`, `launch`, `terminate`, `reset`,
-`deep_link`, and the recipe-only `screenshot`. Interactive `app_act` refuses
+`deep_link`, and `screenshot`. Only recipes accept `screenshot`. Interactive `app_act` refuses
 `screenshot`; use `app_screenshot` instead. Use the action schema for each operation.
 `reset` closes the original session and services, then returns a replacement
 session handle. Use that handle for subsequent input, views, evidence, and cleanup.

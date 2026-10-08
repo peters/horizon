@@ -14,17 +14,17 @@ SOURCES = {
 }
 TOOL = re.compile(r'#\[tool\(\s*name\s*=\s*"([^"]+)"')
 OPERATIONS = [
-    ('crates/horizon-browser-control/src/manifest/cast.rs', 'CastOperation', 'horizon-cast', set()),
-    ('crates/horizon-browser-control/src/manifest/device.rs', 'Operation', 'horizon-device', {'BrowserScreenshot'}),
-    ('crates/horizon-browser-control/src/manifest/device.rs', 'VideoAction', 'horizon-device', set()),
-    ('crates/horizon-browser-mcp/src/model.rs', 'ActKind', 'horizon-browser', set()),
-    ('crates/horizon-browser-mcp/src/model/network.rs', 'NetworkOperation', 'horizon-browser', set()),
-    ('crates/horizon-browser-mcp/src/model/video.rs', 'VideoOperation', 'horizon-browser', set()),
-    ('crates/horizon-browser-mcp/src/model/http_auth.rs', 'HttpAuthOperation', 'horizon-browser', set()),
-    ('crates/horizon-browser-mcp/src/model/recovery.rs', 'RecoveryOperation', 'horizon-browser', set()),
-    ('crates/horizon-app-host/src/mcp/model.rs', 'VideoOperation', 'horizon-app-testing', set()),
-    ('crates/horizon-app-testing/src/recipe.rs', 'Action', 'horizon-app-testing', set()),
-    ('crates/horizon-device/src/model.rs', 'Action', 'horizon-device', set()),
+    ('crates/horizon-browser-control/src/manifest/cast.rs', 'CastOperation', 'horizon-cast', set(), 'cast'),
+    ('crates/horizon-browser-control/src/manifest/device.rs', 'Operation', 'horizon-device', {'BrowserScreenshot'}, 'device_panel'),
+    ('crates/horizon-browser-control/src/manifest/device.rs', 'VideoAction', 'horizon-device', set(), 'device_panel video'),
+    ('crates/horizon-browser-mcp/src/model.rs', 'ActKind', 'horizon-browser', set(), 'browser_act'),
+    ('crates/horizon-browser-mcp/src/model/network.rs', 'NetworkOperation', 'horizon-browser', set(), 'browser_network'),
+    ('crates/horizon-browser-mcp/src/model/video.rs', 'VideoOperation', 'horizon-browser', set(), 'browser_video'),
+    ('crates/horizon-browser-mcp/src/model/http_auth.rs', 'HttpAuthOperation', 'horizon-browser', set(), 'browser_http_auth'),
+    ('crates/horizon-browser-mcp/src/model/recovery.rs', 'RecoveryOperation', 'horizon-browser', set(), 'browser_remote_allocations'),
+    ('crates/horizon-app-host/src/mcp/model.rs', 'VideoOperation', 'horizon-app-testing', set(), 'app_video'),
+    ('crates/horizon-app-testing/src/recipe.rs', 'Action', 'horizon-app-testing', set(), 'native recipe'),
+    ('crates/horizon-device/src/model.rs', 'Action', 'horizon-device', set(), 'device_act'),
 ]
 
 
@@ -61,6 +61,10 @@ def check():
     build = (ROOT / 'crates/horizon-ui/build.rs').read_text()
     installed = (ROOT / 'crates/horizon-ui/src/plugin_install/mod.rs').read_text() + (ROOT / 'crates/horizon-ui/src/plugin_install/mcp_skills.rs').read_text()
     documents = {}
+    primary_skills = {p.name for p in codex.iterdir() if p.is_dir()}
+    other_skills = {p.name for p in claude.iterdir() if p.is_dir()}
+    if primary_skills != other_skills:
+        errors.append('bundle skill sets differ: ' + ', '.join(sorted(primary_skills ^ other_skills)))
     for skill in sorted(codex.iterdir()):
         if not skill.is_dir():
             continue
@@ -125,9 +129,14 @@ def check():
             count += 1
     for source in SOURCES.keys() - discovered_sources:
         errors.append(f'{source}: coverage route no longer names an MCP server')
-    for source, enum, skill, excluded in OPERATIONS:
+    for source, enum, skill, excluded, api in OPERATIONS:
+        declarations = re.findall(r'`' + re.escape(api) + r'` operations are ([^.]+)\.', documents[skill])
+        if len(declarations) != 1:
+            errors.append(f'{api}: expected one qualified operation list in {skill}')
+            continue
+        documented = set(re.findall(r'`([a-z_]+)`', declarations[0]))
         for name in enum_variants((ROOT / source).read_text(), enum):
-            if name not in excluded and not re.search(r'\b' + re.escape(snake_case(name)) + r'\b', documents[skill]):
+            if name not in excluded and snake_case(name) not in documented:
                 errors.append(f'{enum}.{name}: operation missing from {skill}')
     standalone = ROOT / 'crates/horizon-device/skills/horizon-device/SKILL.md'
     if standalone.read_bytes() != (codex / 'horizon-device/SKILL.md').read_bytes():

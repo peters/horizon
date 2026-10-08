@@ -93,6 +93,7 @@ so do not poll it in a tight loop; pick a `timeout_millis` that covers the
 expected change. Use `browser_evaluate` only when the semantic tools cannot
 answer the question.
 
+`browser_http_auth` operations are `set` and `clear`.
 If a page presents HTTP Basic or Digest authentication, call
 `browser_http_auth` with `operation: set`, the username and password the user
 supplied, and `origin` (`http://host[:port]` or `https://host[:port]`) when
@@ -108,6 +109,7 @@ for later intercepted challenges; it does not revoke Authorization values the
 browser already cached, so open a new panel for a clean unauthenticated
 session.
 
+`browser_network` operations are `start`, `status`, and `stop`.
 For HTTP or WebSocket observation, first inspect the panel's
 `network_capture` field from `browser_list` or `browser_panel`. When supported,
 call `browser_network` with `operation: start` **before navigation** so open,
@@ -139,7 +141,7 @@ host size cap remains active when a recording omits `max_width`. These
 encoding settings do not resize the page viewport. Pause skips time in the file;
 resume continues the same WebM; stop finalizes a private `.webm` path.
 Use `operation: status` to inspect the active or last recording without changing it.
-The video operations are `start`, `pause`, `resume`, `status`, and `stop`.
+`browser_video` operations are `start`, `pause`, `resume`, `status`, and `stop`.
 Page pixels never enter the action audit. The recording samples the existing
 decoded frame slot on Chromium, Firefox, and Safari.
 
@@ -219,6 +221,7 @@ clears the pin. A timeout/failure may follow a backend mutation: inspect the
 page or retry rather than assuming no change. `browser_video` max_width and
 codec alignment affect encoding only. Reacquire semantic refs after resizing.
 
+`browser_remote_allocations` operations are `list` and `reconcile`.
 For capacity retained after a remote panel disappears, use
 `browser_remote_allocations` with `operation: list`, then `operation: reconcile`
 and one returned `reference`. This checks only the exact retired allocation
@@ -241,7 +244,7 @@ or raw provider capabilities.
 
 ## Actions, attachments, and screenshots
 
-`browser_act` supports `click`, `fill`, `scroll`, `reload`, `back`, `forward`,
+`browser_act` operations are `click`, `fill`, `scroll`, `reload`, `back`, `forward`,
 `set_files`, and `drop_files`. A click accepts `count: 1..3`, including a trusted
 double-click with 2. Use a fresh ref or selector and examine the visible result.
 

@@ -27,7 +27,7 @@ No UI layout or input behavior changes in this feature.
 
 1. Run `python3 -B scripts/check-horizon-mcp-skills.py`.
 
-   Result: Each shipped tool has a skill route. Operation variants have guidance.
+   Result: Each shipped tool has a skill route. Operation lists name the exact API.
    Both bundles have the same files. Each reference has a valid link and embedded asset.
 
 2. Examine the six skill entry points under `assets/plugins/codex/skills/`.
@@ -44,8 +44,10 @@ No UI layout or input behavior changes in this feature.
 
 2. Examine the ownership and lease test results.
 
-   Result: Custom files, partial trees, changed references, and symlinks remain intact.
+   Result: Custom user files, partial trees, changed references, and symlinks remain intact.
    A complete tree remains until the last host exits. Later user edits survive cleanup.
+   Private caches remove retired references from prior unrecorded bundles.
+   A private cache with a symlink refuses writes.
 
 ### 3.3 MATRIX — Run repository checks
 

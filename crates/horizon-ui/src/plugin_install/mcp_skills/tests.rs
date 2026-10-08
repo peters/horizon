@@ -272,3 +272,61 @@ fn interrupted_retired_reference_removal_prunes_its_empty_directory() {
     assert_files(&dir, MCP_SKILLS[0].files);
     validate_mcp_skill(&dir).expect("no stale empty directories");
 }
+
+#[test]
+fn private_integration_upgrade_removes_retired_unrecorded_references() {
+    let temp = tempfile::tempdir().expect("temp");
+    let home = HorizonHome::from_root(temp.path().join("horizon"));
+    let plugin = home.claude_plugin_dir_for_host("host");
+    let dirs = [
+        home.codex_integrations_dir().join(MCP_SKILLS[0].name),
+        plugin.join("skills").join(MCP_SKILLS[0].name),
+    ];
+    let old = [
+        EmbeddedFile {
+            relative_path: "SKILL.md",
+            content: "old entry point",
+        },
+        EmbeddedFile {
+            relative_path: "legacy/reference.md",
+            content: "retired reference",
+        },
+    ];
+    for dir in &dirs {
+        sync_plugin_files(dir, &old).expect("prior unrecorded integration");
+        assert!(!dir.join(".horizon-owned.json").exists());
+    }
+    let install = || sync_mcp_skills(&home, &plugin, None, None, None, None);
+    install().expect("upgrade integration");
+    for dir in &dirs {
+        assert!(!dir.join("legacy").exists());
+        assert_files(dir, MCP_SKILLS[0].files);
+        validate_mcp_skill(dir).expect("exact upgraded tree");
+    }
+    assert_eq!(install().expect("repeat installation"), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn private_cache_sync_refuses_symlinks_before_writing_files() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("temp");
+    let dir = temp.path().join("cache");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&dir).expect("cache directory");
+    std::fs::create_dir_all(&outside).expect("outside directory");
+    std::fs::write(dir.join("SKILL.md"), "old entry point").expect("old cache");
+    std::fs::write(outside.join("notes.md"), "keep me").expect("outside file");
+    symlink(&outside, dir.join("legacy")).expect("linked directory");
+    assert!(sync_managed_skill_files(&dir, MCP_SKILLS[0].files).is_err());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("SKILL.md")).expect("unchanged cache"),
+        "old entry point"
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.join("notes.md")).expect("outside intact"),
+        "keep me"
+    );
+    assert!(dir.join("legacy").is_symlink());
+}

@@ -131,6 +131,58 @@ fn unowned() -> io::Error {
     )
 }
 
+fn check_managed_entries(dir: &Path) -> io::Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Err(unowned()),
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            check_managed_entries(&entry.path())?;
+        } else if !kind.is_file() {
+            return Err(unowned());
+        }
+    }
+    Ok(())
+}
+
+fn prune_managed_entries(root: &Path, dir: &Path, files: &[EmbeddedFile]) -> io::Result<usize> {
+    let mut removed = 0;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let relative = path.strip_prefix(root).map_err(io::Error::other)?;
+        if entry.file_type()?.is_dir() {
+            removed += prune_managed_entries(root, &path, files)?;
+            if !files
+                .iter()
+                .any(|file| Path::new(file.relative_path).starts_with(relative))
+            {
+                std::fs::remove_dir(&path)?;
+                removed += 1;
+            }
+        } else if !files.iter().any(|file| relative == Path::new(file.relative_path)) {
+            std::fs::remove_file(&path)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+// Private integration caches belong to Horizon and predate ownership records.
+// User skill roots use the recorded-byte guard instead of this cache policy.
+fn sync_managed_skill_files(dir: &Path, files: &[EmbeddedFile]) -> io::Result<usize> {
+    super::user_skills::with_skill_root_lock(dir, || {
+        check_managed_entries(dir)?;
+        let updated = sync_plugin_files(dir, files)?;
+        Ok(updated + prune_managed_entries(dir, dir, files)?)
+    })
+}
+
 pub(super) fn sync_mcp_skills(
     horizon_home: &HorizonHome,
     claude_plugin_dir: &Path,
@@ -143,8 +195,8 @@ pub(super) fn sync_mcp_skills(
     let grok_root = provider_home(grok_home, user_home, ".grok").filter(|root| super::grok_mcp::register(root).is_ok());
     let codex_root = provider_home(codex_home, user_home, ".codex");
     for skill in MCP_SKILLS {
-        updated += sync_plugin_files(&claude_plugin_dir.join("skills").join(skill.name), skill.files)?;
-        updated += sync_plugin_files(&horizon_home.codex_integrations_dir().join(skill.name), skill.files)?;
+        updated += sync_managed_skill_files(&claude_plugin_dir.join("skills").join(skill.name), skill.files)?;
+        updated += sync_managed_skill_files(&horizon_home.codex_integrations_dir().join(skill.name), skill.files)?;
         for root in [codex_root.as_ref(), grok_root.as_ref()].into_iter().flatten() {
             let dir = root.join("skills").join(skill.name);
             if !skill_dir_is_leased(lease, &dir) {

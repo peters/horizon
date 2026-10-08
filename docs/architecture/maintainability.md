@@ -12,7 +12,9 @@ complete-directory ownership checks, and installation targets. `owned_skills`
 publishes complete new trees and records exact installed bytes before an update.
 The record permits recovery of interrupted file replacement. Host leases remain
 in `user_skills`. Skill references ship with their entry points. The repository
-check compares shipped MCP tools and operation variants with the linked guidance.
+check compares shipped MCP tools and qualified operation lists with the linked guidance.
+Private integration caches use exact file synchronization and remove retired
+references. They accept prior unrecorded bundles and refuse symlinks before writes.
 
 
 Remote-development provisioning, workers, managed SSH views, repository transfer,

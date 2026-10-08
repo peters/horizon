@@ -16,6 +16,8 @@ Device panel in the user's current workspace**. Use a task-owned isolated
 desktop and private application state. Do not use noVNC or a browser viewer, or
 substitute screenshots or recordings for the live panel.
 
+`device_panel` operations are `create`, `list`, `inspect`, `screenshot`,
+`video`, `visibility`, `reveal`, `reconnect`, and `close`.
 Use the public `device_panel` MCP tool for viewer lifecycle. Call
 `operation: "list"` to discover panels in the caller's workspace. Create a
 task-owned viewer with `operation: "create"` and the fixture's numeric loopback
@@ -128,7 +130,8 @@ Omitting options preserves full-resolution PNG; JPEG defaults to quality 85.
 history. The MCP server uses `--target <file> mcp` and stays bound to that
 configured target. Read `--help` if the executable/target was not supplied.
 
-Action kinds: `click` (at, button), `drag` (from, to, duration_ms), `scroll` (at,
+`device_act` operations are `click`, `drag`, `scroll`, `type`, and `key`.
+Action fields: `click` (at, button), `drag` (from, to, duration_ms), `scroll` (at,
 vertical_notches, horizontal_notches), `type` (text), `key` (key, modifiers).
 Coordinates are original surface pixels. When a screenshot is cropped/scaled,
 map image pixels through `source_region` and `image_dimensions` before input:
@@ -170,6 +173,7 @@ Stopped, disconnected, or no-frame viewers refuse capture. Capture changes no
 visibility, focus, canvas, or Interact state. Only eight exports remain until
 panel close or normal host exit. A screenshot does not replace live-motion evidence.
 
+`device_panel video` operations are `start`, `status`, and `stop`.
 For feature evidence, use `device_panel` with `operation: video`, the owned
 `panel_id`, and `action: start|status|stop`. Start before the flow. It records the
 full VNC desktop as private WebM without audio and continues offscreen. Every

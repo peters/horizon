@@ -1,5 +1,8 @@
 # Casting reference
 
+`cast` operations are `discover`, `sources`, `status`, `paired`, `forget`,
+`start`, `pair`, and `stop`.
+
 | Operation | Use |
 |---|---|
 | `discover` | Start asynchronous receiver discovery. Read `status` for results. |
