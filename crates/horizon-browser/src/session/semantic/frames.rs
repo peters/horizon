@@ -55,9 +55,30 @@ impl DriverState {
         if sessions.len() > MAX_SEMANTIC_FRAMES {
             return Err(frame_limit());
         }
-        // Wait for enable replies so every attached frame has reported its worlds.
-        for session in sessions {
-            self.frame_call(link, events, slot, (&session, "Runtime.enable", &json!({})), deadline)?;
+        for session in &sessions {
+            self.queue_runtime_enable(link, session);
+        }
+        // Drain outstanding enables without re-enabling already observed worlds.
+        while self
+            .runtime_enable_inflight
+            .values()
+            .any(|session| sessions.contains(session))
+        {
+            remaining(deadline)?;
+            if self.stop_requested.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(stale());
+            }
+            match link.read_one() {
+                Ok(Some(message)) => self.handle_message(link, events, slot, message),
+                Ok(None) => {}
+                Err(_) => return Err(frame_unavailable()),
+            }
+        }
+        if sessions
+            .iter()
+            .any(|session| !self.runtime_enable_requested.contains(session))
+        {
+            return Err(frame_unavailable());
         }
         let mut targets = self.clipboard.evaluation_targets(&page);
         targets.sort();
@@ -106,9 +127,7 @@ impl DriverState {
         for message in outcome.drained {
             self.handle_message(link, events, slot, message);
         }
-        outcome.result.map_err(|_| {
-            BrowserControlFailure::new("frame_unavailable", "the frame command failed; take a fresh snapshot")
-        })
+        outcome.result.map_err(|_| frame_unavailable())
     }
 
     fn frame_value(
@@ -134,8 +153,9 @@ impl DriverState {
                 }),
             ),
             deadline,
-        )?;
+        );
         self.cdp_frame(frame)?;
+        let result = result?;
         if result.get("exceptionDetails").is_some() {
             return Err(stale());
         }
@@ -277,6 +297,146 @@ fn remaining(deadline: Instant) -> Result<Duration, BrowserControlFailure> {
 fn stale() -> BrowserControlFailure {
     BrowserControlFailure::new("stale_reference", "the child document changed; take a fresh snapshot")
 }
+fn frame_unavailable() -> BrowserControlFailure {
+    BrowserControlFailure::new("frame_unavailable", "the frame command failed; take a fresh snapshot")
+}
 fn frame_limit() -> BrowserControlFailure {
     BrowserControlFailure::new("frame_limit", "the page exceeds the semantic frame limit")
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cdp::CdpEvent;
+    use crate::session::{BrowserEventWake, BrowserSessionConfig, CommittedUrl};
+    use std::net::TcpListener;
+    use std::sync::{atomic::AtomicBool, mpsc};
+    use tungstenite::Message;
+
+    fn fixture(url: &str) -> (DriverState, BrowserEventSender, Arc<FrameSlot>) {
+        let slot = Arc::new(FrameSlot::default());
+        let config = BrowserSessionConfig {
+            browser: crate::BrowserConfig::default(),
+            panel_local_id: "frame-protocol".into(),
+            initial_url: None,
+            width: 800,
+            height: 600,
+            frame_slot: Arc::clone(&slot),
+            coordination: None,
+            capture_directory: None,
+            video: Arc::default(),
+            remote: None,
+        };
+        let mut state = DriverState::new(&config, url, None, Arc::new(AtomicBool::new(false)));
+        state.session_id = Some("page".into());
+        state.clipboard.iframe_sessions.insert("child".into());
+        let events = BrowserEventSender {
+            tx: mpsc::channel().0,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        (state, events, slot)
+    }
+
+    #[test]
+    fn scans_enable_once_and_failed_evaluations_recheck_the_route() {
+        for event in [
+            None,
+            Some("Target.detachedFromTarget"),
+            Some("Runtime.executionContextDestroyed"),
+            Some("Runtime.executionContextsCleared"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("ws://{}/", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut socket = tungstenite::accept(stream).unwrap();
+                let mut commands = Vec::new();
+                let mut pending = Vec::new();
+                while let Ok(Message::Text(text)) = socket.read() {
+                    let command: Value = serde_json::from_str(&text).unwrap();
+                    commands.push(command.clone());
+                    let session = command["sessionId"].clone();
+                    let response = json!({"id":command["id"],"result":{"result":{"value":{"nodes":[]}}}});
+                    if command["method"] == "Runtime.enable" {
+                        pending.push(json!({"method":"Runtime.executionContextCreated","sessionId":session,"params":{"context":{"id":7,"auxData":{"isDefault":true}}}}));
+                        pending.push(json!({"id":command["id"],"result":{}}));
+                        continue;
+                    }
+                    if command["params"]["expression"] == "fail" {
+                        if let Some(method) = event {
+                            socket.send(Message::Text(json!({"method":method,"sessionId":"child","params":{"sessionId":"child","executionContextId":7}}).to_string().into())).unwrap();
+                        }
+                        socket
+                            .send(Message::Text(
+                                json!({"id":command["id"],"error":{"code":-32000,"message":"evaluation failed"}})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .unwrap();
+                    } else {
+                        socket.send(Message::Text(response.to_string().into())).unwrap();
+                        for response in pending.drain(..) {
+                            socket.send(Message::Text(response.to_string().into())).unwrap();
+                        }
+                    }
+                }
+                commands
+            });
+            let (mut state, events, slot) = fixture(&url);
+            let mut link = CdpLink::connect_with_timeout(&url, Duration::from_millis(10)).unwrap();
+            if event.is_none() {
+                for _ in 0..2 {
+                    state.frame_scan(&mut link, &events, &slot, None, 10).unwrap();
+                    assert!(state.runtime_enable_inflight.is_empty());
+                }
+            } else {
+                state.note_clipboard_execution_context(&CdpEvent {
+                    method: "Runtime.executionContextCreated",
+                    session_id: Some("child"),
+                    params: &json!({"context":{"id":7,"auxData":{"isDefault":true}}}),
+                });
+            }
+            let frame = FrameTarget::Cdp {
+                session: "child".into(),
+                context: 7,
+            };
+            let error = state
+                .frame_value(
+                    &mut link,
+                    &events,
+                    &slot,
+                    &frame,
+                    "fail",
+                    Instant::now() + Duration::from_secs(2),
+                )
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                if event.is_some() {
+                    "stale_reference"
+                } else {
+                    "frame_unavailable"
+                }
+            );
+            drop(link);
+            let commands = server.join().unwrap();
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|command| command["method"] == "Runtime.enable")
+                    .count(),
+                if event.is_none() { 2 } else { 0 }
+            );
+            if event.is_none() {
+                assert_eq!(
+                    commands
+                        .iter()
+                        .filter(|command| command["sessionId"] == "child" && command["method"] == "Runtime.evaluate")
+                        .count(),
+                    3
+                );
+            }
+        }
+    }
 }
