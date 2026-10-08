@@ -7,7 +7,7 @@ use std::{
     thread,
 };
 
-/// Each request as its request line and body.
+/// Each request, as its request line and its body.
 type Requests = Arc<Mutex<Vec<(String, String)>>>;
 
 /// A fake GitHub answering each connection with the next scripted response.

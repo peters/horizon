@@ -22,11 +22,13 @@ fn user(token: &str) -> u16 {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_global(Some(Duration::from_secs(30)))
+        .max_redirects(0)
         .build()
         .into();
+    let authorization = zeroize::Zeroizing::new(format!("Bearer {token}"));
     agent
         .get("https://api.github.com/user")
-        .header("Authorization", &format!("Bearer {token}"))
+        .header("Authorization", authorization.as_str())
         .header("User-Agent", "horizon")
         .call()
         .map_or(0, |response| response.status().as_u16())

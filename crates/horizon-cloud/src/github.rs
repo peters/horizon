@@ -358,9 +358,15 @@ impl Answer {
     }
 }
 
-/// Builds a form body in a buffer that is wiped on drop.
+/// Builds a form body in a buffer that is wiped on drop. The buffer gets its full
+/// size first, so it never moves while it holds a secret.
 fn form(fields: &[(&str, &str)]) -> Zeroizing<String> {
-    let mut body = Zeroizing::new(String::new());
+    // Each byte encodes to at most three bytes; each field adds `=` and `&`.
+    let size = fields
+        .iter()
+        .map(|(key, value)| 3 * (key.len() + value.len()) + 2)
+        .sum();
+    let mut body = Zeroizing::new(String::with_capacity(size));
     for (index, (key, value)) in fields.iter().enumerate() {
         if index > 0 {
             body.push('&');
@@ -385,7 +391,11 @@ fn encode(output: &mut String, value: &str) {
 fn read(response: std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<Answer> {
     let mut response = response.map_err(|_| Error::Transport)?;
     let status = response.status().as_u16();
-    let mut body = Zeroizing::new(Vec::new());
+    // The whole limit is reserved first, so no part of a secret is left behind in a
+    // buffer that a growing read freed.
+    let mut body = Zeroizing::new(Vec::with_capacity(
+        usize::try_from(RESPONSE_LIMIT + 1).unwrap_or(usize::MAX),
+    ));
     response
         .body_mut()
         .as_reader()

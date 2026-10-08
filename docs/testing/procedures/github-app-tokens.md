@@ -44,21 +44,35 @@ sign-in. The checks use a real GitHub App that the tester creates and deletes.
 
    Result: GitHub shows the registration form.
 
-2. Type a name such as `horizon-token-test-<date>`. Type any homepage URL. Type
-   `http://127.0.0.1/callback` as the callback URL.
+2. Type a name such as `horizon-token-test-<date>`.
 
-   Result: The form shows the values.
+   Result: The name field shows the name.
 
-3. Make sure that **Expire user access tokens** is on. Turn on **Enable Device
-   Flow**. Turn off **Webhook › Active**.
+3. Type any homepage URL.
 
-   Result: The three settings show as you set them.
+   Result: The homepage field shows the URL.
 
-4. Click **Create GitHub App**.
+4. Type `http://127.0.0.1/callback` as the callback URL.
+
+   Result: The callback field shows the URL.
+
+5. Make sure that **Expire user access tokens** is on.
+
+   Result: The box is selected.
+
+6. Select **Enable Device Flow**.
+
+   Result: The box is selected.
+
+7. Clear **Webhook › Active**.
+
+   Result: The box is clear.
+
+8. Click **Create GitHub App**.
 
    Result: GitHub shows the app settings with a client ID that starts with `Iv`.
 
-5. Record the client ID in the private evidence.
+9. Record the client ID in the private evidence.
 
    Result: You have the client ID.
 
@@ -68,19 +82,35 @@ sign-in. The checks use a real GitHub App that the tester creates and deletes.
 
 1. In the checkout, run the example with the client ID.
 
+   On Linux and macOS:
+
    ```sh
    HORIZON_GITHUB_CLIENT_ID=<client id> cargo run -p horizon-cloud --example github_token_smoke
+   ```
+
+   On Windows, in PowerShell:
+
+   ```powershell
+   $env:HORIZON_GITHUB_CLIENT_ID = "<client id>"; cargo run -p horizon-cloud --example github_token_smoke
    ```
 
    Result: The example shows `Open https://github.com/login/device and enter` and
    a code.
 
-2. Open the URL, type the code and click **Authorize**.
+2. Open the URL in a browser.
+
+   Result: GitHub asks for the code.
+
+3. Type the code and click **Continue**.
+
+   Result: GitHub shows the app and **Authorize**.
+
+4. Click **Authorize**.
 
    Result: The example shows `signed in: access token for 7 h, refresh token for 181 days`
    or 182 days.
 
-3. Read the next lines.
+5. Read the next lines.
 
    Result: The example shows these lines:
 
@@ -92,11 +122,15 @@ sign-in. The checks use a real GitHub App that the tester creates and deletes.
 
 ### 6.2 T02 — Decline a sign-in
 
-1. Run the example again.
+1. Run the example again, as in T01 step 1.
 
    Result: The example shows a new code.
 
-2. Open the URL, type the code and click **Cancel**.
+2. Open the URL and type the code.
+
+   Result: GitHub shows the app and **Cancel**.
+
+3. Click **Cancel**.
 
    Result: The example shows `sign-in ended: The GitHub sign-in was declined.`
 
@@ -113,11 +147,15 @@ sign-in. The checks use a real GitHub App that the tester creates and deletes.
 
 ### 6.4 T04 — Refuse a device sign-in when the app does not permit it
 
-1. In the app settings, turn off **Enable Device Flow** and save.
+1. In the app settings, clear **Enable Device Flow**.
 
-   Result: GitHub shows the setting off.
+   Result: The box is clear.
 
-2. Run the example again.
+2. Click **Save changes**.
+
+   Result: GitHub saves the settings.
+
+3. Run the example again.
 
    Result: The example shows `start:` and
    `Device sign-in is off for this GitHub App. Turn on Enable Device Flow in the app's settings.`
@@ -132,8 +170,15 @@ sign-in. The checks use a real GitHub App that the tester creates and deletes.
 
 ## 8. Cleanup
 
-1. In the app settings, open **Advanced** and click **Delete GitHub App**. Type the
-   name and confirm.
+1. In the app settings, open **Advanced**.
+
+   Result: GitHub shows **Delete GitHub App**.
+
+2. Click **Delete GitHub App**.
+
+   Result: GitHub asks for the name of the app.
+
+3. Type the name and confirm.
 
    Result: GitHub deletes the app. All tokens of the app stop working.
 
