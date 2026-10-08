@@ -11,10 +11,11 @@ use super::{
     WorkspaceAction, WorkspaceInteraction, WorkspaceVisual,
 };
 
-/// A workspace with content has the toolbar, also one that holds only cloud cards: they
-/// take layout slots, and its cast button is then the only way to cast the workspace.
+/// A workspace with panels has the toolbar, even when they are all hidden. So does one
+/// that holds only cloud cards: they take layout slots, and its cast button is then the
+/// only way to cast the workspace.
 pub(super) fn should_show_workspace_layout_toolbar(workspace: &WorkspaceVisual) -> bool {
-    !workspace.is_empty
+    workspace.panel_count > 0 || !workspace.is_empty
 }
 
 #[profiling::function]

@@ -488,4 +488,12 @@ mod tests {
         clouds_only.is_empty = false;
         assert!(should_show_workspace_layout_toolbar(&clouds_only));
     }
+
+    #[test]
+    fn layout_toolbar_stays_for_a_workspace_of_only_hidden_panels() {
+        // Hidden panels give a workspace no bounds, so it looks empty.
+        let mut hidden_only = workspace_visual(2);
+        hidden_only.is_empty = true;
+        assert!(should_show_workspace_layout_toolbar(&hidden_only));
+    }
 }
