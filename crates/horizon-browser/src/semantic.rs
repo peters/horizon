@@ -560,7 +560,11 @@ const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
     if (element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true')
         return { error: { code: 'element_disabled', message: 'target element is disabled' } };
     if (clear) {
+        const isReadOnly = () => element.readOnly || element.getAttribute('aria-readonly') === 'true';
+        const notEditable = { error: { code: 'element_not_editable', message: 'target element is not editable' } };
+        if (isReadOnly()) return notEditable;
         element.focus();
+        if (isReadOnly()) return notEditable;
         if (element.isContentEditable) {
             element.textContent = '';
             element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
@@ -570,7 +574,7 @@ const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
             if (setter) setter.call(element, ''); else element.value = '';
             element.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
-            return { error: { code: 'element_not_editable', message: 'target element is not editable' } };
+            return notEditable;
         }
     }
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };

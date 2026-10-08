@@ -96,6 +96,9 @@ The test does not use the developer's browser session.
    Result: Invalid selectors return `invalid_selector`.
    The node limit applies when the top document fills the limit and when child documents fill it.
    Hidden, disabled and non-editable targets return the applicable errors.
+   Read-only inputs, text areas and ARIA read-only fields reject fill actions.
+   Their existing values do not change in the child or top-level document.
+   A field that becomes read-only on focus also retains its value.
    Child file inputs have no file-upload capability marker.
    A scroll action on a child reference returns `unsupported_frame_action`.
 
@@ -103,7 +106,7 @@ The test does not use the developer's browser session.
 
 1. Examine the completed test result.
 
-   Result: After the input tasks, the test changes the page background.
+   Result: After the input tasks, the test changes the page background and fills a top-level field.
    A new decoded frame arrives within three seconds.
 
 ### 6.7 SAFARI-COMPAT — Check the supported Safari behavior

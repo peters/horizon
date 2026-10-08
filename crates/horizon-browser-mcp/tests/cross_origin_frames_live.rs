@@ -182,12 +182,59 @@ fn safari_compatibility(host: &mut McpProcess) {
         )
         .unwrap();
     assert_eq!(value["value"], "safari-synthetic");
+    readonly_controls(host, false);
     assert!(
         !host
             .call("browser_audit", json!({}))
             .unwrap()
             .to_string()
             .contains("safari-synthetic")
+    );
+}
+
+fn readonly_controls(host: &mut McpProcess, child: bool) {
+    let prefix = if child { "" } else { "top-" };
+    let selector = [
+        "protected-input",
+        "protected-textarea",
+        "protected-aria",
+        "protected-editor",
+        "protected-onfocus",
+    ]
+    .map(|id| format!("#{prefix}{id}"))
+    .join(",");
+    let fields = host.nodes(&selector);
+    assert_eq!(fields.len(), 5);
+    for field in fields {
+        assert!(
+            host.call(
+                "browser_act",
+                json!({"action":"fill","ref":field.reference,"value":"rejected"}),
+            )
+            .unwrap_err()
+            .contains("element_not_editable")
+        );
+    }
+    let expression = if child {
+        let inspect = host.nodes("#inspect-protected");
+        host.call("browser_act", json!({"action":"click","ref":inspect[0].reference}))
+            .unwrap();
+        host.call(
+            "browser_wait",
+            json!({"selector":"output[data-protected]","state":"present","timeout_millis":2000}),
+        )
+        .unwrap();
+        "window.protectedValues".to_owned()
+    } else {
+        format!(
+            "[...document.querySelectorAll({})].map(e=>e.value??e.textContent)",
+            serde_json::to_string(&selector).unwrap()
+        )
+    };
+    let values = host.call("browser_evaluate", json!({"expression":expression})).unwrap();
+    assert_eq!(
+        values["value"],
+        json!(["input-kept", "textarea-kept", "aria-kept", "editor-kept", "focus-kept"])
     );
 }
 
@@ -218,6 +265,7 @@ fn edge_cases(host: &mut McpProcess) {
             .contains(code)
         );
     }
+    readonly_controls(host, true);
     let files = host.nodes("input[type=file]");
     assert_eq!(files.len(), 1);
     assert!(files[0].file_input.is_none());
@@ -294,6 +342,34 @@ fn wait_for_first_frame(session: &horizon_browser::BrowserSession, slot: &FrameS
     }
 }
 
+fn check_frame_delivery(host: &mut McpProcess, slot: &FrameSlot) {
+    let frame_seq = slot.latest().unwrap().seq;
+    host.call(
+        "browser_evaluate",
+        json!({"expression":"document.body.style.backgroundColor='rgb(12, 34, 56)'"}),
+    )
+    .unwrap();
+    let capture = host.nodes("body > #same");
+    assert_eq!(capture.len(), 1);
+    host.call(
+        "browser_act",
+        json!({"action":"fill","ref":capture[0].reference,"value":"capture-synthetic"}),
+    )
+    .unwrap();
+    assert!(
+        !host
+            .call("browser_audit", json!({}))
+            .unwrap()
+            .to_string()
+            .contains("capture-synthetic")
+    );
+    let frame_deadline = Instant::now() + Duration::from_secs(3);
+    while slot.latest().unwrap().seq == frame_seq {
+        assert!(Instant::now() < frame_deadline, "frame delivery stopped during input");
+        thread::sleep(Duration::from_millis(30));
+    }
+}
+
 fn run(backend: BackendKind, root: &Path, nested: bool) {
     let (port, stop, server) = fixture(nested);
     let profiles = tempfile::Builder::new().prefix("frame-profiles-").tempdir().unwrap();
@@ -336,17 +412,7 @@ fn run(backend: BackendKind, root: &Path, nested: bool) {
         } else {
             form_roundtrip(&mut host);
         }
-        let frame_seq = slot.latest().unwrap().seq;
-        host.call(
-            "browser_evaluate",
-            json!({"expression":"document.body.style.backgroundColor='rgb(12, 34, 56)'"}),
-        )
-        .unwrap();
-        let frame_deadline = Instant::now() + Duration::from_secs(3);
-        while slot.latest().unwrap().seq == frame_seq {
-            assert!(Instant::now() < frame_deadline, "frame delivery stopped during input");
-            thread::sleep(Duration::from_millis(30));
-        }
+        check_frame_delivery(&mut host, &slot);
         drop(host);
     }));
     assert!(session.send(BrowserCommand::Stop));
@@ -390,7 +456,7 @@ fn form_roundtrip(host: &mut McpProcess) {
         },
         value: "synthetic-secret".into(),
     });
-    let submit = host.nodes("button");
+    let submit = host.nodes("button[type=submit]");
     assert_eq!(submit.len(), 1);
     host.success(BrowserControlAction::Click {
         target: BrowserTarget::Ref {
@@ -422,6 +488,7 @@ fn form_roundtrip(host: &mut McpProcess) {
         assert_eq!(host.nodes("input[type=password]").len(), 1);
     }
     edge_cases(host);
+    readonly_controls(host, false);
     let audit = host.call("browser_audit", json!({})).unwrap().to_string();
     for secret in [
         "synthetic-secret",
@@ -457,8 +524,8 @@ fn fixture(nested: bool) -> (u16, Arc<std::sync::atomic::AtomicBool>, thread::Jo
             let request = String::from_utf8_lossy(&request[..size]);
             let body = if request.starts_with("GET /form") {
                 r#"<!doctype html><title>Frame form</title><form>
-<label>User<input id="same" name="user" aria-label="User"></label><label>Password<input type="password" name="password" aria-label="Password"></label><button>Submit frame</button></form><input id="disabled" disabled><input id="hidden" style="display:none"><div id="readonly">Read only</div><input type="file">
-<script>const token=crypto.randomUUID();parent.postMessage({ready:true},'*');document.querySelector('form').oninput=()=>parent.postMessage({state:token,value:document.querySelector('[name=password]').value},'*');document.querySelector('form').onsubmit=e=>{e.preventDefault();parent.postMessage({submitted:document.querySelector('[name=user]').value==='synthetic-user'&&document.querySelector('[name=password]').value==='synthetic-secret',trusted:e.isTrusted},'*')};</script>"#.to_owned()
+<label>User<input id="same" name="user" aria-label="User"></label><label>Password<input type="password" name="password" aria-label="Password"></label><button type="submit">Submit frame</button></form><input id="disabled" disabled><input id="hidden" style="display:none"><div id="readonly">Read only</div><input type="file"><input id="protected-input" readonly value="input-kept"><textarea id="protected-textarea" readonly>textarea-kept</textarea><input id="protected-aria" aria-readonly="true" value="aria-kept"><div id="protected-editor" contenteditable="true" aria-readonly="true">editor-kept</div><input id="protected-onfocus" value="focus-kept" onfocus="this.readOnly=true"><button id="inspect-protected" type="button">Inspect protected fields</button>
+<script>document.querySelector('#inspect-protected').onclick=()=>parent.postMessage({protected:[...document.querySelectorAll('#protected-input,#protected-textarea,#protected-aria,#protected-editor,#protected-onfocus')].map(e=>e.value??e.textContent)},'*');const token=crypto.randomUUID();parent.postMessage({ready:true},'*');document.querySelector('form').oninput=()=>parent.postMessage({state:token,value:document.querySelector('[name=password]').value},'*');document.querySelector('form').onsubmit=e=>{e.preventDefault();parent.postMessage({submitted:document.querySelector('[name=user]').value==='synthetic-user'&&document.querySelector('[name=password]').value==='synthetic-secret',trusted:e.isTrusted},'*')};</script>"#.to_owned()
             } else if request.starts_with("GET /wrapper") {
                 format!(
                     r#"<!doctype html><title>Frame wrapper</title><iframe src="http://127.0.0.1:{port}/form" style="width:480px;height:220px"></iframe><script>window.addEventListener('message',e=>top.postMessage(e.data,'*'))</script>"#
@@ -466,7 +533,7 @@ fn fixture(nested: bool) -> (u16, Arc<std::sync::atomic::AtomicBool>, thread::Jo
             } else {
                 let path = if nested { "wrapper" } else { "form" };
                 format!(
-                    r#"<!doctype html><title>Frame fixture</title><input id="same" value="top-kept"><output>Waiting</output><iframe id="widget" src="http://localhost:{port}/{path}" style="margin:50px;width:500px;height:250px"></iframe><script>window.states={{}};window.addEventListener('message',e=>{{if(e.data.state){{window.states[e.data.state]={{owner:e.source===document.querySelector('#widget').contentWindow?'widget':'sibling',value:e.data.value}}}}else if(e.data.ready){{document.querySelector('output').setAttribute('data-ready','')}}else{{document.querySelector('output').textContent=e.data.submitted&&e.data.trusted?'Submitted':'Failed'}}}})</script>"#
+                    r#"<!doctype html><title>Frame fixture</title><input id="same" value="top-kept"><input id="top-protected-input" readonly value="input-kept"><textarea id="top-protected-textarea" readonly>textarea-kept</textarea><input id="top-protected-aria" aria-readonly="true" value="aria-kept"><div id="top-protected-editor" contenteditable="true" aria-readonly="true">editor-kept</div><input id="top-protected-onfocus" value="focus-kept" onfocus="this.readOnly=true"><output>Waiting</output><iframe id="widget" src="http://localhost:{port}/{path}" style="margin:50px;width:500px;height:250px"></iframe><script>window.states={{}};window.addEventListener('message',e=>{{if(e.data.state){{window.states[e.data.state]={{owner:e.source===document.querySelector('#widget').contentWindow?'widget':'sibling',value:e.data.value}}}}else if(e.data.protected){{window.protectedValues=e.data.protected;document.querySelector('output').setAttribute('data-protected','')}}else if(e.data.ready){{document.querySelector('output').setAttribute('data-ready','')}}else{{document.querySelector('output').textContent=e.data.submitted&&e.data.trusted?'Submitted':'Failed'}}}})</script>"#
                 )
             };
             let _ = write!(
