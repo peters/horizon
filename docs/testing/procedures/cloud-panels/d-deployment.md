@@ -421,6 +421,74 @@ Use `smoke-a` from D01.
 
    Result: The evidence shows the readiness card.
 
+### 6.6 D06 — Make sure that a failed image push stays on Push image
+
+This task rents no compute. It deploys the `runpod-build` profile with settings that
+have no registry binding and an empty Docker configuration, so the build succeeds and
+the push is refused before Horizon requests a worker. It changes the cloud settings
+for the time of the task and no Docker login of this computer.
+
+1. Close Cloud settings if they are open.
+
+   Result: No Cloud settings dialog is open.
+
+2. Make a copy of the cloud settings. Stop if the copy name is in use.
+
+   ```sh
+   test ! -e ~/.horizon/cloud/settings.json.d06-backup && cp -p ~/.horizon/cloud/settings.json ~/.horizon/cloud/settings.json.d06-backup
+   ```
+
+   Result: The command ends without an error. If it fails, do not continue: an
+   earlier copy has that name. Restore it as in step 8 first.
+
+3. Make an empty Docker configuration for this task.
+
+   ```sh
+   mkdir -p <evidence>/d06-docker && printf '{"auths":{}}' > <evidence>/d06-docker/config.json
+   ```
+
+   Result: `<evidence>/d06-docker/config.json` contains `{"auths":{}}`.
+
+   > **CAUTION:** IF THIS TASK STOPS BEFORE STEP 8, DO STEP 8 BEFORE YOU STOP. From
+   > step 4 to step 8, every cloud that you start uses the changed settings.
+
+4. Point Horizon at that configuration and remove all registry bindings from the
+   settings.
+
+   ```sh
+   jq --arg d <evidence>/d06-docker '.docker_config = $d | .registries = null' ~/.horizon/cloud/settings.json.d06-backup > ~/.horizon/cloud/settings.json
+   ```
+
+   Result: `jq '.docker_config, .registries' ~/.horizon/cloud/settings.json` shows the
+   directory of step 3 and `null`.
+
+5. Deploy a new cloud `smoke-push` from `<repo>` with the `runpod-build` profile.
+
+   Result: The card shows **Build locally**, then **Push image**. If the build fails,
+   do step 8, then examine the build.
+
+6. Wait until the push fails.
+
+   Result: The card shows the failure on **Push image**. **Validate** and
+   **Build locally** show as done. The status strip does not say
+   **Validation failed**. The explanation says that Horizon's own Docker
+   configuration has no login that may publish.
+
+7. Record a screenshot of the card and the step list in the evidence, then close the
+   card of `smoke-push`.
+
+   Result: The evidence shows the failure on **Push image**. The board does not show
+   `smoke-push`, and the provider shows no pod for it.
+
+8. Put back the cloud settings from the copy.
+
+   ```sh
+   mv ~/.horizon/cloud/settings.json.d06-backup ~/.horizon/cloud/settings.json
+   ```
+
+   Result: `~/.horizon/cloud/settings.json.d06-backup` does not exist. Cloud settings
+   show the registry bindings of area A again.
+
 ## 7. Pass criteria
 
 - `smoke-a`, `smoke-r` and `smoke-g` each show **Ready**.
@@ -429,6 +497,7 @@ Use `smoke-a` from D01.
 - The checkout of `smoke-r` is at the recorded commit and has no sentinel file.
 - LFS files and submodules agree with the committed selection.
 - **Where the time went** agrees with the stages in the output.
+- A failed image push shows on **Push image**, not on **Validate**.
 
 ## 8. Cleanup
 

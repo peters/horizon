@@ -866,3 +866,62 @@ fn a_stop_that_fails_its_preflight_leaves_a_connected_cloud_ready() {
     assert!(runtime.receiver.is_some());
     assert_eq!(runtime.error.as_deref(), Some("settings.json could not be read"));
 }
+
+fn saved_record(stage: &str) -> cloud_runtime::state::Deployment {
+    let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n").unwrap();
+    serde_json::from_value(serde_json::json!({
+        "version": 1, "cloud_id": "fixture", "repository": "/synthetic", "revision": "a".repeat(40),
+        "profile": config.profiles["dev"], "stage": stage, "operation": {"state": "prepared"},
+        "spec": null, "worker": null, "sessions": []
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_failed_push_stays_on_its_step_when_the_saved_record_still_says_validate() {
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.prepare_production_clouds(&ctx);
+    let mut runtime = Runtime::default();
+    let (sender, receiver) = channel();
+    runtime.receiver = Some(receiver);
+    app.cloud_prototype.production.runtimes.insert(1, runtime);
+    for stage in [Stage::Validate, Stage::Build, Stage::Push] {
+        sender.send(Event::stage(stage)).unwrap();
+    }
+    // The failure report: the saved record, which keeps Validate until provisioning.
+    sender
+        .send(Event::Snapshot(Box::new(saved_record("Validate"))))
+        .unwrap();
+    sender
+        .send(Event::failed("error from registry: unauthenticated".into()))
+        .unwrap();
+    app.prepare_production_clouds(&ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert_eq!(runtime.stage, Some(Stage::Push));
+    assert!(runtime.error.is_some());
+    assert_eq!(runtime.state.as_ref().map(|state| state.stage), Some(Stage::Validate));
+}
+
+#[test]
+fn a_saved_record_sets_the_step_except_a_lagging_one_during_image_steps() {
+    for (live, saved, shown) in [
+        (Stage::Provision, "Validate", Stage::Validate),
+        (Stage::Push, "Provision", Stage::Provision),
+        (Stage::Readiness, "Ready", Stage::Ready),
+        // A rebuild of a running cloud keeps its record at Ready while it builds,
+        // pushes and switches the image.
+        (Stage::Build, "Validate", Stage::Build),
+        (Stage::Build, "Ready", Stage::Build),
+        (Stage::Push, "Ready", Stage::Push),
+        (Stage::Replace, "Ready", Stage::Replace),
+        (Stage::Replace, "Validate", Stage::Replace),
+    ] {
+        let mut runtime = Runtime {
+            stage: Some(live),
+            ..Runtime::default()
+        };
+        runtime.adopt_snapshot(saved_record(saved));
+        assert_eq!(runtime.stage, Some(shown), "{live:?} then a saved {saved}");
+    }
+}

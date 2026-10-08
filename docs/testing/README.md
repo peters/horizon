@@ -31,7 +31,7 @@ documents that are not yet STE.
 | [cloud-agent-browser](procedures/cloud-agent-browser.md) | Browser tools of an agent panel in a cloud with agent isolation | rents compute |
 | [cloud-agent-panel-start](procedures/cloud-agent-panel-start.md) | Agent panel start in a cloud, host instance and browser runtime root owner | rents compute |
 | [cloud-idle-stop](procedures/cloud-idle-stop.md) | Cloud idle stop on RunPod and Hetzner, and the stopped card | rents compute |
-| [cloud-panels](procedures/cloud-panels.md) | Cloud panels end to end: 113 tests in 12 area files | rents compute |
+| [cloud-panels](procedures/cloud-panels.md) | Cloud panels end to end: 114 tests in 12 area files | rents compute |
 | [cloud-quick-start](procedures/cloud-quick-start.md) | Quick start on the base image for a repository without `.horizon/cloud.yml` | rents compute |
 | [cloud-settings-replace-key](procedures/cloud-settings-replace-key.md) | Cloud settings saved keys | none |
 | [cloud-stopped-panel-restore](procedures/cloud-stopped-panel-restore.md) | Restored panels of a stopped or reconnecting cloud | rents compute |

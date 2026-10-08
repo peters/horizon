@@ -13,7 +13,7 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that Horizon cloud panels work from the first setup to
-the last deletion. It covers 113 tests in 12 areas. Each test has an ID that a
+the last deletion. It covers 114 tests in 12 areas. Each test has an ID that a
 report uses to give a result.
 
 ## 2. Applicability
@@ -269,7 +269,7 @@ area X.
 5. Do O01 and O03.
 6. Do T01 and T02. D01 needs the saved test tailnet.
 7. Do C09.
-8. Do D01 to D05. D01 and D02 select the places that C31 examines.
+8. Do D01 to D06. D01 and D02 select the places that C31 examines.
 9. Do step 8 of C02.
 10. Do C31 and A09.
 11. Do E01 to E09.
@@ -289,7 +289,7 @@ The cleanup of this procedure does X01 to X05.
 | A — Machine setup and credentials | [a-machine-setup.md](cloud-panels/a-machine-setup.md) | A01–A09 | A09 rents compute |
 | B — Repository configuration | [b-repository-configuration.md](cloud-panels/b-repository-configuration.md) | B01–B05 | none |
 | C — New cloud dialog | [c-new-cloud-dialog.md](cloud-panels/c-new-cloud-dialog.md) | C01–C31 | C08 if the watch starts a cloud, and C31 |
-| D — Deployment | [d-deployment.md](cloud-panels/d-deployment.md) | D01–D05 | rents compute |
+| D — Deployment | [d-deployment.md](cloud-panels/d-deployment.md) | D01–D06 | rents compute |
 | E — Panels in a cloud | [e-panels.md](cloud-panels/e-panels.md) | E01–E09 | rents compute |
 | L — Lifecycle | [l-lifecycle.md](cloud-panels/l-lifecycle.md) | L01–L10 | rents compute |
 | T — Tailnets | [t-tailnets.md](cloud-panels/t-tailnets.md) | T01–T14 | T03–T12 and T14 rent compute |

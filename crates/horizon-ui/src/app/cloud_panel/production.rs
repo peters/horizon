@@ -522,10 +522,7 @@ impl HorizonApp {
             for event in events {
                 runtime.observe(&event);
                 match event {
-                    Event::Snapshot(state) => {
-                        runtime.stage = Some(state.stage);
-                        runtime.state = Some(*state);
-                    }
+                    Event::Snapshot(state) => runtime.adopt_snapshot(*state),
                     Event::Stopped(state) => {
                         runtime.progress.stage(Stage::Stopped, std::time::Instant::now());
                         runtime.stage = Some(Stage::Stopped);
