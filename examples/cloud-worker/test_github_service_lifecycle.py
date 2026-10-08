@@ -1,6 +1,7 @@
 """Lifecycle of the worker GitHub service: a chain that only memory holds, clear across
 processes, the host's status of the serving process and a start that fails."""
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -234,6 +235,30 @@ class VolumeCopyTests(ServiceTestCase):
         self.assertTrue(self.store.retry_pending())
         self.assertIsNone(self.store.pending, 'its own unconfirmed copy does not supersede it')
         self.assertEqual(self.store.load(serving=True)[0]['chain'], rotated_chain)
+
+    def test_an_unconfirmed_rotation_is_pending_before_readers_look_again(self):
+        self.install()
+        _, post = self.fake_github((200, rotated(2)))
+        due = chain()['access_expires_at'] - 60
+        fsync, write = self.unconfirmed_volume()
+        held = []
+        keep = self.store.keep_pending
+
+        def record(state):
+            fd = os.open(self.store.runtime / 'commit.lock', os.O_RDONLY)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                held.append(True)
+            finally:
+                os.close(fd)
+            keep(state)
+        with mock.patch.object(common, 'fsync_directory', side_effect=fsync), \
+                mock.patch.object(common, 'write_private', side_effect=write), \
+                mock.patch.object(self.store, 'keep_pending', side_effect=record), \
+                self.assertRaisesRegex(ValueError, 'confirmed'):
+            service.refresh_once(self.store, lambda: due, post)
+        self.assertEqual(held, [True], 'readers wait until the chain is recorded as pending')
 
     def test_an_install_no_storage_confirmed_keeps_the_previous_chain(self):
         self.install()

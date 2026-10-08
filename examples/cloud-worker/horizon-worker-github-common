@@ -291,11 +291,7 @@ class Store:
 
     def write(self, state):
         """Writes `state` as it is; returns whether the volume holds it durably. Raises
-        ValueError when no storage confirmed it."""
-        with self.commit():
-            return self.write_committed(state)
-
-    def write_committed(self, state):
+        ValueError when no storage confirmed it. The caller holds the commit lock."""
         data = json.dumps(state, separators=(',', ':'))
         try:
             private_directory(self.persistent.parent, create=True)
@@ -344,13 +340,16 @@ class Store:
         # A counter, never the clock: it only grows, also when the clock moves back. Writers
         # hold the store lock, so the next serial is above every copy and every clear.
         state = dict(state, serial=self.highest() + 1)
-        try:
-            persistent = self.write(state)
-        except ValueError:
-            if retain:
-                self.keep_pending(state)
-            raise
-        self.pending = None
+        # The outcome is recorded before readers may look again: a chain no storage confirmed
+        # is pending before any serving read can see its volume copy.
+        with self.commit():
+            try:
+                persistent = self.write(state)
+            except ValueError:
+                if retain:
+                    self.keep_pending(state)
+                raise
+            self.pending = None
         return persistent
 
     def retry_pending(self):
@@ -365,8 +364,9 @@ class Store:
             self.pending = None
         if self.pending is None:
             return True
-        self.write(self.pending)
-        self.pending = None
+        with self.commit():
+            self.write(self.pending)
+            self.pending = None
         return True
 
     def clear(self):

@@ -89,6 +89,7 @@ class CapabilitiesTests(unittest.TestCase):
         for reported, missing, args, expected in [(declared, (), ('--git-auth',), True),
                                                   ({'horizon-worker-supervise': b''}, (), ('--git-auth',), False),
                                                   (declared, ('horizon-worker-github',), ('--git-auth',), False),
+                                                  (declared, ('horizon-worker-github-common',), ('--git-auth',), False),
                                                   # Without the agent isolation launcher the service would refuse to run.
                                                   (declared, ('horizon-worker-tailnet',), ('--git-auth',), False),
                                                   (declared, (), (), False)]:
