@@ -76,6 +76,13 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
    A new query returns a new valid reference.
    Each backend repeats the reload three times.
    A new query also invalidates a reference from the previous snapshot.
+2. Run `cargo test -p horizon-browser multi_frame_scan_rejects_an_earlier_child_invalidated_during_a_later_scan`.
+
+   Result: Each protocol fixture scans one child before it scans another child.
+   The first child changes or is removed during the second scan.
+   The scan returns `stale_reference` and does not publish the old child nodes.
+   Existing top-level references remain valid.
+   A scan with no document change returns both child nodes.
 
 ### 6.3 FRAME-AUDIT — Examine the audit
 

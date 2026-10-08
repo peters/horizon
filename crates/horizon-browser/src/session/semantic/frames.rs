@@ -39,11 +39,11 @@ impl DriverState {
         timeout: Duration,
     ) -> Result<Value, BrowserControlFailure> {
         let deadline = Instant::now() + timeout;
-        let generation = self.semantic.generation();
+        let revision = self.semantic.scan_revision();
         let expression = scan_expression(selector, max_nodes);
         let mut scan = self.evaluate_json_within(link, events, slot, &expression, remaining(deadline)?)?;
         crate::semantic::clear_scan_frames(&mut scan)?;
-        if self.semantic.generation() != generation {
+        if self.semantic.scan_revision() != revision {
             return Err(stale());
         }
         if scan_node_limit_reached(&scan, max_nodes) {
@@ -105,7 +105,7 @@ impl DriverState {
                 append_frame_scan(&mut scan, value, &frame, max_nodes)?;
             }
         }
-        if self.semantic.generation() != generation {
+        if self.semantic.scan_revision() != revision {
             return Err(stale());
         }
         Ok(scan)
@@ -437,6 +437,76 @@ mod tests {
                     3
                 );
             }
+        }
+    }
+    #[test]
+    fn multi_frame_scan_rejects_an_earlier_child_invalidated_during_a_later_scan() {
+        for event in [
+            None,
+            Some("Runtime.executionContextDestroyed"),
+            Some("Runtime.executionContextsCleared"),
+            Some("Target.detachedFromTarget"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("ws://{}/", listener.local_addr().unwrap());
+            let worker = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut socket = tungstenite::accept(stream).unwrap();
+                let mut sessions = Vec::new();
+                while let Ok(Message::Text(text)) = socket.read() {
+                    let command: Value = serde_json::from_str(&text).unwrap();
+                    assert_eq!(command["method"], "Runtime.evaluate");
+                    let session = command["sessionId"].as_str().unwrap_or("page");
+                    sessions.push(session.to_owned());
+                    if session == "later"
+                        && let Some(method) = event
+                    {
+                        socket.send(Message::Text(json!({"method":method,"sessionId":"child","params":{"sessionId":"child","executionContextId":7}}).to_string().into())).unwrap();
+                    }
+                    let value = if session == "page" {
+                        Value::Null
+                    } else {
+                        json!({"nodes":[{"selector":"#field"}]})
+                    };
+                    let response = json!({"id":command["id"],"result":{"result":{"value":if command["params"]["contextId"].is_null() { json!({"nodes":[]}) } else { value }}}});
+                    socket.send(Message::Text(response.to_string().into())).unwrap();
+                }
+                sessions
+            });
+            let (mut state, events, slot) = fixture(&url);
+            state.clipboard.iframe_sessions.insert("later".into());
+            for session in ["page", "child", "later"] {
+                state.runtime_enable_requested.insert(session.into());
+                state.note_clipboard_execution_context(&CdpEvent {
+                    method: "Runtime.executionContextCreated",
+                    session_id: Some(session),
+                    params: &json!({"context":{"id":7,"auxData":{"isDefault":true}}}),
+                });
+            }
+            let (generation, _, nodes) = state
+                .semantic
+                .register_nodes(json!({"nodes":[{"selector":"#top"}]}))
+                .unwrap();
+            let mut link = CdpLink::connect_with_timeout(&url, Duration::from_millis(10)).unwrap();
+            let result = state.frame_scan(&mut link, &events, &slot, None, 10);
+            if event.is_some() {
+                assert_eq!(result.unwrap_err().code, "stale_reference");
+            } else {
+                assert_eq!(result.unwrap()["nodes"].as_array().unwrap().len(), 2);
+            }
+            assert_eq!(state.semantic.generation(), generation);
+            assert_eq!(
+                state
+                    .semantic
+                    .resolve(&crate::BrowserTarget::Ref {
+                        reference: nodes[0].reference.clone()
+                    })
+                    .unwrap(),
+                "#top"
+            );
+            drop(link);
+            assert_eq!(worker.join().unwrap(), ["page", "child", "later", "page"]);
         }
     }
 }

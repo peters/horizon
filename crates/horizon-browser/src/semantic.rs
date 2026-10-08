@@ -37,6 +37,7 @@ impl TeachCapture {
 #[derive(Debug)]
 pub(crate) struct SemanticState {
     generation: u64,
+    frame_epoch: u64,
     revision: u64,
     references: HashMap<String, ResolvedTarget>,
     teach_text_gesture: bool,
@@ -46,6 +47,7 @@ impl Default for SemanticState {
     fn default() -> Self {
         Self {
             generation: 1,
+            frame_epoch: 0,
             revision: 0,
             references: HashMap::new(),
             teach_text_gesture: false,
@@ -60,6 +62,10 @@ impl SemanticState {
         self.generation
     }
 
+    pub(crate) fn scan_revision(&self) -> (u64, u64) {
+        (self.generation, self.frame_epoch)
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1).max(1);
         self.revision = 0;
@@ -68,6 +74,7 @@ impl SemanticState {
     }
 
     pub(crate) fn invalidate_cdp_frame(&mut self, session: &str, context: Option<u64>) {
+        self.frame_epoch = self.frame_epoch.wrapping_add(1);
         self.references.retain(|_, target| {
             !matches!(
                 &target.frame,
@@ -78,6 +85,7 @@ impl SemanticState {
     }
 
     pub(crate) fn invalidate_bidi_frame(&mut self, context: &str) {
+        self.frame_epoch = self.frame_epoch.wrapping_add(1);
         self.references.retain(|_, target| {
             !matches!(
                 &target.frame, Some(FrameTarget::Bidi { context: stored, .. }) if stored == context
