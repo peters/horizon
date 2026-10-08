@@ -421,6 +421,48 @@ Use `smoke-a` from D01.
 
    Result: The evidence shows the readiness card.
 
+### 6.6 D06 — Make sure that a failed image push stays on Push image
+
+This task rents no compute. The deployment stops before Horizon requests a worker.
+
+1. In a scratch branch of `<repo>`, change the `runpod-cpu` profile. Add a `build`
+   section and set `image` to a private repository on `ghcr.io` that the run owns.
+
+   Result: `git -C <repo> log -1` shows the scratch commit.
+
+2. Read the `docker_config` value in `~/.horizon/cloud/settings.json`. Horizon
+   builds and pushes with this Docker configuration only.
+
+   Result: You know the directory, for example `~/.horizon/cloud/docker`.
+
+3. Make sure that this directory has no login for `ghcr.io`.
+
+   ```sh
+   docker --config <docker_config> logout ghcr.io
+   ```
+
+   Result: Docker shows **Removing login credentials for ghcr.io**, or that there
+   was no login.
+
+4. Deploy a new cloud `smoke-push` from the scratch commit with the `runpod-cpu`
+   profile.
+
+   Result: The card shows **Build locally**, then **Push image**.
+
+5. Wait until the push fails.
+
+   Result: The card shows the failure on **Push image**. **Validate** and
+   **Build locally** show as done. The status strip does not say
+   **Validation failed**.
+
+6. Record a screenshot of the card and the step list in the evidence.
+
+   Result: The evidence shows the failure on **Push image**.
+
+7. Close the card of `smoke-push` and delete the scratch branch.
+
+   Result: The board does not show `smoke-push`. The provider shows no pod for it.
+
 ## 7. Pass criteria
 
 - `smoke-a`, `smoke-r` and `smoke-g` each show **Ready**.
@@ -429,6 +471,7 @@ Use `smoke-a` from D01.
 - The checkout of `smoke-r` is at the recorded commit and has no sentinel file.
 - LFS files and submodules agree with the committed selection.
 - **Where the time went** agrees with the stages in the output.
+- A failed image push shows on **Push image**, not on **Validate**.
 
 ## 8. Cleanup
 
