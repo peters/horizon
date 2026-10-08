@@ -350,8 +350,8 @@ mod tests {
         // the last button inside the toolbar's reserved width casts, the one before
         // it detaches.
         let room = workspace_layout_toolbar_rect(Rect::from_min_size(Pos2::ZERO, Vec2::new(120.0, 26.0)));
-        let emitted: Vec<_> = (0..)
-            .map(|step| toolbar_rect.min.x + 2.0 * step as f32)
+        let emitted: Vec<_> = (0_u16..400)
+            .map(|step| toolbar_rect.min.x + 2.0 * f32::from(step))
             .take_while(|x| *x <= toolbar_rect.min.x + room.width())
             .filter_map(|x| click_toolbar(&visual, Pos2::new(x, y)))
             .collect();
