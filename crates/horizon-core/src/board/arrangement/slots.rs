@@ -39,9 +39,17 @@ impl Board {
             }
         }
         #[cfg(feature = "cloud-workspaces")]
-        for index in self.slot_clouds(id) {
-            if !slots.contains(&Slot::Cloud(index)) {
-                slots.push(Slot::Cloud(index));
+        {
+            // Clouds without members keep the place they were last given.
+            let mut empty: Vec<usize> = self
+                .slot_clouds(id)
+                .into_iter()
+                .filter(|index| !slots.contains(&Slot::Cloud(*index)))
+                .collect();
+            empty.sort_by_key(|index| (self.cloud_groups.0[*index].slot.unwrap_or(usize::MAX), *index));
+            for index in empty {
+                let at = self.cloud_groups.0[index].slot.unwrap_or(usize::MAX).min(slots.len());
+                slots.insert(at, Slot::Cloud(index));
             }
         }
         slots
@@ -155,31 +163,35 @@ impl Board {
     /// Store a slot order in the workspace's panel order, which is what is saved. A cloud's
     /// members stand together where its slot is; panels outside the preset keep their
     /// relative order after them. A cloud without members has no place in the panel order,
-    /// so an order that moves one is refused.
+    /// so it remembers its slot number instead.
     fn write_slot_order(&mut self, workspace: WorkspaceId, order: &[Slot]) -> bool {
         let Some(current) = self.workspace(workspace).map(|ws| ws.panels.clone()) else {
             return false;
         };
         let mut panels: Vec<PanelId> = Vec::with_capacity(current.len());
-        // Whether a slot without a place in the panel order (an empty cloud) came yet.
-        let mut unplaced = false;
-        for slot in order {
-            let members: Vec<PanelId> = match *slot {
-                Slot::Panel(id) => vec![id],
+        #[cfg(feature = "cloud-workspaces")]
+        let mut places: Vec<(usize, Option<usize>)> = Vec::new();
+        for (position, slot) in order.iter().enumerate() {
+            #[cfg(not(feature = "cloud-workspaces"))]
+            let _ = position;
+            match *slot {
+                Slot::Panel(id) => panels.push(id),
                 #[cfg(feature = "cloud-workspaces")]
-                Slot::Cloud(index) => current
-                    .iter()
-                    .copied()
-                    .filter(|id| self.slot_cloud_of(*id, workspace) == Some(index))
-                    .collect(),
-            };
-            if members.is_empty() {
-                unplaced = true;
-            } else if unplaced {
-                // An empty cloud before this slot would come back after it.
-                return false;
+                Slot::Cloud(index) => {
+                    let members: Vec<PanelId> = current
+                        .iter()
+                        .copied()
+                        .filter(|id| self.slot_cloud_of(*id, workspace) == Some(index))
+                        .collect();
+                    // A cloud with members is placed by them; an empty one remembers its slot.
+                    places.push((index, members.is_empty().then_some(position)));
+                    panels.extend(members);
+                }
             }
-            panels.extend(members);
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        for (index, place) in places {
+            self.cloud_groups.0[index].slot = place;
         }
         let rest: Vec<PanelId> = current.iter().copied().filter(|id| !panels.contains(id)).collect();
         panels.extend(rest);
@@ -188,6 +200,21 @@ impl Board {
         };
         ws.panels = panels;
         true
+    }
+
+    /// Apply each preset that has a cloud slot, so restored clouds stand in their slots
+    /// even when they were saved elsewhere.
+    #[cfg(feature = "cloud-workspaces")]
+    pub(crate) fn place_slot_clouds(&mut self) {
+        let workspaces: Vec<WorkspaceId> = self
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id)
+            .filter(|id| self.workspace_layout_value(*id).is_some() && !self.slot_clouds(*id).is_empty())
+            .collect();
+        for workspace in workspaces {
+            self.reapply_workspace_layout_if_set(workspace);
+        }
     }
 
     /// The cloud whose slot `panel` belongs to, when that cloud takes a slot in `workspace`.

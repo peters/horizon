@@ -25,6 +25,7 @@ impl CloudGroup {
             layout: Some(WorkspaceLayout::default()),
             panels: Vec::new(),
             hidden: Vec::new(),
+            slot: None,
         }
     }
 

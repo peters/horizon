@@ -75,6 +75,10 @@ pub struct CloudGroup {
     pub panels: Vec<String>,
     /// Only panels hidden by collapse are revealed by expand.
     hidden: Vec<String>,
+    /// Where this cloud stands among its workspace preset's slots while it has no
+    /// members; a cloud with members stands where its first member does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<usize>,
 }
 
 /// Fields reconciliation compares. Omits the remote launch payload so the

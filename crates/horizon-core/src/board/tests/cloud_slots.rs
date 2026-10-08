@@ -240,3 +240,48 @@ fn a_freeform_workspace_leaves_the_cloud_out_of_any_slot() {
     let _ = board.move_panel(panels[0], [5000.0, 5000.0]);
     assert!(near(cloud(&board).position, before));
 }
+
+#[test]
+fn a_restored_cloud_saved_outside_its_slot_takes_it_again() {
+    let (mut board, _, _, members) = desk(1);
+    let slot = cloud(&board).position;
+    let member = board.panel(members[0]).expect("member").layout.position;
+    let mut moved = board.cloud_groups.0[0].clone();
+    moved.shift_in_slot(&mut board, [3000.0, 500.0]);
+    board.cloud_groups.0[0] = moved;
+    let state = crate::RuntimeState::from_board(
+        &board,
+        crate::WindowConfig::default(),
+        crate::CanvasViewState::default(),
+    );
+    let restored = Board::from_runtime_state(&state).expect("restore");
+    assert!(
+        near(restored.cloud_groups.0[0].position, slot),
+        "{:?}",
+        restored.cloud_groups.0[0].position
+    );
+    let local = &board.panel(members[0]).expect("member").local_id;
+    let id = restored.panel_id_by_local_id(local).expect("restored member");
+    assert!(near(restored.panel(id).expect("member").layout.position, member));
+}
+
+#[test]
+fn an_empty_cloud_keeps_the_slot_it_was_dragged_to() {
+    let (mut board, workspace, panels, _) = desk(0);
+    let first = board.panel(panels[0]).expect("panel").layout.position;
+    assert!(board.swap_cloud_slot_at("slot-fixture", [first[0] + 10.0, first[1] + 10.0]));
+    assert!(
+        near(cloud(&board).position, first),
+        "the empty cloud took the first slot"
+    );
+    assert_eq!(cloud(&board).slot, Some(0));
+    board.reapply_workspace_layout_if_set(workspace);
+    assert!(near(cloud(&board).position, first), "and keeps it");
+    let state = crate::RuntimeState::from_board(
+        &board,
+        crate::WindowConfig::default(),
+        crate::CanvasViewState::default(),
+    );
+    let restored = Board::from_runtime_state(&state).expect("restore");
+    assert!(near(restored.cloud_groups.0[0].position, first), "after a restart too");
+}

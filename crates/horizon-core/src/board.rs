@@ -242,6 +242,8 @@ impl Board {
                 board.retained_empty_workspaces.insert(workspace);
             }
         }
+        #[cfg(feature = "cloud-workspaces")]
+        board.place_slot_clouds();
         Ok(board)
     }
 

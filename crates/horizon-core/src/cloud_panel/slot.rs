@@ -58,6 +58,7 @@ impl CloudGroups {
             group.position = placed.position;
             group.size = placed.size;
             group.workspace_position = placed.workspace_position;
+            group.slot = placed.slot;
         }
     }
 }

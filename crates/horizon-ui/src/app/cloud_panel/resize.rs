@@ -328,6 +328,105 @@ mod tests {
     }
 
     #[test]
+    fn dragging_a_slotted_cloud_by_its_header_swaps_it_with_a_panel_at_any_zoom() {
+        for zoom in [1.0_f32, 0.62] {
+            let (_temp, mut app) = crate::app::test_support::test_app();
+            let workspace = app.board.create_workspace_at("Cloud fixture", [0.0, 0.0]);
+            let neighbour_panel = app
+                .board
+                .create_panel(
+                    PanelOptions {
+                        kind: PanelKind::Usage,
+                        ..PanelOptions::default()
+                    },
+                    workspace,
+                )
+                .unwrap();
+            let local = app.board.workspace(workspace).unwrap().local_id.clone();
+            let mut group = CloudGroup::new(101, "Fixture".into(), local, "/fixture".into(), [2000.0, 120.0]);
+            let config = horizon_core::cloud_panel::CloudConfig::parse(
+                "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n",
+            )
+            .unwrap();
+            group.environment.id = "slot-drag-fixture".into();
+            group.remote = Some(horizon_core::cloud_panel::CloudLaunch {
+                deployment_started: true,
+                id: "slot-drag-fixture".into(),
+                revision: "a".repeat(40),
+                profile_name: "dev".into(),
+                profile: config.profiles["dev"].clone(),
+                placement: horizon_core::cloud_panel::Placement::default(),
+            });
+            app.board.cloud_groups.0.push(group);
+            app.board
+                .arrange_workspace(workspace, horizon_core::WorkspaceLayout::Grid);
+            let ctx = egui::Context::default();
+            app.prepare_cloud_prototype(&ctx);
+            app.cloud_prototype.ready = true;
+            app.canvas_view = horizon_core::CanvasViewState::new([0.0, 0.0], zoom);
+            let panel_slot = app.board.panel(neighbour_panel).unwrap().layout;
+            let cloud_slot = app.cloud_prototype.groups.0[0].position;
+            let canvas = app.canvas_rect(&ctx);
+            let transform = crate::app::view::canvas_scene_transform(canvas, app.canvas_view);
+            let header = transform * egui::pos2(cloud_slot[0] + 200.0, cloud_slot[1] + 40.0);
+            let target = transform
+                * egui::pos2(
+                    panel_slot.position[0] + panel_slot.size[0] * 0.5,
+                    panel_slot.position[1] + panel_slot.size[1] * 0.5,
+                );
+            let mut time = 0.0;
+            let mut frame = |position: egui::Pos2, events: Vec<egui::Event>| {
+                time += 0.05;
+                let _ = ctx
+                    .run_ui(
+                        crate::app::cloud_panel::scroll_bar_tests::input(
+                            egui::vec2(1600.0, 1000.0),
+                            time,
+                            position,
+                            events,
+                        ),
+                        |ui| app.render_active_view(ui, false),
+                    )
+                    .discard_textures();
+            };
+            for _ in 0..3 {
+                frame(header, Vec::new());
+            }
+            let press = |pressed| egui::Event::PointerButton {
+                pos: header,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(header, vec![press(true)]);
+            for step in 1..=12 {
+                let t = step as f32 / 12.0;
+                frame(header + (target - header) * t, Vec::new());
+            }
+            frame(
+                target,
+                vec![egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 0.05 && (a[1] - b[1]).abs() < 0.05;
+            assert!(
+                near(app.cloud_prototype.groups.0[0].position, panel_slot.position),
+                "zoom {zoom}: cloud at {:?}, panel slot {:?}",
+                app.cloud_prototype.groups.0[0].position,
+                panel_slot.position
+            );
+            assert!(near(
+                app.board.panel(neighbour_panel).unwrap().layout.position,
+                cloud_slot
+            ));
+        }
+    }
+
+    #[test]
     fn zoomed_corner_drag_resizes_by_the_canvas_delta_without_panning() {
         let (temp, mut app) = crate::app::test_support::test_app();
         let workspace = app.board.create_workspace("fixture");
