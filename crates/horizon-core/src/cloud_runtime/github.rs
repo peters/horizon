@@ -103,10 +103,11 @@ pub struct Grant {
 /// The GitHub repositories of a deployment: its primary when the checkout's origin is on
 /// GitHub, and each same-worker sibling, which `.horizon/cloud.yml` names by `owner/name`.
 /// # Errors
-/// A sibling declaration that is not a GitHub repository name.
+/// A sibling declaration that is not a GitHub repository name, or a checkout whose
+/// origin could not be read, including a cancelled deployment.
 pub fn grants(state: &Deployment, runner: &Runner<'_>) -> Result<Vec<Grant>> {
     let mut grants = Vec::new();
-    if let Ok(primary) = super::companions::inventory::identity(&state.repository, runner) {
+    if let Some(primary) = github_origin(&state.repository, runner)? {
         grants.push(Grant {
             repository: primary.to_ascii_lowercase(),
             target: Target::Primary,
@@ -135,6 +136,37 @@ pub fn grants(state: &Deployment, runner: &Runner<'_>) -> Result<Vec<Grant>> {
         ));
     }
     Ok(grants)
+}
+
+/// The GitHub `owner/name` of a checkout's origin, or `None` when it has no origin or
+/// one elsewhere. A lookup that fails is an error, never `None`: an empty grant set
+/// removes the worker's access.
+fn github_origin(checkout: &std::path::Path, runner: &Runner<'_>) -> Result<Option<String>> {
+    // The origin URL may embed a credential, so nothing of it is emitted.
+    let quiet = Runner {
+        cancel: runner.cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let git = |args: &[&str]| {
+        let mut command = std::process::Command::new("git");
+        command.arg("-C").arg(checkout).args(args);
+        command
+    };
+    let remotes = quiet.run(
+        "Read repository remotes",
+        &mut git(&["remote"]),
+        std::time::Duration::from_secs(10),
+    )?;
+    if !remotes.lines().any(|remote| remote.trim() == "origin") {
+        return Ok(None);
+    }
+    let origin = quiet.run(
+        "Read repository origin",
+        &mut git(&["remote", "get-url", "origin"]),
+        std::time::Duration::from_secs(10),
+    )?;
+    Ok(super::companions::inventory::from_remote(origin.trim()).ok())
 }
 
 /// Gives the worker current GitHub access for the cloud's repositories, signing in

@@ -230,10 +230,32 @@ fn grants_take_the_primary_from_its_github_origin_and_siblings_by_name() {
         "one repository on two worker checkouts is refused, not merged"
     );
     state.siblings = None;
-    state.repository = tempfile::tempdir().unwrap().path().into();
+    git(&["remote", "set-url", "origin", "https://gitlab.example/acme/web.git"]);
     assert!(
         grants(&state, &runner).unwrap().is_empty(),
-        "a checkout without a GitHub origin has no grant"
+        "a checkout with an origin elsewhere has no grant"
+    );
+    git(&["remote", "remove", "origin"]);
+    assert!(
+        grants(&state, &runner).unwrap().is_empty(),
+        "a checkout without an origin has no grant"
+    );
+    git(&["remote", "add", "origin", "git@github.com:Acme/Web.git"]);
+    cancel.cancel();
+    assert!(
+        grants(&state, &runner).is_err(),
+        "a cancelled lookup is an error, never an empty grant set"
+    );
+    let cancel = Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: Vec::new(),
+    };
+    state.repository = tempfile::tempdir().unwrap().path().into();
+    assert!(
+        grants(&state, &runner).is_err(),
+        "a checkout whose remotes cannot be read is an error"
     );
 }
 
