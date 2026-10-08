@@ -402,31 +402,31 @@ fn the_user_is_named_with_github_private_commit_address() {
 
 #[test]
 fn installed_repositories_reads_every_page_of_every_installation() {
-    let page = |from: usize, count: usize| -> Value {
+    let page = |prefix: &str, from: usize, count: usize| -> Value {
         let repositories: Vec<Value> = (from..from + count)
-            .map(|n| json!({"full_name": format!("Acme/Repo-{n}")}))
+            .map(|n| json!({"full_name": format!("Acme/{prefix}-{n}")}))
             .collect();
         json!({"total_count": 101, "repositories": repositories})
     };
+    // Each installation has 101 repositories: the second is read in full although the
+    // first already gave more names than its own total.
     let (client, requests, task) = github(vec![
         (200, json!({"installations": [{"id": 1}, {"id": 2}]})),
-        (200, page(0, 100)),
-        (200, page(100, 1)),
-        (
-            200,
-            json!({"total_count": 1, "repositories": [{"full_name": "acme/repo-0"}]}),
-        ),
+        (200, page("one", 0, 100)),
+        (200, page("one", 100, 1)),
+        (200, page("two", 0, 100)),
+        (200, page("two", 100, 1)),
     ]);
     let names = client
         .installed_repositories(&Secret::new("ghu_synthetic".into()))
         .unwrap();
     task.join().unwrap();
-    assert_eq!(names.len(), 101, "lowercased and deduplicated across installations");
-    assert!(names.contains(&"acme/repo-100".to_owned()));
+    assert_eq!(names.len(), 202);
+    assert!(names.contains(&"acme/two-100".to_owned()), "lowercased");
     let lines: Vec<String> = requests.lock().unwrap().iter().map(|(line, _)| line.clone()).collect();
     assert_eq!(
-        lines[2],
-        "GET /user/installations/1/repositories?per_page=100&page=2 HTTP/1.1"
+        lines[4],
+        "GET /user/installations/2/repositories?per_page=100&page=2 HTTP/1.1"
     );
 }
 

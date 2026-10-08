@@ -188,6 +188,19 @@ fn grants_take_the_primary_from_its_github_origin_and_siblings_by_name() {
             target: Target::Primary
         }]
     );
+    state.siblings = Some(
+        serde_json::from_value(serde_json::json!({
+            "primary_directory": "web",
+            "members": [{"alias": "again", "repository": "Acme/Web", "directory": "web-again",
+                         "revision": "b".repeat(40), "local_repository": "/synthetic", "profile": "dev"}]
+        }))
+        .unwrap(),
+    );
+    assert!(
+        grants(&state, &runner).is_err(),
+        "one repository on two worker checkouts is refused, not merged"
+    );
+    state.siblings = None;
     state.repository = tempfile::tempdir().unwrap().path().into();
     assert!(
         grants(&state, &runner).unwrap().is_empty(),
@@ -241,6 +254,34 @@ fn only_a_callback_with_the_expected_state_yields_its_code() {
     }
 }
 
+/// Reads one whole request, its head and its body, so closing the connection never
+/// resets it (Windows sends the body in a separate segment).
+fn read_request(stream: &mut TcpStream) {
+    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut input = Vec::new();
+    let mut buffer = [0; 4096];
+    loop {
+        let read = stream.read(&mut buffer).unwrap();
+        if read == 0 {
+            return;
+        }
+        input.extend_from_slice(&buffer[..read]);
+        if let Some(end) = input.windows(4).position(|window| window == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&input[..end]).to_ascii_lowercase();
+            let length = head
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("content-length:")
+                        .map(|v| v.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            if input.len() >= end + 4 + length {
+                return;
+            }
+        }
+    }
+}
+
 /// A fake GitHub that answers each connection with the next scripted JSON body.
 fn github(responses: Vec<serde_json::Value>) -> (horizon_cloud::github::Client, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -248,8 +289,7 @@ fn github(responses: Vec<serde_json::Value>) -> (horizon_cloud::github::Client, 
     let task = std::thread::spawn(move || {
         for body in responses {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buffer = [0; 8192];
-            let _ = stream.read(&mut buffer).unwrap();
+            read_request(&mut stream);
             let text = body.to_string();
             write!(
                 stream,

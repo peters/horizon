@@ -183,6 +183,12 @@ fn write_private(path: &Path, value: &str) -> Result<()> {
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    // `mode` applies only to a new file; an existing one is made private before the write.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     file.write_all(value.as_bytes())?;
     file.sync_all()?;
     Ok(())

@@ -334,3 +334,33 @@ fn a_hetzner_token_saved_alone_turns_hetzner_on_without_a_runpod_key() {
             .contains("synthetic")
     );
 }
+
+#[test]
+fn an_open_form_keeps_saving_after_connect_github_saved_the_app() {
+    let root = tempfile::tempdir().unwrap();
+    prepared(root.path()).save().unwrap();
+    let mut form = Draft::load(root.path()).unwrap();
+    let app = crate::cloud_runtime::github::Settings {
+        app_id: 42,
+        slug: "horizon-example".into(),
+        client_id: "Iv23synthetic".into(),
+        client_secret_file: root.path().join("credentials/github-app"),
+        mode: crate::cloud_runtime::github::Mode::Ask,
+    };
+    let committed = save_github(root.path(), Some(app.clone())).unwrap();
+    form.adopt_github(&committed, Some(app.clone()));
+    form.settings.github.as_mut().unwrap().mode = crate::cloud_runtime::github::Mode::Automatic;
+    let saved = form
+        .save()
+        .expect("the form's save is not taken for a change made elsewhere");
+    assert_eq!(
+        saved.github.map(|github| github.mode),
+        Some(crate::cloud_runtime::github::Mode::Automatic)
+    );
+    // A form opened before another change still sees that change as made elsewhere.
+    let mut stale = Draft::load(root.path()).unwrap();
+    let other = save_github(root.path(), None).unwrap();
+    std::fs::write(root.path().join("settings.json"), b"{}").unwrap();
+    stale.adopt_github(&other, None);
+    assert!(stale.save().is_err());
+}

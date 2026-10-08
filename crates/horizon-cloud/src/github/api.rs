@@ -69,6 +69,7 @@ impl Client {
         let installations: Installations = self.get(token, "/user/installations?per_page=100")?;
         let mut names = Vec::new();
         for installation in installations.installations {
+            let mut read = 0_u64;
             for page in 1..=MAX_PAGES {
                 let path = format!(
                     "/user/installations/{}/repositories?per_page=100&page={page}",
@@ -76,13 +77,14 @@ impl Client {
                 );
                 let answer: Repositories = self.get(token, &path)?;
                 let last = answer.repositories.len() < 100;
+                read += answer.repositories.len() as u64;
                 for repository in answer.repositories {
                     if !valid_repository(&repository.full_name) {
                         return Err(Error::InvalidResponse);
                     }
                     names.push(repository.full_name.to_ascii_lowercase());
                 }
-                if last || names.len() as u64 >= answer.total_count {
+                if last || read >= answer.total_count {
                     break;
                 }
             }

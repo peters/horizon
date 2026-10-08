@@ -24,6 +24,7 @@ pub(in crate::app::cloud_panel) struct Card {
 
 struct Connected {
     settings: github::Settings,
+    committed: setup::Committed,
     device_flow: Option<bool>,
 }
 
@@ -43,14 +44,15 @@ impl Card {
             let name = connect::app_name();
             let result = connect::start(&root, &name, horizon_core::open_url)
                 .and_then(|created| created.recv().map_err(|_| horizon_core::cloud_runtime::Error::Busy)?)
-                .and_then(|settings| {
-                    setup::save_github(&root, Some(settings.clone()))?;
-                    Ok(settings)
-                })
-                .map(|settings| {
+                .and_then(|settings| Ok((setup::save_github(&root, Some(settings.clone()))?, settings)))
+                .map(|(committed, settings)| {
                     open(&settings.installation_url());
                     let device_flow = connect::device_flow_enabled(&settings).ok();
-                    Connected { settings, device_flow }
+                    Connected {
+                        settings,
+                        committed,
+                        device_flow,
+                    }
                 })
                 .map_err(|error| error.to_string());
             let _ = tx.send(result);
@@ -69,7 +71,7 @@ impl Card {
         if let Some(rx) = &self.connecting {
             match rx.try_recv() {
                 Ok(Ok(connected)) => {
-                    draft.settings.github = Some(connected.settings);
+                    draft.adopt_github(&connected.committed, Some(connected.settings));
                     self.device_flow = connected.device_flow;
                     self.connecting = None;
                 }
@@ -171,10 +173,15 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
         "Ask me for each new cloud (one Authorize click)",
     );
     caption(ui, "The app secret never leaves this computer.");
-    ui.radio_value(&mut chosen, Mode::Automatic, "Automatic (no clicks)");
+    ui.radio_value(
+        &mut chosen,
+        Mode::Automatic,
+        "Automatic (no clicks after the first approval)",
+    );
     caption(
         ui,
-        "Each cloud keeps a copy of the app secret, readable only by its system service.",
+        "The first cloud asks once to authorize the app in your browser. Each cloud keeps a copy of the \
+         app secret, readable only by its system service.",
     );
     if chosen != mode
         && let Some(github) = &mut draft.settings.github

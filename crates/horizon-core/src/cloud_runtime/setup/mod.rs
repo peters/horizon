@@ -224,14 +224,36 @@ pub fn save_provider_key(root: &Path, provider: Provider, key: &str) -> Result<S
     draft.save()
 }
 
+/// A settings file this machine wrote: its bytes before and after the write.
+pub struct Committed {
+    before: Option<Vec<u8>>,
+    after: Vec<u8>,
+}
+
 /// Saves the GitHub App of Connect GitHub, or forgets it, and keeps every other
-/// setting. Run off the UI thread, as [`save_provider_key`].
+/// setting. Run off the UI thread, as [`save_provider_key`]. An open form adopts the
+/// result with [`Draft::adopt_github`].
 /// # Errors
 /// As [`Draft::save`].
-pub fn save_github(root: &Path, github: Option<super::github::Settings>) -> Result<Settings> {
+pub fn save_github(root: &Path, github: Option<super::github::Settings>) -> Result<Committed> {
     let mut draft = Draft::load(root)?;
+    let before = draft.original.clone();
     draft.settings.github = github;
-    draft.save()
+    draft.save()?;
+    let after = std::fs::read(root.join("settings.json"))?;
+    Ok(Committed { before, after })
+}
+
+impl Draft {
+    /// Takes the GitHub App that [`save_github`] saved. When the form was opened from the
+    /// file that the save replaced, the form now counts the saved file as its starting
+    /// point, so its own Save does not see the save as a change made elsewhere.
+    pub fn adopt_github(&mut self, committed: &Committed, github: Option<super::github::Settings>) {
+        if self.original == committed.before {
+            self.original = Some(committed.after.clone());
+        }
+        self.settings.github = github;
+    }
 }
 
 fn authentication(binding: Option<&PathBuf>) -> Authentication {

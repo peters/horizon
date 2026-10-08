@@ -91,8 +91,8 @@ fn web(ui: &mut egui::Ui, cloud_id: &str) {
     );
     ui.label(
         RichText::new(
-            "Horizon opened GitHub in your browser. If GitHub asks you to sign in, sign in there; \
-             the page then returns to Horizon by itself.",
+            "Horizon opened GitHub in your browser. If GitHub asks you to sign in, or to authorize the \
+             app the first time, do it there; the page then returns to Horizon by itself.",
         )
         .size(12.5)
         .color(theme::FG_DIM()),

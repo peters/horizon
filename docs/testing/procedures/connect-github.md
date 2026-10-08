@@ -155,21 +155,38 @@ the access requests of agents.
    Result: The card continues to **Ready**. The steps card shows
    **GitHub: Skipped: this cloud has no GitHub access.**
 
-### 6.6 G06 — Sign in a new cloud automatically
+### 6.6 G06 — Sign in new clouds automatically
 
-1. In Cloud settings, select **Automatic (no clicks)** and click **Save settings**.
+1. In Cloud settings, select **Automatic (no clicks after the first approval)** and
+   click **Save settings**.
 
    Result: Cloud settings close without an error.
 
-2. Start a new cloud `gh-auto` from the same checkout.
+   > **CAUTION:** REVOKE ONLY THE TEST APP. Revoking an app ends the access it has
+   > for your account.
 
-   Result: After the worker is ready, the browser opens a page from GitHub and then
-   shows **GitHub is connected for this cloud. You can close this page.**
+2. On GitHub, open **Settings › Applications › Authorized GitHub Apps** and revoke
+   the test app.
 
-3. Look at the `gh-auto` card.
+   Result: GitHub does not list the test app. The app is not authorized for your
+   account, as for a person who never used Ask mode.
 
-   Result: The card shows **Ready** and **GitHub: signed in as <login> · 1 repository**.
-   It showed no code.
+3. Start a new cloud `gh-auto` from the same checkout.
+
+   Result: After the worker is ready, the browser shows GitHub's page to authorize
+   the app.
+
+4. Click **Authorize**.
+
+   Result: The browser shows **GitHub is connected for this cloud. You can close
+   this page.** The `gh-auto` card shows **Ready** and
+   **GitHub: signed in as <login> · 1 repository**. It showed no code.
+
+5. Start a new cloud `gh-auto-2` from the same checkout.
+
+   Result: The browser opens a page from GitHub and then shows **GitHub is
+   connected for this cloud.** without a click. The card shows **Ready** and the
+   GitHub line.
 
 ### 6.7 G07 — Decide an agent's request
 
@@ -200,10 +217,27 @@ the access requests of agents.
 
    Result: Git shows the references. It asks for no password.
 
-7. Ask the agent to call `github_access` for `<owner>/<repo-b>` once more from a
-   new agent panel, and click **Deny**.
+7. Open a new agent panel in `gh-ask`. Ask its agent to run
+   `git ls-remote https://github.com/<owner>/<repo-b>`.
+
+   Result: Git asks for a user name or fails. The grant of step 5 was for the other
+   task only.
+
+8. Ask this agent to call `github_access` for `<owner>/<repo-b>`, and click
+   **Deny**.
 
    Result: The agent reports that access was denied.
+
+9. Ask the agent to call `github_access` for `<owner>/<repo-b>` again, and click
+   **Always for this cloud**.
+
+   Result: The agent reports that access was allowed.
+
+10. Open one more agent panel in `gh-ask`. Ask its agent to run
+    `git ls-remote https://github.com/<owner>/<repo-b>`.
+
+    Result: Git shows the references without a new request. The cloud card shows
+    no request.
 
 ### 6.8 G08 — Disconnect
 
@@ -219,16 +253,18 @@ the access requests of agents.
 ## 7. Pass criteria
 
 - The app secret file is private, and Horizon keeps no private key of the app.
-- In Ask mode a new cloud needs one Authorize click; in Automatic mode none.
+- In Ask mode a new cloud needs one Authorize click. In Automatic mode only the first
+  sign-in of the app needs one, and later clouds need none.
 - A reconnect does not ask again.
 - A skipped sign-in leaves the cloud **Ready** without GitHub access.
 - Agents push without a password and cannot read the stored chain.
 - A request for a repository outside the installation is not allowed.
-- **Allow for this task** and **Deny** reach the agent.
+- **Allow for this task**, **Always for this cloud** and **Deny** reach the agent.
+- A task grant does not reach another agent session; a cloud grant does.
 
 ## 8. Cleanup
 
-1. Delete the clouds `gh-ask`, `gh-skip` and `gh-auto` with **Delete cloud…**.
+1. Delete the clouds `gh-ask`, `gh-skip`, `gh-auto` and `gh-auto-2` with **Delete cloud…**.
 
    Result: The board does not show them. The provider shows no worker for them.
 

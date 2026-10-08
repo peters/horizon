@@ -115,7 +115,12 @@ pub fn grants(state: &Deployment, runner: &Runner<'_>) -> Result<Vec<Grant>> {
             target,
         });
     }
-    grants.dedup_by(|a, b| a.repository == b.repository);
+    let mut seen = std::collections::HashSet::new();
+    if grants.iter().any(|grant| !seen.insert(grant.repository.clone())) {
+        return Err(Error::Invalid(
+            "One GitHub repository is checked out twice on this worker",
+        ));
+    }
     Ok(grants)
 }
 

@@ -267,7 +267,7 @@ The card then chooses how a new cloud gets its access:
 | Mode | New cloud | The worker renews with |
 |---|---|---|
 | **Ask me for each new cloud** (default) | One **Authorize** click on GitHub, with a code that the card shows | The app's client ID only |
-| **Automatic** | No click. Your browser, already signed in to GitHub, returns to Horizon by itself | The client ID and a copy of the client secret, readable only by the worker's root service |
+| **Automatic** | No click after the first approval: the first sign-in for the app shows **Authorize** in your browser once. Later, your browser, already signed in to GitHub, returns to Horizon by itself | The client ID and a copy of the client secret, readable only by the worker's root service |
 
 When a deployment reaches the worker, Horizon asks the worker's GitHub service
 whether it already holds access. A worker that does keeps it, so a reconnect
