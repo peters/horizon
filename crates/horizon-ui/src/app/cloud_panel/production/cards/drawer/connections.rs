@@ -67,8 +67,13 @@ fn sessions(ui: &mut egui::Ui, runtime: &Runtime, context: &Context<'_>) {
             .spacing([16.0, 6.0])
             .show(ui, |ui| {
                 for session in listed {
-                    ui.label(RichText::new(&session.agent).size(14.0).color(theme::FG()));
-                    ui.label(
+                    // The drawer wraps text; grid columns would squeeze these to a letter wide.
+                    let cell = |ui: &mut egui::Ui, text: RichText| {
+                        ui.add(egui::Label::new(text).extend());
+                    };
+                    cell(ui, RichText::new(&session.agent).size(14.0).color(theme::FG()));
+                    cell(
+                        ui,
                         RichText::new(
                             [session.branch.as_str(), session.worktree.as_str()]
                                 .into_iter()
@@ -79,7 +84,8 @@ fn sessions(ui: &mut egui::Ui, runtime: &Runtime, context: &Context<'_>) {
                         .size(13.0)
                         .color(theme::FG_SOFT()),
                     );
-                    ui.label(
+                    cell(
+                        ui,
                         RichText::new(format!("tmux {}", session.tmux))
                             .monospace()
                             .size(12.5)
@@ -112,8 +118,11 @@ pub(in crate::app::cloud_panel::production::cards) fn access(
         return None;
     }
     // A held share shows while disconnected; the desktop viewer needs the connection.
-    let desktop =
-        (runtime.connected_and_ready() && super::super::desktop_button(ui, runtime)).then_some(Action::Desktop);
+    let desktop = (runtime.connected_and_ready()
+        && section::row(ui, "Desktop", "Open the worker's desktop in a viewer panel.", |ui| {
+            super::super::desktop_button(ui, runtime)
+        }))
+    .then_some(Action::Desktop);
     ui.add_space(4.0);
     super::super::super::local_network::show(ui, runtime).or(desktop)
 }

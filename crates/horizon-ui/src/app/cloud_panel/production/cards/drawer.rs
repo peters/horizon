@@ -393,7 +393,9 @@ fn manage(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'
         if let Some(controls) = layout {
             let mut selected = controls.selected;
             if section::row(ui, "Layout", "How the panels in this cloud are arranged.", |ui| {
-                crate::app::workspace::workspace_layout_buttons(ui, &mut selected, controls.color)
+                // Left to right inside the right-aligned column, so Default comes first.
+                ui.horizontal(|ui| crate::app::workspace::workspace_layout_buttons(ui, &mut selected, controls.color))
+                    .inner
             }) {
                 response.layout = LayoutChoice::Set(selected);
             }

@@ -83,12 +83,19 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
         }
         return action;
     }
-    if ui.add(accent_button(ui, "Redeploy cloud…")).clicked() {
+    ui.add_space(6.0);
+    if section::row(
+        ui,
+        "Redeploy",
+        "Start a new worker and workspace storage from the current commit.",
+        |ui| ui.add(section::row_button(action_button("Redeploy cloud…"))).clicked(),
+    ) {
         runtime.confirmation = Confirmation::Redeploy;
     }
-    ui.add(danger_button("Remove cloud"))
-        .clicked()
-        .then_some(Action::Remove)
+    section::row(ui, "Remove", "Remove this card. Nothing is left to bill.", |ui| {
+        ui.add(section::row_button(danger_button("Remove cloud"))).clicked()
+    })
+    .then_some(Action::Remove)
 }
 
 /// Manage's lifecycle actions. Sharing and the desktop viewer are in Connections, which
@@ -314,6 +321,21 @@ pub(super) fn confirming_stop(runtime: &super::Runtime) -> bool {
 fn stop_confirmation_card(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
     runtime.reveal_confirmation = false;
     let mut action = None;
+    confirmation_card(ui, wording::stop_confirmation(runtime), |ui| {
+        if ui.add(danger_button("Stop worker")).clicked() {
+            // Answered: a preflight that fails must show its error in Manage, not keep asking.
+            runtime.confirmation = Confirmation::None;
+            action = Some(Action::Stop);
+        }
+        if ui.add(action_button("Keep running")).clicked() {
+            runtime.confirmation = Confirmation::None;
+        }
+    });
+    action
+}
+
+/// A destructive question: what will happen, over its answer buttons, in a red frame.
+fn confirmation_card(ui: &mut egui::Ui, question: &str, answers: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
         .fill(theme::alpha(theme::PALETTE_RED(), 18))
         .stroke(egui::Stroke::new(1.0, theme::alpha(theme::PALETTE_RED(), 110)))
@@ -321,24 +343,10 @@ fn stop_confirmation_card(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Op
         .inner_margin(egui::Margin::symmetric(16, 14))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(
-                RichText::new(wording::stop_confirmation(runtime))
-                    .size(14.0)
-                    .color(theme::FG()),
-            );
+            ui.label(RichText::new(question).size(14.0).color(theme::FG()));
             ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.add(danger_button("Stop worker")).clicked() {
-                    // Answered: a preflight that fails must show its error in Manage, not keep asking.
-                    runtime.confirmation = Confirmation::None;
-                    action = Some(Action::Stop);
-                }
-                if ui.add(action_button("Keep running")).clicked() {
-                    runtime.confirmation = Confirmation::None;
-                }
-            });
+            ui.horizontal(answers);
         });
-    action
 }
 
 fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Action> {
@@ -357,29 +365,30 @@ fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<A
 }
 
 fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
-    if runtime.state.is_some() {
-        if runtime.confirmation == Confirmation::Delete {
-            ui.colored_label(egui::Color32::LIGHT_RED, wording::delete_confirmation(runtime));
+    runtime.state.as_ref()?;
+    ui.separator();
+    if runtime.confirmation == Confirmation::Delete {
+        let mut action = None;
+        confirmation_card(ui, wording::delete_confirmation(runtime), |ui| {
             if ui.add(danger_button("Delete resources permanently")).clicked() {
-                return Some(Action::Delete);
+                action = Some(Action::Delete);
             }
             if ui.add(action_button("Keep resources")).clicked() {
                 runtime.confirmation = Confirmation::None;
             }
-        } else {
-            ui.separator();
-            if section::row(
-                ui,
-                "Delete",
-                "Deletes the worker and its storage. Charges end; files are gone.",
-                |ui| {
-                    ui.add(section::row_button(danger_button("Delete cloud resources…")))
-                        .clicked()
-                },
-            ) {
-                runtime.confirmation = Confirmation::Delete;
-            }
-        }
+        });
+        return action;
+    }
+    if section::row(
+        ui,
+        "Delete",
+        "Deletes the worker and its storage. Charges end; files are gone.",
+        |ui| {
+            ui.add(section::row_button(danger_button("Delete cloud resources…")))
+                .clicked()
+        },
+    ) {
+        runtime.confirmation = Confirmation::Delete;
     }
     None
 }
@@ -419,7 +428,7 @@ fn desktop_button(ui: &mut egui::Ui, runtime: &super::Runtime) -> bool {
         .is_some_and(|state| state.profile.capabilities.desktop);
     ui.add_enabled(
         enabled && runtime.desktop.is_some(),
-        action_button("Add desktop viewer"),
+        section::row_button(action_button("Add desktop viewer")),
     )
     .on_disabled_hover_text(if enabled {
         "Desktop tunnel is not connected"
