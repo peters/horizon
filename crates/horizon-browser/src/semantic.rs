@@ -571,8 +571,9 @@ const TARGET_RECT_FUNCTION: &str = r"async function(selector, clear) {
     const style = getComputedStyle(element);
     if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || rect.height <= 0)
         return { error: { code: 'element_not_visible', message: 'target element is not visible' } };
-    if (element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true')
-        return { error: { code: 'element_disabled', message: 'target element is disabled' } };
+    const isDisabled = () => element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true';
+    const disabled = { error: { code: 'element_disabled', message: 'target element is disabled' } };
+    if (isDisabled()) return disabled;
     if (clear) {
         const isReadOnly = () => element.readOnly || element.getAttribute('aria-readonly') === 'true';
         const notEditable = { error: { code: 'element_not_editable', message: 'target element is not editable' } };
@@ -592,6 +593,7 @@ const TARGET_RECT_FUNCTION: &str = r"async function(selector, clear) {
         if (!isEditable()) return notEditable;
         element.focus();
         await settle();
+        if (isDisabled()) return disabled;
         if (!isEditable()) return notEditable;
         if (document.activeElement !== element) return notFocused;
         if (contentEditable()) {
@@ -606,6 +608,7 @@ const TARGET_RECT_FUNCTION: &str = r"async function(selector, clear) {
             return notEditable;
         }
         await settle();
+        if (isDisabled()) return disabled;
         if (!isEditable()) return notEditable;
         if (document.activeElement !== element) return notFocused;
     }

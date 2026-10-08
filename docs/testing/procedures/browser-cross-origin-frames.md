@@ -119,6 +119,9 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
    The test also moves focus through queued and nested microtasks after focus and clearing.
    A queued onfocus redirect retains the original value and sends no input event.
    A queued input redirect sends no requested text or input event to the field that receives focus.
+   If a focus or clearing handler sets native or ARIA disabled state, the fill returns `element_disabled`.
+   Direct and queued focus handlers retain the original value and send no input event.
+   Direct and queued clearing handlers permit the single clearing event but no requested text or later input event.
    File, checkbox, radio, range, button, color, date and select controls reject fill without value changes or input events.
    These controls also reject fill when they have `contenteditable="true"`.
    Text, search, tel, URL, email, password and number inputs accept fill.
@@ -141,6 +144,8 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
    A query returns no child password input.
    Top-level reference input works and its value is absent from the audit.
    Read-only top-level controls retain their values after rejected fill actions.
+   Native and ARIA disabled transitions return `element_disabled`.
+   The test checks direct and queued handlers during focus and clearing, as in task 6.5.
    A field rejected because of onfocus redirection or an inert ancestor retains its value and receives no input event.
    If focus moves during the clearing event, the requested text does not reach the field that receives focus.
    This result does not qualify child-frame input on Safari.

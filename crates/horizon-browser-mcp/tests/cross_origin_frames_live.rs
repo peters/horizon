@@ -182,7 +182,7 @@ fn safari_compatibility(host: &mut McpProcess) {
         )
         .unwrap();
     assert_eq!(value["value"], "safari-synthetic");
-    readonly_controls(host, false);
+    protected_controls(host, false);
     unfocused_controls(host, false);
     queued_controls(host, false);
     text_controls(host, false);
@@ -195,29 +195,37 @@ fn safari_compatibility(host: &mut McpProcess) {
     );
 }
 
-fn readonly_controls(host: &mut McpProcess, child: bool) {
+fn protected_controls(host: &mut McpProcess, child: bool) {
     let prefix = if child { "" } else { "top-" };
-    let selector = [
-        "protected-input",
-        "protected-textarea",
-        "protected-aria",
-        "protected-editor",
-        "protected-onfocus",
-    ]
-    .map(|id| format!("#{prefix}{id}"))
-    .join(",");
+    let cases = [
+        ("protected-input", "input-kept", "0", "element_not_editable"),
+        ("protected-textarea", "textarea-kept", "0", "element_not_editable"),
+        ("protected-aria", "aria-kept", "0", "element_not_editable"),
+        ("protected-editor", "editor-kept", "0", "element_not_editable"),
+        ("protected-onfocus", "focus-kept", "0", "element_not_editable"),
+        ("disabled-focus-native", "disabled-kept", "0", "element_disabled"),
+        ("disabled-focus-aria", "disabled-kept", "0", "element_disabled"),
+        ("disabled-input-native", "", "1", "element_disabled"),
+        ("disabled-input-aria", "", "1", "element_disabled"),
+        ("disabled-queued-focus-native", "disabled-kept", "0", "element_disabled"),
+        ("disabled-queued-focus-aria", "disabled-kept", "0", "element_disabled"),
+        ("disabled-queued-input-native", "", "1", "element_disabled"),
+        ("disabled-queued-input-aria", "", "1", "element_disabled"),
+    ];
+    let selector = cases.map(|(id, ..)| format!("#{prefix}{id}")).join(",");
     let fields = host.nodes(&selector);
-    assert_eq!(fields.len(), 5);
-    for field in fields {
-        assert!(
+    assert_eq!(fields.len(), cases.len());
+    let errors: Vec<_> = fields
+        .into_iter()
+        .map(|field| {
             host.call(
                 "browser_act",
                 json!({"action":"fill","ref":field.reference,"value":"rejected"}),
             )
-            .unwrap_err()
-            .contains("element_not_editable")
-        );
-    }
+            .err()
+            .unwrap_or_default()
+        })
+        .collect();
     let expression = if child {
         let inspect = host.nodes("#inspect-protected");
         host.call("browser_act", json!({"action":"click","ref":inspect[0].reference}))
@@ -230,14 +238,20 @@ fn readonly_controls(host: &mut McpProcess, child: bool) {
         "window.protectedValues".to_owned()
     } else {
         format!(
-            "[...document.querySelectorAll({})].map(e=>e.value??e.textContent)",
+            "[...document.querySelectorAll({})].map(e=>[e.value??e.textContent,e.dataset.inputs??'0'])",
             serde_json::to_string(&selector).unwrap()
         )
     };
     let values = host.call("browser_evaluate", json!({"expression":expression})).unwrap();
     assert_eq!(
         values["value"],
-        json!(["input-kept", "textarea-kept", "aria-kept", "editor-kept", "focus-kept"])
+        json!(cases.map(|(_, value, inputs, _)| [value, inputs]))
+    );
+    assert!(
+        errors
+            .iter()
+            .zip(cases)
+            .all(|(error, (_, _, _, code))| error.contains(code))
     );
 }
 
@@ -412,6 +426,20 @@ fn control_fixture(prefix: &str) -> String {
     format!(
         r#"{unsupported}<input class="{prefix}unsupported-control" type="text" value="kept" onfocus="this.type='checkbox'"><select class="{prefix}unsupported-control" contenteditable="true"><option value="kept">Kept</option></select>{supported}<textarea class="{prefix}supported-control" contenteditable="true">old-kept</textarea><div class="{prefix}supported-control" contenteditable="true">old-kept</div><button id="{prefix}inspect-controls" type="button">Inspect controls</button><script>document.querySelectorAll('.{prefix}unsupported-control').forEach(e=>{{e.dataset.initial=e.value;e.dataset.inputs='0';e.oninput=()=>e.dataset.inputs=String(Number(e.dataset.inputs)+1)}});document.querySelector('#{prefix}inspect-controls').onclick=()=>parent.postMessage({{controls:{{unsupported:[...document.querySelectorAll('.{prefix}unsupported-control')].map(e=>[e.value,e.dataset.initial,e.dataset.inputs]),supported:[...document.querySelectorAll('.{prefix}supported-control')].map(e=>e.value??e.textContent)}}}},'*')</script>"#
     ) + &queued_fixture(prefix)
+        + &disabled_fixture(prefix)
+}
+
+fn disabled_fixture(prefix: &str) -> String {
+    [
+        ("disabled-focus-native", "this.disabled=true", ""),
+        ("disabled-focus-aria", "this.setAttribute('aria-disabled','true')", ""),
+        ("disabled-input-native", "", "this.disabled=true"),
+        ("disabled-input-aria", "", "this.setAttribute('aria-disabled','true')"),
+        ("disabled-queued-focus-native", "queueMicrotask(()=>this.disabled=true)", ""),
+        ("disabled-queued-focus-aria", "queueMicrotask(()=>this.setAttribute('aria-disabled','true'))", ""),
+        ("disabled-queued-input-native", "", "queueMicrotask(()=>queueMicrotask(()=>this.disabled=true))"),
+        ("disabled-queued-input-aria", "", "queueMicrotask(()=>queueMicrotask(()=>this.setAttribute('aria-disabled','true')))"),
+    ].map(|(id, focus, input)| format!(r#"<input id="{prefix}{id}" value="disabled-kept" onfocus="{focus}" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1);{input}">"#)).join("")
 }
 
 fn queued_fixture(prefix: &str) -> String {
@@ -449,7 +477,7 @@ fn edge_cases(host: &mut McpProcess) {
             .contains(code)
         );
     }
-    readonly_controls(host, true);
+    protected_controls(host, true);
     unfocused_controls(host, true);
     queued_controls(host, true);
     text_controls(host, true);
@@ -675,7 +703,7 @@ fn form_roundtrip(host: &mut McpProcess) {
         assert_eq!(host.nodes("form input[type=password]").len(), 1);
     }
     edge_cases(host);
-    readonly_controls(host, false);
+    protected_controls(host, false);
     unfocused_controls(host, false);
     queued_controls(host, false);
     text_controls(host, false);
@@ -715,7 +743,7 @@ fn fixture(nested: bool) -> (u16, Arc<std::sync::atomic::AtomicBool>, thread::Jo
             let body = if request.starts_with("GET /form") {
                 r#"<!doctype html><title>Frame form</title><form>
 <label>User<input id="same" name="user" aria-label="User"></label><label>Password<input type="password" name="password" aria-label="Password"></label><button type="submit">Submit frame</button></form><input id="disabled" disabled><input id="hidden" style="display:none"><div id="readonly">Read only</div><input id="protected-input" readonly value="input-kept"><textarea id="protected-textarea" readonly>textarea-kept</textarea><input id="protected-aria" aria-readonly="true" value="aria-kept"><div id="protected-editor" contenteditable="true" aria-readonly="true">editor-kept</div><input id="protected-onfocus" value="focus-kept" onfocus="this.readOnly=true"><input id="focus-redirect" value="redirect-kept" onfocus="document.querySelector('#same').focus()" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><div inert><input id="inert-input" value="inert-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"></div><input id="focus-oninput" class="focus-oninput" value="input-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1);const recipient=document.querySelector('.input-recipient');recipient.id=this.id;this.removeAttribute('id');recipient.focus()"><input id="input-recipient" class="input-recipient" value="recipient-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><button id="inspect-unfocused" type="button">Inspect unfocused fields</button><button id="inspect-protected" type="button">Inspect protected fields</button>
-<script>document.querySelector('#inspect-unfocused').onclick=()=>parent.postMessage({unfocused:[...document.querySelectorAll('#focus-redirect,#inert-input,.focus-oninput,.input-recipient')].map(e=>[e.value,e.dataset.inputs??'0'])},'*');document.querySelector('#inspect-protected').onclick=()=>parent.postMessage({protected:[...document.querySelectorAll('#protected-input,#protected-textarea,#protected-aria,#protected-editor,#protected-onfocus')].map(e=>e.value??e.textContent)},'*');const token=crypto.randomUUID();parent.postMessage({ready:true},'*');document.querySelector('form').oninput=()=>parent.postMessage({state:token,value:document.querySelector('[name=password]').value},'*');document.querySelector('form').onsubmit=e=>{e.preventDefault();parent.postMessage({submitted:document.querySelector('[name=user]').value==='synthetic-user'&&document.querySelector('[name=password]').value==='synthetic-secret',trusted:e.isTrusted},'*')};</script>"#.to_owned() + &control_fixture("")
+<script>document.querySelector('#inspect-unfocused').onclick=()=>parent.postMessage({unfocused:[...document.querySelectorAll('#focus-redirect,#inert-input,.focus-oninput,.input-recipient')].map(e=>[e.value,e.dataset.inputs??'0'])},'*');document.querySelector('#inspect-protected').onclick=()=>parent.postMessage({protected:[...document.querySelectorAll('#protected-input,#protected-textarea,#protected-aria,#protected-editor,#protected-onfocus,[id^=disabled-]')].map(e=>[e.value??e.textContent,e.dataset.inputs??'0'])},'*');const token=crypto.randomUUID();parent.postMessage({ready:true},'*');document.querySelector('form').oninput=()=>parent.postMessage({state:token,value:document.querySelector('[name=password]').value},'*');document.querySelector('form').onsubmit=e=>{e.preventDefault();parent.postMessage({submitted:document.querySelector('[name=user]').value==='synthetic-user'&&document.querySelector('[name=password]').value==='synthetic-secret',trusted:e.isTrusted},'*')};</script>"#.to_owned() + &control_fixture("")
             } else if request.starts_with("GET /wrapper") {
                 format!(
                     r#"<!doctype html><title>Frame wrapper</title><iframe src="http://127.0.0.1:{port}/form" style="width:480px;height:220px"></iframe><script>window.addEventListener('message',e=>top.postMessage(e.data,'*'))</script>"#
