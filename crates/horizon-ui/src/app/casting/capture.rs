@@ -161,44 +161,7 @@ impl HorizonApp {
         {
             return Err("Source must be visible in the main Horizon window".into());
         }
-        let selected: Vec<_> = match source {
-            CastSource::Application {} => return Err("Invalid application capture context".into()),
-            CastSource::Panel { id } => self
-                .board
-                .panels
-                .iter()
-                .filter(|panel| panel.workspace_id == workspace && panel.local_id == *id)
-                .map(|panel| panel.id)
-                .collect(),
-            CastSource::Workspace { id } => {
-                if self
-                    .board
-                    .workspace(workspace)
-                    .is_none_or(|value| value.local_id != *id)
-                {
-                    return Err("Source is outside the current workspace".into());
-                }
-                self.board
-                    .panels
-                    .iter()
-                    .filter(|panel| panel.workspace_id == workspace && panel.visible)
-                    .map(|panel| panel.id)
-                    .collect()
-            }
-            CastSource::Cloud { id } => {
-                let members = self
-                    .cast_cloud_members(workspace, id)
-                    .ok_or("Source is outside the current workspace")?;
-                self.board
-                    .panels
-                    .iter()
-                    .filter(|panel| {
-                        panel.workspace_id == workspace && panel.visible && members.contains(&panel.local_id)
-                    })
-                    .map(|panel| panel.id)
-                    .collect()
-            }
-        };
+        let selected = self.cast_selected_panels(workspace, source)?;
         // Workspace and cloud casts show their clouds, and a workspace may hold only clouds.
         let clouds = match source {
             CastSource::Workspace { .. } => self.cast_cloud_rects(workspace, Clouds::All, ctx)?,
@@ -239,6 +202,51 @@ impl HorizonApp {
             return Err("Source has no drawable area".into());
         }
         Ok(bounds.shrink(1.0))
+    }
+    /// The panels a panel, workspace or cloud source shows.
+    fn cast_selected_panels(
+        &self,
+        workspace: WorkspaceId,
+        source: &CastSource,
+    ) -> Result<Vec<horizon_core::PanelId>, String> {
+        Ok(match source {
+            CastSource::Application {} => return Err("Invalid application capture context".into()),
+            CastSource::Panel { id } => self
+                .board
+                .panels
+                .iter()
+                .filter(|panel| panel.workspace_id == workspace && panel.local_id == *id)
+                .map(|panel| panel.id)
+                .collect(),
+            CastSource::Workspace { id } => {
+                if self
+                    .board
+                    .workspace(workspace)
+                    .is_none_or(|value| value.local_id != *id)
+                {
+                    return Err("Source is outside the current workspace".into());
+                }
+                self.board
+                    .panels
+                    .iter()
+                    .filter(|panel| panel.workspace_id == workspace && panel.visible)
+                    .map(|panel| panel.id)
+                    .collect()
+            }
+            CastSource::Cloud { id } => {
+                let members = self
+                    .cast_cloud_members(workspace, id)
+                    .ok_or("Source is outside the current workspace")?;
+                self.board
+                    .panels
+                    .iter()
+                    .filter(|panel| {
+                        panel.workspace_id == workspace && panel.visible && members.contains(&panel.local_id)
+                    })
+                    .map(|panel| panel.id)
+                    .collect()
+            }
+        })
     }
     fn cast_visible_panel_rect(&self, id: horizon_core::PanelId, ctx: &Context) -> Result<Rect, String> {
         if !self.panel_screen_rects.contains_key(&id) {
