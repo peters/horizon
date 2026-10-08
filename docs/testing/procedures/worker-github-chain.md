@@ -14,17 +14,20 @@ owner: peters
 
 This procedure makes sure that the chain service on a worker keeps a token chain
 fresh without the host. It also makes sure that agents get only the access token
-of a granted repository, and never the token chain.
+of a granted repository, and never the token chain. It also makes sure that an
+agent can ask for more access, and that the worker obeys the decision.
 
 ## 2. Applicability
 
-- Candidate: each candidate that changes `horizon-worker-github`,
+- Candidate: each candidate that changes `horizon-worker-github`, its modules
+  `horizon-worker-github-common` and `horizon-worker-github-agents`,
   `horizon-worker-git-auth`, `horizon-worker-supervise` or the token chain part
   of `horizon-worker-check`.
 - Platforms: Linux with Docker.
 - Lanes:
   - Lane U: the unit tests.
   - Lane C: a local worker container and a fake GitHub.
+  - Lane R: access requests in the lane C container.
   - Lane G: a local worker container and a real GitHub App.
 - This procedure does not test: the Horizon host side that gets the token chain,
   a worker at a provider, or a volume that does not keep POSIX modes. The unit
@@ -104,24 +107,29 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    import http.server, json, urllib.parse
    count = 0
    class Handler(http.server.BaseHTTPRequestHandler):
+       def reply(self, status, value):
+           self.send_response(status)
+           self.send_header('Content-Type', 'application/json')
+           self.end_headers()
+           self.wfile.write(json.dumps(value).encode())
        def do_POST(self):
            global count
            form = urllib.parse.parse_qs(self.rfile.read(int(self.headers['Content-Length'])).decode())
            if form['refresh_token'][0] == 'ghr_synthetic-revoked':
-               reply = {'error': 'bad_refresh_token'}
-           else:
-               count += 1
-               reply = {'access_token': 'ghu_synthetic-%d' % count, 'expires_in': 28800,
-                        'refresh_token': 'ghr_synthetic-%d' % count,
-                        'refresh_token_expires_in': 15724800, 'token_type': 'bearer'}
-           self.send_response(200)
-           self.send_header('Content-Type', 'application/json')
-           self.end_headers()
-           self.wfile.write(json.dumps(reply).encode())
+               return self.reply(200, {'error': 'bad_refresh_token'})
+           count += 1
+           self.reply(200, {'access_token': 'ghu_synthetic-%d' % count, 'expires_in': 28800,
+                            'refresh_token': 'ghr_synthetic-%d' % count,
+                            'refresh_token_expires_in': 15724800, 'token_type': 'bearer'})
+       def do_GET(self):
+           if self.path == '/repos/example/missing':
+               return self.reply(404, {'message': 'Not Found'})
+           self.reply(200, {'permissions': {'pull': True, 'push': True}})
    http.server.HTTPServer(('127.0.0.1', 18080), Handler).serve_forever()
    ```
 
    Result: The file exists. It answers the first refresh with `ghu_synthetic-1`.
+   It answers that each repository except `example/missing` accepts a push.
 
 ## 6. Tasks
 
@@ -369,7 +377,109 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: The command shows nothing.
 
-### 6.9 C8: Clear
+### 6.9 R1: Request outside an agent session
+
+1. Install a new chain. Do the steps 2, 3 and 4 of task C2 again.
+
+   Result: The JSON shows `"state":"ok"` and `"pending_requests":0`.
+
+2. Call the tool from a process that is not in an agent session:
+
+   ```bash
+   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github_access","arguments":{"repository":"example/extra","access":"push","reason":"Push the fix"}}}' \
+       | docker exec -i <c> horizon-worker-tailnet agent horizon-worker-github mcp
+   ```
+
+   Result: The reply shows `Only an agent session on this worker can ask for
+   GitHub access` and `"isError": true`.
+
+### 6.10 R2: Allow for this cloud
+
+1. Mark a synthetic agent session:
+
+   ```bash
+   docker exec <c> mkdir -p /workspace/sessions/agent-smoke
+   docker exec <c> sh -c 'echo claude > /workspace/sessions/agent-smoke/agent'
+   ```
+
+   Result: Both commands exit with status 0.
+
+2. Write the tool input for the session:
+
+   ```bash
+   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github_access","arguments":{"repository":"example/extra","access":"push","reason":"Push the fix"}}}' \
+       | docker exec -i <c> tee /workspace/home/mcp-in.jsonl
+   docker exec <c> chown 10001:10001 /workspace/home/mcp-in.jsonl
+   ```
+
+   Result: The file contains one line.
+
+3. Start the session. It calls the tool, then asks Git for a credential:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud new-session -d -s agent-smoke \
+       'horizon-worker-github mcp < /workspace/home/mcp-in.jsonl > /workspace/home/mcp-out.jsonl; printf "protocol=https\nhost=github.com\npath=example/extra.git\n\n" | horizon-worker-git-auth get > /workspace/home/cred.txt; sleep 600'
+   ```
+
+   Result: The command exits with status 0.
+
+4. List the requests:
+
+   ```bash
+   docker exec <c> horizon-worker-github requests
+   ```
+
+   Result: The JSON shows one request for `example/extra` with `"access":"push"`,
+   `"session":"agent-smoke"` and `"agent":"claude"`. Write its `id` as `<id>`.
+
+5. Allow the request for the cloud:
+
+   ```bash
+   docker exec <c> horizon-worker-github decide <id> allow-cloud
+   ```
+
+   Result: The JSON shows `"ok":true` and `"status":"allowed"`.
+
+6. Wait 10 seconds. Then examine the tool output and the credential:
+
+   ```bash
+   docker exec <c> cat /workspace/home/mcp-out.jsonl /workspace/home/cred.txt
+   ```
+
+   Result: The tool output shows `Allowed for this cloud`. The credential shows a
+   `password=ghu_synthetic-` line.
+
+7. Do step 1 of task C4 again with the path `example/extra.git`.
+
+   Result: The command shows a `password=ghu_synthetic-` line. Access is per cloud,
+   so a process outside the asking session gets the token too. The status shows
+   `example/extra` with `"target":null`.
+
+### 6.11 R3: Repository that GitHub does not show
+
+1. Do the steps 2 and 3 of task R2 again with the repository `example/missing`,
+   the access `read` and the window command `tmux ... new-window -t agent-smoke`.
+
+   Result: `horizon-worker-github requests` shows a request for `example/missing`.
+
+2. Allow the request for the cloud:
+
+   ```bash
+   docker exec <c> horizon-worker-github decide <id> allow-cloud
+   ```
+
+   Result: The JSON shows `"ok":false` and `"error":"not_installed"`.
+
+3. Deny the request:
+
+   ```bash
+   docker exec <c> horizon-worker-github decide <id> deny
+   ```
+
+   Result: The JSON shows `"status":"denied"`. The status shows
+   `"pending_requests":0`.
+
+### 6.12 C8: Clear
 
 1. Remove the chain:
 
@@ -388,7 +498,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: `services.json` still contains `github`. The worker did not stop.
 
-### 6.10 G1: Real GitHub refresh
+### 6.13 G1: Real GitHub refresh
 
 Do this lane in a new container without `HORIZON_WORKER_GITHUB_TEST_URL`. Do
 the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
@@ -483,6 +593,10 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
 - The token chain survives a recreated container.
 - `bad_refresh_token` makes the state `revoked`, and agents then get no token.
 - `clear` makes the state `absent`, and the worker continues to run.
+- Only an agent session can ask for access. An allowed repository reaches every
+  session of the cloud.
+- A decision fails, and the request stays pending, when GitHub does not show the
+  repository.
 - In lane G, the real refresh works and GitHub refuses the old refresh token.
 
 ## 8. Cleanup

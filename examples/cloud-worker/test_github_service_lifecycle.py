@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from unittest import mock
 
-from test_horizon_worker_github import NOW, ServiceTestCase, chain, common, installation, rotated, service
+from test_horizon_worker_github import NOW, ServiceTestCase, agents, chain, common, installation, rotated, service
 
 
 class MemoryOnlyChainTests(ServiceTestCase):
@@ -47,7 +47,7 @@ class MemoryOnlyChainTests(ServiceTestCase):
         host = service.Store(self.store.persistent, self.store.runtime)
         service.clear(host, retire=lambda: None)
         self.assertIsNone(self.store.load()[0])
-        reply, _ = service.answer({'request': 'gh-token', 'repository': 'example/project'}, self.store.load()[0], NOW)
+        reply, _ = self.answer({'request': 'gh-token', 'repository': 'example/project'}, NOW)
         self.assertEqual(reply['state'], 'absent')
         self.assertTrue(self.store.retry_pending())
         self.assertIsNone(self.store.pending)
@@ -62,17 +62,18 @@ class HostStatusTests(ServiceTestCase):
         super().setUp()
         self.install()
         self.path = self.root / 'run/worker/github.sock'
-        server = service.listen(self.path)
+        server = agents.listen(self.path)
         self.addCleanup(server.close)
-        threading.Thread(target=service.accept_forever, args=(server, self.store), daemon=True).start()
-        patcher = mock.patch.object(service, 'ALLOWED_UIDS', (os.getuid(),))
+        threading.Thread(target=agents.accept_forever, args=(server, self.store, self.book, service.status),
+                         daemon=True).start()
+        patcher = mock.patch.object(agents, 'ALLOWED_UIDS', (os.getuid(),))
         patcher.start()
         self.addCleanup(patcher.stop)
 
     def test_the_host_reads_the_status_of_the_serving_process(self):
         self.store.pending = dict(self.stored(), serial=time.time_ns() + 10 ** 12, chain=chain(access='ghu_memory'))
         host = service.Store(self.store.persistent, self.store.runtime)
-        with mock.patch.object(service, 'ROOT_UID', os.getuid()):
+        with mock.patch.object(agents, 'ROOT_UID', os.getuid()):
             report = service.host_status(host, self.path)
         self.assertEqual((report['serving'], report['pending_write'], report['persistent']), (True, True, False))
         self.assertNotIn('ghu_', json.dumps(report))
@@ -295,11 +296,11 @@ class VolumeCopyTests(ServiceTestCase):
         stored = self.stored()
         self.store.pending = dict(stored, serial=stored['serial'] + 1, chain=chain(access='ghu_synthetic-unwritten'))
         request = {'request': 'credential', 'protocol': 'https', 'host': 'github.com', 'path': 'example/project'}
-        reply, _ = service.serve_request(request, self.store, NOW)
+        reply, _ = self.answer(request, NOW)
         self.assertEqual((reply['ok'], reply['state']), (False, 'unstored'),
                          'absent would send Git to the static file')
         self.store.pending = None
-        reply, _ = service.serve_request(request, self.store, NOW)
+        reply, _ = self.answer(request, NOW)
         self.assertTrue(reply['ok'])
 
     def test_a_tmpfs_write_whose_directory_sync_fails_still_counts(self):

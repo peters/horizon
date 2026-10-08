@@ -39,8 +39,8 @@ auth = load_sibling('horizon-worker-git-auth', 'horizon_worker_git_auth')
 # isolation leaves the volume's top level to root, so no agent can reach or replace it.
 PERSISTENT = Path('/workspace/.horizon-root/github')
 # Root-only fallback on tmpfs, for volumes that do not keep POSIX permissions. It also holds
-# the lock, the request log and the clear marker. /run/horizon-credentials belongs to the
-# agent under isolation.
+# the locks, the request log, the clear marker, access requests and task grants.
+# /run/horizon-credentials belongs to the agent under isolation.
 RUNTIME = Path('/run/horizon-github')
 # Agents run as UID 10001 only when horizon-worker-tailnet isolate set this marker. Without
 # it they run as root and could read the chain, so the service refuses to run.
@@ -49,6 +49,9 @@ STATE = 'state.json'
 # Written by clear: no copy older than this time is served, in any process.
 CLEARED = 'cleared'
 MAX_STATE = 131072
+ACCESS = ('push', 'read')
+# A token this close to its expiry is refused: Git or gh would fail with it mid-operation.
+SERVE_MARGIN = 60
 # Tests only: a fake GitHub on the loopback address. Nothing else is accepted.
 TEST_URL = 'HORIZON_WORKER_GITHUB_TEST_URL'
 CHAIN_FIELDS = {'access_token', 'access_expires_at', 'refresh_token', 'refresh_expires_at'}
@@ -65,6 +68,11 @@ def validate_chain(chain):
             and timestamp(chain['access_expires_at']) and timestamp(chain['refresh_expires_at'])):
         raise ValueError('Invalid GitHub token chain')
     return chain
+
+
+def stronger(first, second):
+    """The wider of two access levels, where None is no access."""
+    return 'push' if 'push' in (first, second) else first or second
 
 
 def private_directory(path, create):

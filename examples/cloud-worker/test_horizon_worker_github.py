@@ -30,6 +30,7 @@ def load(name, module):
 service = load('horizon-worker-github', 'worker_github')
 auth = service.auth
 common = service.common
+agents = service.agents
 NOW = 1_800_000_000
 ACCESS = 'ghu_synthetic-access-one'
 REFRESH = 'ghr_synthetic-refresh-one'
@@ -92,8 +93,16 @@ class ServiceTestCase(unittest.TestCase):
         (self.root / 'workspace').mkdir()
         (self.root / 'run').mkdir()
         self.store = service.Store(self.root / 'workspace/.horizon-root/github', self.root / 'run/github')
+        self.book = agents.Book(self.store.runtime)
         self.configured = []
         self.retired = []
+
+    def answer(self, request, now, who=None):
+        def identify():
+            if who is None:
+                raise agents.idle.Refused('no session')
+            return who
+        return agents.answer(request, self.store, self.book, now, identify)
 
     def install(self, value=None, now=NOW):
         return service.install(value or installation(), self.store, now=lambda: now,
@@ -200,8 +209,7 @@ class InstallationTests(ServiceTestCase):
         seen = []
 
         def configure(payload):
-            state, _ = self.store.load()
-            seen.append(service.answer({'request': 'gh-token', 'repository': 'example/project'}, state, NOW)[0])
+            seen.append(self.answer({'request': 'gh-token', 'repository': 'example/project'}, NOW)[0])
         service.install(installation(chain=chain(access='ghu_synthetic-new')), self.store, now=lambda: NOW,
                         configure=configure, retire=lambda: None)
         self.assertNotIn('ghu_synthetic-new', json.dumps(seen))
@@ -286,8 +294,7 @@ class InstallationTests(ServiceTestCase):
         shared = os.stat_result((0o100666, 0, 0, 1, os.geteuid(), 0, 0, 0, 0, 0))
         with mock.patch.object(service.os, 'fstat', return_value=shared), self.assertRaises(ValueError):
             common.write_private(self.store.runtime, 'probe', ACCESS)
-        self.assertEqual(sorted(path.name for path in self.store.runtime.iterdir()),
-                         ['commit.lock', 'state.json', 'state.lock'])
+        self.assertEqual([path.name for path in self.store.runtime.iterdir() if 'probe' in path.name], [])
 
     def test_git_helper_configures_repositories_and_replaces_the_static_binding(self):
         def git(*args):
@@ -376,7 +383,7 @@ class RefreshTests(ServiceTestCase):
         self.assertEqual(on_disk, {'access_token': 'ghu_synthetic-access-2', 'access_expires_at': expiry - 1800 + 28800,
                                    'refresh_token': 'ghr_synthetic-refresh-2',
                                    'refresh_expires_at': expiry - 1800 + 15724800})
-        reply, _ = service.answer({'request': 'gh-token', 'repository': 'example/project'}, self.stored(), expiry - 1800)
+        reply, _ = self.answer({'request': 'gh-token', 'repository': 'example/project'}, expiry - 1800)
         self.assertEqual(reply['token'], 'ghu_synthetic-access-2')
         # Without any storage the rotated chain stays in memory and is still served.
         later = on_disk['access_expires_at'] - 60 * 10
@@ -401,7 +408,7 @@ class RefreshTests(ServiceTestCase):
         self.assertEqual((report['state'], report['last_error']), ('revoked', 'bad_refresh_token'))
         self.assertEqual(service.refresh_once(self.store, lambda: NOW + 8 * 3600, mock.Mock(side_effect=AssertionError)),
                          'revoked')
-        reply, _ = service.answer({'request': 'gh-token', 'repository': 'example/project'}, self.stored(), NOW)
+        reply, _ = self.answer({'request': 'gh-token', 'repository': 'example/project'}, NOW)
         self.assertEqual((reply['ok'], reply['state']), (False, 'revoked'))
 
     def test_an_expired_refresh_token_revokes_without_a_request(self):
@@ -449,11 +456,11 @@ class SocketTests(ServiceTestCase):
         super().setUp()
         self.install()
         self.path = self.root / 'run/worker/github.sock'
-        server = service.listen(self.path)
+        server = agents.listen(self.path)
         self.addCleanup(server.close)
-        threading.Thread(target=service.accept_forever, args=(server, self.store), daemon=True).start()
+        threading.Thread(target=agents.accept_forever, args=(server, self.store, self.book), daemon=True).start()
         for name, value in [('ALLOWED_UIDS', (os.getuid(),))]:
-            patcher = mock.patch.object(service, name, value)
+            patcher = mock.patch.object(agents, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
         patcher = mock.patch.object(auth, 'SERVICE_SOCKET', self.path)
@@ -483,14 +490,14 @@ class SocketTests(ServiceTestCase):
         self.assertEqual((reply['token'], reply['repository'], reply['access']), (ACCESS, 'example/library', 'read'))
         replies.append(json.dumps(reply))
         self.assertNotIn(REFRESH, ''.join(replies))
-        log = (self.store.runtime / service.LOG).read_text()
+        log = (self.store.runtime / agents.LOG).read_text()
         self.assertNotIn(ACCESS, log)
         record = json.loads(log.splitlines()[0])
         self.assertEqual((record['uid'], record['pid'], record['granted']), (os.getuid(), os.getpid(), True))
         self.assertEqual(self.store.runtime.stat().st_mode & 0o777, 0o700)
 
     def test_other_accounts_are_refused_and_an_expired_token_is_withheld(self):
-        with mock.patch.object(service, 'ALLOWED_UIDS', ()):
+        with mock.patch.object(agents, 'ALLOWED_UIDS', ()):
             reply = auth.ask_service({'request': 'gh-token', 'repository': 'example/project'})
         self.assertEqual((reply['ok'], reply['state']), (False, 'refused'))
         with mock.patch.object(service.time, 'time', return_value=chain()['access_expires_at'] - 30):

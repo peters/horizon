@@ -14,7 +14,7 @@ WORKER_SCRIPTS = (
     'horizon-worker-idle', 'horizon-worker-stop',
     'horizon-worker-run', 'horizon-worker-session', 'horizon-worker-source',
     'horizon-worker-import', 'horizon-worker-siblings', 'horizon-worker-session-env', 'horizon-worker-gpu-lock',
-    'horizon-worker-git-auth', 'horizon-worker-github', 'horizon-worker-github-common',
+    'horizon-worker-git-auth', 'horizon-worker-github', 'horizon-worker-github-common', 'horizon-worker-github-agents',
     'horizon-worker-browserstack',
 )
 CONTEXT_FILES = ('Dockerfile', '.dockerignore', *WORKER_SCRIPTS)

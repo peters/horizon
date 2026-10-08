@@ -1,0 +1,492 @@
+"""The agent side of horizon-worker-github: the socket that gives agents access tokens, the
+access requests that agents make and the person decides in Horizon, and the github_access
+MCP tool. A module that horizon-worker-github loads, not a command."""
+import contextlib
+import http.client
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import secrets
+import socket
+import struct
+import sys
+import threading
+import time
+import unicodedata
+import urllib.error
+import urllib.request
+
+def load_common():
+    name = 'horizon_worker_github_common'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-common')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+common = load_common()
+auth = common.auth
+# The stop watcher's mapping from a process to its agent session, and the MCP framing of the
+# stop tool, so both tools identify sessions and speak MCP the same way.
+idle = common.load_sibling('horizon-worker-idle', 'horizon_worker_idle')
+stop = common.load_sibling('horizon-worker-stop', 'horizon_worker_stop')
+
+SOCKET = Path('/run/horizon-worker/github.sock')
+LOG = 'requests.log'
+LOG_LIMIT = 1 << 20
+BOOK = 'access-requests.json'
+MAX_BOOK = 262144
+# Root, and the agent identity that horizon-worker-tailnet isolate gives every session.
+ALLOWED_UIDS = (0, 10001)
+ROOT_UID = 0
+MAX_REQUEST = 8192
+CONNECTIONS = 16
+MAX_PENDING = 32
+REASON_LIMIT = 300
+REQUEST_SECONDS = 24 * 3600
+# Decided and expired requests stay readable for the session for one more day.
+RETAIN_SECONDS = 48 * 3600
+# Access is per cloud: every agent session uses the same token, so an allowed repository
+# reaches all of them (#1393 tracks enforcement per task).
+DECISIONS = ('allow-cloud', 'deny')
+KINDS = ('credential', 'gh-token', 'request', 'request-status')
+TOOL = 'github_access'
+WAIT_SECONDS = 600
+POLL_SECONDS = 5
+
+
+def refusal(state, message):
+    return {'ok': False, 'state': state, 'message': message}
+
+
+class Book:
+    """Access requests, root-only on tmpfs: they end with the container."""
+
+    def __init__(self, runtime=common.RUNTIME):
+        self.runtime = runtime
+
+    def read(self):
+        try:
+            data = common.read_json(self.runtime / BOOK, MAX_BOOK)
+        except (OSError, ValueError, RecursionError):
+            data = None
+        if not isinstance(data, dict) or not isinstance(data.get('requests'), list):
+            return {'requests': []}
+        return {'requests': data['requests']}
+
+    @contextlib.contextmanager
+    def edit(self):
+        """The book under its lock; what the block leaves in it is stored when it ends."""
+        with common.locked(self.runtime, 'access-requests.lock'):
+            data = self.read()
+            yield data
+            common.write_private(self.runtime, BOOK, json.dumps(data, separators=(',', ':')))
+
+    def clear(self):
+        with common.locked(self.runtime, 'access-requests.lock'):
+            (self.runtime / BOOK).unlink(missing_ok=True)
+
+
+def tidy(data, now):
+    """Expires old requests and forgets them a day later."""
+    for record in data['requests']:
+        if record['status'] == 'pending' and now - record['created_at'] >= REQUEST_SECONDS:
+            record['status'] = 'expired'
+    data['requests'] = [record for record in data['requests'] if now - record['created_at'] < RETAIN_SECONDS]
+    return data
+
+
+def pending(data):
+    return [record for record in data['requests'] if record['status'] == 'pending']
+
+
+def covered(grant_access, needed):
+    return grant_access == 'push' or grant_access == needed
+
+
+def cloud_access(state, repository):
+    """The widest access the installed and cloud grants give `repository`, or None."""
+    best = None
+    for grant in state['grants'] + state.get('cloud_grants', []):
+        if auth.same_repository(repository, grant['repository']):
+            best = common.stronger(best, grant['access'])
+    return best
+
+
+def request_path(path):
+    """(repository path, whether it names a push) for a credential request path."""
+    path = path.strip('/')
+    push = False
+    for suffix in ('/info/refs', '/git-receive-pack', '/git-upload-pack'):
+        if path.endswith(suffix):
+            push = push or suffix == '/git-receive-pack'
+            path = path[:-len(suffix)]
+    if '?' in path:
+        path, query = path.split('?', 1)
+        push = push or 'git-receive-pack' in query
+    return path.removesuffix('.git'), push
+
+
+def granted_access(state, repository):
+    """(access, repository name) from the installed and cloud grants."""
+    if not auth.valid_repository(repository):
+        return None, repository
+    return cloud_access(state, repository), canonical(state, repository)
+
+
+def canonical(state, repository):
+    """The spelling of the grant that matches, so gh gets the repository's own name."""
+    grants = state['grants'] + state.get('cloud_grants', [])
+    return next((grant['repository'] for grant in grants if auth.same_repository(repository, grant['repository'])),
+                repository)
+
+
+def credential_answer(request, state, now):
+    chain = state['chain']
+    if chain['access_expires_at'] - now <= common.SERVE_MARGIN:
+        return refusal('ok', 'The GitHub access token has expired or expires within a minute, and this worker '
+                             'could not refresh it yet.'), None
+    if request['request'] == 'credential':
+        if request.get('protocol') != 'https' or request.get('host') != 'github.com':
+            return refusal('ok', 'Only HTTPS access to github.com is granted.'), None
+        repository, push = request_path(str(request.get('path', '')))
+    else:
+        repository, push = request.get('repository'), False
+    access, name = granted_access(state, repository)
+    if access is None:
+        return refusal('ok', 'This repository has no GitHub grant on this worker.'), repository
+    if push and access != 'push':
+        return refusal('ok', 'This repository is granted for reading only.'), repository
+    if request['request'] == 'credential':
+        return {'ok': True, 'state': 'ok', 'username': 'x-access-token', 'password': chain['access_token'],
+                'expires_at': chain['access_expires_at']}, name
+    return {'ok': True, 'state': 'ok', 'token': chain['access_token'], 'repository': name, 'access': access,
+            'expires_at': chain['access_expires_at']}, name
+
+
+def valid_reason(reason):
+    """One short line that reads as it is: no control or bidirectional formatting characters,
+    which could make the person's approval card read differently from what it asks."""
+    return (isinstance(reason, str) and reason.strip() != '' and len(reason) <= REASON_LIMIT
+            and not any(unicodedata.category(character) in ('Cc', 'Cf') for character in reason))
+
+
+def ask(request, state, book, now, identify):
+    """Records an agent's request for access, or answers that it already has it."""
+    repository, access, reason = request.get('repository'), request.get('access'), request.get('reason')
+    if not auth.valid_repository(repository) or access not in common.ACCESS:
+        return refusal('ok', 'Name a repository as owner/name and the access as push or read.'), None
+    if not valid_reason(reason):
+        return refusal('ok', 'Give a reason of at most %d characters on one line.' % REASON_LIMIT), repository
+    try:
+        who = identify()
+    except idle.Refused:
+        return refusal('refused', 'Only an agent session on this worker can ask for GitHub access.'), repository
+    if covered(cloud_access(state, repository), access):
+        return {'ok': True, 'state': 'ok', 'status': 'allowed', 'scope': 'cloud', 'id': None}, repository
+    window, session, agent = who
+    with book.edit() as data:
+        tidy(data, now)
+        for record in pending(data):
+            if (record['window'], record['session']) == (window, session) and \
+                    auth.same_repository(repository, record['repository']):
+                return {'ok': True, 'state': 'ok', 'status': 'pending', 'id': record['id'],
+                        'access': record['access']}, repository
+        if len(pending(data)) >= MAX_PENDING:
+            return refusal('ok', 'Too many GitHub access requests wait for the person.'), repository
+        record = {'id': secrets.token_hex(8), 'repository': repository, 'access': access, 'reason': reason,
+                  'session': session, 'window': window, 'agent': agent, 'created_at': int(now),
+                  'status': 'pending', 'scope': None, 'decided_at': None}
+        data['requests'].append(record)
+    return {'ok': True, 'state': 'ok', 'status': 'pending', 'id': record['id'], 'access': access}, repository
+
+
+def request_status(request, book, now, identify):
+    try:
+        window, session, _ = identify()
+    except idle.Refused:
+        return refusal('refused', 'Only an agent session on this worker can read its requests.'), None
+    data = tidy(book.read(), now)
+    for record in data['requests']:
+        if record['id'] == request.get('id') and (record['window'], record['session']) == (window, session):
+            return {'ok': True, 'state': 'ok', 'id': record['id'], 'status': record['status'],
+                    'scope': record['scope'], 'repository': record['repository'],
+                    'access': record['access']}, record['repository']
+    return refusal('ok', 'This session has no GitHub access request with that ID.'), None
+
+
+def answer(request, store, book, now, identify):
+    """The reply to one agent request, and the repository it named for the log. Only a chain
+    that may be served counts; one that is not stored yet is refused as `unstored`, never as
+    `absent`, which would send Git to the static file."""
+    if not isinstance(request, dict) or request.get('request') not in KINDS:
+        return refusal('refused', 'Malformed GitHub request.'), None
+    state = store.load(serving=True)[0]
+    if state is None and store.load()[0] is not None:
+        return refusal('unstored', 'The GitHub token chain is not stored yet; try again in a minute.'), None
+    if state is None:
+        return refusal('absent', 'No GitHub token chain is installed on this worker.'), None
+    if state['state'] != 'ok':
+        return refusal('revoked', 'GitHub access on this worker was revoked; connect GitHub again in Horizon.'), None
+    if request['request'] == 'request':
+        return ask(request, state, book, now, identify)
+    if request['request'] == 'request-status':
+        return request_status(request, book, now, identify)
+    return credential_answer(request, state, now)
+
+
+def peer(connection):
+    """(pid, uid) of the connecting process, as the kernel reports them."""
+    pid, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                            struct.calcsize('3i')))
+    return pid, uid
+
+
+def log_request(directory, record):
+    """One line per request without any token, in a root-only log that keeps two files."""
+    path = directory / LOG
+    with contextlib.suppress(FileNotFoundError):
+        if path.lstat().st_size > LOG_LIMIT:
+            os.replace(path, directory / (LOG + '.1'))
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    with os.fdopen(fd, 'a') as output:
+        output.write(json.dumps(record, separators=(',', ':')) + '\n')
+
+
+def identify_session(pid):
+    """The agent session of process `pid`, as (window, session, agent); raises idle.Refused."""
+    return idle.caller(pid)
+
+
+def handle(connection, store, book, report=None):
+    pid, uid = peer(connection)
+    connection.settimeout(5)
+    with connection.makefile('rb') as stream:
+        line = stream.readline(MAX_REQUEST + 1)
+    try:
+        request = json.loads(line) if len(line) <= MAX_REQUEST else None
+    except ValueError:
+        request = None
+    now = time.time()
+    if uid not in ALLOWED_UIDS:
+        reply, repository = refusal('refused', 'This account may not use GitHub access on this worker.'), None
+    elif isinstance(request, dict) and request.get('request') == 'status' and report is not None:
+        # Only root (the host's status command) reads the status of the serving process.
+        reply = dict(report(store), ok=True) if uid == ROOT_UID else refusal('refused', 'Only root reads the status.')
+        repository = None
+    else:
+        reply, repository = answer(request, store, book, now, lambda: identify_session(pid))
+    kind = request.get('request') if isinstance(request, dict) else None
+    with contextlib.suppress(OSError):
+        log_request(store.runtime, {'at': int(now), 'uid': uid, 'pid': pid,
+                                    'request': kind if kind in KINDS + ('status',) else 'invalid',
+                                    'repository': repository if auth.valid_repository(repository) else None,
+                                    'granted': reply['ok']})
+    connection.sendall((json.dumps(reply) + '\n').encode())
+
+
+def listen(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(path))
+    # Any account may connect; the kernel's peer credentials decide who gets an answer.
+    path.chmod(0o666)
+    server.listen(CONNECTIONS)
+    return server
+
+
+def accept_forever(server, store, book, report=None):
+    slots = threading.BoundedSemaphore(CONNECTIONS)
+
+    def run(connection):
+        try:
+            with connection:
+                handle(connection, store, book, report)
+        # One bad client must not end the service.
+        except Exception as error:
+            print('GitHub request failed: ' + type(error).__name__, flush=True)
+        finally:
+            slots.release()
+
+    while True:
+        try:
+            connection, _ = server.accept()
+        except OSError as error:
+            if server.fileno() < 0:
+                return
+            print('GitHub socket accept failed: ' + type(error).__name__, flush=True)
+            time.sleep(1)
+            continue
+        slots.acquire()
+        threading.Thread(target=run, args=(connection,), daemon=True).start()
+
+
+def reachable(token, repository, access, environ=os.environ, timeout=15):
+    """None when the token reaches `repository` with `access`, else the reason as a code."""
+    _, api, loopback = common.github_bases(environ)
+    request = urllib.request.Request(api + '/repos/' + repository, headers={
+        'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + token,
+        'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'horizon-worker-github/1'})
+    try:
+        with common.opener(loopback).open(request, timeout=timeout) as response:
+            body = json.loads(response.read(1 << 20))
+    except urllib.error.HTTPError as error:
+        error.close()
+        return {401: 'token_invalid', 403: 'forbidden', 404: 'not_installed'}.get(error.code, 'unreachable')
+    except (OSError, http.client.HTTPException, ValueError):
+        return 'unreachable'
+    permissions = body.get('permissions') if isinstance(body, dict) else None
+    if access == 'push' and not (isinstance(permissions, dict) and permissions.get('push') is True):
+        return 'no_push'
+    return None
+
+
+MESSAGES = {
+    'unknown_request': 'No pending GitHub access request has this ID.',
+    'not_pending': 'This request was already decided or expired.',
+    'no_chain': 'This worker holds no usable GitHub sign-in.',
+    'token_expired': 'The GitHub access token expired; wait for the worker to refresh it.',
+    'not_installed': 'The GitHub App is not installed on this repository, or the account cannot see it.',
+    'no_push': 'The GitHub account cannot push to this repository.',
+    'token_invalid': 'GitHub refused the access token.',
+    'forbidden': 'GitHub refused access to this repository.',
+    'unreachable': 'GitHub could not be reached; try again.',
+}
+
+
+def failure(identifier, code):
+    return {'ok': False, 'id': identifier, 'error': code, 'message': MESSAGES[code]}
+
+
+def decide(store, book, identifier, decision, now=time.time, check=reachable):
+    """The person's decision on one request. A failed check leaves the request pending. An
+    allowed repository joins the cloud's grants, so every agent session of the cloud gets it."""
+    if decision not in DECISIONS:
+        raise ValueError('Unknown decision')
+    with book.edit() as data:
+        current = now()
+        tidy(data, current)
+        record = next((item for item in data['requests'] if item['id'] == identifier), None)
+        if record is None:
+            return failure(identifier, 'unknown_request')
+        if record['status'] != 'pending':
+            return dict(failure(identifier, 'not_pending'), status=record['status'])
+        result = {'ok': True, 'id': identifier, 'decision': decision, 'repository': record['repository'],
+                  'access': record['access']}
+        if decision == 'deny':
+            record.update(status='denied', decided_at=int(current))
+            return dict(result, status='denied')
+        state = store.load()[0]
+        if state is None or state['state'] != 'ok':
+            return failure(identifier, 'no_chain')
+        if state['chain']['access_expires_at'] - current <= common.SERVE_MARGIN:
+            return failure(identifier, 'token_expired')
+        code = check(state['chain']['access_token'], record['repository'], record['access'])
+        if code is not None:
+            return failure(identifier, code)
+        with store.lock():
+            state = store.load()[0]
+            if state is None or state['state'] != 'ok':
+                return failure(identifier, 'no_chain')
+            others = [grant for grant in state.get('cloud_grants', [])
+                      if not auth.same_repository(record['repository'], grant['repository'])]
+            access = common.stronger(record['access'], cloud_access(
+                {'grants': [], 'cloud_grants': state.get('cloud_grants', [])}, record['repository']))
+            grants = others + [{'repository': record['repository'], 'access': access}]
+            store.save(dict(state, cloud_grants=grants), retain=False)
+        record.update(status='allowed', scope='cloud', decided_at=int(current))
+        return dict(result, status='allowed')
+
+
+def requests_report(book, now=time.time):
+    """The pending requests for the host, without secrets."""
+    data = tidy(book.read(), now())
+    return {'requests': [{key: record[key] for key in ('id', 'repository', 'access', 'reason', 'session', 'agent',
+                                                       'created_at')} for record in pending(data)]}
+
+
+GUIDANCE = (
+    'Ask the person for GitHub access to a repository that this task needs and that Git or gh refuses. '
+    'The person decides in Horizon: for this whole cloud, which gives every agent session on it the '
+    'repository, or not at all. Give the repository '
+    'as owner/name, the access as read or push, and a short reason that the person reads. The call waits up '
+    'to 10 minutes for the decision. If the person has not decided by then, call again later with the same '
+    'repository: it returns the same request. Do not ask again after a denial.')
+
+
+def call_tool(arguments, ask_service=auth.ask_service, sleep=time.sleep, clock=time.monotonic,
+              wait=WAIT_SECONDS, poll=POLL_SECONDS):
+    """Runs one github_access call. Returns (success, text)."""
+    repository = arguments.get('repository')
+    reply = ask_service({'request': 'request', 'repository': repository, 'access': arguments.get('access'),
+                         'reason': arguments.get('reason')})
+    if reply is None:
+        return False, 'GitHub is not connected for this cloud. Ask the person to connect GitHub in Horizon.'
+    if reply.get('ok') is not True:
+        return False, str(reply.get('message', 'The worker refused the request.'))
+    deadline = clock() + wait
+    while reply.get('status') == 'pending' and clock() < deadline:
+        sleep(poll)
+        status = ask_service({'request': 'request-status', 'id': reply['id']})
+        if status is None or status.get('ok') is not True:
+            return False, 'The worker lost the request; ask again.'
+        reply = dict(status, id=reply['id'])
+    if reply.get('status') == 'allowed':
+        return True, ('Allowed for this cloud: Git and gh now get a token for %s. Run the command again.'
+                      % repository)
+    if reply.get('status') == 'denied':
+        return True, 'The person denied access to %s. Do not ask again; continue without it.' % repository
+    if reply.get('status') == 'expired':
+        return True, 'The request for %s expired without a decision.' % repository
+    return True, ('Still waiting for the person to decide (request %s). Ask again later with the same '
+                  'repository.' % reply.get('id'))
+
+
+def respond(message, call=call_tool):
+    """One MCP reply for a JSON-RPC message, or None for notifications."""
+    method, ident = message.get('method'), message.get('id')
+    if ident is None:
+        return None
+    params = message.get('params') if isinstance(message.get('params'), dict) else {}
+    if method == 'initialize':
+        requested = params.get('protocolVersion')
+        version = requested if requested in stop.PROTOCOL_VERSIONS else stop.PROTOCOL_VERSIONS[0]
+        result = {'protocolVersion': version, 'capabilities': {'tools': {}},
+                  'serverInfo': {'name': 'horizon-github', 'version': '1'}}
+    elif method == 'ping':
+        result = {}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': TOOL, 'description': GUIDANCE, 'inputSchema': {
+            'type': 'object', 'required': ['repository', 'access', 'reason'], 'properties': {
+                'repository': {'type': 'string', 'description': 'The repository as owner/name.'},
+                'access': {'type': 'string', 'enum': list(common.ACCESS)},
+                'reason': {'type': 'string', 'description': 'Why the task needs it, in one line.'}}}}]}
+    elif method == 'tools/call' and params.get('name') == TOOL:
+        arguments = params.get('arguments') if isinstance(params.get('arguments'), dict) else {}
+        success, text = call(arguments)
+        result = {'content': [{'type': 'text', 'text': text}], 'isError': not success}
+    else:
+        return {'jsonrpc': '2.0', 'id': ident, 'error': {'code': -32601, 'message': 'Unknown method'}}
+    return {'jsonrpc': '2.0', 'id': ident, 'result': result}
+
+
+def serve_mcp(stdin=sys.stdin, stdout=sys.stdout, call=call_tool):
+    for line in stdin:
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        reply = respond(message, call) if isinstance(message, dict) else None
+        if reply is not None:
+            stdout.write(json.dumps(reply) + '\n')
+            stdout.flush()
+
+
+if __name__ == '__main__':
+    sys.exit('horizon-worker-github-agents is a module of horizon-worker-github, not a command.')
