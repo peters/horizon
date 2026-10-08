@@ -5,6 +5,18 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+### Agent skills
+
+`horizon-ui::plugin_install::mcp_skills` owns the additional MCP skill assets,
+complete-directory ownership checks, and installation targets. `owned_skills`
+publishes complete new trees and records exact installed bytes before an update.
+The record permits recovery of interrupted file replacement. Host leases remain
+in `user_skills`. Skill references ship with their entry points. The repository
+check compares shipped MCP tools and qualified operation lists with the linked guidance.
+Private integration caches use exact file synchronization and remove retired
+references. They accept prior unrecorded bundles and refuse symlinks before writes.
+
+
 Remote-development provisioning, workers, managed SSH views, repository transfer,
 and the Remote Environments modal were removed in #693. Ordinary SSH terminals,
 Remote Hosts, Sessions, and remote browser settings remain. Runtime v3 references

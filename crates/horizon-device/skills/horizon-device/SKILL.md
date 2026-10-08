@@ -16,6 +16,8 @@ Device panel in the user's current workspace**. Use a task-owned isolated
 desktop and private application state. Do not use noVNC or a browser viewer, or
 substitute screenshots or recordings for the live panel.
 
+`device_panel` operations are `create`, `list`, `inspect`, `screenshot`,
+`video`, `visibility`, `reveal`, `reconnect`, and `close`.
 Use the public `device_panel` MCP tool for viewer lifecycle. Call
 `operation: "list"` to discover panels in the caller's workspace. Create a
 task-owned viewer with `operation: "create"` and the fixture's numeric loopback
@@ -48,11 +50,16 @@ Creation returns immediately. Use `operation: "inspect"` and the returned id to
 check `connection: "connected"`. For a visible, on-screen viewer, also verify
 `image_received`, `image_displayed` and an advancing `frame_sequence` while target
 output changes. `visible` is only a presentation setting; an image can be off
-canvas or clipped. For hidden or off-canvas viewers, use an advancing
-`received_frame_sequence` while target output changes to verify reception;
-uploads and display may remain absent or unchanged. This counter tracks received
-image updates independently of the uploaded-image `frame_sequence`. Background
-reception does not satisfy the live-view requirement for interactive testing.
+canvas or clipped. Current hosts keep uploading about once a second while a
+viewer is not drawn, so `frame_sequence` keeps advancing off canvas; older hosts
+pause uploads there, so also accept an advancing `received_frame_sequence` while
+target output changes as reception evidence. That counter tracks received image
+updates independently of the uploaded-image `frame_sequence`. Establish live
+presentation once per connection (`image_displayed` with advancing frames). If
+the viewer later reports `not_rendered` with `outside_canvas` while
+`last_displayed_age_millis` is present, the person navigated away: keep testing
+and recording, do not pause the lane, and do not reveal again just to advance
+counters.
 Both counters reset on reconnect and neither is a heartbeat: a stationary desktop
 is not a connection failure. Older hosts may omit reception progress; do not
 interpret a missing/default-zero counter as a failure. Set
@@ -85,8 +92,8 @@ reason and host exclusion that kept it off screen (a host running no UI frames
 cannot draw it and answers when that bound expires). In the reveal answer,
 `image_displayed` is true only for a draw after the reveal applied. A drawn image is not live-motion proof. When diagnostics are present, record connection
 generation, decoded-frame sequence and age, sampling pause, last displayed age
-and presentation reason. Current hosts keep reception active while hidden or off
-canvas; older hosts may pause it. Neither `not_rendered` nor a legacy sampling
+and presentation reason. Current hosts keep reception and bounded uploads active while hidden or
+off canvas; older hosts may pause them. Neither `not_rendered` nor a legacy sampling
 pause proves a transport failure; `awaiting_frame` differs from `clipped`. Decoded pixels alone do not
 prove display. Older hosts may lack reveal or diagnostics: record
 `presentation_unverified` and the missing capability instead of asking the user
@@ -123,7 +130,8 @@ Omitting options preserves full-resolution PNG; JPEG defaults to quality 85.
 history. The MCP server uses `--target <file> mcp` and stays bound to that
 configured target. Read `--help` if the executable/target was not supplied.
 
-Action kinds: `click` (at, button), `drag` (from, to, duration_ms), `scroll` (at,
+`device_act` operations are `click`, `drag`, `scroll`, `type`, and `key`.
+Action fields: `click` (at, button), `drag` (from, to, duration_ms), `scroll` (at,
 vertical_notches, horizontal_notches), `type` (text), `key` (key, modifiers).
 Coordinates are original surface pixels. When a screenshot is cropped/scaled,
 map image pixels through `source_region` and `image_dimensions` before input:
@@ -155,24 +163,33 @@ For nested Device-panel tests, view the isolated Horizon containing that panel
 through a native panel in the user's workspace; keep each target and its
 geometry distinct.
 
-For feature evidence, record the task-owned isolated desktop. On supporting
-hosts, use `device_panel` with `operation: "video"`, the owned `panel_id`, and
-`action: "start" | "status" | "stop"`. Every action requires the exact owner.
-This records the full decoded desktop, including when hidden or off canvas,
-without audio. View crop and scale do not affect the recording. Capture stops
-on disconnect, reconnect, close, after five minutes, or at 256 MiB. Stop is
-asynchronous: poll until `recording.capture.active` and `recording.finalizing`
-are both false, then check `encoder_failed` and `frames_encoded`. The private
-`recording.capture.path` is on the Horizon host, not a download URL. Copy it
-before panel close or four subsequent recordings. Never resume automatically
-or record an unowned viewer. The Horizon app includes the video encoder.
-On older hosts, use a recorder explicitly scoped to the isolated display;
-`browser_video` is for browser pages. Start before the flow, stop afterward and
-inspect decoded frames. If recording is unavailable or stalls, report the blocked
-recording lane; still images do not replace motion evidence. Client-side scaling
-does not reduce VNC wire bandwidth. Keep application-specific workflows and
-evidence private; public demonstrations use generic fixtures and synthetic
-content only.
+## Viewer screenshots and video
+
+Use `device_panel` with `operation: screenshot` and the owned `panel_id` to get
+full connected desktop pixels as a private PNG with dimensions. Local crop and
+scale controls do not affect this capture. Optional `copy_to_clipboard` defaults
+false; `clipboard_requested` proves native host dispatch, not OS acknowledgement.
+Stopped, disconnected, or no-frame viewers refuse capture. Capture changes no
+visibility, focus, canvas, or Interact state. Only eight exports remain until
+panel close or normal host exit. A screenshot does not replace live-motion evidence.
+
+`device_panel video` operations are `start`, `status`, and `stop`.
+For feature evidence, use `device_panel` with `operation: video`, the owned
+`panel_id`, and `action: start|status|stop`. Start before the flow. It records the
+full VNC desktop as private WebM without audio and continues offscreen. Every
+action requires the exact owning agent. It stops on disconnect, after five
+minutes, or at 256 MiB. Stop is asynchronous: read status at a bounded interval
+until `recording.capture.active` and `recording.finalizing` are both false.
+Examine `encoder_failed` and `frames_encoded`, then decode representative frames.
+The file path is on the Horizon host. Copy it before panel close or four subsequent
+recordings. Browser pages use `browser_video`; native provider sessions use
+`app_video` through `horizon-app-testing`.
+
+On older hosts without viewer video, use a recorder explicitly scoped to the
+owned isolated display. If recording is unavailable or stalls, report that lane;
+still images do not replace motion evidence. Keep finalized evidence private.
+Public demonstrations use generic fixtures and synthetic content only.
+Client-side scaling does not reduce VNC wire bandwidth.
 
 Close only task-owned viewers and application/display fixtures, then verify
 children exited and target configuration expired. Horizon injects `device_panel`

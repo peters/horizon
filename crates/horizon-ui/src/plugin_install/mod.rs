@@ -7,6 +7,8 @@ use horizon_core::browser::manifest;
 use horizon_core::{HorizonHome, browser_mcp_executable, codex_home_dir, grok_home_dir, user_home_dir};
 
 mod grok_mcp;
+mod mcp_skills;
+mod owned_skills;
 mod user_skills;
 mod work_hooks;
 use user_skills::{
@@ -91,27 +93,7 @@ const DEVICE_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
 }];
 
 fn validate_device_skill(dir: &Path) -> io::Result<()> {
-    let metadata = match std::fs::symlink_metadata(dir) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    if metadata.is_dir() {
-        let mut entries = std::fs::read_dir(dir)?;
-        let entry = entries.next().transpose()?;
-        if let Some(entry) = entry
-            && entries.next().is_none()
-            && entry.file_name() == "SKILL.md"
-            && entry.file_type()?.is_file()
-            && std::fs::read_to_string(entry.path())? == DEVICE_SKILL_FILES[0].content
-        {
-            return Ok(());
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "Grok device skill is not Horizon-owned; preserving existing content",
-    ))
+    mcp_skills::validate_skill_files(dir, DEVICE_SKILL_FILES)
 }
 
 fn install_device_skill(dir: &Path) -> io::Result<()> {
@@ -274,6 +256,13 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
             Ok(roots) => {
                 lease.skill_roots.extend(roots);
                 lease.bind_grok_device_skill(&root, true);
+                let dirs = mcp_skills::MCP_SKILLS
+                    .iter()
+                    .map(|skill| root.join("skills").join(skill.name))
+                    .collect::<Vec<_>>();
+                lease
+                    .skill_roots
+                    .extend(bind_skill_roots(manifest::host_instance().as_ref(), &dirs, &[]));
             }
             Err(error) => {
                 tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
@@ -472,6 +461,8 @@ fn install_agent_plugins_impl(
         }
     }
 
+    updated_files +=
+        mcp_skills::sync_mcp_skills(horizon_home, claude_plugin_dir, user_home, grok_home, codex_home, lease)?;
     Ok(updated_files)
 }
 
@@ -485,6 +476,11 @@ fn user_skill_lease_dirs(user_home: Option<&Path>, codex_home: Option<&Path>) ->
         dirs.push(codex_root.join("skills").join(HORIZON_BROWSER_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_DEVICE_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_SPEECH_SKILL));
+        dirs.extend(
+            mcp_skills::MCP_SKILLS
+                .iter()
+                .map(|skill| codex_root.join("skills").join(skill.name)),
+        );
     }
     dirs
 }

@@ -108,8 +108,26 @@ fn claim_dir(claimed: &mut Vec<PathBuf>, dir: &Path) -> bool {
     true
 }
 
+pub(super) fn with_skill_root_lock<T>(skill_dir: &Path, operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    let coord_dir =
+        skill_coord_dir(skill_dir).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Skill has no parent"))?;
+    std::fs::create_dir_all(&coord_dir)?;
+    let _lock = lock_coord(&coord_dir)?;
+    operation()
+}
+
 fn push_acquired(leases: &mut Vec<SkillRootLease>, host_id: &OsStr, skill_dir: &Path, install: bool) {
-    match acquire_skill_root(host_id, skill_dir.to_path_buf(), install, || Ok(())) {
+    let result = if install && super::mcp_skills::is_mcp_skill(skill_dir) {
+        bind_prepared_skill_root(
+            host_id,
+            skill_dir.to_path_buf(),
+            super::mcp_skills::validate_mcp_skill,
+            || super::mcp_skills::validate_mcp_skill(skill_dir),
+        )
+    } else {
+        acquire_skill_root(host_id, skill_dir.to_path_buf(), install, || Ok(()))
+    };
+    match result {
         Ok(lease) => leases.push(lease),
         Err(error) => {
             tracing::warn!(path = %skill_dir.display(), %error, "failed to lease Horizon skill root");
@@ -251,6 +269,7 @@ pub(super) fn remove_horizon_skill_dir(path: &Path) {
         && name != HORIZON_DEVICE_SKILL
         && name != HORIZON_SPEECH_SKILL
         && name != RETIRED_OFFLOAD_SKILL
+        && !super::mcp_skills::is_mcp_skill(path)
     {
         return;
     }

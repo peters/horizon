@@ -77,6 +77,8 @@ jobs:
           python3 -m venv "$cast_bench_venv"
           "$cast_bench_venv/bin/pip" install --disable-pip-version-check -r auto/cast/requirements.txt
           "$cast_bench_venv/bin/python" -B -m unittest discover -s auto/cast -p 'test_*.py' -v
+      - name: Horizon MCP skill coverage
+        run: python3 -B scripts/check-horizon-mcp-skills.py
       - name: Maintainability
         run: ./scripts/check-maintainability.sh
       - name: Version Sync

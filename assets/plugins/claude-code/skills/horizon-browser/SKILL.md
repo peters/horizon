@@ -93,6 +93,7 @@ so do not poll it in a tight loop; pick a `timeout_millis` that covers the
 expected change. Use `browser_evaluate` only when the semantic tools cannot
 answer the question.
 
+`browser_http_auth` operations are `set` and `clear`.
 If a page presents HTTP Basic or Digest authentication, call
 `browser_http_auth` with `operation: set`, the username and password the user
 supplied, and `origin` (`http://host[:port]` or `https://host[:port]`) when
@@ -108,6 +109,7 @@ for later intercepted challenges; it does not revoke Authorization values the
 browser already cached, so open a new panel for a clean unauthenticated
 session.
 
+`browser_network` operations are `start`, `status`, and `stop`.
 For HTTP or WebSocket observation, first inspect the panel's
 `network_capture` field from `browser_list` or `browser_panel`. When supported,
 call `browser_network` with `operation: start` **before navigation** so open,
@@ -124,7 +126,8 @@ reports timeout, capture stop/replacement, gaps, drops, truncation, file limits,
 and writer failure explicitly. For sustained local analysis, it is also safe to
 inspect the exact path returned by `browser_network` with read-only tools such
 as `tail -f`, `jq`, or `rg`; never infer or inspect another Horizon runtime
-path. Call `operation: stop` to flush the capture.
+path. Call `operation: status` to inspect the active or last capture without restarting it.
+Call `operation: stop` to flush the capture.
 
 For page-pixel recording, inspect `video_capture` then call `browser_video`
 with `operation: start`. Optional start-only knobs: `quality` (1-100),
@@ -137,6 +140,8 @@ proportionally. An explicit
 host size cap remains active when a recording omits `max_width`. These
 encoding settings do not resize the page viewport. Pause skips time in the file;
 resume continues the same WebM; stop finalizes a private `.webm` path.
+Use `operation: status` to inspect the active or last recording without changing it.
+`browser_video` operations are `start`, `pause`, `resume`, `status`, and `stop`.
 Page pixels never enter the action audit. The recording samples the existing
 decoded frame slot on Chromium, Firefox, and Safari.
 
@@ -191,7 +196,7 @@ An explicit configured or per-call orientation requires matching measured geomet
 on the first committed document before readiness. A pending, failed or unmeasurable
 first page is rejected with a typed orientation error and exact-session release
 attempt; default creates without an explicit orientation keep the pending contract
-above. See `docs/architecture/remote-browser-orientation.md` for the feature contract.
+above.
 Check `orientation_support` (`supported`, `unsupported`, or `unverified`) and
 `remote_orientation`, then call `browser_orientation` with `panel_id` and
 `orientation` to rotate a supported session. The tool waits for the device and
@@ -216,6 +221,7 @@ clears the pin. A timeout/failure may follow a backend mutation: inspect the
 page or retry rather than assuming no change. `browser_video` max_width and
 codec alignment affect encoding only. Reacquire semantic refs after resizing.
 
+`browser_remote_allocations` operations are `list` and `reconcile`.
 For capacity retained after a remote panel disappears, use
 `browser_remote_allocations` with `operation: list`, then `operation: reconcile`
 and one returned `reference`. This checks only the exact retired allocation
@@ -223,3 +229,41 @@ at its original provider. Active, unidentified, or uncertain sessions retain
 their holds. Repeated reconciliation is safe; never infer release from an
 empty panel list or account-wide session counts. The user can also reconcile
 in Settings > Remote browsers.
+
+## Provider discovery and usage
+
+Call `browser_provider_devices` with a configured provider and optional search
+words. Read at most 50 returned combinations per page, then use `next_offset`
+for another page. Pass the returned target reference to `browser_create` with
+`backend` omitted. A catalog entry proves neither entitlement nor capacity.
+Call `browser_provider_usage` without a provider for all profiles, or with a
+configured provider name. Read sample time, running/allowed counts, queues, and
+per-profile errors. Profiles use their own credential bindings; names alone do
+not provide isolation. Usage does not reserve a device. Never pass credentials
+or raw provider capabilities.
+
+## Actions, attachments, and screenshots
+
+`browser_act` operations are `click`, `fill`, `scroll`, `reload`, `back`, `forward`,
+`set_files`, and `drop_files`. A click accepts `count: 1..3`, including a trusted
+double-click with 2. Use a fresh ref or selector and examine the visible result.
+
+For `set_files`, target the actual `input[type=file]`, even when hidden.
+Use its `file_input` metadata for accept and multiple-file policy.
+For `drop_files`, target a visible drop element on local Chromium or Firefox.
+Supply 1..32 absolute regular-file paths under the configured agent work root
+or an explicitly permitted attachment root. These paths are on the server host.
+Do not widen roots or upload private files without task authorization.
+Read attached names and sizes for `set_files`, then examine page acceptance.
+A dispatched drop does not prove that an application accepted the files.
+
+`browser_screenshot` returns retained viewport pixels as a private PNG path and
+original dimensions. It requires a ready panel and a live supporting Horizon
+host. It takes no fresh navigation or full-page capture. Optional
+`copy_to_clipboard` defaults false; `clipboard_requested` proves host dispatch,
+not OS acknowledgement. Capture claims ownership and refuses another live owner,
+human steering, or pending handoff. It changes no focus, visibility, or canvas.
+Copy needed evidence before panel close or host exit; only eight exports remain.
+
+Casting uses `horizon-cast`. Cloud offers and companions use `horizon-cloud`.
+Native iOS and Android sessions use `horizon-app-testing`.
