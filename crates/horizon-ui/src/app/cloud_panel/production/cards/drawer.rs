@@ -252,12 +252,34 @@ fn status(
     response: &mut Response,
     room: f32,
 ) {
+    /// The log's share of a drawer: its heading and a few lines.
+    const OUTPUT_ROOM: f32 = 180.0;
+    let failure = context.status.failure.as_ref();
+    if room < 2.0 * OUTPUT_ROOM {
+        // Too short to split: the summary and a short log scroll together inside the drawer.
+        solid_scroll_area(ui)
+            .id_salt(("cloud-drawer-status", id))
+            .max_height(room)
+            .show(ui, |ui| {
+                overview(ui, id, runtime, context, response);
+                ui.add_space(10.0);
+                output_heading(ui, runtime);
+                super::output::show(ui, id, "drawer", runtime, OUTPUT_ROOM, failure);
+            });
+        return;
+    }
     let top = ui.min_rect().bottom();
     solid_scroll_area(ui)
         .id_salt(("cloud-drawer-status", id))
-        .max_height(room * 0.5)
+        .max_height(room - OUTPUT_ROOM)
         .show(ui, |ui| overview(ui, id, runtime, context, response));
     ui.add_space(10.0);
+    output_heading(ui, runtime);
+    let left = room - (ui.min_rect().bottom() - top);
+    super::output::show(ui, id, "drawer", runtime, left, failure);
+}
+
+fn output_heading(ui: &mut egui::Ui, runtime: &Runtime) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Output").size(12.0).color(theme::FG_DIM()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -268,15 +290,6 @@ fn status(
             );
         });
     });
-    let left = room - (ui.min_rect().bottom() - top);
-    super::output::show(
-        ui,
-        id,
-        "drawer",
-        runtime,
-        left.max(120.0),
-        context.status.failure.as_ref(),
-    );
 }
 
 fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'_>, response: &mut Response) {

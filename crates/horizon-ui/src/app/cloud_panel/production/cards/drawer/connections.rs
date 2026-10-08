@@ -62,14 +62,19 @@ fn sessions(ui: &mut egui::Ui, runtime: &Runtime, context: &Context<'_>) {
         .map_or(&[][..], |state| state.sessions.as_slice());
     if !listed.is_empty() {
         ui.add_space(6.0);
+        // Branch and worktree names have no bound: each column is capped, and a cut value
+        // shows in full on hover.
+        let column = (ui.available_width() / 3.0).max(80.0);
         egui::Grid::new(("cloud-sessions", context.group.issue))
             .num_columns(3)
             .spacing([16.0, 6.0])
+            .min_col_width(48.0)
+            .max_col_width(column)
             .show(ui, |ui| {
                 for session in listed {
-                    // The drawer wraps text; grid columns would squeeze these to a letter wide.
+                    // The drawer wraps text; wrapped grid cells shrink to a letter wide.
                     let cell = |ui: &mut egui::Ui, text: RichText| {
-                        ui.add(egui::Label::new(text).extend());
+                        ui.add(egui::Label::new(text).truncate());
                     };
                     cell(ui, RichText::new(&session.agent).size(14.0).color(theme::FG()));
                     cell(
