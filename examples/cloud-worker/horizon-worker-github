@@ -52,6 +52,8 @@ REFRESH_MARGIN = 30 * 60
 # A token this close to its expiry is refused: Git or gh would fail with it mid-operation.
 SERVE_MARGIN = 60
 POLL_SECONDS = 60
+# A chain stored before its repositories are configured; it is never served.
+INSTALLING = 'installing'
 RETRY_BASE_SECONDS = 15
 RETRY_MAX_SECONDS = 15 * 60
 # Start attempts and the first wait between them, before serve exits for the supervisor.
@@ -254,6 +256,8 @@ def answer(request, state, now):
         return refusal('refused', 'Malformed GitHub credential request.'), None
     if state is None:
         return refusal('absent', 'No GitHub token chain is installed on this worker.'), None
+    if state['state'] == INSTALLING:
+        return refusal(INSTALLING, 'GitHub access on this worker is being set up; try again in a moment.'), None
     if state['state'] != 'ok':
         return refusal('revoked', 'GitHub access on this worker was revoked; connect GitHub again in Horizon.'), None
     chain = state['chain']
@@ -407,12 +411,15 @@ def identity_grants(state):
 
 
 def install(value, store, now=time.time, configure=run_configure, retire=run_retire):
-    """Stores the chain, configures each target repository, then retires the static binding.
+    """Stages the chain, configures each target repository, commits the chain, then retires
+    the static binding.
 
-    Each step keeps a usable credential when it fails: a failed save changes nothing, a failed
-    configuration puts the previous chain back, and the static binding is removed last. A
-    static binding that cannot be removed stays as a fallback, which the service overrides
-    whenever it answers. Returns status."""
+    The staged chain is never served, so no agent gets its token before the repositories are
+    configured. Each step keeps a usable credential when it fails: a failed save changes
+    nothing; a failed configuration configures the previous chain's repositories again and
+    puts the previous chain back; a failed commit puts it back too. The static binding goes
+    last; one that cannot be removed stays as a fallback, which the service overrides whenever
+    it answers. Returns status."""
     validate_install(value, int(now()))
     with store.lock():
         try:
@@ -424,15 +431,14 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
             state['client_secret'] = value['client_secret']
         if value.get('login'):
             state['login'] = value['login']
-        store.save(dict(state, version=1, state='ok', installed_at=int(now()), last_refresh_at=None,
-                        last_error=None), retain=False)
+        staged = dict(state, version=1, state=INSTALLING, installed_at=int(now()), last_refresh_at=None,
+                      last_error=None)
+        store.save(staged, retain=False)
         try:
             configure({'grants': identity_grants(value), 'previous': identity_grants(previous)})
+            store.save(dict(staged, state='ok'), retain=False)
         except BaseException:
-            if previous is not None:
-                store.save(previous, retain=False)
-            else:
-                store.clear()
+            restore(store, previous, value, configure)
             raise
         try:
             retire()
@@ -440,6 +446,17 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
             print('horizon-worker-github: the static Git binding could not be removed; the service '
                   'still answers first.', file=sys.stderr)
     return status(store)
+
+
+def restore(store, previous, value, configure):
+    """Undoes a failed install: the previous chain's repositories are configured again, as far
+    as that works, and the previous chain is stored again; without one, no chain remains."""
+    if previous is None:
+        store.clear()
+        return
+    with contextlib.suppress(Exception):
+        configure({'grants': identity_grants(previous), 'previous': identity_grants(value)})
+    store.save(previous, retain=False)
 
 
 def status(store):

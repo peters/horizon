@@ -160,7 +160,8 @@ class VolumeCopyTests(ServiceTestCase):
         self.install()
         first = self.stored()['serial']
         self.install(installation(chain=chain(access='ghu_synthetic-second')))
-        self.assertEqual(self.stored()['serial'], first + 1)
+        # An install stores the chain twice: staged, then committed.
+        self.assertEqual(self.stored()['serial'], first + 2)
         service.clear(self.store, retire=lambda: None)
         self.install(installation(chain=chain(access='ghu_synthetic-third')))
         self.assertEqual(self.stored()['chain']['access_token'], 'ghu_synthetic-third',

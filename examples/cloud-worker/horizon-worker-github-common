@@ -134,7 +134,7 @@ def read_private(path):
     state = read_json(path)
     if state is None:
         return None
-    if (not isinstance(state, dict) or state.get('version') != 1 or state.get('state') not in ('ok', 'revoked')
+    if (not isinstance(state, dict) or state.get('version') != 1 or state.get('state') not in ('ok', 'revoked', 'installing')
             or type(state.get('serial')) is not int):
         raise ValueError('Malformed GitHub state')
     validate_chain(state.get('chain'))

@@ -195,6 +195,33 @@ class InstallationTests(ServiceTestCase):
         self.assertEqual(without_serial(self.stored()), without_serial(before))
         self.assertEqual(self.retired, [True], 'only the first, successful install retired the static binding')
 
+    def test_no_agent_gets_the_new_token_before_the_repositories_are_configured(self):
+        self.install()
+        seen = []
+
+        def configure(payload):
+            state, _ = self.store.load()
+            seen.append(service.answer({'request': 'gh-token', 'repository': 'example/project'}, state, NOW)[0])
+        service.install(installation(chain=chain(access='ghu_synthetic-new')), self.store, now=lambda: NOW,
+                        configure=configure, retire=lambda: None)
+        self.assertNotIn('ghu_synthetic-new', json.dumps(seen))
+        self.assertEqual(seen[0].get('state'), service.INSTALLING)
+        self.assertEqual(self.stored()['state'], 'ok')
+
+    def test_a_failed_configuration_configures_the_previous_repositories_again(self):
+        self.install()
+        calls = []
+
+        def configure(payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                raise subprocess.CalledProcessError(1, 'configure')
+        with self.assertRaises(subprocess.CalledProcessError):
+            service.install(installation(author_name='Other Author'), self.store, now=lambda: NOW,
+                            configure=configure, retire=lambda: None)
+        self.assertEqual(calls[1]['grants'][0]['author_name'], 'Test Author', 'the previous identity comes back')
+        self.assertEqual(self.stored()['state'], 'ok')
+
     def test_a_failed_first_configuration_leaves_no_chain(self):
         def refuse(payload):
             raise subprocess.CalledProcessError(1, 'configure')
