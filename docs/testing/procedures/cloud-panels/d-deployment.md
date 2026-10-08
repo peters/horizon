@@ -449,45 +449,53 @@ This task rents no compute. The deployment stops before Horizon requests a worke
 
    Result: You know the directory, for example `~/.horizon/cloud/docker`.
 
-4. Make a copy of the directory, then remove its login for `ghcr.io`.
+4. Make a copy of the directory under a new name. Stop if that name is in use.
 
    ```sh
-   cp -a <docker_config> <docker_config>.d06-backup
+   test ! -e <docker_config>.d06-<run> && cp -a <docker_config> <docker_config>.d06-<run>
+   ```
+
+   Result: The command ends without an error and `<docker_config>.d06-<run>` exists.
+   If the command fails, do not continue: an earlier copy has that name.
+
+5. Remove the login for `ghcr.io` from Horizon's Docker configuration.
+
+   ```sh
    docker --config <docker_config> logout ghcr.io
    ```
 
-   Result: The copy exists. Docker shows **Removing login credentials for
-   ghcr.io**, or that there was no login.
+   Result: Docker shows **Removing login credentials for ghcr.io**, or that there
+   was no login.
 
-5. Deploy a new cloud `smoke-push` from the scratch commit with the `runpod-cpu`
+6. Deploy a new cloud `smoke-push` from the scratch commit with the `runpod-cpu`
    profile.
 
    Result: The card shows **Build locally**, then **Push image**.
 
-6. Wait until the push fails.
+7. Wait until the push fails.
 
    Result: The card shows the failure on **Push image**. **Validate** and
    **Build locally** show as done. The status strip does not say
    **Validation failed**.
 
-7. Record a screenshot of the card and the step list in the evidence.
+8. Record a screenshot of the card and the step list in the evidence.
 
    Result: The evidence shows the failure on **Push image**.
 
-8. Close the card of `smoke-push`.
+9. Close the card of `smoke-push`.
 
    Result: The board does not show `smoke-push`. The provider shows no pod for it.
 
-9. Put back the Docker configuration from the copy.
+10. Put back the Docker configuration from the copy.
 
-   ```sh
-   rm -rf <docker_config> && mv <docker_config>.d06-backup <docker_config>
-   ```
+    ```sh
+    rm -rf <docker_config> && mv <docker_config>.d06-<run> <docker_config>
+    ```
 
-   Result: `<docker_config>` exists again and `<docker_config>.d06-backup` does not.
-   Its `config.json` is the same as before step 4.
+    Result: `<docker_config>` exists again and `<docker_config>.d06-<run>` does not.
+    Its `config.json` is the same as before step 5.
 
-10. Go back to the branch of the run and delete the scratch branch.
+11. Go back to the branch of the run and delete the scratch branch.
 
     ```sh
     git -C <repo> switch - && git -C <repo> branch -D smoke-push-<run>
