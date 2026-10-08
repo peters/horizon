@@ -72,7 +72,8 @@ pub(crate) fn check_attachment_request(probe: &FileInputProbe, paths: &[PathBuf]
             ),
         ));
     }
-    if let Some(rejected) = paths.iter().find(|path| !accept_allows(&probe.accept, path)) {
+    let accept = FileAcceptPolicy::new(&probe.accept);
+    if let Some(rejected) = paths.iter().find(|path| !accept.allows(path)) {
         // Only the file name is reported: at this point the paths are the
         // private staged copies, which stay internal.
         return Err(BrowserControlFailure::new(
@@ -164,34 +165,54 @@ pub(crate) fn verify_attached(
 /// by a MIME-only list rather than guessed. Tokens that are neither an
 /// extension nor a MIME type are ignored, as browsers ignore them, so a
 /// list with no valid token restricts nothing.
-pub(crate) fn accept_allows(accept: &str, path: &Path) -> bool {
-    let tokens = accept
-        .split(',')
-        .map(|token| token.trim().to_ascii_lowercase())
-        .filter(|token| is_accept_token(token))
-        .collect::<Vec<_>>();
-    if tokens.is_empty() {
-        return true;
-    }
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    let extension = path
-        .extension()
-        .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
-    let mime = extension.as_deref().and_then(mime_for_extension);
-    tokens.iter().any(|token| {
-        if token == "*/*" {
-            true
-        } else if token.starts_with('.') {
-            name.ends_with(token.as_str())
-        } else if let Some(family) = token.strip_suffix("/*") {
-            mime.is_some_and(|mime| mime.split('/').next() == Some(family))
-        } else {
-            mime == Some(token.as_str())
+#[derive(Clone, Debug, Default)]
+pub struct FileAcceptPolicy {
+    tokens: Vec<String>,
+}
+
+impl FileAcceptPolicy {
+    /// Parse a file input's extension and MIME rules once for repeated matching.
+    #[must_use]
+    pub fn new(accept: &str) -> Self {
+        Self {
+            tokens: accept
+                .split(',')
+                .map(|token| token.trim().to_ascii_lowercase())
+                .filter(|token| is_accept_token(token))
+                .collect(),
         }
-    })
+    }
+
+    /// Match a path's name against the parsed extension and MIME rules.
+    #[must_use]
+    pub fn allows(&self, path: &Path) -> bool {
+        if self.tokens.is_empty() {
+            return true;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let extension = path
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
+        let mime = extension.as_deref().and_then(mime_for_extension);
+        self.tokens.iter().any(|token| {
+            if token == "*/*" {
+                true
+            } else if token.starts_with('.') {
+                name.ends_with(token.as_str())
+            } else if let Some(family) = token.strip_suffix("/*") {
+                mime.is_some_and(|mime| mime.split('/').next() == Some(family))
+            } else {
+                mime == Some(token.as_str())
+            }
+        })
+    }
+}
+
+pub(crate) fn accept_allows(accept: &str, path: &Path) -> bool {
+    FileAcceptPolicy::new(accept).allows(path)
 }
 
 /// A valid file type specifier: an extension with something after the dot,
@@ -311,6 +332,18 @@ pub(crate) const ATTACHED_FILES_FUNCTION: &str = r"function(element) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parsed_accept_policy_is_reused_for_compound_extensions_and_mime_rules() {
+        let policy = FileAcceptPolicy::new(" .TAR.GZ, IMAGE/*, invalid ");
+        for _ in 0..3 {
+            assert!(policy.allows(Path::new("archive.TAR.GZ")));
+            assert!(policy.allows(Path::new("photo.HEIC")));
+            assert!(!policy.allows(Path::new("archive.gz")));
+            assert!(!policy.allows(Path::new("report.PDF")));
+        }
+        assert!(FileAcceptPolicy::new("invalid,.").allows(Path::new("anything")));
+    }
 
     fn probe(accept: &str, multiple: bool) -> FileInputProbe {
         FileInputProbe {

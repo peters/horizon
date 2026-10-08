@@ -98,6 +98,7 @@ pub struct BrowserUiState {
 impl BrowserUiState {
     fn update_drop_geometry(
         &mut self,
+        ui: &Ui,
         body: &render::BodyOutput,
         interactive: bool,
         fixed: bool,
@@ -113,7 +114,8 @@ impl BrowserUiState {
                 ),
                 input::PointerViewportState::Ready
             ) {
-            body.image_rect.zip(body.frame_size)
+            let to_global = ui.ctx().layer_transform_to_global(ui.layer_id()).unwrap_or_default();
+            body.image_rect.map(|rect| to_global * rect).zip(body.frame_size)
         } else {
             None
         };
@@ -272,7 +274,7 @@ impl<'a> BrowserView<'a> {
             if !fixed_viewport {
                 synchronize_viewport(ui, browser, state, &body, explicit_viewport);
             }
-            state.update_drop_geometry(&body, interactive, fixed_viewport, explicit_viewport);
+            state.update_drop_geometry(ui, &body, interactive, fixed_viewport, explicit_viewport);
             input::handle(
                 ui,
                 browser,
@@ -754,5 +756,43 @@ mod tests {
         assert!(!page_keyboard_can_route(false, false, false));
         assert!(!page_keyboard_can_route(true, true, false));
         assert!(!page_keyboard_can_route(true, false, true));
+    }
+    #[test]
+    fn drop_geometry_tracks_viewport_coordinates_after_canvas_pan_and_zoom() {
+        use crate::test_egui::DiscardTextures;
+        let ctx = egui::Context::default();
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                let transform = egui::emath::TSTransform::new(egui::vec2(350.0, -50.0), 0.5);
+                ctx.set_transform_layer(ui.layer_id(), transform);
+                let mut state = BrowserUiState::default();
+                let body = super::render::BodyOutput {
+                    image_rect: Some(egui::Rect::from_min_size(
+                        egui::pos2(100.0, 200.0),
+                        egui::vec2(800.0, 400.0),
+                    )),
+                    frame_size: Some([800.0, 400.0]),
+                    viewport_size: Some((800, 400)),
+                    pointer_target: true,
+                    retry_clicked: false,
+                    body_clicked: false,
+                    keyboard_focus_id: None,
+                };
+                state.update_drop_geometry(ui, &body, true, true, None);
+                let (rect, size) = state.drop_geometry.unwrap();
+                assert_eq!(
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(400.0, 50.0), egui::pos2(800.0, 250.0))
+                );
+                let pointer = egui::pos2(700.0, 100.0);
+                assert!(rect.contains(pointer));
+                assert!(!rect.contains(egui::pos2(700.0, 40.0)));
+                let offset = pointer - rect.min;
+                assert_eq!(
+                    [offset.x / rect.width() * size[0], offset.y / rect.height() * size[1]],
+                    [600.0, 100.0]
+                );
+            })
+            .discard_textures();
     }
 }

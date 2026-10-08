@@ -25,7 +25,7 @@ impl FilePicker {
         let mut picker = Self {
             id: request.id,
             modal: PickerModalState::new(directory_query(&directory)),
-            files: FilePickerState::new(directory, request.multiple, request.accept.clone()),
+            files: FilePickerState::new(directory, request.multiple, &request.accept),
             listing: None,
             loading: None,
             error: None,

@@ -21,18 +21,18 @@ pub struct FilePickerState {
     pub selected: Vec<PathBuf>,
     pub show_hidden: bool,
     multiple: bool,
-    accept: String,
+    accept: horizon_browser::FileAcceptPolicy,
 }
 
 impl FilePickerState {
     #[must_use]
-    pub fn new(directory: PathBuf, multiple: bool, accept: String) -> Self {
+    pub fn new(directory: PathBuf, multiple: bool, accept: &str) -> Self {
         Self {
             directory,
             selected: Vec::new(),
             show_hidden: false,
             multiple,
-            accept,
+            accept: horizon_browser::FileAcceptPolicy::new(accept),
         }
     }
 
@@ -60,7 +60,7 @@ impl FilePickerState {
                 let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
                 (self.show_hidden || !name.starts_with('.') || filter.starts_with('.'))
                     && name.to_lowercase().contains(filter)
-                    && (entry.directory || horizon_browser::accepts_file(&self.accept, &entry.path))
+                    && (entry.directory || self.accept.allows(&entry.path))
             })
             .collect()
     }
@@ -94,7 +94,7 @@ impl FilePickerState {
             if !path.is_file() {
                 return Err(FileSelectionError::NotFile);
             }
-            if !horizon_browser::accepts_file(&self.accept, path) {
+            if !self.accept.allows(path) {
                 return Err(FileSelectionError::TypeMismatch(
                     path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
                 ));
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn path_queries_separate_directory_navigation_from_name_filtering() {
         let root = tempfile::tempdir().expect("directory");
-        let state = FilePickerState::new(root.path().into(), true, String::new());
+        let state = FilePickerState::new(root.path().into(), true, "");
         let child = root.path().join("Reports");
         assert_eq!(
             state.query_location(&format!("{}/", child.display())),
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn selection_survives_navigation_and_single_file_selection_replaces() {
-        let mut state = FilePickerState::new(PathBuf::new(), true, String::new());
+        let mut state = FilePickerState::new(PathBuf::new(), true, "");
         state.toggle(Path::new("/first/a.pdf")).expect("selection");
         state.directory = "/second".into();
         state.toggle(Path::new("/second/b.pdf")).expect("selection");
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn listing_filters_names_hidden_files_and_types_but_keeps_folders() {
-        let state = FilePickerState::new(PathBuf::new(), true, ".pdf".into());
+        let state = FilePickerState::new(PathBuf::new(), true, ".pdf");
         let listing = DirectoryListing {
             entries: [
                 ("Reports", true),
@@ -185,7 +185,7 @@ mod tests {
         let invalid = root.path().join("photo.png");
         std::fs::write(&valid, "synthetic").expect("file");
         std::fs::write(&invalid, "synthetic").expect("file");
-        let mut state = FilePickerState::new(root.path().into(), true, ".pdf".into());
+        let mut state = FilePickerState::new(root.path().into(), true, ".pdf");
         state.select_dropped(std::slice::from_ref(&valid)).expect("selection");
         assert!(state.select_dropped(&[valid.clone(), invalid]).is_err());
         assert_eq!(state.selected, [valid]);
