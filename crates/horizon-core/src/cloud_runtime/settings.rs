@@ -37,6 +37,9 @@ pub struct Settings {
     /// Omitted unless Hetzner is configured, so existing settings keep their encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hetzner: Option<Hetzner>,
+    /// The GitHub App of Connect GitHub. Omitted until it is connected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<super::github::Settings>,
     /// The cloud's own placement, kept by [`Settings::for_cloud`] for providers
     /// that read it themselves. Never stored.
     #[serde(skip)]
@@ -129,6 +132,9 @@ impl Settings {
         }
         if let Some(hetzner) = &self.hetzner {
             hetzner.validate()?;
+        }
+        if let Some(github) = &self.github {
+            github.validate()?;
         }
         Ok(())
     }

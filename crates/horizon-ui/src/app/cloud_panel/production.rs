@@ -193,6 +193,8 @@ fn layer_id(line: &str) -> Option<&str> {
 #[derive(Default)]
 pub(super) struct Runtime {
     drawer: Option<cards::Tab>,
+    /// The latest GitHub sign-in prompt or outcome of this cloud's deployment.
+    github: Option<cloud_runtime::github::Prompt>,
     receiver: Option<Receiver<Event>>,
     recovery_receiver: Option<Receiver<cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>>>,
     recovery_worker_id: String,
@@ -539,6 +541,7 @@ impl HorizonApp {
                         runtime.receiver = None;
                         resumed.push(id);
                     }
+                    Event::GitHub(prompt) => runtime.github = Some(prompt),
                     Event::ClosedBrowsers(ids) => {
                         if let Some(browsers) = &mut runtime.browsers {
                             browsers.retain(|b| !ids.contains(&b.id));

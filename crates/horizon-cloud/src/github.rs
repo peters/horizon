@@ -15,6 +15,8 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod api;
+pub use api::{User, valid_repository};
 #[cfg(test)]
 mod tests;
 

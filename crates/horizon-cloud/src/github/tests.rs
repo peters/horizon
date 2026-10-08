@@ -376,3 +376,64 @@ fn a_token_answer_must_be_a_bearer_token() {
         assert_eq!(result.unwrap_err(), Error::InvalidResponse);
     }
 }
+
+#[test]
+fn the_user_is_named_with_github_private_commit_address() {
+    let (client, requests, task) = github(vec![
+        (200, json!({"id": 7, "login": "octo-cat", "name": "Octo Cat"})),
+        (200, json!({"id": 8, "login": "plain", "name": null})),
+        (401, json!({"message": "Bad credentials"})),
+    ]);
+    let token = Secret::new("ghu_synthetic".into());
+    let user = client.user(&token).unwrap();
+    assert_eq!(user.email, "7+octo-cat@users.noreply.github.com");
+    assert_eq!(user.name, "Octo Cat");
+    assert_eq!(
+        client.user(&token).unwrap().name,
+        "plain",
+        "the login stands in for no name"
+    );
+    assert_eq!(client.user(&token).unwrap_err(), Error::Revoked);
+    task.join().unwrap();
+    assert_eq!(requests.lock().unwrap()[0].0, "GET /user HTTP/1.1");
+}
+
+#[test]
+fn installed_repositories_reads_every_page_of_every_installation() {
+    let page = |from: usize, count: usize| -> Value {
+        let repositories: Vec<Value> = (from..from + count)
+            .map(|n| json!({"full_name": format!("Acme/Repo-{n}")}))
+            .collect();
+        json!({"total_count": 101, "repositories": repositories})
+    };
+    let (client, requests, task) = github(vec![
+        (200, json!({"installations": [{"id": 1}, {"id": 2}]})),
+        (200, page(0, 100)),
+        (200, page(100, 1)),
+        (
+            200,
+            json!({"total_count": 1, "repositories": [{"full_name": "acme/repo-0"}]}),
+        ),
+    ]);
+    let names = client
+        .installed_repositories(&Secret::new("ghu_synthetic".into()))
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(names.len(), 101, "lowercased and deduplicated across installations");
+    assert!(names.contains(&"acme/repo-100".to_owned()));
+    let lines: Vec<String> = requests.lock().unwrap().iter().map(|(line, _)| line.clone()).collect();
+    assert_eq!(
+        lines[2],
+        "GET /user/installations/1/repositories?per_page=100&page=2 HTTP/1.1"
+    );
+}
+
+#[test]
+fn repository_names_follow_github_rules() {
+    for good in ["acme/web", "a-b/c.d_e", "acme/.github"] {
+        assert!(valid_repository(good), "{good}");
+    }
+    for bad in ["acme", "acme/web/x", "acme/..", "-/x", "acme/we b", "acme/"] {
+        assert!(!valid_repository(bad), "{bad}");
+    }
+}
