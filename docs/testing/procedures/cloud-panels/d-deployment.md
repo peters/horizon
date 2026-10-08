@@ -425,43 +425,75 @@ Use `smoke-a` from D01.
 
 This task rents no compute. The deployment stops before Horizon requests a worker.
 
-1. In a scratch branch of `<repo>`, change the `runpod-cpu` profile. Add a `build`
-   section and set `image` to a private repository on `ghcr.io` that the run owns.
+1. Make a scratch branch of `<repo>`.
 
-   Result: `git -C <repo> log -1` shows the scratch commit.
+   ```sh
+   git -C <repo> switch -c smoke-push-<run>
+   ```
 
-2. Read the `docker_config` value in `~/.horizon/cloud/settings.json`. Horizon
+   Result: `git -C <repo> branch --show-current` shows `smoke-push-<run>`.
+
+2. In `.horizon/cloud.yml` of the scratch branch, add a `build` section to the
+   `runpod-cpu` profile and set its `image` to a private repository on `ghcr.io`
+   that the run owns. Commit the change.
+
+   ```sh
+   git -C <repo> commit -am "Smoke: build and push the runpod-cpu image"
+   ```
+
+   Result: `git -C <repo> show HEAD:.horizon/cloud.yml` shows the `build` section
+   and the `ghcr.io` image in the `runpod-cpu` profile.
+
+3. Read the `docker_config` value in `~/.horizon/cloud/settings.json`. Horizon
    builds and pushes with this Docker configuration only.
 
    Result: You know the directory, for example `~/.horizon/cloud/docker`.
 
-3. Make sure that this directory has no login for `ghcr.io`.
+4. Make a copy of the directory, then remove its login for `ghcr.io`.
 
    ```sh
+   cp -a <docker_config> <docker_config>.d06-backup
    docker --config <docker_config> logout ghcr.io
    ```
 
-   Result: Docker shows **Removing login credentials for ghcr.io**, or that there
-   was no login.
+   Result: The copy exists. Docker shows **Removing login credentials for
+   ghcr.io**, or that there was no login.
 
-4. Deploy a new cloud `smoke-push` from the scratch commit with the `runpod-cpu`
+5. Deploy a new cloud `smoke-push` from the scratch commit with the `runpod-cpu`
    profile.
 
    Result: The card shows **Build locally**, then **Push image**.
 
-5. Wait until the push fails.
+6. Wait until the push fails.
 
    Result: The card shows the failure on **Push image**. **Validate** and
    **Build locally** show as done. The status strip does not say
    **Validation failed**.
 
-6. Record a screenshot of the card and the step list in the evidence.
+7. Record a screenshot of the card and the step list in the evidence.
 
    Result: The evidence shows the failure on **Push image**.
 
-7. Close the card of `smoke-push` and delete the scratch branch.
+8. Close the card of `smoke-push`.
 
    Result: The board does not show `smoke-push`. The provider shows no pod for it.
+
+9. Put back the Docker configuration from the copy.
+
+   ```sh
+   rm -rf <docker_config> && mv <docker_config>.d06-backup <docker_config>
+   ```
+
+   Result: `docker --config <docker_config> login ghcr.io --get-login 2>/dev/null`
+   or the directory listing shows the same state as before step 4.
+
+10. Go back to the branch of the run and delete the scratch branch.
+
+    ```sh
+    git -C <repo> switch - && git -C <repo> branch -D smoke-push-<run>
+    ```
+
+    Result: `git -C <repo> branch --list 'smoke-push-*'` shows nothing.
 
 ## 7. Pass criteria
 
