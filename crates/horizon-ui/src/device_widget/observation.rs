@@ -21,6 +21,9 @@ impl DeviceUiState {
                 self.status = status;
             }
             let details = session.take_server_details();
+            if let Some(metadata) = details.native_session {
+                self.set_native_metadata(metadata);
+            }
             if let Some(name) = details.name {
                 self.server.name = Some(name);
             }

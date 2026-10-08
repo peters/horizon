@@ -38,18 +38,15 @@ pub async fn execute(host: Host, lifetime: Duration) -> Result<()> {
     let mut terminate =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(|_| Error::Unavailable)?;
     let mut task = tokio::task::spawn_blocking(move || {
+        let observer = views.observer();
         let report = runner::run(
             &host.actor,
             &retained,
             |session, kind, bytes| retained_archive.capture(session, kind, bytes),
             |mut event| {
-                if event.phase == "session_created"
-                    && let Some(session) = event.session
-                {
-                    event.view = Some(views.open(session)?);
-                }
+                observer.observe(&mut event)?;
                 let mut bytes = serde_json::to_vec(&event).map_err(|_| Error::Cancelled)?;
-                if bytes.len() > 8192 {
+                if bytes.len() > horizon_core::browser::manifest::device::NativeSessionMetadata::MAX_WIRE_BYTES + 1024 {
                     retained.cancel();
                     return Err(Error::Cancelled);
                 }
@@ -57,6 +54,7 @@ pub async fn execute(host: Host, lifetime: Duration) -> Result<()> {
                 progress.send(bytes, &retained)
             },
         );
+        drop(observer);
         let failed = report.as_ref().map_or(true, |report| {
             report.cancelled
                 || !report.upload_cleanup_errors.is_empty()

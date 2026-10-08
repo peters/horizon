@@ -289,6 +289,54 @@ It also tests live views, evidence and cleanup after cancellation or a native ho
 
    Result: Foreign handles cause refusal. Lost replies retain uncertainty. A blocked output consumer cannot retain resources indefinitely.
 
+### 6.8 NATIVE-CAPTION — Device identity and progress
+
+1. Attach both lane endpoints to Device panels on the candidate.
+
+   Result: Each header shows the model, OS version, form, provider and matrix lane.
+   The lane number starts at one. The header shows the app ID and a short build hash.
+
+2. Examine each panel with `device_panel inspect`.
+
+   Result: `server.native_session` contains the same facts as the header.
+   **Connection details** contains selectable session, run and full build IDs.
+   The metadata contains no credentials, upload tokens, tunnel names or provider URLs.
+
+3. Run a recipe with more than one step.
+
+   Result: The caption follows the current recipe and step within about one second.
+   Each completed recipe has a **PASS** or **FAIL** result.
+
+4. Run a failing recipe and a recipe with a reset step.
+
+   Result: The failing recipe shows **FAIL**. The replacement endpoint has its own
+   session ID. It keeps the run ID, matrix lane and completed recipe results.
+
+   Use a synthetic provider fixture to delay and refuse the replacement allocation.
+   Then run one more recipe.
+
+   Result: The original viewer keeps both recipe **FAIL** results before it disconnects.
+   Native resources close before the delayed replacement result arrives.
+   Cancellation or a progress callback failure releases the retained viewer.
+
+5. Examine the panels after native cleanup.
+
+   Result: The panels disconnect. The last metadata and recipe results remain visible.
+
+   Close the CLI immediately after its report.
+
+   Result: The viewer receives the final recipe result before the CLI exits.
+   A client with an incomplete message cannot prevent bounded viewer cleanup.
+
+6. Resize a panel and select **Fit**.
+
+   Result: The caption wraps within the panel. The image keeps its aspect ratio.
+
+7. Reconnect a panel to a synthetic VNC server without native metadata.
+
+   Result: The old native metadata disappears. Ordinary clipboard text does not
+   create native metadata or change the local clipboard.
+
 ## 7. Pass criteria
 
 - All matrix steps pass with real app-to-backend requests.

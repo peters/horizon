@@ -445,6 +445,17 @@ impl Plan<'_> {
             return report;
         }
         self.steps(runtime, control, &mut report, &mut owned, observation);
+        if let Err(error) = progress(Progress {
+            run,
+            matrix_index: Some(target.matrix_index),
+            phase: "lane_complete",
+            recipe: None,
+            step: None,
+            session: report.session,
+            view: None,
+        }) {
+            report.error = Some(error.to_string());
+        }
         if let Some(session) = owned.session.take()
             && let Err(error) = runtime.close(session)
         {
@@ -472,6 +483,7 @@ impl Plan<'_> {
                 .as_ref()
                 .is_none_or(|platforms| platforms.contains(&platform))
         }) {
+            let first_step = report.steps.len();
             for step in &recipe.steps {
                 let start = Instant::now();
                 let mut screenshot = None;
@@ -508,8 +520,8 @@ impl Plan<'_> {
                                 run,
                                 matrix_index: Some(report.matrix_index),
                                 phase: "session_created",
-                                recipe: None,
-                                step: None,
+                                recipe: Some(recipe.id.clone()),
+                                step: Some(step.id.clone()),
                                 session: Some(replacement),
                                 view: None,
                             })?;
@@ -535,6 +547,19 @@ impl Plan<'_> {
                     error: outcome.err().map(|error| error.to_string()),
                     screenshot,
                 });
+            }
+            let passed = report.steps[first_step..].iter().all(|step| step.passed);
+            if let Err(error) = progress(Progress {
+                run,
+                matrix_index: Some(report.matrix_index),
+                phase: if passed { "recipe_passed" } else { "recipe_failed" },
+                recipe: Some(recipe.id.clone()),
+                step: None,
+                session: report.session,
+                view: None,
+            }) {
+                report.error = Some(error.to_string());
+                return;
             }
         }
     }

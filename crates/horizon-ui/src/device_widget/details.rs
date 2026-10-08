@@ -1,9 +1,47 @@
 //! Machine identity and selectable connection facts, separate from image controls.
 use egui::{Align, Label, Layout, RichText, Stroke, Ui, vec2};
-use horizon_core::{DevicePanelState, browser::manifest::device::DeviceServerDetails};
+use horizon_core::{
+    DevicePanelState,
+    browser::manifest::device::{DeviceServerDetails, NativeSessionMetadata},
+};
 
 use super::session::Status;
 use crate::theme;
+
+/// Rebuild caption strings only when metadata changes, not on pointer frames.
+#[derive(Default)]
+pub(super) struct NativeLabels {
+    device: String,
+    lane: String,
+    app: String,
+    progress: String,
+}
+impl NativeLabels {
+    pub(super) fn new(native: &NativeSessionMetadata) -> Self {
+        let result = native
+            .recipes
+            .iter()
+            .rev()
+            .find(|result| Some(&result.recipe) == native.recipe.as_ref());
+        Self {
+            device: format!("{} · {} · {}", native.model, native.os, native.form),
+            lane: format!("{} · lane {} of {}", native.provider, native.lane, native.lanes),
+            app: format!(
+                "{} · {}",
+                native.app,
+                native.build_sha256.get(..12).unwrap_or(&native.build_sha256)
+            ),
+            progress: match (&native.recipe, &native.step, result) {
+                (Some(recipe), Some(step), _) => format!("{recipe} · {step}"),
+                (Some(recipe), None, Some(result)) => {
+                    format!("{recipe}: {}", if result.passed { "PASS" } else { "FAIL" })
+                }
+                (Some(recipe), None, _) => recipe.clone(),
+                _ => String::new(),
+            },
+        }
+    }
+}
 
 pub(super) fn show(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServerDetails, connected: bool) {
     ui.collapsing("Connection details", |ui| {
@@ -98,6 +136,18 @@ fn connection(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServerDetai
             row(ui, "Resolution", &format!("{width} × {height}"));
         }
     }
+    if let Some(native) = &server.native_session {
+        ui.add_space(6.0);
+        section(ui, "Native test (host-reported)");
+        row(ui, "Session", &native.session_id);
+        if let Some(run) = &native.run_id {
+            row(ui, "Run", run);
+        }
+        row(ui, "Build SHA256", &native.build_sha256);
+        for result in &native.recipes {
+            row(ui, &result.recipe, if result.passed { "PASS" } else { "FAIL" });
+        }
+    }
     if device.display_name(server.name.as_deref()).is_none() {
         ui.add_space(6.0);
         caption(ui, "Machine name unavailable");
@@ -125,6 +175,7 @@ pub(super) fn header(
     ui: &mut Ui,
     device: &DevicePanelState,
     server: &DeviceServerDetails,
+    native_labels: &NativeLabels,
     status: &super::session::Status,
     interactive: bool,
     interact: bool,
@@ -138,7 +189,11 @@ pub(super) fn header(
         } else {
             "VNC desktop"
         };
-        let name = device.display_name(server.name.as_deref());
+        let name = if server.native_session.is_some() {
+            Some(native_labels.device.as_str())
+        } else {
+            device.display_name(server.name.as_deref())
+        };
         let reconnect = ui
             .horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
@@ -152,9 +207,15 @@ pub(super) fn header(
                         .on_hover_text(name.unwrap_or(&endpoint));
                     ui.add(
                         Label::new(
-                            RichText::new(if name.is_some() { &endpoint } else { transport })
-                                .size(12.0)
-                                .color(theme::FG_SOFT()),
+                            RichText::new(if server.native_session.is_some() {
+                                &native_labels.lane
+                            } else if name.is_some() {
+                                &endpoint
+                            } else {
+                                transport
+                            })
+                            .size(12.0)
+                            .color(theme::FG_SOFT()),
                         )
                         .truncate(),
                     )
@@ -167,6 +228,13 @@ pub(super) fn header(
                 .inner
             })
             .inner;
+        if let Some(native) = &server.native_session {
+            ui.add(Label::new(&native_labels.app).wrap())
+                .on_hover_text(&native.build_sha256);
+            if !native_labels.progress.is_empty() {
+                ui.add(Label::new(&native_labels.progress).wrap());
+            }
+        }
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
@@ -178,7 +246,9 @@ pub(super) fn header(
             };
             ui.label(RichText::new(mode).size(12.0).color(theme::FG_SOFT()));
             if name.is_some() {
-                let source = if device.display_name(None).is_some() {
+                let source = if server.native_session.is_some() {
+                    "Native host"
+                } else if device.display_name(None).is_some() {
                     "Supplied name"
                 } else {
                     "VNC name"
@@ -233,4 +303,28 @@ fn desktop_icon(ui: &mut Ui) {
         [rect.min + vec2(14.0, 30.0), rect.min + vec2(26.0, 30.0)],
         Stroke::new(1.5, color),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn repeated_recipe_ids_show_active_step_then_latest_result() {
+        let mut native = super::super::tests::native_metadata();
+        native.recipe = Some("login".into());
+        native.recipes = vec![horizon_core::browser::manifest::device::NativeRecipeResult {
+            recipe: "login".into(),
+            passed: true,
+        }];
+        native.step = Some("retry".into());
+        assert_eq!(NativeLabels::new(&native).progress, "login · retry");
+        native.step = None;
+        native
+            .recipes
+            .push(horizon_core::browser::manifest::device::NativeRecipeResult {
+                recipe: "login".into(),
+                passed: false,
+            });
+        assert_eq!(NativeLabels::new(&native).progress, "login: FAIL");
+    }
 }

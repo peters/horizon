@@ -9,7 +9,8 @@ use std::{
 
 use egui::{ColorImage, Context, ViewportId};
 use horizon_core::{
-    DevicePanelState, DeviceViewOptions, SshConnection, browser::manifest::device::DeviceServerDetails,
+    DevicePanelState, DeviceViewOptions, SshConnection,
+    browser::manifest::device::{DeviceServerDetails, NativeSessionMetadata},
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot};
@@ -81,6 +82,7 @@ pub(super) struct Updates {
     options: DeviceViewOptions,
     pub desktop: Option<[usize; 2]>,
     pub server_name: Option<String>,
+    pub native_session: Option<NativeSessionMetadata>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -123,6 +125,7 @@ impl Session {
             options,
             desktop: None,
             server_name: None,
+            native_session: None,
         }));
         let latest_full = Arc::new(Mutex::new(None));
         let state = Arc::clone(&updates);
@@ -238,6 +241,7 @@ impl Session {
                 options: produced_with,
                 desktop: Some(latest_full.size),
                 server_name: None,
+                native_session: None,
             })),
             latest_full: Arc::new(Mutex::new(Some(Arc::new(latest_full)))),
             recording_live: Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -248,6 +252,11 @@ impl Session {
         (session, receiver)
     }
 
+    #[cfg(test)]
+    pub(super) fn native_text_for_test(&self, ctx: &Context, text: &str) -> bool {
+        publish_native_text(&self.updates, ctx, text)
+    }
+
     /// Marks the viewer undrawn and routes its wakes to `viewport`, the pass
     /// that uploads for it, so a closed detached window cannot keep them.
     /// Returns whether an image or status change is waiting.
@@ -255,7 +264,7 @@ impl Session {
         let mut state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.visible = false;
         state.viewport = viewport;
-        state.image.is_some() || state.status.is_some()
+        state.image.is_some() || state.status.is_some() || state.native_session.is_some()
     }
 
     pub(super) fn set_visible(&self, visible: bool) {
@@ -279,6 +288,7 @@ impl Session {
             options: state.options,
             desktop: state.desktop,
             server_name: state.server_name.take(),
+            native_session: state.native_session.take(),
         }
     }
 
@@ -286,6 +296,7 @@ impl Session {
         let mut state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         DeviceServerDetails {
             name: state.server_name.take(),
+            native_session: state.native_session.take(),
             desktop_size: state.desktop,
         }
     }
@@ -335,6 +346,19 @@ fn wake_ui(ctx: &Context, drawn: bool, viewport: ViewportId) {
     } else {
         ctx.request_repaint_after_for(super::BACKGROUND_UPLOAD_INTERVAL, viewport);
     }
+}
+
+fn publish_native_text(updates: &Mutex<Updates>, ctx: &Context, text: &str) -> bool {
+    let Some(metadata) = NativeSessionMetadata::from_wire_text(text) else {
+        return false;
+    };
+    let (drawn, viewport) = {
+        let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.native_session = Some(metadata);
+        (state.visible, state.viewport)
+    };
+    wake_ui(ctx, drawn, viewport);
+    true
 }
 
 async fn connection(
@@ -389,6 +413,10 @@ async fn stream_desktop(
                 break;
             }
             if let Some(event) = client.poll_event().await? {
+                if let vnc::VncEvent::Text(text) = &event {
+                    publish_native_text(updates, ctx, text);
+                    continue;
+                }
                 full_refresh |= matches!(event, vnc::VncEvent::SetResolution(_));
                 let previous_size = framebuffer.size();
                 changed |= apply_frame_event(&mut framebuffer, &mut received_pixels, event)?;

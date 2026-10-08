@@ -235,6 +235,58 @@ impl Actor {
         remaining(lane.deadline)?;
         Ok(Arc::clone(&lane.view_closed))
     }
+    pub(crate) fn view_metadata(
+        &self,
+        id: Uuid,
+    ) -> Result<horizon_core::browser::manifest::device::NativeSessionMetadata> {
+        use horizon_app_testing::contract::Form;
+        use horizon_core::browser::manifest::device::NativeSessionMetadata;
+        let lane = self.lane(id)?;
+        let lane = lane.lock().map_err(|_| Error::Unavailable)?;
+        let target = self
+            .matrix
+            .iter()
+            .find(|row| row.matrix_index == lane.matrix_index)
+            .ok_or(Error::Unavailable)?;
+        let app = self
+            .contract
+            .apps
+            .get(&target.device.platform)
+            .ok_or(Error::Unavailable)?;
+        let upload = lane.app.lock().map_err(|_| Error::Unavailable)?;
+        Ok(NativeSessionMetadata {
+            session_id: id.to_string(),
+            run_id: None,
+            model: target.device.model.clone(),
+            os: format!(
+                "{} {}",
+                match target.device.platform {
+                    Platform::Ios => "iOS",
+                    Platform::Android => "Android",
+                },
+                target.device.os_version
+            ),
+            form: match target.device.form {
+                Form::Phone => "phone",
+                Form::Tablet => "tablet",
+            }
+            .into(),
+            provider: "BrowserStack".into(),
+            lane: lane.matrix_index + 1,
+            lanes: self.matrix.len(),
+            app: app
+                .bundle_id
+                .as_ref()
+                .or(app.package.as_ref())
+                .ok_or(Error::Unavailable)?
+                .clone(),
+            build_sha256: upload.sha256.clone(),
+            recipe: None,
+            step: None,
+            recipes: Vec::new(),
+        })
+    }
+
     pub(super) fn active<'a>(&self, lane: &'a mut Lane) -> Result<&'a mut NativeDriver> {
         if lane.cleanup != Cleanup::Active {
             return Err(Error::SessionUnknown);

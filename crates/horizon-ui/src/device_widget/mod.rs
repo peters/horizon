@@ -47,6 +47,7 @@ pub(crate) struct DeviceUiState {
     presented_options: Option<DeviceViewOptions>,
     status: Status,
     server: DeviceServerDetails,
+    native_labels: details::NativeLabels,
     desktop: Option<[usize; 2]>,
     /// What is shown is one flat colour: nothing is open on the desktop yet.
     empty_desktop: bool,
@@ -74,6 +75,11 @@ struct ImageDisplay {
 }
 
 impl DeviceUiState {
+    fn set_native_metadata(&mut self, metadata: horizon_core::browser::manifest::device::NativeSessionMetadata) {
+        self.native_labels = details::NativeLabels::new(&metadata);
+        self.server.native_session = Some(metadata);
+    }
+
     pub(crate) fn screenshot_image(&mut self) -> Result<ColorImage, String> {
         if let Some(observation) = self.session.as_ref().map(Session::observation) {
             if let Some(status) = observation.status {
@@ -172,6 +178,9 @@ impl DeviceUiState {
             self.desktop = Some(desktop);
             self.server.desktop_size = Some(desktop);
         }
+        if let Some(metadata) = updates.native_session {
+            self.set_native_metadata(metadata);
+        }
         if let Some(name) = updates.server_name {
             self.server.name = Some(name);
         }
@@ -218,7 +227,15 @@ impl DeviceUiState {
         {
             self.desktop = Some(source.size);
         }
-        if details::header(ui, device, &self.server, &self.status, interactive, self.interact) {
+        if details::header(
+            ui,
+            device,
+            &self.server,
+            &self.native_labels,
+            &self.status,
+            interactive,
+            self.interact,
+        ) {
             self.reconnect(ui.ctx(), device);
         }
         ui.add_enabled_ui(interactive, |ui| {
@@ -395,6 +412,7 @@ impl DeviceUiState {
         self.image = ImageDisplay::default();
         self.empty_desktop = false;
         self.server = DeviceServerDetails::default();
+        self.native_labels = details::NativeLabels::default();
         self.input = InputState::default();
         self.captured = false;
         if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {

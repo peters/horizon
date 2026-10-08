@@ -903,3 +903,65 @@ fn reset_publishes_the_owned_replacement_before_capture_and_callback_failure_clo
         assert_eq!(fake.screenshots.load(Ordering::SeqCst), usize::from(!fail_progress));
     }
 }
+
+#[test]
+fn recipe_completion_follows_steps_with_lane_and_reset_session_before_cleanup() {
+    let fake = Fake::default();
+    let events = Mutex::new(Vec::new());
+    let mut reset = recipe();
+    reset.id = "reset".into();
+    reset.steps[0].action = Action::Reset {};
+    let recipes = [reset, recipe()];
+    let plan = Plan {
+        targets: targets(),
+        recipes: &recipes,
+        parallel: 2,
+        screenshots: false,
+        video: false,
+        logs_on_failure: false,
+    };
+    let report = plan
+        .execute(
+            &fake,
+            &Control::new(Duration::from_secs(10)).unwrap(),
+            capture,
+            |event| {
+                if matches!(event.phase, "recipe_passed" | "recipe_failed") {
+                    assert!(fake.sessions.lock().unwrap().contains_key(&event.session.unwrap()));
+                }
+                events.lock().unwrap().push(event);
+                Ok(())
+            },
+        )
+        .unwrap();
+    let events = events.into_inner().unwrap();
+    for device in &report.devices {
+        let events: Vec<_> = events
+            .iter()
+            .filter(|e| e.matrix_index == Some(device.matrix_index))
+            .collect();
+        assert_eq!(
+            events.iter().map(|e| e.phase).collect::<Vec<_>>(),
+            vec![
+                "session_created",
+                "step",
+                "session_created",
+                "recipe_passed",
+                "step",
+                if device.matrix_index == 0 {
+                    "recipe_failed"
+                } else {
+                    "recipe_passed"
+                },
+                "lane_complete"
+            ]
+        );
+        assert_eq!(events[2].recipe.as_deref(), Some("reset"));
+        assert_eq!(events[2].step.as_deref(), Some("visible"));
+        assert_ne!(events[0].session, events[2].session);
+        assert_eq!(events.last().unwrap().session, device.session);
+        assert_eq!(events[events.len() - 2].recipe.as_deref(), Some("smoke"));
+        assert!(events.last().unwrap().step.is_none());
+        assert!(events.iter().all(|e| e.run == report.id));
+    }
+}
