@@ -19,7 +19,11 @@ fn describe(label: &str, chain: &Chain) {
 }
 
 fn user(token: &str) -> u16 {
-    let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(Duration::from_secs(30)))
+        .build()
+        .into();
     agent
         .get("https://api.github.com/user")
         .header("Authorization", &format!("Bearer {token}"))

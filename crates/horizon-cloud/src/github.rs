@@ -411,6 +411,7 @@ fn chain(answer: &Answer) -> Result<Chain> {
     #[derive(Deserialize)]
     struct Fields {
         access_token: String,
+        token_type: String,
         expires_in: Option<u64>,
         refresh_token: Option<String>,
         refresh_token_expires_in: Option<u64>,
@@ -418,6 +419,10 @@ fn chain(answer: &Answer) -> Result<Chain> {
     let fields: Fields = answer.parse()?;
     let access_token = Secret::new(fields.access_token);
     let refresh_token = fields.refresh_token.map(Secret::new);
+    // Callers send the token as a bearer token; any other type is a malformed answer.
+    if !fields.token_type.eq_ignore_ascii_case("bearer") {
+        return Err(Error::InvalidResponse);
+    }
     let (Some(refresh_token), Some(access), Some(refresh)) =
         (refresh_token, fields.expires_in, fields.refresh_token_expires_in)
     else {
@@ -449,7 +454,10 @@ fn later(seconds: u64) -> Result<SystemTime> {
 }
 
 fn valid_user_code(code: &str) -> bool {
-    (4..=32).contains(&code.len()) && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    (4..=32).contains(&code.len())
+        && code
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-')
 }
 
 fn valid_slug(slug: &str) -> bool {

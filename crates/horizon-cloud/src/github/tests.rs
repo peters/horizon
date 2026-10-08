@@ -176,6 +176,7 @@ fn a_device_code_answer_must_be_safe_to_show() {
         ("ABCD-1234", "https://"),
         ("ABCD-1234", "https://github.com/\u{1b}[2J"),
         ("ABCD-1234", "https://github.com:8443/login/device"),
+        ("abcd-1234", "https://github.com/login/device"),
     ] {
         let (client, _requests, task) = github(vec![(
             200,
@@ -362,4 +363,16 @@ fn a_manifest_answer_with_unsafe_values_is_refused() {
         Error::InvalidResponse
     );
     task.join().unwrap();
+}
+
+#[test]
+fn a_token_answer_must_be_a_bearer_token() {
+    for token_type in [json!("mac"), Value::Null] {
+        let mut answer = tokens();
+        answer["token_type"] = token_type;
+        let (client, _requests, task) = github(vec![(200, answer)]);
+        let result = client.refresh("Iv23synthetic", None, &Secret::new("ghr_old".into()));
+        task.join().unwrap();
+        assert_eq!(result.unwrap_err(), Error::InvalidResponse);
+    }
 }
