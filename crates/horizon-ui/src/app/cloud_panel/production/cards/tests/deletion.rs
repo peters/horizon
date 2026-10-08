@@ -367,3 +367,32 @@ fn manage_offers_no_reconnect_or_second_check_while_the_idle_watch_asks_the_prov
     runtime.poll_idle();
     assert!(has(&action_texts(&ctx, &mut runtime), "Reconnect cloud"));
 }
+
+#[test]
+fn manage_keeps_the_layouts_only_for_a_header_too_narrow_to_show_them() {
+    use super::scrolling::{frame, label_pos, verbose_card};
+    for (width, in_manage) in [(1200.0, false), (560.0, true)] {
+        let (_temp, ctx, mut app) = verbose_card();
+        let ready = ready_bound_runtime();
+        {
+            let runtime = app.cloud_prototype.production.runtimes.entry(901).or_default();
+            runtime.stage = ready.stage;
+            runtime.state = ready.state;
+            runtime.drawer = Some(Tab::Manage);
+            // Connected, so the cloud is Ready and its layouts apply.
+            runtime.receiver = Some(std::sync::mpsc::channel().1);
+        }
+        app.cloud_prototype.groups.0[0].size[0] = width;
+        let mut output = frame(&ctx, &mut app, 0.0, Pos2::ZERO, 0.0);
+        for step in 1..4 {
+            output = frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
+        }
+        assert_eq!(label_pos(&output, "Layout").is_some(), in_manage, "at {width}");
+        if in_manage {
+            assert!(
+                label_pos(&output, "Rows").is_some(),
+                "Manage offers the layouts at {width}"
+            );
+        }
+    }
+}

@@ -375,6 +375,13 @@ impl HorizonApp {
         if let Some((id, size)) = chosen.resize {
             self.resize_production_cloud(id, size);
         }
+        if let Some((id, layout)) = chosen.layout
+            && let Some(index) = self.cloud_prototype.groups.0.iter().position(|g| g.issue == id)
+        {
+            self.cloud_prototype.groups.0[index].set_layout(&mut self.board, layout);
+            self.cloud_prototype.groups.make_room(&mut self.board, index);
+            self.save_cloud_prototype();
+        }
     }
 }
 
@@ -389,6 +396,7 @@ struct Layer {
 struct Chosen {
     actions: Vec<(u32, Action)>,
     fullscreen: Option<u32>,
+    layout: Option<(u32, Option<horizon_core::WorkspaceLayout>)>,
     resize: Option<(u32, (u16, u16))>,
 }
 
@@ -399,6 +407,9 @@ impl Chosen {
         }
         if let Some(size) = response.resize {
             self.resize = Some((id, size));
+        }
+        if let drawer::LayoutChoice::Set(selected) = response.layout {
+            self.layout = Some((id, selected));
         }
         if response.fullscreen {
             self.fullscreen = Some(id);

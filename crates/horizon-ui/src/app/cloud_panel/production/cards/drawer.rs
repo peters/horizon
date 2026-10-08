@@ -9,8 +9,8 @@ use super::{Action, profile_details, runtime_actions, section};
 use crate::app::cloud_panel::runtime::{action_button, readable_runtime_style, solid_scroll_area};
 use crate::theme;
 use egui::{Align2, FontId, Rect, RichText, Sense, Stroke, pos2, vec2};
-use horizon_core::Board;
 use horizon_core::cloud_panel::{CloudGroup, CloudLaunch};
+use horizon_core::{Board, WorkspaceLayout};
 
 #[cfg(test)]
 pub(super) use connections::access;
@@ -68,9 +68,19 @@ impl Tab {
 }
 
 #[derive(Default)]
+pub(super) enum LayoutChoice {
+    #[default]
+    Unchanged,
+    /// `None` inside is manual placement.
+    Set(Option<WorkspaceLayout>),
+}
+
+#[derive(Default)]
 pub(super) struct Response {
     pub action: Option<Action>,
     pub resize: Option<(u16, u16)>,
+    /// Set when a layout button was chosen in Manage.
+    pub layout: LayoutChoice,
     pub fullscreen: bool,
 }
 
@@ -374,8 +384,20 @@ fn manage(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'
         response.action = runtime_actions(ui, id, runtime).or(response.action.take());
         return;
     }
-    // The layout buttons are in the header strip whenever they apply.
+    // The header strip has the layout buttons when it is wide enough; a narrow cloud
+    // keeps them here.
+    let occupancy = super::view::occupancy(context.group, context.board);
+    let layout = super::view::layout_controls(context.group, context.status, occupancy)
+        .filter(|_| !super::strip::header_fits_layout(context.group.size[0]));
     section::show(ui, "View", |ui| {
+        if let Some(controls) = layout {
+            let mut selected = controls.selected;
+            if section::row(ui, "Layout", "How the panels in this cloud are arranged.", |ui| {
+                crate::app::workspace::workspace_layout_buttons(ui, &mut selected, controls.color)
+            }) {
+                response.layout = LayoutChoice::Set(selected);
+            }
+        }
         let (label, detail) = if context.fullscreen {
             ("Exit full screen", "Return to the whole canvas.")
         } else {

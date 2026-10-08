@@ -58,8 +58,13 @@ pub(in crate::app::cloud_panel) struct LayoutControls {
 /// Four buttons and the gaps between them, as the workspace toolbar draws them.
 const LAYOUT_WIDTH: f32 = 208.0;
 const LAYOUT_HEIGHT: f32 = 24.0;
-/// Below this header width the status sentence keeps the row; Manage still has the buttons.
+/// Below this header width the status sentence keeps the row; Manage has the buttons instead.
 const LAYOUT_MIN_HEADER: f32 = 700.0;
+
+/// Whether a header `width` wide has room for the layout buttons.
+pub(super) fn header_fits_layout(width: f32) -> bool {
+    width >= LAYOUT_MIN_HEADER
+}
 
 pub(in crate::app::cloud_panel) struct Strip {
     /// Width from the header's right edge that the title must leave free.
@@ -159,7 +164,7 @@ pub(super) fn show(
         left = rect.left() - 24.0;
     }
     let mut reserved_row = 0.0;
-    if let Some(mut controls) = layout.filter(|_| header.width() >= LAYOUT_MIN_HEADER) {
+    if let Some(mut controls) = layout.filter(|_| header_fits_layout(header.width())) {
         let row_y = header.bottom() - TRACK_HEIGHT - 15.0;
         let rect = Rect::from_min_size(
             pos2(header.right() - 26.0 - LAYOUT_WIDTH, row_y - LAYOUT_HEIGHT / 2.0),
