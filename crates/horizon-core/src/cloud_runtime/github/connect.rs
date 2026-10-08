@@ -172,9 +172,23 @@ fn created(code: &Secret, root: &Path) -> Result<Settings> {
     Ok(settings)
 }
 
-/// Removes the client secret of an app whose settings were not saved.
-pub fn discard(settings: &Settings) {
-    let _ = std::fs::remove_file(&settings.client_secret_file);
+/// Removes the client secret of an app whose settings were not saved. A save can fail
+/// after the settings file in `root` already names the app; then, and whenever that
+/// file cannot be read, the secret stays, so saved settings never name a missing file.
+pub fn discard(root: &Path, settings: &Settings) {
+    // Only the path matters here, so settings that fail validation still count.
+    let saved = match std::fs::read(root.join("settings.json")) {
+        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes).map_or(true, |value| {
+            value
+                .pointer("/github/client_secret_file")
+                .and_then(serde_json::Value::as_str)
+                == settings.client_secret_file.to_str()
+        }),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    };
+    if !saved {
+        let _ = std::fs::remove_file(&settings.client_secret_file);
+    }
 }
 
 fn write_private(path: &Path, value: &str) -> Result<()> {

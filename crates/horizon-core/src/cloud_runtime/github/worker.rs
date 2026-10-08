@@ -179,6 +179,17 @@ pub(super) fn payload(
     Ok(file)
 }
 
+/// Removes the worker's chain and the static Git binding.
+pub(super) fn clear(connection: &Connection, runner: &Runner<'_>) -> Result<()> {
+    runner
+        .run(
+            "GitHub access removal",
+            &mut connection.command("horizon-worker-github clear"),
+            Duration::from_secs(20),
+        )
+        .map(drop)
+}
+
 pub(super) fn install(
     connection: &Connection,
     runner: &Runner<'_>,

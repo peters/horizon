@@ -48,8 +48,8 @@ impl Card {
                 .and_then(|settings| match setup::save_github(&root, Some(settings.clone())) {
                     Ok(committed) => Ok((committed, settings)),
                     Err(error) => {
-                        // The saved settings do not name this app, so its secret goes too.
-                        connect::discard(&settings);
+                        // Unless the settings file already names this app, its secret goes too.
+                        connect::discard(&root, &settings);
                         Err(error)
                     }
                 })

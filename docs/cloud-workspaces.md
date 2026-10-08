@@ -277,7 +277,8 @@ is installed. **Skip** continues without GitHub access, and so does a declined o
 expired sign-in, or a worker image without the service. When cloud settings also
 have a `git_credentials` binding for the repository, Git keeps using that binding
 in those cases, and the card says so. While the worker serves access from the
-app, Horizon removes that binding from the worker.
+app, Horizon removes that binding from the worker. A cloud whose checkout no
+longer has a GitHub origin loses the access its worker held.
 
 The worker's root service renews the access every 8 hours for about 6 months,
 also while this computer is off. Agents get short-lived access tokens through

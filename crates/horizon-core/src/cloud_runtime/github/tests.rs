@@ -548,3 +548,28 @@ fn a_worker_that_took_a_new_chain_never_reports_its_old_access() {
     );
     assert_eq!(settle(Signed::In, held()), Settled::Signed);
 }
+
+#[test]
+fn a_secret_stays_when_the_settings_file_already_names_its_app() {
+    let root = tempfile::tempdir().unwrap();
+    let secret = private(root.path(), "synthetic-secret");
+    let app = settings(Mode::Ask, &secret);
+    let file = root.path().join("settings.json");
+    std::fs::write(
+        &file,
+        serde_json::json!({"github": {"client_secret_file": secret}}).to_string(),
+    )
+    .unwrap();
+    connect::discard(root.path(), &app);
+    assert!(secret.exists(), "the committed settings name this secret");
+    std::fs::write(&file, "{").unwrap();
+    connect::discard(root.path(), &app);
+    assert!(secret.exists(), "unreadable settings keep it");
+    std::fs::write(&file, "{}").unwrap();
+    connect::discard(root.path(), &app);
+    assert!(!secret.exists(), "settings without this app let it go");
+    let secret = private(root.path(), "synthetic-secret");
+    std::fs::remove_file(&file).unwrap();
+    connect::discard(root.path(), &settings(Mode::Ask, &secret));
+    assert!(!secret.exists(), "no settings file names nothing");
+}

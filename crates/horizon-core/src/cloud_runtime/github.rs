@@ -178,6 +178,14 @@ pub fn configure(
         None => Vec::new(),
     };
     if settings.is_some() && grants.is_empty() {
+        // Access for a repository this cloud no longer has on GitHub must not stay behind.
+        if matches!(
+            worker::status(connection, runner)?,
+            worker::Status::Current { .. } | worker::Status::Unavailable
+        ) {
+            worker::clear(connection, runner)?;
+            say("removed the worker's access: this cloud no longer has a repository on GitHub.");
+        }
         end("This cloud has no repository on GitHub.".into());
         return Ok(false);
     }
