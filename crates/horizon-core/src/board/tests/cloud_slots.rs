@@ -285,3 +285,16 @@ fn an_empty_cloud_keeps_the_slot_it_was_dragged_to() {
     let restored = Board::from_runtime_state(&state).expect("restore");
     assert!(near(restored.cloud_groups.0[0].position, first), "after a restart too");
 }
+
+#[test]
+fn a_cloud_keeps_its_slot_when_its_last_member_closes() {
+    let (mut board, workspace, panels, members) = desk(1);
+    let first = board.panel(panels[0]).expect("panel").layout.position;
+    assert!(board.swap_cloud_slot_at("slot-fixture", [first[0] + 10.0, first[1] + 10.0]));
+    assert!(near(cloud(&board).position, first));
+    board.close_panel(members[0]);
+    let mut group = board.cloud_groups.0[0].clone();
+    group.reconcile(&mut board);
+    board.reapply_workspace_layout_if_set(workspace);
+    assert!(near(cloud(&board).position, first), "{:?}", cloud(&board).position);
+}

@@ -95,6 +95,8 @@ impl Board {
                 #[cfg(feature = "cloud-workspaces")]
                 Slot::Cloud(group) => {
                     if let Some(group) = groups.0.get_mut(group) {
+                        // Remembered for when the cloud has no member to place it by.
+                        group.slot = Some(index);
                         group.fit_slot(self, workspace_position, position, cell);
                         needed = [needed[0].max(group.size[0]), needed[1].max(group.size[1])];
                     }
@@ -183,8 +185,9 @@ impl Board {
                         .copied()
                         .filter(|id| self.slot_cloud_of(*id, workspace) == Some(index))
                         .collect();
-                    // A cloud with members is placed by them; an empty one remembers its slot.
-                    places.push((index, members.is_empty().then_some(position)));
+                    // A cloud with members is placed by them; the slot number places it once
+                    // it has none.
+                    places.push((index, Some(position)));
                     panels.extend(members);
                 }
             }

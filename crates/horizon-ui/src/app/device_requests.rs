@@ -404,6 +404,8 @@ impl HorizonApp {
                 }
             }
             if expanded_cloud {
+                // Expanding gave the cloud its slot on the board; keep it.
+                self.cloud_prototype.groups.adopt_slot_geometry(&self.board);
                 self.board.cloud_groups = self.cloud_prototype.groups.clone();
             }
         }
