@@ -85,7 +85,7 @@ fn portfolio(
     let stages = model::pr_stages(status);
     let previous = (state.filter, state.search.clone());
     band(ui, HEADER, GAPS[0], |ui| {
-        header(ui, status, state, &repositories, action)
+        header(ui, status, state, &repositories, action);
     });
     band(ui, SUMMARY, GAPS[1], |ui| {
         summary::show(ui, state, &counts, repositories.len(), &stages);

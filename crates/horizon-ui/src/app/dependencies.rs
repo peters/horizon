@@ -54,8 +54,8 @@ impl HorizonApp {
             .collect();
         for (panel, request) in requests {
             match request {
-                Request::OpenCloudSettings => self.open_cloud_accounts(ctx, false),
-                Request::OpenWorkerTerminal { arguments, cwd } => {
+                Request::CloudSettings => self.open_cloud_accounts(ctx, false),
+                Request::WorkerTerminal { arguments, cwd } => {
                     let workspace = self
                         .board
                         .panel_workspace_id(panel)
@@ -71,7 +71,7 @@ impl HorizonApp {
                     };
                     self.open_dependencies_companion(ctx, options, workspace);
                 }
-                Request::OpenLocalAgent(launch) => {
+                Request::LocalAgent(launch) => {
                     let workspace = self.board.create_workspace("Worker diagnosis");
                     let options = PanelOptions {
                         kind: launch.kind,

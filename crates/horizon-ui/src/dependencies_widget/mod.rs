@@ -31,9 +31,9 @@ const GITHUB_RECHECK: Duration = Duration::from_secs(1);
 
 /// Work the panel asks the app to do; drained after the panel draws.
 pub(crate) enum Request {
-    OpenCloudSettings,
-    OpenWorkerTerminal { arguments: Vec<String>, cwd: PathBuf },
-    OpenLocalAgent(Launch),
+    CloudSettings,
+    WorkerTerminal { arguments: Vec<String>, cwd: PathBuf },
+    LocalAgent(Launch),
 }
 
 pub(crate) struct DependenciesUiState {
@@ -83,12 +83,12 @@ impl DependenciesUiState {
                 if let Some(action) = action {
                     self.apply(action, ui.ctx());
                 }
-            } else if let Some(setup::Request::OpenCloudSettings) = setup::show(ui, &setup, self.github.as_ref()) {
-                self.requests.push(Request::OpenCloudSettings);
+            } else if let Some(setup::Request::CloudSettings) = setup::show(ui, &setup, self.github.as_ref()) {
+                self.requests.push(Request::CloudSettings);
             }
         });
         if let Some(launch) = self.debug.show(ui.ctx()) {
-            self.requests.push(Request::OpenLocalAgent(launch));
+            self.requests.push(Request::LocalAgent(launch));
         }
     }
 
@@ -142,7 +142,7 @@ impl DependenciesUiState {
             return;
         };
         match action {
-            portfolio::Action::OpenTerminal => self.requests.push(Request::OpenWorkerTerminal {
+            portfolio::Action::OpenTerminal => self.requests.push(Request::WorkerTerminal {
                 arguments: endpoint.terminal_arguments(),
                 cwd: endpoint.workdir().to_path_buf(),
             }),

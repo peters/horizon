@@ -16,7 +16,7 @@ const GUIDE_URL: &str = "https://github.com/peters/horizon/blob/main/docs/depend
 const COLUMN: f32 = 760.0;
 
 pub(super) enum Request {
-    OpenCloudSettings,
+    CloudSettings,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -61,7 +61,7 @@ pub(super) fn show(ui: &mut egui::Ui, setup: &Setup, github: Option<&GitHubApp>)
                     ui.add_space(20.0);
                     ui.spacing_mut().item_spacing.y = 12.0;
                     if card(ui, &github_step(setup, github)) {
-                        request = Some(Request::OpenCloudSettings);
+                        request = Some(Request::CloudSettings);
                     }
                     if card(ui, &repositories_step(setup, github))
                         && let Some(app) = github

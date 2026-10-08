@@ -314,6 +314,7 @@ impl Poller {
     }
 
     /// Replies received since the last call.
+    #[must_use]
     pub fn updates(&self) -> TryIter<'_, Result<Value, String>> {
         self.updates.try_iter()
     }
