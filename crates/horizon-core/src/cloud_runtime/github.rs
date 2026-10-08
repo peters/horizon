@@ -144,8 +144,29 @@ pub fn configure(
     state: &Deployment,
     connection: &Connection,
     runner: &Runner<'_>,
+    legacy: bool,
 ) -> Result<()> {
     let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub: {text}")));
+    // A cloud without GitHub access from the app may still have a credential binding
+    // from cloud settings; the outcome says so instead of claiming no access.
+    let end = |reason: String| {
+        let reason = if legacy {
+            format!("{reason} Git uses the credential binding from cloud settings.")
+        } else {
+            reason
+        };
+        say(&reason);
+        (runner.emit)(Event::GitHub(Prompt::Ended(reason)));
+    };
+    let connected = |login, repositories, requests| {
+        (runner.emit)(Event::GitHub(Prompt::Connected {
+            login,
+            repositories,
+            requests,
+        }));
+    };
+    // Consumed once, whatever the worker holds, so a later reconnect never signs in anew.
+    let renew = signin::renewing(&state.cloud_id);
     let grants = match settings {
         Some(_) => grants(state, runner)?,
         None => Vec::new(),
@@ -165,43 +186,31 @@ pub fn configure(
         } = held
         {
             say("the worker holds access from an earlier connection.");
-            (runner.emit)(Event::GitHub(Prompt::Connected {
-                login,
-                repositories,
-                requests,
-            }));
+            connected(login, repositories, requests);
         }
         return Ok(());
     };
-    // Connect GitHub again on the card: sign in anew although the worker holds access.
-    let held = match held {
-        worker::Status::Current { .. } | worker::Status::Unavailable if signin::renewing(&state.cloud_id) => {
-            worker::Status::Absent
-        }
-        held => held,
-    };
-    match held {
+    let kept = match held {
         worker::Status::Unsupported => {
             say("this worker image cannot hold GitHub access. Rebuild the image to add it.");
-            (runner.emit)(Event::GitHub(Prompt::Ended(
-                "This worker image cannot hold GitHub access.".into(),
-            )));
+            end("This worker image cannot hold GitHub access.".into());
             return Ok(());
         }
         worker::Status::Unavailable => {
-            let reason = "The worker's GitHub service is not running, so Git and gh have no GitHub access. \
-                          Restart the worker to start it again.";
-            say(reason);
-            (runner.emit)(Event::GitHub(Prompt::Ended(reason.into())));
+            end(
+                "The worker's GitHub service is not running, so Git and gh have no GitHub access. \
+                 Restart the worker to start it again."
+                    .into(),
+            );
             return Ok(());
         }
-        // A repository the worker does not reach stays out until the person connects
-        // this cloud again, so a reconnect never asks for a sign-in by itself.
+        // A repository the worker does not reach stays out until the person chooses
+        // Connect GitHub again, so a reconnect never asks for a sign-in by itself.
         worker::Status::Current {
             login,
             repositories,
             requests,
-        } => {
+        } if !renew => {
             say("the worker holds current access.");
             for grant in grants.iter().filter(|grant| !covers(&repositories, grant)) {
                 say(&format!(
@@ -209,48 +218,52 @@ pub fn configure(
                     grant.repository
                 ));
             }
-            (runner.emit)(Event::GitHub(Prompt::Connected {
-                login,
-                repositories,
-                requests,
-            }));
+            connected(login, repositories, requests);
             return Ok(());
         }
-        worker::Status::Absent => {}
+        // Connect GitHub again: sign in anew, and keep the current access if that fails.
+        worker::Status::Current {
+            login,
+            repositories,
+            requests,
+        } => Some((login, repositories, requests)),
+        worker::Status::Absent => None,
+    };
+    match sign_in(settings, state, grants, connection, runner)? {
+        Ok(()) => {}
+        Err(reason) => match kept {
+            Some((login, repositories, requests)) => {
+                say(&format!("{reason} The cloud keeps its current GitHub access."));
+                connected(login, repositories, requests);
+            }
+            None => end(reason),
+        },
     }
-    sign_in(settings, state, grants, connection, runner)
+    Ok(())
 }
 
 /// Signs in for this cloud and gives the worker the chain, for the repositories where
-/// the app is installed. A GitHub-side refusal ends with a message, not an error.
+/// the app is installed. A GitHub-side refusal is returned as its reason, not an error.
 fn sign_in(
     settings: &Settings,
     state: &Deployment,
     grants: Vec<Grant>,
     connection: &Connection,
     runner: &Runner<'_>,
-) -> Result<()> {
+) -> Result<std::result::Result<(), String>> {
     let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub: {text}")));
     let client = Client::new();
     let chain = match signin::chain(settings, &state.cloud_id, &client, runner) {
         Ok(chain) => chain,
         Err(signin::Ended::Error(error)) => return Err(error),
-        Err(signin::Ended::Reason(reason)) => {
-            say(&reason);
-            (runner.emit)(Event::GitHub(Prompt::Ended(reason)));
-            return Ok(());
-        }
+        Err(signin::Ended::Reason(reason)) => return Ok(Err(reason)),
     };
     let (user, installed) = match client
         .user(&chain.access_token)
         .and_then(|user| Ok((user, client.installed_repositories(&chain.access_token)?)))
     {
         Ok(found) => found,
-        Err(error) => {
-            say(&error.to_string());
-            (runner.emit)(Event::GitHub(Prompt::Ended(error.to_string())));
-            return Ok(());
-        }
+        Err(error) => return Ok(Err(error.to_string())),
     };
     let (reachable, missing): (Vec<_>, Vec<_>) = grants
         .into_iter()
@@ -263,10 +276,9 @@ fn sign_in(
         ));
     }
     if reachable.is_empty() {
-        (runner.emit)(Event::GitHub(Prompt::Ended(
-            "The GitHub App is not installed on this cloud's repositories.".into(),
-        )));
-        return Ok(());
+        return Ok(Err(
+            "The GitHub App is not installed on this cloud's repositories.".into()
+        ));
     }
     let secret = match settings.mode {
         Mode::Ask => None,
@@ -288,7 +300,7 @@ fn sign_in(
         repositories: reachable.into_iter().map(|grant| grant.repository).collect(),
         requests,
     }));
-    Ok(())
+    Ok(Ok(()))
 }
 
 /// Whether the worker's access reaches the grant's repository.

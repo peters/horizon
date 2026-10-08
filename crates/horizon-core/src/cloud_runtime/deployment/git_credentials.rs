@@ -11,6 +11,7 @@ pub(super) fn configure_git_auth(
     connection: &Connection,
     runner: &Runner<'_>,
 ) -> Result<()> {
+    let legacy = git_auth.is_some();
     if let Some(git_auth) = git_auth {
         git_auth.install(connection, runner)?;
     } else {
@@ -22,5 +23,5 @@ pub(super) fn configure_git_auth(
             Duration::from_secs(20),
         )?;
     }
-    crate::cloud_runtime::github::configure(github, state, connection, runner)
+    crate::cloud_runtime::github::configure(github, state, connection, runner, legacy)
 }

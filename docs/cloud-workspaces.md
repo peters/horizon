@@ -274,7 +274,9 @@ whether it already holds access. A worker that does keeps it, so a reconnect
 never asks you again. Otherwise the card shows the sign-in for that cloud. The
 cloud gets access to its repository and its same-worker siblings, where the app
 is installed. **Skip** continues without GitHub access, and so does a declined or
-expired sign-in, or a worker image without the service.
+expired sign-in, or a worker image without the service. When cloud settings also
+have a `git_credentials` binding for the repository, Git keeps using that binding
+in those cases, and the card says so.
 
 The worker's root service renews the access every 8 hours for about 6 months,
 also while this computer is off. Agents get short-lived access tokens through

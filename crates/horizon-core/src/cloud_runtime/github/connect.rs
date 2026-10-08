@@ -197,6 +197,11 @@ fn write_private(path: &Path, value: &str) -> Result<()> {
     }
     file.write_all(value.as_bytes())?;
     file.sync_all()?;
+    // The new entry in its directory must survive a crash too, as the settings that name it.
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
     Ok(())
 }
 
