@@ -40,8 +40,15 @@ impl State {
 }
 
 impl HorizonApp {
+    /// The background exchanges with workers that each frame starts before it reads
+    /// deployment events: the companion session and the GitHub access requests.
+    pub(super) fn sync_cloud_worker_exchanges(&mut self, ctx: &egui::Context) {
+        self.sync_cloud_companion_session(ctx);
+        self.poll_github_requests(ctx);
+    }
+
     /// Asks each ready, GitHub-connected cloud's worker for its pending requests.
-    pub(super) fn poll_github_requests(&mut self, ctx: &egui::Context) {
+    fn poll_github_requests(&mut self, ctx: &egui::Context) {
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
         };
