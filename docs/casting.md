@@ -2,9 +2,11 @@
 
 Horizon can mirror a selected panel, workspace, cloud card or its entire main
 window to a modern Apple TV. Casting
-is Linux-only. The Cast icon appears beside the recording/microphone controls
-on supported builds, and a cloud card has **Cast…** beside **Full screen** in
-its Manage tab. It opens source, receiver, orientation and resolution
+is Linux-only. Each panel has a Cast icon beside its recording/microphone
+controls on supported builds, the workspace toolbar has a cast button after
+**Detach**, and a cloud card has **Cast…** beside **Full screen** in its Manage
+tab. Choosing the same control again closes the picker. Panel icons are hidden
+while a panel fills the window. Each control opens source, receiver, orientation and resolution
 selection, plus status and stop controls. Each TV allows one session, including
 pairing and teardown; different TVs can have independent sessions.
 

@@ -375,7 +375,9 @@ pub(super) mod tests {
                 .panels
                 .iter()
                 .find(|panel| panel.workspace_id == workspace)
-                .map(|panel| panel.id),
+                .map_or(super::super::Anchor::Workspace, |panel| {
+                    super::super::Anchor::Panel(panel.id)
+                }),
             workspace,
             source: CastSource::Application {},
             receiver: Some(receiver.into()),

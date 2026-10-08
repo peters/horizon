@@ -37,6 +37,9 @@ struct WorkspaceVisual {
     panel_count: usize,
     layout: Option<WorkspaceLayout>,
     capabilities: WorkspaceLayoutCapabilities,
+    /// The cast button shows as on: a cast of this workspace runs or its picker is open.
+    #[cfg(target_os = "linux")]
+    casting: bool,
 }
 
 struct WorkspaceInteraction {
@@ -55,6 +58,8 @@ enum WorkspaceAction {
     ArrangeLayout(WorkspaceLayout),
     CloseAllPanels,
     Detach,
+    #[cfg(target_os = "linux")]
+    Cast,
 }
 
 const WORKSPACE_LAYOUT_BUTTON_HEIGHT: f32 = 24.0;
@@ -210,6 +215,11 @@ impl HorizonApp {
                 Some(WorkspaceAction::Detach) => {
                     focus_workspace = Some(workspace.id);
                     self.detach_workspace(workspace.id);
+                }
+                #[cfg(target_os = "linux")]
+                Some(WorkspaceAction::Cast) => {
+                    focus_workspace = Some(workspace.id);
+                    self.toggle_workspace_cast_picker(workspace.id, ctx);
                 }
                 Some(WorkspaceAction::CloseAllPanels) => {
                     focus_workspace = Some(workspace.id);
@@ -373,6 +383,8 @@ impl HorizonApp {
                     panel_count: workspace.panels.len(),
                     layout: workspace.layout,
                     capabilities: self.workspace_layout_capabilities(workspace.id),
+                    #[cfg(target_os = "linux")]
+                    casting: self.workspace_cast_highlighted(workspace.id),
                 })
             })
             .collect()
@@ -454,6 +466,8 @@ mod tests {
                 can_arrange: true,
                 can_detach: true,
             },
+            #[cfg(target_os = "linux")]
+            casting: false,
         }
     }
 

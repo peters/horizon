@@ -11,7 +11,7 @@ fn fixture() -> (tempfile::TempDir, Context, HorizonApp) {
     });
     let panel = &app.board.panels[0];
     app.casting.picker = Some(Picker {
-        anchor: Some(panel.id),
+        anchor: super::super::super::Anchor::Panel(panel.id),
         workspace: panel.workspace_id,
         source: CastSource::Panel {
             id: panel.local_id.clone(),
@@ -231,4 +231,46 @@ fn dragging_picker_changes_its_persistent_position() {
         app.casting.picker.as_ref().expect("persistent picker").position,
         Some(moved.min)
     );
+}
+
+fn icon_drawn(ctx: &Context, id: horizon_core::PanelId) -> bool {
+    ctx.memory(|memory| {
+        memory
+            .areas()
+            .visible_layer_ids()
+            .iter()
+            .any(|layer| layer.id == Id::new(("cast_icon", id.0)))
+    })
+}
+
+#[test]
+fn a_full_screen_panel_hides_the_cast_icons_of_the_canvas() {
+    let (_temp, ctx, mut app) = fixture();
+    app.casting.picker = None;
+    let id = app.board.panels[0].id;
+    for _ in 0..2 {
+        frame(&ctx, &mut app, Vec::new());
+    }
+    assert!(icon_drawn(&ctx, id));
+    // The panel rectangles keep the last canvas frame while a panel fills the window.
+    app.fullscreen_panel = Some(id);
+    for _ in 0..2 {
+        frame(&ctx, &mut app, Vec::new());
+    }
+    assert!(!icon_drawn(&ctx, id), "no icon floats over the full screen panel");
+}
+
+#[test]
+fn an_icon_outside_the_canvas_is_not_drawn() {
+    let (_temp, ctx, mut app) = fixture();
+    app.casting.picker = None;
+    let id = app.board.panels[0].id;
+    let canvas = app.canvas_rect(&ctx);
+    // A panel scrolled up under the toolbar would put its icon over the toolbar.
+    let panel = Rect::from_min_size(Pos2::new(400.0, canvas.top() - 20.0), Vec2::new(400.0, 300.0));
+    app.panel_screen_rects.insert(id, panel);
+    for _ in 0..2 {
+        frame(&ctx, &mut app, Vec::new());
+    }
+    assert!(!icon_drawn(&ctx, id));
 }
