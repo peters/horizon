@@ -16,16 +16,17 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 #[derive(Default)]
 pub(in crate::app::cloud_panel) struct Card {
     connecting: Option<Receiver<Result<Connected, String>>>,
-    checking: Option<Receiver<Option<bool>>>,
-    /// Whether the app permits the device sign-in; `None` until checked.
-    device_flow: Option<bool>,
+    checking: Option<Receiver<Result<bool, String>>>,
+    /// Whether the app permits the device sign-in, or why that could not be checked;
+    /// `None` until checked. A failed check is retried only by Check again.
+    device_flow: Option<Result<bool, String>>,
     message: Option<String>,
 }
 
 struct Connected {
     settings: github::Settings,
     committed: setup::Committed,
-    device_flow: Option<bool>,
+    device_flow: Result<bool, String>,
 }
 
 fn open(url: &str) {
@@ -47,7 +48,7 @@ impl Card {
                 .and_then(|settings| Ok((setup::save_github(&root, Some(settings.clone()))?, settings)))
                 .map(|(committed, settings)| {
                     open(&settings.installation_url());
-                    let device_flow = connect::device_flow_enabled(&settings).ok();
+                    let device_flow = connect::device_flow_enabled(&settings).map_err(|error| error.to_string());
                     Connected {
                         settings,
                         committed,
@@ -63,7 +64,7 @@ impl Card {
         let (tx, rx) = channel();
         self.checking = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send(connect::device_flow_enabled(&settings).ok());
+            let _ = tx.send(connect::device_flow_enabled(&settings).map_err(|error| error.to_string()));
         });
     }
 
@@ -72,7 +73,7 @@ impl Card {
             match rx.try_recv() {
                 Ok(Ok(connected)) => {
                     draft.adopt_github(&connected.committed, Some(connected.settings));
-                    self.device_flow = connected.device_flow;
+                    self.device_flow = Some(connected.device_flow);
                     self.connecting = None;
                 }
                 Ok(Err(message)) => {
@@ -86,7 +87,7 @@ impl Card {
         if let Some(rx) = &self.checking {
             match rx.try_recv() {
                 Ok(found) => {
-                    self.device_flow = found;
+                    self.device_flow = Some(found);
                     self.checking = None;
                 }
                 Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
@@ -144,8 +145,8 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
             open(&settings.installation_url());
         }
     });
-    match card.device_flow {
-        Some(false) => {
+    match card.device_flow.clone() {
+        Some(Ok(false)) => {
             ui.label(
                 RichText::new("Turn on Enable Device Flow in the app's settings, once.")
                     .size(12.0)
@@ -160,7 +161,17 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
                 }
             });
         }
-        Some(true) => caption(ui, "Device sign-in is on."),
+        Some(Ok(true)) => caption(ui, "Device sign-in is on."),
+        Some(Err(error)) => {
+            ui.label(
+                RichText::new(format!("Horizon could not check the app's settings: {error}"))
+                    .size(12.0)
+                    .color(theme::PALETTE_RED()),
+            );
+            if ui.add(chrome_button("Check again")).clicked() {
+                card.device_flow = None;
+            }
+        }
         None => caption(ui, "Checking the app's settings…"),
     }
     ui.add_space(4.0);

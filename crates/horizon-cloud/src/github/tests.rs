@@ -439,3 +439,19 @@ fn repository_names_follow_github_rules() {
         assert!(!valid_repository(bad), "{bad}");
     }
 }
+
+#[test]
+fn an_installation_beyond_the_page_limit_is_an_error_not_partial_data() {
+    let full = |n: usize| -> Value {
+        let repositories: Vec<Value> = (0..100)
+            .map(|i| json!({"full_name": format!("acme/r-{n}-{i}")}))
+            .collect();
+        json!({"total_count": 5000, "repositories": repositories})
+    };
+    let mut responses = vec![(200, json!({"installations": [{"id": 1}]}))];
+    responses.extend((0..20).map(|n| (200, full(n))));
+    let (client, _requests, task) = github(responses);
+    let result = client.installed_repositories(&Secret::new("ghu_synthetic".into()));
+    task.join().unwrap();
+    assert_eq!(result.unwrap_err(), Error::TooMany);
+}

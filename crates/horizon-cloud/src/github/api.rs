@@ -5,7 +5,8 @@ use serde::Deserialize;
 use std::fmt::Write as _;
 use zeroize::Zeroizing;
 
-/// The most installation pages read; 100 repositories each.
+/// The most pages read of installations, and of each installation's repositories; 100
+/// entries each. Beyond it the answer is an error, never partial data.
 const MAX_PAGES: u32 = 20;
 
 /// The account a token acts as. `email` is GitHub's private commit address, so a
@@ -66,15 +67,23 @@ impl Client {
         struct Repository {
             full_name: String,
         }
-        let installations: Installations = self.get(token, "/user/installations?per_page=100")?;
+        let mut ids = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let answer: Installations = self.get(token, &format!("/user/installations?per_page=100&page={page}"))?;
+            let last = answer.installations.len() < 100;
+            ids.extend(answer.installations.into_iter().map(|installation| installation.id));
+            if last {
+                break;
+            }
+            if page == MAX_PAGES {
+                return Err(Error::TooMany);
+            }
+        }
         let mut names = Vec::new();
-        for installation in installations.installations {
+        for id in ids {
             let mut read = 0_u64;
             for page in 1..=MAX_PAGES {
-                let path = format!(
-                    "/user/installations/{}/repositories?per_page=100&page={page}",
-                    installation.id
-                );
+                let path = format!("/user/installations/{id}/repositories?per_page=100&page={page}");
                 let answer: Repositories = self.get(token, &path)?;
                 let last = answer.repositories.len() < 100;
                 read += answer.repositories.len() as u64;
@@ -86,6 +95,10 @@ impl Client {
                 }
                 if last || read >= answer.total_count {
                     break;
+                }
+                if page == MAX_PAGES {
+                    // Partial data would make a reachable repository look not installed.
+                    return Err(Error::TooMany);
                 }
             }
         }

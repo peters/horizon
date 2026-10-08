@@ -50,6 +50,8 @@ pub enum Error {
     Revoked,
     #[error("GitHub refused the request ({0}).")]
     Refused(String),
+    #[error("The GitHub App has more installations or repositories than Horizon reads.")]
+    TooMany,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 

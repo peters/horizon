@@ -96,8 +96,7 @@ impl Transaction {
     pub fn commit(&mut self, settings: &Settings, expected: Option<&[u8]>) -> Result<()> {
         settings.validate()?;
         let mut file = tempfile::NamedTempFile::new_in(&self.root)?;
-        serde_json::to_writer_pretty(&mut file, settings).map_err(|_| Error::Json)?;
-        file.write_all(b"\n")?;
+        file.write_all(&encode(settings)?)?;
         file.flush()?;
         file.as_file().sync_all()?;
         self.verify_current(expected)?;
@@ -108,6 +107,13 @@ impl Transaction {
         self.committed = true;
         sync_directory(&self.root)
     }
+}
+
+/// The exact bytes a commit writes for `settings`.
+pub(super) fn encode(settings: &Settings) -> Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec_pretty(settings).map_err(|_| Error::Json)?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 impl Drop for Transaction {

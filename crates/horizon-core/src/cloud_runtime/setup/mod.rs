@@ -239,8 +239,8 @@ pub fn save_github(root: &Path, github: Option<super::github::Settings>) -> Resu
     let mut draft = Draft::load(root)?;
     let before = draft.original.clone();
     draft.settings.github = github;
-    draft.save()?;
-    let after = std::fs::read(root.join("settings.json"))?;
+    // The bytes this save committed, never a later read of a file another writer may change.
+    let after = storage::encode(&draft.save()?)?;
     Ok(Committed { before, after })
 }
 

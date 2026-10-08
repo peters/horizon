@@ -11,6 +11,12 @@ use horizon_core::cloud_runtime::github::{self, Prompt, requests::Decision};
 /// The height of the sign-in box, with the gap below it.
 pub(super) const PROMPT_HEIGHT: f32 = 168.0;
 
+/// Whether the cloud needs its GitHub overlay: a sign-in that its panels hide, or
+/// access requests and a refused decision.
+pub(super) fn overlay(runtime: &Runtime, body: bool) -> bool {
+    (!body && waiting(runtime)) || !runtime.github_requests.list.is_empty() || runtime.github_requests.refused.is_some()
+}
+
 /// Whether the card shows the sign-in box, which takes [`PROMPT_HEIGHT`] from the output.
 pub(super) fn waiting(runtime: &Runtime) -> bool {
     matches!(runtime.github, Some(Prompt::Device { .. } | Prompt::Web { .. })) && runtime.receiver.is_some()
@@ -35,7 +41,7 @@ pub(super) fn prompt(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime) {
                     verification_uri,
                     ..
                 } => device(ui, cloud_id, user_code, verification_uri),
-                Prompt::Web { .. } => web(ui, cloud_id),
+                Prompt::Web { url } => web(ui, cloud_id, url),
                 Prompt::Connected { .. } | Prompt::Ended(_) => {}
             }
         });
@@ -82,7 +88,7 @@ fn device(ui: &mut egui::Ui, cloud_id: &str, user_code: &str, verification_uri: 
     });
 }
 
-fn web(ui: &mut egui::Ui, cloud_id: &str) {
+fn web(ui: &mut egui::Ui, cloud_id: &str, url: &str) {
     ui.label(
         RichText::new("Connecting GitHub for this cloud")
             .size(15.0)
@@ -91,19 +97,30 @@ fn web(ui: &mut egui::Ui, cloud_id: &str) {
     );
     ui.label(
         RichText::new(
-            "Horizon opened GitHub in your browser. If GitHub asks you to sign in, or to authorize the \
-             app the first time, do it there; the page then returns to Horizon by itself.",
+            "Horizon opened GitHub in your browser; if it did not, click Open GitHub. If GitHub asks you \
+             to sign in, or to authorize the app the first time, do it there; the page then returns to \
+             Horizon by itself.",
         )
         .size(12.5)
         .color(theme::FG_DIM()),
     );
     ui.add_space(8.0);
-    if ui
-        .add(chrome_button("Skip: no GitHub for this cloud").min_size(vec2(0.0, 30.0)))
-        .clicked()
-    {
-        github::skip(cloud_id);
-    }
+    ui.horizontal(|ui| {
+        // Also the way back when the browser did not open.
+        if ui
+            .add(primary_button("Open GitHub").min_size(vec2(120.0, 30.0)))
+            .clicked()
+            && let Err(error) = horizon_core::open_url(url)
+        {
+            tracing::warn!(%error, "could not open the GitHub sign-in page");
+        }
+        if ui
+            .add(chrome_button("Skip: no GitHub for this cloud").min_size(vec2(0.0, 30.0)))
+            .clicked()
+        {
+            github::skip(cloud_id);
+        }
+    });
 }
 
 /// The width of the request box over the cloud's panels.
@@ -261,6 +278,30 @@ mod tests {
         );
         assert!(texts.iter().any(|text| text == "2 more requests wait."));
         assert!(texts.iter().any(|text| text == "Allow for this task"));
+    }
+
+    #[test]
+    fn a_cloud_with_panels_shows_its_sign_in_and_requests_over_them() {
+        let mut runtime = Runtime {
+            github: Some(Prompt::Web {
+                url: "https://github.com/login/oauth/authorize".into(),
+            }),
+            ..Runtime::default()
+        };
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        runtime.receiver = Some(receiver);
+        assert!(
+            overlay(&runtime, false),
+            "the panels hide the body, so the overlay shows the sign-in"
+        );
+        assert!(!overlay(&runtime, true), "the body shows the sign-in itself");
+        runtime.receiver = None;
+        assert!(!overlay(&runtime, false));
+        runtime.github_requests.refused = Some("This request expired.".into());
+        assert!(
+            overlay(&runtime, true),
+            "requests and refusals show with or without panels"
+        );
     }
 
     #[test]
