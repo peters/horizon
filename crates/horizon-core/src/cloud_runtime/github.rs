@@ -24,6 +24,9 @@ mod worker;
 
 pub use signin::{Prompt, skip};
 
+/// The most grants `horizon-worker-github install` accepts.
+const WORKER_GRANTS: usize = 16;
+
 /// How a new cloud gets its GitHub access.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -119,6 +122,12 @@ pub fn grants(state: &Deployment, runner: &Runner<'_>) -> Result<Vec<Grant>> {
     if grants.iter().any(|grant| !seen.insert(grant.repository.clone())) {
         return Err(Error::Invalid(
             "One GitHub repository is checked out twice on this worker",
+        ));
+    }
+    // Refused before any sign-in: the worker takes at most this many grants.
+    if grants.len() > WORKER_GRANTS {
+        return Err(Error::Invalid(
+            "A worker takes GitHub access for at most 16 repositories",
         ));
     }
     Ok(grants)

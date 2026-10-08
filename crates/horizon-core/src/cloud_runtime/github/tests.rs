@@ -442,3 +442,54 @@ fn a_refused_decision_is_explained() {
     );
     assert!(requests::parse_decision("").is_some());
 }
+
+#[test]
+fn more_grants_than_a_worker_takes_are_refused_before_any_sign_in() {
+    let checkout = tempfile::tempdir().unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(checkout.path())
+            .args(["init", "--quiet"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(checkout.path())
+            .args(["remote", "add", "origin", "https://github.com/acme/web.git"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let config = horizon_cloud::CloudConfig::parse(
+        "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n",
+    )
+    .unwrap();
+    let members: Vec<serde_json::Value> = (0..16)
+        .map(|n| {
+            serde_json::json!({"alias": format!("s{n}"), "repository": format!("acme/lib-{n}"),
+                               "directory": format!("lib-{n}"), "revision": "b".repeat(40),
+                               "local_repository": "/synthetic", "profile": "dev"})
+        })
+        .collect();
+    let state: Deployment = serde_json::from_value(serde_json::json!({
+        "version": 1, "cloud_id": "fixture", "repository": checkout.path(), "revision": "a".repeat(40),
+        "profile": config.profiles["dev"], "stage": "Provision", "operation": {"state": "prepared"},
+        "spec": null, "worker": null, "sessions": [],
+        "siblings": {"primary_directory": "web", "members": members}
+    }))
+    .unwrap();
+    let cancel = Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    assert!(
+        grants(&state, &runner).is_err(),
+        "the primary and 16 siblings are 17 grants"
+    );
+}

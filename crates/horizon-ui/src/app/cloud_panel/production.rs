@@ -428,6 +428,8 @@ impl Runtime {
             cancel.cancel();
         }
         self.desktop = None;
+        // The worker reports its GitHub access again; an earlier outcome no longer holds.
+        self.github = None;
         self.progress.reset();
         self.launched_skips = cloud_runtime::image::skipped_stages(&request.profile);
         // A deployment or reconnect is its own operation; an earlier stop or resume that

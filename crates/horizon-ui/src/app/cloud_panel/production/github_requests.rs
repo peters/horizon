@@ -67,7 +67,12 @@ impl HorizonApp {
                 continue;
             }
             let requests = &mut runtime.github_requests;
-            if requests.inflight.is_some() || requests.next.is_some_and(|next| now < next) {
+            if requests.inflight.is_some() {
+                continue;
+            }
+            if let Some(next) = requests.next.filter(|next| now < *next) {
+                // An idle card draws no frame by itself; wake it for the next poll.
+                ctx.request_repaint_after(next - now);
                 continue;
             }
             let Some(state) = runtime.state.clone().filter(|state| state.worker.is_some()) else {
