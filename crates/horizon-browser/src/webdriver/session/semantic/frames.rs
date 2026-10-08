@@ -101,7 +101,7 @@ impl Driver {
             .call_bidi(
                 "script.evaluate",
                 &json!({
-                    "expression":format!("JSON.stringify(({expression}))"), "target":{"realm":realm},
+                    "expression":format!("(async () => JSON.stringify(await ({expression})))()"), "target":{"realm":realm},
                     "awaitPromise":true,
                 }),
                 events,

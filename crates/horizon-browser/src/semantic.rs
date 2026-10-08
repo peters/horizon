@@ -561,7 +561,7 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, co
         : { nodes };
 }";
 
-const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
+const TARGET_RECT_FUNCTION: &str = r"async function(selector, clear) {
     let element;
     try { element = document.querySelector(selector); }
     catch (error) { return { error: { code: 'invalid_selector', message: String(error?.message || error).slice(0, 512) } }; }
@@ -582,8 +582,16 @@ const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
         const textInput = () => element.tagName === 'INPUT'
             && ['text', 'search', 'tel', 'url', 'email', 'password', 'number'].includes((element.getAttribute('type') || 'text').toLowerCase());
         const isEditable = () => !isReadOnly() && (contentEditable() || element.tagName === 'TEXTAREA' || textInput());
+        const settle = () => new Promise(resolve => {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = () => {
+                channel.port1.close(); channel.port2.close(); resolve();
+            };
+            channel.port2.postMessage(null);
+        });
         if (!isEditable()) return notEditable;
         element.focus();
+        await settle();
         if (!isEditable()) return notEditable;
         if (document.activeElement !== element) return notFocused;
         if (contentEditable()) {
@@ -597,6 +605,7 @@ const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
         } else {
             return notEditable;
         }
+        await settle();
         if (!isEditable()) return notEditable;
         if (document.activeElement !== element) return notFocused;
     }

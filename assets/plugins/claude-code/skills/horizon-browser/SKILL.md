@@ -92,6 +92,7 @@ fill returns `element_not_focused` before it clears the value or sends an input
 event. If an input handler moves focus during clearing, the fill stops before
 it sends the requested text to the field that receives focus. The check retains
 the original element even if the handler transfers its selector to another field.
+The focus and clearing checks wait for queued microtasks, including nested microtasks.
 
 `browser_navigate` returns a typed outcome: by default it waits until the
 document committed and reports `committed_url`, `title` when known, `loading`,

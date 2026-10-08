@@ -184,6 +184,7 @@ fn safari_compatibility(host: &mut McpProcess) {
     assert_eq!(value["value"], "safari-synthetic");
     readonly_controls(host, false);
     unfocused_controls(host, false);
+    queued_controls(host, false);
     text_controls(host, false);
     assert!(
         !host
@@ -285,6 +286,44 @@ fn unfocused_controls(host: &mut McpProcess, child: bool) {
     );
 }
 
+fn queued_controls(host: &mut McpProcess, child: bool) {
+    let prefix = if child { "" } else { "top-" };
+    let fields = host.nodes(&format!(".{prefix}queued-control"));
+    assert_eq!(fields.len(), 2);
+    let mut errors = Vec::new();
+    for field in fields {
+        errors.push(
+            host.call(
+                "browser_act",
+                json!({"action":"fill","ref":field.reference,"value":"rejected"}),
+            )
+            .err()
+            .unwrap_or_default(),
+        );
+    }
+    let expression = if child {
+        let inspect = host.nodes("#inspect-queued");
+        host.call("browser_act", json!({"action":"click","ref":inspect[0].reference}))
+            .unwrap();
+        host.call(
+            "browser_wait",
+            json!({"selector":"output[data-queued]","state":"present","timeout_millis":2000}),
+        )
+        .unwrap();
+        "window.queuedValues".to_owned()
+    } else {
+        format!(
+            "[...document.querySelectorAll('.{prefix}queued-control'),document.querySelector('.{prefix}input-recipient')].map(e=>[e.value,e.dataset.inputs??'0'])"
+        )
+    };
+    let values = host.call("browser_evaluate", json!({"expression":expression})).unwrap();
+    assert_eq!(
+        values["value"],
+        json!([["queued-focus-kept", "0"], ["", "1"], ["recipient-kept", "0"]])
+    );
+    assert!(errors.iter().all(|error| error.contains("element_not_focused")));
+}
+
 fn text_controls(host: &mut McpProcess, child: bool) {
     let prefix = if child { "" } else { "top-" };
     let fields = host.nodes(&format!(".{prefix}unsupported-control"));
@@ -372,6 +411,14 @@ fn control_fixture(prefix: &str) -> String {
         .join("");
     format!(
         r#"{unsupported}<input class="{prefix}unsupported-control" type="text" value="kept" onfocus="this.type='checkbox'"><select class="{prefix}unsupported-control" contenteditable="true"><option value="kept">Kept</option></select>{supported}<textarea class="{prefix}supported-control" contenteditable="true">old-kept</textarea><div class="{prefix}supported-control" contenteditable="true">old-kept</div><button id="{prefix}inspect-controls" type="button">Inspect controls</button><script>document.querySelectorAll('.{prefix}unsupported-control').forEach(e=>{{e.dataset.initial=e.value;e.dataset.inputs='0';e.oninput=()=>e.dataset.inputs=String(Number(e.dataset.inputs)+1)}});document.querySelector('#{prefix}inspect-controls').onclick=()=>parent.postMessage({{controls:{{unsupported:[...document.querySelectorAll('.{prefix}unsupported-control')].map(e=>[e.value,e.dataset.initial,e.dataset.inputs]),supported:[...document.querySelectorAll('.{prefix}supported-control')].map(e=>e.value??e.textContent)}}}},'*')</script>"#
+    ) + &queued_fixture(prefix)
+}
+
+fn queued_fixture(prefix: &str) -> String {
+    format!(
+        r#"<input class="{prefix}queued-control" id="{prefix}queued-onfocus" value="queued-focus-kept" onfocus="queueMicrotask(()=>document.querySelector('.{prefix}input-recipient').focus())" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)">
+<input class="{prefix}queued-control" id="{prefix}queued-oninput" value="queued-input-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1);queueMicrotask(()=>queueMicrotask(()=>{{const recipient=document.querySelector('.{prefix}input-recipient');recipient.id=this.id;this.removeAttribute('id');recipient.focus()}}))">
+<button id="{prefix}inspect-queued" type="button" onclick="parent.postMessage({{queued:[...document.querySelectorAll('.{prefix}queued-control'),document.querySelector('.{prefix}input-recipient')].map(e=>[e.value,e.dataset.inputs??'0'])}},'*')">Inspect queued fields</button>"#
     )
 }
 
@@ -404,6 +451,7 @@ fn edge_cases(host: &mut McpProcess) {
     }
     readonly_controls(host, true);
     unfocused_controls(host, true);
+    queued_controls(host, true);
     text_controls(host, true);
     let files = host.nodes(".unsupported-control[type=file]");
     assert_eq!(files.len(), 1);
@@ -629,6 +677,7 @@ fn form_roundtrip(host: &mut McpProcess) {
     edge_cases(host);
     readonly_controls(host, false);
     unfocused_controls(host, false);
+    queued_controls(host, false);
     text_controls(host, false);
     let audit = host.call("browser_audit", json!({})).unwrap().to_string();
     for secret in [
@@ -675,7 +724,7 @@ fn fixture(nested: bool) -> (u16, Arc<std::sync::atomic::AtomicBool>, thread::Jo
                 let path = if nested { "wrapper" } else { "form" };
                 let controls = control_fixture("top-");
                 format!(
-                    r#"<!doctype html><title>Frame fixture</title><input id="same" value="top-kept"><input id="top-protected-input" readonly value="input-kept"><textarea id="top-protected-textarea" readonly>textarea-kept</textarea><input id="top-protected-aria" aria-readonly="true" value="aria-kept"><div id="top-protected-editor" contenteditable="true" aria-readonly="true">editor-kept</div><input id="top-protected-onfocus" value="focus-kept" onfocus="this.readOnly=true"><input id="top-focus-redirect" value="redirect-kept" onfocus="document.querySelector('#same').focus()" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><div inert><input id="top-inert-input" value="inert-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"></div><input id="top-focus-oninput" class="top-focus-oninput" value="input-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1);const recipient=document.querySelector('.top-input-recipient');recipient.id=this.id;this.removeAttribute('id');recipient.focus()"><input id="top-input-recipient" class="top-input-recipient" value="recipient-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><output>Waiting</output><iframe id="widget" src="http://localhost:{port}/{path}" style="margin:50px;width:500px;height:250px"></iframe><script>window.states={{}};window.addEventListener('message',e=>{{if(e.data.state){{window.states[e.data.state]={{owner:e.source===document.querySelector('#widget').contentWindow?'widget':'sibling',value:e.data.value}}}}else if(e.data.controls){{window.controlValues=e.data.controls;document.querySelector('output').setAttribute('data-controls','')}}else if(e.data.unfocused){{window.unfocusedValues=e.data.unfocused;document.querySelector('output').setAttribute('data-unfocused','')}}else if(e.data.protected){{window.protectedValues=e.data.protected;document.querySelector('output').setAttribute('data-protected','')}}else if(e.data.ready){{document.querySelector('output').setAttribute('data-ready','')}}else{{document.querySelector('output').textContent=e.data.submitted&&e.data.trusted?'Submitted':'Failed'}}}})</script>{controls}"#
+                    r#"<!doctype html><title>Frame fixture</title><input id="same" value="top-kept"><input id="top-protected-input" readonly value="input-kept"><textarea id="top-protected-textarea" readonly>textarea-kept</textarea><input id="top-protected-aria" aria-readonly="true" value="aria-kept"><div id="top-protected-editor" contenteditable="true" aria-readonly="true">editor-kept</div><input id="top-protected-onfocus" value="focus-kept" onfocus="this.readOnly=true"><input id="top-focus-redirect" value="redirect-kept" onfocus="document.querySelector('#same').focus()" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><div inert><input id="top-inert-input" value="inert-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"></div><input id="top-focus-oninput" class="top-focus-oninput" value="input-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1);const recipient=document.querySelector('.top-input-recipient');recipient.id=this.id;this.removeAttribute('id');recipient.focus()"><input id="top-input-recipient" class="top-input-recipient" value="recipient-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><output>Waiting</output><iframe id="widget" src="http://localhost:{port}/{path}" style="margin:50px;width:500px;height:250px"></iframe><script>window.states={{}};window.addEventListener('message',e=>{{if(e.data.state){{window.states[e.data.state]={{owner:e.source===document.querySelector('#widget').contentWindow?'widget':'sibling',value:e.data.value}}}}else if(e.data.controls){{window.controlValues=e.data.controls;document.querySelector('output').setAttribute('data-controls','')}}else if(e.data.queued){{window.queuedValues=e.data.queued;document.querySelector('output').setAttribute('data-queued','')}}else if(e.data.unfocused){{window.unfocusedValues=e.data.unfocused;document.querySelector('output').setAttribute('data-unfocused','')}}else if(e.data.protected){{window.protectedValues=e.data.protected;document.querySelector('output').setAttribute('data-protected','')}}else if(e.data.ready){{document.querySelector('output').setAttribute('data-ready','')}}else{{document.querySelector('output').textContent=e.data.submitted&&e.data.trusted?'Submitted':'Failed'}}}})</script>{controls}"#
                 )
             };
             let _ = write!(

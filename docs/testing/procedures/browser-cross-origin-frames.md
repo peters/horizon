@@ -116,6 +116,9 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
    The test checks these cases in child and top-level documents.
    If an input handler moves focus during clearing, the requested text does not reach the field that receives focus.
    The handler transfers the target ID to the field that receives focus. The original element check still rejects the fill.
+   The test also moves focus through queued and nested microtasks after focus and clearing.
+   A queued onfocus redirect retains the original value and sends no input event.
+   A queued input redirect sends no requested text or input event to the field that receives focus.
    File, checkbox, radio, range, button, color, date and select controls reject fill without value changes or input events.
    These controls also reject fill when they have `contenteditable="true"`.
    Text, search, tel, URL, email, password and number inputs accept fill.
