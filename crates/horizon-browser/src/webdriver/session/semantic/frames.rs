@@ -111,6 +111,7 @@ impl Driver {
         value: &str,
         events: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        self.pending_classic_history_start = None;
         let result = self.frame_value(frame, &frame_fill_expression(selector), events)?;
         parse_target_rect(&result)?;
         let FrameTarget::Bidi { context, .. } = frame else {
@@ -133,6 +134,7 @@ impl Driver {
         count: u32,
         events: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        self.pending_classic_history_start = None;
         let result = self.frame_value(frame, &target_rect_expression(selector, false), events)?;
         let (x, y) = parse_target_rect(&result)?;
         let FrameTarget::Bidi { context, realm } = frame else {
@@ -225,6 +227,78 @@ fn remaining(deadline: Instant) -> Result<Duration, BrowserControlFailure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::webdriver::session::PendingHistoryStart;
+    use crate::webdriver::session::viewport::tests::{events, fixture_driver};
+    use crate::webdriver::test_server::Server;
+    use crate::websocket::JsonWsLink;
+    use std::net::TcpListener;
+    use tungstenite::Message;
+
+    fn navigation_fixture() -> (JsonWsLink, std::thread::JoinHandle<Vec<Value>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            let mut commands = Vec::new();
+            while let Ok(Message::Text(text)) = socket.read() {
+                let command: Value = serde_json::from_str(&text).unwrap();
+                commands.push(command.clone());
+                if commands.len() == 1 {
+                    let navigation = json!({"method":"browsingContext.navigationStarted","params":{"context":"first","url":"https://example.test/"}});
+                    socket.send(Message::Text(navigation.to_string().into())).unwrap();
+                }
+                let response = json!({"id":command["id"],"type":"success","result":{"type":"success","realm":"realm","result":{"type":"string","value":"{\"x\":1,\"y\":1}","sharedId":"element"}}});
+                socket.send(Message::Text(response.to_string().into())).unwrap();
+            }
+            commands
+        });
+        (JsonWsLink::connect(&url).unwrap(), worker)
+    }
+
+    #[test]
+    fn frame_input_cannot_consume_a_previous_same_url_history_signal() {
+        for fill in [true, false] {
+            let classic = Server::start(Vec::new());
+            let (link, worker) = navigation_fixture();
+            let mut driver = fixture_driver(&classic, link);
+            let frame = FrameTarget::Bidi {
+                context: "child".into(),
+                realm: "realm".into(),
+            };
+            let mut scan = json!({"nodes":[{"selector":"#top"}]});
+            append_frame_scan(&mut scan, json!({"nodes":[{"selector":"#field"}]}), &frame, 2).unwrap();
+            let (generation, _, nodes) = driver.semantic.register_nodes(scan).unwrap();
+            driver.pending_classic_history_start = Some(PendingHistoryStart {
+                url: "https://example.test/".into(),
+                expires_at: Instant::now() + Duration::from_secs(30),
+            });
+            let result = if fill {
+                driver.frame_fill(&frame, "#field", "synthetic", &events())
+            } else {
+                driver.frame_click(&frame, "#field", 1, &events())
+            };
+            assert_eq!(result.unwrap_err().code, "stale_reference");
+            assert!(driver.semantic.generation() > generation);
+            for node in nodes {
+                assert_eq!(
+                    driver
+                        .semantic
+                        .resolve_target(&crate::BrowserTarget::Ref {
+                            reference: node.reference
+                        })
+                        .unwrap_err()
+                        .code,
+                    "stale_reference"
+                );
+            }
+            drop(driver);
+            let commands = worker.join().unwrap();
+            assert_eq!(commands.len(), 1);
+            assert_eq!(commands[0]["method"], "script.evaluate");
+        }
+    }
 
     #[test]
     fn tree_is_scoped_to_the_bound_page_and_includes_nested_children() {
