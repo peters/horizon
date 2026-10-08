@@ -82,7 +82,10 @@ never credentials. Pairing PINs must not be written to durable plans or logs.
 ## Capture and performance boundaries
 
 Panels and workspaces must be fully visible and unobscured in Horizon's main
-window. Fit the whole source into view first. Hidden, clipped, detached, deleted
+window. Fit the whole source into view first. A workspace source includes the
+cloud cards in that workspace, with their headers, bodies and open drawers. A
+cloud's own chrome and a panel's own resize grip do not count as covering the
+source. Hidden, clipped, detached, deleted
 or covered panel/workspace sources stop casting. Entire Horizon captures the
 main window's rendered content, including its own dialogs, without capturing
 the surrounding desktop, other applications or detached windows. A minimized
