@@ -221,6 +221,12 @@ class VolumeCopyTests(ServiceTestCase):
         self.assertEqual(self.store.load()[0]['chain']['access_token'], 'ghu_synthetic-unwritten')
         self.assertEqual(self.store.load(serving=True)[0]['chain'], chain())
 
+    def test_a_revocation_that_only_memory_holds_still_ends_serving(self):
+        self.install()
+        self.store.pending = dict(self.stored(), serial=self.stored()['serial'] + 1, state='revoked',
+                                  last_error='bad_refresh_token')
+        self.assertEqual(self.store.load(serving=True)[0]['state'], 'revoked')
+
     def test_a_full_tmpfs_leaves_the_older_volume_chain_usable(self):
         self.install()
         old = self.store.persistent / service.STATE

@@ -257,9 +257,11 @@ class Store:
     def load(self, serving=False):
         """(state, persistent) for the newest copy, or (None, False) without a chain. A chain
         that only memory holds is left out when `serving`: no agent gets a token whose refresh
-        token is not stored yet. On an equal serial the tmpfs copy wins, so a volume copy whose
+        token is not stored yet. A revocation that only memory holds still counts. On an equal serial the tmpfs copy wins, so a volume copy whose
         directory sync failed is not reported as persistent."""
-        found = [copy for copy in self.copies() if not (serving and copy[0] is self.pending)]
+        # A revocation counts at once, also from memory only; a new chain waits for its write.
+        found = [copy for copy in self.copies()
+                 if not (serving and copy[0] is self.pending and copy[0]['state'] == 'ok')]
         return max(found, key=lambda copy: (copy[0]['serial'], not copy[1])) if found else (None, False)
 
     def pending_write(self):
