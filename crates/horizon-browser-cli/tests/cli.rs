@@ -12,6 +12,80 @@ const STDIN_EXECUTION_TIMEOUT: Duration = Duration::from_secs(1);
 const DEADLINE_ROUNDING_SLACK_MILLIS: u128 = 1;
 
 #[test]
+fn drop_files_plan_dispatches_the_public_action_with_synthetic_bytes() {
+    use horizon_browser::{AgentActionResult, BrowserControlAction, BrowserControlValue, BrowserTarget};
+
+    let root = tempfile::tempdir().unwrap();
+    let panel_id = "synthetic-drop-panel";
+    let file = root.path().join("Overview.pdf");
+    std::fs::write(&file, b"synthetic drop bytes").unwrap();
+    let plan = root.path().join("drop-plan.json");
+    std::fs::write(
+        &plan,
+        serde_json::to_vec(&json!({
+            "version":1,
+            "steps":[{"id":"drop","tool":"browser_act","arguments":{
+                "panel_id":panel_id,"action":"drop_files","selector":"#drop-zone","files":[file]
+            }}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let manifest_path = manifest::manifest_path_for_root(&root.path().join(".horizon"), panel_id);
+    manifest::write_at(
+        &manifest_path,
+        &BrowserManifest {
+            panel_local_id: panel_id.into(),
+            ..BrowserManifest::default()
+        },
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(["run", plan.to_str().unwrap()])
+        .env("HOME", root.path())
+        .env("HORIZON_BROWSER_ROOT", root.path().join(".horizon"))
+        .env_remove("HORIZON")
+        .env("HORIZON_WORK_ROOT", root.path())
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_manifest_action(&mut child, &manifest_path);
+    let queued: BrowserManifest = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(queued.actions.len(), 1);
+    let action = &queued.actions[0];
+    let BrowserControlAction::DropFiles { target, paths, .. } = &action.action else {
+        panic!("plan did not dispatch DropFiles");
+    };
+    assert_eq!(
+        target,
+        &BrowserTarget::Selector {
+            selector: "#drop-zone".into()
+        }
+    );
+    assert_eq!(paths.len(), 1);
+    assert_eq!(std::fs::read(&paths[0]).unwrap(), b"synthetic drop bytes");
+    let result = AgentActionResult::completed(action.action_id.clone(), BrowserControlValue::Accepted);
+    let result_path = manifest::action_result_path_for_root(&root.path().join(".horizon"), panel_id, &action.action_id);
+    std::fs::create_dir_all(result_path.parent().unwrap()).unwrap();
+    std::fs::write(result_path, serde_json::to_vec(&result).unwrap()).unwrap();
+    wait_for_exit(&mut child, "synthetic drop plan");
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}; report: {}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["steps"][0]["result"]["completed"], true);
+    assert_eq!(report["steps"][0]["result"]["action_id"], action.action_id);
+}
+
+#[test]
 fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     let root = tempfile::tempdir().expect("isolated root");
     let plan = root.path().join("plan.json");

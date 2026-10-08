@@ -183,9 +183,41 @@ It checks file contents, selection, navigation, themes, and the public browser c
 
    Result: An invalidated request cannot attach files to the replacement page.
 
+### 5.6 P06 — Frame drop boundaries
+
+1. Add `?frame=same` to the fixture URL. Navigate through `browser_navigate`.
+
+   Result: The page shows a same-origin frame with a file drop area.
+
+2. Drop a synthetic file into the frame. Repeat on local Firefox and Chromium.
+
+   Result: The frame and parent page show the exact file name, size, and first and last bytes.
+
+3. Add `?frame=cross` to the fixture URL. Navigate through `browser_navigate`.
+
+   Result: The sandbox frame has an opaque origin. The parent cannot read its document.
+
+4. Drop the same file into the sandbox frame on Firefox.
+
+   Result: Firefox reports that cross-origin frame drops are unsupported. The frame receives no file.
+
+5. Repeat step 4 on Chromium.
+
+   Result: The frame and parent page show the exact file name, size, and first and last bytes.
+
+### 5.7 P07 — CLI plan dispatch without a live browser
+
+1. Run `cargo test -p horizon-browser-cli drop_files_plan_dispatches_the_public_action_with_synthetic_bytes`.
+
+   Result: The CLI plan sends one `drop_files` action through public MCP to a mock host. The host checks its selector and synthetic file bytes. The structured report contains the mock action acknowledgement.
+
+2. Repeat P04 through public browser MCP on a live candidate.
+
+   Result: The shared handler delivers the file to the browser. Agent browser control stays on public MCP.
+
 ## 6. Pass criteria
 
-- P01 through P05 pass on each tested platform and backend.
+- P01 through P07 pass on each tested platform and backend.
 - Baseline terminal and editor file drops remain unchanged.
 - The page receives exact synthetic file names, sizes, and bytes.
 - Record unavailable platform lanes separately.

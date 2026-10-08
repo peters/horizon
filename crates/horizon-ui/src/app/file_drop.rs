@@ -73,6 +73,10 @@ impl HorizonApp {
 
     pub(super) fn clear_file_drop_state(&mut self, ctx: &Context) {
         #[cfg(target_os = "linux")]
+        if self.browser_file_chooser_open() && self.observed_keyboard_inputs.is_wayland_backend() {
+            super::browser_file_chooser::resolve_native_picker_drops(ctx, &self.observed_keyboard_inputs);
+        }
+        #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs
             .discard_native_drop_positions(&ctx.input(|input| input.raw.dropped_files.clone()));
         self.file_drop_highlight = None;

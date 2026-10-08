@@ -35,5 +35,22 @@ for(const id of ['files','single'])document.querySelector('#'+id).addEventListen
 for(const kind of ['dragenter','dragover'])zone.addEventListener(kind,event=>{event.preventDefault();zone.classList.add('active')});
 zone.addEventListener('dragleave',()=>zone.classList.remove('active'));
 zone.addEventListener('drop',event=>{event.preventDefault();zone.classList.remove('active');showFiles(event.dataTransfer.files,'Drag and drop')});
+const frameMode=new URLSearchParams(location.search).get('frame');
+if(frameMode==='same'||frameMode==='cross'){
+ const frame=document.createElement('iframe');frame.id='drop-frame';frame.style.height='280px';
+ if(frameMode==='cross')frame.setAttribute('sandbox','allow-scripts');
+ const label=frameMode==='same'?'Same-origin frame':'Cross-origin sandbox frame';
+ frame.srcdoc=`<!doctype html><html><meta charset="utf-8"><style>body{font:18px system-ui;margin:0;background:#e4edff;color:#1b2940}#zone{box-sizing:border-box;min-height:260px;padding:24px;border:2px dashed #365dcc}pre{white-space:pre-wrap}</style><div id="zone"><h2>${label}</h2><p>Drop a synthetic file here.</p><pre id="result"></pre></div><script>
+ const zone=document.querySelector('#zone');
+ zone.addEventListener('dragover',event=>event.preventDefault());
+ zone.addEventListener('drop',async event=>{event.preventDefault();const files=await Promise.all(Array.from(event.dataTransfer.files,async file=>{const bytes=new Uint8Array(await file.arrayBuffer());return{name:file.name,size:file.size,firstByte:bytes[0]??null,lastByte:bytes.at(-1)??null,source:'${label}'}}));document.querySelector('#result').textContent=JSON.stringify(files,null,2);parent.postMessage({fixture:'upload-frame',files},'*')});
+ <\/script></html>`;
+ zone.replaceChildren(frame);
+ window.addEventListener('message',event=>{
+  if(event.source!==frame.contentWindow||event.data?.fixture!=='upload-frame')return;
+  window.uploads=event.data.files;document.querySelector('#empty').hidden=window.uploads.length>0;
+  document.querySelector('#result').textContent=JSON.stringify(window.uploads,null,2);
+ });
+}
 </script>
 </html>
