@@ -25,6 +25,7 @@ impl CloudGroup {
             layout: Some(WorkspaceLayout::default()),
             panels: Vec::new(),
             hidden: Vec::new(),
+            slot: None,
         }
     }
 
@@ -83,6 +84,15 @@ impl CloudGroup {
         if board.panel(id).is_some_and(|p| self.panels.contains(&p.local_id)) {
             return;
         }
+        // The first member of an empty slotted cloud must not move the cloud: its slot is
+        // remembered until now, and panel order places it from here on.
+        let first = !self.panels.iter().any(|local| {
+            board
+                .panels
+                .iter()
+                .any(|panel| &panel.local_id == local && panel.visible)
+        });
+        let remembered = self.slot;
         self.set_collapsed_state(board, false);
         let position = board.panel(id).map_or(self.position, |p| p.layout.position);
         if let Some(panel) = board.panel_mut(id) {
@@ -97,6 +107,19 @@ impl CloudGroup {
             }
         }
         self.reconcile(board);
+        if first && let Some(slot) = remembered {
+            board.seat_first_member(&self.environment.id, slot);
+            if let Some(placed) = board
+                .cloud_groups
+                .0
+                .iter()
+                .find(|group| group.environment.id == self.environment.id)
+            {
+                self.position = placed.position;
+                self.size = placed.size;
+                self.slot = placed.slot;
+            }
+        }
     }
 
     #[must_use]

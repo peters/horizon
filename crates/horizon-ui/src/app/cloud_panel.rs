@@ -237,6 +237,19 @@ impl HorizonApp {
         true
     }
 
+    /// Move an arranged panel outside every cloud onto the slot under it, which may be a cloud's.
+    pub(super) fn reorder_ordinary_panel(&mut self, id: PanelId, position: [f32; 2]) -> bool {
+        let live = self.cloud_state_is_live();
+        if live {
+            std::mem::swap(&mut self.board.cloud_groups, &mut self.cloud_prototype.groups);
+        }
+        let changed = self.board.reorder_arranged_slot(id, position);
+        if live {
+            self.cloud_prototype.groups.clone_from(&self.board.cloud_groups);
+        }
+        changed
+    }
+
     /// Resize a panel outside every cloud; its growth pushes whole cloud frames like sibling panels.
     pub(super) fn resize_ordinary_panel(
         &mut self,

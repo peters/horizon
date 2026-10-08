@@ -76,6 +76,7 @@ impl HorizonApp {
         let mut action = None;
         let mut title_action = RenameEditAction::None;
         let mut moved = false;
+        let mut slotted = false;
         let mut strip_actions = Vec::new();
         let now = std::time::SystemTime::now();
         for group in &mut self.cloud_prototype.groups.0 {
@@ -134,22 +135,15 @@ impl HorizonApp {
                             rename_field(ui, header, cost_width, &mut self.cloud_prototype.title_draft, transform);
                     }
                     let drag = early_drag.unwrap_or_else(|| drag_area(ui, drag_rect, editing));
-                    // Registered over the drag area: it takes the clicks, and drags fall
-                    // through to the header so the card still moves from its title.
                     if !editing {
-                        let title = title_target(ui, group, header, cost_width);
-                        if title.clicked() {
-                            action = Some(Action::Rename(group.issue));
-                        }
-                        cloud_context(&title, group, &mut action);
+                        title_actions(ui, group, header, cost_width, &mut action);
                     }
                     cloud_context(&drag, group, &mut action);
                     card_hint(drag)
                 })
                 .inner;
             if response.dragged() {
-                let delta = response.drag_delta();
-                group.translate(&mut self.board, [delta.x, delta.y]);
+                slotted |= drag_cloud(&mut self.board, group, &response);
                 moved = true;
             }
             if response.double_clicked() {
@@ -160,6 +154,9 @@ impl HorizonApp {
                 let ready = self.cloud_prototype.production.accepts_panels(group);
                 empty_group(ctx, group, rect, transform, clip, ready);
             }
+        }
+        if slotted {
+            self.cloud_prototype.groups.adopt_slot_geometry(&self.board);
         }
         if moved {
             self.save_cloud_prototype();
@@ -271,6 +268,19 @@ impl HorizonApp {
     }
 }
 
+/// A header drag moves a cloud freely, or between slots like a panel when its workspace
+/// has a preset. Returns whether the slots were reordered on the board.
+fn drag_cloud(board: &mut horizon_core::Board, group: &mut CloudGroup, response: &egui::Response) -> bool {
+    if board.cloud_takes_slot(group) {
+        return response
+            .interact_pointer_pos()
+            .is_some_and(|point| board.swap_cloud_slot_at(&group.environment.id, [point.x, point.y]));
+    }
+    let delta = response.drag_delta();
+    group.translate(board, [delta.x, delta.y]);
+    false
+}
+
 fn cloud_context(response: &egui::Response, group: &CloudGroup, action: &mut Option<Action>) {
     response.context_menu(|ui| {
         for (text, next) in [
@@ -350,6 +360,16 @@ fn rename_field(
 
 /// The hover text of the card itself.
 pub(super) const CARD_HINT: &str = "Click the title to rename. Drag to move this cloud.";
+
+/// The title over the drag area: it takes the clicks, and drags fall through to the
+/// header so the card still moves from its title.
+fn title_actions(ui: &egui::Ui, group: &CloudGroup, header: Rect, reserved: f32, action: &mut Option<Action>) {
+    let title = title_target(ui, group, header, reserved);
+    if title.clicked() {
+        *action = Some(Action::Rename(group.issue));
+    }
+    cloud_context(&title, group, action);
+}
 
 /// The title text as its own button: a click starts a rename, assistive technology finds
 /// it as "Rename …", and the pointer shows a text cursor over it. The galley comes from

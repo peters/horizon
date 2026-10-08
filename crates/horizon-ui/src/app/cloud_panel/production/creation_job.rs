@@ -267,6 +267,9 @@ impl HorizonApp {
         group.siblings = siblings;
         group.reconcile(&mut self.board);
         self.cloud_prototype.groups.0.push(group);
+        // Registered now, so a workspace preset gives the cloud its slot before the
+        // overview frames it.
+        self.cloud_prototype.groups.reconcile(&mut self.board);
         self.save_cloud_prototype();
         Ok(id)
     }

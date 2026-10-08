@@ -8,7 +8,9 @@ mod placement;
 mod reordering;
 mod resize;
 mod selection;
+mod slot;
 pub use selection::{ChosenWorker, WorkerChoice};
+pub use slot::SLOT_MIN_MEMBER;
 
 pub use horizon_cloud::Connection as CloudConnection;
 use std::collections::HashMap;
@@ -73,6 +75,10 @@ pub struct CloudGroup {
     pub panels: Vec<String>,
     /// Only panels hidden by collapse are revealed by expand.
     hidden: Vec<String>,
+    /// Where this cloud stands among its workspace preset's slots while it has no
+    /// members; a cloud with members stands where its first member does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<usize>,
 }
 
 /// Fields reconciliation compares. Omits the remote launch payload so the
@@ -221,6 +227,9 @@ impl CloudGroups {
             }
             board.cloud_groups.0.push(group.clone());
         }
+        // A preset applied to the board alone placed slot clouds there; this list must not
+        // write its older geometry back over them.
+        self.adopt_slot_geometry(board);
         // Register every member before any preset can mistake it for a free panel.
         for index in 0..self.0.len() {
             let before = self.0[index].size;
@@ -232,6 +241,7 @@ impl CloudGroups {
         for (workspace, before) in registered {
             board.reapply_workspace_layout_after(workspace, before);
         }
+        self.adopt_slot_geometry(board);
     }
 
     /// Resize within a cloud without invoking the parent workspace's collision policy.
@@ -254,6 +264,13 @@ impl CloudGroups {
                 group.size[axis] =
                     group.size[axis].max(panel.layout.position[axis] - group.position[axis] + extent + PAD);
             }
+        }
+        // In a workspace preset the cloud's new frame is the size every slot takes.
+        if board.cloud_takes_slot(group) {
+            let (environment, frame) = (group.environment.id.clone(), group.size);
+            board.place_cloud_slot(&environment, frame);
+            self.adopt_slot_geometry(board);
+            return true;
         }
         group.reconcile_with_collisions(board, false);
         self.make_room_with_collisions(board, index, false);

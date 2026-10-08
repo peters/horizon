@@ -5,6 +5,8 @@ mod alignment;
 mod cloud_collisions;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud_retention;
+#[cfg(feature = "cloud-workspaces")]
+mod cloud_slots;
 mod core;
 mod disposal;
 mod layout;

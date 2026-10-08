@@ -8,7 +8,7 @@ pub(crate) use geometry::panel_visual_rect;
 
 pub use arrangement::WorkspaceAlignment;
 #[cfg(feature = "cloud-workspaces")]
-pub(crate) use arrangement::arranged_panel_layout;
+pub(crate) use arrangement::{Slot, arranged_panel_layout};
 use shutdown::FORCED_BROWSER_SHUTDOWN_WAIT;
 pub use shutdown::{ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress};
 
@@ -242,6 +242,8 @@ impl Board {
                 board.retained_empty_workspaces.insert(workspace);
             }
         }
+        #[cfg(feature = "cloud-workspaces")]
+        board.place_slot_clouds();
         Ok(board)
     }
 

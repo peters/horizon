@@ -71,6 +71,16 @@ stop or reconnect. Re-read status after that event. Remove only task-owned forwa
 unforward closes their active connections. This network path does not permit a
 browser controller outside the public `browser_*` MCP contract.
 
+## Cloud cards on the canvas
+
+A deployed cloud's card sits in a workspace like a panel. When the workspace has
+a layout preset (Rows, Columns or Grid), the card takes one slot of the same size
+as the panels beside it, and its own panels are arranged inside it. Resizing a
+panel or the card resizes every slot. Dragging the card or a panel onto another
+slot swaps them, and the order is kept across restarts. A collapsed card and a
+workspace without a preset (Default) leave the card where it is. No MCP tool
+moves or resizes a card; use the person's canvas for that.
+
 ## Development-only registry
 
 The source example `cloud_deploy registry-mcp <registry-path>` exposes

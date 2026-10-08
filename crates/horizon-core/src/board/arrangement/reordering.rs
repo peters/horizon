@@ -39,6 +39,23 @@ impl Board {
         })
     }
 
+    /// Move the slot of an arranged panel dragged to `position` onto the slot, a panel's or
+    /// a cloud's, under its center.
+    pub fn reorder_arranged_slot(&mut self, source: PanelId, position: [f32; 2]) -> bool {
+        let Some(panel) = self.panel(source) else {
+            return false;
+        };
+        if !self.panel_follows_workspace_layout(source) {
+            return false;
+        }
+        let workspace = panel.workspace_id;
+        let center = [
+            position[0] + panel.layout.size[0] * 0.5,
+            position[1] + panel.layout.size[1] * 0.5,
+        ];
+        self.swap_slot_at(workspace, super::Slot::Panel(source), center)
+    }
+
     /// Swap two visible panel slots inside the same arranged workspace and
     /// immediately reflow the preset without changing focus or layout mode.
     pub fn swap_arranged_panels(&mut self, source: PanelId, target: PanelId) -> bool {

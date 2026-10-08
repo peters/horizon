@@ -25,6 +25,13 @@ impl CloudGroups {
         if self.0[index].collapsed {
             return false;
         }
+        // In a workspace preset the frame is a slot: every slot takes the new size.
+        if board.cloud_takes_slot(&self.0[index]) {
+            let environment = self.0[index].environment.id.clone();
+            let resized = board.place_cloud_slot(&environment, size);
+            self.adopt_slot_geometry(board);
+            return resized;
+        }
         let before = self.0[index].size;
         let min_member = [min_member[0].max(1.0), min_member[1].max(1.0)];
         self.0[index].apply_frame_size(board, size, min_member);
@@ -42,7 +49,7 @@ impl CloudGroups {
 }
 
 impl CloudGroup {
-    fn apply_frame_size(&mut self, board: &mut Board, requested: [f32; 2], min_member: [f32; 2]) {
+    pub(super) fn apply_frame_size(&mut self, board: &mut Board, requested: [f32; 2], min_member: [f32; 2]) {
         let requested = [requested[0].max(self.minimum_width()), requested[1]];
         let visible = visible_members(self, board);
         if let Some(layout) = self.layout
