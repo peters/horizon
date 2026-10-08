@@ -209,3 +209,81 @@ fn a_stage_segment_shows_its_own_hover_text_over_the_card_hint() {
     );
     assert!(!on_title.iter().any(|text| text.ends_with("· skipped")));
 }
+
+#[test]
+fn a_production_cloud_renames_from_a_click_on_its_title() {
+    let (temp, ctx, mut app) = ready_card(1.0);
+    app.cloud_prototype.initialized = true;
+    app.cloud_prototype.production.session_id = app.active_session.as_ref().map(|session| session.session_id.clone());
+    app.cloud_prototype.root = Some(temp.path().into());
+    let workspace = app.board.create_workspace("Cloud fixture");
+    app.cloud_prototype.groups.0[0].workspace = app.board.workspace(workspace).unwrap().local_id.clone();
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&ID).unwrap();
+    runtime.drawer = None;
+    runtime.confirmation = super::super::super::Confirmation::None;
+    let size = Vec2::new(1600.0, 1000.0);
+    let mut time = 0.0;
+    let mut render = |app: &mut HorizonApp, position: Pos2, events: Vec<Event>| {
+        time += 0.05;
+        ctx.run_ui(input(size, time, position, events), |ui| {
+            app.render_active_view(ui, false);
+        })
+        .discard_textures()
+    };
+    for _ in 0..4 {
+        render(&mut app, Pos2::ZERO, Vec::new());
+    }
+    let layer = LayerId::new(Order::Middle, Id::new(("cloud-header", ID)));
+    let header = ctx
+        .memory(|memory| memory.area_rect(layer.id))
+        .expect("the card header");
+    let to_screen = ctx.layer_transform_to_global(layer).unwrap_or_default();
+    let beside = to_screen * Pos2::new(header.left() + 100.0, header.top() + 58.0);
+    for pressed in [true, false] {
+        let event = Event::PointerButton {
+            pos: beside,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        render(&mut app, beside, vec![event]);
+    }
+    render(&mut app, beside, Vec::new());
+    assert_eq!(
+        app.cloud_prototype.renaming, None,
+        "a click on the subtitle leaves the title"
+    );
+    let title = to_screen * Pos2::new(header.left() + 100.0, header.top() + 30.0);
+    let button = |pressed| Event::PointerButton {
+        pos: title,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    for pressed in [true, false] {
+        render(&mut app, title, vec![button(pressed)]);
+    }
+    render(&mut app, title, Vec::new());
+    assert_eq!(app.cloud_prototype.renaming, Some(ID), "a click on the title edits it");
+    let key = |key, pressed| Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: if key == egui::Key::A {
+            egui::Modifiers::COMMAND
+        } else {
+            egui::Modifiers::NONE
+        },
+    };
+    render(&mut app, title, vec![key(egui::Key::A, true), key(egui::Key::A, false)]);
+    render(&mut app, title, vec![Event::Text("Renamed cloud".into())]);
+    render(
+        &mut app,
+        title,
+        vec![key(egui::Key::Enter, true), key(egui::Key::Enter, false)],
+    );
+    render(&mut app, title, Vec::new());
+    assert_eq!(app.cloud_prototype.renaming, None);
+    assert_eq!(app.cloud_prototype.groups.0[0].title, "Renamed cloud");
+}

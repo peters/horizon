@@ -71,7 +71,7 @@ pub(super) fn worker_requested(runtime: &Runtime) -> bool {
     })
 }
 
-/// The Cost tab's one-word summary.
+/// The cost half of the Machine tab's summary.
 pub(super) fn teaser(runtime: &Runtime) -> String {
     let rate = runtime
         .state

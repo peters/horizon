@@ -283,8 +283,8 @@ fn resuming_shows_the_steps_instead_of_manage() {
     app.apply_card_action(7, Action::Resume, &ctx);
     assert_eq!(
         app.cloud_prototype.production.runtimes[&7].drawer,
-        Some(Tab::Overview),
-        "with panels the steps open in Overview"
+        Some(Tab::Status),
+        "with panels the steps open in Status"
     );
 
     let (_temp, mut app) = crate::app::test_support::test_app();
@@ -303,7 +303,7 @@ fn resuming_shows_the_steps_instead_of_manage() {
         !app.cloud_prototype.groups.0[0].collapsed,
         "a collapsed cloud opens to show it"
     );
-    assert_eq!(app.cloud_prototype.production.runtimes[&7].drawer, Some(Tab::Overview));
+    assert_eq!(app.cloud_prototype.production.runtimes[&7].drawer, Some(Tab::Status));
 }
 
 #[test]

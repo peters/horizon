@@ -46,26 +46,28 @@ pub(in crate::app::cloud_panel) fn short(launch: &CloudLaunch, state: Option<&De
     }
 }
 
-/// `region_of` names the region of a data center, when the provider's list is known.
-pub(super) fn where_it_lives(
-    ui: &mut egui::Ui,
+/// Where the cloud lives as label and value rows. `region_of` names the region of a
+/// data center, when the provider's list is known.
+pub(super) fn facts(
     launch: &CloudLaunch,
     state: Option<&Deployment>,
     region_of: &dyn Fn(&str) -> Option<String>,
-) {
-    if let Some(text) = describe(launch, state, region_of) {
-        ui.small(text);
-    }
-    if let Some(text) = gpu_choice(launch) {
-        ui.small(text);
-    }
-    for sibling in state
+) -> Vec<(String, String)> {
+    let siblings = state
         .and_then(|state| state.siblings.as_ref())
         .into_iter()
         .flat_map(|set| &set.members)
-    {
-        ui.small(sibling_line(sibling));
-    }
+        .map(sibling_line);
+    describe(launch, state, region_of)
+        .into_iter()
+        .chain(gpu_choice(launch))
+        .chain(siblings)
+        .map(|line| match line.split_once(": ") {
+            // Each line reads `Label: value`.
+            Some((label, value)) => (label.to_owned(), value.to_owned()),
+            None => (String::new(), line),
+        })
+        .collect()
 }
 
 /// A pinned sibling, read-only: its repository, the commit checked out on the worker and,
@@ -216,6 +218,19 @@ mod tests {
             describe(&launch(one), None, &unknown).as_deref(),
             Some("Data center: EU-RO-1 · Europe")
         );
+    }
+
+    #[test]
+    fn where_it_lives_reads_as_label_and_value_rows() {
+        let placement = Placement {
+            data_centers: vec!["EU-SE-1".into()],
+            gpu_types: vec!["NVIDIA RTX A5000".into()],
+            ..Placement::default()
+        };
+        let rows = facts(&launch(placement), None, &|_| None);
+        assert_eq!(rows[0], ("Data center".to_owned(), "EU-SE-1".to_owned()));
+        assert_eq!(rows[1], ("GPU".to_owned(), "NVIDIA RTX A5000".to_owned()));
+        assert!(facts(&launch(Placement::default()), None, &|_| None).is_empty());
     }
 
     #[test]

@@ -134,6 +134,9 @@ impl HorizonApp {
                             rename_field(ui, header, cost_width, &mut self.cloud_prototype.title_draft, transform);
                     }
                     let drag = early_drag.unwrap_or_else(|| drag_area(ui, drag_rect, editing));
+                    if !editing && title_clicked(ui, &drag, group, header, cost_width) {
+                        action = Some(Action::Rename(group.issue));
+                    }
                     cloud_context(&drag, group, &mut action);
                     card_hint(drag)
                 })
@@ -340,7 +343,24 @@ fn rename_field(
 }
 
 /// The hover text of the card itself.
-pub(super) const CARD_HINT: &str = "Double-click to rename. Drag to move this cloud.";
+pub(super) const CARD_HINT: &str = "Click the title to rename. Drag to move this cloud.";
+
+/// A click on the title text, not elsewhere on the header, starts a rename; the title
+/// shows a text cursor so it reads as editable.
+fn title_clicked(ui: &egui::Ui, drag: &egui::Response, group: &CloudGroup, header: Rect, reserved: f32) -> bool {
+    let galley = ui
+        .painter()
+        .layout_no_wrap(group.title.clone(), FontId::proportional(21.0), theme::FG());
+    let room = (header.width() - 64.0 - reserved).max(0.0);
+    let title = Rect::from_min_size(
+        header.min + Vec2::new(64.0, 16.0),
+        Vec2::new(galley.size().x.min(room), 30.0),
+    );
+    if drag.hover_pos().is_some_and(|at| title.contains(at)) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
+    drag.clicked() && drag.interact_pointer_pos().is_some_and(|at| title.contains(at))
+}
 
 /// Shows the card's hint only while the pointer is on the card alone. On a stage segment
 /// or a control of the header, that one's own hover text applies: egui shows one hover

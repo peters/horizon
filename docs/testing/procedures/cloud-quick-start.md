@@ -229,7 +229,7 @@ This task allocates nothing.
 9. Put the pointer on the segment of **Build locally** and wait one second.
 
    Result: The hover text is `Build locally · skipped`. The text
-   `Double-click to rename. Drag to move this cloud.` does not show.
+   `Click the title to rename. Drag to move this cloud.` does not show.
 
 10. Put the pointer on the segment of **Provision worker** and wait one second.
 
@@ -237,7 +237,7 @@ This task allocates nothing.
 
 11. Put the pointer on the title of the card and wait one second.
 
-    Result: The hover text is `Double-click to rename. Drag to move this cloud.`
+    Result: The hover text is `Click the title to rename. Drag to move this cloud.`
 
 12. In the RunPod console, examine the pod of this cloud.
 

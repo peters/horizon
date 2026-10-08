@@ -121,7 +121,7 @@ fn grip_dots_stay_inside_the_hit_target_at_each_zoom() {
         assert!(radius > 0.0, "zoom {zoom}");
         let screen_span = rect.width() * zoom;
         assert!(
-            screen_span + 0.01 >= 9.0 + 2.0 * GRIP_DOT_RADIUS,
+            screen_span + 0.01 >= 10.0 + 2.0 * GRIP_DOT_RADIUS,
             "fixture handle should hold full dots at zoom {zoom}"
         );
         assert!(
@@ -145,8 +145,9 @@ fn grip_dots_stay_inside_the_hit_target_at_each_zoom() {
     }
     let rect = handle_rect(panel, 1.0);
     let (centers, radius) = grip_dots(rect, 1.0);
-    assert!((centers[0] - (rect.min + Vec2::new(18.0, 17.0))).length() < 0.01);
-    assert!((centers[5] - (rect.min + Vec2::new(24.0, 26.0))).length() < 0.01);
+    assert!((centers[0] - (rect.min + Vec2::new(26.0, 16.0))).length() < 0.01);
+    assert!((centers[3] - (rect.min + Vec2::new(16.0, 26.0))).length() < 0.01);
+    assert!((centers[5] - (rect.min + Vec2::new(26.0, 26.0))).length() < 0.01);
     assert!((radius - GRIP_DOT_RADIUS).abs() < 0.01);
 }
 

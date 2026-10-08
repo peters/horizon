@@ -26,15 +26,27 @@ fn ready(build: bool, phase: Phase) -> Runtime {
     runtime(deployment(Path::new("/synthetic"), build, phase))
 }
 
-fn render(
+/// One drawer surface: Manage's actions, or the Access section of Connections.
+type Surface = fn(&mut egui::Ui, &mut Runtime) -> Option<Action>;
+
+fn manage(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
+    runtime_actions(ui, 1, runtime)
+}
+
+fn access(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
+    super::super::drawer::access(ui, runtime)
+}
+
+fn render_on(
     ctx: &egui::Context,
     runtime: &mut Runtime,
     input: egui::RawInput,
+    surface: Surface,
 ) -> (Option<Action>, Vec<egui::epaint::TextShape>) {
     let mut action = None;
     let output = ctx
         .run_ui(input, |ui| {
-            action = runtime_actions(ui, 1, runtime);
+            action = surface(ui, runtime);
         })
         .discard_textures();
     let texts = output
@@ -50,7 +62,11 @@ fn render(
 
 /// Texts drawn by one frame of the runtime actions.
 fn texts(ctx: &egui::Context, runtime: &mut Runtime) -> Vec<String> {
-    render(ctx, runtime, egui::RawInput::default())
+    texts_on(ctx, runtime, manage)
+}
+
+fn texts_on(ctx: &egui::Context, runtime: &mut Runtime, surface: Surface) -> Vec<String> {
+    render_on(ctx, runtime, egui::RawInput::default(), surface)
         .1
         .iter()
         .map(|text| text.galley.text().to_owned())
@@ -63,9 +79,13 @@ fn has(texts: &[String], wanted: &str) -> bool {
 
 /// Clicks the text starting with `label` and returns the action it produced.
 fn click(ctx: &egui::Context, runtime: &mut Runtime, label: &str) -> Option<Action> {
+    click_on(ctx, runtime, label, manage)
+}
+
+fn click_on(ctx: &egui::Context, runtime: &mut Runtime, label: &str, surface: Surface) -> Option<Action> {
     let mut point = None;
     for _ in 0..2 {
-        point = render(ctx, runtime, egui::RawInput::default())
+        point = render_on(ctx, runtime, egui::RawInput::default(), surface)
             .1
             .iter()
             .find(|text| text.galley.text().starts_with(label))
@@ -86,7 +106,7 @@ fn click(ctx: &egui::Context, runtime: &mut Runtime, label: &str) -> Option<Acti
             ],
             ..Default::default()
         };
-        action = render(ctx, runtime, input).0.or(action);
+        action = render_on(ctx, runtime, input, surface).0.or(action);
     }
     action
 }
@@ -522,26 +542,30 @@ fn remote_device_release_waits_for_a_pending_replacement() {
 }
 
 #[test]
-fn a_paused_share_stays_visible_and_can_be_switched_off_while_a_rebuild_runs_or_waits() {
+fn a_paused_share_stays_in_connections_and_can_be_switched_off_while_a_rebuild_runs_or_waits() {
     use super::super::super::local_network::Sharing;
     let ctx = egui::Context::default();
     let (mut running, _sender) = rebuilding(Kind::Rebuild, Stage::Build);
     let mut pending = ready(true, Phase::Built);
     for (case, runtime) in [("running", &mut running), ("pending", &mut pending)] {
         runtime.sharing = Sharing::Paused { ready_again: false };
-        let shown = texts(&ctx, runtime);
+        assert!(
+            !has(&texts(&ctx, runtime), "Share local network"),
+            "Manage leaves sharing to Connections: {case}"
+        );
+        let shown = texts_on(&ctx, runtime, access);
         assert!(has(&shown, "Share local network"), "{case}");
         assert!(has(&shown, "Sharing paused: the cloud disconnected"), "{case}");
         assert!(
             matches!(
-                click(&ctx, runtime, "Share local network"),
+                click_on(&ctx, runtime, "Share local network", access),
                 Some(Action::StopSharingLocalNetwork)
             ),
             "{case}"
         );
         // Without an intent to keep, a cloud that is not connected and Ready offers no switch.
         runtime.sharing = Sharing::Off;
-        assert!(!has(&texts(&ctx, runtime), "Share local network"), "{case}");
+        assert!(!has(&texts_on(&ctx, runtime, access), "Share local network"), "{case}");
         // After a move to another network the owner is asked, but the new network is offered only
         // once the cloud is Ready again; the switch still stops sharing meanwhile.
         runtime.sharing = Sharing::Moved {
@@ -552,7 +576,7 @@ fn a_paused_share_stays_visible_and_can_be_switched_off_while_a_rebuild_runs_or_
             )),
             ready: true,
         };
-        let shown = texts(&ctx, runtime);
+        let shown = texts_on(&ctx, runtime, access);
         assert!(
             has(
                 &shown,
@@ -563,7 +587,7 @@ fn a_paused_share_stays_visible_and_can_be_switched_off_while_a_rebuild_runs_or_
         assert!(!has(&shown, "Share 10.0.3.0/24"), "{case}");
         assert!(
             matches!(
-                click(&ctx, runtime, "Share local network"),
+                click_on(&ctx, runtime, "Share local network", access),
                 Some(Action::StopSharingLocalNetwork)
             ),
             "{case}"

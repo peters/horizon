@@ -12,6 +12,8 @@ use horizon_core::cloud_runtime::progress;
 const SIDE_BY_SIDE: f32 = 760.0;
 const STEPS_WIDTH: f32 = 360.0;
 const GAP: f32 = 16.0;
+/// Room under the output for a hint of up to two lines.
+const HINT_HEIGHT: f32 = 44.0;
 
 pub(super) fn show(
     ui: &mut egui::Ui,
@@ -23,9 +25,8 @@ pub(super) fn show(
 ) -> Option<StepAction> {
     ui.set_min_size(size);
     ui.set_max_size(size);
-    let starting = runtime.first_panel_due;
-    let deleting = super::deleting(runtime);
-    let hint_height = 26.0;
+    let hint = hint_text(status, runtime.first_panel_due, super::deleting(runtime));
+    let hint_height = if hint.is_some() { HINT_HEIGHT } else { 0.0 };
     if size.x >= SIDE_BY_SIDE {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
@@ -38,7 +39,7 @@ pub(super) fn show(
                 .inner;
             ui.vertical(|ui| {
                 output_column(ui, id, runtime, status, size.y - hint_height);
-                hint(ui, status, starting, deleting);
+                show_hint(ui, hint, status);
             });
             action
         })
@@ -48,7 +49,7 @@ pub(super) fn show(
         let action = steps_card(ui, id, launch, runtime, status, steps_height);
         ui.add_space(GAP);
         output_column(ui, id, runtime, status, size.y - steps_height - GAP - hint_height);
-        hint(ui, status, starting, deleting);
+        show_hint(ui, hint, status);
         action
     }
 }
@@ -174,6 +175,7 @@ fn worker(runtime: &Runtime) -> String {
 }
 
 fn output_column(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, status: &Status, height: f32) {
+    let bottom = ui.cursor().top() + height;
     ui.horizontal(|ui| {
         ui.label(RichText::new("Output").size(12.0).color(theme::FG_DIM()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -184,36 +186,46 @@ fn output_column(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, status: &Sta
             );
         });
     });
-    super::output::show(ui, id, "body", runtime, height - 24.0, status.failure.as_ref());
+    // Ends level with the steps card: the heading's own height comes off the log's.
+    let room = bottom - ui.cursor().top();
+    super::output::show(ui, id, "body", runtime, room, status.failure.as_ref());
 }
 
-/// What the empty body waits for, in the cloud's own terms.
-fn hint_text(status: &Status, starting: bool, deleting: bool) -> &'static str {
+/// What the empty body waits for, when the steps beside it do not already say so.
+fn hint_text(status: &Status, starting: bool, deleting: bool) -> Option<&'static str> {
     use super::status::{Primary, Tone};
     if deleting {
-        return "Closing this cloud. Its worker and storage are being deleted, and the card closes once they are gone.";
+        return Some(
+            "Closing this cloud. Its worker and storage are being deleted, and the card closes once they are gone.",
+        );
     }
     match (status.tone, status.primary) {
-        (Tone::Ready, _) if starting => "Starting your first panel…",
-        (Tone::Ready, _) => "No panels open. Ctrl-double-click inside this cloud to add an agent, browser or terminal.",
-        (_, Some(Primary::Resume)) => "Resume the worker to open panels here.",
-        (Tone::Failed, Some(Primary::Retry | Primary::Reconnect)) => {
-            "Fix the cause, then retry. Panels open here once the cloud is ready."
+        (Tone::Ready, _) if starting => Some("Starting your first panel…"),
+        (Tone::Ready, _) => {
+            Some("No panels open. Ctrl-double-click inside this cloud to add an agent, browser or terminal.")
         }
-        _ => "Panels open here once the cloud is ready.",
+        (_, Some(Primary::Resume)) => Some("Resume the worker to open panels here."),
+        // A failure already shows its cause and Retry; a running step shows its progress.
+        _ => None,
     }
 }
 
-fn hint(ui: &mut egui::Ui, status: &Status, starting: bool, deleting: bool) {
+/// The hint centered in the room left under the output, so it never reaches the frame.
+fn show_hint(ui: &mut egui::Ui, hint: Option<&str>, status: &Status) {
+    let Some(text) = hint else { return };
     let ready = status.tone == super::status::Tone::Ready;
-    ui.vertical_centered(|ui| {
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new(hint_text(status, starting, deleting))
-                .size(13.0)
-                .color(if ready { theme::FG_SOFT() } else { theme::FG_DIM() }),
-        );
-    });
+    let room = Vec2::new(ui.available_width(), ui.available_height().clamp(0.0, HINT_HEIGHT));
+    ui.allocate_ui_with_layout(
+        room,
+        egui::Layout::centered_and_justified(egui::Direction::TopDown),
+        |ui| {
+            ui.label(
+                RichText::new(text)
+                    .size(13.0)
+                    .color(if ready { theme::FG_SOFT() } else { theme::FG_DIM() }),
+            );
+        },
+    );
 }
 
 #[cfg(test)]
@@ -293,6 +305,54 @@ mod tests {
             } else {
                 assert!(output.top() > find("Ready").bottom(), "output under the steps");
             }
+        }
+    }
+
+    #[test]
+    fn the_hint_shows_only_what_the_steps_do_not_say_and_stays_inside_the_body() {
+        use super::super::super::Stage;
+        let status_of =
+            |runtime: &Runtime| status::of(runtime, status::Occupancy::default(), std::time::SystemTime::now());
+        let building = Runtime {
+            stage: Some(Stage::Build),
+            ..Runtime::default()
+        };
+        assert_eq!(
+            hint_text(&status_of(&building), false, false),
+            None,
+            "a running step speaks for itself"
+        );
+        assert_eq!(hint_text(&status_of(&Runtime::default()), false, false), None);
+        assert!(hint_text(&status_of(&building), false, true).is_some_and(|hint| hint.starts_with("Closing")));
+        let mut state = super::super::super::rebuild::tests::deployment(
+            std::path::Path::new("/synthetic"),
+            true,
+            super::super::super::rebuild::tests::Phase::None,
+        );
+        state.stage = Stage::Stopped;
+        let mut stopped = Runtime {
+            stage: Some(Stage::Stopped),
+            state: Some(state),
+            ..Runtime::default()
+        };
+        let status = status_of(&stopped);
+        let hint = hint_text(&status, false, false).expect("a stopped cloud says to resume it");
+        let launch = launch();
+        for size in [Vec2::new(1370.0, 620.0), Vec2::new(520.0, 600.0)] {
+            let shapes = egui::Context::default()
+                .run_ui(egui::RawInput::default(), |ui| {
+                    let _ = show(ui, 1, size, &launch, &mut stopped, &status);
+                })
+                .discard_textures()
+                .shapes;
+            let painted = shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == hint => Some(text.visual_bounding_rect()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the hint is painted at {size:?}"));
+            assert!(painted.bottom() <= size.y + 0.5, "{painted:?} below {size:?}");
         }
     }
 

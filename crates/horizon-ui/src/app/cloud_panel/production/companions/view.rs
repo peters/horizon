@@ -3,8 +3,6 @@ use super::{Action, Entry};
 use horizon_core::cloud_runtime::companions::{Row, Status};
 
 pub(super) fn render(ui: &mut egui::Ui, entry: &mut Entry) {
-    ui.separator();
-    ui.label("Companion clouds");
     ui.small("Share access to selected clouds. Stopped clouds stay stopped.");
     let busy = entry.job.is_some() || entry.pending.is_some() || !entry.clearing.is_empty();
     if busy {

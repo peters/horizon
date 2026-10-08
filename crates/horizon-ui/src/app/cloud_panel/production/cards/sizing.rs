@@ -1,5 +1,5 @@
 //! Runtime profile details and pre-allocation size choices.
-use super::{HorizonApp, RichText, cloud_runtime, placement, self_stop, theme};
+use super::{HorizonApp, RichText, cloud_runtime, placement, section, self_stop};
 use cloud_runtime::state::Store;
 
 impl HorizonApp {
@@ -56,45 +56,53 @@ pub(super) fn profile_details(
     runtime: &super::super::Runtime,
     region_of: &dyn Fn(&str) -> Option<String>,
 ) -> Option<(u16, u16)> {
-    ui.label(RichText::new(&launch.profile_name).size(17.0).color(theme::FG_DIM()));
-    let resize = machine_size(ui, id, launch, runtime);
-    profile_metadata(ui, launch, runtime, region_of);
-    resize
+    section::facts(ui, ("cloud-profile-facts", id), |ui| {
+        section::fact(ui, "Profile", launch.profile_name.as_str());
+        section::fact_label(ui, "Size");
+        let resize = ui.vertical(|ui| machine_size(ui, id, launch, runtime)).inner;
+        ui.end_row();
+        section::fact(ui, "Image", RichText::new(&launch.profile.image).monospace());
+        for (label, value) in placement::facts(launch, runtime.state.as_ref(), region_of) {
+            section::fact(ui, &label, value);
+        }
+        if let Some(line) = self_stop::line(runtime.state.as_ref()) {
+            section::fact(ui, "Last stop", line);
+        }
+        for (label, value) in capabilities(launch) {
+            section::fact(ui, label, value);
+        }
+        resize
+    })
 }
 
-fn profile_metadata(
-    ui: &mut egui::Ui,
-    launch: &horizon_core::cloud_panel::CloudLaunch,
-    runtime: &super::super::Runtime,
-    region_of: &dyn Fn(&str) -> Option<String>,
-) {
-    ui.label(RichText::new(&launch.profile.image).monospace().size(14.0));
-    placement::where_it_lives(ui, launch, runtime.state.as_ref(), region_of);
-    self_stop::show(ui, runtime.state.as_ref());
-    ui.small(format!(
-        "Agents: {}",
-        if launch.profile.capabilities.agents.is_empty() {
-            "none".into()
-        } else {
-            launch.profile.capabilities.agents_argument()
-        }
-    ));
-    ui.small(format!(
-        "Browsers: {}",
-        if launch.profile.capabilities.browsers.is_empty() {
-            "disabled".into()
-        } else {
-            launch.profile.capabilities.browsers_argument()
-        }
-    ));
-    if let Some(selected) = &launch.profile.capabilities.browserstack {
-        ui.small(format!("Remote account: {}", selected.provider));
+fn capabilities(launch: &horizon_core::cloud_panel::CloudLaunch) -> Vec<(&'static str, String)> {
+    let capabilities = &launch.profile.capabilities;
+    let mut rows = vec![
+        (
+            "Agents",
+            if capabilities.agents.is_empty() {
+                "none".into()
+            } else {
+                capabilities.agents_argument().replace(',', ", ")
+            },
+        ),
+        (
+            "Browsers",
+            if capabilities.browsers.is_empty() {
+                "disabled".into()
+            } else {
+                capabilities.browsers_argument().replace(',', ", ")
+            },
+        ),
+    ];
+    if let Some(selected) = &capabilities.browserstack {
+        rows.push(("Remote account", selected.provider.clone()));
     }
-    ui.small(if launch.profile.capabilities.desktop {
-        "Desktop: enabled"
-    } else {
-        "Desktop: disabled"
-    });
+    rows.push((
+        "Desktop",
+        if capabilities.desktop { "enabled" } else { "disabled" }.into(),
+    ));
+    rows
 }
 
 /// CPU and memory can change until a worker is requested; `RunPod` cannot resize an

@@ -395,7 +395,7 @@ Use `smoke-r` from D02. The setup of this area prepared `<repo>` before D02.
 
 Use `smoke-a` from D01.
 
-1. Open the **Overview** tab of the card of `smoke-a`.
+1. Open the **Status** tab of the card of `smoke-a`.
 
    Result: The card shows the time to **Ready**, a ribbon of phases and
    **Where the time went**.
@@ -405,7 +405,7 @@ Use `smoke-a` from D01.
    Result: The phases show the largest first. An image-only profile shows no
    build and no push phase.
 
-3. Open the **Output** tab of the card.
+3. Read the output under the summary on the **Status** tab.
 
    Result: The output shows the stages with timestamps.
 

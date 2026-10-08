@@ -3,7 +3,7 @@ use crate::app::cloud_panel::production::{Runtime, local_network::Sharing};
 use horizon_core::cloud_runtime::deployment::ResizeTarget;
 
 #[test]
-fn pending_resize_keeps_paused_network_sharing_switch_available() {
+fn pending_resize_keeps_the_paused_sharing_switch_in_connections() {
     let ctx = egui::Context::default();
     let mut runtime = Runtime {
         state_unavailable: true,
@@ -20,7 +20,8 @@ fn pending_resize_keeps_paused_network_sharing_switch_available() {
                     ..Default::default()
                 },
                 |ui| {
-                    action = runtime_actions(ui, 1, &mut runtime);
+                    assert!(runtime_actions(ui, 1, &mut runtime).is_none());
+                    action = super::super::drawer::access(ui, &mut runtime);
                 },
             )
             .discard_textures();

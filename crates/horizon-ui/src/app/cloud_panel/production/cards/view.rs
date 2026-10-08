@@ -64,21 +64,21 @@ fn body_rect(group: &CloudGroup) -> Rect {
     )
 }
 
-fn teasers(group: &CloudGroup, runtime: &Runtime, status: &Status, occupancy: Occupancy) -> [String; 6] {
+fn teasers(group: &CloudGroup, runtime: &Runtime, status: &Status, occupancy: Occupancy) -> [String; Tab::COUNT] {
     let profile = runtime
         .state
         .as_ref()
         .map(|state| &state.profile)
         .or_else(|| group.remote.as_ref().map(|launch| &launch.profile));
     let stages = status.track.stages.len();
+    let size = profile.map(|profile| format!("{} vCPU", profile.cpu));
+    let cost = Some(super::cost::teaser(runtime)).filter(|cost| !cost.is_empty() && cost != "—");
     [
         status.track.current.map_or_else(
             || format!("{}/{stages}", status.track.finished),
             |index| format!("{}/{stages}", index + 1),
         ),
-        format!("{} lines", runtime.logs.len() + runtime.pending_logs.len()),
-        profile.map_or_else(String::new, |profile| format!("{} vCPU", profile.cpu)),
-        super::cost::teaser(runtime),
+        size.into_iter().chain(cost).collect::<Vec<_>>().join(" · "),
         format!("{}/{}", occupancy.running, occupancy.terminals),
         String::new(),
     ]
@@ -234,7 +234,7 @@ impl HorizonApp {
     }
 
     /// Resuming is watched, not managed: the steps are in view instead of the Manage tab.
-    /// A cloud without panels shows them as its body; one with panels shows them in Overview,
+    /// A cloud without panels shows them as its body; one with panels shows them in Status,
     /// and a collapsed one opens first so either is visible.
     fn show_steps_for_resume(&mut self, id: u32) {
         let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
@@ -247,7 +247,7 @@ impl HorizonApp {
         let closing = self.cloud_prototype.production.closing(id);
         let steps_in_body = body_visible(&self.cloud_prototype.groups.0[index], closing);
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
-            runtime.drawer = (!steps_in_body).then_some(Tab::Overview);
+            runtime.drawer = (!steps_in_body).then_some(Tab::Status);
         }
     }
 

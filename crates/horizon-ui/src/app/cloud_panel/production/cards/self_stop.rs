@@ -2,12 +2,6 @@
 use horizon_core::cloud_runtime::{SelfStop, state::Deployment};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub(super) fn show(ui: &mut egui::Ui, state: Option<&Deployment>) {
-    if let Some(line) = line(state) {
-        ui.small(line);
-    }
-}
-
 /// "Stopped by claude 2 h ago: PR 12 merged", when an agent stopped the worker.
 pub(super) fn line(state: Option<&Deployment>) -> Option<String> {
     let stop = state?.last_self_stop.as_ref()?;

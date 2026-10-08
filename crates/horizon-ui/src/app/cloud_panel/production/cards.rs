@@ -10,6 +10,7 @@ mod machine;
 mod output;
 pub(super) mod placement;
 mod rebuild;
+mod section;
 mod self_stop;
 mod sizing;
 mod status;
@@ -90,8 +91,9 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
         .then_some(Action::Remove)
 }
 
+/// Manage's lifecycle actions. Sharing and the desktop viewer are in Connections, which
+/// keeps them during a rebuild or resize too.
 fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
-    ui.separator();
     if deleting(runtime) {
         deletion_progress(ui, id, runtime);
         return None;
@@ -116,8 +118,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     }
     if rebuild::in_progress(runtime) {
         rebuild::progress(ui, id, runtime);
-        // A rebuild pauses sharing; the owner can still switch it off before it resumes.
-        return super::local_network::show(ui, runtime);
+        return None;
     }
     if let Some(next) = rebuild::pending_notice(ui, runtime) {
         return Some(next);
@@ -135,7 +136,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
         return Some(action);
     }
     if runtime.resize.pending.is_some() {
-        return super::local_network::show(ui, runtime);
+        return None;
     }
     if runtime.remote_release.is_some() {
         ui.spinner();
@@ -147,23 +148,21 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     {
         return recovery_actions(ui, runtime);
     }
-    if !runtime.state_unavailable
+    let removable = !runtime.state_unavailable
         && runtime.receiver.is_none()
         && runtime
             .state
             .as_ref()
-            .is_none_or(|state| state.operation == horizon_core::cloud_runtime::CreateState::Prepared)
-        && ui.add(danger_button("Remove cloud")).clicked()
-    {
-        return Some(Action::Remove);
-    }
+            .is_none_or(|state| state.operation == horizon_core::cloud_runtime::CreateState::Prepared);
     let mut action = operation_action(ui, runtime);
 
     if runtime.stage == Some(Stage::Ready) {
         action = ready_actions(ui, runtime).or(action);
     }
-    // Also shown while sharing is paused by a disconnect, so the owner can switch it off.
-    action = super::local_network::show(ui, runtime).or(action);
+    // Under the cloud's own action, as the way out.
+    if removable && ui.add(danger_button("Remove cloud")).clicked() {
+        return Some(Action::Remove);
+    }
     bound_provider_check(ui, runtime)
         .or_else(|| deletion_action(ui, runtime))
         .or(action)
@@ -273,14 +272,10 @@ fn total_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syste
 }
 
 fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
-    let mut action = None;
-    if desktop_button(ui, runtime) {
-        action = Some(Action::Desktop);
-    }
     if !rebuild::blocks_stop(runtime) && ui.add(danger_button("Stop worker…")).clicked() {
         runtime.confirmation = Confirmation::Stop;
     }
-    rebuild::offer(ui, runtime).or(action)
+    rebuild::offer(ui, runtime)
 }
 
 /// A stop asked for, from the header or from Manage, is the only thing Manage shows
