@@ -529,3 +529,22 @@ fn access_for_a_removed_checkout_is_narrowed_and_cloud_grants_are_kept() {
     assert_eq!(said.borrow().len(), 1, "a grant for the whole cloud is not stale");
     assert!(!narrower(&["acme/web".to_owned()], &grants, &say));
 }
+
+#[test]
+fn a_worker_that_took_a_new_chain_never_reports_its_old_access() {
+    let held = || Some(("octo-cat".to_owned(), vec!["acme/web".to_owned()], true));
+    assert_eq!(
+        settle(Signed::Refused("Skipped.".into()), held()),
+        Settled::Kept("Skipped.".into(), held().unwrap())
+    );
+    assert_eq!(
+        settle(Signed::Unserved("The service is down.".into()), held()),
+        Settled::Ended("The service is down.".into()),
+        "after the install the old chain is gone"
+    );
+    assert_eq!(
+        settle(Signed::Refused("Skipped.".into()), None),
+        Settled::Ended("Skipped.".into())
+    );
+    assert_eq!(settle(Signed::In, held()), Settled::Signed);
+}

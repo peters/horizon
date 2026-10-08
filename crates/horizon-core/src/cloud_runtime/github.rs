@@ -226,7 +226,7 @@ pub fn configure(
             connected(login, repositories, requests);
             return Ok(true);
         }
-        // Connect GitHub again: sign in anew, and keep the current access if that fails.
+        // Connect GitHub again: sign in anew, and keep the current access if GitHub refuses.
         worker::Status::Current {
             login,
             repositories,
@@ -235,19 +235,55 @@ pub fn configure(
         } => Some((login, repositories, requests)),
         worker::Status::Absent => None,
     };
-    Ok(match sign_in(settings, state, grants, connection, runner)? {
-        Ok(()) => true,
-        Err(reason) => {
-            if let Some((login, repositories, requests)) = kept {
+    Ok(
+        match settle(sign_in(settings, state, grants, connection, runner)?, kept) {
+            Settled::Signed => true,
+            Settled::Kept(reason, (login, repositories, requests)) => {
                 say(&format!("{reason} The cloud keeps its current GitHub access."));
                 connected(login, repositories, requests);
                 true
-            } else {
+            }
+            Settled::Ended(reason) => {
                 end(reason);
                 false
             }
-        }
-    })
+        },
+    )
+}
+
+/// The access a worker held before a new sign-in: login, repositories and whether it
+/// takes agents' requests.
+type Held = (String, Vec<String>, bool);
+
+/// The cloud's access after a sign-in.
+#[derive(Debug, PartialEq, Eq)]
+enum Settled {
+    /// The worker serves the new chain, which the sign-in reported.
+    Signed,
+    /// GitHub refused before the worker got anything, so it keeps what it held.
+    Kept(String, Held),
+    /// No access from the app.
+    Ended(String),
+}
+
+fn settle(signed: Signed, kept: Option<Held>) -> Settled {
+    match (signed, kept) {
+        (Signed::In, _) => Settled::Signed,
+        (Signed::Refused(reason), Some(kept)) => Settled::Kept(reason, kept),
+        // The worker took the new chain, so the access it held before is gone either way.
+        (Signed::Refused(reason) | Signed::Unserved(reason), _) => Settled::Ended(reason),
+    }
+}
+
+/// How a sign-in for a cloud ended, other than an error.
+#[derive(Debug)]
+enum Signed {
+    /// The worker serves the new chain.
+    In,
+    /// Refused before the worker got anything; the worker keeps what it held.
+    Refused(String),
+    /// The worker took the new chain but does not serve it.
+    Unserved(String),
 }
 
 /// Signs in for this cloud and gives the worker the chain, for the repositories where
@@ -258,20 +294,20 @@ fn sign_in(
     grants: Vec<Grant>,
     connection: &Connection,
     runner: &Runner<'_>,
-) -> Result<std::result::Result<(), String>> {
+) -> Result<Signed> {
     let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub: {text}")));
     let client = Client::new();
     let chain = match signin::chain(settings, &state.cloud_id, &client, runner) {
         Ok(chain) => chain,
         Err(signin::Ended::Error(error)) => return Err(error),
-        Err(signin::Ended::Reason(reason)) => return Ok(Err(reason)),
+        Err(signin::Ended::Reason(reason)) => return Ok(Signed::Refused(reason)),
     };
     let (user, installed) = match client
         .user(&chain.access_token)
         .and_then(|user| Ok((user, client.installed_repositories(&chain.access_token)?)))
     {
         Ok(found) => found,
-        Err(error) => return Ok(Err(error.to_string())),
+        Err(error) => return Ok(Signed::Refused(error.to_string())),
     };
     let (reachable, missing): (Vec<_>, Vec<_>) = grants
         .into_iter()
@@ -284,8 +320,8 @@ fn sign_in(
         ));
     }
     if reachable.is_empty() {
-        return Ok(Err(
-            "The GitHub App is not installed on this cloud's repositories.".into()
+        return Ok(Signed::Refused(
+            "The GitHub App is not installed on this cloud's repositories.".into(),
         ));
     }
     let secret = match settings.mode {
@@ -302,9 +338,11 @@ fn sign_in(
     // whether it takes agents' requests.
     let requests = match worker::status(connection, runner)? {
         worker::Status::Current { requests, .. } => requests,
-        worker::Status::Unavailable => return Ok(Err(SERVICE_DOWN.into())),
+        worker::Status::Unavailable => return Ok(Signed::Unserved(SERVICE_DOWN.into())),
         worker::Status::Absent | worker::Status::Unsupported => {
-            return Ok(Err("The worker did not keep the GitHub access it was given.".into()));
+            return Ok(Signed::Unserved(
+                "The worker did not keep the GitHub access it was given.".into(),
+            ));
         }
     };
     (runner.emit)(Event::GitHub(Prompt::Connected {
@@ -313,7 +351,7 @@ fn sign_in(
         requests,
         renewable: true,
     }));
-    Ok(Ok(()))
+    Ok(Signed::In)
 }
 
 /// Whether the worker holds access for checkouts this cloud no longer has, such as a
