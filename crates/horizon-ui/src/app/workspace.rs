@@ -480,4 +480,12 @@ mod tests {
     fn layout_toolbar_stays_visible_for_single_panel_workspaces() {
         assert!(should_show_workspace_layout_toolbar(&workspace_visual(1)));
     }
+
+    #[test]
+    fn layout_toolbar_shows_for_a_workspace_of_only_clouds() {
+        // Cloud cards give a workspace bounds without any panel.
+        let mut clouds_only = workspace_visual(0);
+        clouds_only.is_empty = false;
+        assert!(should_show_workspace_layout_toolbar(&clouds_only));
+    }
 }
