@@ -163,6 +163,29 @@ For nested Device-panel tests, view the isolated Horizon containing that panel
 through a native panel in the user's workspace; keep each target and its
 geometry distinct.
 
+## Horizon terminal close regression
+
+Use `docs/testing/procedures/terminal-close.md` in the Horizon source checkout for task IDs, native response and owned cleanup.
+
+When testing terminal close in Horizon, use this sequence:
+
+1. On Unix, run the focused teardown regression before native smoke.
+
+   ```bash
+   cargo test -p horizon-core terminal::lifecycle::tests::dropping_a_finished_event_loop_does_not_wait_for_its_live_child -- --exact
+   ```
+
+   Result: The caller returns before the live PTY child exits. Background cleanup then completes after the child exits.
+2. Close an owned terminal panel in the isolated candidate with normal UI input.
+
+   Result: The candidate remains responsive while a helper thread joins the event loop and destroys its PTY.
+3. Record cleanup of the fixture's owned child processes separately from viewer close.
+
+   Result: The evidence distinguishes responsive UI behavior from completed process cleanup.
+
+A finished thread handle can still own a returned PTY that waits for its child.
+Do not replace this regression with a larger timeout or remove its live-child condition.
+
 ## Viewer screenshots and video
 
 Use `device_panel` with `operation: screenshot` and the owned `panel_id` to get

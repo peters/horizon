@@ -232,8 +232,8 @@ impl Terminal {
         true
     }
 
-    /// Releases the PTY of a terminal whose process ends by itself, such as a
-    /// placeholder, on a helper thread once that process has ended. The grid stays.
+    /// Releases the event loop and its PTY on a helper thread after loop exit.
+    /// The grid stays available while cleanup waits for the child process.
     pub(crate) fn release_when_exited(&mut self) {
         let Some(handle) = self.event_loop_handle.take() else {
             return;
@@ -275,10 +275,9 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         self.request_shutdown();
 
-        // Detach the event loop thread instead of joining it; joining can
-        // block the main thread indefinitely if the child process is still
-        // starting up or the PTY is stuck on I/O.
-        drop(self.event_loop_handle.take());
+        // A finished handle still owns the returned PTY. Dropping it here can
+        // synchronously wait for the child, so join and destruction stay on a worker.
+        self.release_when_exited();
     }
 }
 
@@ -293,3 +292,7 @@ fn process_start_time(pid: u32) -> Option<u64> {
         .parse()
         .ok()
 }
+
+// The regression uses a Unix shell and PTY child that ignores SIGHUP.
+#[cfg(all(test, unix))]
+mod tests;
