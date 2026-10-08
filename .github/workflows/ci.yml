@@ -89,6 +89,8 @@ jobs:
         run: python3 -B scripts/test_detect_ci_build_inputs.py -v
       - name: Verify platform test shards
         run: python3 -B scripts/test_ci_cargo_test_shard.py -v
+      - name: Verify owned test watchdog
+        run: python3 -B scripts/test_ci_test_watchdog.py -v
       # One diff answers both gated lanes: Snap packaging and the release
       # Artifacts matrix. This job already checks out full history, so the
       # Artifacts gate costs nothing here instead of a second runner and a
@@ -277,6 +279,10 @@ jobs:
             cache_key: macos-test
             shard: speech
     steps:
+      - name: Reserve time for Linux speech diagnostics
+        if: runner.os == 'Linux'
+        shell: bash
+        run: echo "HORIZON_CI_DIAGNOSTIC_DEADLINE=$(( $(date +%s) + 32 * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         with:
           lfs: true
@@ -301,13 +307,30 @@ jobs:
         run: bash scripts/install-ci-video-build-tools.sh
       # Speech links ALSA. The other shards do not build that feature.
       - if: matrix.os == 'ubuntu-latest' && matrix.shard == 'speech'
-        run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
+        run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config gdb
       - name: Test shard
         shell: bash
         env:
           HORIZON_CI_SHARD: ${{ matrix.shard }}
           HORIZON_CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
-        run: bash scripts/ci-cargo-test-shard.sh
+        run: |
+          watchdog=()
+          if [[ "$RUNNER_OS" == Linux && "$HORIZON_CI_SHARD" == speech ]]; then
+            watchdog=(python3 -B scripts/ci-test-watchdog.py
+              --output "$RUNNER_TEMP/linux-speech-diagnostics"
+              --deadline-unix "$HORIZON_CI_DIAGNOSTIC_DEADLINE" --)
+          fi
+          "${watchdog[@]}" bash scripts/ci-cargo-test-shard.sh
+      - name: Preserve Linux speech diagnostics
+        if: ${{ always() && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-speech-diagnostics-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/linux-speech-diagnostics/diagnostics.json
+            ${{ runner.temp }}/linux-speech-diagnostics/stacks-*.txt
+          if-no-files-found: ignore
+          retention-days: 7
       # horizon-chromecast and horizon-media are standalone libraries that also
       # target Apple mobile platforms; keep device and simulator builds compiling.
       - name: Cross-build portable casting crates for Apple mobile targets
