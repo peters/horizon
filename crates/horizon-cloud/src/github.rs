@@ -505,15 +505,17 @@ fn safe_https_url(url: &str) -> bool {
 }
 
 /// The manifest for a private app that can read and write repository contents and
-/// pull requests as its user. Device Flow and expiring tokens are app settings the
-/// manifest cannot set; GitHub turns expiring tokens on for new apps.
+/// pull requests as its user. GitHub sends the manifest flow's code to
+/// `redirect_url`; user sign-ins return to `callback_url`. Device Flow and expiring
+/// tokens are app settings the manifest cannot set; GitHub turns expiring tokens on
+/// for new apps.
 #[must_use]
-pub fn manifest(name: &str, homepage: &str, redirect_url: &str) -> serde_json::Value {
+pub fn manifest(name: &str, homepage: &str, redirect_url: &str, callback_url: &str) -> serde_json::Value {
     serde_json::json!({
         "name": name,
         "url": homepage,
         "redirect_url": redirect_url,
-        "callback_urls": [redirect_url],
+        "callback_urls": [callback_url],
         "public": false,
         "request_oauth_on_install": false,
         "hook_attributes": {"url": homepage, "active": false},

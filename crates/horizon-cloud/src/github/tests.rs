@@ -295,6 +295,7 @@ fn the_manifest_asks_for_contents_and_pull_requests_only() {
         "Horizon (example)",
         "https://example.com",
         "http://127.0.0.1:1234/manifest",
+        "http://127.0.0.1/callback",
     );
     assert_eq!(manifest["public"], false);
     assert_eq!(manifest["hook_attributes"]["active"], false);
@@ -302,7 +303,8 @@ fn the_manifest_asks_for_contents_and_pull_requests_only() {
         manifest["default_permissions"],
         json!({"contents": "write", "pull_requests": "write", "metadata": "read"})
     );
-    assert_eq!(manifest["callback_urls"], json!(["http://127.0.0.1:1234/manifest"]));
+    assert_eq!(manifest["redirect_url"], "http://127.0.0.1:1234/manifest");
+    assert_eq!(manifest["callback_urls"], json!(["http://127.0.0.1/callback"]));
 }
 
 #[test]

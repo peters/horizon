@@ -310,3 +310,23 @@ fn an_approved_device_sign_in_returns_its_chain() {
     task.join().unwrap();
     assert_eq!(chain.refresh_token.expose(), "ghr_synthetic");
 }
+
+#[test]
+fn the_start_page_posts_an_escaped_manifest_with_the_state() {
+    let page = connect::start_page(4711, "s1", "Horizon \"<quoted>\"");
+    assert!(page.contains("action=\"https://github.com/settings/apps/new?state=s1\""));
+    assert!(page.contains("http://127.0.0.1:4711/created"));
+    assert!(page.contains("&quot;callback_urls&quot;:[&quot;http://127.0.0.1/callback&quot;]"));
+    assert!(!page.contains("\"<quoted>\""), "the name is escaped");
+}
+
+#[test]
+fn only_a_redirect_with_the_state_yields_the_manifest_code() {
+    assert_eq!(
+        connect::redirect_code("code=abc123&state=s1", "s1").map(|code| code.expose().to_owned()),
+        Some("abc123".into())
+    );
+    assert!(connect::redirect_code("code=abc123&state=s2", "s1").is_none());
+    assert!(connect::redirect_code("code=a%2Fb&state=s1", "s1").is_none());
+    assert!(connect::redirect_code("state=s1", "s1").is_none());
+}

@@ -15,6 +15,7 @@ use horizon_cloud::github::{Client, Secret};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub mod connect;
 mod signin;
 #[cfg(test)]
 mod tests;
