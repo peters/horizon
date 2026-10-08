@@ -429,4 +429,31 @@ mod clouds {
             "the panel's own resize grip is part of it"
         );
     }
+
+    #[test]
+    fn an_open_drawer_is_part_of_the_cast() {
+        let (_temp, ctx, mut app) = desk(false);
+        app.open_cloud_drawer(101);
+        for _ in 0..3 {
+            run_app_frame_with_input(&ctx, &mut app, raw_input([1600.0, 1000.0], Some([1.0, 1.0])));
+        }
+        let workspace = app.board.workspaces[0].id;
+        let source = CastSource::Workspace {
+            id: app.board.workspaces[0].local_id.clone(),
+        };
+        let group = app.cloud_prototype.groups.0[0].clone();
+        let drawer = app.cloud_drawer_rect(&group).expect("the drawer is open");
+        let drawer = canvas_scene_transform(app.canvas_rect(&ctx), app.canvas_view) * drawer;
+        let rect = app
+            .cast_source_rect(workspace, &source, &ctx)
+            .expect("cloud with drawer");
+        assert!(
+            rect.expand(1.5).contains_rect(drawer),
+            "{rect:?} holds the drawer {drawer:?}"
+        );
+        assert!(
+            !app.cast_obscured(&source, rect, &ctx),
+            "the drawer does not cover its own cloud"
+        );
+    }
 }

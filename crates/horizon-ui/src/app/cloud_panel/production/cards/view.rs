@@ -313,6 +313,17 @@ impl HorizonApp {
         })
     }
 
+    /// Opens the drawer of cloud `issue` on its first tab, for tests outside this module.
+    #[cfg(test)]
+    pub(in crate::app) fn open_cloud_drawer(&mut self, issue: u32) {
+        self.cloud_prototype
+            .production
+            .runtimes
+            .entry(issue)
+            .or_default()
+            .drawer = Some(Tab::default());
+    }
+
     pub(in crate::app::cloud_panel) fn render_production_runtimes(&mut self, ctx: &egui::Context) {
         self.ensure_cloud_provider_logo(ctx);
         let canvas = self.canvas_rect(ctx);

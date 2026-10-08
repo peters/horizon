@@ -23,6 +23,7 @@ use super::view::canvas_scene_transform;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RenameEditAction};
 
 mod resize;
+#[cfg(feature = "cloud-workspaces")]
 pub(in crate::app) use resize::paint_grip;
 
 mod interaction;

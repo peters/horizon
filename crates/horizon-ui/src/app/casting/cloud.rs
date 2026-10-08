@@ -1,7 +1,7 @@
 //! Clouds in a workspace cast: their frames are part of the picture, and their own
 //! chrome does not count as something covering it.
 use super::super::HorizonApp;
-use egui::{Context, Id, LayerId, Rect};
+use egui::{Context, LayerId, Rect};
 use horizon_core::WorkspaceId;
 
 impl HorizonApp {
@@ -24,7 +24,12 @@ impl HorizonApp {
                 .filter(|group| group.workspace == local)
             {
                 let (min, max) = group.overview_bounds();
-                let rect = transform * Rect::from_min_max(egui::Pos2::from(min), egui::Pos2::from(max));
+                let mut card = Rect::from_min_max(egui::Pos2::from(min), egui::Pos2::from(max));
+                // An open drawer can reach below a short cloud; it is part of the card.
+                if let Some(drawer) = self.cloud_drawer_rect(group) {
+                    card = card.union(drawer);
+                }
+                let rect = transform * card;
                 if !canvas.contains_rect(rect) {
                     return Err("Fit the entire source into view before casting".into());
                 }
@@ -56,7 +61,7 @@ impl HorizonApp {
                 .all(|group| {
                     let (min, max) = group.bounds();
                     let current = transform * Rect::from_min_max(egui::Pos2::from(min), egui::Pos2::from(max));
-                    let layer = LayerId::new(egui::Order::Background, Id::new(("cloud-frame", group.issue)));
+                    let layer = LayerId::new(egui::Order::Background, egui::Id::new(("cloud-frame", group.issue)));
                     ctx.memory(|memory| {
                         memory.area_rect(layer.id).is_some_and(|area| {
                             let drawn = memory.to_global.get(&layer).copied().unwrap_or_default() * area;
@@ -88,9 +93,10 @@ impl HorizonApp {
                 .any(|group| {
                     CLOUD_LAYERS
                         .iter()
-                        .any(|name| layer.id == Id::new((*name, group.issue)))
+                        .any(|name| layer.id == egui::Id::new((*name, group.issue)))
                         || self.board.panels.iter().any(|panel| {
-                            group.panels.contains(&panel.local_id) && layer.id == Id::new(("cloud-owner", panel.id.0))
+                            group.panels.contains(&panel.local_id)
+                                && layer.id == egui::Id::new(("cloud-owner", panel.id.0))
                         })
                 })
         }
