@@ -28,8 +28,9 @@ impl SessionBinding {
 }
 impl CastState {
     /// Opens the picker for `workspace`, or closes it when the same anchor opened it.
-    /// A live session of the workspace keeps its source and settings; otherwise the
-    /// picker starts on `source`.
+    /// A live session of the workspace keeps its source and settings. Otherwise the
+    /// picker starts on `source`, with the receiver and quality of the last finished
+    /// session.
     pub(super) fn toggle_picker(
         &mut self,
         anchor: Option<horizon_core::PanelId>,
@@ -59,7 +60,9 @@ impl CastState {
         self.picker = Some(Picker {
             anchor,
             workspace,
-            source: session.map_or(source, |session| session.source.clone()),
+            source: session
+                .filter(|session| !session.worker.finished())
+                .map_or(source, |session| session.source.clone()),
             receiver: session.map(|session| session.receiver_id.clone()),
             orientation: session.map_or(CastOrientation::Landscape, |session| session.orientation),
             resolution: session.map_or(CastResolution::default(), |session| session.resolution),

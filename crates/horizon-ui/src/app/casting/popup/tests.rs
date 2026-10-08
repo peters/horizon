@@ -150,3 +150,32 @@ fn successful_application_start_or_pair_hides_controls_but_other_sources_keep_th
         assert!(!hide_after_action(&source, &stop, true));
     }
 }
+
+#[test]
+fn only_a_live_session_overrides_the_requested_source() {
+    let ctx = Context::default();
+    let mut state = CastState::default();
+    // A pending discovery keeps the picker from searching the real network.
+    let (_send, receive) = std::sync::mpsc::channel();
+    state.discovery = Some(receive);
+    let (session, peer) = session("first-tv", 1, "127.245.12.5");
+    state.sessions.push(session);
+    let cloud = CastSource::Cloud {
+        id: "synthetic-cloud".into(),
+    };
+    state.toggle_picker(None, WorkspaceId(1), cloud.clone(), &ctx);
+    let live = state.picker.take().expect("picker");
+    assert_eq!(live.source, CastSource::Application {}, "a live cast keeps its source");
+    state.sessions[0].worker.stop();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !state.sessions[0].worker.finished() {
+        assert!(Instant::now() < deadline, "the worker must finish");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    state.toggle_picker(None, WorkspaceId(1), cloud.clone(), &ctx);
+    let picker = state.picker.as_ref().expect("picker");
+    assert_eq!(picker.source, cloud, "a finished cast does not replace the cloud");
+    assert_eq!(picker.receiver.as_deref(), Some("first-tv"), "it still suggests its TV");
+    assert!(state.stop_and_wait(Duration::from_secs(3)));
+    peer.join().expect("receiver closed normally");
+}
