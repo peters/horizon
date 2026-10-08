@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 mode="${1:-cpu}"
-case "$mode" in cpu|gpu) ;; *) printf 'Usage: %s cpu|gpu\n' "$0" >&2; exit 2;; esac
+case "$mode" in
+    cpu) default_build_jobs=2 ;;
+    gpu) default_build_jobs=8 ;;
+    *) printf 'Usage: %s cpu|gpu\n' "$0" >&2; exit 2 ;;
+esac
 cd "$(dirname "$0")/.."
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/workspace/targets/$(basename "$PWD")-$mode}"
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-8}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$default_build_jobs}"
 export RUST_TEST_THREADS="${RUST_TEST_THREADS:-1}"
 test_prefix=()
 if (( EUID == 0 )); then

@@ -12,8 +12,8 @@ profiles:
       agents: [claude]
       browsers: [chromium, firefox]
       desktop: true
-    min_cpu: 8
-    min_memory_gb: 32
+    min_cpu: 4
+    min_memory_gb: 8
     gpu: false
     storage:
       container_gb: 30
