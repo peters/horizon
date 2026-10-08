@@ -156,6 +156,28 @@ class VolumeCopyTests(ServiceTestCase):
         self.assertEqual(removed, [True])
         self.assertIsNone(self.stored())
 
+    def test_a_pending_chain_never_overwrites_a_newer_install(self):
+        self.install(installation(chain=chain(access='ghu_synthetic-newer')))
+        # A rotation this process could not store, older than the install another process made.
+        self.store.pending = dict(self.stored(), serial=self.stored()['serial'] - 1,
+                                  chain=chain(access='ghu_synthetic-stale'))
+        with mock.patch.object(common, 'write_private', side_effect=AssertionError('must not write')):
+            self.assertTrue(self.store.retry_pending())
+        self.assertIsNone(self.store.pending)
+        self.assertEqual(self.stored()['chain']['access_token'], 'ghu_synthetic-newer')
+
+    def test_a_clear_that_cannot_remove_the_volume_copy_changes_nothing(self):
+        self.install()
+        real = common.fsync_directory
+
+        def fsync(directory):
+            if directory == self.store.persistent:
+                raise OSError('input/output error')
+            return real(directory)
+        with mock.patch.object(common, 'fsync_directory', side_effect=fsync), self.assertRaises(OSError):
+            service.clear(self.store, retire=lambda: None)
+        self.assertFalse((self.store.runtime / common.CLEARED).exists(), 'no clear mark without a durable removal')
+
     def test_a_full_tmpfs_leaves_the_older_volume_chain_usable(self):
         self.install()
         old = self.store.persistent / service.STATE

@@ -255,6 +255,11 @@ class Store:
         """Writes a pending chain again. Returns True when nothing is left in memory only."""
         if self.pending is not None and self.pending['serial'] <= self.cleared():
             self.pending = None
+        if self.pending is not None and any(
+                state['serial'] >= self.pending['serial']
+                for state, _ in self.copies() if state is not self.pending):
+            # Another process stored a newer chain meanwhile; the pending one is superseded.
+            self.pending = None
         if self.pending is None:
             return True
         self.write(self.pending)
@@ -263,11 +268,14 @@ class Store:
 
     def clear(self):
         """Removes every copy, also the memory of a serving process, which reads the marker."""
+        # The volume copy goes first and durably: if that fails, nothing changed, and the
+        # chain that was active stays active, also after a restart. Only then does the clear
+        # mark tell the serving process to drop its memory, and the tmpfs copy go.
+        remove_durably(self.persistent, STATE)
         self.pending = None
         private_directory(self.runtime, create=True)
         write_private(self.runtime, CLEARED, str(time.time_ns()))
-        for directory in (self.persistent, self.runtime):
-            remove_durably(directory, STATE)
+        remove_durably(self.runtime, STATE)
 
 
 def github_bases(environ):
