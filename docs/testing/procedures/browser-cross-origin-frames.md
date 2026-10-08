@@ -38,6 +38,9 @@ The test does not use the developer's browser session.
 ## 5. Setup
 
 1. Open a shell in the candidate checkout.
+   If Firefox uses Snap, set `TMPDIR` to a private directory below the home directory.
+   The directory must not have a name that starts with a dot.
+   Firefox and geckodriver must both have access to it.
 2. Run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live -- --ignored --nocapture`.
 
    Result: The test starts an isolated MCP process and each browser backend.

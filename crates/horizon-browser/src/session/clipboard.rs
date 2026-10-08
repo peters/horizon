@@ -26,6 +26,7 @@ pub(super) struct ClipboardState {
     request_ids: HashSet<u64>,
     default_contexts: HashMap<String, HashSet<u64>>,
     pub(super) iframe_sessions: HashSet<String>,
+    iframe_parents: HashMap<String, String>,
     pub(super) pending_capture: bool,
 }
 
@@ -44,10 +45,43 @@ impl ClipboardState {
         targets
     }
 
+    fn track_iframe(&mut self, page: Option<&str>, session: &str, parent: Option<&str>) -> bool {
+        let Some(parent) = parent else {
+            return false;
+        };
+        if page != Some(parent) && !self.iframe_sessions.contains(parent) {
+            return false;
+        }
+        self.iframe_parents.insert(session.to_string(), parent.to_string());
+        self.iframe_sessions.insert(session.to_string())
+    }
+
+    fn retire_subtree(&mut self, session: &str) -> Vec<String> {
+        let mut retired = vec![session.to_string()];
+        let mut index = 0;
+        while index < retired.len() {
+            let children: Vec<_> = self
+                .iframe_parents
+                .iter()
+                .filter(|(child, parent)| *parent == &retired[index] && !retired.contains(child))
+                .map(|(child, _)| child.clone())
+                .collect();
+            retired.extend(children);
+            index += 1;
+        }
+        for session in &retired {
+            self.iframe_sessions.remove(session);
+            self.iframe_parents.remove(session);
+            self.default_contexts.remove(session);
+        }
+        retired
+    }
+
     fn reset(&mut self) {
         self.request_ids.clear();
         self.default_contexts.clear();
         self.iframe_sessions.clear();
+        self.iframe_parents.clear();
         self.pending_capture = false;
     }
 }
@@ -170,8 +204,18 @@ impl DriverState {
                 }
             }
             "Runtime.executionContextsCleared" => {
-                self.semantic.invalidate_cdp_frame(session, None);
-                self.clipboard.default_contexts.remove(session);
+                let parent = self.clipboard.iframe_parents.get(session).cloned();
+                for retired in self.clipboard.retire_subtree(session) {
+                    self.semantic.invalidate_cdp_frame(&retired, None);
+                    if retired != session {
+                        self.forget_runtime_session(&retired);
+                    }
+                }
+                // The clearing session remains attached; only its descendants retire.
+                if let Some(parent) = parent {
+                    self.clipboard.iframe_parents.insert(session.to_string(), parent);
+                    self.clipboard.iframe_sessions.insert(session.to_string());
+                }
             }
             _ => {}
         }
@@ -187,7 +231,9 @@ impl DriverState {
         let Some(session) = target_event_session_id(event.params, event.session_id) else {
             return true;
         };
-        if self.clipboard.iframe_sessions.insert(session.to_string())
+        if self
+            .clipboard
+            .track_iframe(self.session_id.as_deref(), session, event.session_id)
             && let Err(error) = link.send_request(
                 "Target.setAutoAttach",
                 &serde_json::json!({
@@ -207,13 +253,21 @@ impl DriverState {
         let Some(session) = target_event_session_id(event.params, event.session_id) else {
             return;
         };
-        self.semantic.invalidate_cdp_frame(session, None);
-        self.clipboard.iframe_sessions.remove(session);
-        self.clipboard.default_contexts.remove(session);
-        self.forget_runtime_session(session);
+        for retired in self.clipboard.retire_subtree(session) {
+            self.semantic.invalidate_cdp_frame(&retired, None);
+            self.forget_runtime_session(&retired);
+        }
     }
 
     pub(super) fn reset_clipboard_tracking(&mut self) {
+        for session in self
+            .clipboard
+            .default_contexts
+            .keys()
+            .chain(&self.clipboard.iframe_sessions)
+        {
+            self.semantic.invalidate_cdp_frame(session, None);
+        }
         self.clipboard.reset();
     }
 }
@@ -252,6 +306,21 @@ mod tests {
         ClipboardState, clipboard_capture_is_ready, clipboard_text_from_evaluation, default_context_id,
         target_event_session_id,
     };
+
+    #[test]
+    fn frame_tracking_rejects_other_page_sessions_and_retires_descendants() {
+        let mut state = ClipboardState::default();
+        assert!(!state.track_iframe(Some("page"), "foreign", Some("other-page")));
+        assert!(!state.track_iframe(Some("page"), "foreign", None));
+        assert!(state.track_iframe(Some("page"), "child", Some("page")));
+        assert!(state.track_iframe(Some("page"), "nested", Some("child")));
+        assert!(state.track_iframe(Some("page"), "sibling", Some("page")));
+        state.default_contexts.insert("nested".into(), HashSet::from([9]));
+        assert_eq!(state.retire_subtree("child"), vec!["child", "nested"]);
+        assert!(!state.default_contexts.contains_key("nested"));
+        assert_eq!(state.iframe_sessions, HashSet::from(["sibling".to_string()]));
+        assert!(!state.track_iframe(Some("page"), "late-child", Some("child")));
+    }
 
     #[test]
     fn frame_targets_cover_page_contexts_and_out_of_process_iframe_sessions() {

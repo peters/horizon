@@ -149,6 +149,22 @@ fn mcp_cross_origin_form_roundtrip_and_staleness_on_both_backends() {
     }
 }
 
+fn wait_for_first_frame(session: &horizon_browser::BrowserSession, slot: &FrameSlot) {
+    let ready = Instant::now() + Duration::from_secs(25);
+    let mut startup_warnings = Vec::new();
+    while slot.latest().is_none() {
+        while let Ok(event) = session.event_rx.try_recv() {
+            if let horizon_browser::BrowserEvent::Warning(warning) = event
+                && startup_warnings.len() < 8
+            {
+                startup_warnings.push(warning);
+            }
+        }
+        assert!(Instant::now() < ready, "browser startup: {startup_warnings:?}");
+        thread::sleep(Duration::from_millis(30));
+    }
+}
+
 fn run(backend: BackendKind, root: &Path, nested: bool) {
     let (port, stop, server) = fixture(nested);
     let profiles = tempfile::tempdir().unwrap();
@@ -172,12 +188,7 @@ fn run(backend: BackendKind, root: &Path, nested: bool) {
         remote: None,
     })
     .unwrap();
-    let ready = Instant::now() + Duration::from_secs(25);
-    while slot.latest().is_none() {
-        assert!(Instant::now() < ready);
-        while session.event_rx.try_recv().is_ok() {}
-        thread::sleep(Duration::from_millis(30));
-    }
+    wait_for_first_frame(&session, &slot);
     let mut host = McpProcess::start(root);
     let readiness = host.action(BrowserControlAction::WaitForSelector {
         selector: "output[data-ready]".into(),
