@@ -42,7 +42,7 @@ class MemoryOnlyChainTests(ServiceTestCase):
     def test_clear_by_another_process_ends_a_chain_that_only_memory_holds(self):
         self.rotate_without_storage()
         host = service.Store(self.store.persistent, self.store.runtime)
-        service.clear(host)
+        service.clear(host, retire=lambda: None)
         self.assertIsNone(self.store.load()[0])
         reply, _ = service.answer({'request': 'gh-token', 'repository': 'example/project'}, self.store.load()[0], NOW)
         self.assertEqual(reply['state'], 'absent')
@@ -128,6 +128,33 @@ class VolumeCopyTests(ServiceTestCase):
         self.assertEqual(self.stored()['chain']['access_token'], 'ghu_synthetic-new')
         restarted = service.Store(self.store.persistent, self.root / 'run/after-restart')
         self.assertIsNone(restarted.load()[0], 'a restart must not bring the older chain back')
+
+    def test_a_removal_that_does_not_reach_the_disk_fails_the_fallback(self):
+        self.install()
+        old = self.store.persistent / service.STATE
+        real = common.fsync_directory
+
+        def fsync(directory):
+            if directory == self.store.persistent:
+                raise OSError('input/output error')
+            return real(directory)
+        with self.fail_volume_writes(), mock.patch.object(common, 'fsync_directory', side_effect=fsync), \
+                self.assertRaisesRegex(ValueError, 'older GitHub token chain'):
+            self.install(installation(chain=chain(access='ghu_synthetic-new')))
+        self.assertFalse((self.store.runtime / service.STATE).exists())
+
+    def test_clear_keeps_the_chain_while_the_static_binding_stays(self):
+        self.install()
+
+        def stuck():
+            raise OSError('busy')
+        with self.assertRaises(OSError):
+            service.clear(self.store, retire=stuck)
+        self.assertEqual(self.stored()['chain'], chain(), 'agents never keep a static token after clear')
+        removed = []
+        service.clear(self.store, retire=lambda: removed.append(True))
+        self.assertEqual(removed, [True])
+        self.assertIsNone(self.stored())
 
     def test_a_full_tmpfs_leaves_the_older_volume_chain_usable(self):
         self.install()

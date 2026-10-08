@@ -93,13 +93,27 @@ def write_private(directory, name, data):
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, directory / name)
-        folder = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(folder)
-        finally:
-            os.close(folder)
+        fsync_directory(directory)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def fsync_directory(directory):
+    """Makes a rename or removal in `directory` durable."""
+    folder = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
+
+
+def remove_durably(directory, name):
+    """Removes `directory/name` and makes the removal durable. Raises OSError when either
+    fails; a missing directory has nothing to remove."""
+    if not os.path.isdir(directory):
+        return
+    (directory / name).unlink(missing_ok=True)
+    fsync_directory(directory)
 
 
 def read_json(path, limit=MAX_STATE):
@@ -210,9 +224,12 @@ class Store:
             write_private(private_directory(self.runtime, create=True), STATE, data)
         except (OSError, ValueError):
             raise ValueError('No private GitHub storage accepted the token chain') from None
-        with contextlib.suppress(OSError):
-            (self.persistent / STATE).unlink(missing_ok=True)
-        if os.path.lexists(self.persistent / STATE):
+        try:
+            remove_durably(self.persistent, STATE)
+            retired = not os.path.lexists(self.persistent / STATE)
+        except OSError:
+            retired = False
+        if not retired:
             with contextlib.suppress(OSError):
                 (self.runtime / STATE).unlink(missing_ok=True)
             raise ValueError('An older GitHub token chain on the volume cannot be removed')
@@ -250,7 +267,7 @@ class Store:
         private_directory(self.runtime, create=True)
         write_private(self.runtime, CLEARED, str(time.time_ns()))
         for directory in (self.persistent, self.runtime):
-            (directory / STATE).unlink(missing_ok=True)
+            remove_durably(directory, STATE)
 
 
 def github_bases(environ):

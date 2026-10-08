@@ -222,7 +222,7 @@ class InstallationTests(ServiceTestCase):
         self.install()
         restarted = service.Store(self.store.persistent, self.root / 'run/fresh-tmpfs')
         self.assertEqual(restarted.load()[0]['chain'], chain())
-        service.clear(restarted)
+        service.clear(restarted, retire=lambda: None)
         self.assertIsNone(self.stored())
         self.assertEqual(service.status(self.store)['state'], 'absent')
 
@@ -426,7 +426,7 @@ class SocketTests(ServiceTestCase):
             self.assertEqual(auth.service_credential('protocol=https\nhost=github.com\npath=example/project\n'), '')
 
     def test_without_a_chain_the_helper_falls_back_to_its_private_file(self):
-        service.clear(self.store)
+        service.clear(self.store, retire=lambda: None)
         self.assertIsNone(auth.ask_service({'request': 'gh-token', 'repository': 'example/project'}))
         self.assertIsNone(auth.service_credential('protocol=https\nhost=github.com\npath=example/project\n'))
         with mock.patch.object(auth, 'SERVICE_SOCKET', self.root / 'missing.sock'):

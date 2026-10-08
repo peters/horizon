@@ -879,7 +879,9 @@ horizon-worker-github clear
 `state` is `ok`, `revoked` or `absent`. `status` asks the running service over
 the socket, as root, so it also sees a chain that only the service's memory
 holds. Without an answer it reads the stored copies and reports
-`"serving": false`. `clear` removes every copy of the chain and writes a root-only
+`"serving": false`. `clear` first removes the static Git binding, and keeps the
+chain when it cannot, so agents never keep access while status reports no chain.
+Then it removes every copy of the chain, durably, and writes a root-only
 clear mark that the running service reads, so the service also drops a chain
 that only its memory holds. The service keeps running and answers that no chain
 exists. It does not revoke the sign-in on GitHub. Images with this service report

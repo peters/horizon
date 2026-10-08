@@ -465,7 +465,10 @@ def host_status(store, path=SOCKET):
     return dict(status(store), serving=False)
 
 
-def clear(store):
+def clear(store, retire=None):
+    """Removes the static Git binding first, then the chain. When the binding cannot be
+    removed, the chain stays, so agents never keep access while status reports none."""
+    (retire or run_retire)()
     with store.lock():
         store.clear()
 
