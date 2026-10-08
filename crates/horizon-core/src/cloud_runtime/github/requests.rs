@@ -29,10 +29,10 @@ pub struct Request {
     pub agent: String,
 }
 
-/// What the person chose.
+/// What the person chose. Access is per cloud: every agent session of the cloud uses
+/// the same token, so an allowed repository reaches all of them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Decision {
-    AllowTask,
     AllowCloud,
     Deny,
 }
@@ -40,7 +40,6 @@ pub enum Decision {
 impl Decision {
     const fn argument(self) -> &'static str {
         match self {
-            Self::AllowTask => "allow-task",
             Self::AllowCloud => "allow-cloud",
             Self::Deny => "deny",
         }

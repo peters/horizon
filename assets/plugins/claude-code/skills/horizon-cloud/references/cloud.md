@@ -92,8 +92,8 @@ GitHub and chooses its repositories; agents cannot set it up.
   see the refresh token.
 - On workers whose image provides it, `horizon-worker-github mcp` offers
   `github_access` (`repository`, `access` `push` or `read`, `reason`). It asks the
-  person for access to one more repository. The person allows it for this task
-  (this session only), for the cloud, or denies it. The tool waits up to ten
+  person for access to one more repository. The person allows it for the cloud,
+  which gives every session of the cloud access to it, or denies it. The tool waits up to ten
   minutes, then returns that the request still waits; ask again later with the same
   repository instead of a new request.
 - Ask only for a repository the task needs, with a short, true reason. A

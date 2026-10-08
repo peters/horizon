@@ -287,10 +287,14 @@ Git and `gh` and never see the refresh token. Commits use your name and your
 GitHub private commit address. The steps card shows **GitHub: signed in as
 <login>**.
 
-An agent that needs another repository for its task asks with the worker's
-`github_access` tool. The request shows at the top right of the cloud with
-**Allow for this task**, **Always for this cloud** and **Deny**. The worker checks
-that the app reaches the repository before it allows anything.
+An agent that needs another repository asks with the worker's `github_access`
+tool. The request shows at the top right of the cloud with **Allow for this
+cloud** and **Deny**. The worker checks that the app reaches the repository
+before it allows anything.
+
+Access is per cloud. Every agent session of a cloud can use each repository the
+cloud has access to, because Git and `gh` get the same token for all of them. Put
+work that must not reach a repository in a cloud without access to it.
 
 **Disconnect** stops new clouds from getting access. It does not end the access
 of running clouds: delete the app on GitHub for that. Deleting the app ends every

@@ -450,7 +450,7 @@ fn requests_keep_only_well_formed_entries() {
 fn a_refused_decision_is_explained() {
     assert_eq!(
         requests::parse_decision(
-            "{\"ok\":true,\"id\":\"r1\",\"decision\":\"allow-task\",\"repository\":\"acme/x\",\"access\":\"push\",\"status\":\"allowed\"}"
+            "{\"ok\":true,\"id\":\"r1\",\"decision\":\"allow-cloud\",\"repository\":\"acme/x\",\"access\":\"push\",\"status\":\"allowed\"}"
         ),
         None
     );

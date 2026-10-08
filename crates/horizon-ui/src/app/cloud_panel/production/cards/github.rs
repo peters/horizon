@@ -170,10 +170,7 @@ pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, 
                 ui.add_space(4.0);
                 ui.add_enabled_ui(!state.busy(), |ui| {
                     ui.horizontal_wrapped(|ui| {
-                        if ui.add(primary_button("Allow for this task")).clicked() {
-                            chosen = Some((request.id.clone(), Decision::AllowTask));
-                        }
-                        if ui.add(chrome_button("Always for this cloud")).clicked() {
+                        if ui.add(primary_button("Allow for this cloud")).clicked() {
                             chosen = Some((request.id.clone(), Decision::AllowCloud));
                         }
                         if ui.add(chrome_button("Deny")).clicked() {
@@ -305,7 +302,8 @@ mod tests {
             SHOWN
         );
         assert!(texts.iter().any(|text| text == "2 more requests wait."));
-        assert!(texts.iter().any(|text| text == "Allow for this task"));
+        assert!(texts.iter().any(|text| text == "Allow for this cloud"));
+        assert!(!texts.iter().any(|text| text.contains("task")), "access is per cloud");
     }
 
     #[test]

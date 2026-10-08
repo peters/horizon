@@ -170,47 +170,38 @@ the access requests of agents.
    `<owner>/<repo-b>` with push access and a short reason.
 
    Result: The agent waits. The cloud shows a request at the top right:
-   **Push to <owner>/<repo-b>** with the reason.
+   **Push to <owner>/<repo-b>** with the reason, and the buttons
+   **Allow for this cloud** and **Deny**.
 
-2. Click **Allow for this task**.
+2. Click **Deny**.
+
+   Result: The request card closes. The agent reports that access was denied.
+
+3. Ask the agent to call `github_access` for `<owner>/<repo-b>` again, and click
+   **Allow for this cloud**.
 
    Result: The card shows **The GitHub App is not installed on this repository.**
    The request stays and shows again at the next poll. The agent still waits.
 
-3. On GitHub, add `<repo-b>` to the installation of the app.
+4. On GitHub, add `<repo-b>` to the installation of the app.
 
    Result: GitHub shows two repositories for the app.
 
-4. Wait until the request shows again on the cloud, then click **Allow for this task**.
+5. Wait until the request shows again on the cloud, then click
+   **Allow for this cloud**.
 
-   Result: The request card closes. The agent's first `github_access` call reports
-   that access was allowed.
+   Result: The request card closes. The agent's `github_access` call reports that
+   access was allowed.
 
-5. Ask the agent to run `git ls-remote https://github.com/<owner>/<repo-b>`.
+6. Ask the agent to run `git ls-remote https://github.com/<owner>/<repo-b>`.
 
    Result: Git shows the references. It asks for no password.
 
-6. Open a new agent panel in `gh-ask`. Ask its agent to run
+7. Open a new agent panel in `gh-ask`. Ask its agent to run
    `git ls-remote https://github.com/<owner>/<repo-b>`.
 
-   Result: Git asks for a user name or fails. The grant of step 5 was for the other
-   task only.
-
-7. Ask this agent to call `github_access` for `<owner>/<repo-b>`, and click
-   **Deny**.
-
-   Result: The agent reports that access was denied.
-
-8. Ask the agent to call `github_access` for `<owner>/<repo-b>` again, and click
-   **Always for this cloud**.
-
-   Result: The agent reports that access was allowed.
-
-9. Open one more agent panel in `gh-ask`. Ask its agent to run
-   `git ls-remote https://github.com/<owner>/<repo-b>`.
-
-   Result: Git shows the references without a new request. The cloud card shows
-   no request.
+   Result: Git shows the references without a new request. Access is per cloud,
+   so every agent session of the cloud reaches the repository.
 
 ### 6.7 G07 — Sign in new clouds automatically
 
@@ -266,8 +257,8 @@ the access requests of agents.
 - A skipped sign-in leaves the cloud **Ready** without GitHub access.
 - Agents push without a password and cannot read the stored chain.
 - A request for a repository outside the installation is not allowed.
-- **Allow for this task**, **Always for this cloud** and **Deny** reach the agent.
-- A task grant does not reach another agent session; a cloud grant does.
+- **Allow for this cloud** and **Deny** reach the agent.
+- An allowed repository reaches every agent session of the cloud.
 
 ## 8. Cleanup
 
