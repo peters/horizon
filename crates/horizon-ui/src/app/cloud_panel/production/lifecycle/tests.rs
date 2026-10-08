@@ -911,6 +911,7 @@ fn a_saved_record_sets_the_step_except_a_lagging_one_during_image_steps() {
         (Stage::Readiness, "Ready", Stage::Ready),
         // A rebuild of a running cloud keeps its record at Ready while it builds,
         // pushes and switches the image.
+        (Stage::Build, "Validate", Stage::Build),
         (Stage::Build, "Ready", Stage::Build),
         (Stage::Push, "Ready", Stage::Push),
         (Stage::Replace, "Ready", Stage::Replace),

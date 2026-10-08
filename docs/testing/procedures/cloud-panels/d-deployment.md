@@ -424,6 +424,8 @@ Use `smoke-a` from D01.
 ### 6.6 D06 — Make sure that a failed image push stays on Push image
 
 This task rents no compute. The deployment stops before Horizon requests a worker.
+It changes the cloud settings for the time of the task, and it does not change any
+Docker login of this computer.
 
 1. Make a scratch branch of `<repo>`.
 
@@ -434,68 +436,79 @@ This task rents no compute. The deployment stops before Horizon requests a worke
    Result: `git -C <repo> branch --show-current` shows `smoke-push-<run>`.
 
 2. In `.horizon/cloud.yml` of the scratch branch, add a `build` section to the
-   `runpod-cpu` profile and set its `image` to a private repository on `ghcr.io`
-   that the run owns. Commit the change.
+   `runpod-cpu` profile. Set its `image` to `ghcr.io/<owner>/smoke-push-<run>`.
+
+   Result: The file shows the `build` section and the image.
+
+3. Commit the change.
 
    ```sh
    git -C <repo> commit -am "Smoke: build and push the runpod-cpu image"
    ```
 
    Result: `git -C <repo> show HEAD:.horizon/cloud.yml` shows the `build` section
-   and the `ghcr.io` image in the `runpod-cpu` profile.
+   and the image in the `runpod-cpu` profile.
 
-3. Read the `docker_config` value in `~/.horizon/cloud/settings.json`. Horizon
-   builds and pushes with this Docker configuration only.
+4. Close Cloud settings if they are open.
 
-   Result: You know the directory, for example `~/.horizon/cloud/docker`.
+   Result: No Cloud settings dialog is open.
 
-4. Make a copy of the directory under a new name. Stop if that name is in use.
-
-   ```sh
-   test ! -e <docker_config>.d06-<run> && cp -a <docker_config> <docker_config>.d06-<run>
-   ```
-
-   Result: The command ends without an error and `<docker_config>.d06-<run>` exists.
-   If the command fails, do not continue: an earlier copy has that name.
-
-5. Remove the login for `ghcr.io` from Horizon's Docker configuration.
+5. Make a copy of the cloud settings under a new name. Stop if that name is in use.
 
    ```sh
-   docker --config <docker_config> logout ghcr.io
+   test ! -e ~/.horizon/cloud/settings.json.d06-<run> && cp -p ~/.horizon/cloud/settings.json ~/.horizon/cloud/settings.json.d06-<run>
    ```
 
-   Result: Docker shows **Removing login credentials for ghcr.io**, or that there
-   was no login.
+   Result: The command ends without an error. If it fails, do not continue: an
+   earlier copy has that name.
 
-6. Deploy a new cloud `smoke-push` from the scratch commit with the `runpod-cpu`
+6. Make an empty Docker configuration that belongs to this run.
+
+   ```sh
+   mkdir -p <evidence>/d06-docker && printf '{"auths":{}}' > <evidence>/d06-docker/config.json
+   ```
+
+   Result: `<evidence>/d06-docker/config.json` contains `{"auths":{}}`.
+
+   > **CAUTION:** CHANGE ONLY THE COPY THAT STEP 7 WRITES. Step 11 puts back the
+   > copy from step 5. Until then, clouds that you start use the changed settings.
+
+7. Point Horizon at that configuration, and remove the registry bindings on
+   `ghcr.io` from the settings.
+
+   ```sh
+   jq --arg d <evidence>/d06-docker '.docker_config = $d | if .registries then .registries.bindings |= map(select(.repository | startswith("ghcr.io/") | not)) else . end' ~/.horizon/cloud/settings.json.d06-<run> > ~/.horizon/cloud/settings.json
+   ```
+
+   Result: `jq .docker_config ~/.horizon/cloud/settings.json` shows the run's
+   directory. No binding on `ghcr.io` remains.
+
+8. Deploy a new cloud `smoke-push` from the scratch commit with the `runpod-cpu`
    profile.
 
    Result: The card shows **Build locally**, then **Push image**.
 
-7. Wait until the push fails.
+9. Wait until the push fails.
 
    Result: The card shows the failure on **Push image**. **Validate** and
    **Build locally** show as done. The status strip does not say
-   **Validation failed**.
+   **Validation failed**. The explanation says that Horizon's own Docker
+   configuration has no login that may publish.
 
-8. Record a screenshot of the card and the step list in the evidence.
+10. Record a screenshot of the card and the step list in the evidence.
 
-   Result: The evidence shows the failure on **Push image**.
+    Result: The evidence shows the failure on **Push image**.
 
-9. Close the card of `smoke-push`.
-
-   Result: The board does not show `smoke-push`. The provider shows no pod for it.
-
-10. Put back the Docker configuration from the copy.
+11. Close the card of `smoke-push`, then put back the cloud settings from the copy.
 
     ```sh
-    rm -rf <docker_config> && mv <docker_config>.d06-<run> <docker_config>
+    mv ~/.horizon/cloud/settings.json.d06-<run> ~/.horizon/cloud/settings.json
     ```
 
-    Result: `<docker_config>` exists again and `<docker_config>.d06-<run>` does not.
-    Its `config.json` is the same as before step 5.
+    Result: The board does not show `smoke-push`. Cloud settings show the earlier
+    registry bindings again.
 
-11. Go back to the branch of the run and delete the scratch branch.
+12. Go back to the branch of the run and delete the scratch branch.
 
     ```sh
     git -C <repo> switch - && git -C <repo> branch -D smoke-push-<run>
