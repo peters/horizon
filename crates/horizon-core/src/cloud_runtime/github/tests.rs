@@ -103,6 +103,11 @@ fn worker_status_is_read_from_its_last_json_line() {
 fn a_service_that_is_not_running_is_not_current_and_requests_need_support() {
     use worker::{Status, parse_status};
     assert_eq!(
+        parse_status("{\"state\":\"absent\",\"serving\":false,\"repositories\":[]}"),
+        Status::Unavailable,
+        "no sign-in for a chain that no running service could serve"
+    );
+    assert_eq!(
         parse_status("{\"state\":\"ok\",\"serving\":false,\"repositories\":[{\"repository\":\"acme/web\"}]}"),
         Status::Unavailable
     );

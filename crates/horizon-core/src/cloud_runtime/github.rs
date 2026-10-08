@@ -24,6 +24,10 @@ mod worker;
 
 pub use signin::{Prompt, renew, skip};
 
+/// Why a worker whose GitHub service is not running has no GitHub access.
+const SERVICE_DOWN: &str = "The worker's GitHub service is not running, so Git and gh have no GitHub access. \
+                            Restart the worker to start it again.";
+
 /// The most grants `horizon-worker-github install` accepts.
 const WORKER_GRANTS: usize = 16;
 
@@ -172,7 +176,7 @@ pub fn configure(
         None => Vec::new(),
     };
     if settings.is_some() && grants.is_empty() {
-        say("this cloud has no repository on GitHub.");
+        end("This cloud has no repository on GitHub.".into());
         return Ok(());
     }
     // Asked also without settings: a worker keeps its access after Disconnect, and the
@@ -197,11 +201,7 @@ pub fn configure(
             return Ok(());
         }
         worker::Status::Unavailable => {
-            end(
-                "The worker's GitHub service is not running, so Git and gh have no GitHub access. \
-                 Restart the worker to start it again."
-                    .into(),
-            );
+            end(SERVICE_DOWN.into());
             return Ok(());
         }
         // A repository the worker does not reach stays out until the person chooses
@@ -290,11 +290,15 @@ fn sign_in(
         user.login,
         reachable.len()
     ));
-    // The service reports whether it takes agents' requests once it holds the chain.
-    let requests = matches!(
-        worker::status(connection, runner)?,
-        worker::Status::Current { requests: true, .. }
-    );
+    // Connected only when the service serves the chain it now holds; it also reports
+    // whether it takes agents' requests.
+    let requests = match worker::status(connection, runner)? {
+        worker::Status::Current { requests, .. } => requests,
+        worker::Status::Unavailable => return Ok(Err(SERVICE_DOWN.into())),
+        worker::Status::Absent | worker::Status::Unsupported => {
+            return Ok(Err("The worker did not keep the GitHub access it was given.".into()));
+        }
+    };
     (runner.emit)(Event::GitHub(Prompt::Connected {
         login: user.login,
         repositories: reachable.into_iter().map(|grant| grant.repository).collect(),

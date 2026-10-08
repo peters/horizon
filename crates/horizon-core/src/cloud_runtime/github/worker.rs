@@ -74,7 +74,8 @@ pub(super) fn parse_status(output: &str) -> Status {
         .collect();
     match fields.state.as_str() {
         "unsupported" => Status::Unsupported,
-        "ok" if !repositories.is_empty() && fields.serving == Some(false) => Status::Unavailable,
+        // A service that is not running serves no chain, stored or new.
+        _ if fields.serving == Some(false) => Status::Unavailable,
         "ok" if !repositories.is_empty() => Status::Current {
             login: fields.login.unwrap_or_default(),
             repositories,

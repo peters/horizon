@@ -13,7 +13,9 @@ use std::{
 /// How often a ready cloud's worker is asked for new requests.
 const POLL: Duration = Duration::from_secs(15);
 
-type Answer = (Vec<Request>, Option<String>);
+/// The pending requests, and for a decision whether the worker refused it (`Some(None)`
+/// when it applied the decision); a list-only poll leaves the last refusal as it is.
+type Answer = (Vec<Request>, Option<Option<String>>);
 
 /// A cloud's pending requests and the last decision the worker refused.
 #[derive(Default)]
@@ -28,9 +30,11 @@ impl State {
     fn receive(&mut self) {
         let Some(rx) = &self.inflight else { return };
         match rx.try_recv() {
-            Ok((list, refused)) => {
+            Ok((list, decided)) => {
                 self.list = list;
-                self.refused = refused;
+                if let Some(refused) = decided {
+                    self.refused = refused;
+                }
                 self.inflight = None;
             }
             Err(TryRecvError::Disconnected) => self.inflight = None,
@@ -135,7 +139,7 @@ fn spawn(
                 secrets: Vec::new(),
             };
             let refused = match decision {
-                Some((id, decision)) => requests::decide(&connection, &runner, &id, decision)?,
+                Some((id, decision)) => Some(requests::decide(&connection, &runner, &id, decision)?),
                 None => None,
             };
             Ok((requests::list(&connection, &runner)?, refused))
