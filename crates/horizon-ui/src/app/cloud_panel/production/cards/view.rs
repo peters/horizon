@@ -119,6 +119,23 @@ pub(super) fn layout_controls(
     })
 }
 
+/// The layouts Manage offers: those the header has no room for, because the cloud is
+/// narrower than the header needs or a failure keeps the row, while panels can be arranged.
+pub(super) fn manage_layout_controls(
+    group: &CloudGroup,
+    status: &Status,
+    occupancy: Occupancy,
+) -> Option<strip::LayoutControls> {
+    let header = layout_controls(group, status, occupancy);
+    if header.is_some() && strip::header_fits_layout(group.size[0]) {
+        return None;
+    }
+    (header.is_some() || occupancy.panels > 0).then(|| strip::LayoutControls {
+        selected: group.layout,
+        color: theme::workspace_accent(group.issue.saturating_sub(101) as usize),
+    })
+}
+
 impl Production {
     /// The status strip inside a production cloud's header. `header` spans the whole
     /// header, including the status line and track under the title.

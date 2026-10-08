@@ -384,11 +384,8 @@ fn manage(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'
         response.action = runtime_actions(ui, id, runtime).or(response.action.take());
         return;
     }
-    // The header strip has the layout buttons when it is wide enough; a narrow cloud
-    // keeps them here.
     let occupancy = super::view::occupancy(context.group, context.board);
-    let layout = super::view::layout_controls(context.group, context.status, occupancy)
-        .filter(|_| !super::strip::header_fits_layout(context.group.size[0]));
+    let layout = super::view::manage_layout_controls(context.group, context.status, occupancy);
     section::show(ui, "View", |ui| {
         if let Some(controls) = layout {
             let mut selected = controls.selected;

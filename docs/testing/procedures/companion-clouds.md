@@ -156,10 +156,12 @@ Use one test workspace for both clouds.
 
 ### 6.4 K4 — Select the companion
 
-1. On the source card, open the **Connections** tab.
+1. On the source card, open the **Connections** tab and expand **Companion
+   clouds**.
 
    Result: **Companion clouds** shows the checkbox `service` and
-   `example/service · cpu`.
+   `example/service · cpu`. The later steps that use the companion rows and
+   **Refresh** use this expanded section.
 
    > **CAUTION:** SELECT ONLY THE TEST COMPANION OF THIS RUN. Each agent session
    > on the source cloud gets shell access to the companion worker.
