@@ -135,14 +135,8 @@ impl HorizonApp {
                             rename_field(ui, header, cost_width, &mut self.cloud_prototype.title_draft, transform);
                     }
                     let drag = early_drag.unwrap_or_else(|| drag_area(ui, drag_rect, editing));
-                    // Registered over the drag area: it takes the clicks, and drags fall
-                    // through to the header so the card still moves from its title.
                     if !editing {
-                        let title = title_target(ui, group, header, cost_width);
-                        if title.clicked() {
-                            action = Some(Action::Rename(group.issue));
-                        }
-                        cloud_context(&title, group, &mut action);
+                        title_actions(ui, group, header, cost_width, &mut action);
                     }
                     cloud_context(&drag, group, &mut action);
                     card_hint(drag)
@@ -366,6 +360,16 @@ fn rename_field(
 
 /// The hover text of the card itself.
 pub(super) const CARD_HINT: &str = "Click the title to rename. Drag to move this cloud.";
+
+/// The title over the drag area: it takes the clicks, and drags fall through to the
+/// header so the card still moves from its title.
+fn title_actions(ui: &egui::Ui, group: &CloudGroup, header: Rect, reserved: f32, action: &mut Option<Action>) {
+    let title = title_target(ui, group, header, reserved);
+    if title.clicked() {
+        *action = Some(Action::Rename(group.issue));
+    }
+    cloud_context(&title, group, action);
+}
 
 /// The title text as its own button: a click starts a rename, assistive technology finds
 /// it as "Rename …", and the pointer shows a text cursor over it. The galley comes from

@@ -286,7 +286,9 @@ fn a_production_cloud_renames_from_a_click_on_its_title() {
     render(&mut app, title, Vec::new());
     assert_eq!(app.cloud_prototype.renaming, None);
     assert_eq!(app.cloud_prototype.groups.0[0].title, "Renamed cloud");
-    // A drag that starts on the title still moves the card and opens no editor.
+    // A drag that starts on the title still moves the card and opens no editor. In a
+    // workspace preset the card would move between slots, so place it freely here.
+    app.board.clear_workspace_layout(workspace);
     let before = app.cloud_prototype.groups.0[0].position;
     let press = |pos, pressed| Event::PointerButton {
         pos,
