@@ -20,13 +20,19 @@ body{font:16px system-ui;background:#f4f6fa;color:#1b2940;margin:0;padding:40px}
 <script>
 const zone=document.querySelector('#drop-zone');
 window.uploads=[];
+async function describeFile(file,source){
+ const bytes=new Uint8Array(await file.arrayBuffer());
+ const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',bytes));
+ const sha256=Array.from(digest,byte=>byte.toString(16).padStart(2,'0')).join('');
+ return{name:file.name,size:file.size,sha256,firstByte:bytes[0]??null,lastByte:bytes.at(-1)??null,source};
+}
 async function showFiles(files,source){
  const list=document.querySelector('#attachments');list.replaceChildren();
  const values=await Promise.all(Array.from(files,async file=>{
-  const bytes=new Uint8Array(await file.arrayBuffer());
+  const value=await describeFile(file,source);
   const item=document.createElement('li');item.textContent=file.name;
   const detail=document.createElement('small');detail.textContent=`${file.size} bytes · ${source}`;item.append(detail);list.append(item);
-  return{name:file.name,size:file.size,firstByte:bytes[0]??null,lastByte:bytes.at(-1)??null,source};
+  return value;
  }));
  window.uploads=values;document.querySelector('#empty').hidden=values.length>0;
  document.querySelector('#result').textContent=JSON.stringify(values,null,2);
@@ -41,9 +47,10 @@ if(frameMode==='same'||frameMode==='cross'){
  if(frameMode==='cross')frame.setAttribute('sandbox','allow-scripts');
  const label=frameMode==='same'?'Same-origin frame':'Cross-origin sandbox frame';
  frame.srcdoc=`<!doctype html><html><meta charset="utf-8"><style>body{font:18px system-ui;margin:0;background:#e4edff;color:#1b2940}#zone{box-sizing:border-box;min-height:260px;padding:24px;border:2px dashed #365dcc}pre{white-space:pre-wrap}</style><div id="zone"><h2>${label}</h2><p>Drop a synthetic file here.</p><pre id="result"></pre></div><script>
+ const describeFile=${describeFile.toString()};
  const zone=document.querySelector('#zone');
  zone.addEventListener('dragover',event=>event.preventDefault());
- zone.addEventListener('drop',async event=>{event.preventDefault();const files=await Promise.all(Array.from(event.dataTransfer.files,async file=>{const bytes=new Uint8Array(await file.arrayBuffer());return{name:file.name,size:file.size,firstByte:bytes[0]??null,lastByte:bytes.at(-1)??null,source:'${label}'}}));document.querySelector('#result').textContent=JSON.stringify(files,null,2);parent.postMessage({fixture:'upload-frame',files},'*')});
+ zone.addEventListener('drop',async event=>{event.preventDefault();const files=await Promise.all(Array.from(event.dataTransfer.files,file=>describeFile(file,'${label}')));document.querySelector('#result').textContent=JSON.stringify(files,null,2);parent.postMessage({fixture:'upload-frame',files},'*')});
  <\/script></html>`;
  zone.replaceChildren(frame);
  window.addEventListener('message',event=>{

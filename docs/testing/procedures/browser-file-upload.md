@@ -29,7 +29,8 @@ It checks file contents, selection, navigation, themes, and the public browser c
 - A task-owned isolated desktop with a live Device panel.
 - The candidate, Chromium, Firefox, a file manager, and a desktop recorder.
 - The fixture at `docs/testing/fixtures/browser-file-upload.html`.
-- A local HTTP server that serves the fixture.
+- A local HTTP server that serves the fixture on `localhost` or a loopback address.
+- A SHA-256 utility to calculate the expected digest of each synthetic file.
 - Synthetic files in two folders: a PDF, a text file, an image, and a hidden file.
 - A public browser MCP server for the candidate and its private coordination root.
 
@@ -50,6 +51,10 @@ It checks file contents, selection, navigation, themes, and the public browser c
 4. Start the recorder for the isolated display.
 
    Result: The recorder captures the candidate and its interactions.
+
+5. Calculate the SHA-256 digest of each synthetic file with a local utility. Record each digest before upload.
+
+   Result: The expected digests are independent of the fixture. The loopback page has a secure context for its SHA-256 function.
 
 ## 5. Tasks
 
@@ -77,7 +82,7 @@ It checks file contents, selection, navigation, themes, and the public browser c
 
 6. Click **Upload 2 files**.
 
-   Result: The dialog closes and the page lists both files with their correct bytes.
+   Result: The dialog closes and the page lists both files. Compare each `sha256` value with the digest from setup step 5. Each value must match.
 
 ### 5.2 P02 — Search, limits, and cancellation
 
@@ -121,7 +126,7 @@ It checks file contents, selection, navigation, themes, and the public browser c
 
 2. Release the files over the drop area.
 
-   Result: The page lists both files and their correct bytes with **Drag and drop**.
+   Result: The page lists both files with **Drag and drop**. Each `sha256` value matches its expected digest.
 
 3. Drop a folder onto the page.
 
@@ -151,7 +156,7 @@ It checks file contents, selection, navigation, themes, and the public browser c
 
 2. Call `browser_act` with `action: drop_files`, that ref, and an authorized synthetic file path.
 
-   Result: The page receives the same file contents as a manual drop.
+   Result: The page receives the same file contents as a manual drop. Its `sha256` value matches the expected digest.
 
 3. Repeat with a path outside the permitted attachment roots.
 
@@ -195,7 +200,7 @@ It checks file contents, selection, navigation, themes, and the public browser c
 
 2. Drop a synthetic file into the frame. Repeat on local Firefox and Chromium.
 
-   Result: The frame and parent page show the exact file name, size, and first and last bytes.
+   Result: The frame and parent page show the exact file name and size. Each `sha256` value matches its expected digest.
 
 3. Add `?frame=cross` to the fixture URL. Navigate through `browser_navigate`.
 
@@ -207,7 +212,7 @@ It checks file contents, selection, navigation, themes, and the public browser c
 
 5. Repeat step 4 on Chromium.
 
-   Result: The frame and parent page show the exact file name, size, and first and last bytes.
+   Result: The frame and parent page show the exact file name and size. Each `sha256` value matches its expected digest.
 
 ### 5.7 P07 — CLI plan dispatch without a live browser
 
@@ -223,7 +228,7 @@ It checks file contents, selection, navigation, themes, and the public browser c
 
 - P01 through P07 pass on each tested platform and backend.
 - Baseline terminal and editor file drops remain unchanged.
-- The page receives exact synthetic file names, sizes, and bytes.
+- The page receives exact synthetic file names and sizes. Each full-content SHA-256 digest matches the expected digest from the local utility.
 - Record unavailable platform lanes separately.
 - This change adds no persistent settings or migration.
 
