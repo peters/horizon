@@ -10,7 +10,7 @@ use crate::frames::FrameSlot;
 use crate::input::BrowserInputCdpExt;
 use crate::semantic::{
     FrameTarget, MAX_SEMANTIC_FRAMES, append_frame_scan, bounded_control_value, frame_fill_expression,
-    parse_target_rect, scan_expression, target_rect_expression,
+    parse_target_rect, scan_expression, scan_node_limit_reached, target_rect_expression,
 };
 use crate::session::{BrowserEventSender, DriverState};
 use crate::{BrowserControlFailure, BrowserControlValue};
@@ -43,6 +43,12 @@ impl DriverState {
         let expression = scan_expression(selector, max_nodes);
         let mut scan = self.evaluate_json_within(link, events, slot, &expression, remaining(deadline)?)?;
         crate::semantic::clear_scan_frames(&mut scan)?;
+        if self.semantic.generation() != generation {
+            return Err(stale());
+        }
+        if scan_node_limit_reached(&scan, max_nodes) {
+            return Ok(scan);
+        }
         let page = self.session_id.clone().ok_or_else(stale)?;
         let mut sessions: Vec<_> = self.clipboard.iframe_sessions.iter().cloned().collect();
         sessions.push(page.clone());
@@ -59,10 +65,7 @@ impl DriverState {
             return Err(frame_limit());
         }
         for (session, context) in targets {
-            if scan["nodes"]
-                .as_array()
-                .is_some_and(|nodes| nodes.len() >= max_nodes as usize)
-            {
+            if scan_node_limit_reached(&scan, max_nodes) {
                 break;
             }
             let Some(context) = context else {

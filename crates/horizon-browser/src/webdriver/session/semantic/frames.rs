@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::semantic::{
     FrameTarget, MAX_SEMANTIC_FRAMES, append_frame_scan, bounded_control_value, frame_fill_expression,
-    parse_target_rect, scan_expression, target_rect_expression,
+    parse_target_rect, scan_expression, scan_node_limit_reached, target_rect_expression,
 };
 use crate::session::BrowserEventSender;
 use crate::{BrowserButton, BrowserControlFailure, BrowserControlValue, BrowserInput, BrowserModifiers};
@@ -25,7 +25,7 @@ impl Driver {
         let mut scan = self.guarded_semantic_scan(&expression, Some(remaining(deadline)?))?;
         let generation = self.semantic.generation();
         crate::semantic::clear_scan_frames(&mut scan)?;
-        if !self.firefox_bidi() {
+        if !self.firefox_bidi() || scan_node_limit_reached(&scan, max_nodes) {
             return Ok(scan);
         }
         // The tree is rooted at this panel, never another page of a shared session.
@@ -33,10 +33,7 @@ impl Driver {
         let tree = self.frame_command("browsingContext.getTree", &json!({"root":root}), events, deadline)?;
         let contexts = child_contexts(&tree, &root)?;
         for context in contexts {
-            if scan["nodes"]
-                .as_array()
-                .is_some_and(|nodes| nodes.len() >= max_nodes as usize)
-            {
+            if scan_node_limit_reached(&scan, max_nodes) {
                 break;
             }
             let result = self.frame_command(

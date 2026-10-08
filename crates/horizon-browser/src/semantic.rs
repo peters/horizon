@@ -233,6 +233,12 @@ pub(crate) enum FrameTarget {
 
 pub(crate) const MAX_SEMANTIC_FRAMES: usize = 64;
 
+pub(crate) fn scan_node_limit_reached(scan: &Value, max_nodes: u32) -> bool {
+    scan["nodes"]
+        .as_array()
+        .is_some_and(|nodes| nodes.len() >= max_nodes as usize)
+}
+
 /// Frame routes are host-owned; ignore any route a page tried to return.
 pub(crate) fn clear_scan_frames(scan: &mut Value) -> Result<(), BrowserControlFailure> {
     check_script_error(scan)?;
