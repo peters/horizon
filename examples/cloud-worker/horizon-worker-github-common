@@ -279,7 +279,12 @@ class Store:
                 found = self.copies()
             # A revocation counts at once, also from memory only; a new chain waits for its write.
             unstored = self.pending if self.pending is not None and self.pending['state'] == 'ok' else None
-            found = [copy for copy in found if unstored is None or copy[0] != unstored]
+            if unstored is not None:
+                # A stored copy with an older chain is no fallback: GitHub cancelled that chain
+                # when it rotated the pending one. Only a pending write that kept the chain (a
+                # metadata change) leaves the stored copy usable, and a newer install stays.
+                found = [copy for copy in found if copy[0] != unstored and (
+                    copy[0]['serial'] > unstored['serial'] or copy[0]['chain'] == unstored['chain'])]
         else:
             found = self.copies()
         return max(found, key=lambda copy: (copy[0]['serial'], not copy[1])) if found else (None, False)

@@ -5,6 +5,7 @@ import fcntl
 import io
 import json
 import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -319,12 +320,26 @@ class VolumeCopyTests(ServiceTestCase):
         common.remove_durably(self.store.persistent, service.STATE)
         self.assertTrue((victim / service.STATE).exists(), 'root never removes a file behind a link')
 
-    def test_a_memory_only_chain_is_never_served(self):
+    def test_a_memory_only_chain_is_never_served_nor_the_chain_it_replaced(self):
         self.install()
-        self.store.pending = dict(self.stored(), serial=self.stored()['serial'] + 1,
-                                  chain=chain(access='ghu_synthetic-unwritten'))
+        stored = self.stored()
+        self.store.pending = dict(stored, serial=stored['serial'] + 1, chain=chain(access='ghu_synthetic-unwritten'))
         self.assertEqual(self.store.load()[0]['chain']['access_token'], 'ghu_synthetic-unwritten')
+        self.assertIsNone(self.store.load(serving=True)[0], 'GitHub cancelled the stored chain when it rotated')
+        # A pending write that kept the chain leaves the stored copy usable.
+        self.store.pending = dict(stored, serial=stored['serial'] + 1, last_error='timeout')
         self.assertEqual(self.store.load(serving=True)[0]['chain'], chain())
+
+    def test_a_start_configures_the_repositories_of_the_stored_chain(self):
+        configured, restored = [], []
+        service.reconcile(self.store, configure=configured.append, static=restored.append)
+        self.assertEqual((configured, restored), ([], [{'previous': []}]), 'without a chain, the static binding')
+        self.install()
+        service.reconcile(self.store, configure=configured.append, static=restored.append)
+        self.assertEqual(configured[-1], {'grants': service.identity_grants(self.stored()), 'previous': []})
+        failing = mock.Mock(side_effect=subprocess.CalledProcessError(1, 'configure'))
+        with contextlib.redirect_stdout(io.StringIO()):
+            service.reconcile(self.store, configure=failing, static=restored.append)
 
     def test_a_revocation_that_only_memory_holds_still_ends_serving(self):
         self.install()

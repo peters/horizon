@@ -787,7 +787,10 @@ horizon-worker-github install < chain.json
   is the new chain stored. If the configuration or that save fails, the
   repositories of the previous chain are configured again and the previous chain
   stays. Without a previous chain, the repositories of the static token file are
-  configured again (`horizon-worker-git-auth restore`). The install then removes the static token file, so one source of tokens
+  configured again (`horizon-worker-git-auth restore`). Each start of the service
+  configures the repositories for the stored chain, or for the static token file
+  without one, so an install that stopped between the two steps is undone. The
+  install then removes the static token file, so one source of tokens
   remains.
 - The output is the same JSON as `status`.
 
@@ -808,7 +811,7 @@ want the worker to have access.
 If no storage accepts a refreshed chain, the service keeps it in memory, because
 GitHub already cancelled the stored one. It tries to write it again at every
 check, about once a minute, until a write succeeds. Until then it gives agents
-no token from that chain, `status` reports `"pending_write": true` and
+no token, neither from that chain nor from the cancelled one it replaced, `status` reports `"pending_write": true` and
 `"persistent": false`, and a restart of the service loses the chain. A volume
 write whose directory sync fails counts as stored only once tmpfs also holds a
 copy. Agents' requests wait while a write is under way, so they never get a token

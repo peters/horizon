@@ -383,9 +383,26 @@ def serve(store=None, path=SOCKET):
     server = start(store, path)
     if server is None:
         return 1
+    reconcile(store)
     threading.Thread(target=refresh_loop, args=(store,), daemon=True).start()
     accept_forever(server, store)
     return 0
+
+
+def reconcile(store, configure=None, static=None):
+    """Configures the repositories for the stored chain, or for the static binding without
+    one. An install that stopped between its configuration and its save left the
+    repositories configured for a chain that was never stored; the stored state decides."""
+    try:
+        with store.lock():
+            state, _ = store.load()
+            if state is not None and state['state'] == 'ok':
+                (configure or run_configure)({'grants': identity_grants(state), 'previous': []})
+            elif state is None:
+                (static or run_restore)({'previous': []})
+    except Exception as error:
+        # Missing checkouts or a stopped Git helper leave the configuration as it was.
+        print('GitHub repositories not reconciled: ' + type(error).__name__, flush=True)
 
 
 def run_configure(payload):
