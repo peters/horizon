@@ -179,11 +179,16 @@ fn run(backend: BackendKind, root: &Path, nested: bool) {
         thread::sleep(Duration::from_millis(30));
     }
     let mut host = McpProcess::start(root);
-    host.success(BrowserControlAction::WaitForSelector {
+    let readiness = host.action(BrowserControlAction::WaitForSelector {
         selector: "output[data-ready]".into(),
         state: horizon_browser::SelectorState::Present,
         timeout_millis: Some(15000),
     });
+    if let Err(error) = readiness {
+        let diagnostic = host.call("browser_evaluate", json!({"expression":"JSON.stringify({url:location.href,ready:document.readyState,text:document.body?.innerText,frames:[...document.querySelectorAll('iframe')].map(f=>f.src)})"}));
+        let snapshot = host.call("browser_snapshot", json!({"max_nodes":100}));
+        panic!("fixture readiness: {error}; document: {diagnostic:?}; snapshot: {snapshot:?}");
+    }
 
     let snapshot = host.success(BrowserControlAction::Snapshot { max_nodes: 100 });
     let BrowserControlValue::Snapshot { snapshot } = snapshot else {
@@ -262,6 +267,9 @@ fn fixture(nested: bool) -> (u16, Arc<std::sync::atomic::AtomicBool>, thread::Jo
             stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut request = [0; 4096];
             let size = stream.read(&mut request).unwrap_or(0);
+            if size == 0 {
+                continue;
+            }
             let request = String::from_utf8_lossy(&request[..size]);
             let body = if request.starts_with("GET /form") {
                 r#"<!doctype html><title>Frame form</title><form>
