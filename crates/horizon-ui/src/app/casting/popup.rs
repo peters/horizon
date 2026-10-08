@@ -2,7 +2,7 @@ use super::{CastState, Picker, Session};
 use egui::{Context, Pos2, Rect, Vec2, epaint::MarginF32};
 use horizon_core::{
     WorkspaceId,
-    browser::manifest::cast::{CastOperation, CastSource},
+    browser::manifest::cast::{CastOperation, CastOrientation, CastResolution, CastSource},
 };
 use std::time::Instant;
 
@@ -27,6 +27,48 @@ impl SessionBinding {
     }
 }
 impl CastState {
+    /// Opens the picker for `workspace`, or closes it when the same anchor opened it.
+    /// A live session of the workspace keeps its source and settings; otherwise the
+    /// picker starts on `source`.
+    pub(super) fn toggle_picker(
+        &mut self,
+        anchor: Option<horizon_core::PanelId>,
+        workspace: WorkspaceId,
+        source: CastSource,
+        ctx: &Context,
+    ) {
+        let reopened = self
+            .picker
+            .as_ref()
+            .is_some_and(|picker| picker.anchor == anchor && picker.workspace == workspace && picker.anchor.is_some());
+        self.close_picker(ctx);
+        if reopened {
+            return;
+        }
+        let session = self
+            .sessions
+            .iter()
+            .rev()
+            .find(|session| session.workspace == workspace && !session.worker.finished())
+            .or_else(|| {
+                self.sessions
+                    .iter()
+                    .rev()
+                    .find(|session| session.workspace == workspace)
+            });
+        self.picker = Some(Picker {
+            anchor,
+            workspace,
+            source: session.map_or(source, |session| session.source.clone()),
+            receiver: session.map(|session| session.receiver_id.clone()),
+            orientation: session.map_or(CastOrientation::Landscape, |session| session.orientation),
+            resolution: session.map_or(CastResolution::default(), |session| session.resolution),
+            pin: zeroize::Zeroizing::new(String::new()),
+            position: None,
+            binding: session.map(SessionBinding::from_session),
+        });
+        self.discover();
+    }
     pub(super) fn bind_picker(&self, picker: &mut Picker) {
         picker.binding = self
             .sessions

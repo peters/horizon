@@ -327,6 +327,12 @@ fn a_pending_stop_replaces_the_whole_manage_drawer() {
             "{shown} is in the usual Manage tab"
         );
     }
+    // Casting is Linux-only, and so is the row that opens it.
+    assert_eq!(
+        label_pos(&output, "Cast…").is_some(),
+        cfg!(target_os = "linux"),
+        "Cast… is beside Full screen where casting works"
+    );
 
     app.cloud_prototype
         .production
@@ -340,7 +346,14 @@ fn a_pending_stop_replaces_the_whole_manage_drawer() {
     for shown in ["Stop worker", "Keep running"] {
         assert!(label_pos(&output, shown).is_some(), "{shown} is asked");
     }
-    for hidden in ["View", "Full screen", "Cloud", "Stop worker…", "Reconnect cloud"] {
+    for hidden in [
+        "View",
+        "Full screen",
+        "Cast…",
+        "Cloud",
+        "Stop worker…",
+        "Reconnect cloud",
+    ] {
         assert!(
             label_pos(&output, hidden).is_none(),
             "{hidden} waits behind the question in the real Manage drawer"

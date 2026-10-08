@@ -234,6 +234,15 @@ impl HorizonApp {
                 requires_user_approval: false,
             });
         }
+        for (id, name) in self.cast_cloud_sources(workspace) {
+            let source = CastSource::Cloud { id };
+            sources.push(CastSourceInfo {
+                available: self.cast_source_rect(workspace, &source, ctx).is_ok(),
+                source,
+                name,
+                requires_user_approval: false,
+            });
+        }
         sources.push(CastSourceInfo {
             source: CastSource::Application {},
             name: "Entire Horizon".into(),
@@ -366,8 +375,7 @@ pub(super) mod tests {
                 .panels
                 .iter()
                 .find(|panel| panel.workspace_id == workspace)
-                .expect("picker workspace has a panel")
-                .id,
+                .map(|panel| panel.id),
             workspace,
             source: CastSource::Application {},
             receiver: Some(receiver.into()),

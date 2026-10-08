@@ -1,6 +1,6 @@
 ---
 name: horizon-cast
-description: Cast Horizon panels, workspaces, or its main window to Apple TV through the public cast MCP tool. Use for receiver discovery, pairing, casting status, and stopping casts.
+description: Cast Horizon panels, workspaces, cloud cards, or its main window to Apple TV through the public cast MCP tool. Use for receiver discovery, pairing, casting status, and stopping casts.
 ---
 
 # Horizon casting

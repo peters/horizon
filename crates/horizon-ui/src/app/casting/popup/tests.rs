@@ -29,7 +29,7 @@ fn session(receiver: &str, workspace: u64, ip: &str) -> (Session, std::thread::J
 }
 fn picker(session: &Session) -> Picker {
     Picker {
-        anchor: horizon_core::PanelId(1),
+        anchor: Some(horizon_core::PanelId(1)),
         workspace: session.workspace,
         source: session.source.clone(),
         receiver: Some(session.receiver_id.clone()),
