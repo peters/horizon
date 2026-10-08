@@ -562,9 +562,11 @@ const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
     if (clear) {
         const isReadOnly = () => element.readOnly || element.getAttribute('aria-readonly') === 'true';
         const notEditable = { error: { code: 'element_not_editable', message: 'target element is not editable' } };
-        if (isReadOnly()) return notEditable;
+        if (isReadOnly() || (!element.isContentEditable && !('value' in element))) return notEditable;
         element.focus();
         if (isReadOnly()) return notEditable;
+        if (document.activeElement !== element)
+            return { error: { code: 'element_not_focused', message: 'target element did not receive focus' } };
         if (element.isContentEditable) {
             element.textContent = '';
             element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));

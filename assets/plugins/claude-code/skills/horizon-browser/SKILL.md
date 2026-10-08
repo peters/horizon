@@ -81,6 +81,10 @@ use `browser_handoff` on the original panel only when its capabilities include
 `unsupported_backend`; report that limitation. Do not open a separate panel for
 the frame.
 
+Local fills reject read-only fields with `element_not_editable`. If focus moves
+to another field or an inert ancestor prevents focus, the fill returns
+`element_not_focused` before it clears the value or sends an input event.
+
 `browser_navigate` returns a typed outcome: by default it waits until the
 document committed and reports `committed_url`, `title` when known, `loading`,
 `redirected`, and `state`. Check `completed`; a `timed_out` state carries the
