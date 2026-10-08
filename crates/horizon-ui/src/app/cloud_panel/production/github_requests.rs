@@ -64,6 +64,7 @@ impl HorizonApp {
             let ready = runtime.stage == Some(Stage::Ready);
             if !connected || !ready {
                 runtime.github_requests.list.clear();
+                runtime.github_requests.refused = None;
                 continue;
             }
             let requests = &mut runtime.github_requests;

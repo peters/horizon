@@ -194,6 +194,22 @@ pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, 
     chosen
 }
 
+/// **Connect GitHub again**, once this cloud's GitHub step reported its outcome. A click
+/// marks the cloud for a new sign-in; the caller then reconnects it.
+pub(super) fn renew_button(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime) -> bool {
+    if !matches!(runtime.github, Some(Prompt::Connected { .. } | Prompt::Ended(_))) {
+        return false;
+    }
+    let clicked = ui
+        .add(chrome_button("Connect GitHub again"))
+        .on_hover_text("Reconnect this cloud and sign in to GitHub again, for example to add a repository.")
+        .clicked();
+    if clicked {
+        github::renew(cloud_id);
+    }
+    clicked
+}
+
 /// One line for the steps card: who the cloud acts as on GitHub, or why it has no access.
 pub(super) fn summary(runtime: &Runtime) -> Option<(String, bool)> {
     match runtime.github.as_ref()? {

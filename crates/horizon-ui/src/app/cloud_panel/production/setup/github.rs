@@ -45,7 +45,14 @@ impl Card {
             let name = connect::app_name();
             let result = connect::start(&root, &name, horizon_core::open_url)
                 .and_then(|created| created.recv().map_err(|_| horizon_core::cloud_runtime::Error::Busy)?)
-                .and_then(|settings| Ok((setup::save_github(&root, Some(settings.clone()))?, settings)))
+                .and_then(|settings| match setup::save_github(&root, Some(settings.clone())) {
+                    Ok(committed) => Ok((committed, settings)),
+                    Err(error) => {
+                        // The saved settings do not name this app, so its secret goes too.
+                        connect::discard(&settings);
+                        Err(error)
+                    }
+                })
                 .map(|(committed, settings)| {
                     open(&settings.installation_url());
                     let device_flow = connect::device_flow_enabled(&settings).map_err(|error| error.to_string());

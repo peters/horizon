@@ -297,6 +297,15 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
     let status = context.status;
     steps::horizontal(ui, runtime, status);
     ui.add_space(10.0);
+    if let Some((line, _)) = super::github::summary(runtime) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(line).size(12.5).color(theme::FG_DIM()));
+            if super::github::renew_button(ui, &context.launch.id, runtime) {
+                response.action = Some(Action::Deploy);
+            }
+        });
+        ui.add_space(6.0);
+    }
     if let Some(failure) = &status.failure {
         let copy = failure.copy_text();
         egui::Frame::new()
@@ -428,6 +437,7 @@ fn manage(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'
 pub(super) fn step_action(action: StepAction, status: &Status, ctx: &egui::Context) -> Option<Action> {
     match action {
         StepAction::Retry => status.primary.and_then(super::status::Primary::retries),
+        StepAction::Reconnect => Some(Action::Deploy),
         StepAction::CopyError => {
             if let Some(failure) = &status.failure {
                 ctx.copy_text(failure.copy_text());

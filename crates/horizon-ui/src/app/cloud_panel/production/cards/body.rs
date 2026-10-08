@@ -109,24 +109,28 @@ fn steps_card(
                     action
                 })
                 .inner;
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                if let Some((line, connected)) = super::github::summary(runtime) {
-                    let color = if connected {
-                        theme::PALETTE_GREEN()
-                    } else {
-                        theme::FG_DIM()
-                    };
-                    ui.label(RichText::new(line).size(12.5).color(color));
-                }
-                ui.label(RichText::new(worker(runtime)).size(12.5).color(theme::FG_DIM()));
-                ui.label(
-                    RichText::new(machine(launch, runtime))
-                        .size(12.5)
-                        .color(theme::FG_SOFT()),
-                );
-                ui.separator();
-            });
-            action
+            let renew = ui
+                .with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    let renew = super::github::renew_button(ui, &launch.id, runtime);
+                    if let Some((line, connected)) = super::github::summary(runtime) {
+                        let color = if connected {
+                            theme::PALETTE_GREEN()
+                        } else {
+                            theme::FG_DIM()
+                        };
+                        ui.label(RichText::new(line).size(12.5).color(color));
+                    }
+                    ui.label(RichText::new(worker(runtime)).size(12.5).color(theme::FG_DIM()));
+                    ui.label(
+                        RichText::new(machine(launch, runtime))
+                            .size(12.5)
+                            .color(theme::FG_SOFT()),
+                    );
+                    ui.separator();
+                    renew
+                })
+                .inner;
+            if renew { Some(StepAction::Reconnect) } else { action }
         })
         .inner
 }

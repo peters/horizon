@@ -17,8 +17,9 @@ use std::{
 
 /// How long Horizon waits for the person to create the app.
 const TIMEOUT: Duration = Duration::from_mins(10);
-/// The file in the cloud root that holds the client secret.
-pub const SECRET_FILE: &str = "credentials/github-app";
+/// The directory in the cloud root for client secrets; each app has its own file, so a
+/// new app never replaces the secret of the app that the saved settings name.
+const SECRET_DIRECTORY: &str = "credentials";
 /// Shown as the app's homepage on GitHub.
 const HOMEPAGE: &str = "https://github.com/peters/horizon";
 
@@ -158,7 +159,7 @@ fn created(code: &Secret, root: &Path) -> Result<Settings> {
     let app = Client::new()
         .convert_manifest(code)
         .map_err(|error| github_error(&error))?;
-    let path = root.join(SECRET_FILE);
+    let path = root.join(SECRET_DIRECTORY).join(format!("github-app-{}", app.slug));
     write_private(&path, app.client_secret.expose())?;
     let settings = Settings {
         app_id: app.id,
@@ -169,6 +170,11 @@ fn created(code: &Secret, root: &Path) -> Result<Settings> {
     };
     settings.validate()?;
     Ok(settings)
+}
+
+/// Removes the client secret of an app whose settings were not saved.
+pub fn discard(settings: &Settings) {
+    let _ = std::fs::remove_file(&settings.client_secret_file);
 }
 
 fn write_private(path: &Path, value: &str) -> Result<()> {

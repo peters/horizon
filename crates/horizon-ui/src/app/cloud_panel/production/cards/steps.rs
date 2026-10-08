@@ -11,6 +11,8 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, 
 pub(super) enum StepAction {
     Retry,
     CopyError,
+    /// Connect GitHub again: reconnect after the cloud was marked for a new sign-in.
+    Reconnect,
 }
 
 const ROW: f32 = 30.0;

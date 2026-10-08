@@ -255,7 +255,7 @@ with no token to create or copy.
 
 1. Horizon opens GitHub in your browser with a private GitHub App already
    described. You click **Create GitHub App**. Horizon keeps the app's client
-   secret in `credentials/github-app` (0600) and never keeps its private key.
+   secret in `credentials/github-app-<app>` (0600) and never keeps its private key.
 2. GitHub shows the installation page. You choose the repositories that clouds
    may reach. **Choose repositories** on the card opens this page again.
 3. GitHub does not let a new app turn on its device sign-in. When the card says

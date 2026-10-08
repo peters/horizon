@@ -79,7 +79,7 @@ the access requests of agents.
 
    Result: The card shows **Connected** and **App: horizon-<suffix>**.
 
-7. Run `stat -c '%a' ~/.horizon/cloud/credentials/github-app`.
+7. Run `stat -c '%a' ~/.horizon/cloud/credentials/github-app-*`.
 
    Result: The command shows `600`.
 
@@ -143,6 +143,15 @@ the access requests of agents.
 
    Result: The card continues to **Ready** and does not show a code. The output
    shows **GitHub: the worker holds current access.**
+
+2. Click **Connect GitHub again** under the GitHub line of the `gh-ask` steps card,
+   or in the **Status** tab of its drawer.
+
+   Result: The cloud reconnects and the card shows a new code with **Open GitHub**.
+
+3. Approve the code as in G03 steps 3 to 5.
+
+   Result: The card shows **Ready** and **GitHub: signed in as <login> · 1 repository**.
 
 ### 6.5 G05 — Skip the sign-in
 

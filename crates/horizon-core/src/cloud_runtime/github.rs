@@ -22,7 +22,7 @@ mod signin;
 mod tests;
 mod worker;
 
-pub use signin::{Prompt, skip};
+pub use signin::{Prompt, renew, skip};
 
 /// The most grants `horizon-worker-github install` accepts.
 const WORKER_GRANTS: usize = 16;
@@ -173,6 +173,13 @@ pub fn configure(
         }
         return Ok(());
     };
+    // Connect GitHub again on the card: sign in anew although the worker holds access.
+    let held = match held {
+        worker::Status::Current { .. } | worker::Status::Unavailable if signin::renewing(&state.cloud_id) => {
+            worker::Status::Absent
+        }
+        held => held,
+    };
     match held {
         worker::Status::Unsupported => {
             say("this worker image cannot hold GitHub access. Rebuild the image to add it.");
@@ -198,7 +205,7 @@ pub fn configure(
             say("the worker holds current access.");
             for grant in grants.iter().filter(|grant| !covers(&repositories, grant)) {
                 say(&format!(
-                    "{} is not in this cloud's access. Connect GitHub again to add it.",
+                    "{} is not in this cloud's access. Use Connect GitHub again on the cloud card to add it.",
                     grant.repository
                 ));
             }

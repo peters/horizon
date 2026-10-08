@@ -51,6 +51,20 @@ pub fn skip(cloud_id: &str) {
     }
 }
 
+/// Clouds whose person asked to sign in again, for example to add a repository.
+static RENEW: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+
+/// Makes the next deployment of `cloud_id` sign in again although its worker holds access.
+pub fn renew(cloud_id: &str) {
+    if let Ok(mut renew) = RENEW.lock() {
+        renew.insert(cloud_id.to_owned());
+    }
+}
+
+pub(super) fn renewing(cloud_id: &str) -> bool {
+    RENEW.lock().is_ok_and(|mut renew| renew.remove(cloud_id))
+}
+
 fn skipped(cloud_id: &str) -> bool {
     SKIPPED.lock().is_ok_and(|mut skipped| skipped.remove(cloud_id))
 }
