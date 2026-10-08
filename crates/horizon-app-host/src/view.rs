@@ -34,6 +34,34 @@ pub struct Registry {
     views: Mutex<BTreeMap<Uuid, View>>,
     history: Mutex<BTreeMap<(Uuid, usize), RecipeHistory>>,
 }
+pub(crate) struct Observer<'a> {
+    registry: &'a Registry,
+    run: Mutex<Option<Uuid>>,
+}
+impl Observer<'_> {
+    pub(crate) fn observe(&self, progress: &mut crate::runner::Progress) -> Result<()> {
+        *self.run.lock().map_err(|_| Error::Unavailable)? = Some(progress.run);
+        self.registry.observe(progress)
+    }
+}
+impl Drop for Observer<'_> {
+    fn drop(&mut self) {
+        let run = *self.run.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(run) = run else { return };
+        let views = self
+            .registry
+            .views
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let run_id = run.to_string();
+        for view in views.values() {
+            let metadata = view.metadata.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if metadata.run_id.as_deref() == Some(run_id.as_str()) {
+                view.pending.store(false, Ordering::Release);
+            }
+        }
+    }
+}
 impl Registry {
     #[must_use]
     pub fn new(actor: &Arc<Actor>) -> Self {
@@ -41,6 +69,12 @@ impl Registry {
             actor: Arc::downgrade(actor),
             views: Mutex::new(BTreeMap::new()),
             history: Mutex::new(BTreeMap::new()),
+        }
+    }
+    pub(crate) fn observer(&self) -> Observer<'_> {
+        Observer {
+            registry: self,
+            run: Mutex::new(None),
         }
     }
     /// Attach the same identity and progress for CLI and MCP runs.
@@ -83,26 +117,52 @@ impl Registry {
         if let Some(recipes) = recipes {
             metadata.recipes = recipes;
         }
-        metadata.run_id = Some(run_id);
-        metadata.recipe.clone_from(&progress.recipe);
-        metadata.step.clone_from(&progress.step);
+        metadata.run_id = Some(run_id.clone());
+        if progress.phase != "lane_complete" {
+            metadata.recipe.clone_from(&progress.recipe);
+            metadata.step.clone_from(&progress.step);
+        }
         if let Some(handle) = &mut progress.view {
             handle.metadata = metadata.clone();
         }
         // The transport thread publishes updates. A stalled viewer cannot block the runner.
         view.dirty.store(true, Ordering::Release);
+        if progress.phase == "session_created" {
+            view.pending.store(true, Ordering::Release);
+            let lane = metadata.lane;
+            drop(metadata);
+            // Only retire the predecessor after the replacement has its identity and results.
+            for (_, previous) in views.iter().filter(|(id, _)| **id != session) {
+                let previous_metadata = previous.metadata.lock().map_err(|_| Error::Unavailable)?;
+                if previous_metadata.run_id.as_deref() == Some(run_id.as_str()) && previous_metadata.lane == lane {
+                    previous.pending.store(false, Ordering::Release);
+                }
+            }
+        } else if progress.phase == "lane_complete" {
+            // Native reset cleanup can precede results from this and later recipes.
+            view.pending.store(false, Ordering::Release);
+        }
         Ok(())
     }
 
     /// # Errors
-    /// Reuse the exact owned session's viewer; at most two live streams exist per host.
+    /// Reuse the exact session's viewer; at most two active native sessions have viewers.
+    /// Closed run viewers stay available until their final results arrive.
     pub fn open(&self, session: Uuid) -> Result<Handle> {
         let mut views = self.views.lock().map_err(|_| Error::Unavailable)?;
-        views.retain(|_, view| !view.stop.load(Ordering::Acquire) && !view.closed.load(Ordering::Acquire));
+        views.retain(|_, view| {
+            !view.stop.load(Ordering::Acquire)
+                && (!view.closed.load(Ordering::Acquire) || view.pending.load(Ordering::Acquire))
+        });
         if let Some(view) = views.get(&session) {
             return Ok(view.handle());
         }
-        if views.len() >= 2 {
+        if views
+            .values()
+            .filter(|view| !view.closed.load(Ordering::Acquire))
+            .count()
+            >= 2
+        {
             return Err(Error::Unavailable);
         }
         drop(views);
@@ -110,11 +170,19 @@ impl Registry {
         let closed = actor.view_lifetime(session)?;
         let first = actor.screenshot(session)?;
         let mut views = self.views.lock().map_err(|_| Error::Unavailable)?;
-        views.retain(|_, view| !view.stop.load(Ordering::Acquire) && !view.closed.load(Ordering::Acquire));
+        views.retain(|_, view| {
+            !view.stop.load(Ordering::Acquire)
+                && (!view.closed.load(Ordering::Acquire) || view.pending.load(Ordering::Acquire))
+        });
         if let Some(view) = views.get(&session) {
             return Ok(view.handle());
         }
-        if views.len() >= 2 {
+        if views
+            .values()
+            .filter(|view| !view.closed.load(Ordering::Acquire))
+            .count()
+            >= 2
+        {
             return Err(Error::Unavailable);
         }
         if closed.load(Ordering::Acquire) {
@@ -134,6 +202,7 @@ struct View {
     client: Arc<Mutex<Option<TcpStream>>>,
     metadata: Arc<Mutex<NativeSessionMetadata>>,
     dirty: Arc<AtomicBool>,
+    pending: Arc<AtomicBool>,
 }
 impl View {
     fn new(
@@ -154,6 +223,7 @@ impl View {
             client: Arc::new(Mutex::new(None)),
             metadata: Arc::new(Mutex::new(metadata)),
             dirty: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(AtomicBool::new(false)),
         };
         let retained_stop = Arc::clone(&view.stop);
         let retained_frame = Arc::clone(&frame);
@@ -161,11 +231,12 @@ impl View {
         let metadata = Arc::clone(&view.metadata);
         let dirty = Arc::clone(&view.dirty);
         let transport_closed = Arc::clone(&view.closed);
+        let pending = Arc::clone(&view.pending);
         std::thread::Builder::new()
             .name("native-live-view".into())
             .spawn(move || {
                 while !retained_stop.load(Ordering::Acquire) {
-                    if transport_closed.load(Ordering::Acquire) {
+                    if transport_closed.load(Ordering::Acquire) && !pending.load(Ordering::Acquire) {
                         stop_view(&retained_stop, &client);
                         break;
                     }
@@ -190,6 +261,7 @@ impl View {
                                 &metadata,
                                 &dirty,
                                 &transport_closed,
+                                &pending,
                             );
                             let _ = stream.shutdown(Shutdown::Both);
                             if let Ok(mut held) = client.lock() {
@@ -214,6 +286,7 @@ impl View {
         let stop = Arc::clone(&self.stop);
         let closed = Arc::clone(&self.closed);
         let capture_client = Arc::clone(&self.client);
+        let pending = Arc::clone(&self.pending);
         std::thread::Builder::new()
             .name("native-live-capture".into())
             .spawn(move || {
@@ -223,7 +296,7 @@ impl View {
                             return;
                         }
                         if closed.load(Ordering::Acquire) {
-                            close_after_flush(&stop, &capture_client);
+                            close_after_flush(&stop, &capture_client, &pending);
                             return;
                         }
                         std::thread::sleep(Duration::from_millis(50));
@@ -241,7 +314,7 @@ impl View {
                             }
                         }
                         Err(_) if closed.load(Ordering::Acquire) => {
-                            close_after_flush(&stop, &capture_client);
+                            close_after_flush(&stop, &capture_client, &pending);
                             return;
                         }
                         Err(_) => {
@@ -284,7 +357,14 @@ fn stop_view(stop: &AtomicBool, client: &Mutex<Option<TcpStream>>) {
     }
 }
 
-fn close_after_flush(stop: &AtomicBool, client: &Mutex<Option<TcpStream>>) {
+fn close_after_flush(stop: &AtomicBool, client: &Mutex<Option<TcpStream>>, pending: &AtomicBool) {
+    // The run observer releases pending results at lane completion or on cancellation/unwind.
+    while pending.load(Ordering::Acquire) {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     // A separate wall-clock grace bounds closure even during partial/dripped I/O.
     for _ in 0..20 {
         if stop.load(Ordering::Acquire) {
@@ -372,6 +452,8 @@ fn protocol_error() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, "native_view_protocol_invalid")
 }
 fn initialize_stream(stream: &mut TcpStream) -> std::io::Result<()> {
+    // BSD accepts can inherit the listener's nonblocking flag.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     stream.write_all(b"RFB 003.008\n")?;
@@ -402,6 +484,7 @@ fn connection(
     metadata: &Mutex<NativeSessionMetadata>,
     dirty: &AtomicBool,
     closed: &AtomicBool,
+    pending: &AtomicBool,
 ) -> std::io::Result<()> {
     initialize_stream(stream)?;
     {
@@ -411,7 +494,7 @@ fn connection(
     }
     let mut swapped = false;
     while !stop.load(Ordering::Acquire) {
-        let closing = closed.load(Ordering::Acquire);
+        let closing = closed.load(Ordering::Acquire) && !pending.load(Ordering::Acquire);
         if dirty.swap(false, Ordering::AcqRel) || closing {
             let snapshot = metadata.lock().map_err(|_| protocol_error())?.clone();
             send_metadata(stream, &snapshot)?;
@@ -472,7 +555,9 @@ fn connection(
                 stream.write_all(&header)?;
                 stream.write_all(&image)?;
                 for _ in 0..20 {
-                    if stop.load(Ordering::Acquire) || closed.load(Ordering::Acquire) {
+                    if stop.load(Ordering::Acquire)
+                        || (closed.load(Ordering::Acquire) && !pending.load(Ordering::Acquire))
+                    {
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(50));
@@ -520,12 +605,11 @@ mod tests {
         }
     }
 
-    fn handshake(client: &mut TcpStream) {
-        rfb_handshake(client);
-        assert_eq!(read_metadata(client), metadata());
-    }
     fn rfb_handshake(client: &mut TcpStream) {
         assert_eq!(read(client, 12).unwrap(), b"RFB 003.008\n");
+        finish_handshake(client);
+    }
+    fn finish_handshake(client: &mut TcpStream) {
         client.write_all(b"RFB 003.008\n").unwrap();
         assert_eq!(read(client, 2).unwrap(), [1, 1]);
         client.write_all(&[1]).unwrap();
@@ -577,6 +661,8 @@ mod tests {
         event.phase = "recipe_passed";
         event.recipe = Some("login".into());
         registry.observe(&mut event).unwrap();
+        event.phase = "lane_complete";
+        registry.observe(&mut event).unwrap();
         actor.close(session.id).unwrap();
         // Opening another lane retires the closed View while transport still owns the final flush.
         let other = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
@@ -604,6 +690,128 @@ mod tests {
         actor.close(other.id).unwrap();
         actor.release_upload(app.id).unwrap();
     }
+    #[test]
+    #[cfg(unix)]
+    fn delayed_failed_reset_retains_all_recipe_results_until_lane_completion() {
+        let (fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
+        let actor = Arc::new(actor);
+        let app = actor
+            .upload(horizon_app_testing::contract::Platform::Ios, Duration::from_secs(60))
+            .unwrap();
+        let session = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
+        let registry = Registry::new(&actor);
+        let observer = registry.observer();
+        let mut event = crate::runner::Progress {
+            run: Uuid::new_v4(),
+            matrix_index: Some(0),
+            phase: "session_created",
+            recipe: None,
+            step: None,
+            session: Some(session.id),
+            view: None,
+        };
+        observer.observe(&mut event).unwrap();
+        let mut client = TcpStream::connect(&event.view.take().unwrap().endpoint).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        rfb_handshake(&mut client);
+        read_metadata(&mut client);
+        let receiver = std::thread::spawn(move || {
+            let mut latest = None;
+            let mut kind = [0];
+            while client.read(&mut kind).unwrap() != 0 {
+                assert_eq!(kind, [3]);
+                read(&mut client, 3).unwrap();
+                let length =
+                    usize::try_from(u32::from_be_bytes(read(&mut client, 4).unwrap().try_into().unwrap())).unwrap();
+                let text = String::from_utf8(read(&mut client, length).unwrap()).unwrap();
+                latest = NativeSessionMetadata::from_wire_text(&text);
+            }
+            latest.unwrap()
+        });
+        event.phase = "step";
+        event.recipe = Some("reset".into());
+        event.step = Some("replace".into());
+        observer.observe(&mut event).unwrap();
+        fixture.fake.reject_verification.store(true, Ordering::SeqCst);
+        *fixture.fake.transport.after_create.lock().unwrap() = Some(Box::new(|| {
+            std::thread::sleep(Duration::from_millis(1500));
+        }));
+        let (replacement, cleanup_confirmed) = actor.reset_for_run_outcome(session.id);
+        assert!(replacement.is_err());
+        assert!(cleanup_confirmed);
+        assert!(fixture.fake.transport.active.lock().unwrap().is_empty());
+        for recipe in ["reset", "later"] {
+            if recipe == "later" {
+                event.phase = "step";
+                event.recipe = Some(recipe.into());
+                event.step = Some("continue".into());
+                observer.observe(&mut event).unwrap();
+                std::thread::sleep(Duration::from_millis(1100));
+            }
+            event.phase = "recipe_failed";
+            event.recipe = Some(recipe.into());
+            event.step = None;
+            observer.observe(&mut event).unwrap();
+        }
+        event.phase = "lane_complete";
+        observer.observe(&mut event).unwrap();
+        let final_metadata = receiver.join().unwrap();
+        assert_eq!(final_metadata.recipe.as_deref(), Some("later"));
+        assert_eq!(
+            final_metadata.recipes,
+            ["reset", "later"].map(|recipe| NativeRecipeResult {
+                recipe: recipe.into(),
+                passed: false
+            })
+        );
+        drop(observer);
+        actor.release_upload(app.id).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn observer_unwind_releases_only_its_closed_run_viewer() {
+        let (_fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
+        let actor = Arc::new(actor);
+        let app = actor
+            .upload(horizon_app_testing::contract::Platform::Ios, Duration::from_secs(60))
+            .unwrap();
+        let session = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
+        let registry = Registry::new(&actor);
+        let mut event = crate::runner::Progress {
+            run: Uuid::new_v4(),
+            matrix_index: Some(0),
+            phase: "session_created",
+            recipe: None,
+            step: None,
+            session: Some(session.id),
+            view: None,
+        };
+        let observer = registry.observer();
+        observer.observe(&mut event).unwrap();
+        let mut client = TcpStream::connect(&event.view.take().unwrap().endpoint).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+        rfb_handshake(&mut client);
+        read_metadata(&mut client);
+        actor.close(session.id).unwrap();
+        drop(registry.observer()); // An unstarted concurrent call has no run to release.
+        client.set_read_timeout(Some(Duration::from_millis(1200))).unwrap();
+        assert!(
+            matches!(client.read(&mut [0]), Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut))
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _observer = observer;
+                panic!("synthetic progress callback failure");
+            }))
+            .is_err()
+        );
+        client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        read_metadata(&mut client);
+        assert_eq!(client.read(&mut [0]).unwrap(), 0);
+        actor.release_upload(app.id).unwrap();
+    }
+
     #[test]
     #[cfg(unix)]
     fn native_close_interrupts_a_partial_client_message_within_flush_grace() {
@@ -679,10 +887,10 @@ mod tests {
         event.step = None;
         registry.observe(&mut event).unwrap();
         let replacement = actor.reset(session.id).unwrap();
-        // Another lane's open prunes the old viewer before replacement observation.
+        // Another lane must preserve the predecessor until replacement observation.
         let other = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
         registry.open(other.id).unwrap();
-        assert!(!registry.views.lock().unwrap().contains_key(&session.id));
+        assert!(registry.views.lock().unwrap().contains_key(&session.id));
         event.phase = "session_created";
         event.session = Some(replacement.id);
         event.recipe = Some("next".into());
@@ -699,6 +907,8 @@ mod tests {
             }]
         );
         assert_eq!(replaced.step.as_deref(), Some("reset"));
+        event.phase = "lane_complete";
+        registry.observe(&mut event).unwrap();
         actor.close(replacement.id).unwrap();
         actor.close(other.id).unwrap();
         actor.release_upload(app.id).unwrap();
@@ -749,6 +959,7 @@ mod tests {
                     client: Arc::new(Mutex::new(None)),
                     metadata: Arc::new(Mutex::new(metadata())),
                     dirty: Arc::new(AtomicBool::new(false)),
+                    pending: Arc::new(AtomicBool::new(false)),
                 },
             );
         }
@@ -784,6 +995,8 @@ mod tests {
         let held_stop = Arc::clone(&stop);
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            // Exercise the BSD inheritance path on every test platform.
+            stream.set_nonblocking(true).unwrap();
             let _ = connection(
                 &mut stream,
                 &retained,
@@ -791,11 +1004,15 @@ mod tests {
                 &Mutex::new(metadata()),
                 &AtomicBool::new(false),
                 &AtomicBool::new(false),
+                &AtomicBool::new(false),
             );
         });
         let mut client = TcpStream::connect(address).unwrap();
         client.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
-        handshake(&mut client);
+        assert_eq!(read(&mut client, 12).unwrap(), b"RFB 003.008\n");
+        std::thread::sleep(Duration::from_millis(100));
+        finish_handshake(&mut client);
+        assert_eq!(read_metadata(&mut client), metadata());
         client.write_all(&[4, 1, 0, 0, 0, 0, 0, 65, 5, 1, 0, 1, 0, 1]).unwrap();
         let request = [3, 0, 0, 0, 0, 0, 3, 0, 6, 0];
         client.write_all(&request).unwrap();

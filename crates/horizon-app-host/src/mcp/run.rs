@@ -23,15 +23,17 @@ pub(super) async fn execute(
     let retained = Arc::clone(&control);
     let (send, mut receive) = tokio::sync::mpsc::channel::<Progress>(32);
     let mut task = tokio::task::spawn_blocking(move || {
+        let observer = views.observer();
         let result = runner::run(
             &actor,
             &retained,
             |session, kind, bytes| retained_archive.capture(session, kind, bytes),
             |mut progress| {
-                views.observe(&mut progress)?;
+                observer.observe(&mut progress)?;
                 send.blocking_send(progress).map_err(|_| Error::Cancelled)
             },
         );
+        drop(observer);
         retained_archive.finish_result(result)
     });
     let token = context.meta.get_progress_token();

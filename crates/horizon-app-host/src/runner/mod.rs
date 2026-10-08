@@ -445,6 +445,17 @@ impl Plan<'_> {
             return report;
         }
         self.steps(runtime, control, &mut report, &mut owned, observation);
+        if let Err(error) = progress(Progress {
+            run,
+            matrix_index: Some(target.matrix_index),
+            phase: "lane_complete",
+            recipe: None,
+            step: None,
+            session: report.session,
+            view: None,
+        }) {
+            report.error = Some(error.to_string());
+        }
         if let Some(session) = owned.session.take()
             && let Err(error) = runtime.close(session)
         {

@@ -952,14 +952,15 @@ fn recipe_completion_follows_steps_with_lane_and_reset_session_before_cleanup() 
                     "recipe_failed"
                 } else {
                     "recipe_passed"
-                }
+                },
+                "lane_complete"
             ]
         );
         assert_eq!(events[2].recipe.as_deref(), Some("reset"));
         assert_eq!(events[2].step.as_deref(), Some("visible"));
         assert_ne!(events[0].session, events[2].session);
         assert_eq!(events.last().unwrap().session, device.session);
-        assert_eq!(events.last().unwrap().recipe.as_deref(), Some("smoke"));
+        assert_eq!(events[events.len() - 2].recipe.as_deref(), Some("smoke"));
         assert!(events.last().unwrap().step.is_none());
         assert!(events.iter().all(|e| e.run == report.id));
     }

@@ -312,6 +312,13 @@ It also tests live views, evidence and cleanup after cancellation or a native ho
    Result: The failing recipe shows **FAIL**. The replacement endpoint has its own
    session ID. It keeps the run ID, matrix lane and completed recipe results.
 
+   Use a synthetic provider fixture to delay and refuse the replacement allocation.
+   Then run one more recipe.
+
+   Result: The original viewer keeps both recipe **FAIL** results before it disconnects.
+   Native resources close before the delayed replacement result arrives.
+   Cancellation or a progress callback failure releases the retained viewer.
+
 5. Examine the panels after native cleanup.
 
    Result: The panels disconnect. The last metadata and recipe results remain visible.
