@@ -323,6 +323,11 @@ It also tests live views, evidence and cleanup after cancellation or a native ho
 
    Result: The panels disconnect. The last metadata and recipe results remain visible.
 
+   Close the CLI immediately after its report.
+
+   Result: The viewer receives the final recipe result before the CLI exits.
+   A client with an incomplete message cannot prevent bounded viewer cleanup.
+
 6. Resize a panel and select **Fit**.
 
    Result: The caption wraps within the panel. The image keeps its aspect ratio.

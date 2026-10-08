@@ -54,11 +54,21 @@ impl Drop for Observer<'_> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let run_id = run.to_string();
+        let mut completed = Vec::new();
         for view in views.values() {
             let metadata = view.metadata.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if metadata.run_id.as_deref() == Some(run_id.as_str()) {
                 view.pending.store(false, Ordering::Release);
+                if view.closed.load(Ordering::Acquire) {
+                    completed.push(Arc::clone(&view.finished));
+                }
             }
+        }
+        drop(views);
+        // The CLI can exit immediately after its report. Detached transports must finish first.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while completed.iter().any(|finished| !finished.load(Ordering::Acquire)) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
@@ -150,10 +160,8 @@ impl Registry {
     /// Closed run viewers stay available until their final results arrive.
     pub fn open(&self, session: Uuid) -> Result<Handle> {
         let mut views = self.views.lock().map_err(|_| Error::Unavailable)?;
-        views.retain(|_, view| {
-            !view.stop.load(Ordering::Acquire)
-                && (!view.closed.load(Ordering::Acquire) || view.pending.load(Ordering::Acquire))
-        });
+        // A closed viewer remains discoverable until its transport has sent the final result.
+        views.retain(|_, view| !view.finished.load(Ordering::Acquire));
         if let Some(view) = views.get(&session) {
             return Ok(view.handle());
         }
@@ -170,10 +178,8 @@ impl Registry {
         let closed = actor.view_lifetime(session)?;
         let first = actor.screenshot(session)?;
         let mut views = self.views.lock().map_err(|_| Error::Unavailable)?;
-        views.retain(|_, view| {
-            !view.stop.load(Ordering::Acquire)
-                && (!view.closed.load(Ordering::Acquire) || view.pending.load(Ordering::Acquire))
-        });
+        // A closed viewer remains discoverable until its transport has sent the final result.
+        views.retain(|_, view| !view.finished.load(Ordering::Acquire));
         if let Some(view) = views.get(&session) {
             return Ok(view.handle());
         }
@@ -203,6 +209,13 @@ struct View {
     metadata: Arc<Mutex<NativeSessionMetadata>>,
     dirty: Arc<AtomicBool>,
     pending: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
+}
+struct TransportCompletion(Arc<AtomicBool>);
+impl Drop for TransportCompletion {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
 }
 impl View {
     fn new(
@@ -224,6 +237,7 @@ impl View {
             metadata: Arc::new(Mutex::new(metadata)),
             dirty: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(AtomicBool::new(false)),
+            finished: Arc::new(AtomicBool::new(false)),
         };
         let retained_stop = Arc::clone(&view.stop);
         let retained_frame = Arc::clone(&frame);
@@ -232,9 +246,11 @@ impl View {
         let dirty = Arc::clone(&view.dirty);
         let transport_closed = Arc::clone(&view.closed);
         let pending = Arc::clone(&view.pending);
+        let finished = Arc::clone(&view.finished);
         std::thread::Builder::new()
             .name("native-live-view".into())
             .spawn(move || {
+                let _completion = TransportCompletion(finished);
                 while !retained_stop.load(Ordering::Acquire) {
                     if transport_closed.load(Ordering::Acquire) && !pending.load(Ordering::Acquire) {
                         stop_view(&retained_stop, &client);
@@ -605,6 +621,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn rfb_handshake(client: &mut TcpStream) {
         assert_eq!(read(client, 12).unwrap(), b"RFB 003.008\n");
         finish_handshake(client);
@@ -633,46 +650,91 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn final_result_arrives_before_disconnect_during_frame_delay() {
-        let (_fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
-        let actor = Arc::new(actor);
-        let app = actor
-            .upload(horizon_app_testing::contract::Platform::Ios, Duration::from_secs(60))
+        const CHILD: &str = "ISSUE1372_VIEW_EXIT";
+        if let Ok(address) = std::env::var(CHILD) {
+            let (fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
+            let actor = Arc::new(actor);
+            let app = actor
+                .upload(horizon_app_testing::contract::Platform::Ios, Duration::from_secs(60))
+                .unwrap();
+            let session = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
+            let registry = Registry::new(&actor);
+            let observer = registry.observer();
+            let mut event = crate::runner::Progress {
+                run: Uuid::new_v4(),
+                matrix_index: Some(0),
+                phase: "session_created",
+                recipe: None,
+                step: None,
+                session: Some(session.id),
+                view: None,
+            };
+            observer.observe(&mut event).unwrap();
+            let endpoint = event.view.take().unwrap().endpoint;
+            // Model an already-closed failed reset, with no native cleanup left to delay CLI exit.
+            actor.close(session.id).unwrap();
+            actor.release_upload(app.id).unwrap();
+            drop(actor);
+            drop(fixture);
+            let mut control = TcpStream::connect(address).unwrap();
+            control.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            control.write_all(&[u8::try_from(endpoint.len()).unwrap()]).unwrap();
+            control.write_all(endpoint.as_bytes()).unwrap();
+            assert_eq!(read(&mut control, 1).unwrap(), [1]);
+            event.phase = "recipe_failed";
+            event.recipe = Some("reset".into());
+            observer.observe(&mut event).unwrap();
+            event.phase = "lane_complete";
+            observer.observe(&mut event).unwrap();
+            // A concurrent lane can attempt retirement between completion and CLI exit.
+            let _ = registry.open(session.id);
+            // The production CLI drops this same guard immediately before saving its report.
+            drop(observer);
+            std::process::exit(0);
+        }
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "view::tests::final_result_arrives_before_disconnect_during_frame_delay",
+                "--nocapture",
+            ])
+            .env(CHILD, listener.local_addr().unwrap().to_string())
+            .spawn()
             .unwrap();
-        let session = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
-        let registry = Registry::new(&actor);
-        let mut event = crate::runner::Progress {
-            run: Uuid::new_v4(),
-            matrix_index: Some(0),
-            phase: "session_created",
-            recipe: None,
-            step: None,
-            session: Some(session.id),
-            view: None,
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut control = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                    assert!(
+                        child.try_wait().unwrap().is_none(),
+                        "viewer subprocess exited before readiness"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("viewer subprocess readiness: {error}"),
+            }
         };
-        registry.observe(&mut event).unwrap();
-        let mut client = TcpStream::connect(&event.view.as_ref().unwrap().endpoint).unwrap();
-        client.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
-        // This session uses real actor metadata rather than the transport-only fixture.
+        control.set_nonblocking(false).unwrap();
+        control.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let length = usize::from(read(&mut control, 1).unwrap()[0]);
+        let endpoint = String::from_utf8(read(&mut control, length).unwrap()).unwrap();
+        let mut client = TcpStream::connect(endpoint).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         rfb_handshake(&mut client);
         read_metadata(&mut client);
         client.write_all(&[3, 0, 0, 0, 0, 0, 3, 0, 6, 0]).unwrap();
         read(&mut client, 16).unwrap();
         read(&mut client, usize::from(WIDTH) * usize::from(HEIGHT) * 4).unwrap();
-        event.phase = "recipe_passed";
-        event.recipe = Some("login".into());
-        registry.observe(&mut event).unwrap();
-        event.phase = "lane_complete";
-        registry.observe(&mut event).unwrap();
-        actor.close(session.id).unwrap();
-        // Opening another lane retires the closed View while transport still owns the final flush.
-        let other = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
-        registry.open(other.id).unwrap();
+        control.write_all(&[1]).unwrap();
         let final_metadata = read_metadata(&mut client);
         assert_eq!(
             final_metadata.recipes,
             vec![NativeRecipeResult {
-                recipe: "login".into(),
-                passed: true
+                recipe: "reset".into(),
+                passed: false
             }]
         );
         let mut kind = [0];
@@ -687,8 +749,7 @@ mod tests {
                 Some(final_metadata.clone())
             );
         }
-        actor.close(other.id).unwrap();
-        actor.release_upload(app.id).unwrap();
+        assert!(child.wait().unwrap().success());
     }
     #[test]
     #[cfg(unix)]
@@ -822,7 +883,18 @@ mod tests {
             .unwrap();
         let session = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
         let registry = Registry::new(&actor);
-        let view = registry.open(session.id).unwrap();
+        let observer = registry.observer();
+        let mut event = crate::runner::Progress {
+            run: Uuid::new_v4(),
+            matrix_index: Some(0),
+            phase: "session_created",
+            recipe: None,
+            step: None,
+            session: Some(session.id),
+            view: None,
+        };
+        observer.observe(&mut event).unwrap();
+        let view = event.view.take().unwrap();
         let mut client = TcpStream::connect(&view.endpoint).unwrap();
         client.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
         rfb_handshake(&mut client);
@@ -832,6 +904,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         actor.close(session.id).unwrap();
         let started = Instant::now();
+        drop(observer);
         assert_eq!(client.read(&mut [0]).unwrap(), 0);
         assert!(started.elapsed() < Duration::from_secs(2));
         actor.release_upload(app.id).unwrap();
@@ -960,6 +1033,7 @@ mod tests {
                     metadata: Arc::new(Mutex::new(metadata())),
                     dirty: Arc::new(AtomicBool::new(false)),
                     pending: Arc::new(AtomicBool::new(false)),
+                    finished: Arc::new(AtomicBool::new(false)),
                 },
             );
         }
@@ -968,8 +1042,8 @@ mod tests {
         let third = actor.create(0, app.id, Duration::from_secs(30)).unwrap();
         assert!(registry.open(third.id).is_ok());
         assert_eq!(registry.open(second.id).unwrap().endpoint, "127.0.0.1:10002");
-        assert_eq!(registry.views.lock().unwrap().len(), 2);
-        assert!(!registry.views.lock().unwrap().contains_key(&first.id));
+        assert_eq!(registry.views.lock().unwrap().len(), 3);
+        assert!(registry.views.lock().unwrap().contains_key(&first.id));
         actor.close(second.id).unwrap();
         actor.close(third.id).unwrap();
         actor.release_upload(app.id).unwrap();
