@@ -118,8 +118,7 @@ pub fn decide(connection: &Connection, runner: &Runner<'_>, id: &str, decision: 
 pub(super) fn parse_decision(output: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct Fields {
-        #[serde(default)]
-        state: Option<String>,
+        ok: bool,
         #[serde(default)]
         error: Option<String>,
     }
@@ -128,8 +127,8 @@ pub(super) fn parse_decision(output: &str) -> Option<String> {
         .rev()
         .find_map(|line| serde_json::from_str::<Fields>(line.trim()).ok());
     match fields {
+        Some(Fields { ok: true, .. }) => None,
         Some(Fields { error: Some(error), .. }) => Some(explain(&error)),
-        Some(Fields { state: Some(_), .. }) => None,
         _ => Some("The worker did not confirm the decision.".into()),
     }
 }
@@ -141,7 +140,12 @@ fn explain(code: &str) -> String {
                 .into()
         }
         "no_push" => "Your GitHub account cannot push to this repository.".into(),
-        "expired" | "unknown" => "This request expired.".into(),
+        "session_ended" | "not_pending" | "unknown_request" => "This request is no longer waiting.".into(),
+        "no_chain" | "token_expired" | "token_invalid" => {
+            "This cloud has no current GitHub access. Connect GitHub again on the cloud card.".into()
+        }
+        "forbidden" => "GitHub refused to show this repository to the app.".into(),
+        "unreachable" => "The worker could not reach GitHub. Try again.".into(),
         code if code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') && code.len() <= 64 => {
             format!("The worker refused the decision ({code}).")
         }

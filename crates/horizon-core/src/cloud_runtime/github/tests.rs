@@ -359,14 +359,26 @@ fn requests_keep_only_well_formed_entries() {
 
 #[test]
 fn a_refused_decision_is_explained() {
-    assert_eq!(requests::parse_decision("{\"id\":\"r1\",\"state\":\"allowed\"}"), None);
+    assert_eq!(
+        requests::parse_decision(
+            "{\"ok\":true,\"id\":\"r1\",\"decision\":\"allow-task\",\"repository\":\"acme/x\",\"access\":\"push\",\"status\":\"allowed\"}"
+        ),
+        None
+    );
     assert!(
-        requests::parse_decision("{\"error\":\"not_installed\"}")
+        requests::parse_decision(
+            "{\"ok\":false,\"id\":\"r1\",\"error\":\"not_installed\",\"message\":\"The GitHub App is not installed\"}"
+        )
+        .unwrap()
+        .contains("not installed")
+    );
+    assert!(
+        requests::parse_decision("{\"ok\":false,\"error\":\"token_expired\"}")
             .unwrap()
-            .contains("not installed")
+            .contains("Connect GitHub again")
     );
     assert_eq!(
-        requests::parse_decision("{\"error\":\"Weird Text\"}").unwrap(),
+        requests::parse_decision("{\"ok\":false,\"error\":\"Weird Text\"}").unwrap(),
         "The worker refused the decision."
     );
     assert!(requests::parse_decision("").is_some());
