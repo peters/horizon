@@ -1,4 +1,5 @@
 mod capture;
+mod cloud;
 mod controls;
 mod notifications;
 mod popup;
