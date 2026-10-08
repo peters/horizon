@@ -394,6 +394,12 @@ def run_configure(payload):
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
 
 
+def run_restore(payload):
+    # As the agent, like the configuration it undoes.
+    subprocess.run([str(GIT_AUTH), 'restore'], input=json.dumps(payload).encode(), check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+
+
 def run_retire():
     # The static binding belongs to the agent under isolation, so the Git helper removes it.
     subprocess.run([str(GIT_AUTH), 'clear'], check=True, stdout=subprocess.DEVNULL,
@@ -406,7 +412,7 @@ def identity_grants(state):
             for grant in (state or {}).get('grants', [])]
 
 
-def install(value, store, now=time.time, configure=run_configure, retire=run_retire):
+def install(value, store, now=time.time, configure=run_configure, retire=run_retire, static=run_restore):
     """Configures each target repository, stores the chain, then retires the static binding.
 
     The previous chain stays stored and served while the repositories are configured, so no
@@ -431,7 +437,7 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
             store.save(dict(state, version=1, state='ok', installed_at=int(now()), last_refresh_at=None,
                             last_error=None), retain=False)
         except BaseException:
-            restore(previous, value, configure)
+            restore(previous, value, configure, static)
             keep(store, previous)
             raise
         try:
@@ -442,12 +448,16 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
     return status(store)
 
 
-def restore(previous, value, configure):
+def restore(previous, value, configure, static):
     """Configures the previous chain's repositories again after a failed install, as far as
-    that works; `keep` puts the previous chain itself back when a save replaced it."""
-    if previous is not None:
-        with contextlib.suppress(Exception):
+    that works; `keep` puts the previous chain itself back when a save replaced it. Without a
+    previous chain the static binding's configuration comes back, which the failed install's
+    configuration replaced."""
+    with contextlib.suppress(Exception):
+        if previous is not None:
             configure({'grants': identity_grants(previous), 'previous': identity_grants(value)})
+        else:
+            static({'previous': identity_grants(value)})
 
 
 def keep(store, previous):

@@ -786,7 +786,8 @@ horizon-worker-github install < chain.json
   chain stays stored and served until every repository is configured; only then
   is the new chain stored. If the configuration or that save fails, the
   repositories of the previous chain are configured again and the previous chain
-  stays. The install then removes the static token file, so one source of tokens
+  stays. Without a previous chain, the repositories of the static token file are
+  configured again (`horizon-worker-git-auth restore`). The install then removes the static token file, so one source of tokens
   remains.
 - The output is the same JSON as `status`.
 
@@ -861,8 +862,8 @@ token that expires within one minute is not given out. `horizon-worker-git-auth
 get` and the `gh` wrapper ask the socket first and fall back to the static file
 only when no service answers or it holds no chain. The `gh` wrapper still
 chooses the repository as described above. When it refuses a nested `gh`, it
-removes a token that an outer wrapped `gh` injected, but keeps a token that you
-set yourself.
+removes the `GH_TOKEN` that an outer wrapped `gh` injected, but keeps every token
+variable that you set yourself.
 
 `access: "read"` is a routing guard, not a GitHub permission. The service refuses
 a `read` grant only when the request names `git-receive-pack`. Git's credential

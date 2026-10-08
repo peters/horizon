@@ -40,7 +40,8 @@ class CapabilitiesTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def run_check(self, *args, missing=(), environment=None, reported=None, run=None, identities=(10001, 10001)):
+    def run_check(self, *args, missing=(), environment=None, reported=None, run=None, identities=(10001, 10001),
+                  bin_dir='/bin'):
         output = io.StringIO()
         def reply(command, **kwargs):
             if command[:1] == ['/usr/bin/id']:
@@ -53,7 +54,7 @@ class CapabilitiesTests(unittest.TestCase):
                 mock.patch('sys.argv', ['horizon-worker-check', *args]), \
                 mock.patch.dict(os.environ, environment or {}, clear=True), \
                 mock.patch('subprocess.run', side_effect=reply) as commands, \
-                mock.patch('shutil.which', side_effect=lambda name: None if name in missing else '/bin/' + name), \
+                mock.patch('shutil.which', side_effect=lambda name: None if name in missing else f'{bin_dir}/{name}'), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             try:
                 runpy.run_path(str(ROOT / 'horizon-worker-check'), run_name='__main__')
@@ -86,17 +87,27 @@ class CapabilitiesTests(unittest.TestCase):
     def test_github_chain_is_reported_only_with_the_service_and_a_supervisor_that_starts_it(self):
         marker = 'horizon-github-chain-contract=1'
         declared = {'horizon-worker-supervise': (marker + '\n').encode()}
-        for reported, missing, args, expected in [(declared, (), ('--git-auth',), True),
-                                                  ({'horizon-worker-supervise': b''}, (), ('--git-auth',), False),
-                                                  (declared, ('horizon-worker-github',), ('--git-auth',), False),
-                                                  (declared, ('horizon-worker-github-common',), ('--git-auth',), False),
-                                                  # Without the agent isolation launcher the service would refuse to run.
-                                                  (declared, ('horizon-worker-tailnet',), ('--git-auth',), False),
-                                                  (declared, (), (), False)]:
+        binaries = self.root / 'bin'
+        binaries.mkdir()
+        (binaries / 'horizon-worker-github').touch()
+        # A common helper elsewhere on PATH does not count: the service loads it beside itself.
+        elsewhere = self.root / 'elsewhere'
+        elsewhere.mkdir()
+        (elsewhere / 'horizon-worker-github-common').touch()
+        for reported, missing, args, beside, expected in [
+                (declared, (), ('--git-auth',), True, True),
+                ({'horizon-worker-supervise': b''}, (), ('--git-auth',), True, False),
+                (declared, ('horizon-worker-github',), ('--git-auth',), True, False),
+                (declared, (), ('--git-auth',), False, False),
+                # Without the agent isolation launcher the service would refuse to run.
+                (declared, ('horizon-worker-tailnet',), ('--git-auth',), True, False),
+                (declared, (), (), True, False)]:
+            common = binaries / 'horizon-worker-github-common'
+            common.touch() if beside else common.unlink(missing_ok=True)
             with mock.patch('os.readlink', return_value='/usr/local/bin/horizon-worker-git-auth'):
-                status, output, _ = self.run_check(*args, missing=missing, reported=reported)
+                status, output, _ = self.run_check(*args, missing=missing, reported=reported, bin_dir=str(binaries))
             self.assertEqual(status, 0, output)
-            self.assertEqual(marker in output.splitlines(), expected, (reported, missing, args))
+            self.assertEqual(marker in output.splitlines(), expected, (reported, missing, args, beside))
 
     def test_source_features_are_reported_only_when_the_source_helper_declares_them(self):
         for option, marker in [('--shallow-contract', 'horizon-source-shallow-contract=1'),

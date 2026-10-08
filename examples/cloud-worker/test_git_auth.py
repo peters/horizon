@@ -75,7 +75,9 @@ class GitAuthenticationTests(unittest.TestCase):
         # The service stopped answering and its chain replaced the static file: a nested gh must
         # drop the token an outer wrapped gh injected, but keep a token the caller set.
         for inherited, expected in [({'GH_TOKEN': 'ghu_from_service', auth.INJECTED: '1'}, None),
-                                    ({'GH_TOKEN': 'own-token'}, 'own-token')]:
+                                    ({'GH_TOKEN': 'own-token'}, 'own-token'),
+                                    ({'GH_TOKEN': 'ghu_from_service', auth.INJECTED: '1', 'GITHUB_TOKEN': 'own-token'},
+                                     None)]:
             with mock.patch.dict(auth.os.environ, dict(inherited, GH_REPO='example/project'), clear=True), \
                     mock.patch.object(auth.sys, 'argv', ['gh', 'pr', 'list']), \
                     mock.patch.object(auth.os, 'execve') as execute:
@@ -83,6 +85,7 @@ class GitAuthenticationTests(unittest.TestCase):
             env = execute.call_args.args[2]
             self.assertEqual(env.get('GH_TOKEN'), expected, inherited)
             self.assertNotIn(auth.INJECTED, env)
+            self.assertEqual(env.get('GITHUB_TOKEN'), inherited.get('GITHUB_TOKEN'), 'the caller keeps its own token')
 
     def test_malformed_and_non_private_bindings_are_refused_without_secret_diagnostics(self):
         for key, value in [('repository', '../repo'), ('author_name', 'name\ninjection'),

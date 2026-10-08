@@ -228,10 +228,12 @@ try:
         # enough: the supervisor must declare that it starts it, and the image must isolate
         # agents (the launcher's identity is checked below), because both refuse to run without
         # agent isolation.
-        # The service imports its common helper before it parses any operation.
-        if all(shutil.which(helper) for helper in (
-                'horizon-worker-github', 'horizon-worker-github-common', 'horizon-worker-tailnet')) and helper_declares(
-                'horizon-worker-supervise', '--github-chain-contract', 'horizon-github-chain-contract=1'):
+        # The service imports its common helper from its own directory before it parses any
+        # operation.
+        service = shutil.which('horizon-worker-github')
+        if (service and Path(service).resolve().with_name('horizon-worker-github-common').is_file()
+                and shutil.which('horizon-worker-tailnet') and helper_declares(
+                'horizon-worker-supervise', '--github-chain-contract', 'horizon-github-chain-contract=1')):
             print('horizon-github-chain-contract=1')
     if args.ready:
         active = capabilities(json.loads(runtime.read_text()))

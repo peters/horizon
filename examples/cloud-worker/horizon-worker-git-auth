@@ -241,6 +241,19 @@ def configure_chain(value):
     # repository; horizon-worker-github then removes it with `clear`.
 
 
+def restore_static(value):
+    """After a failed first chain install: the static binding's configuration again, without
+    the identities that the failed chain's configuration wrote."""
+    if not isinstance(value, dict) or set(value) != {'previous'}:
+        raise ValueError('Invalid Git configuration')
+    failed = (2, checked_grants(value['previous'], IDENTITY_FIELDS, minimum=0))
+    loaded = previous_grants()
+    if loaded:
+        configure(loaded[0], loaded[1], [failed])
+    else:
+        forget_identities(dict(os.environ, HOME=HOME), failed)
+
+
 def write_private(value):
     CREDENTIAL.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if CREDENTIAL.parent.stat().st_mode & 0o077:
@@ -451,12 +464,11 @@ def service_environment(env, argv, ask=ask_service):
 
 
 def without_injected(env):
-    """The environment without a token that an outer wrapped gh took from the chain service;
-    a token that the caller set without the marker stays."""
+    """The environment without the GH_TOKEN that an outer wrapped gh took from the chain
+    service; every other token variable belongs to the caller and stays."""
     env = dict(env)
     if env.pop(INJECTED, None) is not None:
-        for variable in TOKEN_VARIABLES:
-            env.pop(variable, None)
+        env.pop('GH_TOKEN', None)
     return env
 
 
@@ -479,6 +491,11 @@ def main():
         if len(source.encode()) > MAX_BYTES:
             raise ValueError('Git configuration is too large')
         configure_chain(parse(source))
+    elif operation == 'restore':
+        source = sys.stdin.read(MAX_BYTES + 1)
+        if len(source.encode()) > MAX_BYTES:
+            raise ValueError('Git configuration is too large')
+        restore_static(parse(source))
     elif operation == 'clear':
         CREDENTIAL.unlink(missing_ok=True)
     elif operation == 'get':

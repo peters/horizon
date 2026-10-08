@@ -319,6 +319,36 @@ class InstallationTests(ServiceTestCase):
         self.assertEqual(git('config', '--global', 'credential.https://github.com.helper'),
                          '/usr/local/bin/horizon-worker-git-auth')
 
+    def test_a_failed_first_install_gives_the_static_binding_its_repositories_back(self):
+        def git(*args):
+            return subprocess.run(['git', *args], check=True, capture_output=True, text=True, env=env).stdout.strip()
+        env = dict(os.environ, HOME=str(self.root / 'home'), GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0')
+        (self.root / 'home').mkdir()
+        primary = self.root / 'repository.git'
+        for directory in (primary, self.root / 'siblings/library/repository.git'):
+            git('init', '-q', '--bare', str(directory))
+        static = self.root / 'credentials/github.json'
+        static.parent.mkdir(mode=0o700)
+        binding = {'version': 2, 'grants': [{'repository': 'example/static', 'target': 'primary', 'token': ACCESS,
+                                             'author_name': 'Static Author',
+                                             'author_email': 'static@example.invalid'}]}
+        with contextlib.ExitStack() as stack:
+            for name, value in [('CREDENTIAL', static), ('GIT_DIR', primary), ('SIBLINGS', self.root / 'siblings'),
+                                ('HOME', env['HOME'])]:
+                stack.enter_context(mock.patch.object(auth, name, value))
+            stack.enter_context(mock.patch.dict(auth.os.environ, {'HOME': env['HOME'], 'GIT_CONFIG_NOSYSTEM': '1'}))
+            auth.install(binding)
+            restore = lambda payload: auth.restore_static(json.loads(json.dumps(payload)))  # noqa: E731
+            with mock.patch.object(self.store, 'save', side_effect=OSError('read-only')), \
+                    self.assertRaises(OSError):
+                service.install(installation(), self.store, now=lambda: NOW, configure=auth.configure_chain,
+                                retire=lambda: self.retired.append(True), static=restore)
+        self.assertTrue(static.exists(), 'the static binding stays')
+        self.assertEqual(self.retired, [])
+        self.assertEqual(git('--git-dir=' + str(primary), 'config', 'remote.origin.url'),
+                         'https://github.com/example/static.git')
+        self.assertEqual(git('--git-dir=' + str(primary), 'config', 'user.name'), 'Static Author')
+
     def configured_grant(self):
         return {'repository': 'example/project', 'target': 'primary', 'author_name': 'Test Author',
                 'author_email': 'author@example.invalid'}
