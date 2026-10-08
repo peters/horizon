@@ -111,7 +111,9 @@ pub(in crate::app::cloud_panel::production::cards) fn access(
         );
         return None;
     }
-    let desktop = super::super::desktop_button(ui, runtime).then_some(Action::Desktop);
+    // A held share shows while disconnected; the desktop viewer needs the connection.
+    let desktop =
+        (runtime.connected_and_ready() && super::super::desktop_button(ui, runtime)).then_some(Action::Desktop);
     ui.add_space(4.0);
     super::super::super::local_network::show(ui, runtime).or(desktop)
 }

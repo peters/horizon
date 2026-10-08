@@ -348,14 +348,19 @@ pub(super) const CARD_HINT: &str = "Click the title to rename. Drag to move this
 /// A click on the title text, not elsewhere on the header, starts a rename; the title
 /// shows a text cursor so it reads as editable.
 fn title_clicked(ui: &egui::Ui, drag: &egui::Response, group: &CloudGroup, header: Rect, reserved: f32) -> bool {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(group.title.clone(), FontId::proportional(21.0), theme::FG());
     let room = (header.width() - 64.0 - reserved).max(0.0);
-    let title = Rect::from_min_size(
-        header.min + Vec2::new(64.0, 16.0),
-        Vec2::new(galley.size().x.min(room), 30.0),
-    );
+    let row = Rect::from_min_size(header.min + Vec2::new(64.0, 16.0), Vec2::new(room, 30.0));
+    let over_row = |at: Option<Pos2>| at.is_some_and(|at| row.contains(at));
+    // The text is measured only while the pointer is on the title's row.
+    if !over_row(drag.hover_pos()) && !over_row(drag.interact_pointer_pos()) {
+        return false;
+    }
+    let width = ui
+        .painter()
+        .layout_no_wrap(group.title.clone(), FontId::proportional(21.0), theme::FG())
+        .size()
+        .x;
+    let title = Rect::from_min_size(row.min, Vec2::new(width.min(room), row.height()));
     if drag.hover_pos().is_some_and(|at| title.contains(at)) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
     }

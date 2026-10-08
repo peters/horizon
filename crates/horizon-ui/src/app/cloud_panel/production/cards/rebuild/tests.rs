@@ -555,6 +555,10 @@ fn a_paused_share_stays_in_connections_and_can_be_switched_off_while_a_rebuild_r
         );
         let shown = texts_on(&ctx, runtime, access);
         assert!(has(&shown, "Share local network"), "{case}");
+        assert!(
+            !has(&shown, "Add desktop viewer"),
+            "the viewer waits for the connection: {case}"
+        );
         assert!(has(&shown, "Sharing paused: the cloud disconnected"), "{case}");
         assert!(
             matches!(
