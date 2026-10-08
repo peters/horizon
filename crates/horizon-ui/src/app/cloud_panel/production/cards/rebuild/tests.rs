@@ -594,3 +594,29 @@ fn a_paused_share_stays_in_connections_and_can_be_switched_off_while_a_rebuild_r
         );
     }
 }
+
+#[test]
+fn a_connected_ready_cloud_lists_its_actions_without_a_reconnect() {
+    let ctx = egui::Context::default();
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let mut runtime = ready(true, Phase::None);
+    runtime.receiver = Some(receiver);
+    let shown = texts(&ctx, &mut runtime);
+    for row in [
+        "Worker",
+        "Stop worker…",
+        "Image",
+        OFFER,
+        "Delete",
+        "Delete cloud resources…",
+    ] {
+        assert!(has(&shown, row), "{row} in {shown:?}");
+    }
+    assert!(
+        !has(&shown, "Reconnect cloud"),
+        "a connected cloud needs no reconnect: {shown:?}"
+    );
+    let access = texts_on(&ctx, &mut runtime, access);
+    assert!(has(&access, "Add desktop viewer"), "{access:?}");
+    assert!(has(&access, "Share local network"), "{access:?}");
+}
