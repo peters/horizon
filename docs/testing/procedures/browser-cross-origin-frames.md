@@ -20,7 +20,6 @@ It tests document references and the removal of secret values from audit records
 - Use the candidate source checkout.
 - On Linux, test local Chromium and Firefox.
 - On macOS, test local Safari with Safari automation enabled.
-- Firefox needs geckodriver.
 - Safari and remote sessions do not support child-frame semantic input.
 - This procedure does not test the Horizon UI or remote device providers.
 
@@ -34,22 +33,27 @@ The test does not use the developer's browser session.
 ## 4. Equipment and preconditions
 
 - Rust and the workspace build prerequisites.
-- Local Chromium, Firefox and geckodriver on PATH.
-- Permission to bind loopback sockets and start headless browser processes.
+- On Linux, local Chromium, Firefox and geckodriver on PATH.
+- On macOS, local Safari and safaridriver with Safari automation enabled.
+- Permission to bind loopback sockets.
+- On Linux, permission to start headless browser processes.
+- On macOS, permission to start a Safari automation session.
 
 ## 5. Setup
 
 1. Open a shell in the candidate checkout.
-   If Firefox uses Snap, set `TMPDIR` to a private directory below the home directory.
+   On Linux, if Firefox uses Snap, set `TMPDIR` to a private directory below the home directory.
    The directory must not have a name that starts with a dot.
    Firefox and geckodriver must both have access to it.
 2. On Linux, run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live -- --ignored --nocapture`.
 3. On macOS, run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live mcp_safari_preserves_top_level_input_and_frame_boundaries -- --ignored --nocapture`.
    Run the selected test alone. Each test uses its own coordination root.
 
-   Result: The test starts an isolated MCP process and each browser backend.
+   Result: The test starts an isolated MCP process for each browser session.
 
 ## 6. Tasks
+
+On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
 
 ### 6.1 FRAME-INPUT — Fill and submit the form
 
@@ -116,13 +120,14 @@ The test does not use the developer's browser session.
    Result: The snapshot shows the iframe boundary.
    A query returns no child password input.
    Top-level reference input works and its value is absent from the audit.
+   Read-only top-level controls retain their values after rejected fill actions.
    This result does not qualify child-frame input on Safari.
 
 ## 7. Pass criteria
 
-- All selected test assertions pass on Chromium and Firefox.
-- The Safari compatibility assertions pass on macOS.
-- The input, submission, reference and audit tasks pass through public MCP tools.
+- On Linux, the Chromium and Firefox assertions in tasks 6.1 through 6.6 pass.
+- On macOS, the Safari assertions in tasks 6.6 and 6.7 pass.
+- The selected platform tasks pass through public MCP tools.
 - Decoded frame delivery continues after the input tasks.
 - The test does not require a human handoff.
 
