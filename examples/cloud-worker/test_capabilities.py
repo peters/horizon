@@ -261,7 +261,7 @@ class CapabilitiesTests(unittest.TestCase):
         status, output, commands = self.run_check(reported=reported)
         self.assertEqual(status, 0, output)
         for agent in ['codex', 'claude']:
-            self.assertIn(mock.call([agent, '--version'], check=True, timeout=20,
+            self.assertIn(mock.call([agent, '--version'], check=True, timeout=20, env=mock.ANY,
                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL), commands)
         self.assertNotIn('grok', str(commands))
         for claude in [b'v2.1.281\n', b'Claude Code\n2.1.281\n']:
@@ -277,13 +277,32 @@ class CapabilitiesTests(unittest.TestCase):
         self.write('/etc/horizon-worker/agent-versions.json', {'codex': '0.156.1'})
         status, output, commands = self.run_check(reported=reported)
         self.assertEqual(status, 0, output)
-        self.assertIn(mock.call(['codex', '--version'], check=True, timeout=20,
+        self.assertIn(mock.call(['codex', '--version'], check=True, timeout=20, env=mock.ANY,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL), commands)
-        self.assertIn(mock.call(['claude', '--version'], check=True, timeout=20,
+        self.assertIn(mock.call(['claude', '--version'], check=True, timeout=20, env=mock.ANY,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), commands)
         status, output, _ = self.run_check(reported=dict(reported, codex=b'codex-cli 0.156.2\n'))
         self.assertEqual(status, 1)
         self.assertIn('codex does not report its recorded version 0.156.1', output)
+
+    def test_agent_probes_never_write_into_the_workspace_home(self):
+        # The check runs as root after the workspace home was handed to the isolated agent.
+        # An agent CLI that creates its state directory on --version (Codex creates ~/.codex)
+        # must not leave a root-owned directory there, or the agent cannot configure itself.
+        reported = {'codex': b'codex-cli 0.156.1\n', 'claude': b'2.1.281 (Claude Code)\n'}
+        environment = {'HOME': '/workspace/home', 'CODEX_HOME': '/workspace/home/.codex', 'PATH': '/usr/bin'}
+        for record in [None, {'codex': '0.156.1'}]:
+            if record is not None:
+                self.write('/etc/horizon-worker/agent-versions.json', record)
+            status, output, commands = self.run_check(environment=environment, reported=reported)
+            self.assertEqual(status, 0, output)
+            probes = [call for call in commands if call.args[0][1:] == ['--version'] and call.args[0][0] in {'codex', 'claude'}]
+            self.assertEqual(sorted(call.args[0][0] for call in probes), ['claude', 'codex'], record)
+            for call in probes:
+                probe = call.kwargs['env']
+                self.assertFalse(probe['HOME'].startswith('/workspace'), (record, probe))
+                self.assertNotIn('CODEX_HOME', probe)
+                self.assertEqual(probe['PATH'], '/usr/bin')
 
     def test_recorded_versions_must_be_plain_versions_of_known_agents(self):
         reported = {'codex': b'codex-cli 0.156.1\n', 'claude': b'2.1.281 (Claude Code)\n'}
