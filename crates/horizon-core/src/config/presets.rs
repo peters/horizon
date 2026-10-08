@@ -43,8 +43,11 @@ impl PresetConfig {
 
     #[must_use]
     pub fn requires_workspace_cwd(&self) -> bool {
-        // Browser and device viewers do not need a working directory.
-        !matches!(self.kind, PanelKind::Ssh | PanelKind::Browser | PanelKind::Device)
+        // Browser, device and dependency viewers do not need a working directory.
+        !matches!(
+            self.kind,
+            PanelKind::Ssh | PanelKind::Browser | PanelKind::Device | PanelKind::Dependencies
+        )
     }
 }
 

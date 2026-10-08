@@ -7,6 +7,8 @@ mod branding;
 mod browser_widget;
 mod command_palette;
 mod command_registry;
+#[cfg(feature = "cloud-workspaces")]
+mod dependencies_widget;
 mod device_widget;
 mod dir_picker;
 mod editor_widget;

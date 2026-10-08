@@ -61,6 +61,7 @@ pub enum PanelKind {
     Usage,
     Browser,
     Device,
+    Dependencies,
 }
 
 impl PanelKind {
@@ -74,7 +75,7 @@ impl PanelKind {
     /// panels insert at the caret; browser panels dispatch through CDP.
     #[must_use]
     pub const fn accepts_text_input(self) -> bool {
-        !matches!(self, Self::GitChanges | Self::Usage | Self::Device)
+        !matches!(self, Self::GitChanges | Self::Usage | Self::Device | Self::Dependencies)
     }
 
     #[must_use]
@@ -102,6 +103,7 @@ impl PanelKind {
             Self::Usage => "Usage",
             Self::Browser => "Browser",
             Self::Device => "Device",
+            Self::Dependencies => "Dependencies",
             Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode | Self::Pi | Self::Grok => {
                 unreachable!()
             }
@@ -653,7 +655,10 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => {}
+            PanelContent::GitChanges(_)
+            | PanelContent::Usage(_)
+            | PanelContent::Device(_)
+            | PanelContent::Dependencies => {}
             PanelContent::Browser(browser) => browser.request_shutdown(),
         }
     }
@@ -677,7 +682,10 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => true,
+            PanelContent::GitChanges(_)
+            | PanelContent::Usage(_)
+            | PanelContent::Device(_)
+            | PanelContent::Dependencies => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -690,7 +698,10 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => true,
+            PanelContent::GitChanges(_)
+            | PanelContent::Usage(_)
+            | PanelContent::Device(_)
+            | PanelContent::Dependencies => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -1016,9 +1027,29 @@ mod tests {
         ] {
             assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
         }
-        for kind in [PanelKind::GitChanges, PanelKind::Usage] {
+        for kind in [PanelKind::GitChanges, PanelKind::Usage, PanelKind::Dependencies] {
             assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
         }
+    }
+
+    #[test]
+    fn dependencies_panel_runs_no_process_and_closes_at_once() {
+        let options = crate::PanelOptions {
+            kind: PanelKind::Dependencies,
+            ..crate::PanelOptions::default()
+        };
+        let mut panel = Panel::spawn(PanelId(7), WorkspaceId(1), options).unwrap();
+        assert_eq!(panel.title, "Dependencies");
+        assert!(matches!(panel.content, PanelContent::Dependencies));
+        assert!(panel.content.terminal().is_none());
+        assert_eq!(scrollback_limit_for_kind(PanelKind::Dependencies), 0);
+        assert!(panel.shutdown_with_timeout(std::time::Duration::ZERO));
+        let saved = serde_json::to_string(&PanelKind::Dependencies).unwrap();
+        assert_eq!(saved, "\"dependencies\"");
+        assert_eq!(
+            serde_json::from_str::<PanelKind>(&saved).unwrap(),
+            PanelKind::Dependencies
+        );
     }
 
     #[test]

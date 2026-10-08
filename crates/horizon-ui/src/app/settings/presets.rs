@@ -3,7 +3,7 @@ use horizon_core::{Config, PanelKind, PanelResume, PresetConfig};
 
 use crate::theme;
 
-const ALL_KINDS: [PanelKind; 15] = [
+const ALL_KINDS: [PanelKind; 16] = [
     PanelKind::Shell,
     PanelKind::Ssh,
     PanelKind::Codex,
@@ -19,6 +19,7 @@ const ALL_KINDS: [PanelKind; 15] = [
     PanelKind::Usage,
     PanelKind::Browser,
     PanelKind::Device,
+    PanelKind::Dependencies,
 ];
 
 /// Render the Presets settings tab.  Returns `true` when the preset list

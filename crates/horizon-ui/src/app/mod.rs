@@ -19,6 +19,7 @@ mod casting;
 mod cloud_offers;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud_panel;
+mod dependencies;
 mod detached_viewports;
 mod device_presentation;
 mod device_request_pump;
@@ -211,6 +212,8 @@ pub struct PanelRenderCaches {
     pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     pub(crate) browser_ui_state: HashMap<PanelId, crate::browser_widget::BrowserUiState>,
     pub(crate) device_ui_state: HashMap<PanelId, crate::device_widget::DeviceUiState>,
+    #[cfg(feature = "cloud-workspaces")]
+    pub(crate) dependencies_ui_state: HashMap<PanelId, crate::dependencies_widget::DependenciesUiState>,
     pub(crate) editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
 }
 
@@ -405,6 +408,8 @@ impl HorizonApp {
 
         let (workspace_count_before, panel_count_before) = (self.board.workspaces.len(), self.board.panels.len());
         let had_panel_output = self.process_frame_inputs(ctx);
+        #[cfg(feature = "cloud-workspaces")]
+        self.apply_dependencies_requests(ctx);
         self.apply_panel_transitions();
         self.normalize_workspace_state(ctx);
         self.apply_pending_workspace_changes();

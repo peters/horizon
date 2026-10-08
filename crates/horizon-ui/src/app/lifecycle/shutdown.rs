@@ -39,6 +39,8 @@ impl HorizonApp {
         self.git_watchers.clear();
         self.abandon_device_reveals("Horizon is exiting");
         self.panel_render_caches.device_ui_state.clear();
+        #[cfg(feature = "cloud-workspaces")]
+        self.panel_render_caches.dependencies_ui_state.clear();
         self.retire_pending_browser_closes_for_shutdown();
         let mut progress = self
             .pending_session_switch

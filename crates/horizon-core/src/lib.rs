@@ -20,6 +20,8 @@ pub mod git_watcher;
 mod horizon_home;
 mod layout;
 mod local_store;
+#[cfg(feature = "cloud-workspaces")]
+pub mod maintenance;
 mod opencode_paths;
 mod panel;
 pub mod remote_browser_credential;
