@@ -189,6 +189,19 @@ class VolumeCopyTests(ServiceTestCase):
             service.clear(self.store, retire=lambda: None)
         self.assertFalse((self.store.runtime / common.CLEARED).exists(), 'no clear mark without a durable removal')
 
+    def test_a_write_whose_directory_sync_fails_counts_as_stored(self):
+        self.install()
+        real = common.fsync_directory
+
+        def fsync(directory):
+            if directory == self.store.persistent:
+                raise OSError('input/output error')
+            return real(directory)
+        with mock.patch.object(common, 'fsync_directory', side_effect=fsync):
+            self.install(installation(chain=chain(access='ghu_synthetic-new')))
+        self.assertEqual(self.stored()['chain']['access_token'], 'ghu_synthetic-new')
+        self.assertTrue((self.store.runtime / service.STATE).exists(), 'tmpfs keeps a second copy')
+
     def test_a_full_tmpfs_leaves_the_older_volume_chain_usable(self):
         self.install()
         old = self.store.persistent / service.STATE

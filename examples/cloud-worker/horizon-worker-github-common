@@ -93,9 +93,16 @@ def write_private(directory, name, data):
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, directory / name)
-        fsync_directory(directory)
+        try:
+            fsync_directory(directory)
+        except OSError as error:
+            raise Unsynced(str(error)) from error
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+class Unsynced(OSError):
+    """The file is in place, but its directory entry may not survive a crash."""
 
 
 def fsync_directory(directory):
@@ -228,6 +235,12 @@ class Store:
         try:
             private_directory(self.persistent.parent, create=True)
             write_private(private_directory(self.persistent, create=True), STATE, data)
+        except Unsynced:
+            # The new chain is already in place on the volume, so the write did happen; tmpfs
+            # keeps a second copy in case the volume entry does not survive a crash.
+            with contextlib.suppress(OSError, ValueError):
+                write_private(private_directory(self.runtime, create=True), STATE, data)
+            return False
         except (OSError, ValueError):
             pass
         else:
