@@ -196,12 +196,24 @@ impl Board {
         for (index, place) in places {
             self.cloud_groups.0[index].slot = place;
         }
-        let rest: Vec<PanelId> = current.iter().copied().filter(|id| !panels.contains(id)).collect();
-        panels.extend(rest);
+        let ordered_set: Vec<PanelId> = panels.clone();
+        // Only the places of the panels the slots stand for change; hidden panels and members
+        // of collapsed clouds keep theirs, so they return where they were.
+        let mut ordered = panels.into_iter();
+        let reordered: Vec<PanelId> = current
+            .iter()
+            .map(|id| {
+                if ordered_set.contains(id) {
+                    ordered.next().unwrap_or(*id)
+                } else {
+                    *id
+                }
+            })
+            .collect();
         let Some(ws) = self.workspace_mut(workspace) else {
             return false;
         };
-        ws.panels = panels;
+        ws.panels = reordered;
         true
     }
 

@@ -298,3 +298,50 @@ fn a_cloud_keeps_its_slot_when_its_last_member_closes() {
     board.reapply_workspace_layout_if_set(workspace);
     assert!(near(cloud(&board).position, first), "{:?}", cloud(&board).position);
 }
+
+#[test]
+fn a_collapsed_cloud_returns_to_its_slot_after_its_neighbours_swap() {
+    let (mut board, workspace, panels, members) = desk(1);
+    let second = board.panel(panels[1]).expect("panel").layout.position;
+    assert!(board.swap_cloud_slot_at("slot-fixture", [second[0] + 10.0, second[1] + 10.0]));
+    let middle = cloud(&board).position;
+    let mut group = board.cloud_groups.0[0].clone();
+    group.set_collapsed(&mut board, true);
+    board.cloud_groups.0[0] = group.clone();
+    board.reapply_workspace_layout_if_set(workspace);
+    let first = board.panel(panels[0]).expect("panel").layout.position;
+    assert!(board.reorder_arranged_slot(panels[1], first));
+    let order = &board.workspace(workspace).expect("workspace").panels;
+    assert_eq!(
+        order.iter().position(|id| *id == members[0]),
+        Some(1),
+        "the hidden member kept its place"
+    );
+    group.set_collapsed(&mut board, false);
+    board.cloud_groups.0[0] = group;
+    board.reapply_workspace_layout_if_set(workspace);
+    assert!(
+        near(cloud(&board).position, middle),
+        "{:?} vs {middle:?}",
+        cloud(&board).position
+    );
+}
+
+#[test]
+fn resizing_a_member_of_a_slotted_cloud_resizes_every_slot() {
+    let (mut board, _, panels, members) = desk(2);
+    let mut groups = crate::cloud_panel::CloudGroups(board.cloud_groups.0.clone());
+    let before = cloud(&board).size;
+    assert!(groups.resize_panel(&mut board, members[0], [520.0, 380.0]));
+    let size = cloud(&board).size;
+    assert!(size[0] > before[0], "the cloud grew: {before:?} -> {size:?}");
+    for id in panels {
+        assert!(
+            near(board.panel(id).expect("panel").layout.size, size),
+            "every slot takes the cloud's size"
+        );
+    }
+    assert!(near(groups.0[0].size, size) && near(groups.0[0].position, cloud(&board).position));
+    assert_members_inside(&board, &members);
+    assert_no_overlap(&board, &panels);
+}
