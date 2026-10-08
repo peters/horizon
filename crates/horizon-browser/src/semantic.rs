@@ -562,12 +562,17 @@ const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
     if (clear) {
         const isReadOnly = () => element.readOnly || element.getAttribute('aria-readonly') === 'true';
         const notEditable = { error: { code: 'element_not_editable', message: 'target element is not editable' } };
-        if (isReadOnly() || (!element.isContentEditable && !('value' in element))) return notEditable;
+        const notFocused = { error: { code: 'element_not_focused', message: 'target element did not retain focus' } };
+        const contentEditable = () => element.isContentEditable
+            && !['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(element.tagName);
+        const textInput = () => element.tagName === 'INPUT'
+            && ['text', 'search', 'tel', 'url', 'email', 'password', 'number'].includes((element.getAttribute('type') || 'text').toLowerCase());
+        const isEditable = () => !isReadOnly() && (contentEditable() || element.tagName === 'TEXTAREA' || textInput());
+        if (!isEditable()) return notEditable;
         element.focus();
-        if (isReadOnly()) return notEditable;
-        if (document.activeElement !== element)
-            return { error: { code: 'element_not_focused', message: 'target element did not receive focus' } };
-        if (element.isContentEditable) {
+        if (!isEditable()) return notEditable;
+        if (document.activeElement !== element) return notFocused;
+        if (contentEditable()) {
             element.textContent = '';
             element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
         } else if ('value' in element) {
@@ -578,6 +583,8 @@ const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
         } else {
             return notEditable;
         }
+        if (!isEditable()) return notEditable;
+        if (document.activeElement !== element) return notFocused;
     }
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }";

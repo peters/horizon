@@ -103,9 +103,14 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
    Read-only inputs, text areas and ARIA read-only fields reject fill actions.
    Their existing values do not change in the child or top-level document.
    A field that becomes read-only on focus also retains its value.
-   If focus moves to another field or an inert ancestor prevents focus, the fill returns `element_not_focused`.
+   If an onfocus handler moves focus or an inert ancestor prevents focus, the fill returns `element_not_focused`.
    The rejected fill does not change the original value or send an input event.
    The test checks these cases in child and top-level documents.
+   If an input handler moves focus during clearing, the requested text does not reach the field that receives focus.
+   File, checkbox, radio, range, button, color, date and select controls reject fill without value changes or input events.
+   These controls also reject fill when they have `contenteditable="true"`.
+   Text, search, tel, URL, email, password and number inputs accept fill.
+   Editable text areas and contenteditable elements also accept fill.
    Child file inputs have no file-upload capability marker.
    A scroll action on a child reference returns `unsupported_frame_action`.
 
@@ -124,7 +129,8 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
    A query returns no child password input.
    Top-level reference input works and its value is absent from the audit.
    Read-only top-level controls retain their values after rejected fill actions.
-   A field that cannot retain focus also retains its value and receives no input event.
+   A field rejected because of onfocus redirection or an inert ancestor retains its value and receives no input event.
+   If focus moves during the clearing event, the requested text does not reach the field that receives focus.
    This result does not qualify child-frame input on Safari.
 
 ## 7. Pass criteria

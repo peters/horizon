@@ -167,7 +167,7 @@ fn safari_compatibility(host: &mut McpProcess) {
             .iter()
             .any(|node| node["role"] == "iframe")
     );
-    assert!(host.nodes("input[type=password]").is_empty());
+    assert!(host.nodes("form input[type=password]").is_empty());
     let top = host.nodes("#same");
     assert_eq!(top.len(), 1);
     host.call(
@@ -184,6 +184,7 @@ fn safari_compatibility(host: &mut McpProcess) {
     assert_eq!(value["value"], "safari-synthetic");
     readonly_controls(host, false);
     unfocused_controls(host, false);
+    text_controls(host, false);
     assert!(
         !host
             .call("browser_audit", json!({}))
@@ -241,9 +242,9 @@ fn readonly_controls(host: &mut McpProcess, child: bool) {
 
 fn unfocused_controls(host: &mut McpProcess, child: bool) {
     let prefix = if child { "" } else { "top-" };
-    let selector = format!("#{prefix}focus-redirect,#{prefix}inert-input");
+    let selector = format!("#{prefix}focus-redirect,#{prefix}inert-input,#{prefix}focus-oninput");
     let fields = host.nodes(&selector);
-    assert_eq!(fields.len(), 2);
+    assert_eq!(fields.len(), 3);
     for field in fields {
         assert!(
             host.call(
@@ -254,6 +255,7 @@ fn unfocused_controls(host: &mut McpProcess, child: bool) {
             .contains("element_not_focused")
         );
     }
+    let selector = format!("{selector},#{prefix}input-recipient");
     let expression = if child {
         let inspect = host.nodes("#inspect-unfocused");
         host.call("browser_act", json!({"action":"click","ref":inspect[0].reference}))
@@ -271,7 +273,105 @@ fn unfocused_controls(host: &mut McpProcess, child: bool) {
         )
     };
     let values = host.call("browser_evaluate", json!({"expression":expression})).unwrap();
-    assert_eq!(values["value"], json!([["redirect-kept", "0"], ["inert-kept", "0"]]));
+    assert_eq!(
+        values["value"],
+        json!([
+            ["redirect-kept", "0"],
+            ["inert-kept", "0"],
+            ["", "1"],
+            ["recipient-kept", "0"]
+        ])
+    );
+}
+
+fn text_controls(host: &mut McpProcess, child: bool) {
+    let prefix = if child { "" } else { "top-" };
+    let fields = host.nodes(&format!(".{prefix}unsupported-control"));
+    assert_eq!(fields.len(), 15);
+    for field in fields {
+        assert!(
+            host.call(
+                "browser_act",
+                json!({"action":"fill","ref":field.reference,"value":"rejected"})
+            )
+            .unwrap_err()
+            .contains("element_not_editable")
+        );
+    }
+    let fields = host.nodes(&format!(".{prefix}supported-control"));
+    assert_eq!(fields.len(), 9);
+    let expected = [
+        "typed-synthetic",
+        "typed-synthetic",
+        "typed-synthetic",
+        "typed-synthetic",
+        "typed-synthetic",
+        "typed-synthetic",
+        "314159265",
+        "typed-synthetic",
+        "typed-synthetic",
+    ];
+    for (field, value) in fields.iter().zip(expected) {
+        host.call(
+            "browser_act",
+            json!({"action":"fill","ref":field.reference,"value":value}),
+        )
+        .unwrap();
+    }
+    let expression = if child {
+        let inspect = host.nodes("#inspect-controls");
+        host.call("browser_act", json!({"action":"click","ref":inspect[0].reference}))
+            .unwrap();
+        host.call(
+            "browser_wait",
+            json!({"selector":"output[data-controls]","state":"present","timeout_millis":2000}),
+        )
+        .unwrap();
+        "window.controlValues".to_owned()
+    } else {
+        "({unsupported:[...document.querySelectorAll('.top-unsupported-control')].map(e=>[e.value,e.dataset.initial,e.dataset.inputs]),supported:[...document.querySelectorAll('.top-supported-control')].map(e=>e.value??e.textContent)})".to_owned()
+    };
+    let values = host.call("browser_evaluate", json!({"expression":expression})).unwrap();
+    let values = &values["value"];
+    let unsupported = values["unsupported"].as_array().unwrap();
+    assert_eq!(unsupported.len(), 15);
+    for field in unsupported {
+        assert_eq!(field[0], field[1]);
+        assert_eq!(field[2], "0");
+    }
+    assert_eq!(values["supported"], json!(expected));
+    let audit = host.call("browser_audit", json!({})).unwrap().to_string();
+    assert!(!audit.contains("typed-synthetic") && !audit.contains("314159265"));
+}
+
+fn control_fixture(prefix: &str) -> String {
+    let unsupported = [
+        "file",
+        "checkbox",
+        "radio",
+        "range",
+        "button",
+        "submit",
+        "reset",
+        "color",
+        "date",
+        "time",
+        "datetime-local",
+        "month",
+        "week",
+    ]
+    .map(|kind| {
+        format!("<input class='{prefix}unsupported-control' contenteditable='true' type='{kind}' value='kept'>")
+    })
+    .join("");
+    let supported = ["text", "search", "tel", "url", "email", "password", "number"]
+        .map(|kind| {
+            format!("<input class='{prefix}supported-control' contenteditable='true' type='{kind}' value='old-kept'>")
+        })
+        .join("");
+    format!(
+        r#"{unsupported}<input class="{prefix}unsupported-control" type="text" value="kept" onfocus="this.type='checkbox'"><select class="{prefix}unsupported-control" contenteditable="true"><option value="kept">Kept</option></select>{supported}<textarea class="{prefix}supported-control" contenteditable="true">old-kept</textarea><div class="{prefix}supported-control" contenteditable="true">old-kept</div><button id="{prefix}inspect-controls" type="button">Inspect controls</button><script>document.querySelectorAll('.{prefix}unsupported-control').forEach(e=>{{e.dataset.initial=e.value;e.dataset.inputs='0';e.oninput=()=>e.dataset.inputs=String(Number(e.dataset.inputs)+1)}});document.querySelector('#{prefix}inspect-controls').onclick=()=>parent.postMessage({{controls:{{unsupported:[...document.querySelectorAll('.{prefix}unsupported-control')].map(e=>[e.value,e.dataset.initial,e.dataset.inputs]),supported:[...document.querySelectorAll('.{prefix}supported-control')].map(e=>e.value??e.textContent)}}}},'*')</script>"#
+    )
 }
 
 fn edge_cases(host: &mut McpProcess) {
@@ -303,7 +403,8 @@ fn edge_cases(host: &mut McpProcess) {
     }
     readonly_controls(host, true);
     unfocused_controls(host, true);
-    let files = host.nodes("input[type=file]");
+    text_controls(host, true);
+    let files = host.nodes(".unsupported-control[type=file]");
     assert_eq!(files.len(), 1);
     assert!(files[0].file_input.is_none());
     assert!(
@@ -318,11 +419,11 @@ fn edge_cases(host: &mut McpProcess) {
     let capped = host
         .call(
             "browser_query",
-            json!({"selector":"input[type=password]","max_results":1}),
+            json!({"selector":"form input[type=password]","max_results":1}),
         )
         .unwrap();
     assert_eq!(capped["nodes"].as_array().unwrap().len(), 1);
-    let fields = host.nodes("input[type=password]");
+    let fields = host.nodes("form input[type=password]");
     assert_eq!(fields.len(), 2, "same-URL sibling documents must have distinct refs");
     for (field, value) in fields.iter().zip(["edge-a", "edge-b"]) {
         host.call(
@@ -360,7 +461,7 @@ fn edge_cases(host: &mut McpProcess) {
         json!({"action":"fill","ref":fields[1-index].reference,"value":"survivor"}),
     )
     .unwrap();
-    assert_eq!(host.nodes("input[type=password]").len(), 1);
+    assert_eq!(host.nodes("form input[type=password]").len(), 1);
 }
 
 fn wait_for_first_frame(session: &horizon_browser::BrowserSession, slot: &FrameSlot) {
@@ -477,7 +578,7 @@ fn form_roundtrip(host: &mut McpProcess) {
         },
         value: "synthetic-user".into(),
     });
-    let password = host.nodes("input[type=password]");
+    let password = host.nodes("form input[type=password]");
     assert_eq!(password.len(), 1);
     assert!(
         host.call(
@@ -509,7 +610,7 @@ fn form_roundtrip(host: &mut McpProcess) {
     });
     assert!(matches!(top, BrowserControlValue::Json { value } if value==true));
     for _ in 0..3 {
-        let old = host.nodes("input[type=password]")[0].reference.clone();
+        let old = host.nodes("form input[type=password]")[0].reference.clone();
         host.success(BrowserControlAction::Evaluate {
         expression:
             "new Promise(resolve=>{const ready=e=>{if(e.data.ready){window.removeEventListener('message',ready);resolve(true)}};window.addEventListener('message',ready);document.querySelector('#widget').src=document.querySelector('#widget').src})"
@@ -522,11 +623,12 @@ fn form_roundtrip(host: &mut McpProcess) {
             value: "must-not-fill".into(),
         });
         assert!(stale.unwrap_err().contains("stale_reference"));
-        assert_eq!(host.nodes("input[type=password]").len(), 1);
+        assert_eq!(host.nodes("form input[type=password]").len(), 1);
     }
     edge_cases(host);
     readonly_controls(host, false);
     unfocused_controls(host, false);
+    text_controls(host, false);
     let audit = host.call("browser_audit", json!({})).unwrap().to_string();
     for secret in [
         "synthetic-secret",
@@ -562,16 +664,17 @@ fn fixture(nested: bool) -> (u16, Arc<std::sync::atomic::AtomicBool>, thread::Jo
             let request = String::from_utf8_lossy(&request[..size]);
             let body = if request.starts_with("GET /form") {
                 r#"<!doctype html><title>Frame form</title><form>
-<label>User<input id="same" name="user" aria-label="User"></label><label>Password<input type="password" name="password" aria-label="Password"></label><button type="submit">Submit frame</button></form><input id="disabled" disabled><input id="hidden" style="display:none"><div id="readonly">Read only</div><input type="file"><input id="protected-input" readonly value="input-kept"><textarea id="protected-textarea" readonly>textarea-kept</textarea><input id="protected-aria" aria-readonly="true" value="aria-kept"><div id="protected-editor" contenteditable="true" aria-readonly="true">editor-kept</div><input id="protected-onfocus" value="focus-kept" onfocus="this.readOnly=true"><input id="focus-redirect" value="redirect-kept" onfocus="document.querySelector('#same').focus()" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><div inert><input id="inert-input" value="inert-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"></div><button id="inspect-unfocused" type="button">Inspect unfocused fields</button><button id="inspect-protected" type="button">Inspect protected fields</button>
-<script>document.querySelector('#inspect-unfocused').onclick=()=>parent.postMessage({unfocused:[...document.querySelectorAll('#focus-redirect,#inert-input')].map(e=>[e.value,e.dataset.inputs??'0'])},'*');document.querySelector('#inspect-protected').onclick=()=>parent.postMessage({protected:[...document.querySelectorAll('#protected-input,#protected-textarea,#protected-aria,#protected-editor,#protected-onfocus')].map(e=>e.value??e.textContent)},'*');const token=crypto.randomUUID();parent.postMessage({ready:true},'*');document.querySelector('form').oninput=()=>parent.postMessage({state:token,value:document.querySelector('[name=password]').value},'*');document.querySelector('form').onsubmit=e=>{e.preventDefault();parent.postMessage({submitted:document.querySelector('[name=user]').value==='synthetic-user'&&document.querySelector('[name=password]').value==='synthetic-secret',trusted:e.isTrusted},'*')};</script>"#.to_owned()
+<label>User<input id="same" name="user" aria-label="User"></label><label>Password<input type="password" name="password" aria-label="Password"></label><button type="submit">Submit frame</button></form><input id="disabled" disabled><input id="hidden" style="display:none"><div id="readonly">Read only</div><input id="protected-input" readonly value="input-kept"><textarea id="protected-textarea" readonly>textarea-kept</textarea><input id="protected-aria" aria-readonly="true" value="aria-kept"><div id="protected-editor" contenteditable="true" aria-readonly="true">editor-kept</div><input id="protected-onfocus" value="focus-kept" onfocus="this.readOnly=true"><input id="focus-redirect" value="redirect-kept" onfocus="document.querySelector('#same').focus()" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><div inert><input id="inert-input" value="inert-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"></div><input id="focus-oninput" value="input-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1);document.querySelector('#input-recipient').focus()"><input id="input-recipient" value="recipient-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><button id="inspect-unfocused" type="button">Inspect unfocused fields</button><button id="inspect-protected" type="button">Inspect protected fields</button>
+<script>document.querySelector('#inspect-unfocused').onclick=()=>parent.postMessage({unfocused:[...document.querySelectorAll('#focus-redirect,#inert-input,#focus-oninput,#input-recipient')].map(e=>[e.value,e.dataset.inputs??'0'])},'*');document.querySelector('#inspect-protected').onclick=()=>parent.postMessage({protected:[...document.querySelectorAll('#protected-input,#protected-textarea,#protected-aria,#protected-editor,#protected-onfocus')].map(e=>e.value??e.textContent)},'*');const token=crypto.randomUUID();parent.postMessage({ready:true},'*');document.querySelector('form').oninput=()=>parent.postMessage({state:token,value:document.querySelector('[name=password]').value},'*');document.querySelector('form').onsubmit=e=>{e.preventDefault();parent.postMessage({submitted:document.querySelector('[name=user]').value==='synthetic-user'&&document.querySelector('[name=password]').value==='synthetic-secret',trusted:e.isTrusted},'*')};</script>"#.to_owned() + &control_fixture("")
             } else if request.starts_with("GET /wrapper") {
                 format!(
                     r#"<!doctype html><title>Frame wrapper</title><iframe src="http://127.0.0.1:{port}/form" style="width:480px;height:220px"></iframe><script>window.addEventListener('message',e=>top.postMessage(e.data,'*'))</script>"#
                 )
             } else {
                 let path = if nested { "wrapper" } else { "form" };
+                let controls = control_fixture("top-");
                 format!(
-                    r#"<!doctype html><title>Frame fixture</title><input id="same" value="top-kept"><input id="top-protected-input" readonly value="input-kept"><textarea id="top-protected-textarea" readonly>textarea-kept</textarea><input id="top-protected-aria" aria-readonly="true" value="aria-kept"><div id="top-protected-editor" contenteditable="true" aria-readonly="true">editor-kept</div><input id="top-protected-onfocus" value="focus-kept" onfocus="this.readOnly=true"><input id="top-focus-redirect" value="redirect-kept" onfocus="document.querySelector('#same').focus()" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><div inert><input id="top-inert-input" value="inert-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"></div><output>Waiting</output><iframe id="widget" src="http://localhost:{port}/{path}" style="margin:50px;width:500px;height:250px"></iframe><script>window.states={{}};window.addEventListener('message',e=>{{if(e.data.state){{window.states[e.data.state]={{owner:e.source===document.querySelector('#widget').contentWindow?'widget':'sibling',value:e.data.value}}}}else if(e.data.unfocused){{window.unfocusedValues=e.data.unfocused;document.querySelector('output').setAttribute('data-unfocused','')}}else if(e.data.protected){{window.protectedValues=e.data.protected;document.querySelector('output').setAttribute('data-protected','')}}else if(e.data.ready){{document.querySelector('output').setAttribute('data-ready','')}}else{{document.querySelector('output').textContent=e.data.submitted&&e.data.trusted?'Submitted':'Failed'}}}})</script>"#
+                    r#"<!doctype html><title>Frame fixture</title><input id="same" value="top-kept"><input id="top-protected-input" readonly value="input-kept"><textarea id="top-protected-textarea" readonly>textarea-kept</textarea><input id="top-protected-aria" aria-readonly="true" value="aria-kept"><div id="top-protected-editor" contenteditable="true" aria-readonly="true">editor-kept</div><input id="top-protected-onfocus" value="focus-kept" onfocus="this.readOnly=true"><input id="top-focus-redirect" value="redirect-kept" onfocus="document.querySelector('#same').focus()" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><div inert><input id="top-inert-input" value="inert-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"></div><input id="top-focus-oninput" value="input-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1);document.querySelector('#top-input-recipient').focus()"><input id="top-input-recipient" value="recipient-kept" oninput="this.dataset.inputs=String(Number(this.dataset.inputs||0)+1)"><output>Waiting</output><iframe id="widget" src="http://localhost:{port}/{path}" style="margin:50px;width:500px;height:250px"></iframe><script>window.states={{}};window.addEventListener('message',e=>{{if(e.data.state){{window.states[e.data.state]={{owner:e.source===document.querySelector('#widget').contentWindow?'widget':'sibling',value:e.data.value}}}}else if(e.data.controls){{window.controlValues=e.data.controls;document.querySelector('output').setAttribute('data-controls','')}}else if(e.data.unfocused){{window.unfocusedValues=e.data.unfocused;document.querySelector('output').setAttribute('data-unfocused','')}}else if(e.data.protected){{window.protectedValues=e.data.protected;document.querySelector('output').setAttribute('data-protected','')}}else if(e.data.ready){{document.querySelector('output').setAttribute('data-ready','')}}else{{document.querySelector('output').textContent=e.data.submitted&&e.data.trusted?'Submitted':'Failed'}}}})</script>{controls}"#
                 )
             };
             let _ = write!(
