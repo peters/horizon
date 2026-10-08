@@ -12,6 +12,13 @@ These values are allocation minimums. They do not establish that a worker comple
 the full validation matrix. Record the worker resources, validation results and
 memory measurements for each qualification run.
 
+Use the [worker value procedure](../docs/testing/procedures/cloud-worker-value.md)
+to compare qualified workers by total cost per successful task. The
+[small CPU worker report](../docs/testing/reports/cpu-small-worker-qualification.md)
+records a completed CPU matrix on one worker. The run used warm and mixed build
+caches after an image repair. It does not establish the cheapest worker or an
+untouched cold start of that image.
+
 Both profiles enable only `claude`. The tested provider runtime denies the user
 namespaces required by `codex` protected execution, so that agent is intentionally
 excluded from the advertised capabilities even though its CLI remains installed
