@@ -265,6 +265,8 @@ Use one row per worker, cache state and concurrency setting.
 
    Result: No task-owned command remains active.
 
+> **CAUTION:** DELETE ONLY PROVIDER RESOURCES RECORDED BY THIS RUN. Follow the operator's instruction for retained resources.
+
 2. Delete or retain each owned provider resource under the operator's instruction.
 
    Result: The report states each resource's final state and continued charge.
@@ -272,6 +274,8 @@ Use one row per worker, cache state and concurrency setting.
 3. Examine the provider's final resource state.
 
    Result: The record distinguishes a deletion request from completed deletion.
+
+> **CAUTION:** REMOVE ONLY CREDENTIAL COPIES RECORDED BY THIS RUN. Keep shared credentials and credentials used by other work.
 
 4. Remove copied private credentials after the owned worker stops.
 

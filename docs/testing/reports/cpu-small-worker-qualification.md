@@ -125,7 +125,8 @@ The existing worker and volume stayed in use; the test allocated no replacement.
 | Captured price snapshot | 2026-10-08 12:40:43 UTC; EUR; net prices exclude tax |
 | Provider compute estimate | EUR 0.0136/hour; monthly cap EUR 8.49 |
 | Provider one-hour total estimate | EUR 0.02066849, including 80 GB volume and public IPv4 |
-| Retained volume estimate | EUR 4.576/month for the 80 GB volume; excludes a retained server and IP |
+| Provisioned volume rate estimate | EUR 4.576/month for the 80 GB volume; excludes compute and IP |
+| Final retained task-owned resources | None; provider deletion confirmed |
 | Actual compute, storage, IP, idle and retry cost | No provider invoice collected |
 | Total cost per successful task | Not established |
 | Developer wait cost | Not included |
