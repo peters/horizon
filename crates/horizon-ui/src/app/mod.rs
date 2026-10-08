@@ -51,7 +51,6 @@ mod startup_session;
 mod tailnets;
 #[cfg(test)]
 mod test_support;
-mod updates;
 pub(crate) mod util;
 mod view;
 mod work_resume;
@@ -66,9 +65,9 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
-    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
-    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
-    ShortcutBinding, ShutdownProgress, StartupChooser, WindowConfig, WorkspaceId,
+    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, PanelId,
+    PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShortcutBinding,
+    ShutdownProgress, StartupChooser, WindowConfig, WorkspaceId,
 };
 
 use self::browser_requests::BrowserCreateHostState;
@@ -121,7 +120,6 @@ use self::panels::ArrangedPanelDrag;
 use self::session::{StartupBootstrapFailure, StartupBootstrapOutcome};
 use self::session_manager::RuntimeSessionManagerState;
 use self::settings::SettingsEditor;
-use self::updates::{AvailableUpdate, UpdateCheckMessage};
 
 struct ActiveSession {
     session_id: String,
@@ -315,10 +313,6 @@ pub struct HorizonApp {
     /// Session-only and OS-store provider credentials for remote browser targets.
     remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,
     session_manager: Option<RuntimeSessionManagerState>,
-    managed_install: Option<ManagedInstall>,
-    surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
-    surge_available_update: Option<AvailableUpdate>,
-    next_surge_update_check_at: Option<Instant>,
     canvas_gesture: canvas_gesture::CanvasGesture,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,

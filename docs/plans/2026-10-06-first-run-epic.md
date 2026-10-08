@@ -28,7 +28,7 @@ available today.
   `scripts/install-ci-ubuntu-dependencies.sh` refuses to run outside CI.
 - The Quick Start in `AGENTS.md` did not list macOS arm64 and did not tell the
   reader to run `git lfs pull`. Phase 0 corrects this.
-- The in-app updater works for Surge installs only.
+- Horizon has no in-app updater. Users replace the release binary or use their package manager.
 - The latest release, v0.2.7 from 2 August 2026, is more than 800 commits older
   than `main`. It has no browser panels, Device panels, clouds or casting. A
   user who installs a release does not get the functions that the README shows.

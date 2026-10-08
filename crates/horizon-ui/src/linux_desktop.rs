@@ -52,7 +52,6 @@ const ICON_SVG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/assets/icons/l
 enum SkipReason {
     Snap,
     Flatpak,
-    ManagedInstall,
     PackagedDesktop,
 }
 
@@ -61,7 +60,6 @@ impl std::fmt::Display for SkipReason {
         match self {
             Self::Snap => formatter.write_str("snap"),
             Self::Flatpak => formatter.write_str("flatpak"),
-            Self::ManagedInstall => formatter.write_str("managed install"),
             Self::PackagedDesktop => formatter.write_str("packaged desktop file"),
         }
     }
@@ -93,9 +91,6 @@ fn install_from_environment() -> io::Result<Option<SkipReason>> {
     if let Some(reason) = skip_reason(
         std::env::var_os("SNAP").is_some().then_some(SkipReason::Snap),
         std::env::var_os("FLATPAK_ID").is_some().then_some(SkipReason::Flatpak),
-        horizon_core::ManagedInstall::discover(&exe)
-            .is_some()
-            .then_some(SkipReason::ManagedInstall),
         packaged_desktop_exists().then_some(SkipReason::PackagedDesktop),
     ) {
         return Ok(Some(reason));
@@ -117,10 +112,9 @@ fn install_from_environment() -> io::Result<Option<SkipReason>> {
 fn skip_reason(
     snap: Option<SkipReason>,
     flatpak: Option<SkipReason>,
-    managed: Option<SkipReason>,
     packaged: Option<SkipReason>,
 ) -> Option<SkipReason> {
-    snap.or(flatpak).or(managed).or(packaged)
+    snap.or(flatpak).or(packaged)
 }
 
 #[cfg(target_os = "linux")]
@@ -302,34 +296,24 @@ mod tests {
     fn skip_reason_labels_are_stable() {
         assert_eq!(SkipReason::Snap.to_string(), "snap");
         assert_eq!(SkipReason::Flatpak.to_string(), "flatpak");
-        assert_eq!(SkipReason::ManagedInstall.to_string(), "managed install");
         assert_eq!(SkipReason::PackagedDesktop.to_string(), "packaged desktop file");
     }
 
     #[test]
     fn skip_reason_prefers_packaged_installs() {
         assert_eq!(
-            skip_reason(Some(SkipReason::Snap), Some(SkipReason::Flatpak), None, None),
+            skip_reason(Some(SkipReason::Snap), Some(SkipReason::Flatpak), None),
             Some(SkipReason::Snap)
         );
         assert_eq!(
-            skip_reason(None, Some(SkipReason::Flatpak), Some(SkipReason::ManagedInstall), None),
+            skip_reason(None, Some(SkipReason::Flatpak), None),
             Some(SkipReason::Flatpak)
         );
         assert_eq!(
-            skip_reason(
-                None,
-                None,
-                Some(SkipReason::ManagedInstall),
-                Some(SkipReason::PackagedDesktop)
-            ),
-            Some(SkipReason::ManagedInstall)
-        );
-        assert_eq!(
-            skip_reason(None, None, None, Some(SkipReason::PackagedDesktop)),
+            skip_reason(None, None, Some(SkipReason::PackagedDesktop)),
             Some(SkipReason::PackagedDesktop)
         );
-        assert_eq!(skip_reason(None, None, None, None), None);
+        assert_eq!(skip_reason(None, None, None), None);
     }
 
     #[test]

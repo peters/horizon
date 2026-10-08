@@ -25,7 +25,8 @@ PRERELEASE_ASSETS = [
     "horizon-windows-x64.exe",
     "SHA256SUMS.txt",
 ]
-STABLE_ASSETS = PRERELEASE_ASSETS + [
+STABLE_ASSETS = PRERELEASE_ASSETS
+RETIRED_INSTALLER_ASSETS = [
     "horizon-installer-linux-x64.bin",
     "horizon-installer-osx-arm64.bin",
     "horizon-installer-osx-x64.bin",
@@ -195,6 +196,10 @@ def main(argv):
         tag = positional[0]
         name = positional[1]
         release = require_release(state, tag)
+        if name == os.environ.get("HORIZON_RELEASE_TEST_FAIL_DELETE_ASSET"):
+            save_state(state)
+            sys.stderr.write("injected asset deletion failure\n")
+            sys.exit(2)
         release["assets"] = [asset for asset in release["assets"] if asset["name"] != name]
         save_state(state)
         return
@@ -238,6 +243,7 @@ class ReleaseGithubTests(unittest.TestCase):
         self.env["PATH"] = str(self.root) + os.pathsep + self.env.get("PATH", "")
         self.env["HORIZON_RELEASE_TEST_STATE"] = str(self.state_path)
         self.env.pop("HORIZON_RELEASE_TEST_FAIL_UPLOAD_AFTER", None)
+        self.env.pop("HORIZON_RELEASE_TEST_FAIL_DELETE_ASSET", None)
 
     def state(self):
         return json.loads(self.state_path.read_text())
@@ -304,6 +310,13 @@ class ReleaseGithubTests(unittest.TestCase):
 
     def asset_names(self, tag=TAG):
         return [asset["name"] for asset in self.release(tag)["assets"]]
+
+    def attach_legacy_assets(self, names, tag=TAG):
+        state = self.state()
+        state["releases"][tag]["assets"].extend(
+            {"name": name, "size": 12, "digest": "sha256:old"} for name in names
+        )
+        self.state_path.write_text(json.dumps(state, indent=2))
 
     def test_ensure_pending_creates_draft_for_existing_tag(self):
         result = self.ensure_pending()
@@ -393,12 +406,12 @@ class ReleaseGithubTests(unittest.TestCase):
         self.assertTrue(any("--draft=false" in command for command in self.commands()))
         self.assertFalse(any(command[:1] == ["tag"] for command in self.commands()))
 
-    def test_publish_requires_stable_installers_before_going_public(self):
-        self.write_assets(PRERELEASE_ASSETS)
+    def test_stable_publish_requires_all_binaries_before_going_public(self):
+        self.write_assets(STABLE_ASSETS[:-2] + ["SHA256SUMS.txt"])
         self.ensure_pending(tag=STABLE_TAG, prerelease="false")
         self.upload_assets(tag=STABLE_TAG)
         result = self.publish(tag=STABLE_TAG, prerelease="false", expect=1)
-        self.assertIn("horizon-installer-linux-x64.bin", result.stderr)
+        self.assertIn("horizon-windows-x64.exe", result.stderr)
         self.assertTrue(self.release(STABLE_TAG)["isDraft"])
 
         self.write_assets(STABLE_ASSETS)
@@ -406,6 +419,78 @@ class ReleaseGithubTests(unittest.TestCase):
         self.publish(tag=STABLE_TAG, prerelease="false")
         self.assertFalse(self.release(STABLE_TAG)["isDraft"])
         self.assertCountEqual(self.asset_names(STABLE_TAG), STABLE_ASSETS)
+
+    def test_publish_prunes_retired_installers_from_resumed_drafts(self):
+        self.write_assets(STABLE_ASSETS)
+        retained_extras = ["release-notes.txt", "horizon-installer-custom.zip"]
+        for tag, prerelease in [(TAG, "true"), (STABLE_TAG, "false")]:
+            with self.subTest(tag=tag):
+                self.ensure_pending(tag=tag, prerelease=prerelease)
+                self.upload_assets(tag=tag)
+                self.attach_legacy_assets(RETIRED_INSTALLER_ASSETS + retained_extras, tag=tag)
+                command_offset = len(self.commands())
+
+                self.publish(tag=tag, prerelease=prerelease)
+
+                self.assertFalse(self.release(tag)["isDraft"])
+                self.assertCountEqual(self.asset_names(tag), STABLE_ASSETS + retained_extras)
+                commands = self.commands()[command_offset:]
+                deleted = [command[3] for command in commands if command[:2] == ["release", "delete-asset"]]
+                self.assertCountEqual(deleted, RETIRED_INSTALLER_ASSETS)
+                publish_index = next(index for index, command in enumerate(commands) if "--draft=false" in command)
+                self.assertTrue(all(
+                    index < publish_index
+                    for index, command in enumerate(commands)
+                    if command[:2] == ["release", "delete-asset"]
+                ))
+
+    def test_failed_installer_pruning_keeps_draft_and_can_resume(self):
+        self.write_assets(STABLE_ASSETS)
+        self.ensure_pending(tag=STABLE_TAG, prerelease="false")
+        self.upload_assets(tag=STABLE_TAG)
+        self.attach_legacy_assets(RETIRED_INSTALLER_ASSETS, tag=STABLE_TAG)
+        self.env["HORIZON_RELEASE_TEST_FAIL_DELETE_ASSET"] = RETIRED_INSTALLER_ASSETS[2]
+
+        failed = self.publish(tag=STABLE_TAG, prerelease="false", expect=2)
+
+        self.assertIn("injected asset deletion failure", failed.stderr)
+        self.assertTrue(self.release(STABLE_TAG)["isDraft"])
+        self.assertCountEqual(self.asset_names(STABLE_TAG), STABLE_ASSETS + RETIRED_INSTALLER_ASSETS[2:])
+        self.assertFalse(any("--draft=false" in command for command in self.commands()))
+        del self.env["HORIZON_RELEASE_TEST_FAIL_DELETE_ASSET"]
+        self.publish(tag=STABLE_TAG, prerelease="false")
+        self.assertFalse(self.release(STABLE_TAG)["isDraft"])
+        self.assertCountEqual(self.asset_names(STABLE_TAG), STABLE_ASSETS)
+
+    def test_publish_keeps_assets_of_an_existing_public_release(self):
+        self.write_assets(STABLE_ASSETS)
+        self.ensure_pending(tag=STABLE_TAG, prerelease="false")
+        self.upload_assets(tag=STABLE_TAG)
+        self.publish(tag=STABLE_TAG, prerelease="false")
+        self.attach_legacy_assets(RETIRED_INSTALLER_ASSETS, tag=STABLE_TAG)
+        command_offset = len(self.commands())
+
+        self.publish(tag=STABLE_TAG, prerelease="false")
+
+        self.assertCountEqual(self.asset_names(STABLE_TAG), STABLE_ASSETS + RETIRED_INSTALLER_ASSETS)
+        self.assertFalse(any(
+            command[:2] == ["release", "delete-asset"] for command in self.commands()[command_offset:]
+        ))
+
+    def test_publish_rejects_other_source_before_pruning_installers(self):
+        self.write_assets(STABLE_ASSETS)
+        self.ensure_pending(tag=STABLE_TAG, prerelease="false")
+        self.upload_assets(tag=STABLE_TAG)
+        self.attach_legacy_assets(RETIRED_INSTALLER_ASSETS, tag=STABLE_TAG)
+        command_offset = len(self.commands())
+
+        self.publish(tag=STABLE_TAG, commit=OTHER_COMMIT, prerelease="false", expect=1)
+
+        self.assertTrue(self.release(STABLE_TAG)["isDraft"])
+        self.assertCountEqual(self.asset_names(STABLE_TAG), STABLE_ASSETS + RETIRED_INSTALLER_ASSETS)
+        self.assertFalse(any(
+            command[:2] == ["release", "delete-asset"] for command in self.commands()[command_offset:]
+        ))
 
     def test_script_does_not_invoke_git(self):
         self.write_assets(PRERELEASE_ASSETS)

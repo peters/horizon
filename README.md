@@ -234,14 +234,14 @@ Agents discover one MCP browser contract automatically. Every action is correlat
 
 Grab the latest release from [**Releases**](https://github.com/peters/horizon/releases/latest) — no dependencies needed.
 
-| Platform | Raw binary | Surge installer | |
-|:---------|:-----------|:----------------|:-|
-| **Linux** x64 | `horizon-linux-x64.tar.gz` | `horizon-installer-linux-x64.bin` | Extract and run, or use the installer for managed stable updates |
-| **macOS** arm64 | `horizon-osx-arm64.tar.gz` | `horizon-installer-osx-arm64.bin` | Extract and run, or use the installer for managed stable updates |
-| **macOS** x64 | `horizon-osx-x64.tar.gz` | `horizon-installer-osx-x64.bin` | Extract and run, or use the installer for managed stable updates |
-| **Windows** x64 | `horizon-windows-x64.exe` | `horizon-installer-win-x64.exe` | Run the raw binary directly, or use the installer for managed stable updates |
+| Platform | Download | |
+|:---------|:---------|:-|
+| **Linux** x64 | `horizon-linux-x64.tar.gz` | Extract and run |
+| **macOS** arm64 | `horizon-osx-arm64.tar.gz` | Extract and run |
+| **macOS** x64 | `horizon-osx-x64.tar.gz` | Extract and run |
+| **Windows** x64 | `horizon-windows-x64.exe` | Run the executable |
 
-Homebrew and other package-manager installs keep using the package manager's own upgrade flow. Horizon only offers the in-app update prompt for installs created by the Surge installer.
+To update a downloaded copy, download the new release and replace the executable after you close Horizon. For package-manager installs, use the package manager's upgrade command. Horizon has no in-app updater.
 
 Release builds don't include [speech input](#speech-input-opt-in). Build from source if you want dictation.
 

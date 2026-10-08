@@ -37,7 +37,7 @@ release_inputs=false
 
 while IFS= read -r path; do
   case "$path" in
-    .github/workflows/ci.yml|.github/workflows/release.yml|scripts/build-surge-toolchain.sh|scripts/package-release-asset.sh|scripts/stage-surge-artifacts.sh|snap/*|packaging/linux/*|assets/icons/*)
+    .github/workflows/ci.yml|.github/workflows/release.yml|scripts/package-release-asset.sh|snap/*|packaging/linux/*|assets/icons/*)
       run_snap_build=true
       ;;
   esac

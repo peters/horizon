@@ -14,7 +14,7 @@
 
 Companions of `horizon`:
 
-- Uses: `company` (shared maintenance procedures); `finter-kunnskap` (horizon-finter skill); `surge` (surge-core).
+- Uses: `company` (shared maintenance procedures); `finter-kunnskap` (horizon-finter skill).
 - Used by: `anpr.classification` (Horizon browser_* / device_panel MCP tools); `desktop-migration` (Horizon browser_* / device_panel MCP tools); `jetpack-migration` (Horizon browser_* / device_panel MCP tools); `nativesdk` (Horizon browser_* / device_panel MCP tools); `vagpass.se` (Horizon browser_* / device_panel MCP tools); `youpark.mobile.native` (Horizon browser_* / device_panel MCP tools); `youpark.no` (Horizon browser_* / device_panel MCP tools, Horizon cloud image pins); `youpayv2` (Horizon browser_* / device_panel MCP tools).
 
 When you change a contract shared with a companion (API, package, model files, fixtures, deploy order), check that repo too and update `../company/docs/products.json` if the link itself changes.
@@ -437,20 +437,13 @@ Multi-machine validation (e.g. macOS/Metal on one box, Linux/CUDA on another) is
 
 When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `MicrosoftVisualStudio:windowsplustools:base-win11-gen2:latest` as the current best-known disposable baseline. It worked in `northeurope` when DSv5 quota was unavailable. **Generate a fresh random password** for each VM — never hard-code or commit credentials to the repo.
 
-- **Git and Git LFS are already present on the tested `windowsplustools` image**, but Horizon still needs `git lfs pull` after clone because icons and fonts are stored in LFS and `surge pack` depends on them
+- **Git and Git LFS are already present on the tested `windowsplustools` image**, but Horizon still needs `git lfs pull` after clone because icons and fonts are stored in LFS
 - **Install Visual Studio Build Tools before compiling if `C:\BuildTools\Common7\Tools\VsDevCmd.bat` is missing**:
   ```powershell
-  Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vs_BuildTools.exe -OutFile C:\horizon-surge-smoke\vs_BuildTools.exe
-  C:\horizon-surge-smoke\vs_BuildTools.exe --quiet --wait --norestart --nocache --installPath C:\BuildTools --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621
+  Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vs_BuildTools.exe -OutFile C:\horizon-smoke\vs_BuildTools.exe
+  C:\horizon-smoke\vs_BuildTools.exe --quiet --wait --norestart --nocache --installPath C:\BuildTools --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621
   ```
 - **For iterative Windows smoke work, keep a warm VM and reuse it**. A reused VM avoids Azure provisioning, first boot, and the Build Tools install. If the helper is given an existing `--resource-group` and `--vm-name`, it should start and reuse that VM instead of creating a new one
-- **Reuse the cached Surge toolchain whenever the Surge source commit has not changed**. `scripts/build-surge-toolchain.sh` stamps `.surge/toolchain-bin` with the source ref/commit and skips the rebuild when they still match
-- **Use the released Surge tag as the default smoke path once it exists**. After `v1.0.0-beta.6`, the normal macOS/Linux/Windows smoke path is `./scripts/run-surge-filesystem-smoke.sh` or `./scripts/run-surge-azure-smoke.sh` with no override flags
-- **Horizon ships `offline-gui` installers by default**. Do not switch `.surge/surge.yml` or the smoke harness back to `online-gui` unless the user explicitly wants network-at-install behavior
-- **Use local or pinned Surge sources only for pre-merge validation**. Use `./scripts/run-surge-filesystem-smoke.sh --surge-path ../surge` for local unmerged smoke, or `./scripts/run-surge-azure-smoke.sh --surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha <sha>` to validate an open Surge PR on Azure before merge
-- **When overriding Surge for smoke, patch `surge-core` through a local `file://` Git source, not a raw crate path**. The Git source preserves Surge workspace dependency inheritance on Windows; raw crate-path overrides can fail to resolve `workspace = true` dependencies
-- **On Windows, stop install-root processes before deleting `%LOCALAPPDATA%\\horizon` during repeated smoke runs**. A lingering `horizon.exe` or `surge-supervisor.exe` from the previous pass will otherwise make cleanup fail with `Device or resource busy`
-- **After a headless installer run, stop the installer-launched `--surge-first-run` Horizon process before continuing the scripted smoke**. Leaving that managed-install app instance alive makes repeated Windows checks noisier and can hide later failures behind a still-running first-run session
 - **Stream the guest-side smoke command output live in Azure instead of buffering it until the whole Bash command exits**. The Windows build/install path is too long to diagnose efficiently from a single final dump
 - **Install prerequisites via winget only from a real user session** (winget is per-user and not available from SYSTEM):
   ```powershell
