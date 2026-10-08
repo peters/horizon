@@ -66,6 +66,14 @@ impl Secret {
     }
 }
 
+/// Read straight into a wiped buffer: the string serde builds moves into the
+/// `Secret` without a copy, so a later field that fails to parse still wipes it.
+impl<'de> Deserialize<'de> for Secret {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::new)
+    }
+}
+
 impl std::fmt::Debug for Secret {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("<redacted>")
@@ -161,7 +169,7 @@ impl Client {
     pub fn start_device(&self, client_id: &str) -> Result<DeviceCode> {
         #[derive(Deserialize)]
         struct Fields {
-            device_code: String,
+            device_code: Secret,
             user_code: String,
             verification_uri: String,
             expires_in: u64,
@@ -170,7 +178,7 @@ impl Client {
         }
         let answer = self.oauth("/login/device/code", &[("client_id", client_id)])?;
         let fields: Fields = answer.parse()?;
-        let secret = Secret::new(fields.device_code);
+        let secret = fields.device_code;
         let interval = fields.interval.unwrap_or(DEFAULT_INTERVAL).max(1);
         if !valid_user_code(&fields.user_code) || !safe_https_url(&fields.verification_uri) || interval > MAX_INTERVAL {
             return Err(Error::InvalidResponse);
@@ -265,7 +273,7 @@ impl Client {
             id: u64,
             slug: String,
             client_id: String,
-            client_secret: String,
+            client_secret: Secret,
             html_url: String,
         }
         let code = code.expose();
@@ -286,7 +294,7 @@ impl Client {
         // Only these fields are read: the private key and webhook secret in the same
         // answer stay in the wiped response buffer.
         let fields: Fields = answer.parse()?;
-        let client_secret = Secret::new(fields.client_secret);
+        let client_secret = fields.client_secret;
         if !valid_slug(&fields.slug) || !valid_client_id(&fields.client_id) || !safe_https_url(&fields.html_url) {
             return Err(Error::InvalidResponse);
         }
@@ -410,15 +418,15 @@ fn oauth_error(code: &str) -> Error {
 fn chain(answer: &Answer) -> Result<Chain> {
     #[derive(Deserialize)]
     struct Fields {
-        access_token: String,
+        access_token: Secret,
         token_type: String,
         expires_in: Option<u64>,
-        refresh_token: Option<String>,
+        refresh_token: Option<Secret>,
         refresh_token_expires_in: Option<u64>,
     }
     let fields: Fields = answer.parse()?;
-    let access_token = Secret::new(fields.access_token);
-    let refresh_token = fields.refresh_token.map(Secret::new);
+    let access_token = fields.access_token;
+    let refresh_token = fields.refresh_token;
     // Callers send the token as a bearer token; any other type is a malformed answer.
     if !fields.token_type.eq_ignore_ascii_case("bearer") {
         return Err(Error::InvalidResponse);
