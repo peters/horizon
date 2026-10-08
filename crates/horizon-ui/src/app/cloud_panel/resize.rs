@@ -266,6 +266,68 @@ mod tests {
     }
 
     #[test]
+    fn a_deployed_cloud_in_a_preset_resizes_with_its_slot_and_follows_board_layouts() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let workspace = app.board.create_workspace_at("Cloud fixture", [0.0, 0.0]);
+        let neighbour_panel = app
+            .board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Usage,
+                    ..PanelOptions::default()
+                },
+                workspace,
+            )
+            .unwrap();
+        let local = app.board.workspace(workspace).unwrap().local_id.clone();
+        let mut group = CloudGroup::new(101, "Fixture".into(), local, "/fixture".into(), [2000.0, 120.0]);
+        let config = horizon_core::cloud_panel::CloudConfig::parse(
+            "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n",
+        )
+        .unwrap();
+        group.environment.id = "slot-ui-fixture".into();
+        group.remote = Some(horizon_core::cloud_panel::CloudLaunch {
+            deployment_started: true,
+            id: "slot-ui-fixture".into(),
+            revision: "a".repeat(40),
+            profile_name: "dev".into(),
+            profile: config.profiles["dev"].clone(),
+            placement: horizon_core::cloud_panel::Placement::default(),
+        });
+        app.board.cloud_groups.0.push(group);
+        app.board
+            .arrange_workspace(workspace, horizon_core::WorkspaceLayout::Grid);
+        let ctx = egui::Context::default();
+        app.prepare_cloud_prototype(&ctx);
+        let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 0.05 && (a[1] - b[1]).abs() < 0.05;
+        assert!(app.board.cloud_takes_slot(&app.cloud_prototype.groups.0[0]));
+        let slot = app.board.panel(neighbour_panel).unwrap().layout.size;
+        assert!(near(app.cloud_prototype.groups.0[0].size, slot));
+
+        let size = [slot[0] + 240.0, slot[1] + 120.0];
+        assert!(app.resize_cloud_frame(101, size, &[workspace]));
+        assert!(near(app.board.panel(neighbour_panel).unwrap().layout.size, size));
+        assert!(near(app.cloud_prototype.groups.0[0].size, size));
+
+        // A layout chosen on the board alone moves the cloud, and the UI copy follows.
+        app.board
+            .arrange_workspace(workspace, horizon_core::WorkspaceLayout::Rows);
+        app.prepare_cloud_prototype(&ctx);
+        let placed = app
+            .board
+            .cloud_groups
+            .0
+            .iter()
+            .find(|group| group.issue == 101)
+            .unwrap()
+            .position;
+        assert!(near(app.cloud_prototype.groups.0[0].position, placed));
+        let panel = app.board.panel(neighbour_panel).unwrap().layout;
+        assert!((placed[0] - panel.position[0]).abs() < 0.05, "Rows stack the slots");
+        assert!(placed[1] > panel.position[1] + panel.size[1]);
+    }
+
+    #[test]
     fn zoomed_corner_drag_resizes_by_the_canvas_delta_without_panning() {
         let (temp, mut app) = crate::app::test_support::test_app();
         let workspace = app.board.create_workspace("fixture");

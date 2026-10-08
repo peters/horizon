@@ -532,6 +532,9 @@ fn cloud_creation_requires_the_selected_workspace_in_the_main_window() {
 
 #[test]
 fn new_cloud_placement_is_relative_to_translated_workspace() {
+    // A new cloud takes the next slot of its workspace's Grid preset, measured from
+    // wherever the workspace was moved.
+    let mut pad = None;
     for origin in [[500.0, -100.0], [-500.0, 250.0], [0.0, 0.0], [5000.0, 5000.0]] {
         let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
             runtime_state: Box::new(RuntimeState::default()),
@@ -542,9 +545,13 @@ fn new_cloud_placement_is_relative_to_translated_workspace() {
         app.cloud_prototype.production.creating = true;
         app.create_production_cloud(&ctx).unwrap();
         finish_creation(&ctx, &mut app);
+        assert!(app.board.cloud_takes_slot(&app.cloud_prototype.groups.0[0]));
+        let offset = app.cloud_prototype.groups.0[0].position[0] - origin[0];
+        let pad = *pad.get_or_insert(offset);
+        assert!(pad > 0.0, "inside the workspace's padding");
         assert_position(
             app.cloud_prototype.groups.0[0].position,
-            [origin[0] + 24.0, origin[1] + 128.0],
+            [origin[0] + pad, origin[1] + pad],
         );
         let initial_view = app.canvas_view;
         app.cloud_prototype.groups.reconcile(&mut app.board);
@@ -555,11 +562,11 @@ fn new_cloud_placement_is_relative_to_translated_workspace() {
         finish_creation(&ctx, &mut app);
         let first = &app.cloud_prototype.groups.0[0];
         let second = &app.cloud_prototype.groups.0[1];
-        assert_position(first.position, [origin[0] + 24.0, origin[1] + 128.0]);
-        assert_position(
-            second.position,
-            [first.position[0], first.overview_bounds().1[1] + 48.0],
-        );
+        assert_position(first.position, [origin[0] + pad, origin[1] + pad]);
+        // Grid of two: side by side, the same size.
+        assert!(second.position[0] > first.position[0] + first.size[0]);
+        assert_position([0.0, second.position[1]], [0.0, first.position[1]]);
+        assert_position(second.size, first.size);
         let positions = [first.position, second.position];
         let overview = app.canvas_view;
         let saved = serde_json::to_vec(&app.cloud_prototype.groups).unwrap();

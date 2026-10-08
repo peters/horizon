@@ -10,8 +10,10 @@ use super::{Board, WorkspaceLayout, vec2_eq};
 mod alignment;
 mod panel_collisions;
 mod reordering;
+mod slots;
 
 pub use alignment::WorkspaceAlignment;
+pub(crate) use slots::Slot;
 
 impl Board {
     /// After the workspace `source` was moved, push every overlapping
@@ -345,15 +347,10 @@ impl Board {
             self.set_workspace_layout(id, None);
             return;
         }
-        let Some(count) = self.workspace(id).map(|workspace| {
-            workspace
-                .panels
-                .iter()
-                .filter(|panel_id| self.panel_follows_workspace_layout(**panel_id))
-                .count()
-        }) else {
+        if self.workspace(id).is_none() {
             return;
-        };
+        }
+        let count = self.arranged_slots(id).len();
         if count == 0 {
             self.set_workspace_layout(id, Some(layout));
             return;
@@ -386,16 +383,13 @@ impl Board {
         let mut min = [f32::MAX, f32::MAX];
         let mut max = [f32::MIN, f32::MIN];
         let mut any = false;
-        for panel_id in &workspace.panels {
-            if !self.panel_follows_workspace_layout(*panel_id) {
-                continue;
-            }
-            if let Some(panel) = self.panel(*panel_id) {
+        for slot in self.arranged_slots(id) {
+            if let Some((position, size)) = self.slot_rect(slot) {
                 any = true;
-                min[0] = min[0].min(panel.layout.position[0]);
-                min[1] = min[1].min(panel.layout.position[1]);
-                max[0] = max[0].max(panel.layout.position[0] + panel.layout.size[0]);
-                max[1] = max[1].max(panel.layout.position[1] + panel.layout.size[1]);
+                min[0] = min[0].min(position[0]);
+                min[1] = min[1].min(position[1]);
+                max[0] = max[0].max(position[0] + size[0]);
+                max[1] = max[1].max(position[1] + size[1]);
             }
         }
         if !any {
@@ -409,75 +403,80 @@ impl Board {
         Some([(max[0] - min_x).max(0.0), (max[1] - min_y).max(0.0)])
     }
 
+    /// The slot size of the current arrangement: an ordinary panel's, else a cloud's.
     fn workspace_layout_panel_size(&self, id: WorkspaceId) -> Option<[f32; 2]> {
-        let workspace = self.workspace(id)?;
-        workspace.panels.iter().find_map(|panel_id| {
-            self.panel_follows_workspace_layout(*panel_id)
-                .then(|| self.panel(*panel_id).map(|panel| panel.layout.size))
-                .flatten()
-        })
+        let slots = self.arranged_slots(id);
+        slots
+            .iter()
+            .find(|slot| matches!(slot, Slot::Panel(_)))
+            .or_else(|| slots.first())
+            .and_then(|slot| self.slot_rect(*slot))
+            .map(|(_, size)| size)
     }
 
-    fn apply_workspace_layout_with_panel_size(
+    pub(crate) fn apply_workspace_layout_with_panel_size(
         &mut self,
         id: WorkspaceId,
         layout: WorkspaceLayout,
         panel_size: [f32; 2],
     ) {
-        let Some((panel_ids, origin)) = self.workspace(id).map(|workspace| {
-            (
-                workspace
-                    .panels
-                    .iter()
-                    .copied()
-                    .filter(|panel_id| self.panel_follows_workspace_layout(*panel_id))
-                    .collect::<Vec<_>>(),
-                workspace.position,
-            )
-        }) else {
+        let Some(origin) = self.workspace(id).map(|workspace| workspace.position) else {
             return;
         };
-        let count = panel_ids.len();
-        if count == 0 {
-            self.set_workspace_layout(id, Some(layout));
+        let slots = self.arranged_slots(id);
+        self.set_workspace_layout(id, Some(layout));
+        if slots.is_empty() {
             return;
         }
-
-        self.set_workspace_layout(id, Some(layout));
-
-        for (index, panel_id) in panel_ids.iter().enumerate() {
-            let (position, size) = arranged_panel_layout(origin, layout, index, count, panel_size);
-
-            if let Some(panel) = self.panel_mut(*panel_id) {
-                panel.move_to(position);
-                panel.resize_layout(size);
-            }
+        let needed = self.place_slots(id, origin, layout, &slots, panel_size);
+        // A cloud that cannot shrink to the slot sets the size every slot shares.
+        if !vec2_eq(needed, panel_size) {
+            self.place_slots(id, origin, layout, &slots, needed);
         }
-        self.keep_arranged_panels_clear_of_clouds(id, &panel_ids);
+        self.keep_arranged_slots_clear_of_clouds(id, &slots);
     }
 
-    /// A workspace preset must not paint its panels over an attached cloud.
-    /// The cloud keeps its own position and internal layout; the arranged
-    /// panels move together until their chrome no longer covers it.
-    fn keep_arranged_panels_clear_of_clouds(&mut self, id: WorkspaceId, panel_ids: &[PanelId]) {
-        let obstacles = self.cloud_overview_rects(id);
+    /// A workspace preset must not paint its slots over a cloud that does not take one.
+    /// That cloud keeps its own position and internal layout; the arranged slots move
+    /// together until their chrome no longer covers it.
+    fn keep_arranged_slots_clear_of_clouds(&mut self, id: WorkspaceId, slots: &[Slot]) {
+        let obstacles = self.cloud_obstacle_rects(id);
         if obstacles.is_empty() {
             return;
         }
-        let rects: Vec<[f32; 4]> = panel_ids
+        let rects: Vec<[f32; 4]> = slots
             .iter()
-            .filter_map(|panel_id| self.panel(*panel_id))
-            .map(|panel| super::panel_visual_rect(panel.layout.position, panel.layout.size))
+            .filter_map(|slot| self.slot_rect(*slot))
+            .map(|(position, size)| super::panel_visual_rect(position, size))
             .collect();
         let shift = clearance_translation(&rects, &obstacles);
         if shift[0].abs() <= f32::EPSILON && shift[1].abs() <= f32::EPSILON {
             return;
         }
-        for panel_id in panel_ids {
-            if let Some(panel) = self.panel_mut(*panel_id) {
-                let position = panel.layout.position;
-                panel.move_to([position[0] + shift[0], position[1] + shift[1]]);
-            }
+        self.translate_slots(slots, shift);
+    }
+
+    /// Clouds in `id` that a preset arranges around rather than into a slot.
+    fn cloud_obstacle_rects(&self, id: WorkspaceId) -> Vec<[f32; 4]> {
+        #[cfg(feature = "cloud-workspaces")]
+        {
+            let Some(local_id) = self.workspace(id).map(|workspace| workspace.local_id.clone()) else {
+                return Vec::new();
+            };
+            self.cloud_groups
+                .0
+                .iter()
+                .filter(|group| group.workspace == local_id && !group.takes_workspace_slot())
+                .map(|group| {
+                    let (min, max) = group.overview_bounds();
+                    [min[0], min[1], max[0], max[1]]
+                })
+                .collect()
+        }
+        #[cfg(not(feature = "cloud-workspaces"))]
+        {
+            let _ = id;
+            Vec::new()
         }
     }
 

@@ -76,6 +76,7 @@ impl HorizonApp {
         let mut action = None;
         let mut title_action = RenameEditAction::None;
         let mut moved = false;
+        let mut slotted = false;
         let mut strip_actions = Vec::new();
         let now = std::time::SystemTime::now();
         for group in &mut self.cloud_prototype.groups.0 {
@@ -148,8 +149,7 @@ impl HorizonApp {
                 })
                 .inner;
             if response.dragged() {
-                let delta = response.drag_delta();
-                group.translate(&mut self.board, [delta.x, delta.y]);
+                slotted |= drag_cloud(&mut self.board, group, &response);
                 moved = true;
             }
             if response.double_clicked() {
@@ -160,6 +160,9 @@ impl HorizonApp {
                 let ready = self.cloud_prototype.production.accepts_panels(group);
                 empty_group(ctx, group, rect, transform, clip, ready);
             }
+        }
+        if slotted {
+            self.cloud_prototype.groups.adopt_slot_geometry(&self.board);
         }
         if moved {
             self.save_cloud_prototype();
@@ -269,6 +272,19 @@ impl HorizonApp {
             self.cloud_prototype.error = None;
         }
     }
+}
+
+/// A header drag moves a cloud freely, or between slots like a panel when its workspace
+/// has a preset. Returns whether the slots were reordered on the board.
+fn drag_cloud(board: &mut horizon_core::Board, group: &mut CloudGroup, response: &egui::Response) -> bool {
+    if board.cloud_takes_slot(group) {
+        return response
+            .interact_pointer_pos()
+            .is_some_and(|point| board.swap_cloud_slot_at(&group.environment.id, [point.x, point.y]));
+    }
+    let delta = response.drag_delta();
+    group.translate(board, [delta.x, delta.y]);
+    false
 }
 
 fn cloud_context(response: &egui::Response, group: &CloudGroup, action: &mut Option<Action>) {

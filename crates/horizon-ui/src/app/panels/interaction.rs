@@ -103,9 +103,14 @@ impl HorizonApp {
             }
             return changed;
         }
-        self.board
-            .arranged_panel_collision_target(panel_id, position)
-            .is_some_and(|target| self.board.swap_arranged_panels(panel_id, target))
+        #[cfg(feature = "cloud-workspaces")]
+        {
+            self.reorder_ordinary_panel(panel_id, position)
+        }
+        #[cfg(not(feature = "cloud-workspaces"))]
+        {
+            self.board.reorder_arranged_slot(panel_id, position)
+        }
     }
 
     pub(super) fn update_panel_interactions(
