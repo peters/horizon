@@ -19,8 +19,8 @@ that workspace.
 
 - Candidate: each candidate that changes cast capture, cloud cards or
   workspace bounds.
-- Platforms: Linux, with the local device fixture and one paired Apple TV or
-  Chromecast receiver on the same network.
+- Platforms: Linux, with the local device fixture and one Apple TV on the same
+  network. The Cast picker finds Apple TV receivers only.
 - This procedure does not test: the cast of one cloud card as its own source,
   a workspace with only clouds (it has no Cast entry until the cloud card gets
   one; a unit test covers its bounds), pairing, or the encoder.
@@ -39,7 +39,7 @@ that workspace.
 - A Device panel that shows a live view of the fixture.
 - In the fixture: workspace A with one terminal and one cloud card that is not
   deployed. A cloud that is not deployed rents no compute.
-- One receiver that the candidate can pair with.
+- One Apple TV that the candidate can pair with.
 
 ## 5. Setup
 
@@ -75,14 +75,17 @@ that workspace.
 1. Start a cast of workspace A. Move the canvas until a part of the cloud card
    is outside the canvas.
 
-   Result: The cast pauses or stops with `Fit the entire source into view`.
+   Result: The cast stops, and Horizon shows `Casting stopped because its
+   source is no longer visible`. The receiver shows no more Horizon frames.
 
 ### 6.3 OVER — A foreign panel over the cloud
 
 1. Start a cast of workspace A again. Drag a terminal from another workspace
    over the cloud card.
 
-   Result: The cast stops with `Another panel overlaps this source`.
+   Result: The cast stops, and Horizon shows `Casting stopped because its
+   source is no longer visible`. The receiver never shows the foreign
+   terminal.
 
 ## 7. Pass criteria
 

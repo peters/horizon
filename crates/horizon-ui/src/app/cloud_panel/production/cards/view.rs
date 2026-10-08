@@ -313,8 +313,9 @@ impl HorizonApp {
         })
     }
 
-    /// Opens the drawer of cloud `issue` on its first tab, for tests outside this module.
-    #[cfg(test)]
+    /// Opens the drawer of cloud `issue` on its first tab, for the casting tests, which
+    /// build on Linux only.
+    #[cfg(all(test, target_os = "linux"))]
     pub(in crate::app) fn open_cloud_drawer(&mut self, issue: u32) {
         self.cloud_prototype
             .production
