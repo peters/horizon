@@ -20,6 +20,16 @@ A price limit applies in each offer's native currency. An incomplete comparison
 is not a complete cross-provider ranking. Worker prices refresh from the owner;
 the worker refuses prices older than 20 minutes. Offers reserve no capacity.
 
+## Repository development profiles
+
+Read the repository's `.horizon/cloud.yml` before comparing task workers. Use its
+CPU, memory and storage minimums in the offer request. The Horizon repository's
+CPU profile requests at least 4 vCPU and 8 GB memory for one task per worker.
+Its validation helper defaults to two CPU build jobs; `CARGO_BUILD_JOBS` overrides
+this value. The GPU profile keeps its own resource and build-job defaults.
+Allocation minimums do not establish a successful full validation run. Report
+measured validation and memory results separately from the configured minimums.
+
 ## Host companion lifecycle
 
 1. Read `cloud_companions` for selected aliases, cloud identity, and saved tailnets.

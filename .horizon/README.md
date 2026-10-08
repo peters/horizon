@@ -6,6 +6,12 @@ for `speech-cuda` builds. It never falls back to a CPU allocation. Both profiles
 include Rust 1.98.1, formatting/lint tools, speech and graphics headers, the
 configured agent, both browser engines, and a private native desktop.
 
+The `cpu` profile requests at least 4 vCPU and 8 GB memory for one task per worker.
+The `gpu` profile requests at least 8 vCPU and 32 GB memory.
+These values are allocation minimums. They do not establish that a worker completes
+the full validation matrix. Record the worker resources, validation results and
+memory measurements for each qualification run.
+
 Both profiles enable only `claude`. The tested provider runtime denies the user
 namespaces required by `codex` protected execution, so that agent is intentionally
 excluded from the advertised capabilities even though its CLI remains installed
@@ -54,6 +60,17 @@ configuration so synthetic repositories use their own LFS storage and settings.
 A successful CUDA build
 does not establish inference accuracy or hardware graphics rendering; those
 require the corresponding live workload and adapter evidence.
+
+The validation helper defaults to two build jobs for CPU workers and eight for GPU
+workers. Set `CARGO_BUILD_JOBS` to override either default. If a CPU run needs less
+memory, use one build job:
+
+```sh
+CARGO_BUILD_JOBS=1 .horizon/validate.sh cpu
+```
+
+The helper runs each validation command in sequence. Keep one validation run active
+per worker. Additional builds and browsers can increase memory use.
 
 The GPU validation helper uses `cargo rustc --locked -p horizon-ui --bin horizon
 --features speech-cuda -- -l nccl`. This links the NCCL library already supplied
