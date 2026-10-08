@@ -100,51 +100,58 @@ Do not compare a current offer with an older price without an explicit date.
 
    Result: The measured period includes setup and every allocation attempt.
 
-2. Record each allocated resource in the private resource ledger.
+> **CAUTION:** ALLOCATE ONLY THE AUTHORIZED WORKER. Allocation, failed starts and retained resources can produce charges.
+
+2. Allocate the authorized worker through the repository's normal provider or Horizon flow.
+   Use the selected worker type, region and pinned image.
+
+   Result: The allocation uses the declared comparison candidate and resource budget.
+
+3. Record each allocated resource in the private resource ledger.
 
    Result: The run can identify and remove only its own resources.
 
-3. Select the normal worker user for the task.
+4. Select the normal worker user for the task.
 
    Result: Tests use the same permissions and agent protections as normal work.
 
-4. Examine the effective user, home directory, tool paths and cache permissions from the image's normal launcher.
+5. Examine the effective user, home directory, tool paths and cache permissions from the image's normal launcher.
 
    Result: The task uses the declared worker environment, not an absent default home directory.
 
-5. Use an isolated checkout and build cache for each comparison lane.
+6. Use an isolated checkout and build cache for each comparison lane.
 
    Result: A different worker cannot inherit an undisclosed cache advantage.
 
-6. Label the run `cold`, `warm` or `mixed` before the task starts.
+7. Label the run `cold`, `warm` or `mixed` before the task starts.
 
    Result: The report states which image, dependency and build caches exist.
 
-7. Start worker memory, swap and disk measurements before the task starts.
+8. Start worker memory, swap and disk measurements before the task starts.
 
    Result: Measurements include the complete task execution.
 
-8. Run one complete validation matrix at a time as the selected normal worker user.
+9. Run one complete validation matrix at a time as the selected normal worker user.
 
    Result: Unrelated builds do not change the memory or duration measurements.
 
-9. Record setup time, task time and total elapsed time.
+10. Record setup time, task time and total elapsed time.
 
-   Result: The report includes allocation, image pull, checkout, task and cleanup time.
+    Result: The report includes allocation, image pull, checkout, task and cleanup time.
 
-10. Record memory, swap and disk use during the task.
+11. Record memory, swap and disk use during the task.
 
     Result: The report includes peaks, limits and out-of-memory events.
 
-11. Preserve every failed attempt before a retry.
+12. Preserve every failed attempt before a retry.
 
     Result: The record includes the failure, elapsed time, cost and retry reason.
 
-12. Repeat the unchanged task according to the declared cold and warm sample counts.
+13. Repeat the unchanged task according to the declared cold and warm sample counts.
 
     Result: Cold and warm results remain separate, with every failure recorded.
 
-13. Record the duration range and failures across all samples.
+14. Record the duration range and failures across all samples.
 
     Result: The report shows variation; one successful warm sample does not establish reliability.
 
