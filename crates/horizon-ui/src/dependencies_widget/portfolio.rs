@@ -59,16 +59,23 @@ pub(super) fn show(
 ) -> Option<Action> {
     let mut action = None;
     let fixed = HEADER + SUMMARY + SEARCH + FOOTER + GAPS.iter().sum::<f32>();
-    let body = (ui.available_height() - fixed).max(BODY_MIN);
-    egui::ScrollArea::vertical()
-        .id_salt("dependencies-portfolio")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = Vec2::ZERO;
-            ui.push_id("dependencies-portfolio", |ui| {
-                portfolio(ui, status, transport_error, state, body, &mut action);
-            });
+    // The body takes the remaining height; only a panel too short for it scrolls,
+    // so a scroll bar never takes width from a portfolio that fits.
+    let room = (ui.available_height() - fixed).floor();
+    let mut draw = |ui: &mut egui::Ui| {
+        ui.spacing_mut().item_spacing = Vec2::ZERO;
+        ui.push_id("dependencies-portfolio", |ui| {
+            portfolio(ui, status, transport_error, state, room.max(BODY_MIN), &mut action);
         });
+    };
+    if room >= BODY_MIN {
+        draw(ui);
+    } else {
+        egui::ScrollArea::vertical()
+            .id_salt("dependencies-portfolio")
+            .auto_shrink([false, false])
+            .show(ui, draw);
+    }
     instructions::sheet(ui.ctx(), state, status).or(action)
 }
 
