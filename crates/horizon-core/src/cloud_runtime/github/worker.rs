@@ -20,9 +20,12 @@ pub(super) enum Status {
     Unavailable,
     /// A chain that renews, acting as `login`, for these lowercase repositories.
     /// `requests` is whether the service takes agents' access requests.
+    /// `checkouts` are the repositories granted for this cloud's checkouts; the others in
+    /// `repositories` were allowed for the whole cloud on an agent's request.
     Current {
         login: String,
         repositories: Vec<String>,
+        checkouts: Vec<String>,
         requests: bool,
     },
 }
@@ -41,7 +44,11 @@ pub(super) fn parse_status(output: &str) -> Status {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Held {
-        Grant { repository: String },
+        Grant {
+            repository: String,
+            #[serde(default)]
+            target: Option<String>,
+        },
         Name(String),
     }
     #[derive(Deserialize)]
@@ -63,14 +70,21 @@ pub(super) fn parse_status(output: &str) -> Status {
     else {
         return Status::Absent;
     };
-    let repositories: Vec<String> = fields
+    let held: Vec<(String, bool)> = fields
         .repositories
         .into_iter()
         .map(|held| match held {
-            Held::Grant { repository } | Held::Name(repository) => repository,
+            Held::Grant { repository, target } => (repository, target.is_some()),
+            Held::Name(repository) => (repository, true),
         })
-        .filter(|name| horizon_cloud::github::valid_repository(name))
-        .map(|name| name.to_ascii_lowercase())
+        .filter(|(name, _)| horizon_cloud::github::valid_repository(name))
+        .map(|(name, checkout)| (name.to_ascii_lowercase(), checkout))
+        .collect();
+    let repositories: Vec<String> = held.iter().map(|(name, _)| name.clone()).collect();
+    let checkouts: Vec<String> = held
+        .iter()
+        .filter(|(_, checkout)| *checkout)
+        .map(|(name, _)| name.clone())
         .collect();
     match fields.state.as_str() {
         "unsupported" => Status::Unsupported,
@@ -79,6 +93,7 @@ pub(super) fn parse_status(output: &str) -> Status {
         "ok" if !repositories.is_empty() => Status::Current {
             login: fields.login.unwrap_or_default(),
             repositories,
+            checkouts,
             requests: fields.pending_requests.is_some(),
         },
         _ => Status::Absent,

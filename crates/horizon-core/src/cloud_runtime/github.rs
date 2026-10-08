@@ -188,6 +188,7 @@ pub fn configure(
             login,
             repositories,
             requests,
+            ..
         } = held
         {
             say("the worker holds access from an earlier connection.");
@@ -210,8 +211,9 @@ pub fn configure(
         worker::Status::Current {
             login,
             repositories,
+            checkouts,
             requests,
-        } if !renew => {
+        } if !renew && !narrower(&checkouts, &grants, &say) => {
             say("the worker holds current access.");
             for grant in grants.iter().filter(|grant| !covers(&repositories, grant)) {
                 say(&format!(
@@ -227,6 +229,7 @@ pub fn configure(
             login,
             repositories,
             requests,
+            ..
         } => Some((login, repositories, requests)),
         worker::Status::Absent => None,
     };
@@ -307,6 +310,21 @@ fn sign_in(
         renewable: true,
     }));
     Ok(Ok(()))
+}
+
+/// Whether the worker holds access for checkouts this cloud no longer has, such as a
+/// removed sibling. Such access is narrowed by signing in again, which `say` announces.
+fn narrower(checkouts: &[String], grants: &[Grant], say: &dyn Fn(&str)) -> bool {
+    let stale: Vec<&String> = checkouts
+        .iter()
+        .filter(|held| !grants.iter().any(|grant| grant.repository.eq_ignore_ascii_case(held)))
+        .collect();
+    for repository in &stale {
+        say(&format!(
+            "{repository} is no longer checked out on this cloud; signing in again to narrow its access."
+        ));
+    }
+    !stale.is_empty()
 }
 
 /// Whether the worker's access reaches the grant's repository.

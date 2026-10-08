@@ -85,6 +85,7 @@ fn worker_status_is_read_from_its_last_json_line() {
         Status::Current {
             login: "octo-cat".into(),
             repositories: vec!["acme/web".into()],
+            checkouts: vec!["acme/web".into()],
             requests: false
         },
         "the worker reports each grant as an object"
@@ -94,6 +95,7 @@ fn worker_status_is_read_from_its_last_json_line() {
         Status::Current {
             login: "octo-cat".into(),
             repositories: vec!["acme/web".into()],
+            checkouts: vec!["acme/web".into()],
             requests: false
         }
     );
@@ -113,11 +115,12 @@ fn a_service_that_is_not_running_is_not_current_and_requests_need_support() {
     );
     assert_eq!(
         parse_status(
-            "{\"state\":\"ok\",\"serving\":true,\"login\":\"octo-cat\",\"pending_requests\":0,\"repositories\":[{\"repository\":\"acme/web\"}]}"
+            "{\"state\":\"ok\",\"serving\":true,\"login\":\"octo-cat\",\"pending_requests\":0,\"repositories\":[{\"repository\":\"acme/web\",\"target\":\"primary\"}]}"
         ),
         Status::Current {
             login: "octo-cat".into(),
             repositories: vec!["acme/web".into()],
+            checkouts: vec!["acme/web".into()],
             requests: true
         }
     );
@@ -497,4 +500,32 @@ fn more_grants_than_a_worker_takes_are_refused_before_any_sign_in() {
         grants(&state, &runner).is_err(),
         "the primary and 16 siblings are 17 grants"
     );
+}
+
+#[test]
+fn access_for_a_removed_checkout_is_narrowed_and_cloud_grants_are_kept() {
+    use worker::{Status, parse_status};
+    let Status::Current {
+        checkouts,
+        repositories,
+        ..
+    } = parse_status(
+        "{\"state\":\"ok\",\"serving\":true,\"repositories\":[\
+         {\"repository\":\"acme/web\",\"target\":\"primary\"},\
+         {\"repository\":\"acme/old-lib\",\"target\":\"sibling:lib\"},\
+         {\"repository\":\"acme/extra\",\"target\":null}]}",
+    )
+    else {
+        panic!("a current chain");
+    };
+    assert_eq!(repositories.len(), 3);
+    let grants = [Grant {
+        repository: "acme/web".into(),
+        target: Target::Primary,
+    }];
+    let said = std::cell::RefCell::new(Vec::new());
+    let say = |text: &str| said.borrow_mut().push(text.to_owned());
+    assert!(narrower(&checkouts, &grants, &say), "the removed sibling is narrowed");
+    assert_eq!(said.borrow().len(), 1, "a grant for the whole cloud is not stale");
+    assert!(!narrower(&["acme/web".to_owned()], &grants, &say));
 }
