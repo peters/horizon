@@ -782,12 +782,12 @@ horizon-worker-github install < chain.json
   refused.
 - Each target repository gets the same configuration as a version 2 install: a
   clean HTTPS `origin`, no separate push URL and the author identity. The Git
-  helper does this work as the agent user, and it gets no token. The new chain is
-  stored first as `installing`, which the service never serves, and becomes `ok`
-  only after every repository is configured. If the configuration fails, the
+  helper does this work as the agent user, and it gets no token. The previous
+  chain stays stored and served until every repository is configured; only then
+  is the new chain stored. If the configuration or that save fails, the
   repositories of the previous chain are configured again and the previous chain
-  is stored again. The install then removes the static token file, so one source
-  of tokens remains.
+  stays. The install then removes the static token file, so one source of tokens
+  remains.
 - The output is the same JSON as `status`.
 
 **Storage.** The chain is stored in `/workspace/.horizon-root/github/state.json`.

@@ -205,8 +205,8 @@ class InstallationTests(ServiceTestCase):
         service.install(installation(chain=chain(access='ghu_synthetic-new')), self.store, now=lambda: NOW,
                         configure=configure, retire=lambda: None)
         self.assertNotIn('ghu_synthetic-new', json.dumps(seen))
-        self.assertEqual(seen[0].get('state'), service.INSTALLING)
-        self.assertEqual(self.stored()['state'], 'ok')
+        self.assertIn(ACCESS, json.dumps(seen), 'the previous chain serves until the new one is stored')
+        self.assertEqual(self.stored()['chain']['access_token'], 'ghu_synthetic-new')
 
     def test_a_failed_configuration_configures_the_previous_repositories_again(self):
         self.install()
@@ -222,6 +222,17 @@ class InstallationTests(ServiceTestCase):
         self.assertEqual(calls[1]['grants'][0]['author_name'], 'Test Author', 'the previous identity comes back')
         self.assertEqual(self.stored()['state'], 'ok')
 
+    def test_a_worker_that_stops_midway_still_holds_the_previous_chain(self):
+        self.install()
+
+        def stop(payload):
+            raise KeyboardInterrupt('the worker stops')
+        with self.assertRaises(KeyboardInterrupt):
+            service.install(installation(chain=chain(access='ghu_synthetic-new')), self.store, now=lambda: NOW,
+                            configure=stop, retire=lambda: None)
+        restarted = service.Store(self.store.persistent, self.root / 'run/after-stop')
+        self.assertEqual(restarted.load()[0]['chain'], chain())
+
     def test_a_failed_first_configuration_leaves_no_chain(self):
         def refuse(payload):
             raise subprocess.CalledProcessError(1, 'configure')
@@ -231,11 +242,13 @@ class InstallationTests(ServiceTestCase):
         self.assertIsNone(self.stored())
         self.assertEqual(self.retired, [])
 
-    def test_a_failed_save_configures_nothing_and_retires_nothing(self):
+    def test_a_failed_save_stores_nothing_and_retires_nothing(self):
         with mock.patch.object(self.store, 'save', side_effect=OSError('read-only')), \
                 self.assertRaises(OSError):
             self.install()
-        self.assertEqual((self.configured, self.retired), ([], []))
+        self.assertEqual(len(self.configured), 1, 'the repositories are configured before the save')
+        self.assertEqual(self.retired, [])
+        self.assertIsNone(self.stored())
 
     def test_a_static_binding_that_stays_does_not_fail_the_install(self):
         def stuck():
