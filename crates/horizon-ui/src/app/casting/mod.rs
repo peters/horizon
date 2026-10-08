@@ -5,6 +5,9 @@ mod notifications;
 mod popup;
 mod requests;
 mod scaling;
+mod workspace;
+
+pub(in crate::app) use controls::paint_cast_icon;
 
 use horizon_cast::{CastSession, PairedDevice, PairingStore, Receiver};
 use horizon_core::WorkspaceId;
@@ -46,9 +49,26 @@ struct Session {
     failure_notified: bool,
     agent_controlled: bool,
 }
+/// What opened the picker. Choosing the same control again closes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Anchor {
+    /// A panel's cast icon; the picker stays next to that panel.
+    Panel(horizon_core::PanelId),
+    /// The cast button in a workspace's toolbar.
+    Workspace,
+    /// **Cast…** in the Manage tab of the cloud with this issue number.
+    Cloud(u32),
+}
+impl Anchor {
+    fn panel(self) -> Option<horizon_core::PanelId> {
+        match self {
+            Self::Panel(id) => Some(id),
+            Self::Workspace | Self::Cloud(_) => None,
+        }
+    }
+}
 struct Picker {
-    /// The panel whose cast icon opened the picker; `None` when a cloud's Manage tab did.
-    anchor: Option<horizon_core::PanelId>,
+    anchor: Anchor,
     workspace: WorkspaceId,
     source: CastSource,
     receiver: Option<String>,
