@@ -84,6 +84,64 @@ fn both_providers_are_listed_and_cheapest_chooses_an_exact_hetzner_worker() {
 }
 
 #[test]
+fn a_large_profile_selects_a_catalog_worker_outside_hetzner_fallback_preferences() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let form = &mut app.cloud_prototype.production;
+    let profile = form.profiles.as_mut().unwrap().profiles.get_mut("development").unwrap();
+    profile.cpu = 8;
+    profile.memory_gb = 32;
+    form.provider = None;
+    form.size = None;
+    form.placement = horizon_core::cloud_panel::Placement::default();
+    let mut current = catalog(true);
+    let mut larger = current.offers[0].clone();
+    larger.server_type = "cx53".into();
+    larger.cores = 16;
+    larger.memory_gb = 32.0;
+    larger.disk_gb = 320;
+    larger.hourly_eur = 0.0412;
+    larger.monthly_eur = 25.49;
+    current.offers.push(larger);
+    form.prices
+        .hetzner
+        .answered_with_policy(Some(current), &["cx43", "cx33", "cpx42"], &["hel1"]);
+
+    let output = tall_frame(&ctx, &mut app);
+    let text = painted(&output);
+    assert!(text.contains("Profile development requires at least 8 vCPU and 32 GB memory"));
+    assert!(text.contains("Hetzner · cx53 · hel1"), "{text}");
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(shown.complete);
+    let cheapest = &shown.offers[shown.picks.cheapest.unwrap()];
+    assert_eq!(
+        (cheapest.provider, cheapest.id.as_str(), cheapest.location.as_deref()),
+        ("Hetzner", "cx53", Some("hel1"))
+    );
+    assert!(
+        shown.offers[..shown.matching]
+            .iter()
+            .all(|offer| { offer.provider != "Hetzner" || offer.vcpu.unwrap() >= 8 && offer.memory_gb.unwrap() >= 32 })
+    );
+    click(&ctx, &mut app, label_rect(&output, "Hetzner · cx53 · hel1").center());
+    let output = tall_frame(&ctx, &mut app);
+    assert_eq!(selected(&app).id, "cx53");
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.profile.provider, "hetzner");
+    assert_eq!((launch.profile.cpu, launch.profile.memory_gb), (16, 32));
+    assert_eq!(launch.placement.cpu_types, ["cx53"]);
+    assert_eq!(launch.placement.data_centers, ["hel1"]);
+    let restored: horizon_core::cloud_panel::CloudLaunch =
+        serde_json::from_slice(&serde_json::to_vec(launch).unwrap()).unwrap();
+    assert_eq!(restored.placement, launch.placement);
+}
+
+#[test]
 fn in_stock_only_keeps_unlisted_hetzner_workers_visible_and_eligible_for_picks() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),

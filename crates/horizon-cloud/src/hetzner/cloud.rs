@@ -85,9 +85,9 @@ impl Journal {
     }
 }
 
-/// Where and on what a cloud may run under the current settings and its own
-/// placement. Every attempt, retry and reconnect is checked against the policy
-/// in force then, never the one recorded when the cloud was first provisioned.
+/// Allowed locations and fallback server types under the current settings.
+/// An exact persisted placement replaces fallback types and keeps its location
+/// only while that location remains allowed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     pub locations: Vec<String>,
@@ -95,12 +95,24 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// Intersect current machine policy with the worker's persisted allocation choice.
+    /// Keep a saved exact server type and intersect its location with machine policy.
     /// # Errors
-    /// Refuses a saved worker choice no longer allowed by current settings.
+    /// Refuses malformed exact choices and locations no longer allowed by current settings.
     pub fn for_spec(&self, spec: &WorkerSpec) -> Result<Self, CloudError> {
         if !spec.exact_placement {
             return Ok(self.clone());
+        }
+        if spec.cpu_flavors.len() != 1
+            || spec.data_centers.len() != 1
+            || !spec
+                .cpu_flavors
+                .iter()
+                .chain(&spec.data_centers)
+                .all(|name| valid_placement_name(name))
+        {
+            return Err(CloudError::Invalid(
+                "An exact Hetzner placement needs one valid server type and location",
+            ));
         }
         let selected = |allowed: &[String], saved: &[String]| -> Vec<String> {
             if saved.is_empty() {
@@ -111,7 +123,7 @@ impl Policy {
         };
         let policy = Self {
             locations: selected(&self.locations, &spec.data_centers),
-            server_types: selected(&self.server_types, &spec.cpu_flavors),
+            server_types: spec.cpu_flavors.clone(),
         };
         if policy.locations.is_empty() || policy.server_types.is_empty() {
             return Err(CloudError::Invalid(
@@ -120,6 +132,16 @@ impl Policy {
         }
         Ok(policy)
     }
+}
+
+/// Whether a server type or location has Hetzner's machine-readable name format.
+#[must_use]
+pub fn valid_placement_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 /// The location of an existing workspace volume. The policy can change while a
