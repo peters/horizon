@@ -29,6 +29,9 @@ pub enum CommandId {
     // Settings
     ToggleSettings,
 
+    // Maintenance
+    OpenDependencies,
+
     // Search
     ToggleSearch,
 }
@@ -66,6 +69,15 @@ fn command_entry(id: CommandId, label: &str, shortcut: String, keywords: &[&str]
         id,
         label: label.into(),
         shortcut: Some(shortcut),
+        keywords: keywords.iter().map(|keyword| (*keyword).into()).collect(),
+    }
+}
+
+fn command_entry_without_shortcut(id: CommandId, label: &str, keywords: &[&str]) -> CommandEntry {
+    CommandEntry {
+        id,
+        label: label.into(),
+        shortcut: None,
         keywords: keywords.iter().map(|keyword| (*keyword).into()).collect(),
     }
 }
@@ -187,6 +199,11 @@ fn global_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Command
             shortcuts.search.display_label(primary_label),
             &["find", "search", "grep", "text"],
         ),
+        command_entry_without_shortcut(
+            CommandId::OpenDependencies,
+            "Open Dependencies",
+            &["dependabot", "dependency", "updates", "upgrade", "maintenance"],
+        ),
     ]
 }
 
@@ -209,8 +226,24 @@ mod tests {
     #[test]
     fn action_commands_all_have_shortcuts() {
         for entry in action_commands(&AppShortcuts::default(), "Ctrl") {
+            if entry.id == CommandId::OpenDependencies {
+                continue;
+            }
             assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
         }
+    }
+
+    #[test]
+    fn open_dependencies_has_no_default_shortcut_and_matches_dependabot() {
+        let entries = action_commands(&AppShortcuts::default(), "Ctrl");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.id == CommandId::OpenDependencies)
+            .expect("open dependencies command");
+
+        assert_eq!(entry.label, "Open Dependencies");
+        assert_eq!(entry.shortcut, None);
+        assert!(entry.keywords.iter().any(|keyword| keyword == "dependabot"));
     }
 
     #[test]

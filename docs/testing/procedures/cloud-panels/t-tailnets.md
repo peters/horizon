@@ -71,7 +71,7 @@ send TCP traffic to each other over the tailnet.
 
 ### 6.1 T01 — Add a tailnet and examine the key check
 
-1. Click **Settings** in the toolbar.
+1. In the toolbar, click **Menu**, then **Settings**.
 
    Result: The Settings window opens.
 
@@ -174,7 +174,7 @@ send TCP traffic to each other over the tailnet.
 
 D01 starts `smoke-a` on the test tailnet and records it in the ledger. If D01 did this, do only step 8.
 
-1. Open **Cloud › New cloud…** in the workspace of the test.
+1. Open **Menu › Cloud › New cloud…** in the workspace of the test.
 
    Result: The New cloud dialog opens.
 
@@ -372,7 +372,7 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
 
 ### 6.8 T08 — Connect from cloud A to cloud B on Hetzner
 
-1. Open **Cloud › New cloud…**.
+1. Open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens.
 

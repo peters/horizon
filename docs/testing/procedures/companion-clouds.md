@@ -106,7 +106,7 @@ Give each task an ID. A report uses the ID to give a result.
 
 Use one test workspace for both clouds.
 
-1. Open **Cloud › New cloud…** in the test workspace.
+1. Open **Menu › Cloud › New cloud…** in the test workspace.
 
    Result: The New cloud dialog opens.
 
@@ -131,7 +131,7 @@ Use one test workspace for both clouds.
 
 ### 6.3 K3 — Deploy the source cloud
 
-1. Open **Cloud › New cloud…** in the test workspace.
+1. Open **Menu › Cloud › New cloud…** in the test workspace.
 
    Result: The New cloud dialog opens.
 

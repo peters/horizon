@@ -175,7 +175,7 @@ including for launching the declaring repository's own cloud.
 ## One-time machine setup
 
 In an existing workspace, choose **Cloud** from the panel-creation menu (or
-**Cloud > New cloud**), enter a title, and press Enter. Horizon discovers the Git
+**Menu > Cloud > New cloud**), enter a title, and press Enter. Horizon discovers the Git
 root from the workspace directory, loads `.horizon/cloud.yml`, and uses its named
 default profile. Preparation runs while you type. A configured launch starts
 provisioning immediately after submission, without a separate Deploy action.
@@ -188,8 +188,7 @@ the profile's agents. **Save and start** continues the submitted launch. A dedic
 SSH identity is created when needed and keys stay in private machine-local files.
 Blank replacement fields preserve saved keys. Subscription login happens through
 the actual agent on the worker; worker readiness does not prove authentication.
-Open **Cloud > Cloud settings** to change machine defaults without launching.
-On narrow windows, Cloud appears in the toolbar overflow.
+Open **Menu > Cloud > Cloud settings** to change machine defaults without launching.
 
 Cloud allocation requires a saved session so worker identity survives reconnect.
 An isolated test instance can use its own disposable saved session and private home.

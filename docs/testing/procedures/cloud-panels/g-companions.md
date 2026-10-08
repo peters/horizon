@@ -61,7 +61,7 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The source cloud runs.
 
-2. Open **Cloud › New cloud…** in the workspace of `smoke-a`.
+2. Open **Menu › Cloud › New cloud…** in the workspace of `smoke-a`.
 
    Result: The New cloud dialog opens.
 
@@ -114,7 +114,7 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: You have the commit of the sibling.
 
-2. Open **Cloud › New cloud…** in the workspace of `smoke-a`.
+2. Open **Menu › Cloud › New cloud…** in the workspace of `smoke-a`.
 
    Result: The New cloud dialog opens.
 
@@ -366,7 +366,7 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
    Result: The row shows **Not selected**.
 
-2. Open **Cloud › New cloud…**.
+2. Open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens.
 

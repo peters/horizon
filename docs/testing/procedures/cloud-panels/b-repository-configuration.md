@@ -107,9 +107,9 @@ bind of S02 alone does not change the socket that the candidate uses.
 
 ### 6.1 B01 — Offer quick start and the setup agent for a repository without cloud.yml
 
-1. Click **Cloud** in the menu bar.
+1. In the toolbar, click **Menu**, then **Cloud**.
 
-   Result: The Cloud menu opens.
+   Result: The Cloud submenu opens.
 
 2. Click **New cloud…**.
 
@@ -237,7 +237,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: Each repository has a committed `.horizon` directory.
 
-6. Open **Cloud › New cloud…**.
+6. Open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens.
 

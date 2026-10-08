@@ -73,9 +73,9 @@ setting must open a repair form.
 
 ### 6.1 A01 — Open Cloud settings from the Cloud menu
 
-1. Click **Cloud** in the menu bar.
+1. In the toolbar, click **Menu**, then **Cloud**.
 
-   Result: The Cloud menu shows **New cloud…** and **Cloud settings…**.
+   Result: The Cloud submenu shows **New cloud…** and **Cloud settings…**.
 
 2. Click **Cloud settings…**.
 
@@ -107,7 +107,7 @@ setting must open a repair form.
 
    Result: The dialog closes.
 
-3. Open **Cloud › Cloud settings…** again.
+3. Open **Menu › Cloud › Cloud settings…** again.
 
    Result: The RunPod card shows **Key saved** and **Replace**.
 
@@ -137,7 +137,7 @@ setting must open a repair form.
 
 ### 6.3 A03 — Turn on Hetzner and save the token and the placement
 
-1. Open **Cloud › Cloud settings…**.
+1. Open **Menu › Cloud › Cloud settings…**.
 
    Result: The Hetzner Cloud card shows **Off**.
 
@@ -175,7 +175,7 @@ setting must open a repair form.
 
 ### 6.4 A04 — Turn off Hetzner and remove its settings
 
-1. Open **Cloud › Cloud settings…**.
+1. Open **Menu › Cloud › Cloud settings…**.
 
    Result: The Hetzner Cloud card shows **Key saved**.
 
@@ -204,7 +204,7 @@ setting must open a repair form.
 
 ### 6.5 A05 — Select the coding agents and their sign-in
 
-1. Open **Cloud › Cloud settings…**.
+1. Open **Menu › Cloud › Cloud settings…**.
 
    Result: The Coding agents card shows **Codex** and **Claude**.
 
@@ -239,7 +239,7 @@ setting must open a repair form.
 
    Result: The dialog closes.
 
-8. Open **Cloud › Cloud settings…** again.
+8. Open **Menu › Cloud › Cloud settings…** again.
 
    Result: Each agent with **API key** shows **Key saved**. The **Your workspace**
    card shows both agents.
@@ -275,7 +275,7 @@ Do this task after B02. It needs the synthetic repository.
 
    Result: The second fixture shows the repository at `<home>/smoke/app`.
 
-4. In the second fixture, open **Cloud › New cloud…**.
+4. In the second fixture, open **Menu › Cloud › New cloud…**.
 
    Result: The New cloud dialog opens.
 
@@ -349,7 +349,7 @@ Do this task after B02. It needs the synthetic repository.
 
 ### 6.8 A08 — Validate, examine and revoke a private registry credential
 
-1. Open **Cloud › Cloud settings…**.
+1. Open **Menu › Cloud › Cloud settings…**.
 
    Result: The **Container registry** card shows **Add image repository**.
 
@@ -381,7 +381,7 @@ Do this task after B02. It needs the synthetic repository.
 
    Result: The dialog closes. The settings file has a reference to the token file, not the token.
 
-7. Open **Cloud › Cloud settings…** again.
+7. Open **Menu › Cloud › Cloud settings…** again.
 
    Result: The registry card shows **Needs validation** and a **Pull generation** value.
 

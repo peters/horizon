@@ -132,6 +132,7 @@ impl HorizonApp {
                 }
             }
             CommandId::ToggleSettings => self.toggle_settings(),
+            CommandId::OpenDependencies => self.open_dependencies_panel(ctx),
             CommandId::ToggleSearch => {
                 // Focus the toolbar search input (or create it with focus
                 // if it doesn't exist yet).

@@ -19,7 +19,7 @@ last, optional section; nothing is rented unless that section is run.
 
 ## 1. CPU profile: prices, stock and cost
 
-1. Select the CPU workspace, open **Cloud > New cloud**.
+1. Select the CPU workspace, open **Menu > Cloud > New cloud**.
 2. Expected: every vCPU choice reads `from $x/h` and every memory choice `$x/h`.
 3. Expected: the card shows the hourly price, a stock pill, a line under the size such
    as `In stock in 2 allowed data centers`, then 8 HOURS and 24 HOURS (captioned

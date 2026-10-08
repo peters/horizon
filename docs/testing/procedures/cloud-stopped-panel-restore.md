@@ -79,7 +79,7 @@ command or the binary.
 
    Result: The dialog closes.
 
-5. Open **Cloud › New cloud…**. Type the path of the synthetic repository and
+5. Open **Menu › Cloud › New cloud…**. Type the path of the synthetic repository and
    select the CPU profile.
 
    Result: The dialog shows the offers of the provider.

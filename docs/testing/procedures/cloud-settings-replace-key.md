@@ -98,9 +98,9 @@ or change size after it opens.
 
 ### 6.1 A01 — Open Cloud settings
 
-1. Click **Cloud** in the menu bar.
+1. In the toolbar, click **Menu**, then **Cloud**.
 
-   Result: The Cloud menu opens.
+   Result: The Cloud submenu opens.
 
 2. Click **Cloud settings…**.
 

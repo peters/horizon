@@ -167,7 +167,16 @@ pub(super) fn rounded_i32(value: f32) -> i32 {
 }
 
 pub(super) fn primary_button(text: &str) -> Button<'_> {
-    Button::new(egui::RichText::new(text).size(11.5).color(theme::FG()))
+    primary_frame(Button::new(primary_label(text)))
+}
+
+pub(super) fn primary_label(text: &str) -> egui::RichText {
+    egui::RichText::new(text).size(11.5).color(theme::FG())
+}
+
+/// Gives any button, such as one with a painted mark, the primary look.
+pub(super) fn primary_frame(button: Button<'_>) -> Button<'_> {
+    button
         .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.28))
         .stroke(Stroke::new(
             1.0_f32,
@@ -177,7 +186,16 @@ pub(super) fn primary_button(text: &str) -> Button<'_> {
 }
 
 pub(super) fn chrome_button(text: &str) -> Button<'_> {
-    Button::new(egui::RichText::new(text).size(11.0).color(theme::FG_SOFT()))
+    chrome_frame(Button::new(chrome_label(text)))
+}
+
+pub(super) fn chrome_label(text: &str) -> egui::RichText {
+    egui::RichText::new(text).size(11.0).color(theme::FG_SOFT())
+}
+
+/// Gives any button, such as one with a painted mark, the chrome look.
+pub(super) fn chrome_frame(button: Button<'_>) -> Button<'_> {
+    button
         .fill(theme::PANEL_BG_ALT())
         .stroke(Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 210)))
         .corner_radius(10)
