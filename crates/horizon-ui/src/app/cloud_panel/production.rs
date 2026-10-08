@@ -541,7 +541,7 @@ impl HorizonApp {
                         runtime.receiver = None;
                         resumed.push(id);
                     }
-                    Event::GitHub(prompt) => runtime.github = Some(prompt),
+                    Event::GitHub(prompt) => runtime.adopt_github(prompt),
                     Event::ClosedBrowsers(ids) => {
                         if let Some(browsers) = &mut runtime.browsers {
                             browsers.retain(|b| !ids.contains(&b.id));

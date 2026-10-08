@@ -22,6 +22,13 @@ pub const SECRET_FILE: &str = "credentials/github-app";
 /// Shown as the app's homepage on GitHub.
 const HOMEPAGE: &str = "https://github.com/peters/horizon";
 
+/// A name for a new app. GitHub needs app names to be unique, so a short random
+/// suffix follows "Horizon"; the person may rename the app on GitHub.
+#[must_use]
+pub fn app_name() -> String {
+    format!("Horizon {}", &uuid::Uuid::new_v4().simple().to_string()[..6])
+}
+
 /// Starts the manifest flow and opens its first page with `open`. The receiver gets
 /// the new app's settings once GitHub created it.
 /// # Errors
@@ -148,7 +155,9 @@ fn html_escape(value: &str) -> String {
 }
 
 fn created(code: &Secret, root: &Path) -> Result<Settings> {
-    let app = Client::new().convert_manifest(code).map_err(github_error)?;
+    let app = Client::new()
+        .convert_manifest(code)
+        .map_err(|error| github_error(&error))?;
     let path = root.join(SECRET_FILE);
     write_private(&path, app.client_secret.expose())?;
     let settings = Settings {
@@ -179,7 +188,7 @@ fn write_private(path: &Path, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn github_error(error: GitHubError) -> Error {
+fn github_error(error: &GitHubError) -> Error {
     match error {
         GitHubError::Transport => Error::Invalid("GitHub could not be reached. Check the network and try again."),
         GitHubError::Refused(_) => Error::Invalid("GitHub refused the new app. Click Connect GitHub again."),

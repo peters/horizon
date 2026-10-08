@@ -160,7 +160,7 @@ pub fn configure(
             (runner.emit)(Event::GitHub(Prompt::Connected { login, repositories }));
             return Ok(());
         }
-        _ => {}
+        worker::Status::Absent => {}
     }
     let client = Client::new();
     let chain = match signin::chain(settings, &state.cloud_id, &client, runner) {

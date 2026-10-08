@@ -40,6 +40,12 @@ pub struct Draft {
 }
 
 impl Draft {
+    /// The cloud root these settings belong to.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     #[must_use]
     pub fn has_saved_settings(&self) -> bool {
         self.original.is_some()
@@ -215,6 +221,16 @@ pub fn save_provider_key(root: &Path, provider: Provider, key: &str) -> Result<S
             draft.hetzner.token = Zeroizing::new(key.trim().to_owned());
         }
     }
+    draft.save()
+}
+
+/// Saves the GitHub App of Connect GitHub, or forgets it, and keeps every other
+/// setting. Run off the UI thread, as [`save_provider_key`].
+/// # Errors
+/// As [`Draft::save`].
+pub fn save_github(root: &Path, github: Option<super::github::Settings>) -> Result<Settings> {
+    let mut draft = Draft::load(root)?;
+    draft.settings.github = github;
     draft.save()
 }
 

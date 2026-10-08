@@ -233,8 +233,7 @@ fn deploy_with(
     source::transfer(&connection, store, &mut state, packed, &contract, &runner, emit)?;
     begin_sessions(&mut state, store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
-    configure_git_auth(git_auth, &connection, &runner)?;
-    super::github::configure(request.settings.github.as_ref(), &state, &connection, &runner)?;
+    configure_git_auth(git_auth, request.settings.github.as_ref(), &state, &connection, &runner)?;
     if let Some(browser_auth) = browser_auth {
         state.browserstack_targets.clone_from(browser_auth.targets());
         store.arm_browserstack(&mut state)?;

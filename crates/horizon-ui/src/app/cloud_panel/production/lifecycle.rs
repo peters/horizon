@@ -37,6 +37,17 @@ impl Runtime {
         self.state = Some(state);
     }
 
+    /// Takes a GitHub sign-in prompt or outcome. An automatic sign-in opens GitHub's
+    /// authorize page in the person's browser, which returns to Horizon by itself.
+    pub(super) fn adopt_github(&mut self, prompt: cloud_runtime::github::Prompt) {
+        if let cloud_runtime::github::Prompt::Web { url } = &prompt
+            && let Err(error) = horizon_core::open_url(url)
+        {
+            tracing::warn!(%error, "could not open the GitHub sign-in page");
+        }
+        self.github = Some(prompt);
+    }
+
     /// Shows the failure an operation reported. Whether it may be a stop Horizon did
     /// not make is decided now, while a resize that failed still shows as running.
     pub(super) fn show_failure(&mut self, error: String, at: std::time::Instant) {

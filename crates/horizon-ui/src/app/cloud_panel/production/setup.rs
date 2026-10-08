@@ -1,6 +1,7 @@
 //! Machine account form; filesystem work and key generation run outside rendering.
 mod dashboard;
 mod fields;
+mod github;
 mod registry;
 #[cfg(all(test, unix))]
 mod tests;
@@ -88,6 +89,7 @@ pub(in crate::app::cloud_panel) struct State {
     registry_cancel: Option<horizon_core::cloud_runtime::Cancellation>,
     /// Whether the dialog has been measured since it opened, in case the window changed size.
     measured: bool,
+    github: github::Card,
 }
 
 impl State {

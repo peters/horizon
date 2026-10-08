@@ -30,13 +30,20 @@ pub(super) fn status(connection: &Connection, runner: &Runner<'_>) -> Result<Sta
 }
 
 pub(super) fn parse_status(output: &str) -> Status {
+    /// A held repository: an object with its `owner/name`, or the name alone.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Held {
+        Grant { repository: String },
+        Name(String),
+    }
     #[derive(Deserialize)]
     struct Fields {
         state: String,
         #[serde(default)]
         login: Option<String>,
         #[serde(default)]
-        repositories: Vec<String>,
+        repositories: Vec<Held>,
     }
     let Some(fields) = output
         .lines()
@@ -45,29 +52,31 @@ pub(super) fn parse_status(output: &str) -> Status {
     else {
         return Status::Absent;
     };
+    let repositories: Vec<String> = fields
+        .repositories
+        .into_iter()
+        .map(|held| match held {
+            Held::Grant { repository } | Held::Name(repository) => repository,
+        })
+        .filter(|name| horizon_cloud::github::valid_repository(name))
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
     match fields.state.as_str() {
         "unsupported" => Status::Unsupported,
-        "ok" if !fields.repositories.is_empty() => Status::Current {
+        "ok" if !repositories.is_empty() => Status::Current {
             login: fields.login.unwrap_or_default(),
-            repositories: fields
-                .repositories
-                .into_iter()
-                .filter(|name| horizon_cloud::github::valid_repository(name))
-                .map(|name| name.to_ascii_lowercase())
-                .collect(),
+            repositories,
         },
         _ => Status::Absent,
     }
 }
 
-fn secret<S: Serializer>(value: &Secret, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-    serializer.serialize_str(value.expose())
-}
+/// A secret written as its value into the private payload file only.
+struct Exposed<'a>(&'a Secret);
 
-fn optional_secret<S: Serializer>(value: &Option<&Secret>, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-    match value {
-        Some(value) => serializer.serialize_str(value.expose()),
-        None => serializer.serialize_none(),
+impl Serialize for Exposed<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.expose())
     }
 }
 
@@ -75,8 +84,8 @@ fn optional_secret<S: Serializer>(value: &Option<&Secret>, serializer: S) -> std
 struct Payload<'a> {
     version: u32,
     client_id: &'a str,
-    #[serde(serialize_with = "optional_secret", skip_serializing_if = "Option::is_none")]
-    client_secret: Option<&'a Secret>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_secret: Option<Exposed<'a>>,
     login: &'a str,
     author_name: &'a str,
     author_email: &'a str,
@@ -93,11 +102,9 @@ struct PayloadGrant<'a> {
 
 #[derive(Serialize)]
 struct PayloadChain<'a> {
-    #[serde(serialize_with = "secret")]
-    access_token: &'a Secret,
+    access_token: Exposed<'a>,
     access_expires_at: u64,
-    #[serde(serialize_with = "secret")]
-    refresh_token: &'a Secret,
+    refresh_token: Exposed<'a>,
     refresh_expires_at: u64,
 }
 
@@ -118,7 +125,7 @@ pub(super) fn payload(
     let payload = Payload {
         version: 1,
         client_id: &settings.client_id,
-        client_secret,
+        client_secret: client_secret.map(Exposed),
         login: &user.login,
         author_name: &user.name,
         author_email: &user.email,
@@ -131,9 +138,9 @@ pub(super) fn payload(
             })
             .collect(),
         chain: PayloadChain {
-            access_token: &chain.access_token,
+            access_token: Exposed(&chain.access_token),
             access_expires_at: unix(chain.access_expires_at),
-            refresh_token: &chain.refresh_token,
+            refresh_token: Exposed(&chain.refresh_token),
             refresh_expires_at: unix(chain.refresh_expires_at),
         },
     };

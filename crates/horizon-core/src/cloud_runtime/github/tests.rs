@@ -78,6 +78,17 @@ fn worker_status_is_read_from_its_last_json_line() {
     assert_eq!(parse_status("{\"state\":\"ok\",\"repositories\":[]}"), Status::Absent);
     assert_eq!(parse_status("garbage"), Status::Absent);
     assert_eq!(
+        parse_status(
+            "{\"version\":1,\"state\":\"ok\",\"persistent\":true,\"login\":\"octo-cat\",\"repositories\":\
+             [{\"repository\":\"Acme/Web\",\"target\":\"primary\",\"access\":\"push\"}]}"
+        ),
+        Status::Current {
+            login: "octo-cat".into(),
+            repositories: vec!["acme/web".into()]
+        },
+        "the worker reports each grant as an object"
+    );
+    assert_eq!(
         parse_status("note\n{\"state\":\"ok\",\"login\":\"octo-cat\",\"repositories\":[\"Acme/Web\",\"../x\"]}"),
         Status::Current {
             login: "octo-cat".into(),
