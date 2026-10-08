@@ -197,7 +197,12 @@ pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, 
 /// **Connect GitHub again**, once this cloud's GitHub step reported its outcome. A click
 /// marks the cloud for a new sign-in; the caller then reconnects it.
 pub(super) fn renew_button(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime) -> bool {
-    if !matches!(runtime.github, Some(Prompt::Connected { .. } | Prompt::Ended(_))) {
+    // Not for access a worker kept after GitHub was disconnected here: nothing could sign
+    // it in again.
+    if !matches!(
+        runtime.github,
+        Some(Prompt::Connected { renewable: true, .. } | Prompt::Ended(_))
+    ) {
         return false;
     }
     let clicked = ui
@@ -245,6 +250,7 @@ mod tests {
             login: "octo-cat".into(),
             repositories: vec!["acme/web".into(), "acme/api".into()],
             requests: true,
+            renewable: true,
         });
         assert_eq!(
             summary(&runtime),

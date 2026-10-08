@@ -167,6 +167,7 @@ pub fn configure(
             login,
             repositories,
             requests,
+            renewable: settings.is_some(),
         }));
     };
     // Consumed once, whatever the worker holds, so a later reconnect never signs in anew.
@@ -303,6 +304,7 @@ fn sign_in(
         login: user.login,
         repositories: reachable.into_iter().map(|grant| grant.repository).collect(),
         requests,
+        renewable: true,
     }));
     Ok(Ok(()))
 }
