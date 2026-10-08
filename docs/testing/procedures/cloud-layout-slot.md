@@ -117,9 +117,13 @@ slots.
 
 ## 8. Cleanup
 
-1. Close the Device panel. Stop the fixture processes that this run started.
+1. Close Horizon normally in the fixture.
 
-   Result: The candidate process stops. The developer desktop does not change.
+   Result: The candidate process exits and the fixture harness completes.
+
+2. Close the Device panel with the `device_panel` operation `close`.
+
+   Result: The viewer closes. The developer desktop does not change.
 
 ## 9. Record of results
 
