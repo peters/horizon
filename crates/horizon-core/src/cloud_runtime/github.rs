@@ -140,8 +140,9 @@ pub fn grants(state: &Deployment, runner: &Runner<'_>) -> Result<Vec<Grant>> {
 /// Gives the worker current GitHub access for the cloud's repositories, signing in
 /// for this cloud when the worker holds none. Every GitHub-side refusal is reported
 /// and leaves the cloud without GitHub access; only a worker that cannot store the
-/// access fails the deployment. Returns whether the worker serves access from the app,
-/// which then replaces any credential binding from cloud settings.
+/// access fails the deployment. Returns whether the worker serves access from the app
+/// for every repository of the cloud, which then replaces any credential binding from
+/// cloud settings; a repository the app does not reach keeps that binding.
 /// # Errors
 /// The worker refused the access it was given.
 pub fn configure(
@@ -178,14 +179,7 @@ pub fn configure(
         None => Vec::new(),
     };
     if settings.is_some() && grants.is_empty() {
-        // Access for a repository this cloud no longer has on GitHub must not stay behind.
-        if matches!(
-            worker::status(connection, runner)?,
-            worker::Status::Current { .. } | worker::Status::Unavailable
-        ) {
-            worker::clear(connection, runner)?;
-            say("removed the worker's access: this cloud no longer has a repository on GitHub.");
-        }
+        retire(connection, runner)?;
         end("This cloud has no repository on GitHub.".into());
         return Ok(false);
     }
@@ -201,8 +195,10 @@ pub fn configure(
         } = held
         {
             say("the worker holds access from an earlier connection.");
+            // Without settings the cloud's grants are read only to compare them.
+            let whole = self::grants(state, runner).is_ok_and(|all| complete(&repositories, &all));
             connected(login, repositories, requests);
-            return Ok(true);
+            return Ok(whole);
         }
         return Ok(false);
     };
@@ -231,8 +227,9 @@ pub fn configure(
                     grant.repository
                 ));
             }
+            let whole = complete(&repositories, &grants);
             connected(login, repositories, requests);
-            return Ok(true);
+            return Ok(whole);
         }
         // Connect GitHub again: sign in anew, and keep the current access if GitHub refuses.
         worker::Status::Current {
@@ -243,13 +240,16 @@ pub fn configure(
         } => Some((login, repositories, requests)),
         worker::Status::Absent => None,
     };
+    let kept_complete = kept
+        .as_ref()
+        .is_some_and(|(_, repositories, _)| complete(repositories, &grants));
     Ok(
         match settle(sign_in(settings, state, grants, connection, runner)?, kept) {
-            Settled::Signed => true,
+            Settled::Signed { complete } => complete,
             Settled::Kept(reason, (login, repositories, requests)) => {
                 say(&format!("{reason} The cloud keeps its current GitHub access."));
                 connected(login, repositories, requests);
-                true
+                kept_complete
             }
             Settled::Ended(reason) => {
                 end(reason);
@@ -259,6 +259,21 @@ pub fn configure(
     )
 }
 
+/// Removes the access a worker still holds for a cloud that no longer has a repository
+/// on GitHub, so it does not stay behind.
+fn retire(connection: &Connection, runner: &Runner<'_>) -> Result<()> {
+    if matches!(
+        worker::status(connection, runner)?,
+        worker::Status::Current { .. } | worker::Status::Unavailable
+    ) {
+        worker::clear(connection, runner)?;
+        (runner.emit)(Event::Output(
+            "GitHub: removed the worker's access: this cloud no longer has a repository on GitHub.".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// The access a worker held before a new sign-in: login, repositories and whether it
 /// takes agents' requests.
 type Held = (String, Vec<String>, bool);
@@ -266,8 +281,9 @@ type Held = (String, Vec<String>, bool);
 /// The cloud's access after a sign-in.
 #[derive(Debug, PartialEq, Eq)]
 enum Settled {
-    /// The worker serves the new chain, which the sign-in reported.
-    Signed,
+    /// The worker serves the new chain, which the sign-in reported; `complete` when it
+    /// reaches every repository of the cloud.
+    Signed { complete: bool },
     /// GitHub refused before the worker got anything, so it keeps what it held.
     Kept(String, Held),
     /// No access from the app.
@@ -276,7 +292,7 @@ enum Settled {
 
 fn settle(signed: Signed, kept: Option<Held>) -> Settled {
     match (signed, kept) {
-        (Signed::In, _) => Settled::Signed,
+        (Signed::In { complete }, _) => Settled::Signed { complete },
         (Signed::Refused(reason), Some(kept)) => Settled::Kept(reason, kept),
         // The worker took the new chain, so the access it held before is gone either way.
         (Signed::Refused(reason) | Signed::Unserved(reason), _) => Settled::Ended(reason),
@@ -286,8 +302,8 @@ fn settle(signed: Signed, kept: Option<Held>) -> Settled {
 /// How a sign-in for a cloud ended, other than an error.
 #[derive(Debug)]
 enum Signed {
-    /// The worker serves the new chain.
-    In,
+    /// The worker serves the new chain; `complete` when the app reaches every repository.
+    In { complete: bool },
     /// Refused before the worker got anything; the worker keeps what it held.
     Refused(String),
     /// The worker took the new chain but does not serve it.
@@ -317,7 +333,7 @@ fn sign_in(
         Ok(found) => found,
         Err(error) => return Ok(Signed::Refused(error.to_string())),
     };
-    let (reachable, missing): (Vec<_>, Vec<_>) = grants
+    let (reachable, missing): (Vec<Grant>, Vec<Grant>) = grants
         .into_iter()
         .partition(|grant| installed.contains(&grant.repository));
     for grant in &missing {
@@ -359,7 +375,14 @@ fn sign_in(
         requests,
         renewable: true,
     }));
-    Ok(Signed::In)
+    Ok(Signed::In {
+        complete: missing.is_empty(),
+    })
+}
+
+/// Whether access to `repositories` reaches every grant of the cloud.
+fn complete(repositories: &[String], grants: &[Grant]) -> bool {
+    grants.iter().all(|grant| covers(repositories, grant))
 }
 
 /// Whether the worker holds access for checkouts this cloud no longer has, such as a

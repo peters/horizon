@@ -546,7 +546,32 @@ fn a_worker_that_took_a_new_chain_never_reports_its_old_access() {
         settle(Signed::Refused("Skipped.".into()), None),
         Settled::Ended("Skipped.".into())
     );
-    assert_eq!(settle(Signed::In, held()), Settled::Signed);
+    assert_eq!(
+        settle(Signed::In { complete: false }, held()),
+        Settled::Signed { complete: false }
+    );
+}
+
+#[test]
+fn only_access_to_every_checkout_replaces_the_settings_binding() {
+    let grants = [
+        Grant {
+            repository: "acme/web".into(),
+            target: Target::Primary,
+        },
+        Grant {
+            repository: "acme/lib".into(),
+            target: Target::try_from("sibling:lib".to_owned()).unwrap(),
+        },
+    ];
+    assert!(
+        !complete(&["acme/web".to_owned()], &grants),
+        "acme/lib keeps its binding"
+    );
+    assert!(complete(
+        &["Acme/Web".to_owned(), "acme/lib".to_owned(), "acme/extra".to_owned()],
+        &grants
+    ));
 }
 
 #[test]

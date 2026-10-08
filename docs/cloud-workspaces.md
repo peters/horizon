@@ -276,8 +276,9 @@ cloud gets access to its repository and its same-worker siblings, where the app
 is installed. **Skip** continues without GitHub access, and so does a declined or
 expired sign-in, or a worker image without the service. When cloud settings also
 have a `git_credentials` binding for the repository, Git keeps using that binding
-in those cases, and the card says so. While the worker serves access from the
-app, Horizon removes that binding from the worker. A cloud whose checkout no
+in those cases, and the card says so. While the app's access reaches every
+repository of the cloud, Horizon removes that binding from the worker; otherwise
+the binding stays for the repositories the app does not reach. A cloud whose checkout no
 longer has a GitHub origin loses the access its worker held.
 
 The worker's root service renews the access every 8 hours for about 6 months,
