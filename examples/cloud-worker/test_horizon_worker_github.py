@@ -286,7 +286,8 @@ class InstallationTests(ServiceTestCase):
         shared = os.stat_result((0o100666, 0, 0, 1, os.geteuid(), 0, 0, 0, 0, 0))
         with mock.patch.object(service.os, 'fstat', return_value=shared), self.assertRaises(ValueError):
             common.write_private(self.store.runtime, 'probe', ACCESS)
-        self.assertEqual(sorted(path.name for path in self.store.runtime.iterdir()), ['state.json', 'state.lock'])
+        self.assertEqual(sorted(path.name for path in self.store.runtime.iterdir()),
+                         ['commit.lock', 'state.json', 'state.lock'])
 
     def test_git_helper_configures_repositories_and_replaces_the_static_binding(self):
         def git(*args):

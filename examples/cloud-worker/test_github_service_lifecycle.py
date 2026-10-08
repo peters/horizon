@@ -203,6 +203,59 @@ class VolumeCopyTests(ServiceTestCase):
         self.assertTrue((self.store.runtime / service.STATE).exists(), 'tmpfs keeps a second copy')
         self.assertFalse(service.status(self.store)['persistent'], 'an unsynced volume copy is not reported durable')
 
+    def unconfirmed_volume(self):
+        """A volume whose directory sync fails while tmpfs refuses the second copy."""
+        real_sync, real_write = common.fsync_directory, common.write_private
+
+        def fsync(directory):
+            if directory == self.store.persistent:
+                raise OSError('input/output error')
+            return real_sync(directory)
+
+        def write(directory, name, data):
+            if directory == self.store.runtime and name == service.STATE:
+                raise OSError('no space left on device')
+            return real_write(directory, name, data)
+        return fsync, write
+
+    def test_a_rotation_no_storage_confirmed_stays_pending_and_unserved(self):
+        self.install()
+        _, post = self.fake_github((200, rotated(2)))
+        due = chain()['access_expires_at'] - 60
+        fsync, write = self.unconfirmed_volume()
+        with mock.patch.object(common, 'fsync_directory', side_effect=fsync), \
+                mock.patch.object(common, 'write_private', side_effect=write), \
+                self.assertRaisesRegex(ValueError, 'confirmed'):
+            service.refresh_once(self.store, lambda: due, post)
+        rotated_chain = self.store.pending['chain']
+        self.assertEqual(self.stored()['chain'], rotated_chain, 'the rotated chain is in place on the volume')
+        self.assertIsNone(self.store.load(serving=True)[0], 'an unconfirmed chain is never served')
+        self.assertTrue(service.status(self.store)['pending_write'])
+        self.assertTrue(self.store.retry_pending())
+        self.assertIsNone(self.store.pending, 'its own unconfirmed copy does not supersede it')
+        self.assertEqual(self.store.load(serving=True)[0]['chain'], rotated_chain)
+
+    def test_an_install_no_storage_confirmed_keeps_the_previous_chain(self):
+        self.install()
+        fsync, write = self.unconfirmed_volume()
+        with mock.patch.object(common, 'fsync_directory', side_effect=fsync), \
+                mock.patch.object(common, 'write_private', side_effect=write), \
+                self.assertRaisesRegex(ValueError, 'confirmed'):
+            self.install(installation(chain=chain(access='ghu_synthetic-new')))
+        self.assertEqual(self.stored()['chain'], chain(), 'the previous chain is stored again')
+        self.assertIsNone(self.store.pending)
+
+    def test_a_serving_read_waits_for_a_write_under_way(self):
+        self.install()
+        read = []
+        with self.store.commit():
+            reader = threading.Thread(target=lambda: read.append(self.store.load(serving=True)[0]))
+            reader.start()
+            reader.join(0.3)
+            self.assertTrue(reader.is_alive(), 'the reader waits for the commit')
+        reader.join(5)
+        self.assertEqual(read[0]['chain'], chain())
+
     def test_removal_never_follows_a_swapped_directory_link(self):
         victim = self.root / 'elsewhere'
         victim.mkdir()

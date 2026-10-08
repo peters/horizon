@@ -805,10 +805,13 @@ chain, so use `clear` (or revoke the sign-in on GitHub) when you no longer
 want the worker to have access.
 
 If no storage accepts a refreshed chain, the service keeps it in memory, because
-GitHub already cancelled the stored one. It uses that chain and tries to write it
-again at every check, about once a minute, until a write succeeds. Until then
-`status` reports `"pending_write": true` and `"persistent": false`, and a
-restart of the service loses the chain.
+GitHub already cancelled the stored one. It tries to write it again at every
+check, about once a minute, until a write succeeds. Until then it gives agents
+no token from that chain, `status` reports `"pending_write": true` and
+`"persistent": false`, and a restart of the service loses the chain. A volume
+write whose directory sync fails counts as stored only once tmpfs also holds a
+copy. Agents' requests wait while a write is under way, so they never get a token
+whose refresh token is not stored yet.
 
 **Agent isolation is required.** Without agent isolation, agents run as root and
 could read the chain. The supervisor starts the service only when

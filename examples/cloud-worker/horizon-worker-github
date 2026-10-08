@@ -432,6 +432,7 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
                             last_error=None), retain=False)
         except BaseException:
             restore(previous, value, configure)
+            keep(store, previous)
             raise
         try:
             retire()
@@ -443,10 +444,22 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
 
 def restore(previous, value, configure):
     """Configures the previous chain's repositories again after a failed install, as far as
-    that works. The previous chain itself was never replaced."""
+    that works; `keep` puts the previous chain itself back when a save replaced it."""
     if previous is not None:
         with contextlib.suppress(Exception):
             configure({'grants': identity_grants(previous), 'previous': identity_grants(value)})
+
+
+def keep(store, previous):
+    """After a failed save, removes a copy of the new chain that no storage confirmed, so the
+    previous chain, or none, stays the stored one. Runs under the store lock."""
+    with contextlib.suppress(Exception):
+        current, _ = store.load()
+        if current is not None and current != previous:
+            if previous is None:
+                store.clear()
+            else:
+                store.save(previous, retain=False)
 
 
 def status(store):

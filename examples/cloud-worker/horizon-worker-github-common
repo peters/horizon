@@ -190,11 +190,11 @@ def read_private(path):
 
 
 @contextlib.contextmanager
-def locked(directory, name):
+def locked(directory, name, shared=False):
     private_directory(directory, create=True)
     fd = os.open(directory / name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
         yield
     finally:
         os.close(fd)
@@ -206,7 +206,11 @@ class Store:
 
     A rotated chain that no storage accepted is kept in `pending`: GitHub already cancelled
     the stored one, so the serving process uses it and writes it again on every refresh
-    check until a write succeeds. `clear` in any process ends it through the clear marker."""
+    check until a write succeeds. `clear` in any process ends it through the clear marker.
+
+    Writers hold the store lock for a whole operation, a refresh request included. Each write
+    also holds the commit lock, which serving readers share, so no reader sees a chain between
+    its rename and the outcome of its write."""
 
     def __init__(self, persistent=PERSISTENT, runtime=RUNTIME):
         self.persistent = persistent
@@ -217,6 +221,9 @@ class Store:
 
     def lock(self):
         return locked(self.runtime, 'state.lock')
+
+    def commit(self, shared=False):
+        return locked(self.runtime, 'commit.lock', shared)
 
     def clear_mark(self):
         """(serial, nonce) of the latest clear, or (0, None) without one."""
@@ -261,13 +268,20 @@ class Store:
         return [copy for copy in found if copy[0]['serial'] > floor]
 
     def load(self, serving=False):
-        """(state, persistent) for the newest copy, or (None, False) without a chain. A chain
-        that only memory holds is left out when `serving`: no agent gets a token whose refresh
-        token is not stored yet. A revocation that only memory holds still counts. On an equal serial the tmpfs copy wins, so a volume copy whose
+        """(state, persistent) for the newest copy, or (None, False) without a chain. When
+        `serving`, it waits for a write under way, and a chain that is not stored yet is left
+        out: memory's pending chain, and a volume copy of it that no storage confirmed. No
+        agent gets a token whose refresh token is not stored. A revocation that only memory
+        holds still counts. On an equal serial the tmpfs copy wins, so a volume copy whose
         directory sync failed is not reported as persistent."""
-        # A revocation counts at once, also from memory only; a new chain waits for its write.
-        found = [copy for copy in self.copies()
-                 if not (serving and copy[0] is self.pending and copy[0]['state'] == 'ok')]
+        if serving:
+            with self.commit(shared=True):
+                found = self.copies()
+            # A revocation counts at once, also from memory only; a new chain waits for its write.
+            unstored = self.pending if self.pending is not None and self.pending['state'] == 'ok' else None
+            found = [copy for copy in found if unstored is None or copy[0] != unstored]
+        else:
+            found = self.copies()
         return max(found, key=lambda copy: (copy[0]['serial'], not copy[1])) if found else (None, False)
 
     def pending_write(self):
@@ -276,16 +290,26 @@ class Store:
         return state is not None and state is self.pending
 
     def write(self, state):
-        """Writes `state` as it is; returns whether the volume holds it."""
+        """Writes `state` as it is; returns whether the volume holds it durably. Raises
+        ValueError when no storage confirmed it."""
+        with self.commit():
+            return self.write_committed(state)
+
+    def write_committed(self, state):
         data = json.dumps(state, separators=(',', ':'))
         try:
             private_directory(self.persistent.parent, create=True)
             write_private(private_directory(self.persistent, create=True), STATE, data)
         except Unsynced:
-            # The new chain is already in place on the volume, so the write did happen; tmpfs
-            # keeps a second copy in case the volume entry does not survive a crash.
-            with contextlib.suppress(OSError, ValueError):
+            # The new chain is in place on the volume, but its entry may not survive a crash.
+            # tmpfs must keep a second copy; without one the chain is not stored, and the
+            # caller keeps it pending or gives it up.
+            try:
                 write_private(private_directory(self.runtime, create=True), STATE, data)
+            except Unsynced:
+                pass  # In place on tmpfs, which a crash empties anyway.
+            except (OSError, ValueError):
+                raise ValueError('No private GitHub storage confirmed the token chain') from None
             return False
         except (OSError, ValueError):
             pass
@@ -334,9 +358,10 @@ class Store:
         if self.pending is not None and self.pending['serial'] <= self.cleared():
             self.pending = None
         if self.pending is not None and any(
-                state['serial'] >= self.pending['serial']
+                state['serial'] >= self.pending['serial'] and state != self.pending
                 for state, _ in self.copies() if state is not self.pending):
-            # Another process stored a newer chain meanwhile; the pending one is superseded.
+            # Another process stored a newer chain meanwhile; the pending one is superseded. A
+            # copy equal to it is its own unconfirmed write, which is written again.
             self.pending = None
         if self.pending is None:
             return True
