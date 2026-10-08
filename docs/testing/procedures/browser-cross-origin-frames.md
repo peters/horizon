@@ -86,6 +86,10 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
    Navigation, context removal and detach events for unrelated pages do not interrupt the scan.
    The Chromium fixture also sends destruction events for isolated execution contexts in parent and child sessions.
    These events do not interrupt the scan.
+3. Run `cargo test -p horizon-browser scans_enable_once_and_failed_evaluations_recheck_the_route`.
+
+   Result: A child detach during runtime activation returns `stale_reference`.
+   An activation failure with no document change returns `frame_unavailable`.
 
 ### 6.3 FRAME-AUDIT — Examine the audit
 

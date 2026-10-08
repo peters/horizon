@@ -74,6 +74,9 @@ impl DriverState {
                 Err(_) => return Err(frame_unavailable()),
             }
         }
+        if self.semantic.scan_revision() != revision {
+            return Err(stale());
+        }
         if sessions
             .iter()
             .any(|session| !self.runtime_enable_requested.contains(session))
@@ -337,54 +340,77 @@ mod tests {
         (state, events, slot)
     }
 
+    fn runtime_fixture_commands(listener: &TcpListener, event: Option<&str>, during_enable: bool) -> Vec<Value> {
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut socket = tungstenite::accept(stream).unwrap();
+        let mut commands = Vec::new();
+        let mut pending = Vec::new();
+        while let Ok(Message::Text(text)) = socket.read() {
+            let command: Value = serde_json::from_str(&text).unwrap();
+            commands.push(command.clone());
+            let session = command["sessionId"].clone();
+            let response = json!({"id":command["id"],"result":{"result":{"value":{"nodes":[]}}}});
+            if command["method"] == "Runtime.enable" {
+                pending.push(json!({"method":"Runtime.executionContextCreated","sessionId":session,"params":{"context":{"id":7,"auxData":{"isDefault":true}}}}));
+                if during_enable && session == "child" {
+                    if let Some(method) = event {
+                        pending.push(json!({"method":method,"params":{"sessionId":"child"}}));
+                    }
+                    pending.push(json!({"id":command["id"],"error":{"code":-32000,"message":"enable failed"}}));
+                } else {
+                    pending.push(json!({"id":command["id"],"result":{}}));
+                }
+                continue;
+            }
+            if command["params"]["expression"] == "fail" {
+                if let Some(method) = event {
+                    socket.send(Message::Text(json!({"method":method,"sessionId":"child","params":{"sessionId":"child","executionContextId":7}}).to_string().into())).unwrap();
+                }
+                socket
+                    .send(Message::Text(
+                        json!({"id":command["id"],"error":{"code":-32000,"message":"evaluation failed"}})
+                            .to_string()
+                            .into(),
+                    ))
+                    .unwrap();
+            } else {
+                socket.send(Message::Text(response.to_string().into())).unwrap();
+                for response in pending.drain(..) {
+                    socket.send(Message::Text(response.to_string().into())).unwrap();
+                }
+            }
+        }
+        commands
+    }
+
     #[test]
     fn scans_enable_once_and_failed_evaluations_recheck_the_route() {
-        for event in [
-            None,
-            Some("Target.detachedFromTarget"),
-            Some("Runtime.executionContextDestroyed"),
-            Some("Runtime.executionContextsCleared"),
+        for (event, during_enable) in [
+            (None, false),
+            (Some("Target.detachedFromTarget"), false),
+            (Some("Runtime.executionContextDestroyed"), false),
+            (Some("Runtime.executionContextsCleared"), false),
+            (Some("Target.detachedFromTarget"), true),
+            (None, true),
         ] {
+            let expected = if event.is_some() {
+                "stale_reference"
+            } else {
+                "frame_unavailable"
+            };
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("ws://{}/", listener.local_addr().unwrap());
-            let server = std::thread::spawn(move || {
-                let (stream, _) = listener.accept().unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-                let mut socket = tungstenite::accept(stream).unwrap();
-                let mut commands = Vec::new();
-                let mut pending = Vec::new();
-                while let Ok(Message::Text(text)) = socket.read() {
-                    let command: Value = serde_json::from_str(&text).unwrap();
-                    commands.push(command.clone());
-                    let session = command["sessionId"].clone();
-                    let response = json!({"id":command["id"],"result":{"result":{"value":{"nodes":[]}}}});
-                    if command["method"] == "Runtime.enable" {
-                        pending.push(json!({"method":"Runtime.executionContextCreated","sessionId":session,"params":{"context":{"id":7,"auxData":{"isDefault":true}}}}));
-                        pending.push(json!({"id":command["id"],"result":{}}));
-                        continue;
-                    }
-                    if command["params"]["expression"] == "fail" {
-                        if let Some(method) = event {
-                            socket.send(Message::Text(json!({"method":method,"sessionId":"child","params":{"sessionId":"child","executionContextId":7}}).to_string().into())).unwrap();
-                        }
-                        socket
-                            .send(Message::Text(
-                                json!({"id":command["id"],"error":{"code":-32000,"message":"evaluation failed"}})
-                                    .to_string()
-                                    .into(),
-                            ))
-                            .unwrap();
-                    } else {
-                        socket.send(Message::Text(response.to_string().into())).unwrap();
-                        for response in pending.drain(..) {
-                            socket.send(Message::Text(response.to_string().into())).unwrap();
-                        }
-                    }
-                }
-                commands
-            });
+            let server = std::thread::spawn(move || runtime_fixture_commands(&listener, event, during_enable));
             let (mut state, events, slot) = fixture(&url);
             let mut link = CdpLink::connect_with_timeout(&url, Duration::from_millis(10)).unwrap();
+            if during_enable {
+                let error = state.frame_scan(&mut link, &events, &slot, None, 10).unwrap_err();
+                assert_eq!(error.code, expected);
+                drop(link);
+                server.join().unwrap();
+                continue;
+            }
             if event.is_none() {
                 for _ in 0..2 {
                     state.frame_scan(&mut link, &events, &slot, None, 10).unwrap();
@@ -411,14 +437,7 @@ mod tests {
                     Instant::now() + Duration::from_secs(2),
                 )
                 .unwrap_err();
-            assert_eq!(
-                error.code,
-                if event.is_some() {
-                    "stale_reference"
-                } else {
-                    "frame_unavailable"
-                }
-            );
+            assert_eq!(error.code, expected);
             drop(link);
             let commands = server.join().unwrap();
             assert_eq!(
