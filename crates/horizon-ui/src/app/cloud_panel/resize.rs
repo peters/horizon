@@ -399,8 +399,8 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             };
             frame(header, vec![press(true)]);
-            for step in 1..=12 {
-                let t = step as f32 / 12.0;
+            for step in 1u8..=12 {
+                let t = f32::from(step) / 12.0;
                 frame(header + (target - header) * t, Vec::new());
             }
             frame(
