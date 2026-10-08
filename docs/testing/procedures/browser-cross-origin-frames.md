@@ -1,7 +1,7 @@
 ---
 procedure: browser-cross-origin-frames
 feature: Browser semantic input in child frames
-platforms: [linux]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: synthetic values only
@@ -17,8 +17,10 @@ It tests document references and the removal of secret values from audit records
 
 ## 2. Applicability
 
-- Use the candidate source checkout on Linux.
-- Test local Chromium and Firefox with geckodriver.
+- Use the candidate source checkout.
+- On Linux, test local Chromium and Firefox.
+- On macOS, test local Safari with Safari automation enabled.
+- Firefox needs geckodriver.
 - Safari and remote sessions do not support child-frame semantic input.
 - This procedure does not test the Horizon UI or remote device providers.
 
@@ -41,7 +43,9 @@ The test does not use the developer's browser session.
    If Firefox uses Snap, set `TMPDIR` to a private directory below the home directory.
    The directory must not have a name that starts with a dot.
    Firefox and geckodriver must both have access to it.
-2. Run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live -- --ignored --nocapture`.
+2. On Linux, run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live -- --ignored --nocapture`.
+3. On macOS, run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live mcp_safari_preserves_top_level_input_and_frame_boundaries -- --ignored --nocapture`.
+   Run the selected test alone. Each test uses its own coordination root.
 
    Result: The test starts an isolated MCP process and each browser backend.
 
@@ -66,6 +70,8 @@ The test does not use the developer's browser session.
    Result: The test reloads the child frame at the same URL.
    A fill with the previous reference fails with `stale_reference`.
    A new query returns a new valid reference.
+   Each backend repeats the reload three times.
+   A new query also invalidates a reference from the previous snapshot.
 
 ### 6.3 FRAME-AUDIT — Examine the audit
 
@@ -73,10 +79,48 @@ The test does not use the developer's browser session.
 
    Result: `browser_audit` returns no user or password fill value.
 
+### 6.4 FRAME-SIBLING — Check reference isolation
+
+1. Examine the completed test result.
+
+   Result: The test adds a sibling frame at the same URL.
+   A query returns two password references.
+   Each reference fills a different document.
+   The test removes one sibling.
+   Its reference becomes stale. The other reference remains usable.
+
+### 6.5 FRAME-ERROR — Check bounds and rejected actions
+
+1. Examine the completed test result.
+
+   Result: Invalid selectors return `invalid_selector`.
+   The node limit applies when the top document fills the limit and when child documents fill it.
+   Hidden, disabled and non-editable targets return the applicable errors.
+   Child file inputs have no file-upload capability marker.
+   A scroll action on a child reference returns `unsupported_frame_action`.
+
+### 6.6 FRAME-CAPTURE — Check frame delivery
+
+1. Examine the completed test result.
+
+   Result: After the input tasks, the test changes the page background.
+   A new decoded frame arrives within three seconds.
+
+### 6.7 SAFARI-COMPAT — Check the supported Safari behavior
+
+1. Examine the macOS test result.
+
+   Result: The snapshot shows the iframe boundary.
+   A query returns no child password input.
+   Top-level reference input works and its value is absent from the audit.
+   This result does not qualify child-frame input on Safari.
+
 ## 7. Pass criteria
 
-- All test assertions pass on Chromium and Firefox.
+- All selected test assertions pass on Chromium and Firefox.
+- The Safari compatibility assertions pass on macOS.
 - The input, submission, reference and audit tasks pass through public MCP tools.
+- Decoded frame delivery continues after the input tasks.
 - The test does not require a human handoff.
 
 ## 8. Cleanup
@@ -85,6 +129,7 @@ The test does not use the developer's browser session.
 
    Result: The test stops its MCP processes, browser sessions and HTTP fixture.
    Temporary profiles and coordination state are removed.
+   The same cleanup runs if a test assertion fails.
 
 ## 9. Record of results
 

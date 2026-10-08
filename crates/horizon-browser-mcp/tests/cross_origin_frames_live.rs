@@ -1,4 +1,4 @@
-//! Headless cross-origin form acceptance through the public MCP stdio tools.
+//! Cross-origin form acceptance through the public MCP stdio tools.
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
@@ -149,6 +149,135 @@ fn mcp_cross_origin_form_roundtrip_and_staleness_on_both_backends() {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires local Safari automation and loopback sockets"]
+fn mcp_safari_preserves_top_level_input_and_frame_boundaries() {
+    let root = tempfile::tempdir().unwrap();
+    horizon_browser_control::paths::configure_runtime_root(root.path()).unwrap();
+    run(BackendKind::SafariWebDriver, root.path(), true);
+}
+
+fn safari_compatibility(host: &mut McpProcess) {
+    let snapshot = host.call("browser_snapshot", json!({"max_nodes":100})).unwrap();
+    assert!(
+        snapshot["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["role"] == "iframe")
+    );
+    assert!(host.nodes("input[type=password]").is_empty());
+    let top = host.nodes("#same");
+    assert_eq!(top.len(), 1);
+    host.call(
+        "browser_act",
+        json!({"action":"fill","ref":top[0].reference,"value":"safari-synthetic"}),
+    )
+    .unwrap();
+    let value = host
+        .call(
+            "browser_evaluate",
+            json!({"expression":"document.querySelector('#same').value"}),
+        )
+        .unwrap();
+    assert_eq!(value["value"], "safari-synthetic");
+    assert!(
+        !host
+            .call("browser_audit", json!({}))
+            .unwrap()
+            .to_string()
+            .contains("safari-synthetic")
+    );
+}
+
+fn edge_cases(host: &mut McpProcess) {
+    assert!(
+        host.call("browser_query", json!({"selector":"["}))
+            .unwrap_err()
+            .contains("invalid_selector")
+    );
+    let capped = host
+        .call("browser_query", json!({"selector":"input","max_results":1}))
+        .unwrap();
+    assert_eq!(capped["nodes"].as_array().unwrap().len(), 1);
+    assert!(!capped["nodes"][0]["bounds"].is_null());
+    for (selector, code) in [
+        ("#disabled", "element_disabled"),
+        ("#hidden", "element_not_visible"),
+        ("#readonly", "element_not_editable"),
+    ] {
+        let nodes = host.nodes(selector);
+        assert_eq!(nodes.len(), 1);
+        assert!(
+            host.call(
+                "browser_act",
+                json!({"action":"fill","ref":nodes[0].reference,"value":"rejected"})
+            )
+            .unwrap_err()
+            .contains(code)
+        );
+    }
+    let files = host.nodes("input[type=file]");
+    assert_eq!(files.len(), 1);
+    assert!(files[0].file_input.is_none());
+    assert!(
+        host.call(
+            "browser_act",
+            json!({"action":"scroll","ref":files[0].reference,"delta_y":1})
+        )
+        .unwrap_err()
+        .contains("unsupported_frame_action")
+    );
+    host.call("browser_evaluate", json!({"expression":"new Promise(resolve=>{const ready=e=>{if(e.data.ready){window.removeEventListener('message',ready);resolve(true)}};window.addEventListener('message',ready);const frame=document.createElement('iframe');frame.id='sibling';frame.src=document.querySelector('#widget').src;document.body.append(frame)})"})).unwrap();
+    let capped = host
+        .call(
+            "browser_query",
+            json!({"selector":"input[type=password]","max_results":1}),
+        )
+        .unwrap();
+    assert_eq!(capped["nodes"].as_array().unwrap().len(), 1);
+    let fields = host.nodes("input[type=password]");
+    assert_eq!(fields.len(), 2, "same-URL sibling documents must have distinct refs");
+    for (field, value) in fields.iter().zip(["edge-a", "edge-b"]) {
+        host.call(
+            "browser_act",
+            json!({"action":"fill","ref":field.reference,"value":value}),
+        )
+        .unwrap();
+    }
+    let values = host
+        .call(
+            "browser_evaluate",
+            json!({"expression":"Object.values(window.states).filter(s=>s.value==='edge-a'||s.value==='edge-b')"}),
+        )
+        .unwrap();
+    let values = values["value"].as_array().unwrap();
+    assert_eq!(values.len(), 2, "each ref must fill a different document");
+    let removed = values.iter().find(|state| state["owner"] == "sibling").unwrap();
+    let index = usize::from(removed["value"] == "edge-b");
+    host.call(
+        "browser_evaluate",
+        json!({"expression":"(()=>{document.querySelector('#sibling').remove();return true})()"}),
+    )
+    .unwrap();
+    thread::sleep(Duration::from_millis(250));
+    assert!(
+        host.call(
+            "browser_act",
+            json!({"action":"fill","ref":fields[index].reference,"value":"rejected"})
+        )
+        .unwrap_err()
+        .contains("stale_reference")
+    );
+    host.call(
+        "browser_act",
+        json!({"action":"fill","ref":fields[1-index].reference,"value":"survivor"}),
+    )
+    .unwrap();
+    assert_eq!(host.nodes("input[type=password]").len(), 1);
+}
+
 fn wait_for_first_frame(session: &horizon_browser::BrowserSession, slot: &FrameSlot) {
     let ready = Instant::now() + Duration::from_secs(25);
     let mut startup_warnings = Vec::new();
@@ -167,14 +296,14 @@ fn wait_for_first_frame(session: &horizon_browser::BrowserSession, slot: &FrameS
 
 fn run(backend: BackendKind, root: &Path, nested: bool) {
     let (port, stop, server) = fixture(nested);
-    let profiles = tempfile::tempdir().unwrap();
+    let profiles = tempfile::Builder::new().prefix("frame-profiles-").tempdir().unwrap();
     let coordination = Arc::new(ManifestCoordination::default());
     let slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
         browser: BrowserConfig {
             backend,
-            headless: true,
-            profile_root: Some(profiles.path().join("profiles")),
+            headless: backend != BackendKind::SafariWebDriver,
+            profile_root: (backend != BackendKind::SafariWebDriver).then(|| profiles.path().join("profiles")),
             ..Default::default()
         },
         panel_local_id: "frame-test".into(),
@@ -188,19 +317,48 @@ fn run(backend: BackendKind, root: &Path, nested: bool) {
         remote: None,
     })
     .unwrap();
-    wait_for_first_frame(&session, &slot);
-    let mut host = McpProcess::start(root);
-    let readiness = host.action(BrowserControlAction::WaitForSelector {
-        selector: "output[data-ready]".into(),
-        state: horizon_browser::SelectorState::Present,
-        timeout_millis: Some(15000),
-    });
-    if let Err(error) = readiness {
-        let diagnostic = host.call("browser_evaluate", json!({"expression":"JSON.stringify({url:location.href,ready:document.readyState,text:document.body?.innerText,frames:[...document.querySelectorAll('iframe')].map(f=>f.src)})"}));
-        let snapshot = host.call("browser_snapshot", json!({"max_nodes":100}));
-        panic!("fixture readiness: {error}; document: {diagnostic:?}; snapshot: {snapshot:?}");
-    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_for_first_frame(&session, &slot);
+        let mut host = McpProcess::start(root);
+        let readiness = host.action(BrowserControlAction::WaitForSelector {
+            selector: "output[data-ready]".into(),
+            state: horizon_browser::SelectorState::Present,
+            timeout_millis: Some(15000),
+        });
+        if let Err(error) = readiness {
+            let diagnostic = host.call("browser_evaluate", json!({"expression":"JSON.stringify({url:location.href,ready:document.readyState,text:document.body?.innerText,frames:[...document.querySelectorAll('iframe')].map(f=>f.src)})"}));
+            let snapshot = host.call("browser_snapshot", json!({"max_nodes":100}));
+            panic!("fixture readiness: {error}; document: {diagnostic:?}; snapshot: {snapshot:?}");
+        }
 
+        if backend == BackendKind::SafariWebDriver {
+            safari_compatibility(&mut host);
+        } else {
+            form_roundtrip(&mut host);
+        }
+        let frame_seq = slot.latest().unwrap().seq;
+        host.call(
+            "browser_evaluate",
+            json!({"expression":"document.body.style.backgroundColor='rgb(12, 34, 56)'"}),
+        )
+        .unwrap();
+        let frame_deadline = Instant::now() + Duration::from_secs(3);
+        while slot.latest().unwrap().seq == frame_seq {
+            assert!(Instant::now() < frame_deadline, "frame delivery stopped during input");
+            thread::sleep(Duration::from_millis(30));
+        }
+        drop(host);
+    }));
+    assert!(session.send(BrowserCommand::Stop));
+    assert!(session.shutdown_signal().wait(Duration::from_secs(10)));
+    stop.store(true, std::sync::atomic::Ordering::Release);
+    server.join().unwrap();
+    if let Err(error) = result {
+        std::panic::resume_unwind(error);
+    }
+}
+
+fn form_roundtrip(host: &mut McpProcess) {
     let snapshot = host.success(BrowserControlAction::Snapshot { max_nodes: 100 });
     let BrowserControlValue::Snapshot { snapshot } = snapshot else {
         panic!("snapshot")
@@ -218,6 +376,14 @@ fn run(backend: BackendKind, root: &Path, nested: bool) {
     });
     let password = host.nodes("input[type=password]");
     assert_eq!(password.len(), 1);
+    assert!(
+        host.call(
+            "browser_act",
+            json!({"action":"fill","ref":user.reference,"value":"must-not-fill"})
+        )
+        .unwrap_err()
+        .contains("stale_reference")
+    );
     host.success(BrowserControlAction::Fill {
         target: BrowserTarget::Ref {
             reference: password[0].reference.clone(),
@@ -239,28 +405,35 @@ fn run(backend: BackendKind, root: &Path, nested: bool) {
         timeout_millis: None,
     });
     assert!(matches!(top, BrowserControlValue::Json { value } if value==true));
-    let old = host.nodes("input[type=password]")[0].reference.clone();
-    host.success(BrowserControlAction::Evaluate {
+    for _ in 0..3 {
+        let old = host.nodes("input[type=password]")[0].reference.clone();
+        host.success(BrowserControlAction::Evaluate {
         expression:
             "new Promise(resolve=>{const ready=e=>{if(e.data.ready){window.removeEventListener('message',ready);resolve(true)}};window.addEventListener('message',ready);document.querySelector('#widget').src=document.querySelector('#widget').src})"
                 .into(),
         timeout_millis: None,
     });
-    thread::sleep(Duration::from_millis(700));
-    let stale = host.action(BrowserControlAction::Fill {
-        target: BrowserTarget::Ref { reference: old },
-        value: "must-not-fill".into(),
-    });
-    assert!(stale.unwrap_err().contains("stale_reference"));
-    assert_eq!(host.nodes("input[type=password]").len(), 1);
+        thread::sleep(Duration::from_millis(700));
+        let stale = host.action(BrowserControlAction::Fill {
+            target: BrowserTarget::Ref { reference: old },
+            value: "must-not-fill".into(),
+        });
+        assert!(stale.unwrap_err().contains("stale_reference"));
+        assert_eq!(host.nodes("input[type=password]").len(), 1);
+    }
+    edge_cases(host);
     let audit = host.call("browser_audit", json!({})).unwrap().to_string();
-    assert!(!audit.contains("synthetic-secret"));
-    assert!(!audit.contains("synthetic-user"));
-    drop(host);
-    assert!(session.send(BrowserCommand::Stop));
-    assert!(session.shutdown_signal().wait(Duration::from_secs(10)));
-    stop.store(true, std::sync::atomic::Ordering::Release);
-    server.join().unwrap();
+    for secret in [
+        "synthetic-secret",
+        "synthetic-user",
+        "edge-a",
+        "edge-b",
+        "survivor",
+        "rejected",
+        "must-not-fill",
+    ] {
+        assert!(!audit.contains(secret));
+    }
 }
 
 fn fixture(nested: bool) -> (u16, Arc<std::sync::atomic::AtomicBool>, thread::JoinHandle<()>) {
@@ -284,16 +457,16 @@ fn fixture(nested: bool) -> (u16, Arc<std::sync::atomic::AtomicBool>, thread::Jo
             let request = String::from_utf8_lossy(&request[..size]);
             let body = if request.starts_with("GET /form") {
                 r#"<!doctype html><title>Frame form</title><form>
-<label>User<input id="same" name="user" aria-label="User"></label><label>Password<input type="password" name="password" aria-label="Password"></label><button>Submit frame</button></form>
-<script>top.postMessage({ready:true},'*');document.querySelector('form').onsubmit=e=>{e.preventDefault();top.postMessage({submitted:document.querySelector('[name=user]').value==='synthetic-user'&&document.querySelector('[name=password]').value==='synthetic-secret',trusted:e.isTrusted},'*')};</script>"#.to_owned()
+<label>User<input id="same" name="user" aria-label="User"></label><label>Password<input type="password" name="password" aria-label="Password"></label><button>Submit frame</button></form><input id="disabled" disabled><input id="hidden" style="display:none"><div id="readonly">Read only</div><input type="file">
+<script>const token=crypto.randomUUID();parent.postMessage({ready:true},'*');document.querySelector('form').oninput=()=>parent.postMessage({state:token,value:document.querySelector('[name=password]').value},'*');document.querySelector('form').onsubmit=e=>{e.preventDefault();parent.postMessage({submitted:document.querySelector('[name=user]').value==='synthetic-user'&&document.querySelector('[name=password]').value==='synthetic-secret',trusted:e.isTrusted},'*')};</script>"#.to_owned()
             } else if request.starts_with("GET /wrapper") {
                 format!(
-                    r#"<!doctype html><title>Frame wrapper</title><iframe src="http://127.0.0.1:{port}/form" style="width:480px;height:220px"></iframe>"#
+                    r#"<!doctype html><title>Frame wrapper</title><iframe src="http://127.0.0.1:{port}/form" style="width:480px;height:220px"></iframe><script>window.addEventListener('message',e=>top.postMessage(e.data,'*'))</script>"#
                 )
             } else {
                 let path = if nested { "wrapper" } else { "form" };
                 format!(
-                    r#"<!doctype html><title>Frame fixture</title><input id="same" value="top-kept"><output>Waiting</output><iframe id="widget" src="http://localhost:{port}/{path}" style="margin:50px;width:500px;height:250px"></iframe><script>window.addEventListener('message',e=>{{if(e.data.ready){{document.querySelector('output').setAttribute('data-ready','')}}else{{document.querySelector('output').textContent=e.data.submitted&&e.data.trusted?'Submitted':'Failed'}}}})</script>"#
+                    r#"<!doctype html><title>Frame fixture</title><input id="same" value="top-kept"><output>Waiting</output><iframe id="widget" src="http://localhost:{port}/{path}" style="margin:50px;width:500px;height:250px"></iframe><script>window.states={{}};window.addEventListener('message',e=>{{if(e.data.state){{window.states[e.data.state]={{owner:e.source===document.querySelector('#widget').contentWindow?'widget':'sibling',value:e.data.value}}}}else if(e.data.ready){{document.querySelector('output').setAttribute('data-ready','')}}else{{document.querySelector('output').textContent=e.data.submitted&&e.data.trusted?'Submitted':'Failed'}}}})</script>"#
                 )
             };
             let _ = write!(
