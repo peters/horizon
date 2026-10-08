@@ -310,9 +310,17 @@ class Store:
         except (OSError, ValueError):
             pass
         else:
-            # A tmpfs copy is older, and a restart removes it anyway.
-            with contextlib.suppress(OSError):
+            # A tmpfs copy is older. It must go, or carry this same state: should the volume
+            # later fail its private-mode check, the tmpfs copy would be served again.
+            try:
                 (self.runtime / STATE).unlink(missing_ok=True)
+            except OSError:
+                try:
+                    write_private(private_directory(self.runtime, create=True), STATE, data)
+                except Unsynced:
+                    pass  # In place on tmpfs, which a crash empties anyway.
+                except (OSError, ValueError):
+                    raise ValueError('An older GitHub token chain in tmpfs cannot be removed') from None
             return True
         # The volume refused the write. tmpfs takes the chain first, so the older chain on the
         # volume stays usable until the new one is stored. That older chain must then go: a

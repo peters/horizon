@@ -7,6 +7,7 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 from unittest import mock
 
 from test_horizon_worker_github import NOW, ServiceTestCase, chain, common, installation, rotated, service
@@ -280,6 +281,32 @@ class VolumeCopyTests(ServiceTestCase):
             self.assertTrue(reader.is_alive(), 'the reader waits for the commit')
         reader.join(5)
         self.assertEqual(read[0]['chain'], chain())
+
+    def test_a_volume_write_never_leaves_an_older_tmpfs_chain_behind(self):
+        with self.fail_volume_writes():
+            self.install()
+        self.assertTrue((self.store.runtime / service.STATE).exists(), 'tmpfs held the first chain')
+        real_unlink = Path.unlink
+
+        def unlink(path, *args, **kwargs):
+            if path == self.store.runtime / service.STATE:
+                raise PermissionError('busy')
+            return real_unlink(path, *args, **kwargs)
+        with mock.patch.object(Path, 'unlink', unlink):
+            self.install(installation(chain=chain(access='ghu_synthetic-new')))
+        tmpfs = json.loads((self.store.runtime / service.STATE).read_text())
+        self.assertEqual(tmpfs['chain']['access_token'], 'ghu_synthetic-new',
+                         'the tmpfs copy carries the new chain when it cannot be removed')
+        real_write = common.write_private
+
+        def write(directory, name, data):
+            if directory == self.store.runtime and name == service.STATE:
+                raise OSError('no space left on device')
+            return real_write(directory, name, data)
+        with mock.patch.object(Path, 'unlink', unlink), \
+                mock.patch.object(common, 'write_private', side_effect=write), \
+                self.assertRaisesRegex(ValueError, 'older GitHub token chain in tmpfs'):
+            self.install(installation(chain=chain(access='ghu_synthetic-third')))
 
     def test_removal_never_follows_a_swapped_directory_link(self):
         victim = self.root / 'elsewhere'
