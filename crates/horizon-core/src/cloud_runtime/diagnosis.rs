@@ -161,16 +161,34 @@ const MEANINGS: [Known; 12] = [
     ),
 ];
 
+/// How many failure lines before the newest one may explain it.
+const EXPLAINING_LINES: usize = 4;
+
 /// Finds the cause among `lines`, newest last. `summary` is the failure message
 /// Horizon already shows; a line repeating it is not the cause.
 #[must_use]
 pub fn diagnose<'a>(lines: impl DoubleEndedIterator<Item = &'a str>, summary: &str) -> Option<Diagnosis> {
     let summary = summary.trim();
-    let cause = lines
+    let failures: Vec<&str> = lines
         .rev()
         .map(str::trim)
         .filter(|line| !line.is_empty() && *line != summary)
-        .find(|line| is_failure(line))?;
+        .filter(|line| is_failure(line))
+        .take(EXPLAINING_LINES + 1)
+        .collect();
+    let newest = *failures.first()?;
+    // A tool can repeat its error without its context, as Docker prints "denied" after
+    // "error from registry: denied". A recent failure line that explains the failure is then
+    // the cause.
+    let cause = if meaning_in(newest, summary).is_some() {
+        newest
+    } else {
+        failures
+            .iter()
+            .copied()
+            .find(|line| meaning_in(line, summary).is_some())
+            .unwrap_or(newest)
+    };
     Some(Diagnosis {
         cause: cause.to_owned(),
         meaning: meaning_in(cause, summary).or_else(|| meaning(summary)),
@@ -313,6 +331,17 @@ mod tests {
         .meaning
         .unwrap();
         assert_eq!(pull, REGISTRY_REFUSED);
+    }
+
+    #[test]
+    fn a_bare_repeat_of_the_error_leaves_the_cause_to_the_line_that_explains_it() {
+        let lines = ["b686816be845: Waiting", "error from registry: denied", "denied"];
+        let found = diagnose(lines.into_iter(), SUMMARY).unwrap();
+        assert_eq!(found.cause, "error from registry: denied");
+        assert!(found.meaning.unwrap().contains("publish"));
+        // A newest line without a known meaning stays the cause when no recent line explains it.
+        let found = diagnose(["error: something odd", "fatal: odd"].into_iter(), "Build failed").unwrap();
+        assert_eq!(found.cause, "fatal: odd");
     }
 
     #[test]
