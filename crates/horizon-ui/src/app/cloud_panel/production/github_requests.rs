@@ -135,8 +135,10 @@ fn spawn(
         })();
         if let Ok(answer) = answer {
             let _ = tx.send(answer);
-            ctx.request_repaint();
         }
+        // A failure drops the sender; the repaint lets the card see that and poll again.
+        drop(tx);
+        ctx.request_repaint();
     });
     rx
 }
