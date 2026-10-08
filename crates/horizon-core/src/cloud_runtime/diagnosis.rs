@@ -65,6 +65,15 @@ const HOST_NOT_FOUND: &[&str] = &[
 const REGISTRY_REFUSED: &str =
     "The registry refused the request. Its saved credentials have expired or lack access to this image.";
 
+/// A refused push: Horizon publishes with its own Docker configuration, never the
+/// person's usual Docker login, so the fix is a publishing login there.
+const PUSH_REFUSED: &str = "The registry refused to publish the image. Horizon pushes with its own Docker \
+     configuration, which has no login that may publish here. Add a publishing credential to this image \
+     repository in Cloud settings › Container registry, then retry.";
+
+/// The summary of a failed image push.
+const PUSHING: &str = "uploading image";
+
 /// A well-known cause: any of `patterns`, and when `context` is not empty, one of
 /// those words in the line or the failure summary too.
 struct Known {
@@ -180,7 +189,7 @@ pub fn meaning(line: &str) -> Option<&'static str> {
 pub fn meaning_in(line: &str, summary: &str) -> Option<&'static str> {
     let lower = line.to_ascii_lowercase();
     let summary = summary.to_ascii_lowercase();
-    MEANINGS
+    let meaning = MEANINGS
         .iter()
         .find(|known| {
             known.patterns.iter().any(|pattern| lower.contains(pattern))
@@ -190,7 +199,12 @@ pub fn meaning_in(line: &str, summary: &str) -> Option<&'static str> {
                         .iter()
                         .any(|word| lower.contains(word) || summary.contains(word)))
         })
-        .map(|known| known.meaning)
+        .map(|known| known.meaning);
+    // A registry refusal while the image uploads is a missing publishing login.
+    if meaning == Some(REGISTRY_REFUSED) && summary.contains(PUSHING) {
+        return Some(PUSH_REFUSED);
+    }
+    meaning
 }
 
 /// Whether a line reports a failure rather than progress or a retry.
@@ -280,6 +294,25 @@ mod tests {
         let found = diagnose(lines.into_iter(), SUMMARY).unwrap();
         assert_eq!(found.cause, "error from registry: denied");
         assert!(found.meaning.unwrap().contains("registry refused"));
+    }
+
+    #[test]
+    fn a_refused_push_asks_for_a_publishing_login_and_a_refused_pull_for_valid_credentials() {
+        let lines = [
+            "edd1ed89f0d4: Layer already exists",
+            "error from registry: unauthenticated: User cannot be authenticated with the token provided.",
+        ];
+        let push = diagnose(lines.into_iter(), SUMMARY).unwrap().meaning.unwrap();
+        assert!(push.contains("publishing credential"), "{push}");
+        assert!(push.contains("its own Docker"), "{push}");
+        let pull = diagnose(
+            ["docker pull ghcr.io/example/worker: unauthorized"].into_iter(),
+            "Readiness failed",
+        )
+        .unwrap()
+        .meaning
+        .unwrap();
+        assert_eq!(pull, REGISTRY_REFUSED);
     }
 
     #[test]
