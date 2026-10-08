@@ -142,6 +142,12 @@ def open_directory(path):
         raise
 
 
+def sync_descriptor(fd, directory):
+    """Syncs the directory open as `fd`, the same one a removal used; `directory` names it."""
+    del directory
+    os.fsync(fd)
+
+
 def remove_durably(directory, name):
     """Removes `directory/name` and makes the removal durable. The directory is reached without
     following symbolic links, so a swapped link never makes root remove another file; such a
@@ -153,9 +159,9 @@ def remove_durably(directory, name):
     try:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(name, dir_fd=fd)
+        sync_descriptor(fd, directory)
     finally:
         os.close(fd)
-    fsync_directory(directory)
 
 
 def read_json(path, limit=MAX_STATE):

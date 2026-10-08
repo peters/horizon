@@ -132,13 +132,13 @@ class VolumeCopyTests(ServiceTestCase):
     def test_a_removal_that_does_not_reach_the_disk_fails_the_fallback(self):
         self.install()
         old = self.store.persistent / service.STATE
-        real = common.fsync_directory
+        real = common.sync_descriptor
 
-        def fsync(directory):
+        def fsync(fd, directory):
             if directory == self.store.persistent:
                 raise OSError('input/output error')
-            return real(directory)
-        with self.fail_volume_writes(), mock.patch.object(common, 'fsync_directory', side_effect=fsync), \
+            return real(fd, directory)
+        with self.fail_volume_writes(), mock.patch.object(common, 'sync_descriptor', side_effect=fsync), \
                 self.assertRaisesRegex(ValueError, 'older GitHub token chain'):
             self.install(installation(chain=chain(access='ghu_synthetic-new')))
         self.assertFalse((self.store.runtime / service.STATE).exists())
@@ -179,13 +179,13 @@ class VolumeCopyTests(ServiceTestCase):
 
     def test_a_clear_that_cannot_remove_the_volume_copy_changes_nothing(self):
         self.install()
-        real = common.fsync_directory
+        real = common.sync_descriptor
 
-        def fsync(directory):
+        def fsync(fd, directory):
             if directory == self.store.persistent:
                 raise OSError('input/output error')
-            return real(directory)
-        with mock.patch.object(common, 'fsync_directory', side_effect=fsync), self.assertRaises(OSError):
+            return real(fd, directory)
+        with mock.patch.object(common, 'sync_descriptor', side_effect=fsync), self.assertRaises(OSError):
             service.clear(self.store, retire=lambda: None)
         self.assertFalse((self.store.runtime / common.CLEARED).exists(), 'no clear mark without a durable removal')
 
