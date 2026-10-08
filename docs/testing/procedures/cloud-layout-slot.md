@@ -107,6 +107,15 @@ slots.
 
    Result: The cloud takes a slot again. Nothing overlaps.
 
+### 6.6 GAP — Close the panels before the cloud
+
+1. Put the cloud in the last slot. Then close each terminal from the sidebar,
+   one at a time.
+
+   Result: After each close the cloud moves into the first free slot. When no
+   terminal is left, the cloud takes the first slot and the workspace frame
+   fits around it. No empty slot is left before the cloud.
+
 ## 7. Pass criteria
 
 - In each preset the cloud takes one slot of the same size as the terminals.
@@ -114,6 +123,8 @@ slots.
 - A resize of a terminal or of the cloud changes the size of each slot.
 - The cloud keeps its slot after a restart.
 - A collapsed cloud gives its slot back.
+- A cloud moves up into the slots that closed panels leave, also when no panel
+  is left.
 
 ## 8. Cleanup
 
