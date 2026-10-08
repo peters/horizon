@@ -398,11 +398,7 @@ pub(crate) fn target_rect_expression(selector: &str, clear: bool) -> String {
 }
 
 pub(crate) fn frame_fill_expression(selector: &str) -> String {
-    format!(
-        "(() => {{ const result = {}; if (!result.error && (document.activeElement !== document.querySelector({}))) return {{ error: {{ code: 'element_not_focused', message: 'the child field did not receive focus' }} }}; return result; }})()",
-        target_rect_expression(selector, true),
-        json_string(selector)
-    )
+    target_rect_expression(selector, true)
 }
 
 pub(crate) fn scroll_expression(selector: Option<&str>, delta_x: f64, delta_y: f64) -> String {

@@ -107,6 +107,7 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
    The rejected fill does not change the original value or send an input event.
    The test checks these cases in child and top-level documents.
    If an input handler moves focus during clearing, the requested text does not reach the field that receives focus.
+   The handler transfers the target ID to the field that receives focus. The original element check still rejects the fill.
    File, checkbox, radio, range, button, color, date and select controls reject fill without value changes or input events.
    These controls also reject fill when they have `contenteditable="true"`.
    Text, search, tel, URL, email, password and number inputs accept fill.
