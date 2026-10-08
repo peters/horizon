@@ -100,7 +100,7 @@ impl HorizonApp {
                 continue;
             }
             match self.cast_source_rect(session.workspace, &session.source, ctx) {
-                Ok(rect) if !self.cast_obscured(&session.source, rect, ctx) => {
+                Ok(rect) if !self.cast_obscured(session.workspace, &session.source, rect, ctx) => {
                     if !self.cast_geometry_settled(session.workspace, &session.source, ctx) {
                         continue;
                     }
@@ -234,6 +234,10 @@ impl HorizonApp {
                     .collect()
             }
             CastSource::Cloud { id } => {
+                // Companion access refuses a duplicated cloud ID too; one source is one card.
+                if self.cast_cloud_duplicated(id) {
+                    return Err("This cloud's identity is duplicated; it cannot be cast".into());
+                }
                 let members = self
                     .cast_cloud_members(workspace, id)
                     .ok_or("Source is outside the current workspace")?;
@@ -332,7 +336,7 @@ impl HorizonApp {
     pub(super) fn is_cast_control_layer(&self, layer: LayerId) -> bool {
         layer == cast_picker_layer() || self.casting.control_menus.is_some_and(|menus| menus.contains(&layer))
     }
-    fn cast_obscured(&self, source: &CastSource, rect: Rect, ctx: &Context) -> bool {
+    fn cast_obscured(&self, workspace: WorkspaceId, source: &CastSource, rect: Rect, ctx: &Context) -> bool {
         if self.pending_session_switch.is_some() {
             return true;
         }
@@ -349,12 +353,11 @@ impl HorizonApp {
                     .map(|workspace| (workspace, Clouds::All)),
                 Vec::new(),
             ),
-            CastSource::Cloud { id } => self.cast_cloud_workspace(id).map_or((None, Vec::new()), |workspace| {
-                (
-                    Some((workspace, Clouds::One(id))),
-                    self.cast_cloud_members(workspace, id).unwrap_or_default(),
-                )
-            }),
+            // The session's workspace, not a lookup by ID: the source was validated there.
+            CastSource::Cloud { id } => (
+                Some((workspace, Clouds::One(id))),
+                self.cast_cloud_members(workspace, id).unwrap_or_default(),
+            ),
             CastSource::Panel { .. } | CastSource::Application {} => (None, Vec::new()),
         };
         ctx.memory(|memory| {
@@ -416,7 +419,7 @@ impl HorizonApp {
                     .is_ok_and(|rect| rect == frame.rect)
                 && self.cast_geometry_settled(session.workspace, &session.source, ctx)
                 && !self.cast_controls_cover(frame.rect, ctx)
-                && !self.cast_obscured(&session.source, frame.rect, ctx)
+                && !self.cast_obscured(session.workspace, &session.source, frame.rect, ctx)
             {
                 let _ = session.worker.submit_source(frame.width, frame.height, frame.rgba);
             }
@@ -469,7 +472,7 @@ impl HorizonApp {
                 if current != *rect
                     || !self.cast_geometry_settled(session.workspace, &session.source, ctx)
                     || self.cast_controls_cover(current, ctx)
-                    || self.cast_obscured(&session.source, current, ctx)
+                    || self.cast_obscured(session.workspace, &session.source, current, ctx)
                 {
                     continue;
                 }

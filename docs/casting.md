@@ -88,7 +88,8 @@ cloud cards in that workspace, with their headers, bodies and open drawers. A
 cloud source, `{ "kind": "cloud", "id": "<cloud ID>" }` with the ID that
 `cloud_companions` reports, shows one deployed cloud card with its panels and
 open drawer; panels beside it are left out, and another panel or cloud over it
-refuses the source. A
+refuses the source. A cloud ID that two cards share is refused, as companion
+access refuses it. A
 cloud's own chrome and a panel's own resize grip do not count as covering the
 source. Hidden, clipped, detached, deleted
 or covered panel/workspace sources stop casting. Entire Horizon captures the

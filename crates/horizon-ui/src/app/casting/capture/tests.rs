@@ -25,7 +25,7 @@ fn application_capture_uses_the_root_window_and_includes_its_dialogs() {
                 egui::Window::new("Synthetic dialog").show(ui.ctx(), |ui| {
                     ui.label("Part of this window");
                 });
-                assert!(!app.cast_obscured(&CastSource::Application {}, rect, ui.ctx()));
+                assert!(!app.cast_obscured(workspace, &CastSource::Application {}, rect, ui.ctx()));
                 app.casting.root_geometry = Some(RootGeometry::observe(
                     None,
                     rect,
@@ -35,7 +35,7 @@ fn application_capture_uses_the_root_window_and_includes_its_dialogs() {
                         .expect("capture interval fits"),
                 ));
                 assert!(app.cast_geometry_settled(workspace, &CastSource::Application {}, ui.ctx()));
-                assert!(app.cast_obscured(&CastSource::Panel { id: "synthetic".into() }, rect, ui.ctx()));
+                assert!(app.cast_obscured(workspace, &CastSource::Panel { id: "synthetic".into() }, rect, ui.ctx()));
             })
             .discard_textures();
     }
@@ -255,12 +255,15 @@ fn cast_controls_pause_only_covered_sources_and_other_overlays_remain_private() 
                 }
                 assert!(app.cast_controls_cover(region, ui.ctx()));
                 assert!(!app.cast_controls_cover(region.translate(egui::vec2(700.0, 0.0)), ui.ctx()));
-                assert_eq!(app.cast_obscured(&source, region, ui.ctx()), other_overlay);
+                assert_eq!(
+                    app.cast_obscured(WorkspaceId(1), &source, region, ui.ctx()),
+                    other_overlay
+                );
             })
             .discard_textures();
         // egui has discarded sublayers but retained prior-frame areas.
         assert!(app.cast_controls_cover(region, &ctx));
-        assert_eq!(app.cast_obscured(&source, region, &ctx), other_overlay);
+        assert_eq!(app.cast_obscured(WorkspaceId(1), &source, region, &ctx), other_overlay);
     }
 }
 
@@ -300,7 +303,7 @@ fn source_authority_and_overlay_privacy_are_checked() {
                 ui.allocate_space(region.size());
             });
     });
-    assert!(app.cast_obscured(&source, region, &ctx));
+    assert!(app.cast_obscured(first, &source, region, &ctx));
     app.board.panels[0].layout.size[0] = 10_000.0;
     let id = app.board.panels[0].id;
     app.panel_screen_rects.insert(id, region);
@@ -310,6 +313,7 @@ fn source_authority_and_overlay_privacy_are_checked() {
             .contains("Fit the entire source")
     );
     assert!(!app.cast_obscured(
+        first,
         &source,
         Rect::from_min_size(egui::pos2(1200.0, 700.0), egui::vec2(20.0, 20.0)),
         &ctx
@@ -398,7 +402,7 @@ mod clouds {
         let cloud = cloud_screen_rect(&app, &ctx);
         assert!(rect.expand(1.5).contains_rect(cloud), "{rect:?} holds {cloud:?}");
         assert!(
-            !app.cast_obscured(&source, rect, &ctx),
+            !app.cast_obscured(workspace, &source, rect, &ctx),
             "the cloud's own header does not cover it"
         );
         assert!(app.cast_geometry_settled(workspace, &source, &ctx));
@@ -424,7 +428,7 @@ mod clouds {
             rect.expand(1.5).contains_rect(panel),
             "{rect:?} holds the panel {panel:?}"
         );
-        assert!(!app.cast_obscured(&source, rect, &ctx));
+        assert!(!app.cast_obscured(workspace, &source, rect, &ctx));
         // A single panel's cast still treats the cloud's header as something covering it
         // when they overlap; here they do not, so the panel cast is clear too.
         let panel_source = CastSource::Panel {
@@ -434,7 +438,7 @@ mod clouds {
             .cast_source_rect(workspace, &panel_source, &ctx)
             .expect("panel source");
         assert!(
-            !app.cast_obscured(&panel_source, panel_rect, &ctx),
+            !app.cast_obscured(workspace, &panel_source, panel_rect, &ctx),
             "the panel's own resize grip is part of it"
         );
     }
@@ -461,7 +465,7 @@ mod clouds {
             "{rect:?} holds the drawer {drawer:?}"
         );
         assert!(
-            !app.cast_obscured(&source, rect, &ctx),
+            !app.cast_obscured(workspace, &source, rect, &ctx),
             "the drawer does not cover its own cloud"
         );
     }
@@ -483,7 +487,7 @@ mod clouds {
         let panel = app.panel_screen_rects[&app.board.panels[0].id];
         assert!(rect.expand(1.5).contains_rect(cloud), "{rect:?} holds {cloud:?}");
         assert!(!rect.intersects(panel), "{rect:?} leaves out the panel {panel:?}");
-        assert!(!app.cast_obscured(&cloud_source(), rect, &ctx));
+        assert!(!app.cast_obscured(workspace, &cloud_source(), rect, &ctx));
         assert!(app.cast_geometry_settled(workspace, &cloud_source(), &ctx));
     }
 
@@ -505,7 +509,7 @@ mod clouds {
             "{rect:?} holds the member {panel:?}"
         );
         assert!(
-            !app.cast_obscured(&cloud_source(), rect, &ctx),
+            !app.cast_obscured(workspace, &cloud_source(), rect, &ctx),
             "the member and its owner badge are part of the cloud"
         );
         assert!(app.cast_geometry_settled(workspace, &cloud_source(), &ctx));
@@ -595,5 +599,28 @@ mod clouds {
             .expect("the hidden panel is not part of the picture");
         assert!(rect.expand(1.5).contains_rect(cloud_screen_rect(&app, &ctx)));
         assert!(app.cast_geometry_settled(workspace, &source, &ctx));
+    }
+
+    #[test]
+    fn a_duplicated_cloud_id_is_not_a_source() {
+        // Persisted records can carry one cloud ID twice, here in another workspace.
+        let (_temp, ctx, app) = desk_with(false, |board, group| {
+            let mut copy = group.clone();
+            copy.issue = 102;
+            copy.workspace = "elsewhere".into();
+            board.cloud_groups.0.push(copy);
+        });
+        let workspace = app.board.workspaces[0].id;
+        assert_eq!(
+            app.cast_source_rect(workspace, &cloud_source(), &ctx),
+            Err("This cloud's identity is duplicated; it cannot be cast".into())
+        );
+        let listed = app
+            .cast_snapshot(workspace, &ctx)
+            .sources
+            .into_iter()
+            .find(|source| source.source == cloud_source())
+            .expect("the cloud in this workspace is listed");
+        assert!(!listed.available);
     }
 }

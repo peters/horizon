@@ -105,21 +105,22 @@ impl HorizonApp {
         }
     }
 
-    /// The workspace that holds the deployed cloud `id`.
-    pub(super) fn cast_cloud_workspace(&self, id: &str) -> Option<WorkspaceId> {
+    /// Whether more than one cloud, in any workspace, carries the cloud ID `id`.
+    pub(super) fn cast_cloud_duplicated(&self, id: &str) -> bool {
         #[cfg(feature = "cloud-workspaces")]
         {
             self.cloud_prototype
                 .groups
                 .0
                 .iter()
-                .find(|group| group.remote.as_ref().is_some_and(|launch| launch.id == id))
-                .and_then(|group| self.board.workspace_id_by_local_id(&group.workspace))
+                .filter(|group| group.remote.as_ref().is_some_and(|launch| launch.id == id))
+                .count()
+                > 1
         }
         #[cfg(not(feature = "cloud-workspaces"))]
         {
             let _ = id;
-            None
+            false
         }
     }
 
