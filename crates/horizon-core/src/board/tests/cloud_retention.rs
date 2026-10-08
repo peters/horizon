@@ -252,3 +252,125 @@ fn a_restored_cloud_member_says_why_it_waits_instead_of_blaming_its_command() {
         "the member keeps its command"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn running_cloud_member_parks_with_its_last_screen() {
+    use crate::panel::CloudWait;
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut board = Board::new();
+    let workspace = board.create_workspace("cloud-space");
+    let member = board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Command,
+                command: Some("/bin/sh".into()),
+                args: vec!["-c".into(), "printf 'AGENT SCREEN\\n'; sleep 30".into()],
+                cwd: Some(temp.path().to_path_buf()),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .unwrap();
+    let text = |board: &Board| board.panel(member).unwrap().terminal().unwrap().last_lines_text(30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !text(&board).contains("AGENT SCREEN") {
+        assert!(std::time::Instant::now() < deadline, "the member must print its screen");
+        board.process_output();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let panel = board.panel_mut(member).unwrap();
+    panel.set_parked_agent_status(crate::agents::AgentStatus::Working);
+    assert_eq!(
+        panel.agent_status(),
+        crate::agents::AgentStatus::Idle,
+        "only a parked member takes it"
+    );
+    assert!(panel.park_cloud().unwrap());
+    assert_eq!(panel.cloud_wait(), Some(CloudWait::Parked));
+    assert!(!panel.park_cloud().unwrap(), "already parked");
+    panel.set_parked_agent_status(crate::agents::AgentStatus::Working);
+    assert_eq!(panel.agent_status(), crate::agents::AgentStatus::Working);
+    board.process_output();
+    assert_eq!(
+        board.panel(member).unwrap().agent_status(),
+        crate::agents::AgentStatus::Working,
+        "the placeholder screen must not reset the reported status"
+    );
+    assert!(text(&board).contains("AGENT SCREEN"), "{}", text(&board));
+    let released = |board: &Board| board.panel(member).unwrap().terminal().unwrap().pty_released();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !released(&board) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the placeholder must release its PTY"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // A stop replaces the parked screen, and a later park says why the panel waits.
+    let panel = board.panel_mut(member).unwrap();
+    assert!(panel.show_cloud_wait(CloudWait::Stopped).unwrap());
+    assert!(panel.park_cloud().unwrap());
+    assert_eq!(panel.cloud_wait(), Some(CloudWait::Parked));
+    assert!(text(&board).contains("This panel is parked."), "{}", text(&board));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !released(&board) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a parked placeholder must release its PTY"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_parked_snapshot_keeps_blank_rows_and_the_scrolled_viewport() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut board = Board::new();
+    let workspace = board.create_workspace("cloud-space");
+    let spawn = |board: &mut Board, script: &str| {
+        board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Command,
+                    command: Some("/bin/sh".into()),
+                    args: vec!["-c".into(), script.into()],
+                    cwd: Some(temp.path().to_path_buf()),
+                    ..PanelOptions::default()
+                },
+                workspace,
+            )
+            .unwrap()
+    };
+    let blank = spawn(&mut board, "printf 'TOP\\n\\n\\nAFTER-BLANKS\\n'; sleep 30");
+    let scrolled = spawn(&mut board, "seq 1 300; sleep 30");
+    let viewport = |board: &Board, id| board.panel(id).unwrap().terminal().unwrap().viewport_text();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !(viewport(&board, blank).iter().any(|row| row == "AFTER-BLANKS")
+        && viewport(&board, scrolled).iter().any(|row| row == "300"))
+    {
+        assert!(std::time::Instant::now() < deadline, "both panels must print");
+        board.process_output();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(viewport(&board, blank)[..4], ["TOP", "", "", "AFTER-BLANKS"]);
+    board
+        .panel_mut(scrolled)
+        .unwrap()
+        .terminal_mut()
+        .unwrap()
+        .set_scrollback(100);
+    let before = viewport(&board, scrolled);
+    assert!(!before.iter().any(|row| row == "300"), "the viewport is scrolled back");
+
+    for id in [blank, scrolled] {
+        let shown = viewport(&board, id);
+        assert!(board.panel_mut(id).unwrap().park_cloud().unwrap());
+        assert_eq!(viewport(&board, id), shown, "the parked panel shows what the user saw");
+    }
+    assert_eq!(viewport(&board, scrolled), before);
+}

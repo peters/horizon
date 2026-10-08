@@ -1,3 +1,4 @@
+mod cloud_park;
 mod lifecycle;
 mod spawn;
 mod work_resume;
@@ -221,6 +222,9 @@ pub enum CloudWait {
     Stopped,
     /// This build has no cloud support. Remote processes continue independently.
     Unsupported,
+    /// Out of view for a while, so Horizon detached it. Its agent continues in tmux on
+    /// the worker, and the panel attaches again when it comes into view.
+    Parked,
 }
 
 pub struct Panel {

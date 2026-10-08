@@ -301,7 +301,7 @@ fn spawn_restore_failure_snapshot_terminal(
     replay_bytes: Vec<u8>,
 ) -> Result<Terminal> {
     let (program, args) = disconnected_snapshot_launch_command();
-    Terminal::spawn(TerminalSpawnOptions {
+    let mut terminal = Terminal::spawn(TerminalSpawnOptions {
         program,
         args,
         cwd: None,
@@ -314,7 +314,10 @@ fn spawn_restore_failure_snapshot_terminal(
         replay_bytes,
         env: HashMap::new(),
         kitty_keyboard: kitty_keyboard_for_kind(kind),
-    })
+    })?;
+    // Its shell exits at once; the PTY goes with it and the replayed screen stays.
+    terminal.release_when_exited();
+    Ok(terminal)
 }
 
 /// The terminal of a cloud placeholder for `panel` that says `wait`.
@@ -326,6 +329,13 @@ pub(in crate::panel) fn placeholder_terminal(panel: &Panel, rows: u16, cols: u16
         cols,
         placeholder_replay_bytes(&panel.title, Placeholder::Cloud(wait)),
     )
+}
+
+/// The terminal of a parked cloud member that shows `screen`, the rows of the last
+/// viewport of the terminal it replaces.
+pub(in crate::panel) fn parked_terminal(panel: &Panel, rows: u16, cols: u16, screen: &[String]) -> Result<Terminal> {
+    let replay = screen.join("\r\n");
+    spawn_restore_failure_snapshot_terminal(panel.id, panel.kind, rows, cols, replay.into_bytes())
 }
 
 fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8> {
@@ -354,6 +364,15 @@ fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8
                 "The cloud of this panel is stopped.\r\n\r\n",
                 "Panel: {title}\r\n\r\n",
                 "Choose Resume worker on the cloud card to restore this panel.\r\n"
+            ),
+            title = title
+        ),
+        Placeholder::Cloud(CloudWait::Parked) => format!(
+            concat!(
+                "This panel is parked.\r\n\r\n",
+                "Panel: {title}\r\n",
+                "Its agent continues on the worker.\r\n\r\n",
+                "The panel attaches again when it comes into view.\r\n"
             ),
             title = title
         ),

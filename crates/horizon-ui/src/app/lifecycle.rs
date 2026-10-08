@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use egui::Context;
-use horizon_core::{ClipboardTarget, Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
+use horizon_core::{ClipboardTarget, CloudWait, Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
+use crate::primary_selection::PrimarySelectionPaste;
 use crate::theme;
 
 use super::HorizonApp;
@@ -130,7 +131,7 @@ impl HorizonApp {
 
     /// Whether the previous frame drew this panel in the root window, as the
     /// fullscreen panel, or in a detached workspace window.
-    fn panel_drawn_last_frame(&self, panel_id: PanelId) -> bool {
+    pub(in crate::app) fn panel_drawn_last_frame(&self, panel_id: PanelId) -> bool {
         let drawn_in_root = match self.fullscreen_panel {
             Some(fullscreen_panel) => fullscreen_panel == panel_id,
             None => self.panel_screen_rects.contains_key(&panel_id),
@@ -155,15 +156,30 @@ impl HorizonApp {
 
     fn poll_primary_selection_paste(&mut self) {
         while let Some(paste) = self.primary_selection.try_recv_paste() {
-            let Some(panel) = self.board.panel_mut(paste.panel_id) else {
-                continue;
-            };
-            let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
-                continue;
-            };
-            let bytes = input::paste_bytes(&paste.text, mode, true);
-            panel.write_input(&bytes);
+            self.deliver_primary_paste(&paste);
         }
+    }
+
+    /// Writes a middle-click paste to its terminal. A parked cloud member takes no
+    /// input: the paste brings it into use, so it attaches at once, and is not sent.
+    /// Sent later, it could reach a program whose terminal modes are not set yet.
+    pub(super) fn deliver_primary_paste(&mut self, paste: &PrimarySelectionPaste) {
+        let Some(panel) = self.board.panel_mut(paste.panel_id) else {
+            return;
+        };
+        match panel.cloud_wait() {
+            None => {}
+            Some(CloudWait::Parked) => {
+                self.board.focus(paste.panel_id);
+                return;
+            }
+            Some(_) => return,
+        }
+        let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
+            return;
+        };
+        let bytes = input::paste_bytes(&paste.text, mode, true);
+        panel.write_input(&bytes);
     }
 
     #[profiling::function]

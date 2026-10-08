@@ -232,6 +232,26 @@ impl Terminal {
         true
     }
 
+    /// Releases the PTY of a terminal whose process ends by itself, such as a
+    /// placeholder, on a helper thread once that process has ended. The grid stays.
+    pub(crate) fn release_when_exited(&mut self) {
+        let Some(handle) = self.event_loop_handle.take() else {
+            return;
+        };
+        let terminal_done = Arc::clone(&self.shutdown_complete);
+        std::thread::spawn(move || {
+            // The joined event loop owns the PTY; dropping it here closes it.
+            let _ = handle.join();
+            terminal_done.store(true, Ordering::Release);
+        });
+    }
+
+    /// Whether the event loop has ended and its PTY is closed.
+    #[cfg(all(test, unix))]
+    pub(crate) fn pty_released(&self) -> bool {
+        self.event_loop_handle.is_none() && self.shutdown_complete.load(Ordering::Acquire)
+    }
+
     /// Spawns a background thread to join the event-loop handle, incrementing
     /// `completed` when done. Returns `true` if a join thread was spawned.
     pub(crate) fn begin_async_join(&mut self, completed: &Arc<AtomicUsize>) -> bool {

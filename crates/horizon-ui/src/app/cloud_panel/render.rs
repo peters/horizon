@@ -225,6 +225,7 @@ impl HorizonApp {
             self.render_cloud_runtimes(ctx);
         } else {
             self.render_production_runtimes(ctx);
+            self.render_parked_strips(ctx);
         }
         self.render_cloud_dialogs(ctx);
     }

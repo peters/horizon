@@ -140,6 +140,22 @@ impl Board {
         self.create_panel_with_layout(opts, workspace, false, Panel::spawn)
     }
 
+    /// Add a parked cloud member: a placeholder that runs nothing and does not
+    /// take the focus. Layout rules are as for
+    /// [`Self::create_panel_preserving_workspace_layout`].
+    ///
+    /// # Errors
+    /// Returns an error if the placeholder terminal cannot be created.
+    pub fn create_parked_cloud_member(&mut self, opts: PanelOptions, workspace: WorkspaceId) -> Result<PanelId> {
+        let (focused, active) = (self.focused, self.active_workspace);
+        let id = self.create_panel_with_layout(opts, workspace, false, |id, workspace, opts| {
+            Panel::cloud_placeholder(id, workspace, opts, crate::panel::CloudWait::Parked)
+        })?;
+        self.focused = focused;
+        self.active_workspace = active;
+        Ok(id)
+    }
+
     pub(super) fn create_failed_restore_panel(
         &mut self,
         opts: PanelOptions,

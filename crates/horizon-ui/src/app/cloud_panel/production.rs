@@ -17,6 +17,7 @@ mod log_preview;
 mod machine_size;
 mod offer_publication;
 mod offers;
+mod park;
 mod preparation;
 mod presentation;
 mod prices;
@@ -238,6 +239,7 @@ pub(super) struct Runtime {
     /// a new deployment.
     first_panel_considered: bool,
     pending_browser_attachments: std::collections::HashSet<String>,
+    parking: park::Parking,
     pending_member_attachments: std::collections::HashSet<String>,
     /// What the restored member placeholders of this cloud last showed; the board is
     /// searched for them only when this changes.
@@ -596,8 +598,7 @@ impl HorizonApp {
         self.reconnect_resumed(resumed, ctx);
         self.remove_closed_cloud_browsers(removed);
         self.sync_resized_profiles();
-        self.sync_cloud_presentations();
-        self.sync_cloud_member_waits();
+        self.sync_cloud_members();
         self.start_first_cloud_panels(ctx);
         self.cloud_prototype.groups.reconcile(&mut self.board);
         self.sync_board_cloud_groups();

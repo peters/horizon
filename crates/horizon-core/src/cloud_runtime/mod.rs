@@ -25,6 +25,7 @@ pub mod project_setup;
 mod providers;
 pub mod registry;
 pub mod repository;
+pub mod session_status;
 pub mod settings;
 pub mod setup;
 pub mod siblings;

@@ -84,6 +84,34 @@ impl Terminal {
         lines[start..].join("\n")
     }
 
+    /// The text of each row in the viewport, top to bottom, as the user sees it:
+    /// scrolled back when the viewport is, with empty rows kept and trailing
+    /// spaces and trailing empty rows removed.
+    #[must_use]
+    pub fn viewport_text(&self) -> Vec<String> {
+        let term = self.term.lock();
+        let content = term.renderable_content();
+        let rows = usize::from(self.rows);
+        let offset = i32::try_from(content.display_offset).unwrap_or(i32::MAX);
+        let mut lines = vec![String::new(); rows];
+        let mut columns = vec![0; rows];
+        for indexed in content.display_iter {
+            let Ok(row) = usize::try_from(indexed.point.line.0.saturating_add(offset)) else {
+                continue;
+            };
+            if row < rows {
+                append_cell_text(&mut lines[row], &mut columns[row], indexed.point.column.0, indexed.cell);
+            }
+        }
+        for line in &mut lines {
+            line.truncate(line.trim_end().len());
+        }
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        lines
+    }
+
     /// Extract the text of the bottom `max_rows` visible rows of the screen
     /// (empty rows omitted), for detecting status lines that agent TUIs pin
     /// near the bottom of the screen.
