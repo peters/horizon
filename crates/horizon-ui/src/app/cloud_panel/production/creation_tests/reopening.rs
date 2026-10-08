@@ -13,7 +13,7 @@ fn reopening_keeps_cloud_controls_below_the_modal() {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    let menu = label_position(&output, "Cloud");
+    let menu = label_position(&output, "Menu");
     let root = temp.path().join("clouds");
     app.cloud_prototype.root = Some(root.clone());
     let mut settings = horizon_core::cloud_runtime::setup::Draft::load(&root).unwrap();
@@ -33,6 +33,8 @@ fn reopening_keeps_cloud_controls_below_the_modal() {
     app.canvas_view = original_view;
     for _ in 0..2 {
         click(&ctx, &mut app, menu);
+        let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+        click(&ctx, &mut app, label_position(&output, "Cloud"));
         let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
         let new_cloud = label_position(&output, "New cloud…");
         click(&ctx, &mut app, new_cloud);

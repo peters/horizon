@@ -19,6 +19,7 @@ mod casting;
 mod cloud_offers;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud_panel;
+mod dependencies_entry;
 mod detached_viewports;
 mod device_presentation;
 mod device_request_pump;

@@ -309,6 +309,7 @@ Rules that follow:
 | `ACCENT` outline / focus | 6.18 | 5.86 |
 | `FG` focus ring | 15.13 | 16.13 |
 | Primary button outline on `BG_ELEVATED` | 4.99 | 4.47 |
+| `ACCENT` Dependencies mark on the primary button fill | 3.63 | 3.45 |
 
 `BORDER_SUBTLE` and `BORDER_STRONG` are separators and grouping cues, below the
 3:1 needed to identify a control on their own. Controls are therefore
@@ -453,7 +454,7 @@ Fixed metrics:
 | Metric | Value |
 |---|---|
 | Root toolbar height | 46 |
-| Toolbar buttons | 30 high, 8 gap, 14 horizontal padding |
+| Toolbar buttons | 30 high, 8 gap, 14 horizontal padding; fps meter 72 wide, Dependencies 128 (40 with the mark only), Menu 76 |
 | Sidebar width | 210 default, 168 minimum |
 | Panel titlebar height | 34 |
 | Panel padding | 8 |
@@ -569,6 +570,54 @@ Cloud accounts dialog specifics:
   `BG_ELEVATED` chips (radius 4, margin 5 x 2, 1 px `BORDER_SUBTLE` alpha 160)
   followed by a 10.5 `FG_DIM` description.
 
+### Root toolbar
+
+The root toolbar is a 46 high `TITLEBAR_BG` strip with a 1 px
+`alpha(BORDER_SUBTLE, 170)` bottom edge. From left to right it shows:
+
+1. The app name (14 strong `FG`) and the tagline (10.5 `FG_DIM`).
+2. The search input, 180 to 420 wide, centered in the space between the two
+   outer groups. See [Search overlay](#search-overlay).
+3. The fps meter: a 72 x 24 chip at radius 10, with a state dot and a monospace
+   value.
+4. **Dependencies**: the one primary button in the toolbar, 128 x 30. Its
+   painted mark is one node on the left with lines to two nodes on the right,
+   14 x 12, in `ACCENT`. It opens the Dependencies panel. The command palette
+   also has **Open Dependencies** (keyword `dependabot`), with no default
+   shortcut.
+5. **Menu**: a chrome button, 76 x 30, with a painted three-line mark, 12 x 10,
+   in `FG_SOFT`. Its tooltip names the commands in the menu.
+
+The menu opens 4 below the toolbar edge, aligned to the right edge of the
+**Menu** button, at least 220 wide. Its rows are 26 high, in this order:
+
+| Row | Right side |
+|---|---|
+| Quick Nav | Configured shortcut (default Ctrl+Shift+K) |
+| Remote Hosts | Configured shortcut (default Ctrl+Shift+H) |
+| Cloud (only in builds with cloud workspaces) | Submenu arrow; opens the Cloud submenu |
+| Sessions | Configured shortcut (default Ctrl+Shift+J) |
+| Separator | |
+| Settings | Configured shortcut (default Ctrl+Shift+Comma) |
+
+- The label is 12 `FG_SOFT`. The shortcut is 10.5 monospace `FG_DIM`, read
+  from the shortcut settings. Cmd replaces Ctrl on macOS.
+- A hovered or focused row shows its label in `FG` and its shortcut in
+  `FG_SOFT`, because `FG_DIM` is too faint on the hover fill.
+- A click, or Enter on a focused row, does the command and closes the menu.
+  The key that chose the row does not go on to the overlay that opens.
+- Tab moves into the open menu: first the menu frame, then the rows in order.
+
+If the window is too narrow to keep the search input 180 wide, these items go
+away in this order:
+
+1. The tagline.
+2. The fps meter.
+3. The **Dependencies** label. The button keeps only its mark, 40 x 30, with
+   the tooltip "Dependencies".
+
+**Dependencies** and **Menu** always show.
+
 ### Search overlay
 
 Toolbar search is a separate pattern, not the overlay card above. The input
@@ -604,10 +653,10 @@ backdrop dimming:
 
 | Kind | Fill | Outline | Label | Radius | Where |
 |---|---|---|---|---|---|
-| Primary (emphasized chrome) | `blend(PANEL_BG_ALT, ACCENT, 0.28)` | 1 px `blend(BORDER_STRONG, ACCENT, 0.72)` | `FG` 11.5 | 10 | Toolbar "update available" |
+| Primary (emphasized chrome) | `blend(PANEL_BG_ALT, ACCENT, 0.28)` | 1 px `blend(BORDER_STRONG, ACCENT, 0.72)` | `FG` 11.5 | 10 | Toolbar **Dependencies**, the one primary in the toolbar |
 | Primary (creation dialog) | solid `ACCENT` | none | `BG` 14 strong | 10 | Dialog confirm ("Start cloud"), min 120 x 40 |
 | Primary (accounts dialog) | `blend(PANEL_BG_ALT, ACCENT, 0.35)` (`#334473` dark, `#B0B8DE` light) | egui default | `FG` (default) | 10 | Accounts dialog save ("Save settings" / "Save and start"), 148 x 40; `FG` contrast 7.79 dark, 8.55 light |
-| Secondary / chrome | `PANEL_BG_ALT` | 1 px `alpha(BORDER_SUBTLE, 210)` | `FG_SOFT` 11 | 10 | Toolbar and sidebar actions, 30 high |
+| Secondary / chrome | `PANEL_BG_ALT` | 1 px `alpha(BORDER_SUBTLE, 210)` | `FG_SOFT` 11 | 10 | Toolbar **Menu** and sidebar actions, 30 high |
 | Secondary (creation dialog) | egui default widget fill | egui default | 14 | 10 | "Cancel", min 120 x 40 (the accounts dialog's `Cancel` is min 80 x 40 with egui's default radius) |
 | Danger | `blend(PANEL_BG_ALT, PALETTE_RED, 0.22)` | 1 px `blend(BORDER_STRONG, PALETTE_RED, 0.68)` | `FG` 11 | 10 | Destructive actions in chrome |
 | Destructive confirm | `BTN_CLOSE` | default | default | default | Final "Close ..." confirmation |
@@ -617,6 +666,12 @@ backdrop dimming:
 Use one primary per view. Buttons are never wider than their content plus the
 12 x 6 padding unless a `min_size` gives them a consistent rhythm (toolbar 30
 high; creation dialog 120 x 40). Icon-only buttons need a tooltip.
+
+A button can show a painted mark before its label. Reserve the mark with
+`egui::Atom::custom`, draw it into the rectangle that `Button::atom_ui` returns,
+and use `util::primary_frame` or `util::chrome_frame` for the look. Put 6
+between the mark and the label. When only the mark shows, give the button an
+accessible name with `widget_info` and the same name as a tooltip.
 
 Remote browser orientation uses two 26 px device-outline buttons immediately
 after the recording controls, with a 6 px radius matching those media controls.

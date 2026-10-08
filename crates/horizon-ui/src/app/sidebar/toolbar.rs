@@ -1,14 +1,21 @@
+mod menu;
+
 use egui::{
-    Align, Align2, Context, CornerRadius, FontId, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder, Vec2,
+    Align, Align2, Atom, Button, Context, CornerRadius, FontId, Id, Layout, Order, Painter, Pos2, Rect, Sense, Stroke,
+    UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 
 use crate::app::root_chrome::{
-    ROOT_TOOLBAR_BUTTON_GAP, ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_FPS_WIDTH, RootToolbarLayout, ToolbarAction,
-    ToolbarItem, root_toolbar_layout,
+    DependenciesButton, ROOT_TOOLBAR_BUTTON_GAP, ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_FPS_WIDTH, RootToolbarLayout,
+    root_toolbar_layout,
 };
 use crate::app::util;
 use crate::app::{HorizonApp, TOOLBAR_HEIGHT};
 use crate::{branding, theme};
+
+const DEPENDENCIES_LABEL: &str = "Dependencies";
+const DEPENDENCIES_MARK_SIZE: Vec2 = Vec2::new(14.0, 12.0);
+const MARK_LABEL_GAP: f32 = 6.0;
 
 impl HorizonApp {
     pub(in crate::app) fn render_toolbar(&mut self, ctx: &Context) {
@@ -53,7 +60,7 @@ impl HorizonApp {
                         .size(14.0)
                         .strong(),
                 );
-                if layout.show_tagline {
+                if layout.items.tagline {
                     ui.add_space(ROOT_TOOLBAR_BUTTON_GAP);
                     ui.label(
                         egui::RichText::new(branding::APP_TAGLINE)
@@ -82,13 +89,11 @@ impl HorizonApp {
             |ui| {
                 ui.spacing_mut().item_spacing.x = ROOT_TOOLBAR_BUTTON_GAP;
 
-                for item in &layout.visible_items {
-                    match *item {
-                        ToolbarItem::FpsMeter => self.render_toolbar_fps_meter(ui),
-                        ToolbarItem::Action(action) => self.render_toolbar_action_button(ui, action),
-                        ToolbarItem::OverflowMenu => self.render_toolbar_overflow_menu(ui, &layout.overflow_actions),
-                    }
+                if layout.items.fps_meter {
+                    self.render_toolbar_fps_meter(ui);
                 }
+                self.render_toolbar_dependencies_button(ui, layout.items.dependencies);
+                self.render_toolbar_menu(ui);
             },
         );
     }
@@ -151,80 +156,27 @@ impl HorizonApp {
         let _ = response.on_hover_text(tooltip);
     }
 
-    fn render_toolbar_action_button(&mut self, ui: &mut egui::Ui, action: ToolbarAction) {
-        #[cfg(feature = "cloud-workspaces")]
-        if action == ToolbarAction::Cloud {
-            ui.menu_button("Cloud", |ui| self.render_cloud_menu(ui));
-            return;
-        }
-        let response = match action {
-            ToolbarAction::QuickNav => ui
-                .add(
-                    util::chrome_button(action.label())
-                        .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
-                )
-                .on_hover_text(
-                    self.shortcuts
-                        .command_palette
-                        .display_label(util::primary_shortcut_label()),
-                ),
-            ToolbarAction::RemoteHosts => ui
-                .add(
-                    util::chrome_button(action.label())
-                        .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
-                )
-                .on_hover_text(
-                    self.shortcuts
-                        .open_remote_hosts
-                        .display_label(util::primary_shortcut_label()),
-                ),
-            #[cfg(feature = "cloud-workspaces")]
-            ToolbarAction::Cloud => return,
-            ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
-                util::chrome_button(action.label())
-                    .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
-            ),
+    fn render_toolbar_dependencies_button(&mut self, ui: &mut egui::Ui, presentation: DependenciesButton) {
+        let mark_id = Id::new("toolbar-dependencies-mark");
+        let mark = Atom::custom(mark_id, DEPENDENCIES_MARK_SIZE);
+        let button = match presentation {
+            DependenciesButton::Labeled => Button::new((mark, util::primary_label(DEPENDENCIES_LABEL))),
+            DependenciesButton::MarkOnly => Button::new(mark),
         };
-
-        if response.clicked() {
-            self.perform_toolbar_action(ui.ctx(), action);
+        let atoms = util::primary_frame(button.gap(MARK_LABEL_GAP))
+            .min_size(Vec2::new(presentation.width(), ROOT_TOOLBAR_BUTTON_HEIGHT))
+            .atom_ui(ui);
+        if let Some(rect) = atoms.rect(mark_id) {
+            paint_dependencies_mark(ui.painter(), rect);
         }
-    }
 
-    fn render_toolbar_overflow_menu(&mut self, ui: &mut egui::Ui, overflow_actions: &[ToolbarAction]) {
-        ui.scope(|ui| {
-            ui.style_mut().spacing.button_padding = Vec2::new(12.0, 7.0);
-            ui.menu_button(egui::RichText::new("More").size(11.0).color(theme::FG_SOFT()), |ui| {
-                ui.set_min_width(160.0);
-
-                for action in overflow_actions {
-                    #[cfg(feature = "cloud-workspaces")]
-                    if *action == ToolbarAction::Cloud {
-                        ui.menu_button("Cloud", |ui| self.render_cloud_menu(ui));
-                        continue;
-                    }
-                    let button =
-                        egui::Button::new(egui::RichText::new(action.label()).size(12.0).color(theme::FG_SOFT()))
-                            .frame(false);
-                    let response = ui.add(button);
-
-                    if response.clicked() {
-                        self.perform_toolbar_action(ui.ctx(), *action);
-                        ui.close();
-                    }
-                }
-            });
-        });
-    }
-
-    fn perform_toolbar_action(&mut self, ctx: &Context, action: ToolbarAction) {
-        match action {
-            ToolbarAction::QuickNav => self.open_command_palette(),
-            ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
-            ToolbarAction::Sessions => self.toggle_session_manager(),
-            ToolbarAction::Settings => self.toggle_settings(),
-            #[cfg(feature = "cloud-workspaces")]
-            ToolbarAction::Cloud => self.open_cloud_accounts(ctx, false),
+        let mut response = atoms.response;
+        if presentation == DependenciesButton::MarkOnly {
+            response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), DEPENDENCIES_LABEL));
+            response = response.on_hover_text(DEPENDENCIES_LABEL);
+        }
+        if response.clicked() {
+            self.open_dependencies_panel(ui.ctx());
         }
     }
 }
@@ -233,13 +185,85 @@ fn fps_meter_width() -> f32 {
     ROOT_TOOLBAR_FPS_WIDTH
 }
 
-fn action_button_width(action: ToolbarAction) -> f32 {
-    match action {
-        ToolbarAction::QuickNav => 102.0,
-        ToolbarAction::RemoteHosts => 120.0,
-        #[cfg(feature = "cloud-workspaces")]
-        ToolbarAction::Cloud => 72.0,
-        ToolbarAction::Sessions => 94.0,
-        ToolbarAction::Settings => 92.0,
+/// Three linked nodes: one on the left joined to two on the right.
+fn paint_dependencies_mark(painter: &Painter, rect: Rect) {
+    const NODE_RADIUS: f32 = 2.2;
+
+    let color = theme::ACCENT();
+    let root = Pos2::new(rect.left() + NODE_RADIUS, rect.center().y);
+    let upper = Pos2::new(rect.right() - NODE_RADIUS, rect.top() + NODE_RADIUS);
+    let lower = Pos2::new(rect.right() - NODE_RADIUS, rect.bottom() - NODE_RADIUS);
+    let link = Stroke::new(1.3_f32, color);
+
+    painter.line_segment([root, upper], link);
+    painter.line_segment([root, lower], link);
+    for node in [root, upper, lower] {
+        painter.circle_filled(node, NODE_RADIUS, color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Pos2, Rect, Vec2, epaint::Shape};
+    use horizon_core::{RuntimeState, StartupDecision};
+
+    use crate::app::root_chrome::{
+        DependenciesButton, ROOT_TOOLBAR_BUTTON_GAP, ROOT_TOOLBAR_MENU_WIDTH, root_toolbar_layout,
+    };
+    use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
+
+    /// Global egui button padding; a label must keep it inside its button.
+    const BUTTON_PADDING: Vec2 = Vec2::new(12.0, 0.0);
+
+    fn label_rect(output: &egui::FullOutput, label: &str) -> Option<Rect> {
+        output.shapes.iter().find_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.job.text == label => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()))
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn toolbar_button_labels_fit_inside_the_widths_the_layout_reserves() {
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        app.root_viewport_stabilizer = None;
+
+        for width in [480.0, 760.0, 1024.0, 1680.0] {
+            let mut output = run_app_frame_with_input(&ctx, &mut app, raw_input([width, 900.0], None));
+            for _ in 0..2 {
+                output = run_app_frame_with_input(&ctx, &mut app, raw_input([width, 900.0], None));
+            }
+            let layout = root_toolbar_layout(Rect::from_min_max(Pos2::ZERO, Pos2::new(width, 900.0)));
+            let actions = layout.actions_rect;
+            let menu_slot = Rect::from_x_y_ranges(
+                actions.max.x - ROOT_TOOLBAR_MENU_WIDTH..=actions.max.x,
+                actions.y_range(),
+            );
+            let dependencies_right = menu_slot.min.x - ROOT_TOOLBAR_BUTTON_GAP;
+            let dependencies_slot = Rect::from_x_y_ranges(
+                dependencies_right - layout.items.dependencies.width()..=dependencies_right,
+                actions.y_range(),
+            );
+
+            let menu = label_rect(&output, "Menu").expect("Menu label");
+            assert!(
+                menu_slot.shrink2(BUTTON_PADDING).contains_rect(menu),
+                "{width}: {menu:?}"
+            );
+            let dependencies = label_rect(&output, "Dependencies");
+            match layout.items.dependencies {
+                DependenciesButton::Labeled => {
+                    let dependencies = dependencies.expect("Dependencies label");
+                    assert!(
+                        dependencies_slot.shrink2(BUTTON_PADDING).contains_rect(dependencies),
+                        "{width}: {dependencies:?}"
+                    );
+                }
+                DependenciesButton::MarkOnly => assert_eq!(dependencies, None, "{width}"),
+            }
+        }
     }
 }
