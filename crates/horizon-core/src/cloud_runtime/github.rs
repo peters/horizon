@@ -140,7 +140,8 @@ pub fn grants(state: &Deployment, runner: &Runner<'_>) -> Result<Vec<Grant>> {
 /// Gives the worker current GitHub access for the cloud's repositories, signing in
 /// for this cloud when the worker holds none. Every GitHub-side refusal is reported
 /// and leaves the cloud without GitHub access; only a worker that cannot store the
-/// access fails the deployment.
+/// access fails the deployment. Returns whether the worker serves access from the app,
+/// which then replaces any credential binding from cloud settings.
 /// # Errors
 /// The worker refused the access it was given.
 pub fn configure(
@@ -149,7 +150,7 @@ pub fn configure(
     connection: &Connection,
     runner: &Runner<'_>,
     legacy: bool,
-) -> Result<()> {
+) -> Result<bool> {
     let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub: {text}")));
     // A cloud without GitHub access from the app may still have a credential binding
     // from cloud settings; the outcome says so instead of claiming no access.
@@ -178,7 +179,7 @@ pub fn configure(
     };
     if settings.is_some() && grants.is_empty() {
         end("This cloud has no repository on GitHub.".into());
-        return Ok(());
+        return Ok(false);
     }
     // Asked also without settings: a worker keeps its access after Disconnect, and the
     // card still shows it and its agents' requests.
@@ -193,18 +194,19 @@ pub fn configure(
         {
             say("the worker holds access from an earlier connection.");
             connected(login, repositories, requests);
+            return Ok(true);
         }
-        return Ok(());
+        return Ok(false);
     };
     let kept = match held {
         worker::Status::Unsupported => {
             say("this worker image cannot hold GitHub access. Rebuild the image to add it.");
             end("This worker image cannot hold GitHub access.".into());
-            return Ok(());
+            return Ok(false);
         }
         worker::Status::Unavailable => {
             end(SERVICE_DOWN.into());
-            return Ok(());
+            return Ok(false);
         }
         // A repository the worker does not reach stays out until the person chooses
         // Connect GitHub again, so a reconnect never asks for a sign-in by itself.
@@ -222,7 +224,7 @@ pub fn configure(
                 ));
             }
             connected(login, repositories, requests);
-            return Ok(());
+            return Ok(true);
         }
         // Connect GitHub again: sign in anew, and keep the current access if that fails.
         worker::Status::Current {
@@ -233,17 +235,19 @@ pub fn configure(
         } => Some((login, repositories, requests)),
         worker::Status::Absent => None,
     };
-    match sign_in(settings, state, grants, connection, runner)? {
-        Ok(()) => {}
-        Err(reason) => match kept {
-            Some((login, repositories, requests)) => {
+    Ok(match sign_in(settings, state, grants, connection, runner)? {
+        Ok(()) => true,
+        Err(reason) => {
+            if let Some((login, repositories, requests)) = kept {
                 say(&format!("{reason} The cloud keeps its current GitHub access."));
                 connected(login, repositories, requests);
+                true
+            } else {
+                end(reason);
+                false
             }
-            None => end(reason),
-        },
-    }
-    Ok(())
+        }
+    })
 }
 
 /// Signs in for this cloud and gives the worker the chain, for the repositories where

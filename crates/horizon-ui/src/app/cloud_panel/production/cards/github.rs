@@ -129,7 +129,8 @@ pub(super) const REQUESTS_WIDTH: f32 = 380.0;
 const SHOWN: usize = 3;
 
 /// The access requests of the cloud's agents, newest last. Returns the request and
-/// the decision when the person clicked one.
+/// the decision when the person clicked one; the buttons wait while the worker is
+/// still answering an earlier exchange.
 pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, Decision)> {
     let state = &runtime.github_requests;
     let mut chosen = None;
@@ -167,16 +168,18 @@ pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, 
                     );
                 }
                 ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    if ui.add(primary_button("Allow for this task")).clicked() {
-                        chosen = Some((request.id.clone(), Decision::AllowTask));
-                    }
-                    if ui.add(chrome_button("Always for this cloud")).clicked() {
-                        chosen = Some((request.id.clone(), Decision::AllowCloud));
-                    }
-                    if ui.add(chrome_button("Deny")).clicked() {
-                        chosen = Some((request.id.clone(), Decision::Deny));
-                    }
+                ui.add_enabled_ui(!state.busy(), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.add(primary_button("Allow for this task")).clicked() {
+                            chosen = Some((request.id.clone(), Decision::AllowTask));
+                        }
+                        if ui.add(chrome_button("Always for this cloud")).clicked() {
+                            chosen = Some((request.id.clone(), Decision::AllowCloud));
+                        }
+                        if ui.add(chrome_button("Deny")).clicked() {
+                            chosen = Some((request.id.clone(), Decision::Deny));
+                        }
+                    })
                 });
             });
         ui.add_space(8.0);

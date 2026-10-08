@@ -27,6 +27,12 @@ pub(super) struct State {
 }
 
 impl State {
+    /// Whether an exchange with the worker is under way. Decisions wait for it, so a
+    /// second click never drops the outcome of the first.
+    pub(super) fn busy(&self) -> bool {
+        self.inflight.is_some()
+    }
+
     fn receive(&mut self) {
         let Some(rx) = &self.inflight else { return };
         match rx.try_recv() {
@@ -106,6 +112,9 @@ impl HorizonApp {
         let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
             return;
         };
+        if runtime.github_requests.busy() {
+            return;
+        }
         let Some(state) = runtime.state.clone().filter(|state| state.worker.is_some()) else {
             return;
         };
@@ -152,4 +161,25 @@ fn spawn(
         ctx.request_repaint();
     });
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::State;
+
+    #[test]
+    fn an_exchange_holds_decisions_until_its_answer_arrives() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut state = State {
+            inflight: Some(rx),
+            ..State::default()
+        };
+        state.receive();
+        assert!(state.busy(), "no answer yet");
+        tx.send((Vec::new(), Some(Some("This request expired.".into()))))
+            .unwrap();
+        state.receive();
+        assert!(!state.busy());
+        assert_eq!(state.refused.as_deref(), Some("This request expired."));
+    }
 }
