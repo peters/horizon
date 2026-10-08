@@ -615,6 +615,7 @@ fn connection_details_show_supplied_and_observed_values_separately() {
         server: DeviceServerDetails {
             name: Some("Fixture desktop".into()),
             desktop_size: Some([640, 360]),
+            native_session: None,
         },
         ..Default::default()
     };
@@ -663,4 +664,113 @@ fn connection_details_show_supplied_and_observed_values_separately() {
     assert_eq!(diagnostics.last_uploaded_age_millis, None);
     assert_eq!(observation.image.frame_sequence, 0);
     assert!(!observation.image.image_displayed);
+}
+
+pub(super) fn native_metadata() -> horizon_core::browser::manifest::device::NativeSessionMetadata {
+    use horizon_core::browser::manifest::device::NativeSessionMetadata;
+    NativeSessionMetadata {
+        session_id: "synthetic-session".into(),
+        run_id: Some("synthetic-run".into()),
+        model: "iPhone synthetic".into(),
+        os: "iOS 18.6".into(),
+        form: "phone".into(),
+        provider: "BrowserStack".into(),
+        lane: 2,
+        lanes: 2,
+        app: "com.example.app".into(),
+        build_sha256: "a".repeat(64),
+        recipe: Some("checkout".into()),
+        step: Some("open".into()),
+        recipes: Vec::new(),
+    }
+}
+
+#[test]
+fn native_caption_matches_inspection_without_paint_and_survives_disconnect() {
+    use horizon_core::browser::manifest::device::NativeRecipeResult;
+    let ctx = Context::default();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let device = fixture_device();
+    let mut state = ready_viewer();
+    state.absorb_updates(&ctx);
+    let mut native = native_metadata();
+    let session = state.session.as_ref().unwrap();
+    assert!(session.native_text_for_test(&ctx, &native.wire_text().unwrap()));
+    assert!(session.pending_in_background(egui::ViewportId::ROOT));
+    let observation = state.observation("fixture".into(), &device, false, "actor");
+    assert_eq!(observation.server.native_session.as_ref(), Some(&native));
+    assert_eq!(observation.image.received_frame_sequence, 1);
+    let output = ctx
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| state.show(ui, &device, true),
+        )
+        .discard_textures();
+    for text in [
+        "iPhone synthetic · iOS 18.6 · phone",
+        "BrowserStack · lane 2 of 2",
+        "com.example.app · aaaaaaaaaaaa",
+        "checkout · open",
+    ] {
+        text_center(&output, text);
+    }
+    native.step = None;
+    native.recipes.push(NativeRecipeResult {
+        recipe: "checkout".into(),
+        passed: false,
+    });
+    assert!(
+        state
+            .session
+            .as_ref()
+            .unwrap()
+            .native_text_for_test(&ctx, &native.wire_text().unwrap())
+    );
+    state.absorb_updates(&ctx);
+    state.session = None;
+    state.status = Status::Disconnected("fixture ended".into());
+    let observed = state.observation("fixture".into(), &device, true, "actor");
+    assert_eq!(observed.server.native_session.as_ref(), Some(&native));
+    let output = ctx
+        .run_ui(egui::RawInput::default(), |ui| state.show(ui, &device, true))
+        .discard_textures();
+    text_center(&output, "checkout: FAIL");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut device = device;
+    device.target = horizon_core::DeviceViewTarget::parse(&listener.local_addr().unwrap().to_string()).unwrap();
+    state.reconnect(&ctx, &device);
+    assert!(
+        state
+            .observation("fixture".into(), &device, true, "actor")
+            .server
+            .native_session
+            .is_none()
+    );
+}
+
+#[test]
+fn ordinary_or_invalid_clipboard_text_cannot_replace_native_metadata() {
+    let ctx = Context::default();
+    let device = fixture_device();
+    let mut state = ready_viewer();
+    let native = native_metadata();
+    let session = state.session.as_ref().unwrap();
+    assert!(session.native_text_for_test(&ctx, &native.wire_text().unwrap()));
+    for text in [
+        "ordinary clipboard",
+        "horizon-native-session-v1:{}",
+        "horizon-native-session-v2:{}",
+    ] {
+        assert!(!session.native_text_for_test(&ctx, text));
+    }
+    assert_eq!(
+        state
+            .observation("fixture".into(), &device, true, "actor")
+            .server
+            .native_session,
+        Some(native)
+    );
 }

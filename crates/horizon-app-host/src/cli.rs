@@ -43,13 +43,9 @@ pub async fn execute(host: Host, lifetime: Duration) -> Result<()> {
             &retained,
             |session, kind, bytes| retained_archive.capture(session, kind, bytes),
             |mut event| {
-                if event.phase == "session_created"
-                    && let Some(session) = event.session
-                {
-                    event.view = Some(views.open(session)?);
-                }
+                views.observe(&mut event)?;
                 let mut bytes = serde_json::to_vec(&event).map_err(|_| Error::Cancelled)?;
-                if bytes.len() > 8192 {
+                if bytes.len() > horizon_core::browser::manifest::device::NativeSessionMetadata::MAX_WIRE_BYTES + 1024 {
                     retained.cancel();
                     return Err(Error::Cancelled);
                 }

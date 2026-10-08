@@ -210,10 +210,90 @@ pub struct DeviceIdentity {
     pub tailscale_name: Option<String>,
 }
 
+/// Secret-free facts supplied by the native host, not verified by VNC.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NativeSessionMetadata {
+    pub session_id: String,
+    pub run_id: Option<String>,
+    pub model: String,
+    pub os: String,
+    pub form: String,
+    pub provider: String,
+    /// One-based matrix lane, independent of allocation order.
+    pub lane: usize,
+    pub lanes: usize,
+    pub app: String,
+    pub build_sha256: String,
+    pub recipe: Option<String>,
+    pub step: Option<String>,
+    pub recipes: Vec<NativeRecipeResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NativeRecipeResult {
+    pub recipe: String,
+    pub passed: bool,
+}
+
+impl NativeSessionMetadata {
+    const PREFIX: &str = "horizon-native-session-v1:";
+    pub const MAX_WIRE_BYTES: usize = 64 * 1024;
+
+    /// Reserved RFB `ServerCutText` envelope; never copied to the OS clipboard.
+    #[must_use]
+    pub fn wire_text(&self) -> Option<String> {
+        let json = serde_json::to_string(self).ok()?;
+        let text = format!("{}{json}", Self::PREFIX);
+        Self::from_wire_text(&text).map(|_| text)
+    }
+
+    /// Ignore clipboard text, unknown versions and malformed or oversized metadata.
+    #[must_use]
+    pub fn from_wire_text(text: &str) -> Option<Self> {
+        if text.len() > Self::MAX_WIRE_BYTES {
+            return None;
+        }
+        let value: Self = serde_json::from_str(text.strip_prefix(Self::PREFIX)?).ok()?;
+        let plain = |s: &str| {
+            !s.is_empty() && s.chars().count() <= 256 && s.chars().all(|c|
+            !c.is_control() && !matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        };
+        if value.lane == 0
+            || value.lane > value.lanes
+            || value.lanes > 32
+            || value.recipes.len() > 128
+            || ![
+                &value.session_id,
+                &value.model,
+                &value.os,
+                &value.form,
+                &value.provider,
+                &value.app,
+            ]
+            .into_iter()
+            .all(|s| plain(s))
+            || ![&value.run_id, &value.recipe, &value.step]
+                .into_iter()
+                .flatten()
+                .all(|s| plain(s))
+            || !value.recipes.iter().all(|r| plain(&r.recipe))
+            || value.build_sha256.len() != 64
+            || !value.build_sha256.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return None;
+        }
+        Some(value)
+    }
+}
+
 /// Details observed on this VNC connection, not persisted machine identity.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(default)]
 pub struct DeviceServerDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session: Option<NativeSessionMetadata>,
     pub name: Option<String>,
     pub desktop_size: Option<[usize; 2]>,
 }
@@ -546,6 +626,63 @@ pub fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<Outco
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_metadata_round_trip_is_bounded_and_ignores_clipboard_text() {
+        let native = NativeSessionMetadata {
+            session_id: "session-1".into(),
+            run_id: Some("run-1".into()),
+            model: "iPhone synthetic".into(),
+            os: "iOS 18.6".into(),
+            form: "phone".into(),
+            provider: "BrowserStack".into(),
+            lane: 2,
+            lanes: 2,
+            app: "com.example.app".into(),
+            build_sha256: "a".repeat(64),
+            recipe: Some("home".into()),
+            step: Some("open".into()),
+            recipes: vec![NativeRecipeResult {
+                recipe: "start".into(),
+                passed: false,
+            }],
+        };
+        assert_eq!(
+            NativeSessionMetadata::from_wire_text(&native.wire_text().unwrap()),
+            Some(native.clone())
+        );
+        for text in [
+            "clipboard",
+            "horizon-native-session-v2:{}",
+            "horizon-native-session-v1:{}",
+        ] {
+            assert!(NativeSessionMetadata::from_wire_text(text).is_none());
+        }
+        for field in ["model", "app", "build_sha256", "lane", "recipes"] {
+            let mut value = serde_json::to_value(&native).unwrap();
+            value[field] = match field {
+                "lane" => serde_json::json!(0),
+                "recipes" => serde_json::json!(vec![native.recipes[0].clone(); 129]),
+                "build_sha256" => serde_json::json!("not-a-hash"),
+                _ => serde_json::json!("hidden\nlabel\u{202e}"),
+            };
+            assert!(
+                NativeSessionMetadata::from_wire_text(&format!("{}{}", NativeSessionMetadata::PREFIX, value)).is_none(),
+                "{field}"
+            );
+        }
+        assert!(NativeSessionMetadata::from_wire_text(&"x".repeat(65 * 1024)).is_none());
+        let old: DeviceServerDetails = serde_json::from_str(r#"{"name":"desktop","desktop_size":[1,1]}"#).unwrap();
+        assert!(old.native_session.is_none());
+        let mut large = native;
+        large.recipes = (0..128)
+            .map(|n| NativeRecipeResult {
+                recipe: format!("recipe-{n}-{}", "x".repeat(100)),
+                passed: true,
+            })
+            .collect();
+        assert!(large.wire_text().unwrap().len() > 8192);
+    }
 
     #[test]
     fn public_video_input_has_a_bounded_action_contract() {

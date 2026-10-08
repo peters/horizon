@@ -28,11 +28,7 @@ pub(super) async fn execute(
             &retained,
             |session, kind, bytes| retained_archive.capture(session, kind, bytes),
             |mut progress| {
-                if progress.phase == "session_created"
-                    && let Some(session) = progress.session
-                {
-                    progress.view = Some(views.open(session)?);
-                }
+                views.observe(&mut progress)?;
                 send.blocking_send(progress).map_err(|_| Error::Cancelled)
             },
         );

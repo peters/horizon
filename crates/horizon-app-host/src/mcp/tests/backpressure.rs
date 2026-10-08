@@ -43,8 +43,10 @@ async fn blocked_mcp_progress_finishes_cancelled_report_without_retrying_the_que
         loop {
             for entry in std::fs::read_dir(folder.path()).unwrap().flatten() {
                 let path = entry.path().join("report.json");
-                if path.is_file() {
-                    return serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap();
+                if path.is_file()
+                    && let Ok(report) = serde_json::from_slice::<Value>(&std::fs::read(path).unwrap())
+                {
+                    return report;
                 }
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
