@@ -129,6 +129,21 @@ class VolumeCopyTests(ServiceTestCase):
         restarted = service.Store(self.store.persistent, self.root / 'run/after-restart')
         self.assertIsNone(restarted.load()[0], 'a restart must not bring the older chain back')
 
+    def test_a_full_tmpfs_leaves_the_older_volume_chain_usable(self):
+        self.install()
+        old = self.store.persistent / service.STATE
+        real = common.write_private
+
+        def write(directory, name, data):
+            if directory in (self.store.persistent, self.store.runtime):
+                raise OSError('no space left on device')
+            return real(directory, name, data)
+        with mock.patch.object(common, 'write_private', side_effect=write), \
+                self.assertRaisesRegex(ValueError, 'No private GitHub storage'):
+            self.install(installation(chain=chain(access='ghu_synthetic-new')))
+        self.assertTrue(old.exists(), 'the older chain is not removed before a new one is stored')
+        self.assertEqual(self.stored()['chain'], chain())
+
     def test_tmpfs_refuses_a_chain_while_an_older_volume_chain_stays(self):
         self.install()
         old = self.store.persistent / service.STATE

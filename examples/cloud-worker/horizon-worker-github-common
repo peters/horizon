@@ -202,16 +202,20 @@ class Store:
             with contextlib.suppress(OSError):
                 (self.runtime / STATE).unlink(missing_ok=True)
             return True
-        # The volume refused the write. An older chain left there would be served again after a
-        # restart empties tmpfs, so tmpfs takes the chain only when the volume holds none.
-        with contextlib.suppress(OSError):
-            (self.persistent / STATE).unlink(missing_ok=True)
-        if os.path.lexists(self.persistent / STATE):
-            raise ValueError('An older GitHub token chain on the volume cannot be removed')
+        # The volume refused the write. tmpfs takes the chain first, so the older chain on the
+        # volume stays usable until the new one is stored. That older chain must then go: a
+        # restart empties tmpfs and would serve it again. When it cannot be removed, the tmpfs
+        # copy is removed too and the write fails, which leaves the older chain as it was.
         try:
             write_private(private_directory(self.runtime, create=True), STATE, data)
         except (OSError, ValueError):
             raise ValueError('No private GitHub storage accepted the token chain') from None
+        with contextlib.suppress(OSError):
+            (self.persistent / STATE).unlink(missing_ok=True)
+        if os.path.lexists(self.persistent / STATE):
+            with contextlib.suppress(OSError):
+                (self.runtime / STATE).unlink(missing_ok=True)
+            raise ValueError('An older GitHub token chain on the volume cannot be removed')
         return False
 
     def save(self, state, retain=True):
