@@ -139,7 +139,8 @@ shell commands, files, or other MCP servers.
   including cross-origin frames. Use each returned ref with `browser_act`
   `click` or `fill`; the ref retains its frame and document. A frame navigation
   makes its old refs stale. Each scan shares its node limit across documents
-  and permits at most 64 frame contexts. Child nodes omit top-level bounds.
+  and permits at most 64 frame contexts. Child nodes omit top-level bounds
+  and the file-upload capability marker.
   Direct selector actions, `browser_wait`, and `browser_evaluate` still target
   the top-level document. Child refs return `unsupported_frame_action` for
   `scroll` and `set_files`. Safari and remote sessions scan only the top-level

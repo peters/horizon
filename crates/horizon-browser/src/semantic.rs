@@ -276,6 +276,7 @@ pub(crate) fn append_frame_scan(
         );
         // Frame-local rectangles cannot be used as top-level hit coordinates.
         node.insert("bounds".to_owned(), Value::Null);
+        node.remove("fileInput");
     }
     let output = scan
         .get_mut("nodes")
@@ -737,15 +738,17 @@ mod tests {
             session: "page".into(),
             context: 7,
         };
-        let mut scan = serde_json::json!({"nodes":[{"selector":"#top","frame":{"backend":"bidi","context":"foreign","realm":"foreign"}}]});
+        let mut scan = serde_json::json!({"nodes":[{"selector":"#top","fileInput":{"multiple":true,"accept":"","files":0},"frame":{"backend":"bidi","context":"foreign","realm":"foreign"}}]});
         clear_scan_frames(&mut scan).unwrap();
         assert!(scan["nodes"][0].get("frame").is_none());
-        let child = serde_json::json!({"nodes":[{"selector":"#same","bounds":{"x":1,"y":2,"width":3,"height":4}},{"selector":"#extra"}]});
+        let child = serde_json::json!({"nodes":[{"selector":"#same","fileInput":{"multiple":true,"accept":"","files":0},"bounds":{"x":1,"y":2,"width":3,"height":4}},{"selector":"#extra"}]});
         append_frame_scan(&mut scan, child, &frame, 2).unwrap();
         assert_eq!(scan["nodes"].as_array().unwrap().len(), 2);
         assert!(scan["nodes"][1]["bounds"].is_null());
         let mut state = SemanticState::default();
         let (_, _, nodes) = state.register_nodes(scan).unwrap();
+        assert!(nodes[0].file_input.is_some());
+        assert!(nodes[1].file_input.is_none());
         let top = BrowserTarget::Ref {
             reference: nodes[0].reference.clone(),
         };
