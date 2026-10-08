@@ -430,13 +430,13 @@ Docker login of this computer.
 1. Make a scratch branch of `<repo>`.
 
    ```sh
-   git -C <repo> switch -c smoke-push-<run>
+   git -C <repo> switch -c smoke-push-d06
    ```
 
-   Result: `git -C <repo> branch --show-current` shows `smoke-push-<run>`.
+   Result: `git -C <repo> branch --show-current` shows `smoke-push-d06`.
 
 2. In `.horizon/cloud.yml` of the scratch branch, add a `build` section to the
-   `runpod-cpu` profile. Set its `image` to `ghcr.io/<owner>/smoke-push-<run>`.
+   `runpod-cpu` profile. Set its `image` to `ghcr.io/<owner>/smoke-push-d06`.
 
    Result: The file shows the `build` section and the image.
 
@@ -456,7 +456,7 @@ Docker login of this computer.
 5. Make a copy of the cloud settings under a new name. Stop if that name is in use.
 
    ```sh
-   test ! -e ~/.horizon/cloud/settings.json.d06-<run> && cp -p ~/.horizon/cloud/settings.json ~/.horizon/cloud/settings.json.d06-<run>
+   test ! -e ~/.horizon/cloud/settings.json.d06-backup && cp -p ~/.horizon/cloud/settings.json ~/.horizon/cloud/settings.json.d06-backup
    ```
 
    Result: The command ends without an error. If it fails, do not continue: an
@@ -477,7 +477,7 @@ Docker login of this computer.
    `ghcr.io` from the settings.
 
    ```sh
-   jq --arg d <evidence>/d06-docker '.docker_config = $d | if .registries then .registries.bindings |= map(select(.repository | startswith("ghcr.io/") | not)) else . end' ~/.horizon/cloud/settings.json.d06-<run> > ~/.horizon/cloud/settings.json
+   jq --arg d <evidence>/d06-docker '.docker_config = $d | if .registries then .registries.bindings |= map(select(.repository | startswith("ghcr.io/") | not)) else . end' ~/.horizon/cloud/settings.json.d06-backup > ~/.horizon/cloud/settings.json
    ```
 
    Result: `jq .docker_config ~/.horizon/cloud/settings.json` shows the run's
@@ -502,7 +502,7 @@ Docker login of this computer.
 11. Close the card of `smoke-push`, then put back the cloud settings from the copy.
 
     ```sh
-    mv ~/.horizon/cloud/settings.json.d06-<run> ~/.horizon/cloud/settings.json
+    mv ~/.horizon/cloud/settings.json.d06-backup ~/.horizon/cloud/settings.json
     ```
 
     Result: The board does not show `smoke-push`. Cloud settings show the earlier
@@ -511,10 +511,10 @@ Docker login of this computer.
 12. Go back to the branch of the run and delete the scratch branch.
 
     ```sh
-    git -C <repo> switch - && git -C <repo> branch -D smoke-push-<run>
+    git -C <repo> switch - && git -C <repo> branch -D smoke-push-d06
     ```
 
-    Result: `git -C <repo> branch --list 'smoke-push-*'` shows nothing.
+    Result: `git -C <repo> branch --list 'smoke-push-d06'` shows nothing.
 
 ## 7. Pass criteria
 
