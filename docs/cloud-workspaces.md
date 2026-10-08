@@ -248,6 +248,49 @@ Optional repository Git authentication uses explicit `git_credentials` bindings.
 See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
 for private file permissions, repository matching, removal and token-scope limits.
 
+### Connect GitHub
+
+**Cloud settings › GitHub › Connect GitHub** gives clouds GitHub access as you,
+with no token to create or copy.
+
+1. Horizon opens GitHub in your browser with a private GitHub App already
+   described. You click **Create GitHub App**. Horizon keeps the app's client
+   secret in `credentials/github-app` (0600) and never keeps its private key.
+2. GitHub shows the installation page. You choose the repositories that clouds
+   may reach. **Choose repositories** on the card opens this page again.
+3. GitHub does not let a new app turn on its device sign-in. When the card says
+   so, open the app's settings, select **Enable Device Flow** and save. This is
+   needed once, for the default mode.
+
+The card then chooses how a new cloud gets its access:
+
+| Mode | New cloud | The worker renews with |
+|---|---|---|
+| **Ask me for each new cloud** (default) | One **Authorize** click on GitHub, with a code that the card shows | The app's client ID only |
+| **Automatic** | No click. Your browser, already signed in to GitHub, returns to Horizon by itself | The client ID and a copy of the client secret, readable only by the worker's root service |
+
+When a deployment reaches the worker, Horizon asks the worker's GitHub service
+whether it already holds access. A worker that does keeps it, so a reconnect
+never asks you again. Otherwise the card shows the sign-in for that cloud. The
+cloud gets access to its repository and its same-worker siblings, where the app
+is installed. **Skip** continues without GitHub access, and so does a declined or
+expired sign-in, or a worker image without the service.
+
+The worker's root service renews the access every 8 hours for about 6 months,
+also while this computer is off. Agents get short-lived access tokens through
+Git and `gh` and never see the refresh token. Commits use your name and your
+GitHub private commit address. The steps card shows **GitHub: signed in as
+<login>**.
+
+An agent that needs another repository for its task asks with the worker's
+`github_access` tool. The request shows at the top right of the cloud with
+**Allow for this task**, **Always for this cloud** and **Deny**. The worker checks
+that the app reaches the repository before it allows anything.
+
+**Disconnect** stops new clouds from getting access. It does not end the access
+of running clouds: delete the app on GitHub for that. Deleting the app ends every
+token at once.
+
 ## Provider API and storage requirements
 
 Direct root SSH endpoints accept numeric IPs and validated ASCII DNS hostnames.
