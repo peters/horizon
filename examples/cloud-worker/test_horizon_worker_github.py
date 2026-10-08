@@ -124,7 +124,8 @@ class InstallationTests(ServiceTestCase):
             installation(grants=[grant, dict(grant, repository='example/other')]),
             installation(grants=[dict(grant, repository='example/r%d' % index, target='sibling:s%d' % index)
                                  for index in range(17)]),
-            installation(author_name='name\ninjection'), installation(author_email=''), [installation()]]
+            installation(author_name='name\ninjection'), installation(author_email=''), [installation()],
+            installation(login='bad login'), installation(login='-leading'), installation(login=7)]
         for value in cases:
             with self.assertRaises(ValueError) as refused:
                 service.validate_install(value, NOW)
@@ -171,6 +172,12 @@ class InstallationTests(ServiceTestCase):
         # A later install forgets the identities of the chain it replaces.
         self.install(installation(author_name='Other Author'))
         self.assertEqual(self.configured[1]['previous'], self.configured[0]['grants'])
+
+    def test_the_login_is_optional_and_reported_in_status(self):
+        self.assertIsNone(self.install()['login'])
+        self.assertEqual(self.install(installation(login='octo-cat'))['login'], 'octo-cat')
+        self.assertEqual(service.status(self.store)['login'], 'octo-cat')
+        self.assertIsNone(service.status(service.Store(self.root / 'none', self.root / 'none-run'))['login'])
 
     def test_a_chain_survives_a_restart_and_clear_removes_it(self):
         self.install()

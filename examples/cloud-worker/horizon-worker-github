@@ -65,7 +65,10 @@ GITHUB = 'https://github.com'
 TEST_URL = 'HORIZON_WORKER_GITHUB_TEST_URL'
 CLIENT_ID = re.compile(r'[A-Za-z0-9._-]{1,128}')
 ERROR_CODE = re.compile(r'[a-z0-9_]{1,64}')
-INSTALL_FIELDS = {'version', 'client_id', 'client_secret', 'author_name', 'author_email', 'grants', 'chain'}
+INSTALL_FIELDS = {'version', 'client_id', 'client_secret', 'login', 'author_name', 'author_email', 'grants', 'chain'}
+# Fields an installation may leave out.
+OPTIONAL_FIELDS = {'client_secret', 'login'}
+LOGIN = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?')
 CHAIN_FIELDS = {'access_token', 'access_expires_at', 'refresh_token', 'refresh_expires_at'}
 GRANT_FIELDS = {'repository', 'target', 'access'}
 ACCESS = ('push', 'read')
@@ -89,7 +92,7 @@ def validate_chain(chain):
 
 
 def validate_install(value, now):
-    if not isinstance(value, dict) or not INSTALL_FIELDS - {'client_secret'} <= set(value) <= INSTALL_FIELDS:
+    if not isinstance(value, dict) or not INSTALL_FIELDS - OPTIONAL_FIELDS <= set(value) <= INSTALL_FIELDS:
         raise ValueError('Invalid GitHub chain installation')
     if type(value['version']) is not int or value['version'] != 1:
         raise ValueError('Unsupported GitHub chain installation version')
@@ -97,6 +100,8 @@ def validate_install(value, now):
         raise ValueError('Invalid GitHub App client')
     if 'client_secret' in value and not auth.valid_token(value['client_secret']):
         raise ValueError('Invalid GitHub App client')
+    if 'login' in value and not (isinstance(value['login'], str) and LOGIN.fullmatch(value['login'])):
+        raise ValueError('Invalid GitHub login')
     chain = validate_chain(value['chain'])
     if chain['refresh_expires_at'] <= now:
         raise ValueError('The GitHub token chain expired')
@@ -534,6 +539,8 @@ def install(value, store, now=time.time, configure=run_configure):
         state = {key: value[key] for key in ('client_id', 'author_name', 'author_email', 'grants', 'chain')}
         if value.get('client_secret'):
             state['client_secret'] = value['client_secret']
+        if value.get('login'):
+            state['login'] = value['login']
         store.save(dict(state, version=1, state='ok', installed_at=int(now()), last_refresh_at=None,
                         last_error=None))
     return status(store)
@@ -542,9 +549,9 @@ def install(value, store, now=time.time, configure=run_configure):
 def status(store):
     state, persistent = store.load()
     if state is None:
-        return {'version': 1, 'state': 'absent', 'persistent': False, 'access_expires_at': None,
+        return {'version': 1, 'state': 'absent', 'persistent': False, 'login': None, 'access_expires_at': None,
                 'refresh_expires_at': None, 'last_refresh_at': None, 'last_error': None, 'repositories': []}
-    return {'version': 1, 'state': state['state'], 'persistent': persistent,
+    return {'version': 1, 'state': state['state'], 'persistent': persistent, 'login': state.get('login'),
             'access_expires_at': state['chain']['access_expires_at'],
             'refresh_expires_at': state['chain']['refresh_expires_at'],
             'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),

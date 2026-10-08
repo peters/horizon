@@ -763,7 +763,7 @@ horizon-worker-github install < chain.json
 ```
 
 ```json
-{"version": 1, "client_id": "Iv23...", "client_secret": "optional",
+{"version": 1, "client_id": "Iv23...", "client_secret": "optional", "login": "optional",
  "author_name": "Your Name", "author_email": "you@example.com",
  "grants": [{"repository": "owner/name", "target": "primary", "access": "push"},
             {"repository": "owner/library", "target": "sibling:library", "access": "read"}],
@@ -774,6 +774,8 @@ horizon-worker-github install < chain.json
 - The input is at most 64 KiB. Unknown or duplicate fields are refused.
 - `client_secret` is only for a chain from a web sign-in. A chain from the device
   flow refreshes with `client_id` alone.
+- `login` is the GitHub account the chain acts as. `status` reports it, so Horizon
+  can show who a cloud acts as.
 - `target` is `primary` or `sibling:<alias>`, as in version 2 above. At most 16
   grants are accepted, and repositories and targets must be unique.
 - The times are Unix seconds. A chain whose refresh token already expired is
