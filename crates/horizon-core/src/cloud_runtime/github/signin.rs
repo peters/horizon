@@ -30,8 +30,13 @@ pub enum Prompt {
     },
     /// Open `url` in a signed-in browser; GitHub redirects back without a click.
     Web { url: String },
-    /// The worker holds access to these repositories as `login`.
-    Connected { login: String, repositories: Vec<String> },
+    /// The worker holds access to these repositories as `login`. `requests` is whether
+    /// its service takes agents' access requests, which the card then polls.
+    Connected {
+        login: String,
+        repositories: Vec<String>,
+        requests: bool,
+    },
     /// The cloud continues without GitHub access, for this reason.
     Ended(String),
 }

@@ -197,7 +197,9 @@ pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, 
 /// One line for the steps card: who the cloud acts as on GitHub, or why it has no access.
 pub(super) fn summary(runtime: &Runtime) -> Option<(String, bool)> {
     match runtime.github.as_ref()? {
-        Prompt::Connected { login, repositories } => Some((
+        Prompt::Connected {
+            login, repositories, ..
+        } => Some((
             format!(
                 "GitHub: signed in as {login} · {} {}",
                 repositories.len(),
@@ -226,6 +228,7 @@ mod tests {
         runtime.github = Some(Prompt::Connected {
             login: "octo-cat".into(),
             repositories: vec!["acme/web".into(), "acme/api".into()],
+            requests: true,
         });
         assert_eq!(
             summary(&runtime),

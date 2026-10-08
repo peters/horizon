@@ -136,16 +136,35 @@ pub fn configure(
     connection: &Connection,
     runner: &Runner<'_>,
 ) -> Result<()> {
-    let Some(settings) = settings else {
-        return Ok(());
-    };
     let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub: {text}")));
-    let grants = grants(state, runner)?;
-    if grants.is_empty() {
+    let grants = match settings {
+        Some(_) => grants(state, runner)?,
+        None => Vec::new(),
+    };
+    if settings.is_some() && grants.is_empty() {
         say("this cloud has no repository on GitHub.");
         return Ok(());
     }
-    match worker::status(connection, runner)? {
+    // Asked also without settings: a worker keeps its access after Disconnect, and the
+    // card still shows it and its agents' requests.
+    let held = worker::status(connection, runner)?;
+    let Some(settings) = settings else {
+        if let worker::Status::Current {
+            login,
+            repositories,
+            requests,
+        } = held
+        {
+            say("the worker holds access from an earlier connection.");
+            (runner.emit)(Event::GitHub(Prompt::Connected {
+                login,
+                repositories,
+                requests,
+            }));
+        }
+        return Ok(());
+    };
+    match held {
         worker::Status::Unsupported => {
             say("this worker image cannot hold GitHub access. Rebuild the image to add it.");
             (runner.emit)(Event::GitHub(Prompt::Ended(
@@ -153,9 +172,20 @@ pub fn configure(
             )));
             return Ok(());
         }
+        worker::Status::Unavailable => {
+            let reason = "The worker's GitHub service is not running, so Git and gh have no GitHub access. \
+                          Restart the worker to start it again.";
+            say(reason);
+            (runner.emit)(Event::GitHub(Prompt::Ended(reason.into())));
+            return Ok(());
+        }
         // A repository the worker does not reach stays out until the person connects
         // this cloud again, so a reconnect never asks for a sign-in by itself.
-        worker::Status::Current { login, repositories } => {
+        worker::Status::Current {
+            login,
+            repositories,
+            requests,
+        } => {
             say("the worker holds current access.");
             for grant in grants.iter().filter(|grant| !covers(&repositories, grant)) {
                 say(&format!(
@@ -163,11 +193,28 @@ pub fn configure(
                     grant.repository
                 ));
             }
-            (runner.emit)(Event::GitHub(Prompt::Connected { login, repositories }));
+            (runner.emit)(Event::GitHub(Prompt::Connected {
+                login,
+                repositories,
+                requests,
+            }));
             return Ok(());
         }
         worker::Status::Absent => {}
     }
+    sign_in(settings, state, grants, connection, runner)
+}
+
+/// Signs in for this cloud and gives the worker the chain, for the repositories where
+/// the app is installed. A GitHub-side refusal ends with a message, not an error.
+fn sign_in(
+    settings: &Settings,
+    state: &Deployment,
+    grants: Vec<Grant>,
+    connection: &Connection,
+    runner: &Runner<'_>,
+) -> Result<()> {
+    let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub: {text}")));
     let client = Client::new();
     let chain = match signin::chain(settings, &state.cloud_id, &client, runner) {
         Ok(chain) => chain,
@@ -215,9 +262,15 @@ pub fn configure(
         user.login,
         reachable.len()
     ));
+    // The service reports whether it takes agents' requests once it holds the chain.
+    let requests = matches!(
+        worker::status(connection, runner)?,
+        worker::Status::Current { requests: true, .. }
+    );
     (runner.emit)(Event::GitHub(Prompt::Connected {
         login: user.login,
         repositories: reachable.into_iter().map(|grant| grant.repository).collect(),
+        requests,
     }));
     Ok(())
 }

@@ -59,7 +59,8 @@ impl HorizonApp {
                 continue;
             };
             runtime.github_requests.receive();
-            let connected = matches!(runtime.github, Some(Prompt::Connected { .. }));
+            // Only a service that takes requests is asked for them.
+            let connected = matches!(runtime.github, Some(Prompt::Connected { requests: true, .. }));
             let ready = runtime.stage == Some(Stage::Ready);
             if !connected || !ready {
                 runtime.github_requests.list.clear();

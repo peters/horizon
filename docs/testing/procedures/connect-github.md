@@ -155,40 +155,7 @@ the access requests of agents.
    Result: The card continues to **Ready**. The steps card shows
    **GitHub: Skipped: this cloud has no GitHub access.**
 
-### 6.6 G06 — Sign in new clouds automatically
-
-1. In Cloud settings, select **Automatic (no clicks after the first approval)** and
-   click **Save settings**.
-
-   Result: Cloud settings close without an error.
-
-   > **CAUTION:** REVOKE ONLY THE TEST APP. Revoking an app ends the access it has
-   > for your account.
-
-2. On GitHub, open **Settings › Applications › Authorized GitHub Apps** and revoke
-   the test app.
-
-   Result: GitHub does not list the test app. The app is not authorized for your
-   account, as for a person who never used Ask mode.
-
-3. Start a new cloud `gh-auto` from the same checkout.
-
-   Result: After the worker is ready, the browser shows GitHub's page to authorize
-   the app.
-
-4. Click **Authorize**.
-
-   Result: The browser shows **GitHub is connected for this cloud. You can close
-   this page.** The `gh-auto` card shows **Ready** and
-   **GitHub: signed in as <login> · 1 repository**. It showed no code.
-
-5. Start a new cloud `gh-auto-2` from the same checkout.
-
-   Result: The browser opens a page from GitHub and then shows **GitHub is
-   connected for this cloud.** without a click. The card shows **Ready** and the
-   GitHub line.
-
-### 6.7 G07 — Decide an agent's request
+### 6.6 G06 — Decide an agent's request
 
 1. In an agent panel of `gh-ask`, ask the agent to call `github_access` for
    `<owner>/<repo-b>` with push access and a short reason.
@@ -238,6 +205,40 @@ the access requests of agents.
 
     Result: Git shows the references without a new request. The cloud card shows
     no request.
+
+### 6.7 G07 — Sign in new clouds automatically
+
+1. In Cloud settings, select **Automatic (no clicks after the first approval)** and
+   click **Save settings**.
+
+   Result: Cloud settings close without an error.
+
+   > **CAUTION:** REVOKE ONLY THE TEST APP. Revoking an app ends the access it has
+   > for your account.
+
+2. On GitHub, open **Settings › Applications › Authorized GitHub Apps** and revoke
+   the test app.
+
+   Result: GitHub does not list the test app. The app is not authorized for your
+   account, as for a person who never used Ask mode. The access of `gh-ask` also
+   ends; G06 is complete, so no later task needs it.
+
+3. Start a new cloud `gh-auto` from the same checkout.
+
+   Result: After the worker is ready, the browser shows GitHub's page to authorize
+   the app.
+
+4. Click **Authorize**.
+
+   Result: The browser shows **GitHub is connected for this cloud. You can close
+   this page.** The `gh-auto` card shows **Ready** and
+   **GitHub: signed in as <login> · 1 repository**. It showed no code.
+
+5. Start a new cloud `gh-auto-2` from the same checkout.
+
+   Result: The browser opens a page from GitHub and then shows **GitHub is
+   connected for this cloud.** without a click. The card shows **Ready** and the
+   GitHub line.
 
 ### 6.8 G08 — Disconnect
 

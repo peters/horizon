@@ -84,7 +84,8 @@ fn worker_status_is_read_from_its_last_json_line() {
         ),
         Status::Current {
             login: "octo-cat".into(),
-            repositories: vec!["acme/web".into()]
+            repositories: vec!["acme/web".into()],
+            requests: false
         },
         "the worker reports each grant as an object"
     );
@@ -92,7 +93,27 @@ fn worker_status_is_read_from_its_last_json_line() {
         parse_status("note\n{\"state\":\"ok\",\"login\":\"octo-cat\",\"repositories\":[\"Acme/Web\",\"../x\"]}"),
         Status::Current {
             login: "octo-cat".into(),
-            repositories: vec!["acme/web".into()]
+            repositories: vec!["acme/web".into()],
+            requests: false
+        }
+    );
+}
+
+#[test]
+fn a_service_that_is_not_running_is_not_current_and_requests_need_support() {
+    use worker::{Status, parse_status};
+    assert_eq!(
+        parse_status("{\"state\":\"ok\",\"serving\":false,\"repositories\":[{\"repository\":\"acme/web\"}]}"),
+        Status::Unavailable
+    );
+    assert_eq!(
+        parse_status(
+            "{\"state\":\"ok\",\"serving\":true,\"login\":\"octo-cat\",\"pending_requests\":0,\"repositories\":[{\"repository\":\"acme/web\"}]}"
+        ),
+        Status::Current {
+            login: "octo-cat".into(),
+            repositories: vec!["acme/web".into()],
+            requests: true
         }
     );
 }

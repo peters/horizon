@@ -16,8 +16,15 @@ pub(super) enum Status {
     Unsupported,
     /// No chain, or one GitHub no longer accepts.
     Absent,
+    /// A stored chain whose service is not running, so Git and `gh` get no token.
+    Unavailable,
     /// A chain that renews, acting as `login`, for these lowercase repositories.
-    Current { login: String, repositories: Vec<String> },
+    /// `requests` is whether the service takes agents' access requests.
+    Current {
+        login: String,
+        repositories: Vec<String>,
+        requests: bool,
+    },
 }
 
 pub(super) fn status(connection: &Connection, runner: &Runner<'_>) -> Result<Status> {
@@ -44,6 +51,10 @@ pub(super) fn parse_status(output: &str) -> Status {
         login: Option<String>,
         #[serde(default)]
         repositories: Vec<Held>,
+        #[serde(default)]
+        serving: Option<bool>,
+        #[serde(default)]
+        pending_requests: Option<u64>,
     }
     let Some(fields) = output
         .lines()
@@ -63,9 +74,11 @@ pub(super) fn parse_status(output: &str) -> Status {
         .collect();
     match fields.state.as_str() {
         "unsupported" => Status::Unsupported,
+        "ok" if !repositories.is_empty() && fields.serving == Some(false) => Status::Unavailable,
         "ok" if !repositories.is_empty() => Status::Current {
             login: fields.login.unwrap_or_default(),
             repositories,
+            requests: fields.pending_requests.is_some(),
         },
         _ => Status::Absent,
     }
