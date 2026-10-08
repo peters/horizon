@@ -105,6 +105,9 @@ sign-in. The checks use a real GitHub App that the tester creates and deletes.
 
    Result: GitHub shows the app and **Authorize**.
 
+   > **CAUTION:** AUTHORIZE ONLY THE TEST APP THAT YOU MADE IN THE SETUP. Authorize
+   > gives the app access to your account until you delete it in the cleanup.
+
 4. Click **Authorize**.
 
    Result: The example shows `signed in: access token for 7 h, refresh token for 181 days`
@@ -177,6 +180,9 @@ sign-in. The checks use a real GitHub App that the tester creates and deletes.
 2. Click **Delete GitHub App**.
 
    Result: GitHub asks for the name of the app.
+
+   > **CAUTION:** MAKE SURE THAT THE NAME IS THE NAME OF THE TEST APP. Deleting an app
+   > cannot be undone and ends every token of that app at once.
 
 3. Type the name and confirm.
 
