@@ -33,7 +33,7 @@ fn management_wheel_scrolls_with_the_complete_canvas_render_path() {
     let before = render(center, Vec::new());
     let marker = |output: &egui::FullOutput| {
         output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) if text.galley.text() == "Workspace" => Some(text.pos.y),
+            egui::Shape::Text(text) if text.galley.text() == "View" => Some(text.pos.y),
             _ => None,
         })
     };

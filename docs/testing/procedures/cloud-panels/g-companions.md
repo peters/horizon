@@ -93,9 +93,11 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
 ### 6.1 G01 — Show the declared companions on the source card
 
-1. Open the card of `smoke-a`.
+1. On the card of `smoke-a`, open the details with the chevron, click
+   **Connections** and expand **Companion clouds**.
 
-   Result: The card shows the section **Companion clouds**.
+   Result: The section **Companion clouds** opens. The next steps that use the
+   companion rows of `smoke-a` use this section.
 
 2. Examine the rows of the section.
 

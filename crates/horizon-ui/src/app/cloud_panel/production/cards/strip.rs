@@ -455,32 +455,26 @@ struct Item {
     tip: String,
 }
 
+/// Indicators show only while there is something to report, so an idle or undeployed
+/// cloud does not read as a row of disabled buttons.
 fn items(indicators: &Indicators) -> Vec<Item> {
-    let mut items = vec![Item {
-        glyph: glyph_terminal,
-        label: if indicators.terminals == 0 {
-            String::new()
-        } else {
-            format!("{}/{}", indicators.running, indicators.terminals)
-        },
-        active: indicators.running > 0,
-        color: None,
-        tip: match indicators.terminals {
-            0 => "No terminals attached".into(),
-            total => format!("{} of {total} terminals running", indicators.running),
-        },
-    }];
-    if let Some(connected) = indicators.desktop {
+    let mut items = Vec::new();
+    if indicators.running > 0 {
+        items.push(Item {
+            glyph: glyph_terminal,
+            label: format!("{}/{}", indicators.running, indicators.terminals),
+            active: true,
+            color: None,
+            tip: format!("{} of {} terminals running", indicators.running, indicators.terminals),
+        });
+    }
+    if indicators.desktop == Some(true) {
         items.push(Item {
             glyph: glyph_desktop,
             label: "Desktop".into(),
-            active: connected,
+            active: true,
             color: None,
-            tip: if connected {
-                "Desktop tunnel connected".into()
-            } else {
-                "Desktop tunnel not connected".into()
-            },
+            tip: "Desktop tunnel connected".into(),
         });
     }
     items.extend(network_item(indicators.sharing));

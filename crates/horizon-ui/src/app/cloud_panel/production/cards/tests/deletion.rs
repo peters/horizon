@@ -321,7 +321,7 @@ fn a_pending_stop_replaces_the_whole_manage_drawer() {
     for step in 1..4 {
         output = frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
     }
-    for shown in ["Workspace", "Full screen", "Stop worker…"] {
+    for shown in ["View", "Full screen", "Stop worker…"] {
         assert!(
             label_pos(&output, shown).is_some(),
             "{shown} is in the usual Manage tab"
@@ -340,14 +340,7 @@ fn a_pending_stop_replaces_the_whole_manage_drawer() {
     for shown in ["Stop worker", "Keep running"] {
         assert!(label_pos(&output, shown).is_some(), "{shown} is asked");
     }
-    for hidden in [
-        "Workspace",
-        "Default",
-        "Full screen",
-        "Cloud",
-        "Stop worker…",
-        "Reconnect cloud",
-    ] {
+    for hidden in ["View", "Full screen", "Cloud", "Stop worker…", "Reconnect cloud"] {
         assert!(
             label_pos(&output, hidden).is_none(),
             "{hidden} waits behind the question in the real Manage drawer"

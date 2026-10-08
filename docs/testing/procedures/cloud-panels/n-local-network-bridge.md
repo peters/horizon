@@ -93,9 +93,10 @@ limits the access and that the bridge is off after a restart of Horizon.
 
 ### 6.1 N01 — Share the local network
 
-1. Open the card of `smoke-a`.
+1. On the card of `smoke-a`, open the details with the chevron and click **Connections**.
 
-   Result: The card shows **Share local network**. The switch is off.
+   Result: **Access** shows **Share local network**. The switch is off. The
+   next steps use this tab.
 
    > **CAUTION:** THIS STEP CHANGES NETWORK ACCESS. The worker can reach all devices
    > on the local network of the PC until you switch the bridge off.
@@ -187,7 +188,7 @@ limits the access and that the bridge is off after a restart of Horizon.
 
 ### 6.4 N04 — Limit the reach with the scope
 
-1. On the card of `smoke-a`, open the **Scope** section.
+1. In **Connections** on the card of `smoke-a`, open the **Scope** section.
 
    Result: The section shows **Scope: the whole network**, the **Devices** field
    and the **This computer's own ports** field.
@@ -272,7 +273,7 @@ limits the access and that the bridge is off after a restart of Horizon.
 
    Result: The candidate reconnects to the worker.
 
-6. Examine the **Share local network** switch.
+6. In **Connections**, examine the **Share local network** switch.
 
    Result: The switch is off. The card shows no scope.
 

@@ -25,6 +25,36 @@ pub(super) fn frame<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) 
     inner
 }
 
+/// The width every row button takes, so the buttons of a block line up.
+pub(super) const ROW_BUTTON_WIDTH: f32 = 240.0;
+
+/// One action: what it acts on and what it does on the left, its button on the right.
+pub(in crate::app::cloud_panel::production) fn row<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    detail: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.horizontal(|ui| {
+        let text = (ui.available_width() - ROW_BUTTON_WIDTH - 16.0).max(120.0);
+        ui.allocate_ui_with_layout(egui::vec2(text, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.label(RichText::new(title).size(14.0).color(theme::FG()));
+            ui.add(egui::Label::new(RichText::new(detail).size(12.5).color(theme::FG_DIM())).wrap());
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().button_padding.x = 12.0;
+            add(ui)
+        })
+        .inner
+    })
+    .inner
+}
+
+/// A row's button, sized like every other row button.
+pub(in crate::app::cloud_panel::production) fn row_button(button: egui::Button<'_>) -> egui::Button<'_> {
+    button.min_size(egui::vec2(ROW_BUTTON_WIDTH, 30.0))
+}
+
 /// Label and value columns; `add` fills the rows with [`fact`].
 pub(super) fn facts<R>(ui: &mut egui::Ui, salt: impl egui::AsIdSalt, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Grid::new(salt)

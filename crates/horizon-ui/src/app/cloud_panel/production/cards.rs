@@ -10,7 +10,7 @@ mod machine;
 mod output;
 pub(super) mod placement;
 mod rebuild;
-mod section;
+pub(super) mod section;
 mod self_stop;
 mod sizing;
 mod status;
@@ -154,14 +154,27 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
             .state
             .as_ref()
             .is_none_or(|state| state.operation == horizon_core::cloud_runtime::CreateState::Prepared);
-    let mut action = operation_action(ui, runtime);
+    // A connected cloud needs no reconnect; the header offers it once the connection drops.
+    let mut action = if runtime.connected_and_ready() {
+        None
+    } else {
+        operation_action(ui, runtime)
+    };
 
     if runtime.stage == Some(Stage::Ready) {
         action = ready_actions(ui, runtime).or(action);
     }
     // Under the cloud's own action, as the way out.
-    if removable && ui.add(danger_button("Remove cloud")).clicked() {
-        return Some(Action::Remove);
+    if removable {
+        ui.separator();
+        if section::row(
+            ui,
+            "Remove",
+            "Removes this card. Nothing was allocated, so nothing is billed.",
+            |ui| ui.add(section::row_button(danger_button("Remove cloud"))).clicked(),
+        ) {
+            return Some(Action::Remove);
+        }
     }
     bound_provider_check(ui, runtime)
         .or_else(|| deletion_action(ui, runtime))
@@ -195,18 +208,25 @@ fn operation_action(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Actio
         if ui.add(accent_button(ui, "Read record again")).clicked() {
             action = Some(Action::Deploy);
         }
-    } else if ui
-        .add(accent_button(
-            ui,
-            if runtime.state.is_some() {
-                "Reconnect cloud"
-            } else {
-                "Deploy cloud"
-            },
-        ))
-        .clicked()
-    {
-        action = Some(Action::Deploy);
+    } else {
+        let (title, label, detail) = if runtime.state.is_some() {
+            (
+                "Connection",
+                "Reconnect cloud",
+                "Attach this computer to the worker again; sessions on it keep running.",
+            )
+        } else {
+            (
+                "Deploy",
+                "Deploy cloud",
+                "Build or pull the image and start a worker. Charges start with the worker.",
+            )
+        };
+        if section::row(ui, title, detail, |ui| {
+            ui.add(section::row_button(action_button(label))).clicked()
+        }) {
+            action = Some(Action::Deploy);
+        }
     }
     action
 }
@@ -272,7 +292,14 @@ fn total_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syste
 }
 
 fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
-    if !rebuild::blocks_stop(runtime) && ui.add(danger_button("Stop worker…")).clicked() {
+    if !rebuild::blocks_stop(runtime)
+        && section::row(
+            ui,
+            "Worker",
+            "Running and billed for compute. Stopping keeps the workspace for a resume.",
+            |ui| ui.add(section::row_button(danger_button("Stop worker…"))).clicked(),
+        )
+    {
         runtime.confirmation = Confirmation::Stop;
     }
     rebuild::offer(ui, runtime)
@@ -339,8 +366,19 @@ fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
             if ui.add(action_button("Keep resources")).clicked() {
                 runtime.confirmation = Confirmation::None;
             }
-        } else if ui.add(danger_button("Delete cloud resources…")).clicked() {
-            runtime.confirmation = Confirmation::Delete;
+        } else {
+            ui.separator();
+            if section::row(
+                ui,
+                "Delete",
+                "Deletes the worker and its storage. Charges end; files are gone.",
+                |ui| {
+                    ui.add(section::row_button(danger_button("Delete cloud resources…")))
+                        .clicked()
+                },
+            ) {
+                runtime.confirmation = Confirmation::Delete;
+            }
         }
     }
     None

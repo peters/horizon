@@ -73,8 +73,25 @@ pub(in crate::app) fn workspace_layout_buttons(
         let width = layout.map_or(WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH, workspace_layout_button_width);
         let response = ui
             .add(
-                workspace_toolbar_button(label, active, color)
-                    .min_size(Vec2::new(width, WORKSPACE_LAYOUT_BUTTON_HEIGHT)),
+                Button::new(egui::RichText::new(label).size(10.5).color(if active {
+                    theme::FG()
+                } else {
+                    theme::FG_SOFT()
+                }))
+                .min_size(Vec2::new(width, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
+                .fill(theme::alpha(
+                    theme::blend(theme::PANEL_BG_ALT(), color, if active { 0.22 } else { 0.05 }),
+                    if active { 236 } else { 220 },
+                ))
+                .stroke(Stroke::new(
+                    1.0,
+                    if active {
+                        theme::alpha(color, 224)
+                    } else {
+                        theme::alpha(theme::blend(theme::BORDER_SUBTLE(), color, 0.24), 216)
+                    },
+                ))
+                .corner_radius(8),
             )
             .on_hover_text(layout.map_or("Manual placement", WorkspaceLayout::label));
         if response.clicked() {
@@ -83,29 +100,6 @@ pub(in crate::app) fn workspace_layout_buttons(
         }
     }
     changed
-}
-
-/// One segment of the layout controls, also used for neighbouring toolbar toggles.
-pub(in crate::app) fn workspace_toolbar_button(label: &str, active: bool, color: egui::Color32) -> Button<'_> {
-    Button::new(
-        egui::RichText::new(label)
-            .size(10.5)
-            .color(if active { theme::FG() } else { theme::FG_SOFT() }),
-    )
-    .min_size(Vec2::new(0.0, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
-    .fill(theme::alpha(
-        theme::blend(theme::PANEL_BG_ALT(), color, if active { 0.22 } else { 0.05 }),
-        if active { 236 } else { 220 },
-    ))
-    .stroke(Stroke::new(
-        1.0,
-        if active {
-            theme::alpha(color, 224)
-        } else {
-            theme::alpha(theme::blend(theme::BORDER_SUBTLE(), color, 0.24), 216)
-        },
-    ))
-    .corner_radius(8)
 }
 
 pub(super) fn show_workspace_context_menu(

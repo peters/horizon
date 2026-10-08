@@ -227,11 +227,16 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
         (OFFER, CONFIRMATION)
     };
     if runtime.confirmation != Confirmation::Rebuild {
-        if ui
-            .add(danger_button("Rebuild image & restart…"))
-            .on_hover_text(offer)
-            .clicked()
-        {
+        let detail = if on_public_base(runtime) {
+            "Move to the current base image and restart; the workspace stays."
+        } else {
+            "Build the committed recipe and restart; the workspace stays."
+        };
+        if super::section::row(ui, "Image", detail, |ui| {
+            ui.add(super::section::row_button(danger_button("Rebuild image & restart…")))
+                .on_hover_text(offer)
+                .clicked()
+        }) {
             runtime.confirmation = Confirmation::Rebuild;
         }
         return None;

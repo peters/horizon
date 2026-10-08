@@ -2,7 +2,7 @@ mod paint;
 mod render;
 mod toolbar;
 #[cfg(feature = "cloud-workspaces")]
-pub(super) use toolbar::{workspace_layout_buttons, workspace_toolbar_button};
+pub(super) use toolbar::workspace_layout_buttons;
 
 use std::collections::HashMap;
 

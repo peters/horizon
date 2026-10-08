@@ -9,8 +9,8 @@ use super::{Action, profile_details, runtime_actions, section};
 use crate::app::cloud_panel::runtime::{action_button, readable_runtime_style, solid_scroll_area};
 use crate::theme;
 use egui::{Align2, FontId, Rect, RichText, Sense, Stroke, pos2, vec2};
+use horizon_core::Board;
 use horizon_core::cloud_panel::{CloudGroup, CloudLaunch};
-use horizon_core::{Board, WorkspaceLayout};
 
 #[cfg(test)]
 pub(super) use connections::access;
@@ -68,18 +68,9 @@ impl Tab {
 }
 
 #[derive(Default)]
-pub(super) enum LayoutChoice {
-    #[default]
-    Unchanged,
-    Set(Option<WorkspaceLayout>),
-}
-
-#[derive(Default)]
 pub(super) struct Response {
     pub action: Option<Action>,
     pub resize: Option<(u16, u16)>,
-    /// Set when a layout button was chosen; `None` inside is manual placement.
-    pub layout: LayoutChoice,
     pub fullscreen: bool,
 }
 
@@ -383,26 +374,15 @@ fn manage(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'
         response.action = runtime_actions(ui, id, runtime).or(response.action.take());
         return;
     }
-    section::show(ui, "Workspace", |ui| {
-        ui.horizontal_wrapped(|ui| {
-            let accent = theme::workspace_accent(context.group.issue.saturating_sub(101) as usize);
-            let mut selected = context.group.layout;
-            if crate::app::workspace::workspace_layout_buttons(ui, &mut selected, accent) {
-                response.layout = LayoutChoice::Set(selected);
-            }
-            ui.add_space(8.0);
-            response.fullscreen = ui
-                .add(crate::app::workspace::workspace_toolbar_button(
-                    "Full screen",
-                    context.fullscreen,
-                    accent,
-                ))
-                .on_hover_text(if context.fullscreen {
-                    "Leave full screen"
-                } else {
-                    "Show only this cloud"
-                })
-                .clicked();
+    // The layout buttons are in the header strip whenever they apply.
+    section::show(ui, "View", |ui| {
+        let (label, detail) = if context.fullscreen {
+            ("Exit full screen", "Return to the whole canvas.")
+        } else {
+            ("Full screen", "Show only this cloud and its panels.")
+        };
+        response.fullscreen = section::row(ui, "Focus", detail, |ui| {
+            ui.add(section::row_button(action_button(label))).clicked()
         });
     });
     let chosen = section::show(ui, "Cloud", |ui| runtime_actions(ui, id, runtime));
