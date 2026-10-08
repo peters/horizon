@@ -5,6 +5,9 @@ description: Check that a microphone is usable for Horizon dictation and report 
 
 # Horizon speech input check
 
+This skill uses local audio diagnostics. Horizon has no speech MCP tool.
+Do not treat dictation as an MCP-controlled capability.
+
 Run this when a user says dictation "types the wrong thing", produces text they
 never said, or produces nothing.
 

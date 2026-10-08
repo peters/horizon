@@ -160,14 +160,32 @@ For nested Device-panel tests, view the isolated Horizon containing that panel
 through a native panel in the user's workspace; keep each target and its
 geometry distinct.
 
-For feature evidence, record directly from the task-owned isolated desktop using
-a recorder explicitly scoped to its display. Native panels have no video API;
-`browser_video` is for browser pages. Start before the flow, stop afterward and
-inspect decoded frames. If recording is unavailable or stalls, report the blocked
-recording lane; still images do not replace motion evidence. Client-side scaling
-does not reduce VNC wire bandwidth. Keep application-specific workflows and
-evidence private; public demonstrations use generic fixtures and synthetic
-content only.
+## Viewer screenshots and video
+
+Use `device_panel` with `operation: screenshot` and the owned `panel_id` to get
+full connected desktop pixels as a private PNG with dimensions. Local crop and
+scale controls do not affect this capture. Optional `copy_to_clipboard` defaults
+false; `clipboard_requested` proves native host dispatch, not OS acknowledgement.
+Stopped, disconnected, or no-frame viewers refuse capture. Capture changes no
+visibility, focus, canvas, or Interact state. Only eight exports remain until
+panel close or normal host exit. A screenshot does not replace live-motion evidence.
+
+For feature evidence, use `device_panel` with `operation: video`, the owned
+`panel_id`, and `action: start|status|stop`. Start before the flow. It records the
+full VNC desktop as private WebM without audio and continues offscreen. Every
+action requires the exact owning agent. It stops on disconnect, after five
+minutes, or at 256 MiB. Stop is asynchronous: read status at a bounded interval
+until `recording.capture.active` and `recording.finalizing` are both false.
+Examine `encoder_failed` and `frames_encoded`, then decode representative frames.
+The file path is on the Horizon host. Copy it before panel close or four subsequent
+recordings. Browser pages use `browser_video`; native provider sessions use
+`app_video` through `horizon-app-testing`.
+
+On older hosts without viewer video, use a recorder explicitly scoped to the
+owned isolated display. If recording is unavailable or stalls, report that lane;
+still images do not replace motion evidence. Keep finalized evidence private.
+Public demonstrations use generic fixtures and synthetic content only.
+Client-side scaling does not reduce VNC wire bandwidth.
 
 Close only task-owned viewers and application/display fixtures, then verify
 children exited and target configuration expired. Horizon injects `device_panel`
