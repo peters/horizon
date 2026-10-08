@@ -21,8 +21,12 @@ mod tests;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const RESPONSE_LIMIT: u64 = 64 * 1024;
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
-/// GitHub's default poll interval for a device sign-in.
+/// GitHub's default poll interval for a device sign-in, and the step a `slow_down` adds.
 const DEFAULT_INTERVAL: u64 = 5;
+/// The longest poll interval accepted from GitHub.
+const MAX_INTERVAL: u64 = 15 * 60;
+/// The longest lifetime accepted from GitHub for a code or token, about ten years.
+const MAX_LIFETIME: u64 = 10 * 365 * 24 * 60 * 60;
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -156,7 +160,7 @@ impl Client {
     /// Transport failures, a malformed answer, or the app's refusal.
     pub fn start_device(&self, client_id: &str) -> Result<DeviceCode> {
         #[derive(Deserialize)]
-        struct Answer {
+        struct Fields {
             device_code: String,
             user_code: String,
             verification_uri: String,
@@ -164,27 +168,29 @@ impl Client {
             #[serde(default)]
             interval: Option<u64>,
         }
-        let value = self.oauth("/login/device/code", &[("client_id", client_id)])?;
-        let answer: Answer = serde_json::from_value(value).map_err(|_| Error::InvalidResponse)?;
-        let device_code = Secret::new(answer.device_code);
-        if !valid_user_code(&answer.user_code) || !answer.verification_uri.starts_with("https://") {
+        let answer = self.oauth("/login/device/code", &[("client_id", client_id)])?;
+        let fields: Fields = answer.parse()?;
+        let secret = Secret::new(fields.device_code);
+        let interval = fields.interval.unwrap_or(DEFAULT_INTERVAL).max(1);
+        if !valid_user_code(&fields.user_code) || !safe_https_url(&fields.verification_uri) || interval > MAX_INTERVAL {
             return Err(Error::InvalidResponse);
         }
         Ok(DeviceCode {
-            user_code: answer.user_code,
-            verification_uri: answer.verification_uri,
-            interval: Duration::from_secs(answer.interval.unwrap_or(DEFAULT_INTERVAL).max(1)),
-            expires_at: SystemTime::now() + Duration::from_secs(answer.expires_in),
-            secret: device_code,
+            user_code: fields.user_code,
+            verification_uri: fields.verification_uri,
+            interval: Duration::from_secs(interval),
+            expires_at: later(fields.expires_in)?,
+            secret,
         })
     }
 
     /// Asks once whether the person approved a device sign-in. Call it no more often
-    /// than the code's interval.
+    /// than the code's interval. A `slow_down` answer raises `code.interval`, by
+    /// GitHub's new value or else by 5 seconds, as RFC 8628 requires.
     /// # Errors
     /// [`Error::Denied`], [`Error::Expired`] or another refusal ends the sign-in.
-    pub fn poll_device(&self, client_id: &str, code: &DeviceCode) -> Result<Poll> {
-        let (status, value) = self.post_form(
+    pub fn poll_device(&self, client_id: &str, code: &mut DeviceCode) -> Result<Poll> {
+        let answer = self.post_form(
             "/login/oauth/access_token",
             &[
                 ("client_id", client_id),
@@ -192,20 +198,20 @@ impl Client {
                 ("grant_type", DEVICE_GRANT),
             ],
         )?;
-        match value.get("error").and_then(serde_json::Value::as_str) {
-            Some("authorization_pending") => Ok(Poll::Pending),
-            Some("slow_down") => {
-                // GitHub sends the new interval; without one, add its usual 5 seconds.
-                let seconds = value.get("interval").and_then(serde_json::Value::as_u64);
-                let interval = seconds.map_or(
-                    code.interval + Duration::from_secs(DEFAULT_INTERVAL),
-                    Duration::from_secs,
-                );
-                Ok(Poll::SlowDown(interval))
+        match answer.oauth_error()? {
+            Some((error, _)) if error == "authorization_pending" => Ok(Poll::Pending),
+            Some((error, interval)) if error == "slow_down" => {
+                let raised = code.interval.as_secs().saturating_add(DEFAULT_INTERVAL);
+                let seconds = interval.map_or(raised, |given| given.max(raised));
+                if seconds > MAX_INTERVAL {
+                    return Err(Error::InvalidResponse);
+                }
+                code.interval = Duration::from_secs(seconds);
+                Ok(Poll::SlowDown(code.interval))
             }
-            Some(error) => Err(oauth_error(error)),
-            None if status == 200 => chain(value).map(Poll::Granted),
-            None => Err(Error::Refused(format!("HTTP {status}"))),
+            Some((error, _)) => Err(oauth_error(&error)),
+            None if answer.status == 200 => chain(&answer).map(Poll::Granted),
+            None => Err(Error::Refused(format!("HTTP {}", answer.status))),
         }
     }
 
@@ -217,16 +223,16 @@ impl Client {
         &self,
         client_id: &str,
         client_secret: &Secret,
-        code: &str,
+        code: &Secret,
         redirect_uri: &str,
         verifier: &Secret,
     ) -> Result<Chain> {
-        chain(self.oauth(
+        chain(&self.oauth(
             "/login/oauth/access_token",
             &[
                 ("client_id", client_id),
                 ("client_secret", client_secret.expose()),
-                ("code", code),
+                ("code", code.expose()),
                 ("redirect_uri", redirect_uri),
                 ("code_verifier", verifier.expose()),
             ],
@@ -246,62 +252,67 @@ impl Client {
         if let Some(secret) = client_secret {
             fields.push(("client_secret", secret.expose()));
         }
-        chain(self.oauth("/login/oauth/access_token", &fields)?)
+        chain(&self.oauth("/login/oauth/access_token", &fields)?)
     }
 
     /// Completes the manifest flow: the `code` GitHub sent to the manifest's redirect
     /// URL becomes the new app's identity and client secret.
     /// # Errors
     /// A malformed code, transport failures, or GitHub's refusal (an expired code).
-    pub fn convert_manifest(&self, code: &str) -> Result<App> {
+    pub fn convert_manifest(&self, code: &Secret) -> Result<App> {
         #[derive(Deserialize)]
-        struct Answer {
+        struct Fields {
             id: u64,
             slug: String,
             client_id: String,
             client_secret: String,
             html_url: String,
         }
+        let code = code.expose();
         if code.is_empty() || code.len() > 100 || !code.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return Err(Error::InvalidResponse);
         }
-        let url = format!("{}/app-manifests/{code}/conversions", self.api);
+        let mut url = Zeroizing::new(String::with_capacity(self.api.len() + code.len() + 32));
+        let _ = write!(url, "{}/app-manifests/{code}/conversions", self.api);
         let response = self
             .agent
-            .post(&url)
+            .post(url.as_str())
             .header("Accept", "application/vnd.github+json")
             .send_empty();
-        let (status, value) = read(response)?;
-        if status != 201 {
-            return Err(Error::Refused(format!("HTTP {status}")));
+        let answer = read(response)?;
+        if answer.status != 201 {
+            return Err(Error::Refused(format!("HTTP {}", answer.status)));
         }
-        let answer: Answer = serde_json::from_value(value).map_err(|_| Error::InvalidResponse)?;
-        let client_secret = Secret::new(answer.client_secret);
+        // Only these fields are read: the private key and webhook secret in the same
+        // answer stay in the wiped response buffer.
+        let fields: Fields = answer.parse()?;
+        let client_secret = Secret::new(fields.client_secret);
+        if !valid_slug(&fields.slug) || !valid_client_id(&fields.client_id) || !safe_https_url(&fields.html_url) {
+            return Err(Error::InvalidResponse);
+        }
         Ok(App {
-            id: answer.id,
-            slug: answer.slug,
-            client_id: answer.client_id,
+            id: fields.id,
+            slug: fields.slug,
+            client_id: fields.client_id,
             client_secret,
-            html_url: answer.html_url,
+            html_url: fields.html_url,
         })
     }
 
     /// Posts an OAuth form. GitHub answers OAuth errors with status 200 and an
     /// `error` field, which becomes a typed [`Error`].
-    fn oauth(&self, path: &str, fields: &[(&str, &str)]) -> Result<serde_json::Value> {
-        let (status, value) = self.post_form(path, fields)?;
-        if let Some(code) = value.get("error").and_then(serde_json::Value::as_str) {
-            return Err(oauth_error(code));
+    fn oauth(&self, path: &str, fields: &[(&str, &str)]) -> Result<Answer> {
+        let answer = self.post_form(path, fields)?;
+        if let Some((code, _)) = answer.oauth_error()? {
+            return Err(oauth_error(&code));
         }
-        if status != 200 {
-            return Err(Error::Refused(format!("HTTP {status}")));
+        if answer.status != 200 {
+            return Err(Error::Refused(format!("HTTP {}", answer.status)));
         }
-        Ok(value)
+        Ok(answer)
     }
-}
 
-impl Client {
-    fn post_form(&self, path: &str, fields: &[(&str, &str)]) -> Result<(u16, serde_json::Value)> {
+    fn post_form(&self, path: &str, fields: &[(&str, &str)]) -> Result<Answer> {
         let body = form(fields);
         let response = self
             .agent
@@ -310,6 +321,32 @@ impl Client {
             .header("Content-Type", "application/x-www-form-urlencoded")
             .send(body.as_bytes());
         read(response)
+    }
+}
+
+/// A response kept in a buffer that is wiped on drop. Each caller reads only the
+/// fields it needs from it, so values it does not read are never copied out.
+struct Answer {
+    status: u16,
+    body: Zeroizing<Vec<u8>>,
+}
+
+impl Answer {
+    fn parse<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
+        serde_json::from_slice(&self.body).map_err(|_| Error::InvalidResponse)
+    }
+
+    /// GitHub's OAuth error code, with the interval a `slow_down` may carry.
+    fn oauth_error(&self) -> Result<Option<(String, Option<u64>)>> {
+        #[derive(Deserialize)]
+        struct Probe {
+            #[serde(default)]
+            error: Option<String>,
+            #[serde(default)]
+            interval: Option<u64>,
+        }
+        let probe: Probe = self.parse()?;
+        Ok(probe.error.map(|error| (error, probe.interval)))
     }
 }
 
@@ -337,9 +374,7 @@ fn encode(output: &mut String, value: &str) {
     }
 }
 
-fn read(
-    response: std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error>,
-) -> Result<(u16, serde_json::Value)> {
+fn read(response: std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<Answer> {
     let mut response = response.map_err(|_| Error::Transport)?;
     let status = response.status().as_u16();
     let mut body = Zeroizing::new(Vec::new());
@@ -352,8 +387,7 @@ fn read(
     if body.len() as u64 > RESPONSE_LIMIT {
         return Err(Error::InvalidResponse);
     }
-    let value = serde_json::from_slice(&body).map_err(|_| Error::InvalidResponse)?;
-    Ok((status, value))
+    Ok(Answer { status, body })
 }
 
 fn oauth_error(code: &str) -> Error {
@@ -373,19 +407,19 @@ fn oauth_error(code: &str) -> Error {
 
 /// A chain from a token answer. An answer without a refresh token comes from an app
 /// whose tokens never expire, which Horizon does not accept.
-fn chain(value: serde_json::Value) -> Result<Chain> {
+fn chain(answer: &Answer) -> Result<Chain> {
     #[derive(Deserialize)]
-    struct Answer {
+    struct Fields {
         access_token: String,
         expires_in: Option<u64>,
         refresh_token: Option<String>,
         refresh_token_expires_in: Option<u64>,
     }
-    let answer: Answer = serde_json::from_value(value).map_err(|_| Error::InvalidResponse)?;
-    let access_token = Secret::new(answer.access_token);
-    let refresh_token = answer.refresh_token.map(Secret::new);
+    let fields: Fields = answer.parse()?;
+    let access_token = Secret::new(fields.access_token);
+    let refresh_token = fields.refresh_token.map(Secret::new);
     let (Some(refresh_token), Some(access), Some(refresh)) =
-        (refresh_token, answer.expires_in, answer.refresh_token_expires_in)
+        (refresh_token, fields.expires_in, fields.refresh_token_expires_in)
     else {
         return Err(Error::NotExpiring);
     };
@@ -395,17 +429,51 @@ fn chain(value: serde_json::Value) -> Result<Chain> {
     {
         return Err(Error::InvalidResponse);
     }
-    let now = SystemTime::now();
     Ok(Chain {
         access_token,
-        access_expires_at: now + Duration::from_secs(access),
+        access_expires_at: later(access)?,
         refresh_token,
-        refresh_expires_at: now + Duration::from_secs(refresh),
+        refresh_expires_at: later(refresh)?,
     })
+}
+
+/// The time `seconds` from now. A lifetime beyond [`MAX_LIFETIME`] is a malformed
+/// answer, never a panic.
+fn later(seconds: u64) -> Result<SystemTime> {
+    if seconds > MAX_LIFETIME {
+        return Err(Error::InvalidResponse);
+    }
+    SystemTime::now()
+        .checked_add(Duration::from_secs(seconds))
+        .ok_or(Error::InvalidResponse)
 }
 
 fn valid_user_code(code: &str) -> bool {
     (4..=32).contains(&code.len()) && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+fn valid_slug(slug: &str) -> bool {
+    (1..=100).contains(&slug.len()) && slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+fn valid_client_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// An `https://` URL with a host name and only visible ASCII, safe to show and open.
+fn safe_https_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    url.len() <= 200
+        && url.bytes().all(|b| b.is_ascii_graphic())
+        && host.contains('.')
+        && !host.starts_with('.')
+        && !host.ends_with('.')
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
 }
 
 /// The manifest for a private app that can read and write repository contents and

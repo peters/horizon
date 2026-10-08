@@ -94,7 +94,7 @@ fn a_device_sign_in_waits_slows_down_and_returns_an_expiring_chain() {
         (200, json!({"error": "slow_down"})),
         (200, tokens()),
     ]);
-    let code = device(&client);
+    let mut code = device(&client);
     assert_eq!(code.user_code, "ABCD-1234");
     assert_eq!(code.interval, Duration::from_secs(5));
     assert_eq!(
@@ -102,16 +102,19 @@ fn a_device_sign_in_waits_slows_down_and_returns_an_expiring_chain() {
         0,
         "the device code is never printed"
     );
-    assert!(matches!(client.poll_device("Iv23synthetic", &code), Ok(Poll::Pending)));
     assert!(matches!(
-        client.poll_device("Iv23synthetic", &code),
+        client.poll_device("Iv23synthetic", &mut code),
+        Ok(Poll::Pending)
+    ));
+    assert!(matches!(
+        client.poll_device("Iv23synthetic", &mut code),
         Ok(Poll::SlowDown(interval)) if interval == Duration::from_secs(10)
     ));
     assert!(matches!(
-        client.poll_device("Iv23synthetic", &code),
-        Ok(Poll::SlowDown(interval)) if interval == Duration::from_secs(10)
+        client.poll_device("Iv23synthetic", &mut code),
+        Ok(Poll::SlowDown(interval)) if interval == Duration::from_secs(15)
     ));
-    let Ok(Poll::Granted(chain)) = client.poll_device("Iv23synthetic", &code) else {
+    let Ok(Poll::Granted(chain)) = client.poll_device("Iv23synthetic", &mut code) else {
         panic!("the approved sign-in returns a chain");
     };
     task.join().unwrap();
@@ -150,14 +153,14 @@ fn a_device_sign_in_reports_why_it_ended() {
             ),
             (200, json!({"error": error})),
         ]);
-        let code = device(&client);
+        let mut code = device(&client);
         assert_eq!(
             code.interval,
             Duration::from_secs(DEFAULT_INTERVAL),
             "GitHub's default interval"
         );
         assert_eq!(
-            client.poll_device("Iv23synthetic", &code).unwrap_err(),
+            client.poll_device("Iv23synthetic", &mut code).unwrap_err(),
             expected,
             "{error}"
         );
@@ -170,6 +173,9 @@ fn a_device_code_answer_must_be_safe_to_show() {
     for (user_code, uri) in [
         ("ABCD 1234\u{1b}[2J", "https://github.com/login/device"),
         ("ABCD-1234", "http://github.com/login/device"),
+        ("ABCD-1234", "https://"),
+        ("ABCD-1234", "https://github.com/\u{1b}[2J"),
+        ("ABCD-1234", "https://github.com:8443/login/device"),
     ] {
         let (client, _requests, task) = github(vec![(
             200,
@@ -232,7 +238,7 @@ fn a_web_sign_in_code_is_exchanged_with_the_secret_and_verifier() {
         .exchange_code(
             "Iv23synthetic",
             &Secret::new("synthetic-client-secret".into()),
-            "code123",
+            &Secret::new("code123".into()),
             "http://127.0.0.1:47614/callback",
             &Secret::new("verifier-synthetic".into()),
         )
@@ -253,7 +259,7 @@ fn a_manifest_code_becomes_the_app_without_its_private_key() {
                "client_secret": "synthetic-client-secret", "html_url": "https://github.com/apps/horizon-synthetic",
                "pem": "-----BEGIN RSA PRIVATE KEY-----synthetic", "webhook_secret": null}),
     )]);
-    let app = client.convert_manifest("abc123").unwrap();
+    let app = client.convert_manifest(&Secret::new("abc123".into())).unwrap();
     task.join().unwrap();
     assert_eq!(
         (app.id, app.slug.as_str(), app.client_id.as_str()),
@@ -266,7 +272,7 @@ fn a_manifest_code_becomes_the_app_without_its_private_key() {
         "POST /app-manifests/abc123/conversions HTTP/1.1"
     );
     assert_eq!(
-        client.convert_manifest("../x").unwrap_err(),
+        client.convert_manifest(&Secret::new("../x".into())).unwrap_err(),
         Error::InvalidResponse,
         "no path injection"
     );
@@ -276,7 +282,7 @@ fn a_manifest_code_becomes_the_app_without_its_private_key() {
 fn an_expired_manifest_code_is_a_refusal() {
     let (client, _requests, task) = github(vec![(404, json!({"message": "Not Found"}))]);
     assert_eq!(
-        client.convert_manifest("abc123").unwrap_err(),
+        client.convert_manifest(&Secret::new("abc123".into())).unwrap_err(),
         Error::Refused("HTTP 404".into())
     );
     task.join().unwrap();
@@ -301,4 +307,59 @@ fn the_manifest_asks_for_contents_and_pull_requests_only() {
 #[test]
 fn only_a_loopback_address_can_replace_github() {
     assert!(Client::loopback("192.0.2.1:443".parse().unwrap()).is_err());
+}
+
+#[test]
+fn oversized_lifetimes_and_intervals_are_malformed_answers_not_panics() {
+    let mut huge_access = tokens();
+    huge_access["expires_in"] = json!(u64::MAX);
+    let mut huge_refresh = tokens();
+    huge_refresh["refresh_token_expires_in"] = json!(u64::MAX);
+    for answer in [huge_access, huge_refresh] {
+        let (client, _requests, task) = github(vec![(200, answer)]);
+        let result = client.refresh("Iv23synthetic", None, &Secret::new("ghr_old".into()));
+        task.join().unwrap();
+        assert_eq!(result.unwrap_err(), Error::InvalidResponse);
+    }
+    for (expires_in, interval) in [(u64::MAX, 5), (899, u64::MAX)] {
+        let (client, _requests, task) = github(vec![(
+            200,
+            json!({"device_code": "dc", "user_code": "ABCD-1234",
+                   "verification_uri": "https://github.com/login/device",
+                   "expires_in": expires_in, "interval": interval}),
+        )]);
+        assert_eq!(
+            client.start_device("Iv23synthetic").unwrap_err(),
+            Error::InvalidResponse
+        );
+        task.join().unwrap();
+    }
+    let (client, _requests, task) = github(vec![
+        (
+            200,
+            json!({"device_code": "dc", "user_code": "ABCD-1234",
+                   "verification_uri": "https://github.com/login/device", "expires_in": 899}),
+        ),
+        (200, json!({"error": "slow_down", "interval": u64::MAX})),
+    ]);
+    let mut code = device(&client);
+    assert_eq!(
+        client.poll_device("Iv23synthetic", &mut code).unwrap_err(),
+        Error::InvalidResponse
+    );
+    task.join().unwrap();
+}
+
+#[test]
+fn a_manifest_answer_with_unsafe_values_is_refused() {
+    let (client, _requests, task) = github(vec![(
+        201,
+        json!({"id": 42, "slug": "../evil", "client_id": "Iv23synthetic",
+               "client_secret": "s", "html_url": "https://github.com/apps/x"}),
+    )]);
+    assert_eq!(
+        client.convert_manifest(&Secret::new("abc123".into())).unwrap_err(),
+        Error::InvalidResponse
+    );
+    task.join().unwrap();
 }
