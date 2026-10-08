@@ -441,11 +441,14 @@ mod tests {
     }
     #[test]
     fn multi_frame_scan_rejects_an_earlier_child_invalidated_during_a_later_scan() {
-        for event in [
-            None,
-            Some("Runtime.executionContextDestroyed"),
-            Some("Runtime.executionContextsCleared"),
-            Some("Target.detachedFromTarget"),
+        for (event, affected) in [
+            (None, "child"),
+            (Some("Runtime.executionContextDestroyed"), "child"),
+            (Some("Runtime.executionContextsCleared"), "child"),
+            (Some("Target.detachedFromTarget"), "child"),
+            (Some("Runtime.executionContextDestroyed"), "foreign"),
+            (Some("Runtime.executionContextsCleared"), "foreign"),
+            (Some("Target.detachedFromTarget"), "foreign"),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("ws://{}/", listener.local_addr().unwrap());
@@ -462,7 +465,7 @@ mod tests {
                     if session == "later"
                         && let Some(method) = event
                     {
-                        socket.send(Message::Text(json!({"method":method,"sessionId":"child","params":{"sessionId":"child","executionContextId":7}}).to_string().into())).unwrap();
+                        socket.send(Message::Text(json!({"method":method,"sessionId":affected,"params":{"sessionId":affected,"executionContextId":7}}).to_string().into())).unwrap();
                     }
                     let value = if session == "page" {
                         Value::Null
@@ -490,7 +493,7 @@ mod tests {
                 .unwrap();
             let mut link = CdpLink::connect_with_timeout(&url, Duration::from_millis(10)).unwrap();
             let result = state.frame_scan(&mut link, &events, &slot, None, 10);
-            if event.is_some() {
+            if event.is_some() && affected == "child" {
                 assert_eq!(result.unwrap_err().code, "stale_reference");
             } else {
                 assert_eq!(result.unwrap()["nodes"].as_array().unwrap().len(), 2);

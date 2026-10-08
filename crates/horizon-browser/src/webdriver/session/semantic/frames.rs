@@ -43,6 +43,7 @@ impl Driver {
         let root = self.context_id.clone().ok_or_else(stale)?;
         let tree = self.frame_command("browsingContext.getTree", &json!({"root":root}), events, deadline)?;
         let contexts = child_contexts(&tree, &root)?;
+        self.semantic.track_bidi_scan_contexts(&contexts);
         for context in contexts {
             if scan_node_limit_reached(&scan, max_nodes) {
                 break;
@@ -332,10 +333,12 @@ mod tests {
     }
     #[test]
     fn multi_frame_scan_rejects_an_earlier_child_invalidated_during_a_later_scan() {
-        for event in [
-            None,
-            Some("browsingContext.navigationStarted"),
-            Some("browsingContext.contextDestroyed"),
+        for (event, affected) in [
+            (None, "child"),
+            (Some("browsingContext.navigationStarted"), "child"),
+            (Some("browsingContext.contextDestroyed"), "child"),
+            (Some("browsingContext.navigationStarted"), "foreign"),
+            (Some("browsingContext.contextDestroyed"), "foreign"),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("ws://{}/", listener.local_addr().unwrap());
@@ -355,7 +358,7 @@ mod tests {
                         if context == "later"
                             && let Some(method) = event
                         {
-                            socket.send(Message::Text(json!({"method":method,"params":{"context":"child","url":"https://example.test/same"}}).to_string().into())).unwrap();
+                            socket.send(Message::Text(json!({"method":method,"params":{"context":affected,"url":"https://example.test/same"}}).to_string().into())).unwrap();
                         }
                         json!({"type":"success","realm":format!("{context}-realm"),"result":{"type":"string","value":"{\"nodes\":[{\"selector\":\"#field\"}]}"}})
                     };
@@ -382,7 +385,7 @@ mod tests {
                 &events(),
                 Instant::now() + Duration::from_secs(3),
             );
-            if event.is_some() {
+            if event.is_some() && affected == "child" {
                 assert_eq!(result.unwrap_err().code, "stale_reference");
             } else {
                 assert_eq!(result.unwrap()["nodes"].as_array().unwrap().len(), 2);

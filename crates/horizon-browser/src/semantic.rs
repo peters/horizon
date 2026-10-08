@@ -38,6 +38,7 @@ impl TeachCapture {
 pub(crate) struct SemanticState {
     generation: u64,
     frame_epoch: u64,
+    bidi_scan_contexts: Vec<String>,
     revision: u64,
     references: HashMap<String, ResolvedTarget>,
     teach_text_gesture: bool,
@@ -48,6 +49,7 @@ impl Default for SemanticState {
         Self {
             generation: 1,
             frame_epoch: 0,
+            bidi_scan_contexts: Vec::new(),
             revision: 0,
             references: HashMap::new(),
             teach_text_gesture: false,
@@ -66,10 +68,15 @@ impl SemanticState {
         (self.generation, self.frame_epoch)
     }
 
+    pub(crate) fn track_bidi_scan_contexts(&mut self, contexts: &[String]) {
+        self.bidi_scan_contexts = contexts.to_vec();
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1).max(1);
         self.revision = 0;
         self.references.clear();
+        self.bidi_scan_contexts.clear();
         self.teach_text_gesture = false;
     }
 
@@ -85,12 +92,15 @@ impl SemanticState {
     }
 
     pub(crate) fn invalidate_bidi_frame(&mut self, context: &str) {
-        self.frame_epoch = self.frame_epoch.wrapping_add(1);
+        let previous_refs = self.references.len();
         self.references.retain(|_, target| {
             !matches!(
                 &target.frame, Some(FrameTarget::Bidi { context: stored, .. }) if stored == context
             )
         });
+        if self.references.len() != previous_refs || self.bidi_scan_contexts.iter().any(|owned| owned == context) {
+            self.frame_epoch = self.frame_epoch.wrapping_add(1);
+        }
     }
 
     pub(crate) fn bidi_frame_is_current(&self, frame: &FrameTarget) -> bool {

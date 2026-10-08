@@ -253,6 +253,9 @@ impl DriverState {
         let Some(session) = target_event_session_id(event.params, event.session_id) else {
             return;
         };
+        if !self.clipboard.iframe_sessions.contains(session) {
+            return;
+        }
         for retired in self.clipboard.retire_subtree(session) {
             self.semantic.invalidate_cdp_frame(&retired, None);
             self.forget_runtime_session(&retired);
