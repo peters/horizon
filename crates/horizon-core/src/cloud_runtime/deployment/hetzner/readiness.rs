@@ -30,6 +30,7 @@ pub(in crate::cloud_runtime::deployment) fn wait(
     state: &mut Deployment,
     spec: &WorkerSpec,
 ) -> Result<(Connection, WorkerContract)> {
+    let allowed = compute.allowed.for_spec(spec)?;
     let deadline = Instant::now() + Duration::from_secs(u64::from(state.profile.bootstrap.readiness_seconds));
     state.stage = Stage::Readiness;
     store.save(state)?;
@@ -60,7 +61,7 @@ pub(in crate::cloud_runtime::deployment) fn wait(
         // or the worker's workspace is not the cloud's volume.
         // The server's type and location must still be allowed, and its location
         // must be the one its volume fixed; a resize or a changed policy is refused.
-        if !admitted(&server, &compute.allowed, journal.location.as_deref()) {
+        if !admitted(&server, &allowed, journal.location.as_deref()) {
             return Err(Error::Invalid(
                 "The server's type or location is not one the Hetzner settings allow for this cloud",
             ));
