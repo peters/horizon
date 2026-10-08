@@ -134,16 +134,14 @@ fn the_payload_is_private_and_carries_the_secret_only_in_automatic_mode() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn a_secret_file_others_can_read_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let path = private(dir.path(), "synthetic");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(settings(Mode::Automatic, &path).client_secret().is_err());
-    }
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(settings(Mode::Automatic, &path).client_secret().is_err());
 }
 
 fn runner_parts() -> (Cancellation, Arc<Mutex<Vec<Event>>>) {
