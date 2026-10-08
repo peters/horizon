@@ -238,8 +238,25 @@ This task allocates nothing.
 11. Put the pointer on the title of the card and wait one second.
 
     Result: The hover text is `Click the title to rename. Drag to move this cloud.`
+    The pointer shows a text cursor on the title.
 
-12. In the RunPod console, examine the pod of this cloud.
+12. Click the title of the card once.
+
+    Result: An editor opens on the title, with the title text in it.
+
+13. Select all text in the editor, type `Quick start renamed` and press Enter.
+
+    Result: The editor closes. The card title is `Quick start renamed`.
+
+14. Click the subtitle of the card, under the title.
+
+    Result: No editor opens. The title does not change.
+
+15. Drag the card by the empty part of its header.
+
+    Result: The card moves with the pointer. No editor opens.
+
+16. In the RunPod console, examine the pod of this cloud.
 
     Result: The image is `ghcr.io/peters/horizon-worker-base@sha256:` with the
     pinned digest. The pod has no registry login.
@@ -350,6 +367,8 @@ This task allocates nothing.
 - Q04 reaches **Ready** on the pinned digest with no registry login. **Build
   locally** and **Push image** show as skipped. Each stage segment shows its own
   hover text, and the card title shows the card hint.
+- Q04 renames the card with one click on its title. A click on the subtitle
+  opens no editor, and a header drag moves the card.
 - Q05 opens each worker shell the first time.
 - Q06 reports an unchanged image for the same pin. It switches the pod to the
   other pin and back, and keeps the pod, the volume and `/workspace`. No candidate

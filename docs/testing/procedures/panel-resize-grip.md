@@ -1,6 +1,6 @@
 ---
 procedure: panel-resize-grip
-feature: Panel resize grip
+feature: Panel and cloud resize grip
 platforms: [linux]
 cost: none
 destructive: no
@@ -8,18 +8,20 @@ secrets: none
 owner: peters
 ---
 
-# Panel resize grip test procedure
+# Panel and cloud resize grip test procedure
 
 ## 1. Purpose
 
-This procedure tests the six dots on the panel resize handle.
-The handle stays 32 screen points at each canvas zoom.
+This procedure tests the six dots on the resize handle of a panel and of a
+cloud. The dots make a triangle that points into the corner. The panel handle
+stays 32 screen points at each canvas zoom.
 
 ## 2. Applicability
 
 - Use a Horizon candidate that contains this change.
 - Platforms: Linux, with the local device fixture.
-- This procedure does not test the cloud panel resize handle.
+- A cloud card is necessary for task 6.4. A cloud that is not deployed is
+  satisfactory. It rents no compute.
 
 ## 3. Safety
 
@@ -47,11 +49,14 @@ The handle stays 32 screen points at each canvas zoom.
 
 1. Find the bottom-right corner of a panel.
 
-   Result: You see six small dots. You do not see a filled square.
+   Result: You see six small dots in a triangle: three on the bottom row, two
+   above them and one at the top, on the right edge. You do not see a filled
+   square.
 
 2. Move the pointer onto the corner.
 
-   Result: The dots change to the accent color. The pointer shows the resize cursor.
+   Result: The dots change to the accent color on a soft accent backing. The
+   pointer shows the resize cursor.
 
 3. Drag the corner down and to the right. Then drag it up and to the left.
 
@@ -69,9 +74,33 @@ The handle stays 32 screen points at each canvas zoom.
 
    Result: The click goes to the panel content. The panel size does not change.
 
+### 6.4 CLOUD — Cloud corner
+
+1. Find the bottom-right corner of a cloud card.
+
+   Result: You see the same triangle of six dots as on a panel. The dots are
+   clearly visible on the dark canvas.
+
+2. Move the pointer onto the corner.
+
+   Result: The dots change to the accent color on a soft accent backing. The
+   pointer shows the resize cursor and the hover text is
+   `Drag to resize this cloud.`
+
+3. Drag the corner down and to the right.
+
+   Result: The cloud frame grows. The dots stay in the corner.
+
+4. Zoom the canvas out. Then zoom the canvas in.
+
+   Result: The dots keep about the same size on the screen.
+
 ## 7. Pass criteria
 
-- The corner shows six dots and no filled square.
+- The corner shows six dots in a triangle and no filled square, on a panel
+  and on a cloud.
+- The dots change to the accent color on a soft backing while the pointer is
+  on them.
 - A drag on the dots changes the panel size.
 - A click away from the dots does not change the panel size.
 - The dot size on screen stays about the same after a zoom.
