@@ -28,7 +28,7 @@ impl CloudGroups {
         // In a workspace preset the frame is a slot: every slot takes the new size.
         if board.cloud_takes_slot(&self.0[index]) {
             let environment = self.0[index].environment.id.clone();
-            let resized = board.resize_cloud_slot(&environment, size);
+            let resized = board.place_cloud_slot(&environment, size);
             self.adopt_slot_geometry(board);
             return resized;
         }

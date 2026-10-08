@@ -268,7 +268,7 @@ impl CloudGroups {
         // In a workspace preset the cloud's new frame is the size every slot takes.
         if board.cloud_takes_slot(group) {
             let (environment, frame) = (group.environment.id.clone(), group.size);
-            board.resize_cloud_slot(&environment, frame);
+            board.place_cloud_slot(&environment, frame);
             self.adopt_slot_geometry(board);
             return true;
         }

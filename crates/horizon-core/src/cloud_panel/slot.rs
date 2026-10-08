@@ -81,17 +81,30 @@ impl Board {
     }
 
     /// Resize the slot of the cloud `environment`: every slot of its preset takes `size`,
-    /// as when a panel there is resized. Neighbouring workspaces move out of the way.
+    /// as when a panel there is resized. Every other workspace moves out of the way; the
+    /// UI resizes through [`Self::place_cloud_slot`] and pushes only the workspaces it may.
     pub fn resize_cloud_slot(&mut self, environment: &str, size: [f32; 2]) -> bool {
+        let Some((workspace, _)) = self.slot_workspace(environment) else {
+            return false;
+        };
+        let previous = self.workspace_frame_rect(workspace);
+        if !self.place_cloud_slot(environment, size) {
+            return false;
+        }
+        self.resolve_workspace_collisions_after_frame_growth(workspace, previous);
+        true
+    }
+
+    /// Give every slot of the cloud `environment`'s preset `size`, without moving other
+    /// workspaces; the caller resolves their collisions in its own scope.
+    pub(crate) fn place_cloud_slot(&mut self, environment: &str, size: [f32; 2]) -> bool {
         let Some((workspace, layout)) = self.slot_workspace(environment) else {
             return false;
         };
         if !size.iter().all(|value| value.is_finite() && *value > 0.0) {
             return false;
         }
-        let previous = self.workspace_frame_rect(workspace);
         self.apply_workspace_layout_with_panel_size(workspace, layout, size);
-        self.resolve_workspace_collisions_after_frame_growth(workspace, previous);
         true
     }
 

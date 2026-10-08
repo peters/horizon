@@ -345,3 +345,44 @@ fn resizing_a_member_of_a_slotted_cloud_resizes_every_slot() {
     assert_members_inside(&board, &members);
     assert_no_overlap(&board, &panels);
 }
+
+#[test]
+fn an_empty_cloud_keeps_its_slot_when_it_gains_its_first_member() {
+    let (mut board, workspace, panels, _) = desk(0);
+    let first = board.panel(panels[0]).expect("panel").layout.position;
+    assert!(board.swap_cloud_slot_at("slot-fixture", [first[0] + 10.0, first[1] + 10.0]));
+    assert!(near(cloud(&board).position, first));
+    let member = board
+        .create_panel(
+            PanelOptions {
+                size: Some(CHILD_SIZE),
+                ..editor_panel_options()
+            },
+            workspace,
+        )
+        .expect("member");
+    let mut group = board.cloud_groups.0[0].clone();
+    group.attach(&mut board, member);
+    assert!(
+        near(cloud(&board).position, first),
+        "{:?} vs {first:?}",
+        cloud(&board).position
+    );
+    assert!(near(group.position, first), "the attaching copy follows");
+    assert_members_inside(&board, &[member]);
+}
+
+#[test]
+fn only_the_unscoped_slot_resize_moves_other_workspaces() {
+    let (mut board, workspace, _, _) = desk(1);
+    let right = board.workspace_frame_rect(workspace).expect("frame")[2];
+    let neighbour = board.create_workspace_at("neighbour", [right + 40.0, 0.0]);
+    let _ = panel(&mut board, neighbour);
+    let before = board.workspace(neighbour).expect("neighbour").position;
+    assert!(board.place_cloud_slot("slot-fixture", [1200.0, 900.0]));
+    let after = board.workspace(neighbour).expect("neighbour").position;
+    assert!(crate::board::vec2_eq(after, before), "the caller decides");
+    assert!(board.resize_cloud_slot("slot-fixture", [1400.0, 1000.0]));
+    let pushed = board.workspace(neighbour).expect("neighbour").position;
+    assert!(!crate::board::vec2_eq(pushed, before), "everything is in scope");
+}

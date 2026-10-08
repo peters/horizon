@@ -232,6 +232,41 @@ impl Board {
         }
     }
 
+    /// Put a slotted cloud that just gained its first member back at `slot`; the member was
+    /// appended to the panel order, which now places the cloud.
+    #[cfg(feature = "cloud-workspaces")]
+    pub(crate) fn seat_first_member(&mut self, environment: &str, slot: usize) {
+        let Some(index) = self
+            .cloud_groups
+            .0
+            .iter()
+            .position(|group| group.environment.id == environment)
+        else {
+            return;
+        };
+        if !self.cloud_takes_slot(&self.cloud_groups.0[index]) {
+            return;
+        }
+        let Some(workspace) = self.workspace_id_by_local_id(&self.cloud_groups.0[index].workspace) else {
+            return;
+        };
+        let Some(layout) = self.workspace_layout_value(workspace) else {
+            return;
+        };
+        let mut slots = self.arranged_slots(workspace);
+        let Some(from) = slots.iter().position(|slot| *slot == Slot::Cloud(index)) else {
+            return;
+        };
+        if from == slot {
+            return;
+        }
+        let cloud = slots.remove(from);
+        slots.insert(slot.min(slots.len()), cloud);
+        if self.write_slot_order(workspace, &slots) {
+            self.apply_workspace_layout(workspace, layout);
+        }
+    }
+
     /// The cloud whose slot `panel` belongs to, when that cloud takes a slot in `workspace`.
     #[cfg(feature = "cloud-workspaces")]
     pub(crate) fn slot_cloud_of(&self, panel: PanelId, workspace: WorkspaceId) -> Option<usize> {
