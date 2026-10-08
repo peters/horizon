@@ -156,6 +156,17 @@ class VolumeCopyTests(ServiceTestCase):
         self.assertEqual(removed, [True])
         self.assertIsNone(self.stored())
 
+    def test_serials_count_up_without_the_clock_and_survive_a_clear(self):
+        self.install()
+        first = self.stored()['serial']
+        self.install(installation(chain=chain(access='ghu_synthetic-second')))
+        self.assertEqual(self.stored()['serial'], first + 1)
+        service.clear(self.store, retire=lambda: None)
+        self.install(installation(chain=chain(access='ghu_synthetic-third')))
+        self.assertEqual(self.stored()['chain']['access_token'], 'ghu_synthetic-third',
+                         'a chain installed after a clear counts')
+        self.assertGreater(self.stored()['serial'], first + 1)
+
     def test_a_pending_chain_never_overwrites_a_newer_install(self):
         self.install(installation(chain=chain(access='ghu_synthetic-newer')))
         # A rotation this process could not store, older than the install another process made.

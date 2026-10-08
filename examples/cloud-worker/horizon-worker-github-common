@@ -11,8 +11,8 @@ import re
 import stat
 import sys
 import tempfile
-import time
 import urllib.request
+import uuid
 
 
 def load_sibling(name, module):
@@ -164,17 +164,33 @@ class Store:
         self.persistent = persistent
         self.runtime = runtime
         self.pending = None
+        # The clear mark seen when the pending chain was kept; another one ends that chain.
+        self.pending_clear = None
 
     def lock(self):
         return locked(self.runtime, 'state.lock')
 
-    def cleared(self):
-        """The serial below which no copy counts, written by the latest clear."""
+    def clear_mark(self):
+        """(serial, nonce) of the latest clear, or (0, None) without one."""
         try:
             value = read_json(self.runtime / CLEARED)
         except (OSError, ValueError, RecursionError):
-            return 0
-        return value if type(value) is int else 0
+            return 0, None
+        if not isinstance(value, dict) or type(value.get('serial')) is not int:
+            return 0, None
+        return value['serial'], value.get('nonce')
+
+    def cleared(self):
+        """The serial below which no copy counts, written by the latest clear."""
+        return self.clear_mark()[0]
+
+    def keep_pending(self, state):
+        self.pending = state
+        self.pending_clear = self.clear_mark()[1]
+
+    def highest(self):
+        """The highest serial of any copy, the pending one included, or of the latest clear."""
+        return max([self.cleared(), *(state['serial'] for state, _ in self.copies())])
 
     def copies(self):
         found = []
@@ -188,6 +204,9 @@ class Store:
                 continue
             if state is not None:
                 found.append((state, persistent))
+        if self.pending is not None and self.clear_mark()[1] != self.pending_clear:
+            # Another process cleared the chain after this one was kept in memory.
+            self.pending = None
         if self.pending is not None:
             found.append((self.pending, False))
         floor = self.cleared()
@@ -239,14 +258,14 @@ class Store:
         """Durably stores `state` with the next serial; returns whether the volume holds it.
         When no storage accepts it, `retain` keeps it as the pending write: a refresh must,
         because GitHub already cancelled the stored chain; a failed install must not."""
-        current, _ = self.load()
-        # Clock based, so an install by another process also wins over this process's memory.
-        state = dict(state, serial=max(current['serial'] + 1 if current else 1, time.time_ns()))
+        # A counter, never the clock: it only grows, also when the clock moves back. Writers
+        # hold the store lock, so the next serial is above every copy and every clear.
+        state = dict(state, serial=self.highest() + 1)
         try:
             persistent = self.write(state)
         except ValueError:
             if retain:
-                self.pending = state
+                self.keep_pending(state)
             raise
         self.pending = None
         return persistent
@@ -271,10 +290,11 @@ class Store:
         # The volume copy goes first and durably: if that fails, nothing changed, and the
         # chain that was active stays active, also after a restart. Only then does the clear
         # mark tell the serving process to drop its memory, and the tmpfs copy go.
+        floor = self.highest()
         remove_durably(self.persistent, STATE)
         self.pending = None
         private_directory(self.runtime, create=True)
-        write_private(self.runtime, CLEARED, str(time.time_ns()))
+        write_private(self.runtime, CLEARED, json.dumps({'serial': floor, 'nonce': uuid.uuid4().hex}))
         remove_durably(self.runtime, STATE)
 
 
