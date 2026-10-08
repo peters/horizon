@@ -64,10 +64,11 @@ fn sessions(ui: &mut egui::Ui, runtime: &Runtime, context: &Context<'_>) {
         ui.add_space(6.0);
         // Branch and worktree names have no bound: each column is capped, and a cut value
         // shows in full on hover.
-        let column = (ui.available_width() / 3.0).max(80.0);
+        const GAP: f32 = 16.0;
+        let column = ((ui.available_width() - 2.0 * GAP) / 3.0).max(80.0);
         egui::Grid::new(("cloud-sessions", context.group.issue))
             .num_columns(3)
-            .spacing([16.0, 6.0])
+            .spacing([GAP, 6.0])
             .min_col_width(48.0)
             .max_col_width(column)
             .show(ui, |ui| {

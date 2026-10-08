@@ -209,7 +209,8 @@ This task allocates nothing.
 5. Examine the steps of the card while it validates.
 
    Result: **Build locally** and **Push image** show `skipped`. They do not show
-   a check mark.
+   a check mark. Under the output, the card shows no hint text. The header
+   shows no terminal count and no **Desktop** indicator.
 
 6. Write the new pod and the new network volume in the resource ledger.
 
@@ -220,6 +221,14 @@ This task allocates nothing.
    Result: The card shows **Ready** and the time to ready. The output of the
    card has the line `Worker contract: the pinned quick-start image passed this
    check when it was published`. It has no image download.
+
+   Before the first panel opens, the card shows the hint `Starting your first
+   panel…` under the output. The hint is inside the card frame and does not
+   touch its bottom edge.
+
+   When the first panel runs, the header shows the terminal count `1/1` and
+   **Desktop**. Put the pointer on each of them: the hover texts are
+   `1 of 1 terminals running` and `Desktop tunnel connected`.
 
 8. Examine the stage track of the card.
 
@@ -367,6 +376,9 @@ This task allocates nothing.
 - Q04 reaches **Ready** on the pinned digest with no registry login. **Build
   locally** and **Push image** show as skipped. Each stage segment shows its own
   hover text, and the card title shows the card hint.
+- Q04 shows no body hint and no header indicators while the cloud starts, the
+  first-panel hint inside the frame at **Ready**, and the terminal count and
+  **Desktop** only while they are active.
 - Q04 renames the card with one click on its title. A click on the subtitle
   opens no editor, and a header drag moves the card.
 - Q05 opens each worker shell the first time.
