@@ -32,6 +32,9 @@ pub struct Images<'a> {
     pub isolated_registry: bool,
     pub docker_config: &'a Path,
     pub runner: &'a Runner<'a>,
+    /// Logs the Docker configuration in to `ghcr.io` as the person before a push there;
+    /// `None` pushes with the configuration as it is.
+    pub publisher: Option<super::github::publish::Publisher<'a>>,
 }
 impl Images<'_> {
     fn docker(&self) -> Command {
@@ -138,6 +141,9 @@ impl Images<'_> {
             };
             validated_id = Some(image_id);
             (self.runner.emit)(Event::stage(Stage::Push));
+            if let Some(publisher) = self.publisher {
+                publisher.login(&image, self.runner)?;
+            }
             self.runner.transfer(
                 "Uploading image",
                 self.docker().args(["push", &image]),
@@ -284,6 +290,7 @@ mod tests {
                 docker_config: Path::new("/synthetic/config"),
                 isolated_registry,
                 runner: &runner,
+                publisher: None,
             };
             let command = images.docker();
             let override_auth = command.get_envs().find(|(key, _)| *key == "DOCKER_AUTH_CONFIG");

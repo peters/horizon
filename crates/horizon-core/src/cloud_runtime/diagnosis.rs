@@ -67,9 +67,10 @@ const REGISTRY_REFUSED: &str =
 
 /// A refused push: Horizon publishes with its own Docker configuration, never the
 /// person's usual Docker login, so the fix is a publishing login there.
-const PUSH_REFUSED: &str = "The registry refused to publish the image. Horizon pushes with its own Docker \
-     configuration, which has no login that may publish here. Add a publishing credential to this image \
-     repository in Cloud settings › Container registry, then retry.";
+const PUSH_REFUSED: &str = "The registry refused to publish the image. On ghcr.io Horizon publishes as you once \
+     you allow it on the card, so your GitHub account must be able to publish to this image repository. For \
+     another registry, add a publishing credential for its image repository in Cloud settings › Container \
+     registry. Then retry.";
 
 /// The summary of a failed image push.
 const PUSHING: &str = "uploading image";
@@ -322,7 +323,7 @@ mod tests {
         ];
         let push = diagnose(lines.into_iter(), SUMMARY).unwrap().meaning.unwrap();
         assert!(push.contains("publishing credential"), "{push}");
-        assert!(push.contains("its own Docker"), "{push}");
+        assert!(push.contains("On ghcr.io Horizon publishes as you"), "{push}");
         let pull = diagnose(
             ["docker pull ghcr.io/example/worker: unauthorized"].into_iter(),
             "Readiness failed",

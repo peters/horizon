@@ -44,6 +44,15 @@ pub enum Prompt {
     /// a new sign-in can resolve it, as for a skipped or declined one; a worker image
     /// without the service or a cloud without a GitHub repository cannot.
     Ended { reason: String, renewable: bool },
+    /// Allow Horizon to publish images for you: enter `user_code` at `verification_uri`.
+    /// Asked once, for packages only, when a cloud's image goes to `ghcr.io`.
+    Publish {
+        user_code: String,
+        verification_uri: String,
+        expires_at: SystemTime,
+    },
+    /// The publishing sign-in ended; `allowed` when Horizon may now publish images.
+    Published { allowed: bool },
 }
 
 /// Clouds whose person chose to continue without GitHub access.
@@ -70,13 +79,15 @@ pub(super) fn renewing(cloud_id: &str) -> bool {
     RENEW.lock().is_ok_and(|mut renew| renew.remove(cloud_id))
 }
 
-fn skipped(cloud_id: &str) -> bool {
+pub(super) fn skipped(cloud_id: &str) -> bool {
     SKIPPED.lock().is_ok_and(|mut skipped| skipped.remove(cloud_id))
 }
 
 /// Why no chain came back.
 pub(super) enum Ended {
-    /// The cloud continues without GitHub access.
+    /// The person chose Skip on the card.
+    Skipped,
+    /// GitHub refused or the sign-in expired, for this reason.
     Reason(String),
     /// The deployment was cancelled or a local file failed.
     Error(super::Error),
@@ -120,18 +131,45 @@ fn device(
     client: &Client,
     runner: &Runner<'_>,
 ) -> std::result::Result<Chain, Ended> {
-    let mut code = client.start_device(&settings.client_id)?;
-    (runner.emit)(Event::GitHub(Prompt::Device {
-        user_code: code.user_code.clone(),
-        verification_uri: code.verification_uri.clone(),
-        expires_at: code.expires_at,
-    }));
+    device_chain(
+        client,
+        &settings.client_id,
+        None,
+        cloud_id,
+        runner,
+        |user_code, verification_uri, expires_at| Prompt::Device {
+            user_code,
+            verification_uri,
+            expires_at,
+        },
+    )
+}
+
+/// A device sign-in for the app with `client_id`, asking for `scope` when given. The
+/// card shows the code as `prompt` makes it, and a Skip on the card ends the sign-in.
+pub(super) fn device_chain(
+    client: &Client,
+    client_id: &str,
+    scope: Option<&str>,
+    cloud_id: &str,
+    runner: &Runner<'_>,
+    prompt: fn(String, String, SystemTime) -> Prompt,
+) -> std::result::Result<Chain, Ended> {
+    let mut code = match scope {
+        Some(scope) => client.start_device_with_scope(client_id, scope)?,
+        None => client.start_device(client_id)?,
+    };
+    (runner.emit)(Event::GitHub(prompt(
+        code.user_code.clone(),
+        code.verification_uri.clone(),
+        code.expires_at,
+    )));
     loop {
         wait(code.interval, cloud_id, runner)?;
         if SystemTime::now() >= code.expires_at {
             return Err(GitHubError::Expired.into());
         }
-        match client.poll_device(&settings.client_id, &mut code)? {
+        match client.poll_device(client_id, &mut code)? {
             Poll::Granted(chain) => return Ok(chain),
             Poll::Pending | Poll::SlowDown(_) => {}
         }
@@ -183,7 +221,7 @@ fn wait(duration: Duration, cloud_id: &str, runner: &Runner<'_>) -> std::result:
     loop {
         runner.cancel.check().map_err(super::Error::from)?;
         if skipped(cloud_id) {
-            return Err(Ended::Reason("Skipped: this cloud has no GitHub access.".into()));
+            return Err(Ended::Skipped);
         }
         let left = until.saturating_duration_since(Instant::now());
         if left.is_zero() {

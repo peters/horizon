@@ -266,6 +266,17 @@ fn print_event(event: Event) {
                 repositories.join(", ")
             ),
             Prompt::Ended { reason, .. } => println!("[{at:7.1}s] GitHub: {reason}"),
+            Prompt::Publish {
+                user_code,
+                verification_uri,
+                ..
+            } => println!("[{at:7.1}s] GitHub: to publish the image, enter {user_code} at {verification_uri}"),
+            Prompt::Published { allowed } => {
+                println!(
+                    "[{at:7.1}s] GitHub: image publishing {}",
+                    if allowed { "allowed" } else { "not allowed" }
+                );
+            }
         },
         _ => {}
     }
@@ -329,6 +340,10 @@ fn prepare_image(
                 registry.docker_config(request.profile.build.is_some())
             }),
         runner: &runner,
+        publisher: registry.is_none().then_some(cloud_runtime::github::publish::Publisher {
+            docker_config: &request.settings.docker_config,
+            cloud_id: &request.cloud_id,
+        }),
     };
     let digest = images.prepare(&request.profile, &snapshot, &request.cloud_id)?;
     if git_auth.is_some() {

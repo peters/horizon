@@ -171,6 +171,18 @@ impl Client {
     /// # Errors
     /// Transport failures, a malformed answer, or the app's refusal.
     pub fn start_device(&self, client_id: &str) -> Result<DeviceCode> {
+        self.start_device_for(client_id, None)
+    }
+
+    /// Starts a device sign-in for the OAuth app with `client_id` that asks for `scope`,
+    /// such as `write:packages`. A GitHub App ignores scopes; its permissions apply.
+    /// # Errors
+    /// As [`Client::start_device`].
+    pub fn start_device_with_scope(&self, client_id: &str, scope: &str) -> Result<DeviceCode> {
+        self.start_device_for(client_id, Some(scope))
+    }
+
+    fn start_device_for(&self, client_id: &str, scope: Option<&str>) -> Result<DeviceCode> {
         #[derive(Deserialize)]
         struct Fields {
             device_code: Secret,
@@ -180,7 +192,11 @@ impl Client {
             #[serde(default)]
             interval: Option<u64>,
         }
-        let answer = self.oauth("/login/device/code", &[("client_id", client_id)])?;
+        let mut fields = vec![("client_id", client_id)];
+        if let Some(scope) = scope {
+            fields.push(("scope", scope));
+        }
+        let answer = self.oauth("/login/device/code", &fields)?;
         let fields: Fields = answer.parse()?;
         let secret = fields.device_code;
         let interval = fields.interval.unwrap_or(DEFAULT_INTERVAL).max(1);

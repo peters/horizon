@@ -300,6 +300,23 @@ work that must not reach a repository in a cloud without access to it.
 of running clouds: delete the app on GitHub for that. Deleting the app ends every
 token at once.
 
+### Publishing images to ghcr.io
+
+A cloud whose image Horizon builds pushes it to the registry that its profile
+names. GitHub's package registry does not accept tokens of the GitHub App behind
+Connect GitHub, so the first time an image goes to `ghcr.io`, the card shows
+**Allow Horizon to publish images for you** with a code. Open GitHub, paste the
+code and click **Authorize** once. The permission covers images only
+(`write:packages`), not your repositories, and goes to Horizon's own GitHub
+OAuth app.
+
+Horizon keeps that sign-in on this computer, readable only by you, beside its own
+Docker configuration, and logs that configuration in to `ghcr.io` before each
+push. The access renews itself for about six months. If you revoke it on GitHub,
+the next push asks again. **Skip: do not publish** stops the deployment at
+**Push image**. An image repository bound in **Cloud settings › Container
+registry** publishes with its own credential instead.
+
 ## Provider API and storage requirements
 
 Direct root SSH endpoints accept numeric IPs and validated ASCII DNS hostnames.

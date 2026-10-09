@@ -423,9 +423,10 @@ Use `smoke-a` from D01.
 
 ### 6.6 D06 — Make sure that a failed image push stays on Push image
 
-This task rents no compute. It deploys the `runpod-build` profile with settings that
-have no registry binding and an empty Docker configuration, so the build succeeds and
-the push is refused before Horizon requests a worker. It changes the cloud settings
+This task rents no compute. It deploys the `runpod-build` profile, whose image goes
+to `ghcr.io`, with settings that have no registry binding and an empty Docker
+configuration. The build succeeds, Horizon asks to publish images for you, and a
+Skip stops the push before Horizon requests a worker. It changes the cloud settings
 for the time of the task and no Docker login of this computer.
 
 1. Close Cloud settings if they are open.
@@ -467,12 +468,13 @@ for the time of the task and no Docker login of this computer.
    Result: The card shows **Build locally**, then **Push image**. If the build fails,
    do step 8, then examine the build.
 
-6. Wait until the push fails.
+6. Wait until the card shows **Allow Horizon to publish images for you** with a code,
+   then click **Skip: do not publish**.
 
    Result: The card shows the failure on **Push image**. **Validate** and
    **Build locally** show as done. The status strip does not say
-   **Validation failed**. The explanation says that Horizon's own Docker
-   configuration has no login that may publish.
+   **Validation failed**. The failure says that Horizon was not allowed to publish
+   the image to `ghcr.io`, and how to allow it on retry.
 
 7. Record a screenshot of the card and the step list in the evidence, then close the
    card of `smoke-push`.

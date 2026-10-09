@@ -1,6 +1,6 @@
 ---
 procedure: connect-github
-feature: Connect GitHub (the GitHub card, per-cloud sign-in, access requests)
+feature: Connect GitHub (the GitHub card, per-cloud sign-in, access requests, image publishing)
 platforms: [linux]
 cost: rents compute
 destructive: yes
@@ -13,8 +13,9 @@ owner: peters
 ## 1. Purpose
 
 This procedure proves that Connect GitHub creates the app, that a new cloud signs in
-once in each mode, that a reconnect does not ask again, and that the person decides
-the access requests of agents.
+once in each mode, that a reconnect does not ask again, that the person decides
+the access requests of agents, and that Horizon publishes an image to `ghcr.io`
+after one approval.
 
 ## 2. Applicability
 
@@ -42,6 +43,9 @@ the access requests of agents.
 - A local checkout of `<repo-a>` whose `origin` is on GitHub, with a committed
   `.horizon/cloud.yml`.
 - Cloud settings contain a provider key.
+- For G09: a checkout whose `.horizon/cloud.yml` profile builds an image to a test
+  package `ghcr.io/<owner>/<test-image>`, and no image repository bound for it in
+  **Cloud settings › Container registry**.
 - A browser that is signed in to the GitHub account. It is the default browser.
 
 ## 5. Setup
@@ -258,6 +262,61 @@ the access requests of agents.
    keep their access until the app is deleted on GitHub. No **Connect GitHub
    again** shows on the cloud cards.
 
+### 6.9 G09 — Publish an image to ghcr.io
+
+> **CAUTION:** THE NEXT STEP MOVES HORIZON'S PUBLISHING SIGN-IN AND DOCKER LOGIN
+> ASIDE. Step 5 puts them back. Keep `<evidence>` private: the copies hold tokens.
+
+1. Move the stored publishing sign-in and Horizon's Docker login aside, so Horizon
+   asks again:
+
+   ```sh
+   mkdir -m 700 -p <evidence>/d-backup
+   for f in horizon-github-packages.json config.json; do
+     test -e ~/.horizon/cloud/docker/$f && mv ~/.horizon/cloud/docker/$f <evidence>/d-backup/$f
+   done; true
+   ```
+
+   Result: neither file exists in `~/.horizon/cloud/docker`.
+
+> **CAUTION:** THE NEXT STEP RENTS COMPUTE FOR `gh-publish`. It costs money until the
+> cloud is deleted in the cleanup.
+
+2. Start a new cloud `gh-publish` from the checkout for G09.
+
+   Result: After **Build locally**, the card shows **Allow Horizon to publish images
+   for you** with a code. The caption says that the permission covers images only.
+
+3. Click **Open GitHub**, paste the code and click **Authorize**.
+
+   Result: The box closes. The output shows **Horizon may now publish images as
+   <login>**, and the push continues. `stat -c '%a' ~/.horizon/cloud/docker/horizon-github-packages.json`
+   shows `600`.
+
+> **CAUTION:** THE NEXT STEP RENTS COMPUTE FOR `gh-publish-2`. It costs money until
+> the cloud is deleted in the cleanup.
+
+4. Start a new cloud `gh-publish-2` from the same checkout.
+
+   Result: The push runs without the publishing box.
+
+> **CAUTION:** THE NEXT STEP DELETES THE PUBLISHING SIGN-IN AND DOCKER LOGIN THAT
+> THIS TASK MADE. Delete only these two files.
+
+5. Delete the files this task made and put the ones from step 1 back:
+
+   ```sh
+   rm -f ~/.horizon/cloud/docker/horizon-github-packages.json ~/.horizon/cloud/docker/config.json
+   for f in horizon-github-packages.json config.json; do
+     test -e <evidence>/d-backup/$f && mv <evidence>/d-backup/$f ~/.horizon/cloud/docker/$f
+   done; rmdir <evidence>/d-backup; true
+   ```
+
+   Result: `~/.horizon/cloud/docker` holds the same files as before step 1, and
+   `<evidence>/d-backup` does not exist. On GitHub, **Settings › Applications ›
+   Authorized OAuth Apps** still lists **Horizon** when it did before; revoke it
+   there if this task authorized it for the first time.
+
 ## 7. Pass criteria
 
 - The app secret file is private, and Horizon keeps no private key of the app.
@@ -269,13 +328,15 @@ the access requests of agents.
 - A request for a repository outside the installation is not allowed.
 - **Allow for this cloud** and **Deny** reach the agent.
 - An allowed repository reaches every agent session of the cloud.
+- The first push to `ghcr.io` asks once to publish images, and a later push does not.
 
 ## 8. Cleanup
 
-> **CAUTION:** THE NEXT STEP DELETES FOUR CLOUDS AND THEIR WORKSPACES. Delete only
+> **CAUTION:** THE NEXT STEP DELETES SIX CLOUDS AND THEIR WORKSPACES. Delete only
 > the clouds of this procedure.
 
-1. Delete the clouds `gh-ask`, `gh-skip`, `gh-auto` and `gh-auto-2` with **Delete cloud…**.
+1. Delete the clouds `gh-ask`, `gh-skip`, `gh-auto`, `gh-auto-2`, `gh-publish` and
+   `gh-publish-2` with **Delete cloud…**.
 
    Result: The board does not show them. The provider shows no worker for them.
 
