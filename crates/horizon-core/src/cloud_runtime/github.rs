@@ -301,24 +301,27 @@ fn disconnected(
     connection: &Connection,
     runner: &Runner<'_>,
 ) -> Result<bool> {
-    let worker::Status::Current {
-        login,
-        repositories,
-        requests,
-        ..
-    } = held
-    else {
-        return Ok(false);
+    let current = match held {
+        worker::Status::Current {
+            login,
+            repositories,
+            requests,
+            ..
+        } => Some((login, repositories, requests)),
+        // A stopped service may still store a chain that a restart would serve again.
+        worker::Status::Unavailable => None,
+        worker::Status::Absent | worker::Status::Unsupported => return Ok(false),
     };
     // The cloud's grants are read only to compare them.
-    let whole = match grants(state, runner) {
-        Ok(all) if all.is_empty() => {
-            remove(connection, runner)?;
-            return Ok(false);
-        }
-        Ok(all) => complete(&repositories, &all),
-        Err(_) => false,
+    let all = grants(state, runner);
+    if matches!(&all, Ok(all) if all.is_empty()) {
+        remove(connection, runner)?;
+        return Ok(false);
+    }
+    let Some((login, repositories, requests)) = current else {
+        return Ok(false);
     };
+    let whole = all.is_ok_and(|all| complete(&repositories, &all));
     (runner.emit)(Event::Output(
         "GitHub: the worker holds access from an earlier connection.".into(),
     ));
