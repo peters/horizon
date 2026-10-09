@@ -2,7 +2,9 @@
 
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use super::{ProcessChild, kill_and_reap, poll_and_cleanup_exited_tree, spawn_process, take_stderr};
@@ -15,6 +17,8 @@ pub(crate) struct ServiceProcess {
     control: ChromeProcessControl,
     exit_status: Option<std::process::ExitStatus>,
     stderr_tail: Arc<Mutex<String>>,
+    stderr_reader: Option<JoinHandle<()>>,
+    stderr_drained: Arc<AtomicBool>,
     label: &'static str,
 }
 
@@ -200,8 +204,10 @@ impl ServiceProcess {
         };
         let tail = Arc::new(Mutex::new(String::new()));
         let reader_tail = Arc::clone(&tail);
+        let stderr_drained = Arc::new(AtomicBool::new(false));
+        let drained = Arc::clone(&stderr_drained);
         let thread_name = format!("{label}-stderr");
-        if let Err(error) = std::thread::Builder::new().name(thread_name).spawn(move || {
+        let reader = match std::thread::Builder::new().name(thread_name).spawn(move || {
             use std::io::{BufRead, BufReader};
             for line in BufReader::new(stderr).lines() {
                 let Ok(line) = line else {
@@ -215,10 +221,14 @@ impl ServiceProcess {
                     tail.drain(..cut);
                 }
             }
+            drained.store(true, Ordering::Release);
         }) {
-            let _ = kill_and_reap(&mut child, Duration::from_secs(3));
-            return Err(error);
-        }
+            Ok(reader) => reader,
+            Err(error) => {
+                let _ = kill_and_reap(&mut child, Duration::from_secs(3));
+                return Err(error);
+            }
+        };
         let child = Arc::new(Mutex::new(child));
         control.register(&child);
         Ok(Self {
@@ -226,8 +236,26 @@ impl ServiceProcess {
             control,
             exit_status: None,
             stderr_tail: tail,
+            stderr_reader: Some(reader),
+            stderr_drained,
             label,
         })
+    }
+
+    /// The stderr reader is a separate thread. Child exit does not join it, so
+    /// a snapshot taken in the same turn can still be empty. Wait until that
+    /// thread stores the final line, then join it.
+    fn drain_stderr_reader(&mut self) {
+        let Some(handle) = self.stderr_reader.take() else {
+            return;
+        };
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !self.stderr_drained.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if self.stderr_drained.load(Ordering::Acquire) {
+            let _ = handle.join();
+        }
     }
 
     #[must_use]
@@ -239,8 +267,11 @@ impl ServiceProcess {
             let mut child = self.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             poll_and_cleanup_exited_tree(&mut child).ok().flatten()
         };
-        self.exit_status = status;
-        status
+        if status.is_some() {
+            self.exit_status = status;
+            self.drain_stderr_reader();
+        }
+        self.exit_status
     }
 
     #[must_use]
@@ -253,7 +284,9 @@ impl ServiceProcess {
         let pid = child.id();
         match kill_and_reap(&mut child, Duration::from_secs(3)) {
             Ok(Some(status)) => {
+                drop(child);
                 self.exit_status = Some(status);
+                self.drain_stderr_reader();
                 self.control.clear(&self.child);
                 true
             }
@@ -360,6 +393,34 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(!process_exists(&descendant_pid));
+    }
+
+    #[test]
+    fn exited_service_stderr_includes_the_final_line() {
+        let message = "Found argument '--allow-system-access' which wasn't expected, or isn't valid in this context";
+        let args = vec![
+            "-c".to_string(),
+            "printf '%s\\n' \"$1\" >&2; exit 64".to_string(),
+            "horizon-stderr-test".to_string(),
+            message.to_string(),
+        ];
+        let mut process = ServiceProcess::spawn(
+            Path::new("/bin/sh"),
+            &args,
+            ChromeProcessControl::default(),
+            "test-driver",
+        )
+        .unwrap_or_else(|error| panic!("spawn service test process: {error}"));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process.child_status().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(process.child_status().is_some(), "service test process did not exit");
+        let stderr = process.stderr_tail();
+        assert!(
+            stderr.contains(message),
+            "stderr after exit did not include the final line: {stderr}"
+        );
     }
 
     #[cfg(unix)]

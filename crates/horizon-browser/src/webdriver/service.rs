@@ -171,9 +171,16 @@ pub(super) fn firefox_service_arguments(
 }
 
 pub(super) fn geckodriver_rejected_system_access(stderr: &str) -> bool {
-    let text = stderr.to_ascii_lowercase();
+    // clap 4 says "unexpected argument". clap 2 and 3 say
+    // "Found argument '--allow-system-access' which wasn't expected".
+    let text = stderr.to_ascii_lowercase().replace(['\u{2019}', '\u{2018}'], "'");
     text.contains("allow-system-access")
-        && (text.contains("unexpected") || text.contains("unrecognized") || text.contains("unknown"))
+        && (text.contains("unexpected")
+            || text.contains("unrecognized")
+            || text.contains("unknown")
+            || text.contains("wasn't expected")
+            || text.contains("was not expected")
+            || text.contains("not valid in this context"))
 }
 
 fn service_args(backend: BackendKind, port: u16, bidi_port: Option<u16>, mut extra: Vec<String>) -> Vec<String> {
@@ -247,7 +254,16 @@ mod tests {
         assert!(geckodriver_rejected_system_access(
             "geckodriver: error: unexpected argument '--allow-system-access' found"
         ));
+        assert!(geckodriver_rejected_system_access(
+            "error: Found argument '--allow-system-access' which wasn't expected, or isn't valid in this context"
+        ));
+        assert!(geckodriver_rejected_system_access(
+            "error: Found argument '--allow-system-access' which wasn’t expected, or isn’t valid in this context"
+        ));
         assert!(!geckodriver_rejected_system_access("address already in use"));
+        assert!(!geckodriver_rejected_system_access(
+            "unexpected error while starting firefox"
+        ));
         let config = crate::BrowserConfig {
             backend: BackendKind::FirefoxBidi,
             ..crate::BrowserConfig::default()
