@@ -65,6 +65,10 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | image-only profile | A profile without a `build` section. Horizon uses its image and builds nothing. | — |
 | base image | The public CPU worker image `ghcr.io/peters/horizon-worker-base`. Horizon pins it by digest. | default image, stock image |
 | quick start | The **New cloud** choice that runs a repository without `.horizon/cloud.yml` on the base image, with the built-in profile `quick-start`. | easy start, default cloud |
+| token chain | A GitHub App user access token, its refresh token and their expiry times. Each refresh gives a new token chain and cancels the old one. It is a secret. | token pair |
+| chain service | The worker service `horizon-worker-github serve`. It runs as root, refreshes the token chain and gives access tokens to agents. | GitHub daemon |
+| GitHub socket | The file `/run/horizon-worker/github.sock` on a worker. Agents ask the chain service through it. | agent socket |
+| fake GitHub | A small HTTP server on `127.0.0.1` that answers refresh requests with synthetic tokens. | mock GitHub |
 
 ## Install and build
 
@@ -126,6 +130,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | bind | Make a host path available at a path inside the fixture. |
 | pin | Record a host key, a commit or an image digest as the only accepted value. A client then refuses a different value. |
 | revoke | Remove the access that a credential gives at the provider or at the worker. |
+| refresh | Exchange a refresh token for a new token chain at GitHub. |
 | forward | Connect a port on the worker to a device through the Local Network Bridge. |
 
 ## Video capture

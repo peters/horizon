@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import shutil
 import signal
 import socket
 import subprocess
@@ -19,8 +20,15 @@ RUNTIME = Path('/run/horizon-worker')
 WORKSPACE = Path('/workspace')
 DESKTOP = {'xvfb', 'openbox', 'vnc'}
 SERVICES = {'control', 'sshd'}
-# Started only when the worker was created with an idle period.
-OPTIONAL = {'idle'}
+# Started only when the worker was created with an idle period, or when the image has the
+# GitHub token chain service.
+OPTIONAL = {'idle', 'github'}
+# Root services: every other service runs as the agent under agent isolation.
+PRIVILEGED = {'sshd', 'idle', 'github'}
+# A service whose exit ends only that service: the worker stays up and drops it from its
+# published services. Without the GitHub service, Git falls back to the static token file.
+DISPENSABLE = {'github'}
+GITHUB_CHAIN_CONTRACT = 'horizon-github-chain-contract=1'
 DESKTOP_UNHEALTHY_SECONDS = 10
 # Present when agents run as UID 10001: horizon-worker-tailnet isolate, before this supervisor.
 AGENT_ISOLATION = Path('/run/horizon-tailnet/agent-isolation')
@@ -101,6 +109,17 @@ def vnc_ready():
         with socket.create_connection(('127.0.0.1', 5900), timeout=1) as connection:
             with connection.makefile('rb') as stream:
                 return stream.read(12).startswith(b'RFB ')
+    except OSError:
+        return False
+
+
+def socket_ready(path):
+    """Whether a service listens on the Unix socket `path`."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(1)
+            connection.connect(str(path))
+        return True
     except OSError:
         return False
 
@@ -187,11 +206,16 @@ class Supervisor:
         self.children = {}
         self.identities = {}
         self.stopping = False
+        # The desktop selection of the published services, once they are published.
+        self.published = None
+        # Whether the published services include the GitHub service, which counts only once
+        # its socket answers.
+        self.github_listed = False
 
     def start(self, name, command, environment=None):
         # With agent isolation the control service is the agents' browser host, so it runs as
         # their account like the desktop: it never writes their files as root.
-        if name not in {'sshd', 'idle'} and AGENT_ISOLATION.exists():
+        if name not in PRIVILEGED and AGENT_ISOLATION.exists():
             command = ['/usr/local/bin/horizon-worker-tailnet', 'agent', *command]
         with (self.workspace / (name + '.log')).open('ab') as log:
             child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
@@ -205,11 +229,32 @@ class Supervisor:
     def assert_running(self, configuring=False):
         if self.stopping:
             raise ValueError('Worker shutdown requested')
-        for name, child in self.children.items():
+        for name, child in list(self.children.items()):
             if configuring and name == 'configure':
                 continue
             if child.returncode is not None or exited(child) is not None:
+                if name in DISPENSABLE:
+                    self.retire(name)
+                    continue
                 raise ValueError('Required worker service exited: ' + name)
+
+    def start_github(self):
+        # Always running when installed: it answers that no chain exists until the host installs
+        # one, and a chain stored on the volume is served again after a container restart. Only
+        # agent isolation keeps agents out of its root-only chain, so it needs that.
+        if shutil.which('horizon-worker-github') and AGENT_ISOLATION.exists():
+            self.start('github', ['horizon-worker-github', 'serve'])
+
+    def retire(self, name):
+        """Ends a dispensable service that exited and publishes the services without it."""
+        child, identity = self.children.pop(name), self.identities.pop(name)
+        print('Worker service exited and is not restarted: ' + name, file=sys.stderr, flush=True)
+        try:
+            stop_groups([(child, identity)])
+        except ValueError as error:
+            print('Worker service cleanup: ' + str(error), file=sys.stderr, flush=True)
+        if self.published is not None:
+            self.publish(self.published)
 
     def wait_until(self, predicate, message, timeout=30, configuring=False):
         deadline = time.monotonic() + timeout
@@ -258,7 +303,14 @@ class Supervisor:
 
     def publish(self, desktop):
         self.assert_running(configuring=True)
-        names = SERVICES | (DESKTOP if desktop else set()) | (OPTIONAL & set(self.children))
+        self.published = desktop
+        optional = OPTIONAL & set(self.children)
+        # The GitHub service reconciles the repositories before it opens its socket; until then
+        # Git falls back to the static binding, so it is not published as running.
+        if 'github' in optional and not socket_ready(self.runtime / 'github.sock'):
+            optional.discard('github')
+        self.github_listed = 'github' in optional
+        names = SERVICES | (DESKTOP if desktop else set()) | optional
         state = {'supervisor': process_identity(os.getpid()),
                  'services': {name: self.identities[name] for name in sorted(names)}}
         pending = self.runtime / 'services.new'
@@ -275,7 +327,10 @@ class Supervisor:
             self.start('vnc', ['x11vnc', '-display', ':99', '-localhost', '-rfbport', '5900',
                                '-forever', '-shared', '-viewonly', '-nopw'])
             self.wait_until(vnc_ready, 'Worker desktop transport did not become ready')
+        # The one-shot configuration and the GitHub service's reconciliation both write the
+        # agent's global Git configuration, so the service starts after it.
         self.configure(['horizon-worker-configure'])
+        self.start_github()
         self.start_control()
         self.await_control()
         self.start('sshd', ['/usr/sbin/sshd', '-D', '-e'])
@@ -289,6 +344,9 @@ class Supervisor:
         unhealthy_since = None
         while True:
             self.assert_running(configuring=True)
+            if ('github' in self.children and not self.github_listed
+                    and socket_ready(self.runtime / 'github.sock')):
+                self.publish(desktop)
             if desktop and time.monotonic() >= next_desktop_check:
                 started = time.monotonic()
                 healthy = desktop_ready(self.children['openbox'].pid)
@@ -323,9 +381,14 @@ def main():
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--idle-stop-contract', action='store_true',
                         help='report that this supervisor starts horizon-worker-idle for an idle period')
+    parser.add_argument('--github-chain-contract', action='store_true',
+                        help='report that this supervisor starts horizon-worker-github')
     args = parser.parse_args()
     if args.idle_stop_contract:
         print('horizon-idle-stop-contract=1')
+        return 0
+    if args.github_chain_contract:
+        print(GITHUB_CHAIN_CONTRACT)
         return 0
     try:
         if args.check:

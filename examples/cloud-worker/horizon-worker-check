@@ -246,6 +246,20 @@ try:
             raise ValueError('Worker Git wrapper is missing')
         # Contract 2: per-repository grants for the primary and its same-worker siblings.
         print('horizon-git-auth-contract=1\nhorizon-git-auth-contract=2')
+        # A refreshing GitHub App token chain held by a root service. The service alone is not
+        # enough: the supervisor must declare that it starts it, and the image must isolate
+        # agents (the launcher's identity is checked below), because both refuse to run without
+        # agent isolation.
+        # The service imports its common helper, and that the Git helper, from the service's own
+        # directory before it parses any operation.
+        service = shutil.which('horizon-worker-github')
+        beside = Path(service).resolve() if service else None
+        # The Git helper is also run from there, so it must be executable.
+        if (beside and beside.with_name('horizon-worker-github-common').is_file()
+                and os.access(beside.with_name('horizon-worker-git-auth'), os.X_OK)
+                and shutil.which('horizon-worker-tailnet') and helper_declares(
+                'horizon-worker-supervise', '--github-chain-contract', 'horizon-github-chain-contract=1')):
+            print('horizon-github-chain-contract=1')
     if args.ready:
         active = capabilities(json.loads(runtime.read_text()))
         if active != selected:

@@ -1,0 +1,445 @@
+"""Shared parts of horizon-worker-github: private storage, the token chain checks and the
+GitHub addresses. A module that horizon-worker-github loads, not a command."""
+import contextlib
+import errno
+import fcntl
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import tempfile
+import urllib.request
+import uuid
+
+
+def load_sibling(name, module):
+    """A helper next to this file, loaded one time per process so its classes stay the same."""
+    if module in sys.modules:
+        return sys.modules[module]
+    loader = importlib.machinery.SourceFileLoader(module, str(Path(__file__).resolve().with_name(name)))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    loaded = importlib.util.module_from_spec(spec)
+    sys.modules[module] = loaded
+    try:
+        loader.exec_module(loaded)
+    except BaseException:
+        del sys.modules[module]
+        raise
+    return loaded
+
+
+GIT_AUTH = Path(__file__).resolve().with_name('horizon-worker-git-auth')
+auth = load_sibling('horizon-worker-git-auth', 'horizon_worker_git_auth')
+
+# Root-owned on the workspace volume, so the chain survives a container restart. Agent
+# isolation leaves the volume's top level to root, so no agent can reach or replace it.
+PERSISTENT = Path('/workspace/.horizon-root/github')
+# Root-only fallback on tmpfs, for volumes that do not keep POSIX permissions. It also holds
+# the lock, the request log and the clear marker. /run/horizon-credentials belongs to the
+# agent under isolation.
+RUNTIME = Path('/run/horizon-github')
+# Agents run as UID 10001 only when horizon-worker-tailnet isolate set this marker. Without
+# it they run as root and could read the chain, so the service refuses to run.
+AGENT_ISOLATION = Path('/run/horizon-tailnet/agent-isolation')
+STATE = 'state.json'
+# Written by clear: no copy older than this time is served, in any process.
+CLEARED = 'cleared'
+MAX_STATE = 131072
+# Tests only: a fake GitHub on the loopback address. Nothing else is accepted.
+TEST_URL = 'HORIZON_WORKER_GITHUB_TEST_URL'
+CHAIN_FIELDS = {'access_token', 'access_expires_at', 'refresh_token', 'refresh_expires_at'}
+
+
+def timestamp(value):
+    return type(value) is int and 0 < value < 1 << 40
+
+
+def validate_chain(chain):
+    if not isinstance(chain, dict) or set(chain) != CHAIN_FIELDS:
+        raise ValueError('Invalid GitHub token chain')
+    if not (auth.valid_token(chain['access_token']) and auth.valid_token(chain['refresh_token'])
+            and timestamp(chain['access_expires_at']) and timestamp(chain['refresh_expires_at'])):
+        raise ValueError('Invalid GitHub token chain')
+    return chain
+
+
+def private_directory(path, create):
+    """A real directory that only this (root) process can enter, checked after creation:
+    some provider volumes accept chmod and still report other modes."""
+    if create:
+        with contextlib.suppress(FileExistsError):
+            path.mkdir(mode=0o700)
+        if path.is_symlink():
+            raise ValueError('Private GitHub storage must not be a link')
+        os.chmod(path, 0o700)
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise ValueError('GitHub storage does not keep private permissions')
+    return path
+
+
+def write_private(directory, name, data):
+    fd, temporary = tempfile.mkstemp(prefix='.' + name + '-', dir=directory)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            info = os.fstat(output.fileno())
+            if info.st_mode & 0o077 or info.st_uid != os.geteuid():
+                raise ValueError('GitHub storage does not keep private permissions')
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, directory / name)
+        try:
+            fsync_directory(directory)
+        except OSError as error:
+            raise Unsynced(str(error)) from error
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+class Unsynced(OSError):
+    """The file is in place, but its directory entry may not survive a crash."""
+
+
+def fsync_directory(directory):
+    """Makes a rename or removal in `directory` durable."""
+    folder = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
+
+
+def open_directory(path):
+    """A descriptor for the real directory `path`, opened component by component without
+    following any symbolic link, or None when a component is missing or is not a directory."""
+    parts = Path(path).parts
+    if not parts or parts[0] != '/' or '..' in parts:
+        raise ValueError('GitHub storage paths must be absolute')
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts[1:]:
+            try:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except (FileNotFoundError, NotADirectoryError):
+                os.close(fd)
+                return None
+            except OSError as error:
+                if error.errno == errno.ELOOP:
+                    os.close(fd)
+                    return None
+                raise
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def sync_descriptor(fd, directory):
+    """Syncs the directory open as `fd`, the same one a removal used; `directory` names it."""
+    del directory
+    os.fsync(fd)
+
+
+def remove_durably(directory, name):
+    """Removes `directory/name` and makes the removal durable. The directory is reached without
+    following symbolic links, so a swapped link never makes root remove another file; such a
+    path, or a missing one, has nothing of this service to remove. Raises OSError when the
+    removal or its sync fails."""
+    fd = open_directory(directory)
+    if fd is None:
+        return
+    try:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(name, dir_fd=fd)
+        sync_descriptor(fd, directory)
+    finally:
+        os.close(fd)
+
+
+def read_json(path, limit=MAX_STATE):
+    """A private regular file's JSON, or None when it does not exist."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd, 'rb') as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.geteuid()
+                or info.st_size > limit):
+            raise ValueError('GitHub state must be private')
+        return json.loads(source.read(limit + 1))
+
+
+def read_private(path):
+    state = read_json(path)
+    if state is None:
+        return None
+    if (not isinstance(state, dict) or state.get('version') != 1 or state.get('state') not in ('ok', 'revoked')
+            or type(state.get('serial')) is not int):
+        raise ValueError('Malformed GitHub state')
+    validate_chain(state.get('chain'))
+    return state
+
+
+@contextlib.contextmanager
+def locked(directory, name, shared=False):
+    private_directory(directory, create=True)
+    fd = os.open(directory / name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+class Store:
+    """The chain on the persistent volume when it keeps private permissions, else on tmpfs.
+    Every save carries a higher serial, so the newest copy wins if both exist.
+
+    A rotated chain that no storage accepted is kept in `pending`: GitHub already cancelled
+    the stored one, so the serving process uses it and writes it again on every refresh
+    check until a write succeeds. `clear` in any process ends it through the clear marker.
+
+    Writers hold the store lock for a whole operation, a refresh request included. Each write
+    also holds the commit lock, which serving readers share, so no reader sees a chain between
+    its rename and the outcome of its write."""
+
+    def __init__(self, persistent=PERSISTENT, runtime=RUNTIME):
+        self.persistent = persistent
+        self.runtime = runtime
+        self.pending = None
+        # The clear mark seen when the pending chain was kept; another one ends that chain.
+        self.pending_clear = None
+
+    def lock(self):
+        return locked(self.runtime, 'state.lock')
+
+    def commit(self, shared=False):
+        return locked(self.runtime, 'commit.lock', shared)
+
+    def clear_mark(self):
+        """(serial, nonce) of the latest clear, or (0, None) without one."""
+        try:
+            value = read_json(self.runtime / CLEARED)
+        except (OSError, ValueError, RecursionError):
+            return 0, None
+        if not isinstance(value, dict) or type(value.get('serial')) is not int:
+            return 0, None
+        return value['serial'], value.get('nonce')
+
+    def cleared(self):
+        """The serial below which no copy counts, written by the latest clear."""
+        return self.clear_mark()[0]
+
+    def keep_pending(self, state):
+        self.pending = state
+        self.pending_clear = self.clear_mark()[1]
+
+    def highest(self):
+        """The highest serial of any copy, the pending one included, or of the latest clear."""
+        return max([self.cleared(), *(state['serial'] for state, _ in self.copies())])
+
+    def copies(self):
+        found = []
+        for directory, persistent in ((self.persistent, True), (self.runtime, False)):
+            # A copy that is not private or not well formed is never served; the next save
+            # replaces it.
+            try:
+                private_directory(directory, create=False)
+                state = read_private(directory / STATE)
+            except (OSError, ValueError, RecursionError):
+                continue
+            if state is not None:
+                found.append((state, persistent))
+        if self.pending is not None and self.clear_mark()[1] != self.pending_clear:
+            # Another process cleared the chain after this one was kept in memory.
+            self.pending = None
+        if self.pending is not None:
+            found.append((self.pending, False))
+        floor = self.cleared()
+        return [copy for copy in found if copy[0]['serial'] > floor]
+
+    def load(self, serving=False):
+        """(state, persistent) for the newest copy, or (None, False) without a chain. When
+        `serving`, it waits for a write under way, and a chain that is not stored yet is left
+        out: memory's pending chain, and a volume copy of it that no storage confirmed. No
+        agent gets a token whose refresh token is not stored. A revocation that only memory
+        holds still counts. On an equal serial the tmpfs copy wins, so a volume copy whose
+        directory sync failed is not reported as persistent."""
+        if serving:
+            with self.commit(shared=True):
+                found = self.copies()
+            # A revocation counts at once, also from memory only; a new chain waits for its write.
+            unstored = self.pending if self.pending is not None and self.pending['state'] == 'ok' else None
+            if unstored is not None:
+                # A stored copy with an older chain is no fallback: GitHub cancelled that chain
+                # when it rotated the pending one. Only a pending write that kept the chain (a
+                # metadata change) leaves the stored copy usable, and a newer install stays.
+                found = [copy for copy in found if copy[0] != unstored and (
+                    copy[0]['serial'] > unstored['serial'] or copy[0]['chain'] == unstored['chain'])]
+        else:
+            found = self.copies()
+        return max(found, key=lambda copy: (copy[0]['serial'], not copy[1])) if found else (None, False)
+
+    def pending_write(self):
+        """Whether the newest chain waits for its write in this process's memory. Compared by
+        value: a stored copy can hold the same state while the write is still pending."""
+        state, _ = self.load()
+        return state is not None and self.pending is not None and state == self.pending
+
+    def write(self, state):
+        """Writes `state` as it is; returns whether the volume holds it durably. Raises
+        ValueError when no storage confirmed it. The caller holds the commit lock."""
+        data = json.dumps(state, separators=(',', ':'))
+        try:
+            private_directory(self.persistent.parent, create=True)
+            write_private(private_directory(self.persistent, create=True), STATE, data)
+        except Unsynced:
+            # The new chain is in place on the volume, but its entry may not survive a crash.
+            # tmpfs must keep a second copy; without one the chain is not stored, and the
+            # caller keeps it pending or gives it up.
+            try:
+                write_private(private_directory(self.runtime, create=True), STATE, data)
+            except Unsynced:
+                pass  # In place on tmpfs, which a crash empties anyway.
+            except (OSError, ValueError):
+                raise ValueError('No private GitHub storage confirmed the token chain') from None
+            return False
+        except (OSError, ValueError):
+            pass
+        else:
+            # A tmpfs copy is older. It must go, or carry this same state: should the volume
+            # later fail its private-mode check, the tmpfs copy would be served again.
+            try:
+                (self.runtime / STATE).unlink(missing_ok=True)
+            except OSError:
+                try:
+                    write_private(private_directory(self.runtime, create=True), STATE, data)
+                except Unsynced:
+                    pass  # In place on tmpfs, which a crash empties anyway.
+                except (OSError, ValueError):
+                    raise ValueError('An older GitHub token chain in tmpfs cannot be removed') from None
+            return True
+        # The volume refused the write. tmpfs takes the chain first, so the older chain on the
+        # volume stays usable until the new one is stored. That older chain must then go: a
+        # restart empties tmpfs and would serve it again. When it cannot be removed, the tmpfs
+        # copy is removed too and the write fails, which leaves the older chain as it was.
+        try:
+            write_private(private_directory(self.runtime, create=True), STATE, data)
+        except Unsynced:
+            pass  # In place on tmpfs, which needs no crash durability.
+        except (OSError, ValueError):
+            raise ValueError('No private GitHub storage accepted the token chain') from None
+        try:
+            remove_durably(self.persistent, STATE)
+            retired = not os.path.lexists(self.persistent / STATE)
+        except OSError:
+            retired = False
+        if not retired:
+            with contextlib.suppress(OSError):
+                (self.runtime / STATE).unlink(missing_ok=True)
+            raise ValueError('An older GitHub token chain on the volume cannot be removed')
+        return False
+
+    def save(self, state, retain=True):
+        """Durably stores `state` with the next serial; returns whether the volume holds it.
+        When no storage accepts it, `retain` keeps it as the pending write: a refresh must,
+        because GitHub already cancelled the stored chain; a failed install must not."""
+        # A counter, never the clock: it only grows, also when the clock moves back. Writers
+        # hold the store lock, so the next serial is above every copy and every clear.
+        state = dict(state, serial=self.highest() + 1)
+        # The outcome is recorded before readers may look again: a chain no storage confirmed
+        # is pending before any serving read can see its volume copy.
+        with self.commit():
+            before = self.volume_state()
+            try:
+                persistent = self.write(state)
+            except ValueError:
+                if retain:
+                    self.keep_pending(state)
+                else:
+                    self.undo(state, before)
+                raise
+            self.pending = None
+        return persistent
+
+    def volume_state(self):
+        """The volume's copy as it is, or None without a readable one."""
+        try:
+            private_directory(self.persistent, create=False)
+            return read_private(self.persistent / STATE)
+        except (OSError, ValueError, RecursionError):
+            return None
+
+    def undo(self, state, before):
+        """After a failed write that left `state` on the volume, puts back what was there, before
+        the commit lock lets a serving read in, so no reader finds a chain no storage confirmed.
+        A process that stops here leaves the same uncertain copy as a crash after the rename."""
+        if self.volume_state() != state:
+            return
+        with contextlib.suppress(OSError, ValueError):
+            if before is None:
+                remove_durably(self.persistent, STATE)
+            else:
+                write_private(self.persistent, STATE, json.dumps(before, separators=(',', ':')))
+
+    def retry_pending(self):
+        """Writes a pending chain again. Returns True when nothing is left in memory only."""
+        if self.pending is not None and self.pending['serial'] <= self.cleared():
+            self.pending = None
+        if self.pending is not None and any(
+                state['serial'] >= self.pending['serial'] and state != self.pending
+                for state, _ in self.copies() if state is not self.pending):
+            # Another process stored a newer chain meanwhile; the pending one is superseded. A
+            # copy equal to it is its own unconfirmed write, which is written again.
+            self.pending = None
+        if self.pending is None:
+            return True
+        with self.commit():
+            self.write(self.pending)
+            self.pending = None
+        return True
+
+    def clear(self):
+        """Removes every copy, also the memory of a serving process, which reads the marker."""
+        # The volume copy goes first and durably: if that fails, nothing changed, and the
+        # chain that was active stays active, also after a restart. Only then does the clear
+        # mark tell the serving process to drop its memory, and the tmpfs copy go.
+        floor = self.highest()
+        remove_durably(self.persistent, STATE)
+        self.pending = None
+        private_directory(self.runtime, create=True)
+        write_private(self.runtime, CLEARED, json.dumps({'serial': floor, 'nonce': uuid.uuid4().hex}))
+        remove_durably(self.runtime, STATE)
+
+
+def github_bases(environ):
+    """(sign-in base, API base, loopback) for github.com, or for a loopback fake in tests."""
+    override = environ.get(TEST_URL)
+    if override is None:
+        return 'https://github.com', 'https://api.github.com', False
+    if not re.fullmatch(r'http://127\.0\.0\.1:[0-9]{1,5}', override):
+        raise ValueError('The GitHub test address must be a loopback port')
+    return override, override, True
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def opener(loopback):
+    """HTTPS to GitHub without redirects; a loopback fake also skips any proxy."""
+    return urllib.request.build_opener(NoRedirect(), *([urllib.request.ProxyHandler({})] if loopback else []))
+
+
+if __name__ == '__main__':
+    sys.exit('horizon-worker-github-common is a module of horizon-worker-github, not a command.')

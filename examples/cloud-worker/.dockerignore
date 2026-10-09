@@ -16,6 +16,8 @@
 !horizon-worker-session-env
 !horizon-worker-gpu-lock
 !horizon-worker-git-auth
+!horizon-worker-github
+!horizon-worker-github-common
 !horizon-worker-browserstack
 !bin/
 bin/**
