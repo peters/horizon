@@ -327,8 +327,10 @@ class Supervisor:
             self.start('vnc', ['x11vnc', '-display', ':99', '-localhost', '-rfbport', '5900',
                                '-forever', '-shared', '-viewonly', '-nopw'])
             self.wait_until(vnc_ready, 'Worker desktop transport did not become ready')
-        self.start_github()
+        # The one-shot configuration and the GitHub service's reconciliation both write the
+        # agent's global Git configuration, so the service starts after it.
         self.configure(['horizon-worker-configure'])
+        self.start_github()
         self.start_control()
         self.await_control()
         self.start('sshd', ['/usr/sbin/sshd', '-D', '-e'])

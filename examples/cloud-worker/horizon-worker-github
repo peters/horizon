@@ -42,6 +42,9 @@ STATE = common.STATE
 TEST_URL = common.TEST_URL
 SOCKET = Path('/run/horizon-worker/github.sock')
 LOG = 'requests.log'
+# The grants an install is configuring, kept while it runs. A live install holds the store
+# lock, so whoever gets the lock and still finds this file knows the install was cut off.
+INTENT = 'install.intent'
 LOG_LIMIT = 1 << 20
 # Root, and the agent identity that horizon-worker-tailnet isolate gives every session.
 ALLOWED_UIDS = (0, 10001)
@@ -195,8 +198,18 @@ def next_check(store, now):
     return max(1, min(POLL_SECONDS, due))
 
 
-def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=random.random, log=print):
+def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=random.random, log=print,
+                 configure=None, static=None):
     """One refresh check; returns (delay before the next check, consecutive failures)."""
+    try:
+        # An install that was cut off, such as by a closed SSH connection, left repositories
+        # configured for a chain it never stored; the stored state decides again.
+        with store.lock():
+            if (store.runtime / INTENT).exists():
+                settle(store, configure or run_configure, static or run_restore)
+                log('GitHub repositories reconciled after an interrupted install', flush=True)
+    except Exception as error:
+        log('GitHub repositories not reconciled: ' + type(error).__name__, flush=True)
     try:
         # A rotated chain that no storage accepted is written again at every check.
         with store.lock():
@@ -413,13 +426,26 @@ def reconcile(store, configure=None, static=None):
     repositories configured for another chain."""
     try:
         with store.lock():
-            state, _ = store.load()
-            if state is not None and state['state'] == 'ok':
-                (configure or run_configure)({'grants': identity_grants(state), 'previous': []})
-            elif state is None:
-                (static or run_restore)({'previous': []})
+            settle(store, configure or run_configure, static or run_restore)
     except Exception as error:
         raise ValueError('GitHub repositories not reconciled: ' + type(error).__name__) from None
+
+
+def settle(store, configure, static):
+    """Under the store lock: configures the repositories for the stored chain, or for the
+    static binding without one, after forgetting the identities that a cut-off install
+    wrote, then drops that install's intent."""
+    try:
+        intent = common.read_json(store.runtime / INTENT)
+    except (OSError, ValueError, RecursionError):
+        intent = None
+    intended = intent.get('grants') if isinstance(intent, dict) and isinstance(intent.get('grants'), list) else []
+    state, _ = store.load()
+    if state is not None and state['state'] == 'ok':
+        configure({'grants': identity_grants(state), 'previous': intended})
+    elif state is None:
+        static({'previous': intended})
+    (store.runtime / INTENT).unlink(missing_ok=True)
 
 
 def run_configure(payload):
@@ -466,6 +492,12 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
             state['client_secret'] = value['client_secret']
         if value.get('login'):
             state['login'] = value['login']
+        # Written before any repository changes; if this process dies before its end, the
+        # service's next check finds it and reconciles. A tmpfs that refuses it costs only that
+        # recovery, and one whose directory sync fails still holds it.
+        with contextlib.suppress(OSError, ValueError):
+            common.write_private(common.private_directory(store.runtime, create=True), INTENT,
+                                 json.dumps({'grants': identity_grants(value)}))
         try:
             configure({'grants': identity_grants(value), 'previous': identity_grants(previous)})
             store.save(dict(state, version=1, state='ok', installed_at=int(now()), last_refresh_at=None,
@@ -474,6 +506,8 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
             restore(previous, value, configure, static)
             keep(store, previous)
             raise
+        finally:
+            (store.runtime / INTENT).unlink(missing_ok=True)
         try:
             retire()
         except (OSError, subprocess.SubprocessError):

@@ -207,6 +207,19 @@ class SupervisionTests(unittest.TestCase):
         self.assertNotEqual(later[HOST_INSTANCE_ENV], environment[HOST_INSTANCE_ENV],
                             'each control service gets a new value')
 
+    def test_the_github_service_starts_after_the_one_shot_configuration(self):
+        # Both write the agent's global Git configuration.
+        calls = []
+
+        class Stop(Exception):
+            pass
+        with mock.patch.object(self.supervisor, 'configure', side_effect=lambda command: calls.append('configure')), \
+                mock.patch.object(self.supervisor, 'start_github', side_effect=lambda: calls.append('github')), \
+                mock.patch.object(self.supervisor, 'start_control', side_effect=Stop), \
+                self.assertRaises(Stop):
+            self.supervisor.run(False)
+        self.assertEqual(calls, ['configure', 'github'])
+
     def test_the_assigned_value_is_published_only_after_the_service_answers(self):
         published = self.root / 'browser-host-instance'
         endpoint = self.free_endpoint()

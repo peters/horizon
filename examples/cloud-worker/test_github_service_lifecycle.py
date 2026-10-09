@@ -314,6 +314,37 @@ class VolumeCopyTests(ServiceTestCase):
             self.install(installation(chain=chain(access='ghu_synthetic-new')))
         self.assertEqual(self.store.load(serving=True)[0]['chain']['access_token'], 'ghu_synthetic-new')
 
+    def test_an_install_cut_off_midway_is_reconciled_at_the_next_check(self):
+        self.install()
+        stored = self.stored()
+
+        class CutOff(BaseException):
+            pass
+
+        def configure(payload):
+            self.configured.append(payload)
+            # The process dies here, as when its SSH connection closes: no handler runs.
+            raise CutOff()
+        with mock.patch.object(service, 'restore'), mock.patch.object(service, 'keep'), \
+                mock.patch.object(Path, 'unlink', autospec=True,
+                                  side_effect=lambda path, missing_ok=False: None), \
+                self.assertRaises(CutOff):
+            service.install(installation(chain=chain(access='ghu_synthetic-new'),
+                                         grants=[{'repository': 'example/other', 'target': 'primary',
+                                                  'access': 'push'}]),
+                            self.store, now=lambda: NOW, configure=configure, retire=lambda: None)
+        self.assertTrue((self.store.runtime / service.INTENT).exists(), 'the intent outlives the cut-off install')
+        reconciled = []
+        service.refresh_step(self.store, 0, now=lambda: NOW, post=mock.Mock(), jitter=lambda: 0,
+                             log=lambda *args, **kwargs: None, configure=reconciled.append, static=reconciled.append)
+        self.assertEqual(reconciled[0]['grants'], service.identity_grants(stored), 'the stored chain decides')
+        self.assertEqual([grant['repository'] for grant in reconciled[0]['previous']], ['example/other'])
+        self.assertFalse((self.store.runtime / service.INTENT).exists())
+
+    def test_a_finished_install_leaves_no_intent(self):
+        self.install()
+        self.assertFalse((self.store.runtime / service.INTENT).exists())
+
     def test_a_serving_read_waits_for_a_write_under_way(self):
         self.install()
         read = []

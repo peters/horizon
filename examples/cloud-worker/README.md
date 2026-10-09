@@ -791,11 +791,15 @@ horizon-worker-github install < chain.json
   configures the repositories for the stored chain, or for the static token file
   without one, before it opens its socket, so an install that stopped between the
   two steps is undone. When that fails, the service does not start, and `status`
-  reports `"serving": false`. The supervisor lists the service as running only
+  reports `"serving": false`. An install that is cut off while the service runs,
+  such as by a closed SSH connection, leaves an intent file with the grants it was
+  configuring, never a token; the service's next check, within a minute, finds it
+  and configures the repositories for the stored chain again. The supervisor lists the service as running only
   once its socket answers. The
   install then removes the static token file, so one source of tokens
   remains.
-- The output is the same JSON as `status`.
+- The output is the JSON of the stored copies, as `status` prints it without the
+  `serving` field, which only the running service can report.
 
 **Storage.** The chain is stored in `/workspace/.horizon-root/github/state.json`.
 The directory belongs to root with mode 0700, so the chain survives a container
