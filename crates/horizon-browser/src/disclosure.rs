@@ -39,11 +39,31 @@ impl AutomationDisclosurePolicy {
     }
 }
 
-/// A callable `WebDriver` `BiDi` preload function used by Firefox. Chromium
-/// relies on `--disable-blink-features=AutomationControlled` instead of this
-/// getter, because a script-defined `navigator.webdriver` accessor is itself a
-/// detection signal. The function changes only the standard value and
-/// deliberately avoids broad fingerprint spoofing.
+/// Chrome-privileged Firefox script that clears the content-process automation
+/// flags read by `Navigator::Webdriver()`. The native getter stays in place and
+/// returns false. A page-world replacement getter is itself a detection signal,
+/// so this is the preferred minimization path. It changes only those two flags.
+pub(crate) const FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT: &str = r#"const keys = [
+    "Marionette:IsBrowserAutomationRunning",
+    "RemoteAgent:IsBrowserAutomationRunning"
+];
+for (const key of keys) {
+    Services.ppmm.sharedData.set(key, false);
+}
+Services.ppmm.sharedData.flush();
+return keys.every((key) => Services.ppmm.sharedData.get(key) === false);"#;
+
+/// True when the chrome-context script reported both automation flags cleared.
+#[must_use]
+pub(crate) fn firefox_native_automation_flag_cleared(response: &serde_json::Value) -> bool {
+    response.get("value").and_then(serde_json::Value::as_bool) == Some(true)
+}
+
+/// Fallback Firefox preload used only when the native automation flag cannot
+/// be cleared. Chromium relies on `--disable-blink-features=AutomationControlled`
+/// instead of this getter, because a script-defined `navigator.webdriver`
+/// accessor is itself a detection signal. The function changes only the
+/// standard value and deliberately avoids broad fingerprint spoofing.
 pub(crate) const COMMON_SIGNAL_PRELOAD_FUNCTION: &str = r#"() => {
     const prototype = globalThis.Navigator && globalThis.Navigator.prototype;
     if (!prototype) return;
@@ -158,6 +178,21 @@ mod tests {
         assert!(COMMON_SIGNAL_PRELOAD_FUNCTION.contains("webdriver"));
         assert!(COMMON_SIGNAL_PRELOAD_FUNCTION.contains("get: () => false"));
         assert!(!COMMON_SIGNAL_PRELOAD_FUNCTION.contains("userAgent"));
+    }
+
+    #[test]
+    fn firefox_native_flag_script_only_clears_the_automation_keys() {
+        assert!(FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT.contains("Marionette:IsBrowserAutomationRunning"));
+        assert!(FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT.contains("RemoteAgent:IsBrowserAutomationRunning"));
+        assert!(!FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT.contains("userAgent"));
+        assert!(!FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT.contains("toString"));
+        assert!(firefox_native_automation_flag_cleared(
+            &serde_json::json!({ "value": true })
+        ));
+        assert!(!firefox_native_automation_flag_cleared(
+            &serde_json::json!({ "value": false })
+        ));
+        assert!(!firefox_native_automation_flag_cleared(&serde_json::json!({})));
     }
 
     #[test]

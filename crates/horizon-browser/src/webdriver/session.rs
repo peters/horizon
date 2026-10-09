@@ -1116,6 +1116,7 @@ mod tests {
         let prefs = &capabilities["moz:firefoxOptions"]["prefs"];
 
         assert_eq!(capabilities["moz:firefoxOptions"]["args"][0], "-headless");
+        assert!(firefox_args_include(&capabilities, "-remote-allow-system-access"));
         assert_eq!(prefs["widget.gtk.overlay-scrollbars.enabled"], false);
         assert_eq!(prefs["ui.useOverlayScrollbars"], 0);
         assert_eq!(prefs["remote.bidi.dismiss_file_pickers.enabled"], true);
@@ -1123,7 +1124,7 @@ mod tests {
         let visible = new_session_capabilities(
             &BrowserConfig {
                 headless: false,
-                ..config
+                ..config.clone()
             },
             "panel",
             true,
@@ -1139,6 +1140,25 @@ mod tests {
                 .as_array()
                 .is_some_and(|args| args.iter().all(|argument| argument != "-headless"))
         );
+        assert!(firefox_args_include(&visible, "-remote-allow-system-access"));
+
+        let browser_default = new_session_capabilities(
+            &BrowserConfig {
+                automation_disclosure: crate::AutomationDisclosurePolicy::BrowserDefault,
+                ..config
+            },
+            "panel",
+            true,
+            false,
+        )
+        .unwrap_or_default();
+        assert!(!firefox_args_include(&browser_default, "-remote-allow-system-access"));
+    }
+
+    fn firefox_args_include(capabilities: &serde_json::Value, argument: &str) -> bool {
+        capabilities["moz:firefoxOptions"]["args"]
+            .as_array()
+            .is_some_and(|args| args.iter().any(|value| value.as_str() == Some(argument)))
     }
 
     #[test]

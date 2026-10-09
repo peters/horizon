@@ -13,7 +13,9 @@ use super::super::remote::{
 };
 use super::super::service::WebDriverService;
 use super::bidi::{connect_bidi_with_startup_retry, discover_context, install_common_signal_preload, subscribe};
-use super::handshake::{NewSession, parse_new_session_response};
+use super::handshake::{
+    FirefoxNativeFlagClear, NewSession, clear_firefox_native_automation_flag, parse_new_session_response,
+};
 use super::semantic;
 
 /// Spawn the local driver process and create its classic session.
@@ -223,12 +225,29 @@ pub(super) fn establish_bidi(
         host.delete_session(session_id);
         return Err("Firefox BiDi returned no top-level browsing context".to_string());
     }
+    let native_flag_cleared =
+        if firefox_bidi && config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals {
+            match clear_firefox_native_automation_flag(host.transport(), session_id) {
+                FirefoxNativeFlagClear::Cleared => true,
+                FirefoxNativeFlagClear::Unavailable(error) => {
+                    tracing::warn!("Firefox native automation flag stayed set; using the preload fallback: {error}");
+                    false
+                }
+                FirefoxNativeFlagClear::Unsafe(error) => {
+                    host.delete_session(session_id);
+                    return Err(error);
+                }
+            }
+        } else {
+            false
+        };
     if shared && let Some(link) = bidi.as_mut() {
-        super::bidi::subscribe_shared_page(link, host, config.browser.automation_disclosure)?;
+        super::bidi::subscribe_shared_page(link, host, config.browser.automation_disclosure, native_flag_cleared)?;
     }
     if !shared
         && firefox_bidi
         && config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
+        && !native_flag_cleared
         && let Some(link) = bidi.as_mut()
         && let Err(error) = install_common_signal_preload(link)
     {
