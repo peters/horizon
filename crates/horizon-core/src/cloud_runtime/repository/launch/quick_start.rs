@@ -9,7 +9,7 @@ use horizon_cloud::{Capabilities, Profile};
 // to put here; docs/release-flow.md describes the update, which also updates CONTRACT.
 macro_rules! image {
     () => {
-        "ghcr.io/peters/horizon-worker-base@sha256:fb0767fd2d98c2f7936c018902a259fc568765faf50d0cecf9ed20bad9adc922"
+        "ghcr.io/peters/horizon-worker-base@sha256:f2fc6e9db2816841bfa2ca155e03f0ce4fca861a55427c9dd924e48e177e59fd"
     };
 }
 
@@ -29,6 +29,7 @@ pub const IMAGE: &str = image!();
 /// report with the pinned image in local Docker.
 pub const CONTRACT: &str = "horizon-git-auth-contract=1
 horizon-git-auth-contract=2
+horizon-github-chain-contract=1
 horizon-idle-stop-contract=1
 horizon-idle-report-contract=1
 horizon-siblings-contract=1
