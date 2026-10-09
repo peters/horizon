@@ -103,7 +103,8 @@ impl State {
             ui.label(RichText::new(note).size(13.0).color(theme::FG_DIM()));
         }
         let Some(remote) = self.remote().cloned() else {
-            if self.unrecognised() {
+            // A name that narrows the connected account's list is no unknown link.
+            if self.unrecognised() && !self.filters_the_list() {
                 ui.label(
                     RichText::new("That is neither a repository link nor a folder that exists.")
                         .size(13.0)
