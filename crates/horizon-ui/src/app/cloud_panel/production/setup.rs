@@ -156,7 +156,9 @@ impl State {
             |ui| {
                 let save = ui
                     .add_enabled(
-                        self.draft.is_some() && self.receiver.is_none(),
+                        // A Connect GitHub flow under way saves the app itself; Save would close
+                        // the form before its outcome shows. Cancel ends that flow.
+                        self.draft.is_some() && self.receiver.is_none() && !self.github.connecting(),
                         egui::Button::new(if self.continue_creation {
                             "Save and start"
                         } else {

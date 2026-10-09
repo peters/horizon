@@ -275,7 +275,7 @@ fn the_pkce_challenge_is_the_base64url_sha256_of_the_verifier() {
     );
 }
 
-fn request(line: &str) -> (Option<Secret>, String) {
+fn request(line: &str) -> (Option<signin::Callback>, String) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let line = line.to_owned();
@@ -294,10 +294,18 @@ fn request(line: &str) -> (Option<Secret>, String) {
 #[test]
 fn only_a_callback_with_the_expected_state_yields_its_code() {
     let (code, answer) = request("GET /callback?code=abc123&state=expected-state HTTP/1.1");
-    assert_eq!(code.unwrap().expose(), "abc123");
+    assert!(matches!(code, Some(signin::Callback::Code(code)) if code.expose() == "abc123"));
     assert!(answer.contains("You can close this page."));
+    let (denied, answer) =
+        request("GET /callback?error=access_denied&error_description=x&state=expected-state HTTP/1.1");
+    assert!(
+        matches!(denied, Some(signin::Callback::Denied)),
+        "a declined sign-in ends it"
+    );
+    assert!(answer.contains("declined"));
     for line in [
         "GET /callback?code=abc123&state=other HTTP/1.1",
+        "GET /callback?error=access_denied&state=other HTTP/1.1",
         "GET /callback?code=abc%3B1&state=expected-state HTTP/1.1",
         "GET /favicon.ico HTTP/1.1",
         "POST /callback?code=abc123&state=expected-state HTTP/1.1",

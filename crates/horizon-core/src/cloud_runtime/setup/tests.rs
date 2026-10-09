@@ -364,3 +364,19 @@ fn an_open_form_keeps_saving_after_connect_github_saved_the_app() {
     stale.adopt_github(&other, None);
     assert!(stale.save().is_err());
 }
+
+#[test]
+fn connect_github_saves_before_any_provider_is_set_up() {
+    let root = tempfile::tempdir().unwrap();
+    let app = crate::cloud_runtime::github::Settings {
+        app_id: 42,
+        slug: "horizon-example".into(),
+        client_id: "Iv23synthetic".into(),
+        client_secret_file: root.path().join("credentials/github-app-42"),
+        mode: crate::cloud_runtime::github::Mode::Ask,
+    };
+    save_github(root.path(), Some(app.clone())).expect("no RunPod key is needed");
+    let draft = Draft::load(root.path()).unwrap();
+    assert_eq!(draft.settings.github, Some(app));
+    assert!(!draft.settings.runpod_configured());
+}

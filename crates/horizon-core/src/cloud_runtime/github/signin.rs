@@ -152,11 +152,15 @@ fn web(settings: &Settings, cloud_id: &str, client: &Client, runner: &Runner<'_>
     let deadline = Instant::now() + WEB_TIMEOUT;
     let code = loop {
         match listener.accept() {
-            Ok((stream, _)) => {
-                if let Some(code) = callback(stream, &state) {
-                    break code;
+            Ok((stream, _)) => match callback(stream, &state) {
+                Some(Callback::Code(code)) => break code,
+                Some(Callback::Denied) => {
+                    return Err(Ended::Reason(
+                        "You declined the sign-in on GitHub, so this cloud has no GitHub access.".into(),
+                    ));
                 }
-            }
+                None => {}
+            },
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     return Err(Ended::Reason(
@@ -205,9 +209,16 @@ pub(super) fn authorize_url(client_id: &str, redirect: &str, state: &str, challe
     )
 }
 
-/// Reads one request on the loopback port. Returns the code of a callback whose
-/// `state` matches; any other request gets a plain answer and is ignored.
-pub(super) fn callback(mut stream: TcpStream, state: &str) -> Option<Secret> {
+/// What a callback with the expected `state` brought.
+pub(super) enum Callback {
+    Code(Secret),
+    /// GitHub reported an error, such as the person declining the sign-in.
+    Denied,
+}
+
+/// Reads one request on the loopback port. Returns what a callback whose `state`
+/// matches brought; any other request gets a plain answer and is ignored.
+pub(super) fn callback(mut stream: TcpStream, state: &str) -> Option<Callback> {
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     // Read the whole request head, so closing the connection never resets it.
@@ -219,36 +230,47 @@ pub(super) fn callback(mut stream: TcpStream, state: &str) -> Option<Secret> {
             Ok(count) => read += count,
         }
     }
-    let code = std::str::from_utf8(&buffer[..read])
+    let outcome = std::str::from_utf8(&buffer[..read])
         .ok()
-        .and_then(|request| matching_code(request, state));
-    let body = if code.is_some() {
-        "Horizon received GitHub's answer and is finishing the sign-in. You can close this page."
-    } else {
-        "Horizon did not expect this request."
+        .and_then(|request| matching_callback(request, state));
+    let body = match outcome {
+        Some(Callback::Code(_)) => {
+            "Horizon received GitHub's answer and is finishing the sign-in. You can close this page."
+        }
+        Some(Callback::Denied) => "The sign-in was declined. You can close this page.",
+        None => "Horizon did not expect this request.",
     };
     let _ = write!(
         stream,
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    code
+    outcome
 }
 
 /// The code of a `GET /callback` request whose `state` matches.
-fn matching_code(request: &str, state: &str) -> Option<Secret> {
+fn matching_callback(request: &str, state: &str) -> Option<Callback> {
     let target = request.strip_prefix("GET ")?.split(' ').next()?;
     let query = target.strip_prefix("/callback?")?;
     let mut code = None;
+    let mut error = false;
     let mut matched = false;
     for pair in query.split('&') {
         match pair.split_once('=') {
             Some(("code", value)) if valid_code(value) => code = Some(Secret::new(value.to_owned())),
+            Some(("error", _)) => error = true,
             Some(("state", value)) => matched = value == state,
             _ => {}
         }
     }
-    code.filter(|_| matched)
+    if !matched {
+        return None;
+    }
+    if error {
+        Some(Callback::Denied)
+    } else {
+        code.map(Callback::Code)
+    }
 }
 
 fn valid_code(code: &str) -> bool {

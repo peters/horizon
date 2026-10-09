@@ -47,6 +47,11 @@ fn open(url: &str) {
 }
 
 impl Card {
+    /// Whether a Connect GitHub flow is under way.
+    pub(super) fn connecting(&self) -> bool {
+        self.connecting.is_some()
+    }
+
     /// Creates the app with the manifest flow, saves it, and checks its device sign-in.
     fn connect(&mut self, root: std::path::PathBuf) {
         let (tx, rx) = channel();
@@ -239,5 +244,19 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
              clouds, delete the app on GitHub."
                 .into(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Card;
+
+    #[test]
+    fn a_connect_flow_under_way_holds_the_form_save() {
+        let mut card = Card::default();
+        assert!(!card.connecting());
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        card.connecting = Some(receiver);
+        assert!(card.connecting(), "Save waits while the flow runs");
     }
 }
