@@ -2,7 +2,7 @@
 use crate::theme;
 use egui::{ProgressBar, RichText, Ui};
 use horizon_core::cloud_runtime::{Cancellation, repository::source::Snapshot};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The time left in the words a person would use: coarse, and never more exact than it is.
 pub(super) fn left(eta: Duration) -> String {
@@ -33,8 +33,9 @@ pub(super) fn title(snapshot: &Snapshot) -> String {
     }
 }
 
-/// The line under the bar: what was received and how fast, then the time left.
-pub(super) fn detail(snapshot: &Snapshot) -> String {
+/// The line under the bar: what was received and how fast, then the time left at `now`, for
+/// the whole clone when the host told its size and for the step otherwise.
+pub(super) fn detail(snapshot: &Snapshot, now: Instant) -> String {
     let mut parts = Vec::new();
     if let Some(percent) = snapshot.percent {
         parts.push(format!("{percent}%"));
@@ -42,8 +43,12 @@ pub(super) fn detail(snapshot: &Snapshot) -> String {
     if !snapshot.detail.is_empty() {
         parts.push(snapshot.detail.clone());
     }
-    if let Some(eta) = snapshot.eta {
-        parts.push(left(eta));
+    if let Some(ends) = snapshot.ends {
+        parts.push(match ends.checked_duration_since(now).filter(|left| !left.is_zero()) {
+            Some(left_now) if snapshot.whole => left(left_now),
+            Some(left_now) => format!("{} in this step", left(left_now)),
+            None => "almost done".into(),
+        });
     }
     parts.join(" · ")
 }
@@ -68,9 +73,13 @@ pub(super) fn show(ui: &mut Ui, snapshot: &Snapshot, cancel: &Cancellation) {
     } else {
         bar.animate(true)
     });
-    let detail = detail(snapshot);
+    // Counted down live, between Git's own lines too.
+    let detail = detail(snapshot, Instant::now());
     if !detail.is_empty() {
         ui.label(RichText::new(detail).size(12.5).color(theme::FG_DIM()));
+    }
+    if snapshot.ends.is_some() {
+        ui.ctx().request_repaint_after(Duration::from_secs(1));
     }
 }
 
@@ -105,13 +114,28 @@ mod tests {
     }
 
     #[test]
-    fn the_detail_joins_what_is_known() {
+    fn the_detail_joins_what_is_known_and_counts_down() {
+        let now = Instant::now();
         let mut snapshot = Snapshot::default();
-        assert_eq!(detail(&snapshot), "");
+        assert_eq!(detail(&snapshot, now), "");
         snapshot.detail = "12.30 MiB | 4.50 MiB/s".into();
-        assert_eq!(detail(&snapshot), "12.30 MiB | 4.50 MiB/s");
+        assert_eq!(detail(&snapshot, now), "12.30 MiB | 4.50 MiB/s");
         snapshot.percent = Some(45);
-        snapshot.eta = Some(Duration::from_secs(8));
-        assert_eq!(detail(&snapshot), "45% · 12.30 MiB | 4.50 MiB/s · about 8 s left");
+        snapshot.ends = Some(now + Duration::from_secs(8));
+        assert_eq!(
+            detail(&snapshot, now),
+            "45% · 12.30 MiB | 4.50 MiB/s · about 8 s left in this step"
+        );
+        snapshot.whole = true;
+        assert_eq!(detail(&snapshot, now), "45% · 12.30 MiB | 4.50 MiB/s · about 8 s left");
+        assert_eq!(
+            detail(&snapshot, now + Duration::from_secs(3)),
+            "45% · 12.30 MiB | 4.50 MiB/s · about 5 s left",
+            "live, between Git's lines"
+        );
+        assert_eq!(
+            detail(&snapshot, now + Duration::from_secs(9)),
+            "45% · 12.30 MiB | 4.50 MiB/s · almost done"
+        );
     }
 }

@@ -12,8 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Where a running clone stands, for showing it: the step, Git's phase, how far, and when that
-/// phase should end.
+/// Where a running clone stands, for showing it: the step, Git's phase, how far, and when the
+/// clone, or else the step, should end.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Snapshot {
     /// The step under way, from 1, and how many there are; 0 before the first starts.
@@ -26,8 +26,16 @@ pub struct Snapshot {
     pub percent: Option<u8>,
     /// Git's size and speed for the phase, such as `12.30 MiB | 4.50 MiB/s`.
     pub detail: String,
-    /// How long the phase has left at the pace it has kept, once there is a pace to go by.
-    pub eta: Option<Duration>,
+    /// When the whole clone should end at the pace kept so far, or only the step when `whole`
+    /// is false, once there is a pace to go by. A viewer counts down to it.
+    pub ends: Option<Instant>,
+    /// `ends` is for the whole clone: the host told the repository's size.
+    pub whole: bool,
+    /// What the whole clone receives, as the host counts it, once it answered.
+    pub expected: Option<u64>,
+    /// What the steps before this one received, and what this one has so far.
+    pub received: u64,
+    pub receiving: u64,
 }
 
 /// Shared between the clone and whoever shows it.
@@ -208,10 +216,10 @@ impl Watched {
             }
             let left = eta(self.phase_started.elapsed(), percent);
             update(progress, |snapshot| {
+                estimate::take(snapshot, &name, &detail, left, Instant::now());
                 snapshot.phase = name;
                 snapshot.percent = Some(percent);
                 snapshot.detail = detail;
-                snapshot.eta = left;
             });
         } else if !is_chatter(line) {
             keep_tail(&mut self.said, line);
@@ -553,11 +561,17 @@ fn quietly(mut command: Command, folder: &Path, remote: &Remote, cancel: &Cancel
 
 fn announce(progress: &Progress, step: u8, resumed: bool) {
     update(progress, |snapshot| {
+        // What earlier steps received, and the whole clone's estimate, carry on.
+        let whole = snapshot.ends.filter(|_| snapshot.whole);
         *snapshot = Snapshot {
             step,
             steps: STEPS,
             resumed,
             phase: "Connecting".into(),
+            ends: whole,
+            whole: whole.is_some(),
+            expected: snapshot.expected,
+            received: snapshot.received.saturating_add(snapshot.receiving),
             ..Snapshot::default()
         };
     });
@@ -611,6 +625,11 @@ fn claimed_steps(
         return Ok(());
     }
     announce(progress, 1, earlier.is_some());
+    if earlier.is_some() {
+        let before = estimate::received_before(destination);
+        update(progress, |snapshot| snapshot.received = before);
+    }
+    estimate::look_up(remote, token, progress);
     let marker = if let Some(marker) = earlier {
         // The try before may have been ended by a crash or a kill, mid-write.
         clear_leftovers(destination);
@@ -784,6 +803,8 @@ fn interrupted(failure: Failure) -> Failure {
         other => Failure::Interrupted(format!("{other} {RESUME}")),
     }
 }
+
+mod estimate;
 
 #[cfg(test)]
 mod tests;

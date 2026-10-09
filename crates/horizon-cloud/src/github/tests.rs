@@ -479,3 +479,18 @@ fn a_device_sign_in_asks_for_a_scope_only_when_given_one() {
         [("client_id".to_owned(), "Iv23synthetic".to_owned())]
     );
 }
+
+#[test]
+fn a_repository_size_is_read_in_bytes_with_or_without_a_token() {
+    let (client, requests, task) = github(vec![(200, json!({"size": 2048})), (200, json!({"size": 1}))]);
+    assert_eq!(client.repository_size("acme/web", None).unwrap(), 2048 * 1024);
+    let token = Secret::new("ghu_synthetic".into());
+    assert_eq!(client.repository_size("acme/private", Some(&token)).unwrap(), 1024);
+    task.join().unwrap();
+    let lines: Vec<String> = requests.lock().unwrap().iter().map(|(line, _)| line.clone()).collect();
+    assert_eq!(
+        lines,
+        ["GET /repos/acme/web HTTP/1.1", "GET /repos/acme/private HTTP/1.1"]
+    );
+    assert!(client.repository_size("acme/../x", None).is_err(), "never sent");
+}
