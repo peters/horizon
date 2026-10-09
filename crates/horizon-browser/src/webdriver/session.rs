@@ -1116,7 +1116,8 @@ mod tests {
         let prefs = &capabilities["moz:firefoxOptions"]["prefs"];
 
         assert_eq!(capabilities["moz:firefoxOptions"]["args"][0], "-headless");
-        assert!(firefox_args_include(&capabilities, "-remote-allow-system-access"));
+        assert!(!firefox_args_include(&capabilities, "-remote-allow-system-access"));
+        assert!(geckodriver_allows_system_access(&config));
         assert_eq!(prefs["widget.gtk.overlay-scrollbars.enabled"], false);
         assert_eq!(prefs["ui.useOverlayScrollbars"], 0);
         assert_eq!(prefs["remote.bidi.dismiss_file_pickers.enabled"], true);
@@ -1140,19 +1141,26 @@ mod tests {
                 .as_array()
                 .is_some_and(|args| args.iter().all(|argument| argument != "-headless"))
         );
-        assert!(firefox_args_include(&visible, "-remote-allow-system-access"));
+        assert!(!firefox_args_include(&visible, "-remote-allow-system-access"));
+        assert!(geckodriver_allows_system_access(&BrowserConfig {
+            headless: false,
+            ..config.clone()
+        }));
 
-        let browser_default = new_session_capabilities(
-            &BrowserConfig {
-                automation_disclosure: crate::AutomationDisclosurePolicy::BrowserDefault,
-                ..config
-            },
-            "panel",
-            true,
-            false,
-        )
-        .unwrap_or_default();
+        let browser_default_config = BrowserConfig {
+            automation_disclosure: crate::AutomationDisclosurePolicy::BrowserDefault,
+            ..config
+        };
+        let browser_default =
+            new_session_capabilities(&browser_default_config, "panel", true, false).unwrap_or_default();
         assert!(!firefox_args_include(&browser_default, "-remote-allow-system-access"));
+        assert!(!geckodriver_allows_system_access(&browser_default_config));
+    }
+
+    fn geckodriver_allows_system_access(config: &crate::BrowserConfig) -> bool {
+        super::super::service::firefox_service_arguments(config, 9, 10)
+            .iter()
+            .any(|argument| argument == "--allow-system-access")
     }
 
     fn firefox_args_include(capabilities: &serde_json::Value, argument: &str) -> bool {

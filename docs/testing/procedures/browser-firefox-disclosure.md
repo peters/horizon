@@ -25,6 +25,8 @@ It also tests the preload fallback and a sign-in field on a browser panel.
 ## 3. Safety
 
 > **CAUTION:** USE ONLY SYNTHETIC ACCOUNT TEXT. A real password or a login click can lock the account.
+>
+> **CAUTION:** USE ONLY THE ISOLATED DESKTOP. A click on the developer desktop can change a real session.
 
 ## 4. Equipment and preconditions
 
@@ -32,7 +34,7 @@ It also tests the preload fallback and a sign-in field on a browser panel.
 - Local Firefox and geckodriver on PATH.
 - Permission to bind a loopback port.
 - Permission to start a headless Firefox process.
-- For task 6.6, a Horizon build from this checkout.
+- For task 6.6, a frozen Horizon candidate and the local device fixture.
 
 ## 5. Setup
 
@@ -56,8 +58,9 @@ It also tests the preload fallback and a sign-in field on a browser panel.
 
 1. Run `cargo test -p horizon-browser --lib firefox_screenshot_session_keeps_scrollbars_visible`.
 
-   Result: A minimize session includes `-remote-allow-system-access`.
-   A `BrowserDefault` session does not include that argument.
+   Result: A minimize session starts geckodriver with `--allow-system-access`.
+   A `BrowserDefault` session does not start geckodriver with that argument.
+   Firefox options do not include `-remote-allow-system-access`.
 
 ### 6.3 SHARED-CLEAR — One clear for a shared process
 
@@ -71,7 +74,8 @@ It also tests the preload fallback and a sign-in field on a browser panel.
 
 1. Run `cargo test -p horizon-browser --lib shared_process_uses_the_preload_fallback_when_chrome_context_is_unavailable`.
 
-   Result: The clear keeps the content context.
+   Result: The chrome switch fails.
+   The clear returns the session to the content context.
    The native flag stays set, so the preload shim can run.
 
 ### 6.5 UNSAFE — Stop a session stuck in the chrome context
@@ -83,37 +87,45 @@ It also tests the preload fallback and a sign-in field on a browser panel.
 
 ### 6.6 SIGN-IN — A panel field accepts synthetic text
 
-1. Start Horizon from this checkout.
+1. Start the local device fixture with the frozen candidate and `--native-view`.
 
-   Result: The Horizon window is open.
+   Result: The fixture prints a loopback VNC address. `viewer_url` is null.
 
-2. Open a Firefox browser panel.
+2. Open that address with the public `device_panel` tool.
+
+   Result: The Device panel shows the isolated desktop.
+
+3. Inspect the Device panel twice, two seconds apart.
+
+   Result: The displayed frame advances.
+
+4. In the isolated Horizon window, open a Firefox browser panel.
 
    Result: The panel is ready.
 
-3. Go to `https://accounts.google.com/ServiceLogin?hl=en`.
+5. Go to `https://accounts.google.com/ServiceLogin?hl=en`.
 
    Result: The Google sign-in form is open.
 
-4. Type `not-a-real-person@example.com` in the email field.
+6. Type `not-a-real-person@example.com` in the email field.
 
    Result: The email field shows that text.
 
-5. Do not click Next.
+7. Do not click Next.
 
    Result: The page does not show the text "This browser or app may not be secure."
 
-6. Go to `https://x.com/i/flow/login`.
+8. Go to `https://x.com/i/flow/login`.
 
    Result: The X login form is open.
 
-7. Type `not-a-real-person` in the username field.
+9. Type `not-a-real-person` in the username field.
 
    Result: The username field shows that text.
 
-8. Do not click Continue.
+10. Do not click Continue.
 
-   Result: The login form is still open.
+    Result: The login form is still open.
 
 ## 7. Pass criteria
 
@@ -124,9 +136,11 @@ It also tests the preload fallback and a sign-in field on a browser panel.
 
 ## 8. Cleanup
 
-1. Close the Firefox panel.
+1. Close the Firefox panel inside the isolated Horizon window.
+2. Close the Device panel with the `device_panel` operation `close`.
+3. Stop the fixture processes that this run started.
 
-   Result: The panel session stops.
+   Result: The candidate process stops. The developer desktop does not change.
 
 ## 9. Record of results
 

@@ -995,16 +995,26 @@ mod tests {
 
     #[test]
     fn shared_process_uses_the_preload_fallback_when_chrome_context_is_unavailable() {
-        let server = Server::start(vec![Reply::json(
-            500,
-            &json!({"value":{"error":"unknown error","message":"no system access"}}),
-        )]);
+        let server = Server::start(vec![
+            Reply::json(
+                500,
+                &json!({"value":{"error":"unknown error","message":"no system access"}}),
+            ),
+            Reply::json(200, &json!({"value": null})),
+        ]);
         let http = HttpClient::new(([127, 0, 0, 1], server.port).into()).expect("client");
         let mut state = minimized_state();
         state.clear_native_automation_flag(&http, "session").expect("fallback");
         assert!(!state.native_automation_flag_cleared);
         assert!(state.native_flag_decided);
-        assert_eq!(server.recorded().len(), 1);
+        assert_eq!(
+            server
+                .recorded()
+                .iter()
+                .map(|request| request.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/session/session/moz/context", "/session/session/moz/context"]
+        );
     }
 
     #[test]

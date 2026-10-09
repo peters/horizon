@@ -31,10 +31,12 @@ fn firefox_minimization_keeps_a_native_webdriver_getter_false() {
     let addr = listener.local_addr().expect("addr");
     thread::spawn(move || serve_fixture(&listener));
 
+    let profiles = tempfile::tempdir().expect("profile root");
     let frame_slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
         browser: BrowserConfig {
             backend: BackendKind::FirefoxBidi,
+            profile_root: Some(profiles.path().to_path_buf()),
             ..BrowserConfig::default()
         },
         panel_local_id: "firefox-native-webdriver-flag".into(),

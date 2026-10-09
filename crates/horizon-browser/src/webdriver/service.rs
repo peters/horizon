@@ -93,7 +93,11 @@ impl WebDriverService {
                 .transpose()
                 .map_err(|error| format!("failed to read reserved Firefox BiDi port: {error}"))?
                 .map(|address| address.port());
-            let args = service_args(config.backend, address.port(), bidi_port, base_args.clone());
+            let args = if config.backend == BackendKind::FirefoxBidi {
+                firefox_service_arguments(config, address.port(), bidi_port.unwrap_or(address.port()))
+            } else {
+                service_args(config.backend, address.port(), bidi_port, base_args.clone())
+            };
             drop(bidi_listener);
             drop(webdriver_listener);
             let mut process = ServiceProcess::spawn(&command, &args, control.clone(), label)
@@ -137,6 +141,16 @@ impl WebDriverService {
 
 fn status_is_ready(status: &serde_json::Value) -> bool {
     status.pointer("/value/ready").and_then(serde_json::Value::as_bool) == Some(true)
+}
+
+pub(super) fn firefox_service_arguments(config: &BrowserConfig, port: u16, bidi_port: u16) -> Vec<String> {
+    let mut extra = Vec::new();
+    // geckodriver 0.37 rejects this privilege inside `moz:firefoxOptions`.
+    // The process flag is what opens the chrome context for the native flag.
+    if config.automation_disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals {
+        extra.push("--allow-system-access".to_string());
+    }
+    service_args(BackendKind::FirefoxBidi, port, Some(bidi_port), extra)
 }
 
 fn service_args(backend: BackendKind, port: u16, bidi_port: Option<u16>, mut extra: Vec<String>) -> Vec<String> {
