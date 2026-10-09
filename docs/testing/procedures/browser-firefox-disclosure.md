@@ -19,6 +19,7 @@ It also tests the preload fallback and one synthetic sign-in check.
 
 - Use the candidate source checkout.
 - On Linux, Firefox and geckodriver must be on PATH.
+- Task 6.1 needs geckodriver 0.37 or newer.
 - This procedure does not test Chromium or Safari.
 - This procedure sends one synthetic Google identifier.
 - This procedure does not send a password.
@@ -34,6 +35,7 @@ It also tests the preload fallback and one synthetic sign-in check.
 
 - Rust and the workspace build tools.
 - Local Firefox and geckodriver on PATH.
+- For task 6.1, geckodriver 0.37 or newer.
 - Permission to bind a loopback port.
 - Permission to start a headless Firefox process.
 - For task 6.6, a frozen Horizon candidate and the local device fixture.
@@ -55,6 +57,7 @@ It also tests the preload fallback and one synthetic sign-in check.
 1. Run `cargo test -p horizon-browser --test firefox_native_flag_live -- --ignored --nocapture`.
 
    Result: The test passes. The page title is `false native`.
+   Geckodriver older than 0.37 uses the preload fallback.
 
 ### 6.2 LAUNCH-POLICY — Both disclosure policies
 

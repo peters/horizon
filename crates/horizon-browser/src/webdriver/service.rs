@@ -77,7 +77,7 @@ impl WebDriverService {
             BackendKind::ChromiumCdp => return Err("Chromium does not use WebDriver service startup".to_string()),
         };
 
-        let mut permit_system_access = true;
+        let mut permit_system_access = firefox_requests_system_access(config);
         for attempt in 1..=STARTUP_ATTEMPTS {
             let webdriver_listener = reserve_loopback_listener()?;
             let address = webdriver_listener
@@ -164,11 +164,19 @@ pub(super) fn firefox_service_arguments(
     let mut extra = Vec::new();
     // geckodriver 0.37 rejects this privilege inside `moz:firefoxOptions`.
     // Older drivers reject the process flag, so startup retries without it.
-    if permit_system_access && config.automation_disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals
-    {
+    if permit_system_access && firefox_requests_system_access(config) {
         extra.push("--allow-system-access".to_string());
     }
     service_args(BackendKind::FirefoxBidi, port, Some(bidi_port), extra)
+}
+
+/// True only for a minimized Firefox session. Safari and `BrowserDefault` never
+/// pass `--allow-system-access`, so an unfinished stderr tail must not claim
+/// that startup is retrying without that flag.
+#[must_use]
+pub(super) fn firefox_requests_system_access(config: &BrowserConfig) -> bool {
+    config.backend == BackendKind::FirefoxBidi
+        && config.automation_disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals
 }
 
 /// Drop `--allow-system-access` when geckodriver rejected it, or when the
@@ -288,6 +296,28 @@ mod tests {
             backend: BackendKind::FirefoxBidi,
             ..crate::BrowserConfig::default()
         };
+        let browser_default = crate::BrowserConfig {
+            backend: BackendKind::FirefoxBidi,
+            automation_disclosure: crate::AutomationDisclosurePolicy::BrowserDefault,
+            ..crate::BrowserConfig::default()
+        };
+        let safari = crate::BrowserConfig {
+            backend: BackendKind::SafariWebDriver,
+            ..crate::BrowserConfig::default()
+        };
+        assert!(super::firefox_requests_system_access(&config));
+        assert!(!super::firefox_requests_system_access(&browser_default));
+        assert!(!super::firefox_requests_system_access(&safari));
+        assert!(!super::retry_without_system_access(
+            super::firefox_requests_system_access(&browser_default),
+            false,
+            ""
+        ));
+        assert!(!super::retry_without_system_access(
+            super::firefox_requests_system_access(&safari),
+            false,
+            ""
+        ));
         assert!(
             super::firefox_service_arguments(&config, 9, 10, true)
                 .iter()
