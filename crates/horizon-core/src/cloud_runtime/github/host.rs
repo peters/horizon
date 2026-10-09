@@ -49,6 +49,10 @@ fn configured(root: &Path, settings: &Settings) -> bool {
 /// GitHub out of reach or not confirming the sign-in, which is then kept, or a local file
 /// that cannot be read or written.
 pub fn current(root: &Path, settings: &Settings) -> Result<Option<(String, Secret)>> {
+    renewed(root, settings, &Client::new())
+}
+
+fn renewed(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(String, Secret)>> {
     let _lock = lock(root, settings)?;
     if !configured(root, settings) {
         return stored::forget(&path(root, settings));
@@ -57,7 +61,7 @@ pub fn current(root: &Path, settings: &Settings) -> Result<Option<(String, Secre
     // device chain needs none, and the secret is then not read.
     stored::current(
         &path(root, settings),
-        &Client::new(),
+        client,
         &settings.client_id,
         Some(&|| settings.client_secret()),
     )

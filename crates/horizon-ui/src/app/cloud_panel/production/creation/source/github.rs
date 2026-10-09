@@ -543,7 +543,7 @@ mod tests {
     #[test]
     fn a_token_asked_for_another_repository_starts_nothing() {
         let mut state = super::super::State::default();
-        state.edit_for_test("github.com/acme/other");
+        state.input = "github.com/acme/other".into();
         state.account_for = horizon_core::cloud_runtime::repository::source::parse("github.com/acme/private");
         let (sender, receiver) = channel();
         sender
