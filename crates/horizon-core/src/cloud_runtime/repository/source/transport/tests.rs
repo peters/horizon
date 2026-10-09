@@ -550,3 +550,36 @@ fn a_failed_step_that_cannot_clean_up_after_itself_says_where_it_left_the_folder
         "nothing to remove is no news"
     );
 }
+
+#[test]
+fn a_stopped_clone_resumes_from_the_owners_folder_before_the_earlier_place() {
+    let temp = tempfile::tempdir().unwrap();
+    let remote = super::super::parse("github.com/demo-org/demo").unwrap();
+    let stopped = |folder: &Path| {
+        std::fs::create_dir_all(folder.join(".git")).unwrap();
+        write_marker(
+            folder,
+            &Marker {
+                url: remote.url.clone(),
+                branch: "main".into(),
+                done: 1,
+            },
+        )
+        .unwrap();
+    };
+    // One an earlier Horizon left straight under the parent still resumes.
+    let earlier = temp.path().join("demo");
+    stopped(&earlier);
+    assert_eq!(resumable(temp.path(), &remote), Some(earlier));
+    // One in the owner's folder, where new clones go, comes first.
+    let kept = temp.path().join("demo-org/demo");
+    stopped(&kept);
+    assert_eq!(resumable(temp.path(), &remote), Some(kept.clone()));
+    // Another owner's stopped clone of the same name is not this one.
+    let other = super::super::parse("github.com/acme/demo").unwrap();
+    assert_eq!(resumable(temp.path(), &other), None);
+    assert_eq!(
+        super::super::destination(temp.path(), &other),
+        temp.path().join("acme/demo")
+    );
+}
