@@ -225,22 +225,28 @@ pub(super) fn establish_bidi(
         host.delete_session(session_id);
         return Err("Firefox BiDi returned no top-level browsing context".to_string());
     }
-    let native_flag_cleared =
-        if firefox_bidi && config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals {
-            match clear_firefox_native_automation_flag(host.transport(), session_id) {
-                FirefoxNativeFlagClear::Cleared => true,
-                FirefoxNativeFlagClear::Unavailable(error) => {
-                    tracing::warn!("Firefox native automation flag stayed set; using the preload fallback: {error}");
-                    false
-                }
-                FirefoxNativeFlagClear::Unsafe(error) => {
-                    host.delete_session(session_id);
-                    return Err(error);
-                }
+    // A shared process clears the flags once on its session transport, before
+    // page commands exist. Repeating that session-global switch here is refused.
+    let native_flag_cleared = if host.native_automation_flag_cleared() {
+        true
+    } else if shared {
+        false
+    } else if firefox_bidi && config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
+    {
+        match clear_firefox_native_automation_flag(host.transport(), session_id) {
+            FirefoxNativeFlagClear::Cleared => true,
+            FirefoxNativeFlagClear::Unavailable(error) => {
+                tracing::warn!("Firefox native automation flag stayed set; using the preload fallback: {error}");
+                false
             }
-        } else {
-            false
-        };
+            FirefoxNativeFlagClear::Unsafe(error) => {
+                host.delete_session(session_id);
+                return Err(error);
+            }
+        }
+    } else {
+        false
+    };
     if shared && let Some(link) = bidi.as_mut() {
         super::bidi::subscribe_shared_page(link, host, config.browser.automation_disclosure, native_flag_cleared)?;
     }

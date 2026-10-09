@@ -12,7 +12,7 @@ use crate::websocket::{JsonWsError, JsonWsLink};
 use super::host::DriverHost;
 use super::http::{HttpClient, HttpError, remaining_timeout};
 use super::service::WebDriverService;
-use super::session::handshake::NewSession;
+use super::session::handshake::{FirefoxNativeFlagClear, NewSession, clear_firefox_native_automation_flag};
 use super::transport::ClassicTransport;
 
 #[derive(Clone)]
@@ -35,6 +35,10 @@ struct GroupState {
     profile_retired: bool,
     creation_uncertain: bool,
     launch_identity: Option<FirefoxLaunchIdentity>,
+    /// Set once for the process. Later pages must not install the preload
+    /// shim when this is true, and must not repeat the session-global clear.
+    native_automation_flag_cleared: bool,
+    native_flag_decided: bool,
 }
 
 #[derive(PartialEq, Eq)]
@@ -71,6 +75,45 @@ impl GroupState {
         }
         self.launch_identity.get_or_insert(identity);
         Ok(())
+    }
+
+    /// Clear the native automation flags once on the session transport.
+    ///
+    /// Page commands cannot switch `moz/context`. Doing it here, before the
+    /// first page host exists, keeps later windows on the native getter.
+    ///
+    /// # Errors
+    /// Returns an error when the session is left in the chrome context.
+    fn clear_native_automation_flag(
+        &mut self,
+        transport: &dyn ClassicTransport,
+        session_id: &str,
+    ) -> Result<(), String> {
+        if self.native_flag_decided {
+            return Ok(());
+        }
+        let disclosure = self
+            .launch_identity
+            .as_ref()
+            .map(|identity| identity.disclosure)
+            .unwrap_or_default();
+        if disclosure != crate::AutomationDisclosurePolicy::MinimizeCommonSignals {
+            self.native_flag_decided = true;
+            return Ok(());
+        }
+        match clear_firefox_native_automation_flag(transport, session_id) {
+            FirefoxNativeFlagClear::Cleared => {
+                self.native_automation_flag_cleared = true;
+                self.native_flag_decided = true;
+                Ok(())
+            }
+            FirefoxNativeFlagClear::Unavailable(error) => {
+                tracing::warn!("shared Firefox native automation flag stayed set; using the preload fallback: {error}");
+                self.native_flag_decided = true;
+                Ok(())
+            }
+            FirefoxNativeFlagClear::Unsafe(error) => Err(error),
+        }
     }
 }
 
@@ -163,6 +206,11 @@ impl SharedFirefoxSession {
             let DriverHost::Local(service) = host else {
                 return Err("shared Firefox requires a local service".into());
             };
+            if let Err(error) = state.clear_native_automation_flag(&service.http, &session.id) {
+                service.delete_session(&session.id);
+                drop(service);
+                return Err(error);
+            }
             state.service = Some(service);
             state.session_id = session.id;
             session
@@ -215,6 +263,7 @@ impl SharedFirefoxSession {
             context: context.clone(),
             session_id: state.session_id.clone(),
             contexts: std::collections::HashSet::from([context.clone()]),
+            native_flag_cleared: state.native_automation_flag_cleared,
         };
         let session = NewSession {
             id: state.session_id.clone(),
@@ -472,6 +521,7 @@ pub(super) struct SharedFirefoxPage {
     pub(super) context: String,
     session_id: String,
     contexts: std::collections::HashSet<String>,
+    pub(super) native_flag_cleared: bool,
 }
 
 impl SharedFirefoxPage {
@@ -734,6 +784,7 @@ mod tests {
                 context: context.into(),
                 session_id: "session".into(),
                 contexts: std::collections::HashSet::from([context.into()]),
+                native_flag_cleared: false,
             },
             retained,
         )
@@ -885,6 +936,7 @@ mod tests {
             ("POST", "/session/session/timeouts"),
             ("DELETE", "/session/session/actions"),
             ("POST", "/session/session/window"),
+            ("POST", "/session/session/moz/context"),
             ("POST", "/session/session/frame"),
             ("GET", "/session/other/title"),
             ("POST", "/session/session/element/file/../value"),
@@ -896,6 +948,95 @@ mod tests {
                 Err(HttpError::InvalidResponse(_))
             ));
         }
+    }
+
+    fn minimized_state() -> GroupState {
+        let mut state = GroupState::default();
+        let config = crate::BrowserConfig {
+            backend: crate::BackendKind::FirefoxBidi,
+            ..crate::BrowserConfig::default()
+        };
+        state.pin_launch(&config, "group", false).expect("pin");
+        state
+    }
+
+    #[test]
+    fn shared_process_clears_the_native_automation_flag_once() {
+        let server = Server::start(vec![
+            Reply::json(200, &json!({"value": null})),
+            Reply::json(200, &json!({"value": true})),
+            Reply::json(200, &json!({"value": null})),
+        ]);
+        let http = HttpClient::new(([127, 0, 0, 1], server.port).into()).expect("client");
+        let mut state = minimized_state();
+        state.clear_native_automation_flag(&http, "session").expect("clear");
+        state
+            .clear_native_automation_flag(&http, "session")
+            .expect("second clear is a no-op");
+        assert!(state.native_automation_flag_cleared);
+        assert_eq!(
+            server
+                .recorded()
+                .iter()
+                .map(|request| request.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "/session/session/moz/context",
+                "/session/session/execute/sync",
+                "/session/session/moz/context",
+            ]
+        );
+        let (page, _) = page(SharedFirefoxSession::new("profile".into()), server.port, "page");
+        assert!(
+            page.post("/session/session/moz/context", &json!({"context": "chrome"}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn shared_process_uses_the_preload_fallback_when_chrome_context_is_unavailable() {
+        let server = Server::start(vec![Reply::json(
+            500,
+            &json!({"value":{"error":"unknown error","message":"no system access"}}),
+        )]);
+        let http = HttpClient::new(([127, 0, 0, 1], server.port).into()).expect("client");
+        let mut state = minimized_state();
+        state.clear_native_automation_flag(&http, "session").expect("fallback");
+        assert!(!state.native_automation_flag_cleared);
+        assert!(state.native_flag_decided);
+        assert_eq!(server.recorded().len(), 1);
+    }
+
+    #[test]
+    fn shared_process_rejects_a_session_stuck_in_chrome_context() {
+        let server = Server::start(vec![
+            Reply::json(200, &json!({"value": null})),
+            Reply::json(200, &json!({"value": true})),
+            Reply::json(500, &json!({"value":{"error":"unknown error","message":"stuck"}})),
+        ]);
+        let http = HttpClient::new(([127, 0, 0, 1], server.port).into()).expect("client");
+        let mut state = minimized_state();
+        assert!(state.clear_native_automation_flag(&http, "session").is_err());
+        assert!(!state.native_automation_flag_cleared);
+        assert!(!state.native_flag_decided);
+        assert_eq!(server.recorded().len(), 3);
+    }
+
+    #[test]
+    fn shared_process_skips_the_native_flag_for_browser_default() {
+        let server = Server::start(vec![]);
+        let http = HttpClient::new(([127, 0, 0, 1], server.port).into()).expect("client");
+        let mut state = GroupState::default();
+        let config = crate::BrowserConfig {
+            backend: crate::BackendKind::FirefoxBidi,
+            automation_disclosure: crate::AutomationDisclosurePolicy::BrowserDefault,
+            ..crate::BrowserConfig::default()
+        };
+        state.pin_launch(&config, "group", false).expect("pin");
+        state.clear_native_automation_flag(&http, "session").expect("skip");
+        assert!(!state.native_automation_flag_cleared);
+        assert!(state.native_flag_decided);
+        assert!(server.recorded().is_empty());
     }
 
     #[test]

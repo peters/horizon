@@ -75,7 +75,7 @@ fn wait_for_title(session: &BrowserSession) -> String {
     while Instant::now() < deadline {
         while let Ok(event) = session.event_rx.try_recv() {
             if let BrowserEvent::Title(title) = &event {
-                latest = title.clone();
+                latest.clone_from(title);
                 if title == "false native" || title.ends_with("patched") || title.starts_with("true") {
                     return title.clone();
                 }

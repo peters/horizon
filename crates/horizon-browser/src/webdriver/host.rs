@@ -50,6 +50,14 @@ impl DriverHost {
         }
     }
 
+    /// True when this shared process already cleared the native automation flags.
+    pub(super) fn native_automation_flag_cleared(&self) -> bool {
+        match self {
+            Self::Shared(page) => page.native_flag_cleared,
+            _ => false,
+        }
+    }
+
     pub(super) fn remember_bidi_registration(&mut self, method: &'static str, id: String) {
         if let Self::Shared(page) = self {
             page.remember(method, id);

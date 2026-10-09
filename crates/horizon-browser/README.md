@@ -41,11 +41,16 @@ because that accessor is itself a detection signal. The engine reads native
 Client Hint values on a network-free temporary target and closes that target
 before attaching the caller's `about:blank` page, so it cannot enter caller
 history or frames. Title updates use protocol target metadata rather than a
-page-JS binding. Firefox installs a narrow `navigator.webdriver` value shim
-with WebDriver BiDi `script.addPreloadScript` before the initial navigation;
-startup fails instead of silently downgrading when that required BiDi command
-is rejected. Chromium panels minimizing common signals also use a reserved
-nonzero loopback DevTools port so Chromium does not enable its port-zero
+page-JS binding. Firefox first clears the Marionette and Remote Agent
+automation flags from the chrome context, so the native `navigator.webdriver`
+getter stays native and returns false. A shared Firefox process does that
+once, on the session transport, before page commands are limited to one
+window. If the chrome context is unavailable, Firefox falls back to a narrow
+`navigator.webdriver` value shim installed with WebDriver BiDi
+`script.addPreloadScript` before the initial navigation. Startup fails when
+that fallback command is rejected, and also when the session cannot return
+from the chrome context. Chromium panels minimizing common signals also use a
+reserved nonzero loopback DevTools port so Chromium does not enable its port-zero
 `AutomationControlled` behavior. Startup retries with a fresh reservation when
 another local process wins the required socket handoff. Callers that need the
 browser's unmodified behavior can select

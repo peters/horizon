@@ -114,7 +114,7 @@ pub(super) fn new_session_capabilities(
 }
 
 /// Outcome of clearing Firefox's native `navigator.webdriver` flag.
-pub(super) enum FirefoxNativeFlagClear {
+pub(in crate::webdriver) enum FirefoxNativeFlagClear {
     /// Content processes will see a native getter that returns false.
     Cleared,
     /// The session is still in the content context, so the preload can run.
@@ -125,7 +125,7 @@ pub(super) enum FirefoxNativeFlagClear {
 
 /// Clear the Marionette and Remote Agent automation flags before any
 /// caller-supplied document is created. Restores the content context first.
-pub(super) fn clear_firefox_native_automation_flag(
+pub(in crate::webdriver) fn clear_firefox_native_automation_flag(
     transport: &dyn ClassicTransport,
     session_id: &str,
 ) -> FirefoxNativeFlagClear {
