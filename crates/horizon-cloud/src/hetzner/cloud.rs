@@ -158,11 +158,11 @@ pub fn location(recorded: Option<&str>, policy: &Policy) -> Result<String, Cloud
     }
 }
 
-/// For a cloud without a volume: the first allowed location, in order, where an
-/// allowed server type fits, with those types. Nothing is recorded until a
-/// volume is requested there.
+/// For a cloud without a volume: the first allowed location, in order, where a
+/// requested server type fits. An exact choice keeps its type and location.
+/// Nothing is recorded until a volume is requested there.
 /// # Errors
-/// Refuses when no allowed location has a fitting type.
+/// Refuses when no requested type fits in an allowed location.
 pub fn first_fit(offers: &[Offer], spec: &WorkerSpec, policy: &Policy) -> Result<(String, Vec<Placement>), CloudError> {
     let policy = policy.for_spec(spec)?;
     if policy.locations.is_empty() {
@@ -176,12 +176,12 @@ pub fn first_fit(offers: &[Offer], spec: &WorkerSpec, policy: &Policy) -> Result
                 .ok()
                 .map(|placements| (location.clone(), placements))
         })
-        .ok_or(CloudError::Invalid(
+        .ok_or(no_fitting_type(spec,
             "No configured Hetzner server type has the profile's CPU, memory and container disk in any allowed location",
         ))
 }
 
-/// Every allowed server type in the location, in order, for reconciling a
+/// Every requested server type in the location, in order, for reconciling a
 /// server that was already requested.
 #[must_use]
 pub fn allowed(server_types: &[String], location: &str) -> Vec<Placement> {
@@ -194,11 +194,11 @@ pub fn allowed(server_types: &[String], location: &str) -> Vec<Placement> {
         .collect()
 }
 
-/// The configured server types, in order, whose CPU, memory and local disk fit
-/// the profile in the location. Hetzner's availability flag is advisory, so it
-/// is not used to skip a type.
+/// The requested server types, in order, whose CPU, memory and local disk fit
+/// the profile in the location. An exact choice keeps only its chosen type.
+/// Hetzner's availability flag is advisory, so it is not used to skip a type.
 /// # Errors
-/// Refuses when no configured type fits.
+/// Refuses when no requested type fits.
 pub fn fit(
     offers: &[Offer],
     spec: &WorkerSpec,
@@ -223,11 +223,20 @@ pub fn fit(
         })
         .collect();
     if placements.is_empty() {
-        return Err(CloudError::Invalid(
+        return Err(no_fitting_type(
+            spec,
             "No configured Hetzner server type has the profile's CPU, memory and container disk in the workspace's location",
         ));
     }
     Ok(placements)
+}
+
+fn no_fitting_type(spec: &WorkerSpec, fallback_message: &'static str) -> CloudError {
+    CloudError::Invalid(if spec.exact_placement {
+        "The chosen Hetzner server type is missing from the catalog or does not fit the profile at the chosen location"
+    } else {
+        fallback_message
+    })
 }
 
 /// A shared worker's startup data has no Hetzner path yet.

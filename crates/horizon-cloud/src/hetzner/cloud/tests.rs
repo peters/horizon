@@ -279,3 +279,33 @@ fn an_exact_worker_choice_survives_plain_policy_reload_without_fallback() {
     legacy.as_object_mut().unwrap().remove("exact_placement");
     assert!(!serde_json::from_value::<WorkerSpec>(legacy).unwrap().exact_placement);
 }
+
+#[test]
+fn an_exact_choice_reports_a_missing_or_incompatible_type_without_suggesting_fallback() {
+    let mut chosen = spec();
+    chosen.cpu_flavors = vec!["cx33".into()];
+    chosen.data_centers = vec!["hel1".into()];
+    chosen.exact_placement = true;
+    let policy = allowing(&["hel1"], &["cpx32"]);
+    let mut small_disk = offer("cx33", "hel1", 4, 8.0);
+    small_disk.disk_gb = 10;
+    for offers in [
+        Vec::new(),
+        vec![offer("cx33", "hel1", 2, 8.0)],
+        vec![offer("cx33", "hel1", 4, 4.0)],
+        vec![small_disk],
+        vec![offer("cx33", "nbg1", 4, 8.0)],
+    ] {
+        for error in [
+            fit(&offers, &chosen, &chosen.cpu_flavors, "hel1").unwrap_err(),
+            first_fit(&offers, &chosen, &policy).unwrap_err(),
+        ] {
+            assert!(matches!(
+                error,
+                CloudError::Invalid(
+                    "The chosen Hetzner server type is missing from the catalog or does not fit the profile at the chosen location"
+                )
+            ));
+        }
+    }
+}
