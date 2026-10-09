@@ -21,17 +21,26 @@ fn path(root: &Path, settings: &Settings) -> PathBuf {
         .join(format!("github-host-{}.json", settings.app_id))
 }
 
+/// Holds the lock of this computer's chain, so two Horizon windows never renew it at once:
+/// a renewal ends the old chain, and the second would lose it.
+fn lock(root: &Path, settings: &Settings) -> Result<std::fs::File> {
+    let directory = root.join("credentials");
+    stored::private_directory(&directory)?;
+    stored::lock(&directory.join(format!("github-host-{}.lock", settings.app_id)), || {
+        Ok(())
+    })
+}
+
 /// The account and a usable access token of this computer's sign-in, renewed when close
 /// to its expiry, or `None` when it must sign in first.
 /// # Errors
 /// GitHub out of reach or not confirming the sign-in, which is then kept, or a local file
 /// that cannot be read or written.
 pub fn current(root: &Path, settings: &Settings) -> Result<Option<(String, Secret)>> {
-    // Only a chain from a web sign-in renews with the secret; a device chain needs none.
-    let secret = match settings.mode {
-        Mode::Automatic => settings.client_secret().ok(),
-        Mode::Ask => None,
-    };
+    let _lock = lock(root, settings)?;
+    // A chain from a web sign-in renews with the secret whatever the setting says now; a
+    // device chain needs none, and the secret is then not sent.
+    let secret = settings.client_secret().ok();
     stored::current(
         &path(root, settings),
         &Client::new(),
@@ -77,6 +86,8 @@ pub fn sign_in(
         Ok(user) => user,
         Err(error) => return Ok(Err(error.to_string())),
     };
+    // Locked only to store it: the sign-in itself waits for the person.
+    let _lock = lock(root, settings)?;
     stored::save(
         &path(root, settings),
         &user.login,

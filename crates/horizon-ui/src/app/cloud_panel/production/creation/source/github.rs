@@ -259,12 +259,11 @@ impl Account {
     }
 }
 
-/// The repositories whose name holds `filter`, at most [`SHOWN`]. A link or path being
-/// typed narrows by its last part, so `github.com/acme/web` still finds `acme/web`.
+/// The repositories whose name holds the typed `filter`, at most [`SHOWN`]. A whole link
+/// in the field is looked up as it is, so the list steps aside for it.
 fn matching<'a>(repositories: &'a [String], filter: &str) -> Vec<&'a String> {
-    let filter = filter.trim().trim_end_matches('/').to_ascii_lowercase();
-    let filter = filter.strip_prefix("https://").unwrap_or(&filter);
-    let filter = filter.strip_prefix("github.com/").unwrap_or(filter);
+    let filter = filter.trim().to_ascii_lowercase();
+    let filter = filter.as_str();
     repositories
         .iter()
         .filter(|name| filter.is_empty() || name.contains(filter))
@@ -457,14 +456,14 @@ mod tests {
     }
 
     #[test]
-    fn typing_narrows_the_repositories_by_name_or_link() {
+    fn typing_narrows_the_repositories_by_name() {
         let names: Vec<String> = ["acme/api", "acme/web", "acme/web-docs", "octo/web"]
             .iter()
             .map(|name| (*name).to_owned())
             .collect();
         assert_eq!(matching(&names, "").len(), 4);
         assert_eq!(matching(&names, "WEB"), [&names[1], &names[2], &names[3]]);
-        assert_eq!(matching(&names, "https://github.com/acme/web/"), [&names[1], &names[2]]);
+        assert_eq!(matching(&names, "acme/web"), [&names[1], &names[2]]);
         let many: Vec<String> = (0..20).map(|n| format!("acme/repo-{n}")).collect();
         assert_eq!(matching(&many, "repo").len(), SHOWN);
     }
