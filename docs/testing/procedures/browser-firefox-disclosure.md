@@ -13,18 +13,20 @@ owner: peters
 ## 1. Purpose
 
 This procedure tests the native Firefox `navigator.webdriver` getter.
-It also tests the preload fallback and a sign-in field on a browser panel.
+It also tests the preload fallback and one synthetic sign-in check.
 
 ## 2. Applicability
 
 - Use the candidate source checkout.
 - On Linux, Firefox and geckodriver must be on PATH.
 - This procedure does not test Chromium or Safari.
-- This procedure does not send a login form.
+- This procedure sends one synthetic Google identifier.
+- This procedure does not send a password.
+- This procedure does not click Continue on X.
 
 ## 3. Safety
 
-> **CAUTION:** USE ONLY SYNTHETIC ACCOUNT TEXT. A real password or a login click can lock the account.
+> **CAUTION:** CLICK NEXT ONE TIME WITH THE SYNTHETIC EMAIL ONLY, AND DO NOT TYPE A PASSWORD.
 >
 > **CAUTION:** USE ONLY THE ISOLATED DESKTOP. A click on the developer desktop can change a real session.
 
@@ -97,7 +99,7 @@ It also tests the preload fallback and a sign-in field on a browser panel.
    Result: The clear returns an error.
    The clear does not mark the process as cleared.
 
-### 6.6 SIGN-IN — A panel field accepts synthetic text
+### 6.6 SIGN-IN — Google checks the browser after Next
 
 1. Start the local device fixture with the frozen candidate and `--native-view`.
 
@@ -123,19 +125,24 @@ It also tests the preload fallback and a sign-in field on a browser panel.
 
    Result: The email field shows that text.
 
-7. Do not click Next.
+7. Click Next one time.
 
-   Result: The page does not show the text "This browser or app may not be secure."
+   Result: The page shows "Couldn't find this account".
+   The page does not show "This browser or app may not be secure."
 
-8. Go to `https://x.com/i/flow/login`.
+8. Do not click Next again.
+
+   Result: The password field stays empty.
+
+9. Go to `https://x.com/i/flow/login`.
 
    Result: The X login form is open.
 
-9. Type `not-a-real-person` in the username field.
+10. Type `not-a-real-person` in the username field.
 
-   Result: The username field shows that text.
+    Result: The username field shows that text.
 
-10. Do not click Continue.
+11. Do not click Continue.
 
     Result: The login form is still open.
 
@@ -143,8 +150,8 @@ It also tests the preload fallback and a sign-in field on a browser panel.
 
 - Task 6.1 reports the title `false native`.
 - Tasks 6.2 through 6.5 pass.
-- Task 6.6 shows the synthetic text.
-- Task 6.6 does not show the insecure-browser message.
+- Task 6.6 shows "Couldn't find this account".
+- Task 6.6 does not show "This browser or app may not be secure."
 
 ## 8. Cleanup
 
