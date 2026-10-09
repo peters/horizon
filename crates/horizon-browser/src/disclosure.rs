@@ -42,16 +42,40 @@ impl AutomationDisclosurePolicy {
 /// Chrome-privileged Firefox script that clears the content-process automation
 /// flags read by `Navigator::Webdriver()`. The native getter stays in place and
 /// returns false. A page-world replacement getter is itself a detection signal,
-/// so this is the preferred minimization path. It changes only those two flags.
-pub(crate) const FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT: &str = r#"const keys = [
-    "Marionette:IsBrowserAutomationRunning",
-    "RemoteAgent:IsBrowserAutomationRunning"
+/// so this is the preferred minimization path.
+///
+/// Current Firefox reads `IsBrowserAutomationRunning`. Firefox ESR 140 reads
+/// `Active` (`Navigator::Webdriver` calls `GetRunning()`). Shared data accepts
+/// any key, so a missing key must not be created: writing it and reading it
+/// back would report success while the native getter stays true. A pair is
+/// changed only when both keys are already booleans. No recognized pair means
+/// the preload fallback has to run.
+pub(crate) const FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT: &str = r#"const pairs = [
+    [
+        "Marionette:IsBrowserAutomationRunning",
+        "RemoteAgent:IsBrowserAutomationRunning"
+    ],
+    [
+        "Marionette:Active",
+        "RemoteAgent:Active"
+    ]
 ];
-for (const key of keys) {
-    Services.ppmm.sharedData.set(key, false);
+let cleared = false;
+for (const keys of pairs) {
+    const present = keys.every((key) => typeof Services.ppmm.sharedData.get(key) === "boolean");
+    if (!present) {
+        continue;
+    }
+    for (const key of keys) {
+        Services.ppmm.sharedData.set(key, false);
+    }
+    Services.ppmm.sharedData.flush();
+    if (!keys.every((key) => Services.ppmm.sharedData.get(key) === false)) {
+        return false;
+    }
+    cleared = true;
 }
-Services.ppmm.sharedData.flush();
-return keys.every((key) => Services.ppmm.sharedData.get(key) === false);"#;
+return cleared;"#;
 
 /// True when the chrome-context script reported both automation flags cleared.
 #[must_use]
@@ -182,9 +206,17 @@ mod tests {
 
     #[test]
     fn firefox_native_flag_script_only_clears_the_automation_keys() {
-        assert!(FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT.contains("Marionette:IsBrowserAutomationRunning"));
-        assert!(FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT.contains("RemoteAgent:IsBrowserAutomationRunning"));
-        assert!(!FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT.contains("userAgent"));
+        let script = FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT;
+        assert!(script.contains("Marionette:IsBrowserAutomationRunning"));
+        assert!(script.contains("RemoteAgent:IsBrowserAutomationRunning"));
+        assert!(script.contains("Marionette:Active"));
+        assert!(script.contains("RemoteAgent:Active"));
+        let check = script
+            .find("typeof Services.ppmm.sharedData.get(key) === \"boolean\"")
+            .expect("boolean check");
+        let write = script.find("sharedData.set(key, false)").expect("flag write");
+        assert!(check < write, "missing keys must not be created");
+        assert!(!script.contains("userAgent"));
         assert!(!FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT.contains("toString"));
         assert!(firefox_native_automation_flag_cleared(
             &serde_json::json!({ "value": true })

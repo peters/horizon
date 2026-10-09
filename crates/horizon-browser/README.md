@@ -43,9 +43,12 @@ before attaching the caller's `about:blank` page, so it cannot enter caller
 history or frames. Title updates use protocol target metadata rather than a
 page-JS binding. Firefox first clears the Marionette and Remote Agent
 automation flags from the chrome context, so the native `navigator.webdriver`
-getter stays native and returns false. A shared Firefox process does that
-once, on the session transport, before page commands are limited to one
-window. If the chrome context is unavailable, Firefox falls back to a narrow
+getter stays native and returns false. It changes a key pair only when both
+keys are already booleans: current Firefox uses `IsBrowserAutomationRunning`,
+and Firefox ESR 140 uses `Active`. A shared Firefox process does that once,
+on the session transport, before page commands are limited to one window. If
+the chrome context is unavailable, or neither key pair is already present,
+Firefox falls back to a narrow
 `navigator.webdriver` value shim installed with WebDriver BiDi
 `script.addPreloadScript` before the initial navigation. Startup fails when
 that fallback command is rejected, and also when the session cannot return
