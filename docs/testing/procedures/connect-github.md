@@ -101,10 +101,11 @@ the access requests of agents.
 
    Result: The card shows **Device sign-in is on.**
 
-5. Make sure that **Ask me for each new cloud** is selected, and click
-   **Save settings**.
+5. Make sure that **Ask me for each new cloud** is selected. Close Cloud settings
+   and open them again.
 
-   Result: Cloud settings close without an error.
+   Result: The card shows **Ask me for each new cloud** selected. The card saves
+   the choice itself, also without a provider set up.
 
 ### 6.3 G03 — Sign in a new cloud with one click
 
@@ -211,10 +212,10 @@ the access requests of agents.
 
 ### 6.7 G07 — Sign in new clouds automatically
 
-1. In Cloud settings, select **Automatic (no clicks after the first approval)** and
-   click **Save settings**.
+1. In Cloud settings, select **Automatic (no clicks after the first approval)**.
+   Close Cloud settings and open them again.
 
-   Result: Cloud settings close without an error.
+   Result: The card shows **Automatic** selected.
 
    > **CAUTION:** REVOKE ONLY THE TEST APP. Revoking an app ends the access it has
    > for your account.
@@ -253,12 +254,9 @@ the access requests of agents.
 
 1. In Cloud settings, click **Disconnect** on the GitHub card.
 
-   Result: The card says that Save settings disconnects, and that running clouds
-   keep their access until the app is deleted on GitHub.
-
-2. Click **Save settings**.
-
-   Result: The GitHub card shows **Not connected**.
+   Result: The GitHub card shows **Not connected** and says that running clouds
+   keep their access until the app is deleted on GitHub. No **Connect GitHub
+   again** shows on the cloud cards.
 
 ## 7. Pass criteria
 

@@ -23,7 +23,13 @@ pub(in crate::app::cloud_panel) struct Card {
     message: Option<String>,
     /// Ends a Connect flow under way when the card goes, such as on Cancel.
     abort: Option<Abort>,
+    /// A mode change or Disconnect being saved; the card saves them itself, so they need
+    /// no provider set up and no Save settings.
+    saving: Option<Receiver<Result<Saved, String>>>,
 }
+
+/// A GitHub setting the card saved: the file's bytes and what it now holds.
+type Saved = (setup::Committed, Option<github::Settings>);
 
 /// Cancels its flow when dropped.
 struct Abort(horizon_core::cloud_runtime::Cancellation);
@@ -47,9 +53,26 @@ fn open(url: &str) {
 }
 
 impl Card {
-    /// Whether a Connect GitHub flow is under way.
+    /// Whether a Connect GitHub flow or a GitHub setting is being saved.
     pub(super) fn connecting(&self) -> bool {
-        self.connecting.is_some()
+        self.connecting.is_some() || self.saving.is_some()
+    }
+
+    /// Saves the app with a changed mode, or forgets it on Disconnect, off the UI thread.
+    fn save(&mut self, root: std::path::PathBuf, github: Option<github::Settings>) {
+        let (tx, rx) = channel();
+        self.saving = Some(rx);
+        self.message = None;
+        std::thread::spawn(move || {
+            let result = setup::save_github(
+                &root,
+                github.clone(),
+                &horizon_core::cloud_runtime::Cancellation::default(),
+            )
+            .map(|committed| (committed, github))
+            .map_err(|error| error.to_string());
+            let _ = tx.send(result);
+        });
     }
 
     /// Creates the app with the manifest flow, saves it, and checks its device sign-in.
@@ -111,6 +134,32 @@ impl Card {
                 }
                 Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
                 Err(TryRecvError::Disconnected) => self.connecting = None,
+            }
+            // A finished attempt, also a failed one, stops its loopback server at once.
+            if self.connecting.is_none() {
+                self.abort = None;
+            }
+        }
+        if let Some(rx) = &self.saving {
+            match rx.try_recv() {
+                Ok(Ok((committed, github))) => {
+                    if github.is_none() {
+                        self.device_flow = None;
+                        self.message = Some(
+                            "Disconnected. New clouds get no GitHub access. To end the access of running clouds, \
+                             delete the app on GitHub."
+                                .into(),
+                        );
+                    }
+                    draft.adopt_github(&committed, github);
+                    self.saving = None;
+                }
+                Ok(Err(message)) => {
+                    self.message = Some(message);
+                    self.saving = None;
+                }
+                Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
+                Err(TryRecvError::Disconnected) => self.saving = None,
             }
         }
         if let Some(rx) = &self.checking {
@@ -224,28 +273,49 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
          app secret, readable only by its system service.",
     );
     if chosen != mode
-        && let Some(github) = &mut draft.settings.github
+        && card.saving.is_none()
+        && let Some(github) = draft.settings.github.clone()
     {
-        github.mode = chosen;
+        card.save(
+            draft.root().to_owned(),
+            Some(github::Settings { mode: chosen, ..github }),
+        );
     }
     caption(
         ui,
         "Each cloud renews its own access for about 6 months, also while this computer is off.",
     );
-    if ui.add(chrome_button("Disconnect")).clicked() {
-        draft.settings.github = None;
-        card.device_flow = None;
-        card.message = Some(
-            "Save settings to disconnect. New clouds then get no GitHub access. To end the access of running \
-             clouds, delete the app on GitHub."
-                .into(),
-        );
+    if ui
+        .add_enabled(card.saving.is_none(), chrome_button("Disconnect"))
+        .clicked()
+    {
+        card.save(draft.root().to_owned(), None);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Card;
+    use super::{Abort, Card};
+    use crate::test_egui::DiscardTextures as _;
+
+    #[test]
+    fn a_failed_connect_attempt_stops_its_server_at_once() {
+        let root = tempfile::tempdir().unwrap();
+        let mut draft = horizon_core::cloud_runtime::setup::Draft::load(root.path()).unwrap();
+        let cancel = horizon_core::cloud_runtime::Cancellation::default();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut card = Card {
+            connecting: Some(receiver),
+            abort: Some(Abort(cancel.clone())),
+            ..Card::default()
+        };
+        sender.send(Err("The browser could not be opened.".into())).unwrap();
+        let _ = egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| card.poll(ui, &mut draft))
+            .discard_textures();
+        assert!(cancel.is_cancelled(), "the loopback server ends with the attempt");
+        assert!(!card.connecting());
+    }
 
     #[test]
     fn a_connect_flow_under_way_holds_the_form_save() {
