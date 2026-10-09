@@ -1,5 +1,6 @@
 //! A cloud's GitHub sign-in on its card: the device code to approve, the browser
-//! step of an automatic sign-in, and a one-line outcome.
+//! step of an automatic sign-in, the one-time code that lets Horizon publish images,
+//! and a one-line outcome.
 use super::super::Runtime;
 use crate::{
     app::util::{chrome_button, primary_button},
@@ -19,7 +20,10 @@ pub(super) fn overlay(runtime: &Runtime, body: bool) -> bool {
 
 /// Whether the card shows the sign-in box, which takes [`PROMPT_HEIGHT`] from the output.
 pub(super) fn waiting(runtime: &Runtime) -> bool {
-    matches!(runtime.github, Some(Prompt::Device { .. } | Prompt::Web { .. })) && runtime.receiver.is_some()
+    matches!(
+        runtime.github,
+        Some(Prompt::Device { .. } | Prompt::Web { .. } | Prompt::Publish { .. })
+    ) && runtime.receiver.is_some()
 }
 
 /// The sign-in box. `cloud_id` names the cloud a Skip applies to.
@@ -40,26 +44,43 @@ pub(super) fn prompt(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime) {
                     user_code,
                     verification_uri,
                     ..
-                } => device(ui, cloud_id, user_code, verification_uri),
+                } => device(ui, cloud_id, user_code, verification_uri, &DEVICE),
+                Prompt::Publish {
+                    user_code,
+                    verification_uri,
+                    ..
+                } => device(ui, cloud_id, user_code, verification_uri, &PUBLISH),
                 Prompt::Web { url } => web(ui, cloud_id, url),
-                Prompt::Connected { .. } | Prompt::Ended { .. } => {}
+                Prompt::Connected { .. } | Prompt::Ended { .. } | Prompt::Published { .. } => {}
             }
         });
     ui.add_space(12.0);
 }
 
-fn device(ui: &mut egui::Ui, cloud_id: &str, user_code: &str, verification_uri: &str) {
-    ui.label(
-        RichText::new("Approve GitHub access for this cloud")
-            .size(15.0)
-            .strong()
-            .color(theme::FG()),
-    );
-    ui.label(
-        RichText::new("Open GitHub, paste the code and click Authorize. Horizon copies the code for you.")
-            .size(12.5)
-            .color(theme::FG_DIM()),
-    );
+/// The words of a device code box.
+struct Words {
+    title: &'static str,
+    caption: &'static str,
+    skip: &'static str,
+}
+
+const DEVICE: Words = Words {
+    title: "Approve GitHub access for this cloud",
+    caption: "Open GitHub, paste the code and click Authorize. Horizon copies the code for you.",
+    skip: "Skip: no GitHub for this cloud",
+};
+
+/// Asked once, the first time a cloud's image goes to ghcr.io.
+const PUBLISH: Words = Words {
+    title: "Allow Horizon to publish images for you",
+    caption: "This cloud's image goes to ghcr.io. GitHub asks once; the permission covers images only, not \
+              your repositories. Open GitHub, paste the code and click Authorize.",
+    skip: "Skip: do not publish",
+};
+
+fn device(ui: &mut egui::Ui, cloud_id: &str, user_code: &str, verification_uri: &str, words: &Words) {
+    ui.label(RichText::new(words.title).size(15.0).strong().color(theme::FG()));
+    ui.label(RichText::new(words.caption).size(12.5).color(theme::FG_DIM()));
     ui.add_space(6.0);
     ui.label(
         RichText::new(user_code)
@@ -79,10 +100,7 @@ fn device(ui: &mut egui::Ui, cloud_id: &str, user_code: &str, verification_uri: 
                 tracing::warn!(%error, "could not open the GitHub device page");
             }
         }
-        if ui
-            .add(chrome_button("Skip: no GitHub for this cloud").min_size(vec2(0.0, 30.0)))
-            .clicked()
-        {
+        if ui.add(chrome_button(words.skip).min_size(vec2(0.0, 30.0))).clicked() {
             github::skip(cloud_id);
         }
     });
@@ -239,7 +257,7 @@ pub(super) fn summary(runtime: &Runtime) -> Option<(String, bool)> {
             true,
         )),
         Prompt::Ended { reason, .. } => Some((format!("GitHub: {reason}"), false)),
-        Prompt::Device { .. } | Prompt::Web { .. } => None,
+        Prompt::Device { .. } | Prompt::Web { .. } | Prompt::Publish { .. } | Prompt::Published { .. } => None,
     }
 }
 
@@ -270,6 +288,41 @@ mod tests {
             summary(&runtime),
             Some(("GitHub: Skipped: this cloud has no GitHub access.".into(), false))
         );
+    }
+
+    #[test]
+    fn the_publishing_code_shows_while_the_deployment_waits_and_names_images_only() {
+        let mut runtime = Runtime {
+            github: Some(Prompt::Publish {
+                user_code: "WDJB-MJHT".into(),
+                verification_uri: "https://github.com/login/device".into(),
+                expires_at: std::time::SystemTime::now(),
+            }),
+            ..Runtime::default()
+        };
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        runtime.receiver = Some(receiver);
+        assert!(waiting(&runtime));
+        assert_eq!(summary(&runtime), None, "publishing is not the cloud's GitHub access");
+        let texts: Vec<String> = egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| prompt(ui, "cloud", &runtime))
+            .discard_textures()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "Allow Horizon to publish images for you")
+        );
+        assert!(texts.iter().any(|text| text == "WDJB-MJHT"));
+        assert!(texts.iter().any(|text| text.contains("not your repositories")));
+        runtime.github = Some(Prompt::Published { allowed: true });
+        assert!(!waiting(&runtime), "the box closes once GitHub allowed it");
     }
 
     #[test]

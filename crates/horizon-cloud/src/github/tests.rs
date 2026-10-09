@@ -455,3 +455,27 @@ fn an_installation_beyond_the_page_limit_is_an_error_not_partial_data() {
     task.join().unwrap();
     assert_eq!(result.unwrap_err(), Error::TooMany);
 }
+
+#[test]
+fn a_device_sign_in_asks_for_a_scope_only_when_given_one() {
+    let code = json!({"device_code": "synthetic-device", "user_code": "WDJB-MJHT",
+                      "verification_uri": "https://github.com/login/device", "expires_in": 900, "interval": 5});
+    let (client, requests, task) = github(vec![(200, code.clone()), (200, code)]);
+    client
+        .start_device_with_scope("Ov23synthetic", "write:packages")
+        .unwrap();
+    client.start_device("Iv23synthetic").unwrap();
+    task.join().unwrap();
+    let sent = requests.lock().unwrap();
+    assert_eq!(
+        fields(&sent[0].1),
+        [
+            ("client_id".to_owned(), "Ov23synthetic".to_owned()),
+            ("scope".to_owned(), "write:packages".to_owned())
+        ]
+    );
+    assert_eq!(
+        fields(&sent[1].1),
+        [("client_id".to_owned(), "Iv23synthetic".to_owned())]
+    );
+}

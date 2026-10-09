@@ -318,7 +318,7 @@ fn only_a_callback_with_the_expected_state_yields_its_code() {
 
 /// Reads one whole request, its head and its body, so closing the connection never
 /// resets it (Windows sends the body in a separate segment).
-fn read_request(stream: &mut TcpStream) {
+pub(in crate::cloud_runtime::github) fn read_request(stream: &mut TcpStream) {
     stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut input = Vec::new();
     let mut buffer = [0; 4096];
@@ -345,7 +345,9 @@ fn read_request(stream: &mut TcpStream) {
 }
 
 /// A fake GitHub that answers each connection with the next scripted JSON body.
-fn github(responses: Vec<serde_json::Value>) -> (horizon_cloud::github::Client, std::thread::JoinHandle<()>) {
+pub(in crate::cloud_runtime::github) fn github(
+    responses: Vec<serde_json::Value>,
+) -> (horizon_cloud::github::Client, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let client = horizon_cloud::github::Client::loopback(listener.local_addr().unwrap()).unwrap();
     let task = std::thread::spawn(move || {
@@ -387,7 +389,7 @@ fn a_device_sign_in_shows_its_code_and_a_skip_ends_it() {
     let result = signin::chain(&settings, "cloud-skip", &client, &runner);
     skipper.join().unwrap();
     task.join().unwrap();
-    assert!(matches!(result, Err(signin::Ended::Reason(reason)) if reason.starts_with("Skipped")));
+    assert!(matches!(result, Err(signin::Ended::Skipped)));
     let events = events.lock().unwrap();
     assert!(events.iter().any(|event| matches!(
         event,
