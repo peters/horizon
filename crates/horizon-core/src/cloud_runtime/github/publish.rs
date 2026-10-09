@@ -97,8 +97,10 @@ fn current(docker_config: &Path, client: &Client) -> Result<Option<(String, Secr
                 save(docker_config, &stored.login, &chain)?;
                 chain.access_token
             }
-            Err(GitHubError::Transport) => return Err(unreachable()),
-            Err(_) => return forget(docker_config),
+            // Only GitHub's word that the chain is gone ends it; anything else keeps it
+            // for the next try.
+            Err(GitHubError::Revoked) => return forget(docker_config),
+            Err(error) => return Err(not_renewed(&error)),
         }
     } else {
         return forget(docker_config);
@@ -106,8 +108,17 @@ fn current(docker_config: &Path, client: &Client) -> Result<Option<(String, Secr
     // The person may have revoked Horizon on GitHub since; ask GitHub who the token is.
     match client.user(&token) {
         Ok(user) => Ok(Some((user.login, token))),
-        Err(GitHubError::Transport) => Err(unreachable()),
-        Err(_) => forget(docker_config),
+        Err(GitHubError::Revoked) => forget(docker_config),
+        Err(error) => Err(not_renewed(&error)),
+    }
+}
+
+/// A failure that leaves the stored chain as it is.
+fn not_renewed(error: &GitHubError) -> Error {
+    if matches!(error, GitHubError::Transport) {
+        Error::Invalid("GitHub could not be reached to publish the image. Check the network and retry.")
+    } else {
+        Error::Invalid("GitHub did not confirm Horizon's permission to publish images. Retry; the permission is kept.")
     }
 }
 
@@ -150,10 +161,6 @@ fn sign_in(docker_config: &Path, client: &Client, cloud_id: &str, runner: &Runne
     say(format!("Horizon may now publish images as {}.", user.login));
     (runner.emit)(Event::GitHub(Prompt::Published { allowed: true }));
     Ok((user.login, chain.access_token))
-}
-
-fn unreachable() -> Error {
-    Error::Invalid("GitHub could not be reached to publish the image. Check the network and retry.")
 }
 
 /// Drops a chain that no longer works, so the next push asks again.

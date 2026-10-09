@@ -196,6 +196,9 @@ pub(super) struct Runtime {
     drawer: Option<cards::Tab>,
     /// The latest GitHub sign-in prompt or outcome of this cloud's deployment.
     github: Option<cloud_runtime::github::Prompt>,
+    /// The code that lets Horizon publish images, while a push waits for it. Kept apart
+    /// from `github`, so a cloud's own GitHub outcome stays shown.
+    publish: Option<cloud_runtime::github::Prompt>,
     /// The GitHub access requests this cloud's agents wait on.
     github_requests: github_requests::State,
     receiver: Option<Receiver<Event>>,
@@ -430,6 +433,7 @@ impl Runtime {
         self.desktop = None;
         // The worker reports its GitHub access again; an earlier outcome no longer holds.
         self.github = None;
+        self.publish = None;
         self.progress.reset();
         self.launched_skips = cloud_runtime::image::skipped_stages(&request.profile);
         // A deployment or reconnect is its own operation; an earlier stop or resume that

@@ -45,7 +45,11 @@ impl Runtime {
         {
             tracing::warn!(%error, "could not open the GitHub sign-in page");
         }
-        self.github = Some(prompt);
+        match prompt {
+            cloud_runtime::github::Prompt::Publish { .. } => self.publish = Some(prompt),
+            cloud_runtime::github::Prompt::Published { .. } => self.publish = None,
+            prompt => self.github = Some(prompt),
+        }
     }
 
     /// Shows the failure an operation reported. Whether it may be a stop Horizon did

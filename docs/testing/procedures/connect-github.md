@@ -264,16 +264,20 @@ after one approval.
 
 ### 6.9 G09 — Publish an image to ghcr.io
 
-> **CAUTION:** THE NEXT STEP MOVES HORIZON'S PUBLISHING SIGN-IN ASIDE. Put it back
-> in step 5 if it existed.
+> **CAUTION:** THE NEXT STEP MOVES HORIZON'S PUBLISHING SIGN-IN AND DOCKER LOGIN
+> ASIDE. Step 5 puts them back. Keep `<evidence>` private: the copies hold tokens.
 
-1. Move the stored publishing sign-in aside, so Horizon asks again:
+1. Move the stored publishing sign-in and Horizon's Docker login aside, so Horizon
+   asks again:
 
    ```sh
-   mv ~/.horizon/cloud/docker/horizon-github-packages.json <evidence>/packages.json.backup 2>/dev/null; true
+   mkdir -m 700 -p <evidence>/d-backup
+   for f in horizon-github-packages.json config.json; do
+     test -e ~/.horizon/cloud/docker/$f && mv ~/.horizon/cloud/docker/$f <evidence>/d-backup/$f
+   done; true
    ```
 
-   Result: `~/.horizon/cloud/docker/horizon-github-packages.json` does not exist.
+   Result: neither file exists in `~/.horizon/cloud/docker`.
 
 > **CAUTION:** THE NEXT STEP RENTS COMPUTE FOR `gh-publish`. It costs money until the
 > cloud is deleted in the cleanup.
@@ -296,13 +300,22 @@ after one approval.
 
    Result: The push runs without the publishing box.
 
-5. If step 1 moved a file, delete the new one and put the old one back:
+> **CAUTION:** THE NEXT STEP DELETES THE PUBLISHING SIGN-IN AND DOCKER LOGIN THAT
+> THIS TASK MADE. Delete only these two files.
+
+5. Delete the files this task made and put the ones from step 1 back:
 
    ```sh
-   test -e <evidence>/packages.json.backup && mv <evidence>/packages.json.backup ~/.horizon/cloud/docker/horizon-github-packages.json; true
+   rm -f ~/.horizon/cloud/docker/horizon-github-packages.json ~/.horizon/cloud/docker/config.json
+   for f in horizon-github-packages.json config.json; do
+     test -e <evidence>/d-backup/$f && mv <evidence>/d-backup/$f ~/.horizon/cloud/docker/$f
+   done; rmdir <evidence>/d-backup; true
    ```
 
-   Result: The command ends without an error.
+   Result: `~/.horizon/cloud/docker` holds the same files as before step 1, and
+   `<evidence>/d-backup` does not exist. On GitHub, **Settings › Applications ›
+   Authorized OAuth Apps** still lists **Horizon** when it did before; revoke it
+   there if this task authorized it for the first time.
 
 ## 7. Pass criteria
 

@@ -149,3 +149,22 @@ fn a_skipped_publishing_sign_in_ends_with_a_clear_reason() {
         Some(Event::GitHub(Prompt::Published { allowed: false }))
     ));
 }
+
+#[test]
+fn a_chain_is_kept_when_github_fails_without_revoking_it() {
+    let docker = tempfile::tempdir().unwrap();
+    save(
+        docker.path(),
+        "octo-cat",
+        &chain("gho_old", "ghr_old", Duration::from_secs(60)),
+    )
+    .unwrap();
+    let (client, task) = github(vec![serde_json::json!({"error": "unexpected_error"})]);
+    assert!(current(docker.path(), &client).is_err());
+    task.join().unwrap();
+    assert_eq!(
+        load(docker.path()).unwrap().refresh_token.expose(),
+        "ghr_old",
+        "the chain stays for a retry"
+    );
+}
