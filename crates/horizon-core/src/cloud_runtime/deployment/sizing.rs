@@ -104,7 +104,7 @@ fn narrow(profile: &horizon_cloud::Profile, configured: Vec<String>, saved: Opti
         .cloned()
         .collect();
     if choices.is_empty() {
-        return Err(Error::Invalid("The saved worker type or location is no longer allowed"));
+        return Err(Error::Invalid("The saved worker location is no longer allowed"));
     }
     Ok(choices)
 }
@@ -148,7 +148,10 @@ mod tests {
         settings.hetzner.as_mut().unwrap().server_types = vec!["cpx32".into()];
         assert_eq!(bound_types(&profile, &settings, Some(&spec)).unwrap(), ["cx33"]);
         settings.hetzner.as_mut().unwrap().locations = vec!["nbg1".into()];
-        assert!(bound_centers(&profile, &settings, Some(&spec)).is_err());
+        assert!(matches!(
+            bound_centers(&profile, &settings, Some(&spec)),
+            Err(Error::Invalid("The saved worker location is no longer allowed"))
+        ));
         spec.cpu_flavors = vec!["bad/type".into()];
         assert!(bound_types(&profile, &settings, Some(&spec)).is_err());
         spec.cpu_flavors.clear();
