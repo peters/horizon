@@ -105,6 +105,10 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 
 ### `horizon-browser`
 
+- `semantic.rs` owns document references and their invalidation.
+  `session/semantic/frames.rs` and `webdriver/session/semantic/frames.rs` own
+  child-frame scans and native input. Frame routes stay private to the engine.
+  These modules share the node limit across documents and bound each scan.
 - `file_chooser` owns manual upload requests and answers shared with the host.
   The CDP and BiDi session leaf modules bind each request to its original input
   and retire stale requests. `horizon-core::browser::file_chooser` performs bounded

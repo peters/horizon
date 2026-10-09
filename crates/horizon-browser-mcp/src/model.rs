@@ -519,7 +519,7 @@ pub(crate) struct SnapshotInput {
 pub(crate) struct QueryInput {
     /// Stable panel id returned by `browser_list`.
     pub(crate) panel_id: String,
-    /// CSS selector evaluated in the top-level document.
+    /// CSS selector evaluated in the document and child frames on local Chromium and Firefox.
     pub(crate) selector: String,
     /// Maximum matching nodes to return (1-250, default 50).
     pub(crate) max_results: Option<u32>,

@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use horizon_browser_protocol::{
@@ -37,8 +37,10 @@ impl TeachCapture {
 #[derive(Debug)]
 pub(crate) struct SemanticState {
     generation: u64,
+    frame_epoch: u64,
+    bidi_scan_contexts: Vec<String>,
     revision: u64,
-    references: HashMap<String, String>,
+    references: HashMap<String, ResolvedTarget>,
     teach_text_gesture: bool,
 }
 
@@ -46,6 +48,8 @@ impl Default for SemanticState {
     fn default() -> Self {
         Self {
             generation: 1,
+            frame_epoch: 0,
+            bidi_scan_contexts: Vec::new(),
             revision: 0,
             references: HashMap::new(),
             teach_text_gesture: false,
@@ -60,11 +64,51 @@ impl SemanticState {
         self.generation
     }
 
+    pub(crate) fn scan_revision(&self) -> (u64, u64) {
+        (self.generation, self.frame_epoch)
+    }
+
+    pub(crate) fn track_bidi_scan_contexts(&mut self, contexts: &[String]) {
+        self.bidi_scan_contexts = contexts.to_vec();
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1).max(1);
         self.revision = 0;
         self.references.clear();
+        self.bidi_scan_contexts.clear();
         self.teach_text_gesture = false;
+    }
+
+    pub(crate) fn invalidate_cdp_frame(&mut self, session: &str, context: Option<u64>) {
+        self.frame_epoch = self.frame_epoch.wrapping_add(1);
+        self.references.retain(|_, target| {
+            !matches!(
+                &target.frame,
+                Some(FrameTarget::Cdp { session: stored, context: id })
+                    if stored == session && context.is_none_or(|context| context == *id)
+            )
+        });
+    }
+
+    pub(crate) fn invalidate_bidi_frame(&mut self, context: &str) {
+        let previous_refs = self.references.len();
+        self.references.retain(|_, target| {
+            !matches!(
+                &target.frame, Some(FrameTarget::Bidi { context: stored, .. }) if stored == context
+            )
+        });
+        if self.references.len() != previous_refs || self.bidi_scan_contexts.iter().any(|owned| owned == context) {
+            self.frame_epoch = self.frame_epoch.wrapping_add(1);
+        }
+    }
+
+    pub(crate) fn bidi_frame_is_current(&self, frame: &FrameTarget) -> bool {
+        self.references.values().any(|target| matches!(
+            (&target.frame, frame),
+            (Some(FrameTarget::Bidi { context: stored_context, realm: stored_realm }), FrameTarget::Bidi { context, realm })
+                if stored_context == context && stored_realm == realm
+        ))
     }
 
     /// `Some(Click)` for a left press, `Some(Focused)` for the start of a
@@ -147,7 +191,13 @@ impl SemanticState {
         let mut nodes = Vec::with_capacity(response.nodes.len());
         for (index, scanned) in response.nodes.into_iter().enumerate() {
             let reference = format!("g{}s{}e{}", self.generation, self.revision, index + 1);
-            self.references.insert(reference.clone(), scanned.selector);
+            self.references.insert(
+                reference.clone(),
+                ResolvedTarget {
+                    selector: scanned.selector,
+                    frame: scanned.frame,
+                },
+            );
             nodes.push(BrowserNode {
                 reference,
                 role: truncate_utf8(scanned.role, MAX_NODE_STRING_BYTES),
@@ -162,17 +212,98 @@ impl SemanticState {
         Ok((self.generation, self.revision, nodes))
     }
 
-    pub(crate) fn resolve(&self, target: &BrowserTarget) -> Result<String, BrowserControlFailure> {
+    pub(crate) fn resolve_target(&self, target: &BrowserTarget) -> Result<ResolvedTarget, BrowserControlFailure> {
         match target {
-            BrowserTarget::Selector { selector } => Ok(selector.clone()),
+            BrowserTarget::Selector { selector } => Ok(ResolvedTarget {
+                selector: selector.clone(),
+                frame: None,
+            }),
             BrowserTarget::Ref { reference } => self.references.get(reference).cloned().ok_or_else(|| {
-                BrowserControlFailure::new(
-                    "stale_reference",
-                    format!("element reference {reference} is stale; take a new snapshot"),
-                )
+                BrowserControlFailure::new("stale_reference", "element reference is stale; take a new snapshot")
             }),
         }
     }
+
+    pub(crate) fn resolve(&self, target: &BrowserTarget) -> Result<String, BrowserControlFailure> {
+        let target = self.resolve_target(target)?;
+        if target.frame.is_some() {
+            return Err(BrowserControlFailure::new(
+                "unsupported_frame_action",
+                "this action does not support a child-frame reference",
+            ));
+        }
+        Ok(target.selector)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedTarget {
+    pub(crate) selector: String,
+    pub(crate) frame: Option<FrameTarget>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "backend", rename_all = "snake_case")]
+pub(crate) enum FrameTarget {
+    Cdp { session: String, context: u64 },
+    Bidi { context: String, realm: String },
+}
+
+pub(crate) const MAX_SEMANTIC_FRAMES: usize = 64;
+
+pub(crate) fn scan_node_limit_reached(scan: &Value, max_nodes: u32) -> bool {
+    scan["nodes"]
+        .as_array()
+        .is_some_and(|nodes| nodes.len() >= max_nodes as usize)
+}
+
+/// Frame routes are host-owned; ignore any route a page tried to return.
+pub(crate) fn clear_scan_frames(scan: &mut Value) -> Result<(), BrowserControlFailure> {
+    check_script_error(scan)?;
+    let nodes = scan
+        .get_mut("nodes")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| BrowserControlFailure::new("invalid_result", "page scan returned no nodes"))?;
+    for node in nodes {
+        node.as_object_mut()
+            .ok_or_else(|| BrowserControlFailure::new("invalid_result", "page scan returned an invalid node"))?
+            .remove("frame");
+    }
+    Ok(())
+}
+
+pub(crate) fn append_frame_scan(
+    scan: &mut Value,
+    mut child: Value,
+    frame: &FrameTarget,
+    max_nodes: u32,
+) -> Result<(), BrowserControlFailure> {
+    check_script_error(&child)?;
+    let nodes = child
+        .get_mut("nodes")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| BrowserControlFailure::new("invalid_result", "frame scan returned no nodes"))?;
+    for node in nodes.iter_mut() {
+        let node = node
+            .as_object_mut()
+            .ok_or_else(|| BrowserControlFailure::new("invalid_result", "frame scan returned an invalid node"))?;
+        node.insert(
+            "frame".to_owned(),
+            serde_json::to_value(frame)
+                .map_err(|_| BrowserControlFailure::new("invalid_result", "could not encode frame reference"))?,
+        );
+        // Frame-local rectangles cannot be used as top-level hit coordinates.
+        node.insert("bounds".to_owned(), Value::Null);
+        node.remove("fileInput");
+    }
+    let output = scan
+        .get_mut("nodes")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| BrowserControlFailure::new("invalid_result", "page scan returned no nodes"))?;
+    let remaining = (max_nodes as usize).saturating_sub(output.len());
+    output.extend(nodes.drain(..).take(remaining));
+    bounded_control_value(scan.clone())?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -206,6 +337,8 @@ pub(crate) struct ScanSummary {
 #[derive(Deserialize)]
 struct ScannedNode {
     selector: String,
+    #[serde(default)]
+    frame: Option<FrameTarget>,
     #[serde(default)]
     role: String,
     #[serde(default)]
@@ -280,6 +413,10 @@ pub(crate) fn wait_scan_expression(selector: &str, max_nodes: u32) -> String {
 
 pub(crate) fn target_rect_expression(selector: &str, clear: bool) -> String {
     format!("({TARGET_RECT_FUNCTION})({}, {clear})", json_string(selector))
+}
+
+pub(crate) fn frame_fill_expression(selector: &str) -> String {
+    target_rect_expression(selector, true)
 }
 
 pub(crate) fn scroll_expression(selector: Option<&str>, delta_x: f64, delta_y: f64) -> String {
@@ -424,7 +561,7 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, co
         : { nodes };
 }";
 
-const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
+const TARGET_RECT_FUNCTION: &str = r"async function(selector, clear) {
     let element;
     try { element = document.querySelector(selector); }
     catch (error) { return { error: { code: 'invalid_selector', message: String(error?.message || error).slice(0, 512) } }; }
@@ -434,11 +571,32 @@ const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
     const style = getComputedStyle(element);
     if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || rect.height <= 0)
         return { error: { code: 'element_not_visible', message: 'target element is not visible' } };
-    if (element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true')
-        return { error: { code: 'element_disabled', message: 'target element is disabled' } };
+    const isDisabled = () => element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true';
+    const disabled = { error: { code: 'element_disabled', message: 'target element is disabled' } };
+    if (isDisabled()) return disabled;
     if (clear) {
+        const isReadOnly = () => element.readOnly || element.getAttribute('aria-readonly') === 'true';
+        const notEditable = { error: { code: 'element_not_editable', message: 'target element is not editable' } };
+        const notFocused = { error: { code: 'element_not_focused', message: 'target element did not retain focus' } };
+        const contentEditable = () => element.isContentEditable
+            && !['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(element.tagName);
+        const textInput = () => element.tagName === 'INPUT'
+            && ['text', 'search', 'tel', 'url', 'email', 'password', 'number'].includes((element.getAttribute('type') || 'text').toLowerCase());
+        const isEditable = () => !isReadOnly() && (contentEditable() || element.tagName === 'TEXTAREA' || textInput());
+        const settle = () => new Promise(resolve => {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = () => {
+                channel.port1.close(); channel.port2.close(); resolve();
+            };
+            channel.port2.postMessage(null);
+        });
+        if (!isEditable()) return notEditable;
         element.focus();
-        if (element.isContentEditable) {
+        await settle();
+        if (isDisabled()) return disabled;
+        if (!isEditable()) return notEditable;
+        if (document.activeElement !== element) return notFocused;
+        if (contentEditable()) {
             element.textContent = '';
             element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
         } else if ('value' in element) {
@@ -447,8 +605,12 @@ const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
             if (setter) setter.call(element, ''); else element.value = '';
             element.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
-            return { error: { code: 'element_not_editable', message: 'target element is not editable' } };
+            return notEditable;
         }
+        await settle();
+        if (isDisabled()) return disabled;
+        if (!isEditable()) return notEditable;
+        if (document.activeElement !== element) return notFocused;
     }
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }";
@@ -607,6 +769,93 @@ mod tests {
         assert_eq!(
             check_script_error(&value),
             Err(BrowserControlFailure::new("no_such_element", "missing"))
+        );
+    }
+    #[test]
+    fn child_routes_are_host_owned_bounded_and_expire_independently() {
+        let frame = FrameTarget::Cdp {
+            session: "page".into(),
+            context: 7,
+        };
+        let mut scan = serde_json::json!({"nodes":[{"selector":"#top","fileInput":{"multiple":true,"accept":"","files":0},"frame":{"backend":"bidi","context":"foreign","realm":"foreign"}}]});
+        clear_scan_frames(&mut scan).unwrap();
+        assert!(scan["nodes"][0].get("frame").is_none());
+        let child = serde_json::json!({"nodes":[{"selector":"#same","fileInput":{"multiple":true,"accept":"","files":0},"bounds":{"x":1,"y":2,"width":3,"height":4}},{"selector":"#extra"}]});
+        append_frame_scan(&mut scan, child, &frame, 2).unwrap();
+        assert_eq!(scan["nodes"].as_array().unwrap().len(), 2);
+        assert!(scan["nodes"][1]["bounds"].is_null());
+        let mut state = SemanticState::default();
+        let (_, _, nodes) = state.register_nodes(scan).unwrap();
+        assert!(nodes[0].file_input.is_some());
+        assert!(nodes[1].file_input.is_none());
+        let top = BrowserTarget::Ref {
+            reference: nodes[0].reference.clone(),
+        };
+        let child = BrowserTarget::Ref {
+            reference: nodes[1].reference.clone(),
+        };
+        assert_eq!(state.resolve(&child).unwrap_err().code, "unsupported_frame_action");
+        assert!(matches!(
+            state.resolve_target(&child).unwrap().frame,
+            Some(FrameTarget::Cdp { context: 7, .. })
+        ));
+        let generation = state.generation();
+        state.invalidate_cdp_frame("page", Some(7));
+        assert_eq!(state.resolve_target(&child).unwrap_err().code, "stale_reference");
+        assert_eq!(state.resolve(&top).unwrap(), "#top");
+        assert_eq!(state.generation(), generation);
+    }
+
+    #[test]
+    fn malformed_child_nodes_fail_without_panicking() {
+        let mut scan = serde_json::json!({"nodes":[]});
+        let frame = FrameTarget::Cdp {
+            session: "page".into(),
+            context: 7,
+        };
+        let child = serde_json::json!({"nodes":[null]});
+        assert_eq!(
+            append_frame_scan(&mut scan, child, &frame, 1).unwrap_err().code,
+            "invalid_result"
+        );
+    }
+    #[test]
+    fn bidi_navigation_invalidates_only_that_child_document() {
+        let frame = FrameTarget::Bidi {
+            context: "child".into(),
+            realm: "realm".into(),
+        };
+        let mut scan = serde_json::json!({"nodes":[{"selector":"#top"}]});
+        append_frame_scan(
+            &mut scan,
+            serde_json::json!({"nodes":[{"selector":"#field"}]}),
+            &frame,
+            2,
+        )
+        .unwrap();
+        let mut state = SemanticState::default();
+        let (_, _, nodes) = state.register_nodes(scan).unwrap();
+        assert!(state.bidi_frame_is_current(&frame));
+        state.invalidate_bidi_frame("foreign");
+        assert!(state.bidi_frame_is_current(&frame));
+        state.invalidate_bidi_frame("child");
+        assert!(!state.bidi_frame_is_current(&frame));
+        assert_eq!(
+            state
+                .resolve(&BrowserTarget::Ref {
+                    reference: nodes[0].reference.clone()
+                })
+                .unwrap(),
+            "#top"
+        );
+        assert_eq!(
+            state
+                .resolve_target(&BrowserTarget::Ref {
+                    reference: nodes[1].reference.clone()
+                })
+                .unwrap_err()
+                .code,
+            "stale_reference"
         );
     }
 }

@@ -117,6 +117,19 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | RFB | The read-only viewer transport between the native host and Device panel. |
 | NDJSON | One JSON object per line in the progress stream. |
 
+## Browser frame tests
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| Chromium | The local Chromium browser backend. | — |
+| Firefox | The local Firefox browser backend. | — |
+| Safari | The local Safari browser backend. | — |
+| geckodriver | The driver that starts and controls the local Firefox session. | — |
+| child frame | A document embedded in another browser document. | — |
+| cross-origin frame | A child frame whose origin differs from its parent document. | — |
+| HTTP fixture | A task-owned loopback server and synthetic pages for a browser test. | — |
+| document reference | A short-lived browser node reference tied to one document. | — |
+
 ## Technical verbs
 
 | Verb | Meaning |

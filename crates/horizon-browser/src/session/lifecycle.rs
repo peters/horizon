@@ -423,7 +423,10 @@ impl DriverState {
             return false;
         }
         self.screencast_request_id = None;
-        if let Some(error) = error {
+        // A restart can race the existing stream, which is still usable.
+        if let Some(error) =
+            error.filter(|error| error.code != -32000 || error.message != "Screencast is already active")
+        {
             self.note_screencast_failure(&error.to_string());
         } else {
             self.screencast_on = true;
@@ -547,6 +550,53 @@ mod window_tests;
 #[cfg(test)]
 mod tests {
     use super::{hide_embedded_native_window_params, main_frame_id_from_tree};
+
+    #[test]
+    fn an_active_screencast_reply_preserves_binding_and_real_errors_still_retry() {
+        for (code, message, active) in [
+            (-32000, "Screencast is already active", true),
+            (-32000, "Session closed", false),
+            (-32602, "Screencast is already active", false),
+        ] {
+            for attempts in [3, 7] {
+                let mut state = super::DriverState::new(
+                    &crate::BrowserSessionConfig {
+                        browser: crate::BrowserConfig::default(),
+                        panel_local_id: "capture-test".into(),
+                        initial_url: None,
+                        width: 800,
+                        height: 600,
+                        frame_slot: std::sync::Arc::new(crate::FrameSlot::new()),
+                        coordination: None,
+                        capture_directory: None,
+                        video: std::sync::Arc::default(),
+                        remote: None,
+                    },
+                    "ws://127.0.0.1/test",
+                    None,
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                );
+                state.session_id = Some("page".into());
+                state.screencast_request_id = Some(7);
+                state.restart_attempts = attempts;
+                let error = crate::cdp::CdpErrorInfo {
+                    code,
+                    message: message.into(),
+                };
+                assert!(!state.handle_screencast_response(6, Some(&error)));
+                assert_eq!(state.screencast_request_id, Some(7));
+                assert!(state.handle_screencast_response(7, Some(&error)));
+                assert_eq!(state.screencast_on, active);
+                assert_eq!(state.pending_reattach, !active && attempts == 7);
+                assert_eq!(
+                    state.restart_attempts,
+                    if active || attempts == 7 { 0 } else { attempts + 1 }
+                );
+                assert_eq!(state.session_id.as_deref(), Some("page"));
+                assert!(state.screencast_request_id.is_none());
+            }
+        }
+    }
 
     #[test]
     fn frame_tree_requires_a_top_level_frame_id() {
