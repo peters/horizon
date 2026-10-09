@@ -125,10 +125,8 @@ impl Policy {
             locations: selected(&self.locations, &spec.data_centers),
             server_types: spec.cpu_flavors.clone(),
         };
-        if policy.locations.is_empty() || policy.server_types.is_empty() {
-            return Err(CloudError::Invalid(
-                "The saved worker type or location is no longer allowed",
-            ));
+        if policy.locations.is_empty() {
+            return Err(CloudError::Invalid("The saved worker location is no longer allowed"));
         }
         Ok(policy)
     }
