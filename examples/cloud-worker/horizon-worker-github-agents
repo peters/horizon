@@ -47,6 +47,8 @@ ROOT_UID = 0
 MAX_REQUEST = 8192
 CONNECTIONS = 16
 MAX_PENDING = 32
+# Cloud grants are stored with the chain, whose file has a size limit when it is read back.
+MAX_CLOUD_GRANTS = 32
 REASON_LIMIT = 300
 REQUEST_SECONDS = 24 * 3600
 # Decided and expired requests stay readable for the session for one more day.
@@ -355,6 +357,8 @@ def reachable(token, repository, access, environ=os.environ, timeout=15):
 MESSAGES = {
     'unknown_request': 'No pending GitHub access request has this ID.',
     'not_pending': 'This request was already decided or expired.',
+    'too_many_grants': 'This cloud already has the most repositories that can be allowed for it.',
+    'chain_changed': 'GitHub access on this worker changed while the request was checked; decide again.',
     'no_chain': 'This worker holds no usable GitHub sign-in.',
     'token_expired': 'The GitHub access token expired; wait for the worker to refresh it.',
     'not_installed': 'The GitHub App is not installed on this repository, or the account cannot see it.',
@@ -387,26 +391,47 @@ def decide(store, book, identifier, decision, now=time.time, check=reachable):
         if decision == 'deny':
             record.update(status='denied', decided_at=int(current))
             return dict(result, status='denied')
-        state = store.load()[0]
-        if state is None or state['state'] != 'ok':
+        checked = store.load()[0]
+        if checked is None or checked['state'] != 'ok':
             return failure(identifier, 'no_chain')
-        if state['chain']['access_expires_at'] - current <= common.SERVE_MARGIN:
+        if checked['chain']['access_expires_at'] - current <= common.SERVE_MARGIN:
             return failure(identifier, 'token_expired')
-        code = check(state['chain']['access_token'], record['repository'], record['access'])
+        if len(other_grants(checked, record)) >= MAX_CLOUD_GRANTS:
+            return failure(identifier, 'too_many_grants')
+        # Checked without the store lock, which a refresh or an install holds for long.
+        code = check(checked['chain']['access_token'], record['repository'], record['access'])
         if code is not None:
             return failure(identifier, code)
         with store.lock():
             state = store.load()[0]
             if state is None or state['state'] != 'ok':
                 return failure(identifier, 'no_chain')
-            others = [grant for grant in state.get('cloud_grants', [])
-                      if not auth.same_repository(record['repository'], grant['repository'])]
+            if not same_chain(checked, state):
+                return failure(identifier, 'chain_changed')
+            others = other_grants(state, record)
+            if len(others) >= MAX_CLOUD_GRANTS:
+                return failure(identifier, 'too_many_grants')
             access = common.stronger(record['access'], cloud_access(
                 {'grants': [], 'cloud_grants': state.get('cloud_grants', [])}, record['repository']))
             grants = others + [{'repository': record['repository'], 'access': access}]
             store.save(dict(state, cloud_grants=grants), retain=False)
         record.update(status='allowed', scope='cloud', decided_at=int(current))
         return dict(result, status='allowed')
+
+
+def other_grants(state, record):
+    """The cloud grants for repositories other than the request's."""
+    return [grant for grant in state.get('cloud_grants', [])
+            if not auth.same_repository(record['repository'], grant['repository'])]
+
+
+def same_chain(checked, current):
+    """Whether `current` is the chain that GitHub checked: the same token, or a refresh of the
+    same app and known account. Another install in between must not receive the grant."""
+    if current['chain']['access_token'] == checked['chain']['access_token']:
+        return True
+    return (current['client_id'] == checked['client_id'] and bool(checked.get('login'))
+            and current.get('login') == checked.get('login'))
 
 
 def requests_report(book, now=time.time):

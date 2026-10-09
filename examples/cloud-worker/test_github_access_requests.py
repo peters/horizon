@@ -192,6 +192,29 @@ class AccessRequestTests(ServiceTestCase):
         self.assertEqual(self.decide(identifier, 'allow-cloud')['error'], 'no_chain')
         self.assertEqual(self.ask(ALPHA)['state'], 'revoked')
 
+    def test_cloud_grants_are_bounded(self):
+        with self.store.lock():
+            self.store.save(dict(self.stored(), cloud_grants=[{'repository': 'example/r%d' % n, 'access': 'read'}
+                                                              for n in range(agents.MAX_CLOUD_GRANTS)]))
+        identifier = self.ask(ALPHA)['id']
+        check = mock.Mock(side_effect=AssertionError('no GitHub call over the limit'))
+        self.assertEqual(self.decide(identifier, 'allow-cloud', check)['error'], 'too_many_grants')
+        self.assertEqual(self.answer({'request': 'request-status', 'id': identifier}, NOW, ALPHA)[0]['status'],
+                         'pending')
+
+    def test_a_grant_never_lands_on_a_chain_that_github_did_not_check(self):
+        identifier = self.ask(ALPHA)['id']
+
+        def check(*args):
+            # Another account's chain is stored while GitHub is asked. (A real install waits
+            # for the request book, which this decision holds, so the chain is swapped here.)
+            with self.store.lock():
+                self.store.save(dict(self.stored(), chain=chain(access='ghu_synthetic-other'), login='someone-else'))
+        self.assertEqual(self.decide(identifier, 'allow-cloud', check)['error'], 'chain_changed')
+        self.assertNotIn('cloud_grants', self.stored())
+        self.assertEqual(self.answer({'request': 'request-status', 'id': identifier}, NOW, ALPHA)[0]['status'],
+                         'pending')
+
     def test_clear_removes_requests_and_grants(self):
         self.decide(self.ask(ALPHA)['id'], 'allow-cloud')
         self.ask(BETA, repository='example/other')

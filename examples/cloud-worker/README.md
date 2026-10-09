@@ -945,7 +945,10 @@ access token (`GET /repos/{owner}/{name}`), and for push it requires
 `permissions.push`. If that fails, the decision fails with one of these codes
 and the request stays pending: `not_installed` (GitHub answered 404),
 `no_push`, `token_invalid`, `forbidden`, `unreachable`, `token_expired` or
-`no_chain`. `unknown_request` and `not_pending` end the decision too. Both
+`no_chain`. `too_many_grants` (a cloud takes at most 32 cloud grants, so the
+stored chain stays readable) and `chain_changed` (another chain was stored while
+GitHub was asked) also leave it pending. `unknown_request` and `not_pending` end
+the decision too. Both
 outcomes print JSON and exit with status 0. `read` and `push` keep the meaning
 described above: `permissions.push` reports your account's access, and the
 GitHub App's own permissions still limit what the token can do.
