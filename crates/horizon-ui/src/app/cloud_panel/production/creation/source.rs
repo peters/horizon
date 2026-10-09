@@ -81,6 +81,9 @@ pub(in crate::app::cloud_panel::production) struct State {
     token_instead: bool,
     /// The clone under way or last tried used the connected account's token.
     connected: bool,
+    /// The repository the connected account's token was asked for; a token that arrives
+    /// once the field names another is dropped.
+    account_for: Option<Remote>,
 }
 
 impl State {

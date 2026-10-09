@@ -73,7 +73,7 @@ pub fn current(root: &Path, settings: &Settings) -> Result<Option<(String, Secre
 /// or Horizon window ends never ends this one. Returns the account and its token, or why
 /// GitHub ended the sign-in.
 /// # Errors
-/// A local file that cannot be written, or a cancelled sign-in.
+/// A local file that cannot be written, or a cancelled sign-in, which stores nothing.
 pub fn sign_in(
     root: &Path,
     settings: &Settings,
@@ -103,8 +103,10 @@ pub fn sign_in(
         Err(error) => return Ok(Err(error.to_string())),
     };
     // Locked only to store it: the sign-in itself waits for the person. A Disconnect while
-    // it waited keeps the chain out.
+    // it waited keeps the chain out, as does a request that ended meanwhile.
+    cancel.check()?;
     let _lock = lock(root, settings)?;
+    cancel.check()?;
     if !configured(root, settings) {
         return Ok(Err("GitHub was disconnected while this computer signed in.".into()));
     }

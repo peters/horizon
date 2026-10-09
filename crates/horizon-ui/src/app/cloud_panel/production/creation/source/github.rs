@@ -307,9 +307,14 @@ impl super::State {
     }
 
     /// Starts the clone with the connected account's token once it arrived; it is used as a
-    /// pasted token would be, and never saved.
+    /// pasted token would be, and never saved. A token asked for a repository the field no
+    /// longer names starts nothing.
     pub(super) fn take_account_token(&mut self, ctx: &Context) {
         if let Some(token) = self.account.as_mut().and_then(Account::poll) {
+            let asked = self.account_for.take();
+            if asked.is_none() || self.remote() != asked.as_ref() {
+                return;
+            }
             self.token.zeroize();
             self.token.push_str(token.expose());
             self.remember = false;
@@ -331,7 +336,7 @@ impl super::State {
         let Some(account) = self.account.as_mut() else {
             return;
         };
-        let mut instead = false;
+        let (mut clone, mut instead) = (false, false);
         egui::Frame::new()
             .fill(theme::PANEL_BG_ALT())
             .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE()))
@@ -362,9 +367,7 @@ impl super::State {
                 ui.add_enabled_ui(!account.busy(), |ui| {
                     ui.horizontal(|ui| {
                         let label = if tried { "Try again" } else { "Clone with GitHub" };
-                        if ui.add(primary_button(label).min_size(vec2(150.0, 32.0))).clicked() {
-                            account.request(Purpose::Clone, ui.ctx());
-                        }
+                        clone = ui.add(primary_button(label).min_size(vec2(150.0, 32.0))).clicked();
                         if tried
                             && ui.add(chrome_button("Add it on GitHub")).clicked()
                             && let Err(error) = horizon_core::open_url(&account.installation_url())
@@ -379,6 +382,12 @@ impl super::State {
                     ui.label(RichText::new(failed).size(13.0).color(theme::PALETTE_RED()));
                 }
             });
+        if clone {
+            self.account_for = self.remote().cloned();
+            if let Some(account) = self.account.as_mut() {
+                account.request(Purpose::Clone, ui.ctx());
+            }
+        }
         if instead {
             self.token_instead = true;
         }
@@ -529,5 +538,30 @@ mod tests {
             .collect();
         assert!(texts.iter().any(|text| text == "Open GitHub"));
         assert!(texts.iter().any(|text| text == "Cancel"));
+    }
+
+    #[test]
+    fn a_token_asked_for_another_repository_starts_nothing() {
+        let mut state = super::super::State::default();
+        state.edit_for_test("github.com/acme/other");
+        state.account_for = horizon_core::cloud_runtime::repository::source::parse("github.com/acme/private");
+        let (sender, receiver) = channel();
+        sender
+            .send(Answer::Done {
+                token: Secret::new("ghu_synthetic".into()),
+                repositories: None,
+            })
+            .unwrap();
+        let mut account = account();
+        account.job = Some(Job {
+            receiver,
+            purpose: Purpose::Clone,
+            _abort: Abort(Cancellation::default()),
+        });
+        state.account = Some(account);
+        state.take_account_token(&egui::Context::default());
+        assert!(state.token.is_empty(), "the token is not used");
+        assert!(state.job.is_none() && !state.connected, "no clone started");
+        assert!(state.account_for.is_none());
     }
 }
