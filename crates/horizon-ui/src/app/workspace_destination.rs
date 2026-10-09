@@ -1,8 +1,15 @@
-use egui::{Key, Modifiers, Response, Ui};
+use egui::{
+    Align, Color32, CornerRadius, Key, Layout, Modifiers, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui,
+    UiBuilder, Vec2,
+};
 use horizon_core::{PanelId, Workspace, WorkspaceId};
 
 use super::HorizonApp;
 use crate::theme;
+
+const MENU_SEARCH_HEIGHT: f32 = 32.0;
+const MENU_SEARCH_RADIUS: u8 = 8;
+const MENU_SEARCH_TEXT_INSET: f32 = 28.0;
 
 #[derive(Clone, Default)]
 struct DestinationSearch {
@@ -73,12 +80,7 @@ fn render_destination_search(
     } else {
         (false, false, false)
     };
-    let search = ui.add(
-        egui::TextEdit::singleline(&mut state.query)
-            .id(query_id)
-            .hint_text("Search workspaces…")
-            .desired_width(f32::INFINITY),
-    );
+    let search = render_menu_search_field(ui, &mut state.query, query_id, opening);
     if opening {
         search.request_focus();
     }
@@ -224,6 +226,92 @@ fn render_results(
         }
     });
     chosen
+}
+
+fn render_menu_search_field(ui: &mut Ui, query: &mut String, id: egui::Id, opening: bool) -> Response {
+    let width = ui.available_width();
+    let (rect, well) = ui.allocate_exact_size(Vec2::new(width, MENU_SEARCH_HEIGHT), Sense::click());
+    let _ = well.clone().on_hover_cursor(egui::CursorIcon::Text);
+    let focused = opening || ui.memory(|memory| memory.has_focus(id));
+    let hovered = ui
+        .input(|input| input.pointer.hover_pos())
+        .is_some_and(|pos| rect.contains(pos));
+    paint_menu_search_well(ui.painter(), rect, focused, hovered);
+    paint_search_mark(
+        ui.painter(),
+        Pos2::new(rect.min.x + 15.0, rect.center().y),
+        if focused || !query.is_empty() {
+            theme::FG()
+        } else {
+            theme::FG_SOFT()
+        },
+    );
+
+    let text_rect = Rect::from_min_max(
+        Pos2::new(rect.min.x + MENU_SEARCH_TEXT_INSET, rect.min.y + 2.0),
+        Pos2::new(rect.max.x - 10.0, rect.max.y - 2.0),
+    );
+    let mut editor = ui.new_child(
+        UiBuilder::new()
+            .max_rect(text_rect)
+            .layout(Layout::left_to_right(Align::Center))
+            .id_salt(id.with("editor")),
+    );
+    // egui replaces any hint color with `weak_text_color`. Set it here so the
+    // placeholder stays `FG_DIM` and does not inherit the menu's text color.
+    editor.visuals_mut().weak_text_color = Some(theme::FG_DIM());
+    let response = editor.add(
+        egui::TextEdit::singleline(query)
+            .id(id)
+            .frame(egui::Frame::NONE)
+            .desired_width(text_rect.width())
+            .min_size(text_rect.size())
+            .font(egui::FontId::proportional(13.0))
+            .text_color(theme::FG())
+            .vertical_align(Align::Center)
+            .margin(egui::Margin::ZERO)
+            .hint_text(egui::RichText::new("Search workspaces…").size(12.0)),
+    );
+    if well.clicked() {
+        response.request_focus();
+    }
+    response
+}
+
+fn paint_menu_search_well(painter: &egui::Painter, rect: Rect, focused: bool, hovered: bool) {
+    let stroke = if focused {
+        theme::alpha(theme::ACCENT(), 200)
+    } else if hovered {
+        theme::alpha(theme::ACCENT(), 160)
+    } else {
+        theme::alpha(theme::BORDER_STRONG(), 200)
+    };
+    painter.rect(
+        rect,
+        CornerRadius::same(MENU_SEARCH_RADIUS),
+        theme::BG(),
+        Stroke::new(1.0, stroke),
+        StrokeKind::Inside,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(rect.min.x + 12.0, rect.min.y + 2.0),
+            Pos2::new(rect.max.x - 12.0, rect.min.y + 2.0),
+        ],
+        Stroke::new(1.0, theme::alpha(theme::FG(), if focused { 28 } else { 16 })),
+    );
+}
+
+fn paint_search_mark(painter: &egui::Painter, center: Pos2, color: Color32) {
+    let loop_center = Pos2::new(center.x - 1.2, center.y - 1.2);
+    painter.circle_stroke(loop_center, 3.6, Stroke::new(1.25, color));
+    painter.line_segment(
+        [
+            Pos2::new(loop_center.x + 2.7, loop_center.y + 2.7),
+            Pos2::new(loop_center.x + 5.6, loop_center.y + 5.6),
+        ],
+        Stroke::new(1.25, color),
+    );
 }
 
 fn step_selection(selected: &mut Option<WorkspaceId>, eligible: &[WorkspaceId], forward: bool) {

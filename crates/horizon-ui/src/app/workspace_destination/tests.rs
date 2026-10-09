@@ -336,3 +336,43 @@ fn sidebar_search_field_is_above_the_sidebar_and_accepts_pointer_input() {
         destination
     );
 }
+
+#[test]
+fn menu_search_field_uses_an_inset_well_instead_of_the_selection_stroke() {
+    use crate::theme;
+
+    let mut harness = Harness::new();
+    theme::apply(&harness.ctx, horizon_core::AppearanceTheme::Dark);
+    let output = harness.frame(Vec::new(), true, None);
+    let hint = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.text().contains("Search workspaces") => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .expect("search field hint");
+    let well = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Rect(rect)
+                if rect.fill == theme::BG() && rect.rect.contains(hint) && (rect.rect.height() - 32.0).abs() < 1.0 =>
+            {
+                Some(rect.clone())
+            }
+            _ => None,
+        })
+        .expect("menu search well");
+    let focus = egui::Stroke::new(1.0, theme::alpha(theme::ACCENT(), 200));
+    assert_eq!(well.corner_radius, egui::CornerRadius::same(8));
+    assert_eq!(well.stroke, focus);
+    assert_eq!(well.stroke_kind, egui::StrokeKind::Inside);
+    assert_ne!(
+        well.stroke.color,
+        theme::ACCENT(),
+        "a focused menu search field must not paint the full-opacity selection ring"
+    );
+}

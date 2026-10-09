@@ -285,6 +285,8 @@ What this means:
 | `FG` / `FG_SOFT` / `FG_DIM` on selected worker card | 11.51 / 7.08 / 3.38 `*` | 11.69 / 4.98 / 2.59 `*` |
 | `FG_SOFT` on hovered widget fill (`blend .16`) | 6.80 | 4.83 |
 | `ACCENT` text on `+ Add` button fill (`blend .08`) | 5.17 | 4.61 |
+| `FG` / `FG_DIM` on a menu search field (`BG`) | 16.28 / 4.78 | 14.68 / 3.25 `*` |
+| Menu search focus outline `alpha(ACCENT, 200)` on `BG` | 4.44 | 3.58 |
 | `FG` on terminal selection (`alpha(ACCENT, 76)` over `PANEL_BG`) | 9.28 | 10.31 |
 
 Rules that follow:
@@ -460,6 +462,7 @@ Fixed metrics:
 | Panel resize handle | 32 screen points, independent of canvas zoom (bounded by panel extent). The painted mark is six dots in the corner. Those dots keep the same screen size when the corner can hold them. The square is the hit target and has no fill. |
 | Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5 |
 | Text field in a dialog | 38 high, text margin (12, 10) |
+| Menu search field | 32 high, radius 8, text inset 28 left and 10 right |
 | Dialog buttons | creation dialog: at least 120 x 40; accounts dialog: the primary ("Save settings", or "Save and start" while continuing a first cloud) 148 x 40, `Cancel` at least 80 x 40 |
 | Overlay text input | 44 high |
 | Command palette | 500 wide, 36 row, 28 section header, at most 12 visible rows |
@@ -599,6 +602,7 @@ backdrop dimming:
   "Browse..." label (13 `FG_SOFT`); an empty value shows the placeholder in
   `FG_DIM`.
 - Overlay inputs (above) draw their own well and disable the built-in frame.
+- A menu search field does the same. See [Menu search field](#menu-search-field).
 
 ### Buttons
 
@@ -680,6 +684,38 @@ outline).
   select eligible destinations, Enter moves the panel, and Escape cancels.
   Long names truncate with a full-name tooltip. Sidebar menus are sublayers
   above the sidebar chrome, so search fields and results remain clickable.
+  The search control is a menu search field.
+
+### Menu search field
+
+A menu search field is the search control at the top of a menu. The **Move to Workspace**
+menu uses this field. Paint the well in the menu code. Do not use the default text frame.
+
+The default text frame paints `selection.stroke` when the field has focus. That
+stroke is 1 px of `ACCENT` at full opacity. The stroke is the color of selected
+text. On a menu, the stroke shows as a hard blue ring. Do not use that ring as
+the outline of a control.
+
+The menu fill is `PANEL_BG`. The well is an inset on that fill.
+
+- The well is 32 high and as wide as the menu. The corner radius is 8.
+- The fill is `BG`.
+- The rest outline is 1 px `alpha(BORDER_STRONG, 200)`, on the inside of the well.
+  This outline is only a separator. The inset fill and the search mark identify the control.
+- The hover outline is 1 px `alpha(ACCENT, 160)`, on the inside.
+- The focus outline is 1 px `alpha(ACCENT, 200)`, on the inside. Contrast of this
+  outline on `BG` is 4.44 in the dark theme and 3.58 in the light theme.
+- The search mark is 15 from the left edge, at the vertical center. The mark is
+  `FG_SOFT`. The mark is `FG` when the field has focus or the query is not empty.
+- The text edit uses `Frame::NONE`. Typed text is 13 proportional `FG`. The hint is 12 `FG_DIM`.
+- Set `weak_text_color` on the text-edit child to `FG_DIM`. egui replaces a hint
+  color with `weak_text_color`, so a color on the hint text has no effect.
+- Text starts 28 from the left and stops 10 from the right.
+- A click on the mark or on the padding focuses the field. The click does not close the menu.
+- The menu focuses the field one time, when the menu opens.
+- A 1 px line of `alpha(FG, 28)` crosses the top of a focused well. The line
+  starts 12 from each side. At rest and on hover the line is `alpha(FG, 16)`.
+  The line matches the toolbar search highlight. The line does not replace the focus outline.
 
 ## Terminal
 
@@ -811,6 +847,8 @@ Don't:
   hover paths for polish.
 - Don't add a new modal or overlay style; reuse the modal, overlay and search
   recipes above.
+- Do not give a menu search field the default text frame. That frame paints a
+  1 px full-opacity `ACCENT` ring when the field has focus.
 
 ## Reproducing the numbers
 
