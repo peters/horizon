@@ -39,10 +39,11 @@ python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
 ```
 
 Use a new state path if it already exists. Pass `--firefox-system-access` only
-with the Firefox disclosure procedure. The flag writes
-`browser.firefox_system_access: true` into the fixture config. Other runs leave
-that field false. Mozilla documents the matching geckodriver flag as full
-system access for clients that reach the fixture driver port.
+with the Firefox disclosure procedure. The flag sets `browser.backend` to
+`firefox` and `browser.firefox_system_access` to true. It also opens the
+Google sign-in page and the X login page. Other runs leave that field false.
+Mozilla documents the matching geckodriver flag as full system access for
+clients that reach the fixture driver port.
 
 The harness atomically allocates an
 unused 1600×1000 Xvfb display, disables MIT-SHM and starts its own window manager.

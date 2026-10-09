@@ -57,7 +57,19 @@ def application_document(cwd, device_address=None, firefox_system_access=False):
             {'name': 'Native device view', 'kind': 'device', 'command': device_address,
              'position': [40, 60], 'size': [1150, 780]}]
     if firefox_system_access:
-        fixture['browser'] = {'firefox_system_access': True}
+        fixture['browser'] = {'backend': 'firefox', 'firefox_system_access': True}
+        if not device_address:
+            fixture['workspaces'][0]['terminals'] = [
+                {'name': 'Google sign-in', 'kind': 'browser',
+                 'command': 'https://accounts.google.com/ServiceLogin?hl=en',
+                 'position': [40, 60], 'size': [700, 640]},
+                {'name': 'X login', 'kind': 'browser',
+                 'command': 'https://x.com/i/flow/login',
+                 'position': [760, 60], 'size': [680, 640]},
+                {'name': 'Live render heartbeat', 'command': '/usr/bin/python3',
+                 'args': ['-u', '-c', "import time\nprint('HORIZON DEBUG / noVNC LIVE VIEW')\nfor i in range(3600):\n print('Live frame heartbeat:', i, flush=True); time.sleep(1)"],
+                 'position': [40, 720], 'size': [550, 140]},
+            ]
     return fixture
 
 

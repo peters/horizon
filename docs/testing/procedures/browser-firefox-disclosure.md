@@ -42,7 +42,7 @@ It also tests the preload fallback and one synthetic sign-in check.
 - For tasks 6.1 and 6.6, geckodriver 0.37 or newer.
 - Permission to bind a loopback port.
 - Permission to start a headless Firefox process.
-- For task 6.6, a frozen Horizon candidate and the local device fixture.
+- For task 6.6, a frozen Horizon candidate, `horizon-device` from the same commit, `xdotool`, `jq`, and the local device fixture.
 
 ## 5. Setup
 
@@ -114,6 +114,8 @@ It also tests the preload fallback and one synthetic sign-in check.
 
 ### 6.6 SIGN-IN — Google checks the browser after Next
 
+`device_panel` is the view only. Send input with `horizon-device` on the fixture target.
+
 1. Start the local device fixture with `--native-view` and `--firefox-system-access`.
 
    ```sh
@@ -122,48 +124,125 @@ It also tests the preload fallback and one synthetic sign-in check.
    ```
 
    Result: The fixture prints a loopback VNC address. `viewer_url` is null.
+   The fixture config sets `browser.backend` to `firefox`.
    The fixture config sets `browser.firefox_system_access` to true.
+   The workspace opens the Google page and the X page.
 
-2. Open that address with the public `device_panel` tool.
+2. Record the candidate process ID.
+
+   ```sh
+   pgrep -f '^<frozen-candidate> --config'
+   ```
+
+   Result: The command shows one process ID.
+   `/proc/<pid>/exe` is the frozen candidate.
+
+3. Open that address with the public `device_panel` tool.
 
    Result: The Device panel shows the isolated desktop.
+   The panel does not accept input.
 
-3. Inspect the Device panel twice, two seconds apart.
+4. Inspect the Device panel twice, two seconds apart.
 
    Result: The displayed frame advances.
 
-4. In the isolated Horizon window, open a Firefox browser panel.
+5. Define the input helpers. `<state>/target.json` names the fixture display.
 
-   Result: The panel is ready.
+   ```sh
+   device() { <bin>/horizon-device --target <state>/target.json "$@"; }
+   geometry() {
+     device screenshot --options '{"region":{"x":0,"y":0,"width":2,"height":2}}' \
+       | jq -c .result.geometry
+   }
+   send_type() {
+     jq -Rsc --argjson g "$(geometry)" '{geometry: $g, action: {kind: "type", text: .}}' \
+       | device act -
+   }
+   send_key() {
+     jq -nc --argjson g "$(geometry)" --arg k "$1" \
+       '{geometry: $g, action: {kind: "key", key: $k, modifiers: []}}' | device act -
+   }
+   send_click() {
+     jq -nc --argjson g "$(geometry)" --argjson x "$1" --argjson y "$2" \
+       '{geometry: $g, action: {kind: "click", at: {x: $x, y: $y}, button: "left"}}' \
+       | device act -
+   }
+   ```
 
-5. Go to `https://accounts.google.com/ServiceLogin?hl=en`.
+   Result: The helpers use the fixture display. They do not use the developer display.
 
-   Result: The Google sign-in form is open.
+6. Focus the candidate window on the fixture display.
 
-6. Type `not-a-real-person@example.com` in the email field.
+   ```sh
+   DISPLAY=<display> xdotool search --pid <pid> --name '^Horizon$' windowactivate --sync
+   ```
+
+   Result: The window for that process ID is focused.
+
+7. Capture the isolated desktop.
+
+   ```sh
+   device screenshot <evidence>/desktop.png
+   ```
+
+   Result: The image shows the Google email field and the X username field.
+
+8. Click the Google email field at its surface point.
+
+   ```sh
+   send_click <email-x> <email-y>
+   ```
+
+   Result: The email field has focus.
+
+9. Type the synthetic email.
+
+   ```sh
+   printf '%s' 'not-a-real-person@example.com' | send_type
+   ```
 
    Result: The email field shows that text.
 
-7. Click Next one time.
+10. Press Enter one time. This is the one Next action.
 
-   Result: The page shows "Couldn't find this account".
-   The page does not show "This browser or app may not be secure."
+    ```sh
+    send_key enter
+    ```
 
-8. Do not click Next again.
+    Result: The page shows "Couldn't find this account".
+    The page does not show "This browser or app may not be secure."
 
-   Result: The password field stays empty.
+11. Do not press Enter again.
 
-9. Go to `https://x.com/i/flow/login`.
+    Result: The password field stays empty.
 
-   Result: The X login form is open.
+12. Capture the X login page.
 
-10. Type `not-a-real-person` in the username field.
+    ```sh
+    device screenshot <evidence>/x-login.png
+    ```
+
+    Result: The image shows the username field.
+
+13. Click the X username field at its surface point.
+
+    ```sh
+    send_click <username-x> <username-y>
+    ```
+
+    Result: The username field has focus.
+
+14. Type the synthetic username.
+
+    ```sh
+    printf '%s' 'not-a-real-person' | send_type
+    ```
 
     Result: The username field shows that text.
 
-11. Do not click Continue.
+15. Leave the X login form as it is.
 
-    Result: The login form is still open.
+    Result: The login form is still open. Continue stays unused.
 
 ## 7. Pass criteria
 

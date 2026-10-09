@@ -46,8 +46,12 @@ automation flags from the chrome context when `firefox_system_access` is
 true. That option starts geckodriver with `--allow-system-access`. Mozilla
 documents the flag as full system access for every local client that can
 reach the driver port, so it stays off unless you set it. The clear changes
-a key pair only when both keys are already booleans: current Firefox uses
-`IsBrowserAutomationRunning`, and Firefox ESR 140 uses `Active`. A shared
+a key pair only when both keys are already booleans, then stops. Current
+Firefox publishes `IsBrowserAutomationRunning` and the legacy `Active` keys.
+`Navigator.webdriver` reads the first pair, so `Active` stays as it was.
+Those keys still report whether Marionette and Remote Agent are running.
+Firefox ESR 140 has only the `Active` pair, so that is the pair that changes.
+A shared
 Firefox process does that once, on the session transport, before page
 commands are limited to one window. If system access is off, the chrome
 context is unavailable, or neither key pair is already present, Firefox
