@@ -245,6 +245,30 @@ pub fn save_github(
     github: Option<super::github::Settings>,
     cancel: &super::Cancellation,
 ) -> Result<Committed> {
+    write_github(root, github, None, cancel)
+}
+
+/// Changes the mode of the GitHub App `app_id`, or forgets it, as [`save_github`], but only
+/// while the settings still name that app. Settings that name another app, or none, were
+/// saved by another Horizon window since this one showed the app, and are left as they are.
+/// # Errors
+/// As [`save_github`], and settings that no longer name the app.
+pub fn change_github(
+    root: &Path,
+    app_id: u64,
+    github: Option<super::github::Settings>,
+    cancel: &super::Cancellation,
+) -> Result<Committed> {
+    write_github(root, github, Some(app_id), cancel)
+}
+
+/// Saves `github`, when `replaces` is set only over settings that name that app.
+fn write_github(
+    root: &Path,
+    github: Option<super::github::Settings>,
+    replaces: Option<u64>,
+    cancel: &super::Cancellation,
+) -> Result<Committed> {
     let mut write = storage::Transaction::new(root)?;
     let before = match std::fs::read(root.join("settings.json")) {
         Ok(bytes) => Some(bytes),
@@ -255,6 +279,11 @@ pub fn save_github(
         || Ok(defaults(root)),
         |bytes| serde_json::from_slice::<Settings>(bytes).map_err(|_| Error::Json),
     )?;
+    if replaces.is_some_and(|app_id| settings.github.as_ref().map(|github| github.app_id) != Some(app_id)) {
+        return Err(Error::Invalid(
+            "GitHub was changed in another Horizon window. Close and reopen the settings to see it.",
+        ));
+    }
     settings.github = github;
     cancel.check()?;
     // Committed only over the bytes read above, so a concurrent writer is never overwritten.

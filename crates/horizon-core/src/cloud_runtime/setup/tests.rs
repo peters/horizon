@@ -397,3 +397,32 @@ fn connect_github_saves_before_any_provider_is_set_up() {
     assert_eq!(draft.settings.github, Some(app));
     assert!(!draft.settings.runpod_configured());
 }
+
+#[test]
+fn a_change_of_the_github_app_applies_only_while_the_settings_name_it() {
+    let root = tempfile::tempdir().unwrap();
+    let app = |app_id| crate::cloud_runtime::github::Settings {
+        app_id,
+        slug: format!("horizon-example-{app_id}"),
+        client_id: "Iv23synthetic".into(),
+        client_secret_file: root.path().join(format!("credentials/github-app-{app_id}")),
+        mode: crate::cloud_runtime::github::Mode::Ask,
+    };
+    let cancel = crate::cloud_runtime::Cancellation::default();
+    // Another window replaced app 42 with app 43 since this one showed 42.
+    save_github(root.path(), Some(app(43)), &cancel).unwrap();
+    let automatic = crate::cloud_runtime::github::Settings {
+        mode: crate::cloud_runtime::github::Mode::Automatic,
+        ..app(42)
+    };
+    assert!(change_github(root.path(), 42, Some(automatic), &cancel).is_err());
+    assert!(change_github(root.path(), 42, None, &cancel).is_err());
+    assert_eq!(Draft::load(root.path()).unwrap().settings.github, Some(app(43)));
+    // The app the settings name changes as asked.
+    change_github(root.path(), 43, None, &cancel).expect("the shown app is still the saved one");
+    assert_eq!(Draft::load(root.path()).unwrap().settings.github, None);
+    assert!(
+        change_github(root.path(), 43, None, &cancel).is_err(),
+        "a second Disconnect finds nothing to change"
+    );
+}

@@ -58,14 +58,15 @@ impl Card {
         self.connecting.is_some() || self.saving.is_some()
     }
 
-    /// Saves the app with a changed mode, or forgets it on Disconnect, off the UI thread.
-    /// `previous` is the app a Disconnect leaves; this computer's own sign-in for it goes too.
+    /// Saves `shown`, the app this card shows, with a changed mode, or forgets it on
+    /// Disconnect (`github` is `None`), off the UI thread. Either applies only while the
+    /// settings still name `shown`; a Disconnect also ends this computer's sign-in for it.
     fn save(
         &mut self,
         ctx: &egui::Context,
         root: std::path::PathBuf,
         github: Option<github::Settings>,
-        previous: Option<github::Settings>,
+        shown: github::Settings,
     ) {
         let (tx, rx) = channel();
         self.saving = Some(rx);
@@ -73,17 +74,19 @@ impl Card {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let save = || {
-                setup::save_github(
+                setup::change_github(
                     &root,
+                    shown.app_id,
                     github.clone(),
                     &horizon_core::cloud_runtime::Cancellation::default(),
                 )
             };
             // A Disconnect forgets this computer's sign-in and saves under one lock, so no
             // other Horizon window stores a chain for the app in between.
-            let result = match previous.as_ref().filter(|_| github.is_none()) {
-                Some(previous) => github::host::disconnect(&root, previous, save),
-                None => save(),
+            let result = if github.is_none() {
+                github::host::disconnect(&root, &shown, save)
+            } else {
+                save()
             }
             .map(|committed| (committed, github))
             .map_err(|error| error.to_string());
@@ -301,8 +304,11 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
         card.save(
             ui.ctx(),
             draft.root().to_owned(),
-            Some(github::Settings { mode: chosen, ..github }),
-            None,
+            Some(github::Settings {
+                mode: chosen,
+                ..github.clone()
+            }),
+            github,
         );
     }
     caption(
@@ -313,7 +319,7 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
         .add_enabled(card.saving.is_none(), chrome_button("Disconnect"))
         .clicked()
     {
-        card.save(ui.ctx(), draft.root().to_owned(), None, Some(settings.clone()));
+        card.save(ui.ctx(), draft.root().to_owned(), None, settings.clone());
     }
 }
 
