@@ -178,3 +178,64 @@ fn a_name_that_narrows_the_list_is_no_unknown_link() {
     state.input = "https://example.org/web".into();
     assert!(!state.filters_the_list(), "a link is never a filter");
 }
+
+#[test]
+fn a_token_for_the_repository_in_the_field_is_used_once_and_never_kept() {
+    let temp = tempfile::tempdir().unwrap();
+    let remote = horizon_core::cloud_runtime::repository::source::parse("github.com/acme/private").unwrap();
+    // A checkout of the link is already there, so the start takes it without the network.
+    let checkout = temp.path().join("private");
+    std::fs::create_dir(&checkout).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "first",
+        ],
+        &["remote", "add", "origin", &remote.url],
+    ] {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&checkout)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "{args:?}");
+    }
+    let mut state = super::super::State::default();
+    state.set_parent(temp.path());
+    state.input = "github.com/acme/private".into();
+    state.remember = true;
+    state.account_for = Some(remote.clone());
+    let (sender, receiver) = channel();
+    sender
+        .send(Answer::Done {
+            token: Secret::new("ghu_synthetic".into()),
+            repositories: None,
+        })
+        .unwrap();
+    let mut account = account();
+    account.job = Some(Job {
+        receiver,
+        purpose: Purpose::Clone,
+        _abort: Abort(Cancellation::default()),
+    });
+    state.account = Some(account);
+    state.take_account_token(&egui::Context::default());
+    assert!(state.connected, "the clone uses the connected account");
+    assert!(!state.remember, "its token is never kept in Git's helper");
+    assert!(
+        horizon_core::cloud_runtime::repository::source::Token::new(&remote, &state.token).is_some(),
+        "the token serves this repository's origin"
+    );
+    assert_eq!(state.ready.as_deref(), Some(checkout.as_path()), "the start ran");
+    assert!(state.account_for.is_none());
+}

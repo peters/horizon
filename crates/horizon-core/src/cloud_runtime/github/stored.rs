@@ -99,10 +99,16 @@ fn kept(error: &GitHubError) -> Kept {
     }
 }
 
-/// Drops a chain that no longer works, so the next use asks again.
+/// Drops a chain that no longer works, so the next use asks again. The removal is made
+/// durable before it is reported, so a crash never brings a forgotten chain back.
 pub(super) fn forget(path: &Path) -> Result<Option<(String, Secret)>> {
     match std::fs::remove_file(path) {
-        Ok(()) => Ok(None),
+        Ok(()) => {
+            if let Some(directory) = path.parent() {
+                sync_directory(directory)?;
+            }
+            Ok(None)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
@@ -234,6 +240,16 @@ pub(super) fn write_private(directory: &Path, name: &str, bytes: &[u8]) -> Resul
     file.write_all(bytes)?;
     file.as_file().sync_all()?;
     file.persist(directory.join(name)).map_err(|error| error.error)?;
+    // The rename is durable only once the directory is: a renewed chain is used right after
+    // this, and GitHub has already ended the one it replaced.
+    sync_directory(directory)
+}
+
+fn sync_directory(directory: &Path) -> Result<()> {
+    #[cfg(unix)]
+    File::open(directory)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = directory;
     Ok(())
 }
 
