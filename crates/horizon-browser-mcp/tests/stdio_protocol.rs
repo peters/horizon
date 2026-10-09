@@ -273,6 +273,20 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{name} tool"))
 }
 
+fn assert_output_schemas_describe_objects(tools: &Value) {
+    // Strict MCP clients reject tools/list when an outputSchema lacks a root type;
+    // every advertised output schema must describe a JSON object.
+    for tool in tools["result"]["tools"].as_array().expect("tools") {
+        assert_eq!(
+            tool["outputSchema"]["type"],
+            json!("object"),
+            "{} output schema must describe a JSON object: {}",
+            tool["name"],
+            tool["outputSchema"]
+        );
+    }
+}
+
 fn assert_device_panel_contract(tools: &Value) {
     assert!(
         !listed_tool(tools, "device_panel")["inputSchema"]
@@ -383,6 +397,7 @@ fn assert_resize_contract(tools: &Value) {
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
     assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(31));
+    assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);
     assert_provider_tools_contract(tools);
