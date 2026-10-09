@@ -232,8 +232,9 @@ try:
         # directory before it parses any operation.
         service = shutil.which('horizon-worker-github')
         beside = Path(service).resolve() if service else None
-        if (beside and all(beside.with_name(helper).is_file()
-                           for helper in ('horizon-worker-github-common', 'horizon-worker-git-auth'))
+        # The Git helper is also run from there, so it must be executable.
+        if (beside and beside.with_name('horizon-worker-github-common').is_file()
+                and os.access(beside.with_name('horizon-worker-git-auth'), os.X_OK)
                 and shutil.which('horizon-worker-tailnet') and helper_declares(
                 'horizon-worker-supervise', '--github-chain-contract', 'horizon-github-chain-contract=1')):
             print('horizon-github-chain-contract=1')

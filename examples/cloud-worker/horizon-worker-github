@@ -277,6 +277,15 @@ def answer(request, state, now):
             'access': grant['access'], 'expires_at': chain['access_expires_at']}, grant['repository']
 
 
+def serve_request(request, store, now):
+    """`answer` for the chain that may be served. A chain that exists but is not stored yet is
+    refused as `unstored`, never as `absent`, which would send Git to the static file."""
+    served = store.load(serving=True)[0]
+    if served is None and store.load()[0] is not None:
+        return refusal('unstored', 'The GitHub token chain is not stored yet; try again in a minute.'), None
+    return answer(request, served, now)
+
+
 def peer(connection):
     """(pid, uid) of the connecting process, as the kernel reports them."""
     pid, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
@@ -312,7 +321,7 @@ def handle(connection, store):
         reply = dict(status(store), ok=True) if uid == ROOT_UID else refusal('refused', 'Only root reads the status.')
         repository = None
     else:
-        reply, repository = answer(request, store.load(serving=True)[0], now)
+        reply, repository = serve_request(request, store, now)
     kind = request.get('request') if isinstance(request, dict) else None
     with contextlib.suppress(OSError):
         log_request(store.runtime, {'at': int(now), 'uid': uid, 'pid': pid,

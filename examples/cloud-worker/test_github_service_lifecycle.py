@@ -290,6 +290,30 @@ class VolumeCopyTests(ServiceTestCase):
             self.store.save(dict(previous, chain=chain(access='ghu_synthetic-new')), retain=False)
         self.assertIsNone(self.store.load(serving=True)[0])
 
+    def test_a_chain_waiting_for_its_write_is_refused_but_not_absent(self):
+        self.install()
+        stored = self.stored()
+        self.store.pending = dict(stored, serial=stored['serial'] + 1, chain=chain(access='ghu_synthetic-unwritten'))
+        request = {'request': 'credential', 'protocol': 'https', 'host': 'github.com', 'path': 'example/project'}
+        reply, _ = service.serve_request(request, self.store, NOW)
+        self.assertEqual((reply['ok'], reply['state']), (False, 'unstored'),
+                         'absent would send Git to the static file')
+        self.store.pending = None
+        reply, _ = service.serve_request(request, self.store, NOW)
+        self.assertTrue(reply['ok'])
+
+    def test_a_tmpfs_write_whose_directory_sync_fails_still_counts(self):
+        self.install()
+        real = common.fsync_directory
+
+        def fsync(directory):
+            if directory == self.store.runtime:
+                raise OSError('input/output error')
+            return real(directory)
+        with self.fail_volume_writes(), mock.patch.object(common, 'fsync_directory', side_effect=fsync):
+            self.install(installation(chain=chain(access='ghu_synthetic-new')))
+        self.assertEqual(self.store.load(serving=True)[0]['chain']['access_token'], 'ghu_synthetic-new')
+
     def test_a_serving_read_waits_for_a_write_under_way(self):
         self.install()
         read = []

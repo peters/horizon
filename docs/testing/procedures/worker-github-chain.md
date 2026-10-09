@@ -451,11 +451,18 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
 
    Result: The command shows the references of the synthetic repository.
 
+> **CAUTION:** THE NEXT STEP SENDS THE OLD REFRESH TOKEN TO GITHUB. The token goes
+> over standard input, never in a command line, so it stays out of the shell
+> history and the process list.
+
 8. Try to refresh with the old refresh token from `<evidence>/reply.json`:
 
    ```bash
-   curl -s -X POST https://github.com/login/oauth/access_token -H 'Accept: application/json' \
-       -d client_id=<client-id> -d grant_type=refresh_token -d refresh_token=<old-refresh-token>
+   python3 -c 'import json, sys, urllib.parse; r = json.load(open(sys.argv[1]))
+   sys.stdout.write(urllib.parse.urlencode({"client_id": sys.argv[2], "grant_type": "refresh_token",
+                                            "refresh_token": r["refresh_token"]}))' \
+       <evidence>/reply.json <client-id> \
+     | curl -s -X POST https://github.com/login/oauth/access_token -H 'Accept: application/json' --data @-
    ```
 
    Result: GitHub answers `"error":"bad_refresh_token"`. The chain service

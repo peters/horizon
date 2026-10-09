@@ -333,6 +333,8 @@ class Store:
         # copy is removed too and the write fails, which leaves the older chain as it was.
         try:
             write_private(private_directory(self.runtime, create=True), STATE, data)
+        except Unsynced:
+            pass  # In place on tmpfs, which needs no crash durability.
         except (OSError, ValueError):
             raise ValueError('No private GitHub storage accepted the token chain') from None
         try:

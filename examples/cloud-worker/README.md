@@ -862,9 +862,11 @@ repository and the result, but never a token. Each request is one JSON line:
 
 The reply never contains the refresh token or the client secret. A repository
 without a grant, a host other than github.com or plain HTTP gets a refusal. A
-token that expires within one minute is not given out. `horizon-worker-git-auth
-get` and the `gh` wrapper ask the socket first and fall back to the static file
-only when no service answers or it holds no chain. The `gh` wrapper still
+token that expires within one minute is not given out. While a refreshed chain
+waits for its write, every request gets a refusal with `"state":"unstored"`.
+`horizon-worker-git-auth get` and the `gh` wrapper ask the socket first and fall
+back to the static file only when no service answers or it holds no chain
+(`"state":"absent"`). The `gh` wrapper still
 chooses the repository as described above. When it refuses a nested `gh`, it
 removes the `GH_TOKEN` that an outer wrapped `gh` injected, but keeps every token
 variable that you set yourself.
