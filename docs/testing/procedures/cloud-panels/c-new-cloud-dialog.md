@@ -928,6 +928,44 @@ This task uses the clouds of D01 and D02. Do not start other clouds.
 
    Result: Each card names the data center or location and its region.
 
+### 6.32 C32 — Clone a pasted link into its owner's folder and reuse an earlier checkout
+
+This task clones a small public repository on this computer. It starts no cloud.
+`<folder>` is the first of `github`, `code`, `src`, `projects` and `dev` in
+`<data-home>` that exists, else `Horizon`.
+
+1. Close the New cloud dialog if it is open. Open New cloud again and type
+   `https://github.com/octocat/Hello-World` in the repository field.
+
+   Result: The dialog shows **CLONE INTO** `<home>/<folder>/octocat/Hello-World`.
+
+2. Click **Continue**.
+
+   Result: The clone finishes. `git -C <data-home>/<folder>/octocat/Hello-World
+   remote get-url origin` shows `https://github.com/octocat/Hello-World.git`.
+
+3. Close the dialog with **Cancel**. Move the clone to the place where an earlier
+   Horizon cloned it:
+
+   ```sh
+   mv <data-home>/<folder>/octocat/Hello-World <data-home>/<folder>/Hello-World
+   ```
+
+   Result: `<data-home>/<folder>/octocat` is empty.
+
+4. Open New cloud and type `https://github.com/octocat/Hello-World` again.
+
+   Result: The dialog shows **ALREADY CLONED, CONTINUE USES IT**
+   `<home>/<folder>/Hello-World`. No second clone starts.
+
+5. Close the dialog with **Cancel** and remove the clone:
+
+   ```sh
+   rm -rf <data-home>/<folder>/Hello-World && rmdir <data-home>/<folder>/octocat
+   ```
+
+   Result: Neither folder exists.
+
 ## 7. Pass criteria
 
 - C01 opens the dialog from the panel picker, the toolbar and **More**.
@@ -937,6 +975,8 @@ This task uses the clouds of D01 and D02. Do not start other clouds.
 - C12 to C30 show the expected counts and values that you calculated from the
   settings and the provider catalogs. A known defect has its issue link.
 - C31 shows that each worker runs in the place that the summary named.
+- C32 clones a pasted link into `<folder>/<owner>/<repository>` and uses an
+  earlier checkout at `<folder>/<repository>` without a second clone.
 - No cloud starts in this area except through D01 and D02, or a watch that the
   operator permitted.
 

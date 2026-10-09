@@ -151,7 +151,30 @@ const CANDIDATES: u32 = 25;
 /// The folders a clone of `remote` can land in, `parent/<owner>/<name>` first, in the
 /// order they are tried.
 fn candidates<'a>(parent: &'a Path, remote: &'a Remote) -> impl Iterator<Item = PathBuf> + 'a {
-    named(parent.join(&remote.owner), &remote.name)
+    named(owner_folder(parent, remote), &remote.name)
+}
+
+/// `parent/<owner>`, one folder for each group of a GitLab path.
+fn owner_folder(parent: &Path, remote: &Remote) -> PathBuf {
+    remote
+        .owner
+        .split('/')
+        .fold(parent.to_owned(), |folder, segment| folder.join(portable(segment)))
+}
+
+/// A folder name for `segment` that every platform can make: Windows reserves device names
+/// such as `CON` or `com1.txt` and drops a trailing dot, so those get a `_`.
+fn portable(segment: &str) -> String {
+    let stem = segment.split('.').next().unwrap_or(segment).to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.ends_with(|c: char| ('1'..='9').contains(&c)));
+    if device || segment.ends_with('.') {
+        format!("{segment}_")
+    } else {
+        segment.to_owned()
+    }
 }
 
 /// Where clones went before they were kept by owner, `parent/<name>` first: only searched,
@@ -160,9 +183,10 @@ fn earlier<'a>(parent: &'a Path, remote: &'a Remote) -> impl Iterator<Item = Pat
     named(parent.to_owned(), &remote.name)
 }
 
-fn named(folder: PathBuf, name: &str) -> impl Iterator<Item = PathBuf> + '_ {
+fn named(folder: PathBuf, name: &str) -> impl Iterator<Item = PathBuf> {
+    let name = portable(name);
     (1..=CANDIDATES).map(move |n| match n {
-        1 => folder.join(name),
+        1 => folder.join(&name),
         n => folder.join(format!("{name}-{n}")),
     })
 }
@@ -172,7 +196,7 @@ fn named(folder: PathBuf, name: &str) -> impl Iterator<Item = PathBuf> + '_ {
 pub fn destination(parent: &Path, remote: &Remote) -> PathBuf {
     candidates(parent, remote)
         .find(|path| !path.exists())
-        .unwrap_or_else(|| parent.join(&remote.owner).join(&remote.name))
+        .unwrap_or_else(|| owner_folder(parent, remote).join(portable(&remote.name)))
 }
 
 /// The checkout of `remote` already under `parent`, so a second request reuses it: any of the

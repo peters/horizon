@@ -55,6 +55,23 @@ fn names_the_owner_a_clone_is_kept_under() {
 }
 
 #[test]
+fn an_owner_or_name_that_windows_reserves_gets_a_folder_it_can_make() {
+    let temp = Path::new("/synthetic");
+    let remote = parse("https://git.example.org/CON/team./com1.txt").unwrap();
+    assert_eq!(remote.owner, "CON/team.", "the link itself is kept as written");
+    assert_eq!(
+        destination(temp, &remote),
+        temp.join("CON_").join("team._").join("com1.txt_")
+    );
+    for plain in ["acme", "console", "com0", "lpt10", "nul-ish", ".github"] {
+        assert_eq!(portable(plain), plain, "{plain}");
+    }
+    for reserved in ["con", "Aux", "NUL.txt", "COM9", "lpt1", "trailing."] {
+        assert_eq!(portable(reserved), format!("{reserved}_"), "{reserved}");
+    }
+}
+
+#[test]
 fn keeps_gitlab_groups_and_drops_browser_suffixes() {
     assert_eq!(
         remote("https://gitlab.com/group/sub/app/-/tree/main"),
