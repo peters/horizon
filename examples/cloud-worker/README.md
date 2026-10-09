@@ -940,7 +940,7 @@ Horizon lists and decides requests as root over SSH:
 ```bash
 horizon-worker-github requests
 # {"requests":[{"id":"9bf221fe23173feb","repository":"owner/extra","access":"push",
-#   "reason":"Push the fix","session":"<session>","agent":"claude","created_at":1800000000}]}
+#   "reason":"Push the fix","session":"<session>","created_at":1800000000}]}
 horizon-worker-github decide 9bf221fe23173feb allow-cloud   # or deny
 # {"ok":true,"id":"9bf221fe23173feb","decision":"allow-cloud","repository":"owner/extra",
 #   "access":"push","status":"allowed"}

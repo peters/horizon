@@ -115,7 +115,7 @@ def account(state):
     if state is None:
         return None
     login = state.get('login')
-    return [state['client_id'], login if login else 'install:%s' % state.get('installed_at')]
+    return [state['client_id'], login if login else 'install:%s' % state.get('install_id', state.get('installed_at'))]
 
 
 def expire_other_accounts(data, current):

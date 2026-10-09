@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import random
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -343,6 +344,8 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
         except (OSError, ValueError):
             previous = None
         state = {key: value[key] for key in ('client_id', 'author_name', 'author_email', 'grants', 'chain')}
+        # Names this install for requests made under a chain without a login.
+        state['install_id'] = secrets.token_hex(8)
         for optional in OPTIONAL_FIELDS:
             if value.get(optional):
                 state[optional] = value[optional]

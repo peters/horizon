@@ -233,6 +233,13 @@ class AccessRequestTests(ServiceTestCase):
         self.assertFalse(self.ask(BETA, reason='\u00e9' * 300)['ok'], '600 bytes in 300 characters')
         self.assertTrue(self.ask(BETA, reason='\u00e9' * 150)['ok'])
 
+    def test_two_installs_without_a_login_are_two_accounts(self):
+        first = dict(self.stored(), login=None)
+        second = dict(first)
+        self.install()
+        second['install_id'] = self.stored()['install_id']
+        self.assertNotEqual(agents.account(first), agents.account(second), 'even in the same second')
+
     def test_a_record_the_host_could_not_parse_is_left_out_of_the_report(self):
         self.ask(ALPHA)
         with self.book.edit() as data:
