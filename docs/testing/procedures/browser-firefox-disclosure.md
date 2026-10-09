@@ -59,9 +59,20 @@ It also tests the preload fallback and a sign-in field on a browser panel.
 1. Run `cargo test -p horizon-browser --lib firefox_screenshot_session_keeps_scrollbars_visible`.
 
    Result: A minimize session asks geckodriver for `--allow-system-access`.
-   A driver that rejects that argument starts without it.
    A `BrowserDefault` session does not ask for that argument.
    Firefox options do not include `-remote-allow-system-access`.
+   This test does not start geckodriver.
+
+2. Run `cargo test -p horizon-browser --lib older_geckodriver_can_start_without_system_access`.
+
+   Result: The test passes.
+   The test matches `unexpected argument '--allow-system-access'`.
+   The test matches `which wasn't expected`.
+   The test does not match `address already in use`.
+   The argument list includes `--allow-system-access` only when the permit is true.
+   An unfinished stderr tail drops `--allow-system-access`.
+   A finished unrelated error keeps that argument.
+   This test does not start geckodriver.
 
 ### 6.3 SHARED-CLEAR — One clear for a shared process
 

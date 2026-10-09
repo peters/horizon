@@ -124,14 +124,15 @@ impl WebDriverService {
                 }
                 if let Some(status) = process.child_status() {
                     let stderr = process.stderr_tail();
-                    if permit_system_access && geckodriver_rejected_system_access(&stderr) {
-                        permit_system_access = false;
-                        tracing::warn!(
-                            "geckodriver rejected --allow-system-access; continuing without chrome-context access: {stderr}"
-                        );
-                        continue;
-                    }
                     let error = format!("{label} exited before becoming ready ({status}); stderr: {stderr}");
+                    if retry_without_system_access(permit_system_access, process.stderr_is_complete(), &stderr) {
+                        permit_system_access = false;
+                        tracing::warn!("{error}; retrying without --allow-system-access");
+                        if attempt == STARTUP_ATTEMPTS {
+                            return Err(error);
+                        }
+                        break;
+                    }
                     if attempt == STARTUP_ATTEMPTS {
                         return Err(error);
                     }
@@ -139,8 +140,8 @@ impl WebDriverService {
                     break;
                 }
                 if Instant::now() >= deadline {
-                    let stderr = process.stderr_tail();
                     let _ = process.kill();
+                    let stderr = process.stderr_tail();
                     return Err(format!("timed out waiting for {label}; stderr: {stderr}"));
                 }
                 std::thread::sleep(STARTUP_POLL);
@@ -168,6 +169,13 @@ pub(super) fn firefox_service_arguments(
         extra.push("--allow-system-access".to_string());
     }
     service_args(BackendKind::FirefoxBidi, port, Some(bidi_port), extra)
+}
+
+/// Drop `--allow-system-access` when geckodriver rejected it, or when the
+/// stderr reader did not finish. An unfinished tail must not count as acceptance.
+#[must_use]
+pub(super) fn retry_without_system_access(permit_system_access: bool, stderr_complete: bool, stderr: &str) -> bool {
+    permit_system_access && (!stderr_complete || geckodriver_rejected_system_access(stderr))
 }
 
 pub(super) fn geckodriver_rejected_system_access(stderr: &str) -> bool {
@@ -264,6 +272,18 @@ mod tests {
         assert!(!geckodriver_rejected_system_access(
             "unexpected error while starting firefox"
         ));
+        assert!(super::retry_without_system_access(true, false, ""));
+        assert!(super::retry_without_system_access(
+            true,
+            true,
+            "geckodriver: error: unexpected argument '--allow-system-access' found"
+        ));
+        assert!(!super::retry_without_system_access(
+            true,
+            true,
+            "address already in use"
+        ));
+        assert!(!super::retry_without_system_access(false, false, ""));
         let config = crate::BrowserConfig {
             backend: BackendKind::FirefoxBidi,
             ..crate::BrowserConfig::default()

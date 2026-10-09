@@ -2,10 +2,12 @@
 
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+const STDERR_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
 use super::{ProcessChild, kill_and_reap, poll_and_cleanup_exited_tree, spawn_process, take_stderr};
 
@@ -18,7 +20,8 @@ pub(crate) struct ServiceProcess {
     exit_status: Option<std::process::ExitStatus>,
     stderr_tail: Arc<Mutex<String>>,
     stderr_reader: Option<JoinHandle<()>>,
-    stderr_drained: Arc<AtomicBool>,
+    stderr_done: Option<Receiver<()>>,
+    stderr_complete: bool,
     label: &'static str,
 }
 
@@ -204,8 +207,7 @@ impl ServiceProcess {
         };
         let tail = Arc::new(Mutex::new(String::new()));
         let reader_tail = Arc::clone(&tail);
-        let stderr_drained = Arc::new(AtomicBool::new(false));
-        let drained = Arc::clone(&stderr_drained);
+        let (done_tx, done_rx) = mpsc::channel();
         let thread_name = format!("{label}-stderr");
         let reader = match std::thread::Builder::new().name(thread_name).spawn(move || {
             use std::io::{BufRead, BufReader};
@@ -221,7 +223,8 @@ impl ServiceProcess {
                     tail.drain(..cut);
                 }
             }
-            drained.store(true, Ordering::Release);
+            // Send only after the mutex write. Classification waits for this.
+            let _ = done_tx.send(());
         }) {
             Ok(reader) => reader,
             Err(error) => {
@@ -237,24 +240,27 @@ impl ServiceProcess {
             exit_status: None,
             stderr_tail: tail,
             stderr_reader: Some(reader),
-            stderr_drained,
+            stderr_done: Some(done_rx),
+            stderr_complete: false,
             label,
         })
     }
 
-    /// The stderr reader is a separate thread. Child exit does not join it, so
-    /// a snapshot taken in the same turn can still be empty. Wait until that
-    /// thread stores the final line, then join it.
+    /// Wait until the reader has stored every line it could read, then join it.
+    /// A pipe that stays open does not finish this wait: the reader is detached
+    /// and [`Self::stderr_is_complete`] stays false so startup does not treat a
+    /// partial tail as proof that `--allow-system-access` was accepted.
     fn drain_stderr_reader(&mut self) {
         let Some(handle) = self.stderr_reader.take() else {
             return;
         };
-        let deadline = Instant::now() + Duration::from_millis(500);
-        while !self.stderr_drained.load(Ordering::Acquire) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        if self.stderr_drained.load(Ordering::Acquire) {
+        let finished = self
+            .stderr_done
+            .take()
+            .is_some_and(|done| done.recv_timeout(STDERR_DRAIN_TIMEOUT).is_ok());
+        if finished {
             let _ = handle.join();
+            self.stderr_complete = true;
         }
     }
 
@@ -314,6 +320,11 @@ impl ServiceProcess {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    #[must_use]
+    pub(crate) fn stderr_is_complete(&self) -> bool {
+        self.stderr_complete
     }
 }
 
@@ -416,6 +427,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(process.child_status().is_some(), "service test process did not exit");
+        assert!(
+            process.stderr_is_complete(),
+            "stderr reader did not finish before classification"
+        );
         let stderr = process.stderr_tail();
         assert!(
             stderr.contains(message),
