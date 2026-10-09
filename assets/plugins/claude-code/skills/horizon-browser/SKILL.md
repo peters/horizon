@@ -76,6 +76,7 @@ or `fill`. A frame navigation makes its old refs stale. If a frame changes durin
 a scan, the scan returns `stale_reference`; take a new snapshot or query.
 Context events from unrelated pages do not invalidate this scan.
 Chromium ignores destruction of isolated execution contexts during a scan.
+Nested session retirement processes each tracked parent link once and preserves siblings.
 Direct selector actions, `browser_wait`, and `browser_evaluate` target the
 top-level document. Child-frame
 refs do not support `scroll` or `set_files`. Safari and remote sessions scan only

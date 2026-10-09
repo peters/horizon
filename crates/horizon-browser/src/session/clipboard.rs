@@ -57,17 +57,18 @@ impl ClipboardState {
     }
 
     fn retire_subtree(&mut self, session: &str) -> Vec<String> {
-        let mut retired = vec![session.to_string()];
-        let mut index = 0;
-        while index < retired.len() {
-            let children: Vec<_> = self
-                .iframe_parents
-                .iter()
-                .filter(|(child, parent)| *parent == &retired[index] && !retired.contains(child))
-                .map(|(child, _)| child.clone())
-                .collect();
-            retired.extend(children);
-            index += 1;
+        let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (child, parent) in &self.iframe_parents {
+            children.entry(parent.as_str()).or_default().push(child.as_str());
+        }
+        let mut retired = Vec::new();
+        let mut pending = vec![session];
+        let mut seen = HashSet::new();
+        while let Some(session) = pending.pop() {
+            if seen.insert(session) {
+                pending.extend(children.remove(session).unwrap_or_default());
+                retired.push(session.to_string());
+            }
         }
         for session in &retired {
             self.iframe_sessions.remove(session);
@@ -323,6 +324,36 @@ mod tests {
         assert!(!state.default_contexts.contains_key("nested"));
         assert_eq!(state.iframe_sessions, HashSet::from(["sibling".to_string()]));
         assert!(!state.track_iframe(Some("page"), "late-child", Some("child")));
+    }
+
+    #[test]
+    fn retirement_handles_deep_trees_and_cycles_without_touching_siblings() {
+        let mut state = ClipboardState::default();
+        let mut parent = "page".to_string();
+        for index in 0..10_000 {
+            let child = format!("deep-{index}");
+            assert!(state.track_iframe(Some("page"), &child, Some(&parent)));
+            state.default_contexts.insert(child.clone(), HashSet::from([7]));
+            parent = child;
+        }
+        assert!(state.track_iframe(Some("page"), "sibling", Some("page")));
+        state.default_contexts.insert("sibling".into(), HashSet::from([9]));
+        assert_eq!(state.retire_subtree("deep-0").len(), 10_000);
+        assert_eq!(
+            state.default_contexts,
+            HashMap::from([("sibling".to_string(), HashSet::from([9]))])
+        );
+        assert_eq!(state.iframe_sessions, HashSet::from(["sibling".to_string()]));
+        assert_eq!(state.iframe_parents.len(), 1);
+        assert!(state.track_iframe(Some("page"), "cycle", Some("page")));
+        assert!(!state.track_iframe(Some("page"), "cycle", Some("cycle")));
+        assert_eq!(state.retire_subtree("cycle"), vec!["cycle"]);
+        assert_eq!(state.iframe_sessions, HashSet::from(["sibling".to_string()]));
+        assert!(state.track_iframe(Some("page"), "cycle", Some("page")));
+        assert!(state.track_iframe(Some("page"), "inner", Some("cycle")));
+        assert!(!state.track_iframe(Some("page"), "cycle", Some("inner")));
+        assert_eq!(state.retire_subtree("cycle").len(), 2);
+        assert_eq!(state.iframe_sessions, HashSet::from(["sibling".to_string()]));
     }
 
     #[test]
