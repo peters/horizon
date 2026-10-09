@@ -893,7 +893,7 @@ asks you for it with the `github_access` MCP tool. You decide in Horizon:
 
 - **Allow for this cloud**: the worker stores a cloud grant with the chain, so it
   survives a restart and a new chain of the same GitHub App and account. A chain
-  of another account drops it.
+  of another account, or one whose account is unknown, drops it.
 - **Deny**: the agent is told not to ask again.
 
 Access is per cloud. Every agent session of the cloud gets the same token, so a
@@ -908,8 +908,10 @@ answers that GitHub is not connected. The tool runs
 
 - `{"request": "request", "repository": "owner/name", "access": "push",
   "reason": "..."}` records a request and answers `{"status": "pending",
-  "id": "..."}`. The reason has at most 300 characters and no control or
-  formatting characters, such as the ones that reorder text. A repository that the session already reaches answers
+  "id": "..."}`. The reason has at most 300 characters and no control,
+  formatting or line separator characters, such as the ones that reorder text.
+  Asking for push while a read request of the same session waits turns it into
+  a push request with the new reason. A repository that the session already reaches answers
   `"status": "allowed"` without a request. A second request of the same session
   for the same repository answers with the first request. At most 32 requests
   wait at the same time, and a request without a decision expires after 24

@@ -170,10 +170,11 @@ def credential_answer(request, state, now):
 
 
 def valid_reason(reason):
-    """One short line that reads as it is: no control or bidirectional formatting characters,
-    which could make the person's approval card read differently from what it asks."""
+    """One short line that reads as it is: no control, formatting or line and paragraph
+    separator characters, which could make the person's approval card read differently from
+    what it asks."""
     return (isinstance(reason, str) and reason.strip() != '' and len(reason) <= REASON_LIMIT
-            and not any(unicodedata.category(character) in ('Cc', 'Cf') for character in reason))
+            and not any(unicodedata.category(character) in ('Cc', 'Cf', 'Zl', 'Zp') for character in reason))
 
 
 def ask(request, state, book, now, identify):
@@ -195,6 +196,10 @@ def ask(request, state, book, now, identify):
         for record in pending(data):
             if (record['window'], record['session']) == (window, session) and \
                     auth.same_repository(repository, record['repository']):
+                # A request for more than the pending one asks for that, with its reason, so an
+                # allow gives what the agent now needs.
+                if common.stronger(record['access'], access) != record['access']:
+                    record.update(access=access, reason=reason)
                 return {'ok': True, 'state': 'ok', 'status': 'pending', 'id': record['id'],
                         'access': record['access']}, repository
         if len(pending(data)) >= MAX_PENDING:

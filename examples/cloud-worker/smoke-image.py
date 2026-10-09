@@ -75,7 +75,9 @@ def main():
                             'import shutil,sys; print(bool(shutil.which(sys.argv[1])))', executable)
                 assert check.stdout.strip() == 'False', 'Unexpected installed executable: ' + executable
             config = json.loads(run('docker', 'exec', name, 'cat', '/workspace/agent-mcp.json').stdout)
-            expected = {'horizon-cloud-companions', 'horizon-local-network'} if caps.get('agents') else set()
+            # This image always contains horizon-worker-github, so agents also get github_access.
+            expected = ({'horizon-cloud-companions', 'horizon-local-network', 'horizon-github'}
+                        if caps.get('agents') else set())
             if caps.get('browsers') or caps.get('browserstack') is not None:
                 expected.add('horizon-browser')
             if caps.get('desktop'):

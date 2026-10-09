@@ -320,8 +320,10 @@ def identity_grants(state):
 
 
 def same_account(previous, value):
+    """Whether a new chain belongs to the app and account of the previous one. Without a
+    login on both, the account is unknown, and no grant carries over."""
     return (previous is not None and previous['client_id'] == value['client_id']
-            and previous.get('login') == value.get('login'))
+            and bool(previous.get('login')) and previous.get('login') == value.get('login'))
 
 
 def install(value, store, now=time.time, configure=run_configure, retire=run_retire, static=run_restore):

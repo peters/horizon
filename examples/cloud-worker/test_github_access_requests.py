@@ -139,11 +139,27 @@ class AccessRequestTests(ServiceTestCase):
         self.assertEqual(self.answer({'request': 'request-status', 'id': identifier}, NOW, ALPHA)[0]['scope'],
                          'cloud')
 
+    def test_a_pending_read_request_becomes_a_push_request_when_push_is_asked(self):
+        first = self.ask(ALPHA, access='read', reason='Read the API')
+        second = self.ask(ALPHA, access='push', reason='Push the fix')
+        self.assertEqual((second['id'], second['access']), (first['id'], 'push'))
+        waiting = agents.requests_report(self.book, lambda: NOW)['requests']
+        self.assertEqual([(item['access'], item['reason']) for item in waiting], [('push', 'Push the fix')])
+        self.assertEqual(self.ask(ALPHA, access='read')['access'], 'push', 'a read request never weakens it')
+
+    def test_a_grant_carries_over_only_for_a_known_same_account(self):
+        self.assertTrue(service.same_account({'client_id': 'a', 'login': 'octo'}, {'client_id': 'a', 'login': 'octo'}))
+        self.assertFalse(service.same_account({'client_id': 'a'}, {'client_id': 'a'}), 'no login, no account')
+        self.assertFalse(service.same_account({'client_id': 'a', 'login': 'octo'}, {'client_id': 'a'}))
+        self.assertFalse(service.same_account({'client_id': 'a', 'login': 'octo'}, {'client_id': 'b', 'login': 'octo'}))
+
     def test_a_reason_that_reorders_text_is_refused(self):
-        for reason in ('fix \u202etsurt', 'fix \u2066x', 'fix \u200fx', 'line\nbreak'):
+        for reason in ('fix \u202etsurt', 'fix \u2066x', 'fix \u200fx', 'line\nbreak', 'one\u2028two',
+                       'one\u2029two'):
             self.assertFalse(self.ask(ALPHA, reason=reason)['ok'], repr(reason))
 
     def test_allow_for_the_cloud_persists_for_every_session_and_the_same_account(self):
+        self.install(installation(login='octo-cat'))
         identifier = self.ask(ALPHA)['id']
         _, check = self.api(repository(True))
         self.assertEqual(self.decide(identifier, 'allow-cloud', check)['status'], 'allowed')
@@ -154,7 +170,7 @@ class AccessRequestTests(ServiceTestCase):
         self.assertIn({'repository': 'example/extra', 'target': None, 'access': 'push'},
                       service.status(self.store)['repositories'])
         self.assertEqual(self.ask(BETA)['status'], 'allowed')
-        self.install(installation(chain=chain(access='ghu_synthetic-new')))
+        self.install(installation(chain=chain(access='ghu_synthetic-new'), login='octo-cat'))
         self.assertTrue(self.token(None)['ok'], 'a new chain of the same account keeps the grant')
         self.install(installation(login='other-account'))
         self.assertFalse(self.token(None)['ok'], 'another account loses it')
