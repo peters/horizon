@@ -8,6 +8,7 @@ mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
 mod first_panel;
+mod github_requests;
 mod idle;
 mod launch;
 mod lifecycle;
@@ -193,6 +194,10 @@ fn layer_id(line: &str) -> Option<&str> {
 #[derive(Default)]
 pub(super) struct Runtime {
     drawer: Option<cards::Tab>,
+    /// The latest GitHub sign-in prompt or outcome of this cloud's deployment.
+    github: Option<cloud_runtime::github::Prompt>,
+    /// The GitHub access requests this cloud's agents wait on.
+    github_requests: github_requests::State,
     receiver: Option<Receiver<Event>>,
     recovery_receiver: Option<Receiver<cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>>>,
     recovery_worker_id: String,
@@ -423,6 +428,8 @@ impl Runtime {
             cancel.cancel();
         }
         self.desktop = None;
+        // The worker reports its GitHub access again; an earlier outcome no longer holds.
+        self.github = None;
         self.progress.reset();
         self.launched_skips = cloud_runtime::image::skipped_stages(&request.profile);
         // A deployment or reconnect is its own operation; an earlier stop or resume that
@@ -505,7 +512,7 @@ impl Runtime {
 }
 impl HorizonApp {
     pub(super) fn prepare_production_clouds(&mut self, ctx: &egui::Context) {
-        self.sync_cloud_companion_session(ctx);
+        self.sync_cloud_worker_exchanges(ctx);
         if self.pending_startup_runtime_state.is_some() || self.startup_receiver.is_some() {
             return;
         }
@@ -539,6 +546,7 @@ impl HorizonApp {
                         runtime.receiver = None;
                         resumed.push(id);
                     }
+                    Event::GitHub(prompt) => runtime.adopt_github(prompt),
                     Event::ClosedBrowsers(ids) => {
                         if let Some(browsers) = &mut runtime.browsers {
                             browsers.retain(|b| !ids.contains(&b.id));

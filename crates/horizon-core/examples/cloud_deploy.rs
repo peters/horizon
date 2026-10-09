@@ -9,6 +9,7 @@ mod registry_mcp;
 use horizon_core::cloud_runtime::{
     self, Cancellation, Event,
     deployment::{self, replacement},
+    github::Prompt,
     repository,
     settings::Settings,
     state::Store,
@@ -245,6 +246,27 @@ fn print_event(event: Event) {
                 }
             }
         }
+        // The deployment waits for this sign-in, so the person needs its code or page here.
+        Event::GitHub(prompt) => match prompt {
+            Prompt::Device {
+                user_code,
+                verification_uri,
+                ..
+            } => println!("[{at:7.1}s] GitHub: enter {user_code} at {verification_uri}"),
+            Prompt::Web { url } => {
+                println!("[{at:7.1}s] GitHub: approve this cloud at {url}");
+                if let Err(error) = horizon_core::open_url(&url) {
+                    println!("[{at:7.1}s] GitHub: could not open the page: {error}");
+                }
+            }
+            Prompt::Connected {
+                login, repositories, ..
+            } => println!(
+                "[{at:7.1}s] GitHub: signed in as {login} for {}",
+                repositories.join(", ")
+            ),
+            Prompt::Ended { reason, .. } => println!("[{at:7.1}s] GitHub: {reason}"),
+        },
         _ => {}
     }
 }

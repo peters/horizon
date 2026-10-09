@@ -120,7 +120,7 @@ pub(in crate::cloud_runtime) fn identity(path: &Path, runner: &Runner<'_>) -> Re
     from_remote(remote.trim())
 }
 
-fn from_remote(remote: &str) -> Result<String> {
+pub(in crate::cloud_runtime) fn from_remote(remote: &str) -> Result<String> {
     let name = ["https://github.com/", "ssh://git@github.com/", "git@github.com:"]
         .into_iter()
         .find_map(|prefix| remote.strip_prefix(prefix))
