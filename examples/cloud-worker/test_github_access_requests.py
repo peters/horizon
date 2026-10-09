@@ -97,7 +97,7 @@ class AccessRequestTests(ServiceTestCase):
         report = service.agents.requests_report(self.book, self.store.load()[0], lambda: NOW + 5)
         self.assertEqual(report, {'requests': [{'id': identifier, 'repository': 'example/extra', 'access': 'push',
                                                 'reason': 'Open a PR for the fix', 'session': 'agent-alpha',
-                                                'agent': 'claude', 'created_at': NOW}]})
+                                                'created_at': NOW}]})
         self.assertNotIn(ACCESS, json.dumps(report))
         self.assertEqual(service.status(self.store, lambda: NOW)['pending_requests'], 1)
         self.assertEqual(self.book.runtime.joinpath(agents.BOOK).stat().st_mode & 0o777, 0o600)
@@ -236,10 +236,10 @@ class AccessRequestTests(ServiceTestCase):
     def test_a_record_the_host_could_not_parse_is_left_out_of_the_report(self):
         self.ask(ALPHA)
         with self.book.edit() as data:
-            data['requests'][0]['agent'] = 'cl\ud800aude'
+            data['requests'][0]['session'] = 'agent-\ud800alpha'
         self.assertEqual(agents.requests_report(self.book, self.store.load()[0], lambda: NOW)['requests'], [])
         with self.book.edit() as data:
-            data['requests'][0]['agent'] = 'x' * 101
+            data['requests'][0]['session'] = 'x' * 101
         self.assertEqual(agents.requests_report(self.book, self.store.load()[0], lambda: NOW)['requests'], [],
                          'a name longer than Horizon shows')
 

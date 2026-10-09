@@ -140,7 +140,7 @@ def reportable(record):
     would leave out never reaches it, so a waiting card is never hidden."""
     return (utf8_length(str(record['repository'])) <= REASON_LIMIT
             and utf8_length(str(record['reason'])) <= REASON_LIMIT
-            and all(utf8_length(str(record[key])) <= NAME_LIMIT for key in ('session', 'agent')))
+            and utf8_length(str(record['session'])) <= NAME_LIMIT)
 
 
 def covered(grant_access, needed):
@@ -479,7 +479,9 @@ def same_chain(checked, current):
 def requests_report(book, state, now=time.time):
     """The pending requests of the current chain's account for the host, without secrets."""
     data = expire_other_accounts(tidy(book.read(), now()), account(state))
-    return {'requests': [{key: record[key] for key in ('id', 'repository', 'access', 'reason', 'session', 'agent',
+    # The agent name comes from a session marker that any process of the cloud can write,
+    # so it is not reported: the card names the session, not a verified agent.
+    return {'requests': [{key: record[key] for key in ('id', 'repository', 'access', 'reason', 'session',
                                                        'created_at')}
                          for record in pending(data) if reportable(record)]}
 

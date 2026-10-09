@@ -429,8 +429,9 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> horizon-worker-github requests
    ```
 
-   Result: The JSON shows one request for `example/extra` with `"access":"push"`,
-   `"session":"agent-smoke"` and `"agent":"claude"`. Write its `id` as `<id>`.
+   Result: The JSON shows one request for `example/extra` with `"access":"push"`
+   and `"session":"agent-smoke"`, and no agent name: the session's agent marker
+   is not a verified identity. Write its `id` as `<id>`.
 
 5. Allow the request for the cloud:
 

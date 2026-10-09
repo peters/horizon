@@ -923,7 +923,11 @@ answers that GitHub is not connected. The tool runs
 
 The service finds the asking session the same way the stop watcher does: it walks
 from the caller's process, which the kernel names, up to an agent pane of
-`horizon-worker-session`. A shell panel or any other process cannot ask. The tool
+`horizon-worker-session`. That mapping only keeps requests apart per session; it
+is not an identity. The session's agent marker is writable by every process of the
+cloud, so Horizon shows the session that asks, never a verified agent, and the
+host's list carries no agent name. Access is per cloud anyway: every session of
+the cloud gets the same token for an allowed repository. The tool
 waits up to 10 minutes for your decision and then tells the agent to ask again
 later; that call returns the same request. Requests are kept in
 `/run/horizon-github/access-requests.json` (root only), so a container restart
