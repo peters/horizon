@@ -148,25 +148,42 @@ pub(super) fn save(path: &Path, login: &str, chain: &Chain, web: bool) -> Result
         web: bool,
     }
     let seconds = |at: SystemTime| at.duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs());
-    // Sized up front, so no reallocation frees an unwiped copy.
-    let mut value = Zeroizing::new(Vec::with_capacity(8192));
-    serde_json::to_writer(
-        &mut *value,
-        &Fields {
-            login,
-            access_token: chain.access_token.expose(),
-            access_expires_at: seconds(chain.access_expires_at),
-            refresh_token: chain.refresh_token.expose(),
-            refresh_expires_at: seconds(chain.refresh_expires_at),
-            web,
-        },
-    )
-    .map_err(|_| Error::Json)?;
+    let fields = Fields {
+        login,
+        access_token: chain.access_token.expose(),
+        access_expires_at: seconds(chain.access_expires_at),
+        refresh_token: chain.refresh_token.expose(),
+        refresh_expires_at: seconds(chain.refresh_expires_at),
+        web,
+    };
+    let value = serialized(|writer| serde_json::to_writer(writer, &fields))?;
     let (Some(directory), Some(name)) = (path.parent(), path.file_name().and_then(|name| name.to_str())) else {
         return Err(Error::Invalid("A Horizon credential file needs a directory and a name"));
     };
     private_directory(directory)?;
     write_private(directory, name, &value)
+}
+
+/// What `write` writes, in a wiped buffer of exactly its size: the output is counted first,
+/// so no reallocation frees an unwiped copy of a credential in it.
+pub(super) fn serialized(
+    write: impl Fn(&mut dyn std::io::Write) -> serde_json::Result<()>,
+) -> Result<Zeroizing<Vec<u8>>> {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    write(&mut count).map_err(|_| Error::Json)?;
+    let mut bytes = Zeroizing::new(Vec::with_capacity(count.0));
+    write(&mut *bytes).map_err(|_| Error::Json)?;
+    Ok(bytes)
 }
 
 pub(super) fn valid_login(login: &str) -> bool {

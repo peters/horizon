@@ -169,6 +169,12 @@ fn a_name_that_narrows_the_list_is_no_unknown_link() {
         !state.filters_the_list(),
         "a name that matches nothing is still unknown"
     );
+    state.input = "acme/we".into();
+    assert!(state.filters_the_list());
+    assert!(state.remote().is_none(), "a partial name is not looked up");
+    state.input = "ACME/web".into();
+    assert!(!state.filters_the_list(), "a listed repository in full is the choice");
+    assert!(state.remote().is_some());
     state.input = "https://example.org/web".into();
     assert!(!state.filters_the_list(), "a link is never a filter");
 }

@@ -329,12 +329,18 @@ impl super::State {
         }
     }
 
-    /// Whether the field's text narrows the listed repositories to at least one.
+    /// Whether the field's text narrows the listed repositories to at least one without
+    /// naming one of them in full: it is then a filter, not a repository to look up.
     pub(super) fn filters_the_list(&self) -> bool {
+        let text = self.input.trim();
         self.account
             .as_ref()
             .and_then(|account| account.repositories.as_ref())
-            .is_some_and(|repositories| !names_a_link(&self.input) && !matching(repositories, &self.input).is_empty())
+            .is_some_and(|repositories| {
+                !names_a_link(text)
+                    && !matching(repositories, text).is_empty()
+                    && !repositories.iter().any(|name| name.eq_ignore_ascii_case(text))
+            })
     }
 
     /// Whether a private GitHub link is cloned with the connected account rather than a

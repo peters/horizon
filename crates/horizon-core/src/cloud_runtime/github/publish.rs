@@ -168,9 +168,7 @@ fn write_auth(docker_config: &Path, login: &str, token: &Secret) -> Result<()> {
         .as_object_mut()
         .ok_or(Error::Invalid("Horizon's Docker configuration is not valid JSON"))?;
     auths.insert(REGISTRY.into(), serde_json::json!({ "auth": auth.as_str() }));
-    // Sized up front, so no reallocation frees an unwiped copy.
-    let mut bytes = Zeroizing::new(Vec::with_capacity(existing.len() * 2 + 8192));
-    serde_json::to_writer_pretty(&mut *bytes, &config.0).map_err(|_| Error::Json)?;
+    let bytes = stored::serialized(|writer| serde_json::to_writer_pretty(writer, &config.0))?;
     write_private(docker_config, "config.json", &bytes)
 }
 

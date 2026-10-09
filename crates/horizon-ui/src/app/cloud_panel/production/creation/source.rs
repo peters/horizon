@@ -137,8 +137,10 @@ impl State {
             let before = self.remote.as_ref().map(|remote| origin(&remote.url).to_owned());
             let before_url = self.remote.as_ref().map(|remote| remote.url.clone());
             // Only a repository that is really there shadows a link: `owner/repo` may also be a plain
-            // folder that happens to have that name.
-            self.remote = source::parse(&self.input).filter(|_| !holds_repository(&path));
+            // folder that happens to have that name. Text that narrows the connected account's
+            // list is not looked up until it names a listed repository in full.
+            let filtering = self.filters_the_list();
+            self.remote = source::parse(&self.input).filter(|_| !filtering && !holds_repository(&path));
             // A token was pasted for one origin (scheme, host and port) and goes to no other.
             if before.as_deref() != self.remote.as_ref().map(|remote| origin(&remote.url)) {
                 self.token.zeroize();
