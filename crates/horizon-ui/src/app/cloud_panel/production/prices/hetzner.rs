@@ -321,6 +321,14 @@ impl State {
         self.answered_with_types(catalog, server_types);
         self.locations = locations.iter().map(|&name| name.to_owned()).collect();
     }
+
+    /// As [`State::answered`], with the types and locations the settings left out.
+    ///
+    /// The selector tests that read this note run on Unix only.
+    pub fn answered_with_exclusions(&mut self, catalog: Option<HetznerCatalog>, exclusions: HetznerExclusions) {
+        self.answered(catalog);
+        self.exclusions = exclusions;
+    }
 }
 
 /// A catalog as if Hetzner had just answered, for tests, which never contact it.
@@ -332,12 +340,6 @@ impl State {
         self.fixture_answered_at = Some(at);
         self.fetched = Some(Fetched { value: catalog, at });
         self.exclusions = HetznerExclusions::default();
-    }
-
-    /// As [`Self::answered`], with the types and locations the settings left out.
-    pub fn answered_with_exclusions(&mut self, catalog: Option<HetznerCatalog>, exclusions: HetznerExclusions) {
-        self.answered(catalog);
-        self.exclusions = exclusions;
     }
 
     /// A fetch that failed for a machine with a Hetzner binding.
