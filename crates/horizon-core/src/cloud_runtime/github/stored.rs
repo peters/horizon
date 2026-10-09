@@ -120,7 +120,7 @@ pub(super) fn load(path: &Path) -> Option<Stored> {
         #[serde(default)]
         web: bool,
     }
-    let bytes = Zeroizing::new(read_private(path).ok()??);
+    let bytes = read_private(path).ok()??;
     let fields: Fields = serde_json::from_slice(&bytes).ok()?;
     let at = |seconds| UNIX_EPOCH.checked_add(Duration::from_secs(seconds));
     (valid_login(&fields.login) && valid_token(&fields.access_token) && valid_token(&fields.refresh_token))
@@ -197,7 +197,7 @@ fn valid_token(token: &Secret) -> bool {
 
 /// A private file's bytes, or `None` when it does not exist. A file that others could
 /// read or replace is refused.
-pub(super) fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
+pub(super) fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -214,8 +214,9 @@ pub(super) fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
     if !metadata.is_file() || metadata.len() > MAX_FILE {
         return Err(Error::Invalid("A Horizon credential file is not a private file"));
     }
-    // Sized for the whole read up front, so no reallocation frees an unwiped copy.
-    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0) + 1);
+    // Wiped also when the read fails halfway, and sized for the whole read up front, so no
+    // reallocation frees an unwiped copy.
+    let mut bytes = Zeroizing::new(Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0) + 1));
     file.take(MAX_FILE).read_to_end(&mut bytes)?;
     Ok(Some(bytes))
 }

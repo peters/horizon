@@ -141,7 +141,7 @@ fn sign_in(docker_config: &Path, client: &Client, cloud_id: &str, runner: &Runne
 /// other setting. A credential helper for `ghcr.io` would answer first, so it goes.
 fn write_auth(docker_config: &Path, login: &str, token: &Secret) -> Result<()> {
     let path = docker_config.join("config.json");
-    let existing = Zeroizing::new(read_private(&path)?.unwrap_or_default());
+    let existing = read_private(&path)?.unwrap_or_default();
     let mut config = Config(if existing.is_empty() {
         serde_json::json!({})
     } else {
@@ -167,7 +167,10 @@ fn write_auth(docker_config: &Path, login: &str, token: &Secret) -> Result<()> {
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or(Error::Invalid("Horizon's Docker configuration is not valid JSON"))?;
-    auths.insert(REGISTRY.into(), serde_json::json!({ "auth": auth.as_str() }));
+    // The login it replaces is wiped too, not only what stays in the configuration.
+    if let Some(mut replaced) = auths.insert(REGISTRY.into(), serde_json::json!({ "auth": auth.as_str() })) {
+        wipe(&mut replaced);
+    }
     let bytes = stored::serialized(|writer| serde_json::to_writer_pretty(writer, &config.0))?;
     write_private(docker_config, "config.json", &bytes)
 }
