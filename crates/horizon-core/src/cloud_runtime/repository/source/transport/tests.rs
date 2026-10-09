@@ -100,6 +100,7 @@ fn origin_with(temp: &Path, commits: usize) -> Remote {
             }
         },
         host: "example.com".into(),
+        owner: String::new(),
         name: "origin".into(),
     }
 }

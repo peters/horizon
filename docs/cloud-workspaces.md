@@ -182,6 +182,14 @@ provisioning immediately after submission, without a separate Deploy action.
 **More options** contains the container disk, repository and committed revision.
 Only committed source is transferred; local changes stay on this computer.
 
+A pasted repository link is cloned on this computer first. Unless you choose
+another folder, the clone goes to `<folder>/<owner>/<repository>`, for example
+`~/github/acme/web`. `<folder>` is the first of `~/github`, `~/code`, `~/src`,
+`~/projects` and `~/dev` that exists, else `~/Horizon`. A GitLab link keeps all
+its groups, as in `~/github/group/subgroup/app`. A checkout of the same link that
+is already there is used as it is, also one from an earlier Horizon at
+`<folder>/<repository>`.
+
 Missing account settings open a repair form without losing the title or target
 workspace. Enter the compute API key and choose API-key or subscription login for
 the profile's agents. **Save and start** continues the submitted launch. A dedicated

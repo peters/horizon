@@ -2,7 +2,7 @@
 //! in steps that a failure or a cancel does not throw away, so a later try picks up from what was
 //! already received. Git cannot resume inside one pack, so each step is one pack: the latest
 //! commit first, then the rest of the history, then the checkout.
-use super::{Cancellation, Failure, Remote, Token, candidates, classify, git_output};
+use super::{Cancellation, Failure, Remote, Token, candidates, classify, earlier, git_output};
 use std::{
     fs::{File, OpenOptions, TryLockError},
     io::Read,
@@ -434,6 +434,7 @@ pub fn resumable(parent: &Path, remote: &Remote) -> Option<PathBuf> {
     // A link is not a candidate: two parents could reach one checkout by different names, and the
     // claim on it is kept by name.
     candidates(parent, remote)
+        .chain(earlier(parent, remote))
         .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()))
         .find(|path| marker(path).is_some_and(|marker| marker.url == remote.url && !marker.complete()))
 }
