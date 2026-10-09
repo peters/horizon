@@ -94,7 +94,7 @@ class AccessRequestTests(ServiceTestCase):
 
     def test_the_host_lists_requests_without_secrets_and_status_counts_them(self):
         identifier = self.ask(ALPHA)['id']
-        report = service.agents.requests_report(self.book, lambda: NOW + 5)
+        report = service.agents.requests_report(self.book, self.store.load()[0], lambda: NOW + 5)
         self.assertEqual(report, {'requests': [{'id': identifier, 'repository': 'example/extra', 'access': 'push',
                                                 'reason': 'Open a PR for the fix', 'session': 'agent-alpha',
                                                 'agent': 'claude', 'created_at': NOW}]})
@@ -102,7 +102,7 @@ class AccessRequestTests(ServiceTestCase):
         self.assertEqual(service.status(self.store, lambda: NOW)['pending_requests'], 1)
         self.assertEqual(self.book.runtime.joinpath(agents.BOOK).stat().st_mode & 0o777, 0o600)
         # A request without a decision expires after a day.
-        self.assertEqual(agents.requests_report(self.book, lambda: NOW + DAY)['requests'], [])
+        self.assertEqual(agents.requests_report(self.book, self.store.load()[0], lambda: NOW + DAY)['requests'], [])
         self.assertEqual(self.answer({'request': 'request-status', 'id': identifier}, NOW + DAY, ALPHA)[0]['status'],
                          'expired')
 
@@ -143,7 +143,7 @@ class AccessRequestTests(ServiceTestCase):
         first = self.ask(ALPHA, access='read', reason='Read the API')
         second = self.ask(ALPHA, access='push', reason='Push the fix')
         self.assertEqual((second['id'], second['access']), (first['id'], 'push'))
-        waiting = agents.requests_report(self.book, lambda: NOW)['requests']
+        waiting = agents.requests_report(self.book, self.store.load()[0], lambda: NOW)['requests']
         self.assertEqual([(item['access'], item['reason']) for item in waiting], [('push', 'Push the fix')])
         self.assertEqual(self.ask(ALPHA, access='read')['access'], 'push', 'a read request never weakens it')
 
@@ -155,7 +155,7 @@ class AccessRequestTests(ServiceTestCase):
 
     def test_a_reason_that_reorders_text_is_refused(self):
         for reason in ('fix \u202etsurt', 'fix \u2066x', 'fix \u200fx', 'line\nbreak', 'one\u2028two',
-                       'one\u2029two'):
+                       'one\u2029two', 'lone \ud800 surrogate'):
             self.assertFalse(self.ask(ALPHA, reason=reason)['ok'], repr(reason))
 
     def test_allow_for_the_cloud_persists_for_every_session_and_the_same_account(self):
@@ -212,8 +212,27 @@ class AccessRequestTests(ServiceTestCase):
                 self.store.save(dict(self.stored(), chain=chain(access='ghu_synthetic-other'), login='someone-else'))
         self.assertEqual(self.decide(identifier, 'allow-cloud', check)['error'], 'chain_changed')
         self.assertNotIn('cloud_grants', self.stored())
+        # The new chain acts for another account, so the request does not carry over to it.
         self.assertEqual(self.answer({'request': 'request-status', 'id': identifier}, NOW, ALPHA)[0]['status'],
-                         'pending')
+                         'expired')
+
+    def test_a_request_belongs_to_the_account_it_was_made_under(self):
+        self.install(installation(login='octo-cat'))
+        old = self.ask(ALPHA)['id']
+        # Another account's chain; its own requests are not cleared away after the install.
+        self.install(installation(chain=chain(access='ghu_synthetic-other'), login='someone-else'))
+        fresh = self.ask(BETA, repository='example/other')['id']
+        waiting = agents.requests_report(self.book, self.store.load()[0], lambda: NOW)['requests']
+        self.assertEqual([item['id'] for item in waiting], [fresh])
+        self.assertEqual(self.answer({'request': 'request-status', 'id': old}, NOW, ALPHA)[0]['status'], 'expired')
+        self.assertEqual(self.decide(old, 'allow-cloud')['error'], 'not_pending')
+        self.assertEqual(self.decide(fresh, 'allow-cloud')['status'], 'allowed')
+
+    def test_a_record_the_host_could_not_parse_is_left_out_of_the_report(self):
+        self.ask(ALPHA)
+        with self.book.edit() as data:
+            data['requests'][0]['agent'] = 'cl\ud800aude'
+        self.assertEqual(agents.requests_report(self.book, self.store.load()[0], lambda: NOW)['requests'], [])
 
     def test_clear_removes_requests_and_grants(self):
         self.decide(self.ask(ALPHA)['id'], 'allow-cloud')
@@ -298,7 +317,7 @@ class EndToEndTests(ServiceTestCase):
         def host():
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
-                waiting = agents.requests_report(self.book)['requests']
+                waiting = agents.requests_report(self.book, self.store.load()[0])['requests']
                 if waiting:
                     decided.append(agents.decide(self.store, self.book, waiting[0]['id'], 'allow-cloud',
                                                  now=lambda: NOW, check=lambda *args: None))

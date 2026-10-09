@@ -107,6 +107,34 @@ def pending(data):
     return [record for record in data['requests'] if record['status'] == 'pending']
 
 
+def account(state):
+    """The app and GitHub account a chain acts for; without a login, that install alone.
+    A request belongs to the account of the chain it was made under."""
+    if state is None:
+        return None
+    login = state.get('login')
+    return [state['client_id'], login if login else 'install:%s' % state.get('installed_at')]
+
+
+def expire_other_accounts(data, current):
+    """Expires the waiting requests that were made under another chain's account, so a new
+    app or account never receives them. A request of the current account stays."""
+    for record in pending(data):
+        if record.get('account') != current:
+            record['status'] = 'expired'
+    return data
+
+
+def reportable(record):
+    """Whether every text of a record is valid Unicode, which the host's JSON parser needs."""
+    try:
+        for key in ('repository', 'reason', 'session', 'agent'):
+            str(record[key]).encode('utf-8')
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def covered(grant_access, needed):
     return grant_access == 'push' or grant_access == needed
 
@@ -172,11 +200,11 @@ def credential_answer(request, state, now):
 
 
 def valid_reason(reason):
-    """One short line that reads as it is: no control, formatting or line and paragraph
-    separator characters, which could make the person's approval card read differently from
-    what it asks."""
+    """One short line that reads as it is: no control, formatting, surrogate or line and
+    paragraph separator characters, which could make the person's approval card read
+    differently from what it asks, or keep the host from reading the list."""
     return (isinstance(reason, str) and reason.strip() != '' and len(reason) <= REASON_LIMIT
-            and not any(unicodedata.category(character) in ('Cc', 'Cf', 'Zl', 'Zp') for character in reason))
+            and not any(unicodedata.category(character) in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp') for character in reason))
 
 
 def ask(request, state, book, now, identify):
@@ -194,7 +222,7 @@ def ask(request, state, book, now, identify):
         return {'ok': True, 'state': 'ok', 'status': 'allowed', 'scope': 'cloud', 'id': None}, repository
     window, session, agent = who
     with book.edit() as data:
-        tidy(data, now)
+        expire_other_accounts(tidy(data, now), account(state))
         for record in pending(data):
             if (record['window'], record['session']) == (window, session) and \
                     auth.same_repository(repository, record['repository']):
@@ -208,17 +236,17 @@ def ask(request, state, book, now, identify):
             return refusal('ok', 'Too many GitHub access requests wait for the person.'), repository
         record = {'id': secrets.token_hex(8), 'repository': repository, 'access': access, 'reason': reason,
                   'session': session, 'window': window, 'agent': agent, 'created_at': int(now),
-                  'status': 'pending', 'scope': None, 'decided_at': None}
+                  'status': 'pending', 'scope': None, 'decided_at': None, 'account': account(state)}
         data['requests'].append(record)
     return {'ok': True, 'state': 'ok', 'status': 'pending', 'id': record['id'], 'access': access}, repository
 
 
-def request_status(request, book, now, identify):
+def request_status(request, state, book, now, identify):
     try:
         window, session, _ = identify()
     except idle.Refused:
         return refusal('refused', 'Only an agent session on this worker can read its requests.'), None
-    data = tidy(book.read(), now)
+    data = expire_other_accounts(tidy(book.read(), now), account(state))
     for record in data['requests']:
         if record['id'] == request.get('id') and (record['window'], record['session']) == (window, session):
             return {'ok': True, 'state': 'ok', 'id': record['id'], 'status': record['status'],
@@ -243,7 +271,7 @@ def answer(request, store, book, now, identify):
     if request['request'] == 'request':
         return ask(request, state, book, now, identify)
     if request['request'] == 'request-status':
-        return request_status(request, book, now, identify)
+        return request_status(request, state, book, now, identify)
     return credential_answer(request, state, now)
 
 
@@ -357,6 +385,7 @@ def reachable(token, repository, access, environ=os.environ, timeout=15):
 MESSAGES = {
     'unknown_request': 'No pending GitHub access request has this ID.',
     'not_pending': 'This request was already decided or expired.',
+    'account_changed': 'This request was made for another GitHub account, so it expired.',
     'too_many_grants': 'This cloud already has the most repositories that can be allowed for it.',
     'chain_changed': 'GitHub access on this worker changed while the request was checked; decide again.',
     'no_chain': 'This worker holds no usable GitHub sign-in.',
@@ -394,6 +423,10 @@ def decide(store, book, identifier, decision, now=time.time, check=reachable):
         checked = store.load()[0]
         if checked is None or checked['state'] != 'ok':
             return failure(identifier, 'no_chain')
+        # A request belongs to the account it was made under; another one never receives it.
+        if record.get('account') != account(checked):
+            record.update(status='expired', decided_at=int(current))
+            return failure(identifier, 'account_changed')
         if checked['chain']['access_expires_at'] - current <= common.SERVE_MARGIN:
             return failure(identifier, 'token_expired')
         if len(other_grants(checked, record)) >= MAX_CLOUD_GRANTS:
@@ -434,11 +467,12 @@ def same_chain(checked, current):
             and current.get('login') == checked.get('login'))
 
 
-def requests_report(book, now=time.time):
-    """The pending requests for the host, without secrets."""
-    data = tidy(book.read(), now())
+def requests_report(book, state, now=time.time):
+    """The pending requests of the current chain's account for the host, without secrets."""
+    data = expire_other_accounts(tidy(book.read(), now()), account(state))
     return {'requests': [{key: record[key] for key in ('id', 'repository', 'access', 'reason', 'session', 'agent',
-                                                       'created_at')} for record in pending(data)]}
+                                                       'created_at')}
+                         for record in pending(data) if reportable(record)]}
 
 
 GUIDANCE = (

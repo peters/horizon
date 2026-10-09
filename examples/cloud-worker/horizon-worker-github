@@ -375,9 +375,7 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
         except (OSError, subprocess.SubprocessError):
             print('horizon-worker-github: the static Git binding could not be removed; the service '
                   'still answers first.', file=sys.stderr)
-    if not kept:
-        # Another app or account: requests made for the previous one do not carry over.
-        agents.Book(store.runtime).clear()
+    # Requests of another app or account expire by themselves: each names its account.
     return status(store)
 
 
@@ -410,7 +408,7 @@ def keep(store, previous):
 
 def status(store, now=time.time):
     state, persistent = store.load()
-    pending = len(agents.requests_report(agents.Book(store.runtime), now)['requests'])
+    pending = len(agents.requests_report(agents.Book(store.runtime), state, now)['requests'])
     if state is None:
         return {'version': 1, 'state': 'absent', 'persistent': False, 'pending_write': False, 'login': None,
                 'access_expires_at': None, 'refresh_expires_at': None, 'last_refresh_at': None, 'last_error': None,
@@ -477,7 +475,7 @@ def main(argv):
     elif operation == 'status':
         print_json(host_status(store))
     elif operation == 'requests':
-        print_json(agents.requests_report(agents.Book(store.runtime)))
+        print_json(agents.requests_report(agents.Book(store.runtime), store.load()[0]))
     elif operation == 'decide':
         print_json(agents.decide(store, agents.Book(store.runtime), argv[1], argv[2]))
     else:

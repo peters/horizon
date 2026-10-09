@@ -909,7 +909,8 @@ answers that GitHub is not connected. The tool runs
 - `{"request": "request", "repository": "owner/name", "access": "push",
   "reason": "..."}` records a request and answers `{"status": "pending",
   "id": "..."}`. The reason has at most 300 characters and no control,
-  formatting or line separator characters, such as the ones that reorder text.
+  formatting, surrogate or line separator characters, such as the ones that
+  reorder text.
   Asking for push while a read request of the same session waits turns it into
   a push request with the new reason. A repository that the session already reaches answers
   `"status": "allowed"` without a request. A second request of the same session
@@ -926,7 +927,9 @@ from the caller's process, which the kernel names, up to an agent pane of
 waits up to 10 minutes for your decision and then tells the agent to ask again
 later; that call returns the same request. Requests are kept in
 `/run/horizon-github/access-requests.json` (root only), so a container restart
-ends them.
+ends them. Each request belongs to the GitHub App and account of the chain it was
+made under; after an install for another app or account it counts as expired and
+is never decided for the new one.
 
 Horizon lists and decides requests as root over SSH:
 
