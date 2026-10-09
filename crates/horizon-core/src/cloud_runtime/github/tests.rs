@@ -318,14 +318,15 @@ fn only_a_callback_with_the_expected_state_yields_its_code() {
 
 /// Reads one whole request, its head and its body, so closing the connection never
 /// resets it (Windows sends the body in a separate segment).
-pub(in crate::cloud_runtime::github) fn read_request(stream: &mut TcpStream) {
+/// Reads one request and returns it, head and body.
+pub(in crate::cloud_runtime::github) fn read_request(stream: &mut TcpStream) -> String {
     stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut input = Vec::new();
     let mut buffer = [0; 4096];
     loop {
         let read = stream.read(&mut buffer).unwrap();
         if read == 0 {
-            return;
+            return String::from_utf8_lossy(&input).into_owned();
         }
         input.extend_from_slice(&buffer[..read]);
         if let Some(end) = input.windows(4).position(|window| window == b"\r\n\r\n") {
@@ -338,7 +339,7 @@ pub(in crate::cloud_runtime::github) fn read_request(stream: &mut TcpStream) {
                 })
                 .unwrap_or(0);
             if input.len() >= end + 4 + length {
-                return;
+                return String::from_utf8_lossy(&input).into_owned();
             }
         }
     }

@@ -110,6 +110,11 @@ GitHub and chooses its repositories; agents cannot set it up.
   repository where the person's GitHub App is not installed cannot be allowed.
 - When the cloud has no GitHub access, do not ask the person for a token. Say that
   GitHub is not connected for this cloud.
+- On this computer, **New cloud** lists the repositories the person's GitHub App is
+  installed on and clones a private one with the connected account, after this computer
+  signs in once. No MCP tool lists or clones them: to start a cloud from a private
+  repository, ask the person to pick it in **New cloud**. A repository missing from the
+  list needs **Add repositories on GitHub** there.
 
 ## Development-only registry
 

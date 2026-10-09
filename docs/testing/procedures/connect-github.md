@@ -317,6 +317,36 @@ after one approval.
    Authorized OAuth Apps** still lists **Horizon** when it did before; revoke it
    there if this task authorized it for the first time.
 
+### 6.10 G10 — Pick and clone a private repository
+
+1. Open **New cloud** while GitHub is connected. Under **Where is your code?**,
+   click **Pick from your GitHub repositories**.
+
+   Result: The first time, a box asks to sign in to GitHub on this computer, with a
+   code in Ask mode. In Automatic mode the browser returns by itself.
+
+2. Approve the code on GitHub if one shows.
+
+   Result: The dialog lists `<owner>/<repo-a>` and `<owner>/<repo-b>`.
+   `stat -c '%a' ~/.horizon/cloud/credentials/github-host-*.json` shows `600`.
+
+3. Type `repo-b`, then click `<owner>/<repo-b>`.
+
+   Result: The field shows its link. The dialog says that the repository is
+   private and offers **Clone with GitHub** in place of a token field.
+
+4. Click **Clone with GitHub**.
+
+   Result: The clone starts by itself and finishes without a token field. The
+   dialog then shows **Preparing cloud…** and the cloud's choices. `git -C <clone> config --get
+   remote.origin.url` shows the plain `https://github.com/<owner>/<repo-b>.git` link,
+   and `.git/config` holds no token.
+
+5. Close the dialog, open **New cloud** again and click **Pick from your GitHub
+   repositories**.
+
+   Result: The list shows without a sign-in.
+
 ## 7. Pass criteria
 
 - The app secret file is private, and Horizon keeps no private key of the app.
@@ -329,6 +359,8 @@ after one approval.
 - **Allow for this cloud** and **Deny** reach the agent.
 - An allowed repository reaches every agent session of the cloud.
 - The first push to `ghcr.io` asks once to publish images, and a later push does not.
+- New cloud lists the connected repositories after one sign-in of this computer and
+  clones a private one without a token.
 
 ## 8. Cleanup
 

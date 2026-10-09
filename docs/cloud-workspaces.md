@@ -300,6 +300,23 @@ work that must not reach a repository in a cloud without access to it.
 of running clouds: delete the app on GitHub for that. Deleting the app ends every
 token at once.
 
+### Your repositories in New cloud
+
+With GitHub connected, **New cloud** offers **Pick from your GitHub
+repositories** under **Where is your code?**. It lists the repositories your
+GitHub App is installed on, and typing narrows the list. A click puts the
+repository's link in the field, and Continue clones it on this computer as
+before. For a private repository on github.com, the token card becomes **Clone
+with GitHub**, which clones with your connected account; **Use a token instead**
+keeps the old way.
+
+For this, this computer signs in once to your GitHub App, the way the app's
+setting says: one Authorize click, or none in Automatic. Horizon keeps that
+sign-in private in its credentials folder, renews it before each use for about
+six months, and never writes it into a checkout. **Disconnect** forgets it. A
+repository the app does not reach shows **Add it on GitHub**, which opens the
+app's repository choice.
+
 ### Publishing images to ghcr.io
 
 A cloud whose image Horizon builds pushes it to the registry that its profile

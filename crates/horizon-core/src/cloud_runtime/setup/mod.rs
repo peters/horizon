@@ -231,17 +231,21 @@ pub struct Committed {
     after: Vec<u8>,
 }
 
-/// Saves the GitHub App of Connect GitHub, or forgets it, and keeps every other
-/// setting as it is. Unlike the form's save it needs no provider or agent credential,
-/// since Connect GitHub can come first. Run off the UI thread, as
+/// Saves the GitHub App of Connect GitHub, changes its mode, or forgets it, and keeps
+/// every other setting as it is. Unlike the form's save it needs no provider or agent
+/// credential, since Connect GitHub can come first. Run off the UI thread, as
 /// [`save_provider_key`]. An open form adopts the result with [`Draft::adopt_github`].
-/// `cancel` is checked under the settings lock, right before the commit, so a cancelled
-/// Connect flow saves nothing.
+/// `shown` is the app ID the caller showed, `None` for no app: settings that name another
+/// app, or none, were saved by another Horizon window since, and are left as they are, so
+/// a stale window never replaces or disconnects an app it did not show. `cancel` is checked
+/// under the settings lock, right before the commit, so a cancelled Connect flow saves
+/// nothing.
 /// # Errors
-/// Malformed saved settings, settings that changed while this save ran, or a
-/// cancellation.
+/// Malformed saved settings, settings that changed while this save ran or no longer name
+/// `shown`, or a cancellation.
 pub fn save_github(
     root: &Path,
+    shown: Option<u64>,
     github: Option<super::github::Settings>,
     cancel: &super::Cancellation,
 ) -> Result<Committed> {
@@ -255,6 +259,11 @@ pub fn save_github(
         || Ok(defaults(root)),
         |bytes| serde_json::from_slice::<Settings>(bytes).map_err(|_| Error::Json),
     )?;
+    if settings.github.as_ref().map(|github| github.app_id) != shown {
+        return Err(Error::Invalid(
+            "GitHub was changed in another Horizon window. Close and reopen the settings to see it.",
+        ));
+    }
     settings.github = github;
     cancel.check()?;
     // Committed only over the bytes read above, so a concurrent writer is never overwritten.
