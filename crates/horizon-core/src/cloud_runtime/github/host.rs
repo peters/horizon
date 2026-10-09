@@ -11,7 +11,8 @@ use crate::cloud_runtime::Cancellation;
 use horizon_cloud::github::{Client, Secret};
 use std::path::{Path, PathBuf};
 
-/// The name a Skip of this computer's sign-in uses, as a cloud's sign-in uses its cloud.
+/// The start of the name of each sign-in of this computer, where a cloud's sign-in uses its
+/// cloud. Each sign-in has its own, so nothing that ends one ends another.
 const SIGN_IN: &str = "horizon-this-computer";
 
 /// Where this computer's chain for the app of `settings` is kept. A chain of another app is
@@ -68,8 +69,9 @@ pub fn current(root: &Path, settings: &Settings) -> Result<Option<(String, Secre
 }
 
 /// Signs this computer in for the app of `settings`. `show` gets the code to approve, or
-/// the page to open in Automatic; a [`skip`] or `cancel` ends it. Returns the account and
-/// its token, or why GitHub ended the sign-in.
+/// the page to open in Automatic; only `cancel` ends it, so a sign-in that another request
+/// or Horizon window ends never ends this one. Returns the account and its token, or why
+/// GitHub ended the sign-in.
 /// # Errors
 /// A local file that cannot be written, or a cancelled sign-in.
 pub fn sign_in(
@@ -89,7 +91,8 @@ pub fn sign_in(
         secrets: Vec::new(),
     };
     let client = Client::new();
-    let chain = match signin::chain(settings, SIGN_IN, &client, &runner) {
+    let name = format!("{SIGN_IN}-{}", uuid::Uuid::new_v4().simple());
+    let chain = match signin::chain(settings, &name, &client, &runner) {
         Ok(chain) => chain,
         Err(signin::Ended::Error(error)) => return Err(error),
         Err(signin::Ended::Skipped) => return Ok(Err("Skipped.".into())),
@@ -112,11 +115,6 @@ pub fn sign_in(
         settings.mode == Mode::Automatic,
     )?;
     Ok(Ok((user.login, chain.access_token)))
-}
-
-/// Ends this computer's sign-in that waits for the person.
-pub fn skip() {
-    signin::skip(SIGN_IN);
 }
 
 /// Every `owner/name` the app is installed on and this computer's account reaches, in

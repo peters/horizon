@@ -38,13 +38,13 @@ enum Answer {
     Failed(String),
 }
 
-/// Ends its sign-in when dropped, as when the dialog closes.
+/// Ends its own request's sign-in when dropped, as on Cancel or when the dialog closes,
+/// and no other.
 struct Abort(Cancellation);
 
 impl Drop for Abort {
     fn drop(&mut self) {
         self.0.cancel();
-        host::skip();
     }
 }
 
@@ -158,77 +158,10 @@ impl Account {
 
     /// The sign-in box while this computer signs in, with a way out.
     pub(super) fn sign_in_box(&mut self, ui: &mut Ui) {
-        let Some(prompt) = &self.prompt else {
-            if self.job.is_some() {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(RichText::new("Asking GitHub…").size(13.5).color(theme::FG_SOFT()));
-                });
-            }
-            return;
-        };
-        egui::Frame::new()
-            .fill(theme::alpha(theme::ACCENT(), 18))
-            .stroke(egui::Stroke::new(1.0, theme::alpha(theme::ACCENT(), 120)))
-            .corner_radius(10)
-            .inner_margin(14)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new("Sign in to GitHub on this computer")
-                        .size(14.5)
-                        .strong()
-                        .color(theme::FG()),
-                );
-                if let Prompt::Device {
-                    user_code,
-                    verification_uri,
-                    ..
-                } = prompt
-                {
-                    {
-                        ui.label(
-                            RichText::new(
-                                "Once, for listing and cloning your repositories. Open GitHub, paste the code and \
-                                 click Authorize.",
-                            )
-                            .size(12.5)
-                            .color(theme::FG_DIM()),
-                        );
-                        ui.label(
-                            RichText::new(user_code)
-                                .monospace()
-                                .size(22.0)
-                                .strong()
-                                .color(theme::FG()),
-                        );
-                        let (code, page) = (user_code.clone(), verification_uri.clone());
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add(primary_button("Open GitHub").min_size(vec2(120.0, 30.0)))
-                                .clicked()
-                            {
-                                ui.ctx().copy_text(code);
-                                if let Err(error) = horizon_core::open_url(&page) {
-                                    tracing::warn!(%error, "could not open the GitHub device page");
-                                }
-                            }
-                            if ui.add(chrome_button("Cancel")).clicked() {
-                                host::skip();
-                            }
-                        });
-                    }
-                } else {
-                    ui.label(
-                        RichText::new("Horizon opened GitHub in your browser; the page returns here by itself.")
-                            .size(12.5)
-                            .color(theme::FG_DIM()),
-                    );
-                    if ui.add(chrome_button("Cancel")).clicked() {
-                        host::skip();
-                    }
-                }
-            });
+        if prompt(ui, self.prompt.as_ref(), self.job.is_some()) {
+            // The request goes, and its sign-in ends with it.
+            self.finish();
+        }
     }
 
     /// The repositories to pick from, narrowed by `filter`. Returns the one clicked.
@@ -257,6 +190,74 @@ impl Account {
         }
         chosen
     }
+}
+
+/// Shows `prompt`, or a spinner while `busy` without one. Returns whether the person
+/// cancelled the sign-in.
+fn prompt(ui: &mut Ui, prompt: Option<&Prompt>, busy: bool) -> bool {
+    let Some(prompt) = prompt else {
+        if busy {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new("Asking GitHub…").size(13.5).color(theme::FG_SOFT()));
+            });
+        }
+        return false;
+    };
+    let mut cancelled = false;
+    egui::Frame::new()
+        .fill(theme::alpha(theme::ACCENT(), 18))
+        .stroke(egui::Stroke::new(1.0, theme::alpha(theme::ACCENT(), 120)))
+        .corner_radius(10)
+        .inner_margin(14)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                RichText::new("Sign in to GitHub on this computer")
+                    .size(14.5)
+                    .strong()
+                    .color(theme::FG()),
+            );
+            let (words, code, page) = match prompt {
+                Prompt::Device {
+                    user_code,
+                    verification_uri,
+                    ..
+                } => (
+                    "Once, for listing and cloning your repositories. Open GitHub, paste the code and click \
+                     Authorize.",
+                    Some(user_code),
+                    verification_uri,
+                ),
+                Prompt::Web { url } => (
+                    "Horizon opened GitHub in your browser; if it did not, click Open GitHub. The page then \
+                     returns here by itself.",
+                    None,
+                    url,
+                ),
+                _ => return,
+            };
+            ui.label(RichText::new(words).size(12.5).color(theme::FG_DIM()));
+            if let Some(code) = code {
+                ui.label(RichText::new(code).monospace().size(22.0).strong().color(theme::FG()));
+            }
+            ui.horizontal(|ui| {
+                // Also the way back when the browser did not open.
+                if ui
+                    .add(primary_button("Open GitHub").min_size(vec2(120.0, 30.0)))
+                    .clicked()
+                {
+                    if let Some(code) = code {
+                        ui.ctx().copy_text(code.clone());
+                    }
+                    if let Err(error) = horizon_core::open_url(page) {
+                        tracing::warn!(%error, "could not open the GitHub sign-in page");
+                    }
+                }
+                cancelled = ui.add(chrome_button("Cancel")).clicked();
+            });
+        });
+    cancelled
 }
 
 /// The repositories whose name holds the typed `filter`, at most [`SHOWN`]. A whole link
@@ -499,5 +500,34 @@ mod tests {
             .collect();
         assert!(texts.iter().any(|text| text == "acme/web"));
         assert!(!texts.iter().any(|text| text == "acme/api"));
+    }
+
+    #[test]
+    fn ending_a_request_ends_only_its_own_sign_in() {
+        let (mine, other) = (Cancellation::default(), Cancellation::default());
+        drop(Abort(mine.clone()));
+        assert!(mine.check().is_err());
+        assert!(other.check().is_ok(), "another request's sign-in goes on");
+    }
+
+    #[test]
+    fn an_automatic_sign_in_offers_the_page_again_and_a_way_out() {
+        let web = Prompt::Web {
+            url: "https://github.com/login/oauth/authorize?client_id=Iv23synthetic".into(),
+        };
+        let texts: Vec<String> = egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                assert!(!prompt(ui, Some(&web), true), "nothing is cancelled without a click");
+            })
+            .discard_textures()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|text| text == "Open GitHub"));
+        assert!(texts.iter().any(|text| text == "Cancel"));
     }
 }
