@@ -35,6 +35,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 |---|---|---|
 | board | The Horizon canvas that holds workspaces and panels. | canvas (in procedures) |
 | workspace | A named group of panels on the board. | — |
+| menu search field | The search control at the top of a menu. The **Move to Workspace** menu uses one. | search bar, default text frame |
 | panel | One terminal, agent, browser, device or cloud area on the board. | window, pane, tile |
 | session | The saved state of a board. An ephemeral session is not saved. | profile |
 | cloud | A Horizon cloud panel and its remote worker, storage and sessions. | cloud workspace, cloud panel instance |
