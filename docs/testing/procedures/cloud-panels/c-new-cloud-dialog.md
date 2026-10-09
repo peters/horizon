@@ -593,9 +593,12 @@ changes:
 
    Result: Each expected pair shows one row. No other type or location shows.
 
-5. Record that the dialog does not say which catalog types the settings exclude.
+5. Read the note under the search field.
 
-   Result: The report links [issue #1305](https://github.com/peters/horizon/issues/1305).
+   Result: When the settings do not allow some server types or locations, the
+   note gives the count of server types, the count of locations, or both
+   counts. The list does not show those types or locations. When the settings
+   allow every catalog type and location, the dialog shows no exclusion note.
 
 ### 6.16 C16 — Keep the unlisted Hetzner rows under In stock only
 
@@ -670,8 +673,14 @@ changes:
 
 3. Compare the number of rows for the location with the number of rows of C15 in that location.
 
-   Result: The numbers are the same. The search finds only text in the row
-   title ([issue #1305](https://github.com/peters/horizon/issues/1305)).
+   Result: The numbers are the same.
+
+4. Search for a RunPod flavor id, a data center id, a region name, `shared` and `dedicated`.
+
+   Result: The flavor id shows the RunPod rows that use that flavor. The
+   data center id shows the rows that can run there. The region name shows the
+   rows in that region. `shared` and `dedicated` show the Hetzner rows of that
+   CPU kind.
 
 ### 6.20 C20 — Show EUR totals for Hetzner and USD totals for RunPod
 
@@ -851,8 +860,8 @@ changes:
 
 2. Examine the data center choices.
 
-   Result: No chip and no summary line shows `stock unknown`. If one does, link
-   [issue #1305](https://github.com/peters/horizon/issues/1305) in the report.
+   Result: No chip and no summary line shows `stock unknown`. If one does, record
+   a defect.
 
 ### 6.30 C30 — Show only RunPod GPU types for a GPU profile
 

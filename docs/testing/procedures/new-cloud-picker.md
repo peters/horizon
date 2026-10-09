@@ -22,8 +22,9 @@ the UI and the agents must agree.
 
 - Candidate: a build that includes the fixes for
   [issue #1302](https://github.com/peters/horizon/issues/1302),
-  [issue #1303](https://github.com/peters/horizon/issues/1303) and
-  [issue #1304](https://github.com/peters/horizon/issues/1304).
+  [issue #1303](https://github.com/peters/horizon/issues/1303),
+  [issue #1304](https://github.com/peters/horizon/issues/1304) and
+  [issue #1305](https://github.com/peters/horizon/issues/1305).
 - Platforms: Linux with Xvfb. Providers: RunPod and Hetzner.
 - Test list: C12 to C30 of the cloud panel smoke test,
   [issue #1264](https://github.com/peters/horizon/issues/1264).
@@ -196,6 +197,15 @@ this order. Each task starts with the result of the task before it.
 
    Result: Each row has `cx33`, `cx43` or `cpx42`, in `fsn1`, `hel1` or `nbg1`.
 
+4. Read the note under the search field.
+
+   Result: When the catalog has server types or locations that the settings do
+   not allow, the note gives those counts. It names the server types, the
+   locations, or both. One example is **Cloud settings exclude 4 Hetzner
+   server types and 2 locations.** The list does not show those types or
+   locations. When the settings allow every type and location in the catalog,
+   the dialog shows no exclusion note.
+
 ### 6.5 C16 — Unlisted Hetzner offers
 
 1. Find the rows that show **Unlisted · advisory**.
@@ -302,6 +312,30 @@ this order. Each task starts with the result of the task before it.
 5. Remove the text from the search field.
 
    Result: The list shows all rows again.
+
+6. Type `cpu3c` in the search field.
+
+   Result: Each row uses the flavor `cpu3c`.
+
+7. Remove the text. Type a data center id from a RunPod row, for example `EU-RO-1`.
+
+   Result: Each row can run in that data center.
+
+8. Remove the text. Type `dedicated`.
+
+   Result: Each row is a Hetzner row for dedicated vCPUs.
+
+9. Remove the text. Type `shared`.
+
+   Result: Each row is a Hetzner row for shared vCPUs.
+
+10. Remove the text. Type `EUROPE`.
+
+   Result: Each row can run in Europe.
+
+11. Remove the text from the search field.
+
+    Result: The list shows all rows again.
 
 ### 6.9 C20 — Currencies
 

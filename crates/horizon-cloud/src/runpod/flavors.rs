@@ -49,6 +49,25 @@ impl Flavor {
     }
 }
 
+/// Whether `reported` is `flavor` or one of its size ids, such as `cpu3c-2-4`.
+///
+/// `RunPod` documents `cpuAvailability[].id` as a size id. Catalogs today also send
+/// the family id. Either form names the same flavor; a shorter family never matches
+/// a longer one (`cpu3` is not `cpu3c`).
+#[must_use]
+pub fn same_flavor(reported: &str, flavor: &str) -> bool {
+    let (shorter, longer) = if reported.len() <= flavor.len() {
+        (reported, flavor)
+    } else {
+        (flavor, reported)
+    };
+    longer == shorter
+        || longer.strip_prefix(shorter).is_some_and(|rest| {
+            let mut bytes = rest.bytes();
+            bytes.next() == Some(b'-') && bytes.next().is_some_and(|byte| byte.is_ascii_digit())
+        })
+}
+
 /// Whether any flavor offers `(cpu, memory_gb)` with this container disk. Flavors
 /// bound memory from above, so zero memory, which no profile may request, is refused here.
 #[must_use]
@@ -244,5 +263,15 @@ mod tests {
         assert_eq!(Flavor::get("cpu3g").unwrap().instance_id(8), "cpu3g-8-32");
         assert_eq!(Flavor::get("cpu3c").unwrap().instance_id(2), "cpu3c-2-4");
         assert_eq!(Flavor::get("cpu5m").unwrap().instance_id(32), "cpu5m-32-256");
+    }
+    #[test]
+    fn a_size_id_names_its_family_and_a_shorter_prefix_does_not() {
+        assert!(same_flavor("cpu3c", "cpu3c"));
+        assert!(same_flavor("cpu3c-2-4", "cpu3c"));
+        assert!(same_flavor("cpu3c", "cpu3c-2-4"));
+        assert!(!same_flavor("cpu3", "cpu3c"));
+        assert!(!same_flavor("cpu3c", "cpu5c"));
+        assert!(!same_flavor("cpu3c-extra", "cpu3c"));
+        assert!(!same_flavor("cpu3cx-2-4", "cpu3c"));
     }
 }

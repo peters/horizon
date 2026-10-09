@@ -140,6 +140,15 @@ pub(super) fn filters(ui: &mut Ui, catalog: &Catalog, form: &mut Production) {
         .scoped_offers(form)
         .filter(|(index, _)| *index >= catalog.matching)
         .count();
+    let show_hetzner = form
+        .launch
+        .selector
+        .provider_filter
+        .as_deref()
+        .is_none_or(|provider| provider == "Hetzner");
+    let exclusion = show_hetzner
+        .then(|| exclusion_note(form.prices.hetzner.exclusions()))
+        .flatten();
     let state = &mut form.launch.selector;
     ui.horizontal_wrapped(|ui| {
         ui.add(
@@ -149,8 +158,27 @@ pub(super) fn filters(ui: &mut Ui, catalog: &Catalog, form: &mut Production) {
         );
         widgets::checkbox(ui, &mut state.in_stock_only, "In stock only");
     });
+    if let Some(note) = &exclusion {
+        widgets::note(ui, note);
+    }
     if excluded > 0 {
         widgets::checkbox(ui, &mut state.show_below_minimums, "Show workers below requirements");
+    }
+}
+
+/// The note that names Hetzner server types and locations the settings leave out.
+fn exclusion_note(exclusions: horizon_core::cloud_runtime::prices::HetznerExclusions) -> Option<String> {
+    let types = exclusions.server_types;
+    let locations = exclusions.locations;
+    let types_label = if types == 1 { "server type" } else { "server types" };
+    let locations_label = if locations == 1 { "location" } else { "locations" };
+    match (types, locations) {
+        (0, 0) => None,
+        (_, 0) => Some(format!("Cloud settings exclude {types} Hetzner {types_label}.")),
+        (0, _) => Some(format!("Cloud settings exclude {locations} Hetzner {locations_label}.")),
+        _ => Some(format!(
+            "Cloud settings exclude {types} Hetzner {types_label} and {locations} {locations_label}."
+        )),
     }
 }
 
@@ -171,8 +199,7 @@ pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Opti
         .map(|(index, _)| index)
         .filter(|&index| show_below_minimums || index < catalog.matching)
         .filter(|&index| {
-            let (name, detail) = title(&catalog.offers[index]);
-            search.is_empty() || format!("{name} {detail}").to_lowercase().contains(&search)
+            horizon_core::cloud_runtime::offers::matches_search(&catalog.offers[index], &catalog.places[index], &search)
         })
         .filter(|&index| {
             !in_stock_only

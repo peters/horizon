@@ -643,7 +643,10 @@ pub(super) fn candidates(
                 .cpu_availability
                 .iter()
                 .any(|cpu| {
-                    cpu_flavors.contains(&cpu.id) && matches!(cpu.availability.as_str(), "HIGH" | "MEDIUM" | "LOW")
+                    cpu_flavors
+                        .iter()
+                        .any(|flavor| super::flavors::same_flavor(&cpu.id, flavor))
+                        && matches!(cpu.availability.as_str(), "HIGH" | "MEDIUM" | "LOW")
                 })
                 .then_some((preference, center.id))
         })

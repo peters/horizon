@@ -104,7 +104,7 @@ fn malformed_or_incompatible_stock_is_not_masked_by_an_alternative() {
     ];
     for (field, value) in [
         ("ramGbPerVcpu", json!(2.5)),
-        ("vcpu", json!({"min":8,"max":32})),
+        ("vcpu", json!({"min":32,"max":8})),
         ("dataCenters", Value::Null),
     ] {
         let mut invalid = base.clone();
@@ -145,6 +145,46 @@ fn provider_errors_remain_errors_and_never_capacity_verdicts() {
         ));
         task.join().unwrap();
     }
+}
+
+#[test]
+fn a_flavor_outside_its_live_vcpu_range_does_not_fail_the_stock_check() {
+    let mut wide = spec();
+    wide.cpu_flavors.push("cpu5g".into());
+    let mut narrow = cpu("cpu3g", &[("first", "HIGH")]);
+    narrow["vcpu"] = json!({"min": 8, "max": 32});
+    let (provider, _, task) = server(vec![
+        (200, catalog(&[center("first", "HIGH")])),
+        (200, stock(&[narrow, cpu("cpu5g", &[("first", "MEDIUM")])])),
+    ]);
+    assert_eq!(place(&provider, &wide).unwrap(), "first");
+    task.join().unwrap();
+
+    let mut only = cpu("cpu3g", &[("first", "HIGH")]);
+    only["vcpu"] = json!({"min": 8, "max": 32});
+    let (provider, _, task) = server(vec![(200, catalog(&[center("first", "HIGH")])), (200, stock(&[only]))]);
+    assert!(matches!(place(&provider, &spec()), Err(CloudError::Invalid(_))));
+    task.join().unwrap();
+}
+
+#[test]
+fn a_size_id_still_counts_as_its_flavor_family() {
+    let mut row = center("first", "HIGH");
+    row["cpuAvailability"][0]["id"] = json!("cpu3g-4-16");
+    let (provider, requests, task) = server(vec![
+        (200, catalog(&[row])),
+        (200, stock(&[cpu("cpu3g", &[("first", "HIGH")])])),
+    ]);
+    assert_eq!(place(&provider, &spec()).unwrap(), "first");
+    task.join().unwrap();
+    assert_eq!(requests.lock().unwrap().len(), 2);
+
+    let mut other = center("first", "HIGH");
+    other["cpuAvailability"][0]["id"] = json!("cpu5c-4-8");
+    let (provider, requests, task) = server(vec![(200, catalog(&[other]))]);
+    assert!(matches!(place(&provider, &spec()), Err(CloudError::Invalid(_))));
+    task.join().unwrap();
+    assert_eq!(requests.lock().unwrap().len(), 1);
 }
 
 #[test]

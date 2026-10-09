@@ -86,7 +86,12 @@ pub fn places(list: &PriceList, offer: &Offer, tier: Tier) -> Vec<Place> {
                 center
                     .cpus
                     .iter()
-                    .filter(|(id, _)| offer.flavors.contains(id))
+                    .filter(|(id, _)| {
+                        offer
+                            .flavors
+                            .iter()
+                            .any(|flavor| crate::runpod::flavors::same_flavor(id, flavor))
+                    })
                     .map(|&(_, level)| level)
                     .min()?
             } else {
@@ -170,6 +175,45 @@ pub fn picks_matching(
         balanced,
         powerful,
     }
+}
+
+/// Whether `query` occurs in the worker's identity, flavor, location, data center or region.
+///
+/// The row title is only part of that text. A search can name `cpu3c`, a data center
+/// such as `EU-RO-1`, a region such as `EUROPE`, or `shared` / `dedicated`.
+#[must_use]
+pub fn matches_search(offer: &Offer, places: &[Place], query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let query = query.to_lowercase();
+    let mut haystack = String::new();
+    let mut push = |part: &str| {
+        if part.is_empty() {
+            return;
+        }
+        if !haystack.is_empty() {
+            haystack.push(' ');
+        }
+        haystack.push_str(part);
+    };
+    push(&offer.id);
+    push(&offer.name);
+    push(offer.provider);
+    push(offer.kind);
+    push(offer.location.as_deref().unwrap_or_default());
+    for flavor in &offer.flavors {
+        push(flavor);
+    }
+    for region in &offer.regions_in_stock {
+        push(region);
+    }
+    for place in places {
+        push(&place.id);
+        push(&place.region);
+    }
+    haystack.to_lowercase().contains(&query)
 }
 
 fn capability(a: &Offer, b: &Offer, price: &impl Fn(&Offer) -> f64) -> Ordering {
@@ -366,6 +410,22 @@ mod tests {
             ids(places(&list, &cpu, Tier::HighPerformance)),
             [("EU-SE-1".to_owned(), Availability::High)]
         );
+        let mut sized = cpu.clone();
+        sized.flavors = vec!["cpu3c".into()];
+        let size_ids = PriceList {
+            data_centers: vec![center(
+                "EU-RO-1",
+                true,
+                false,
+                &[("cpu3c-8-16", Availability::Medium)],
+                &[],
+            )],
+            ..list.clone()
+        };
+        assert_eq!(
+            ids(places(&size_ids, &sized, Tier::Standard)),
+            [("EU-RO-1".to_owned(), Availability::Medium)]
+        );
         let gpu = offer("gpu", "l4", 0.4, (0, 24));
         assert_eq!(
             ids(places(&list, &gpu, Tier::Standard)),
@@ -389,5 +449,27 @@ mod tests {
         let gpu = Requirements::for_profile(&profile);
         assert_eq!((gpu.gpu, gpu.min_vcpu, gpu.min_gpu_memory_gb), (true, None, Some(48)));
         assert!(gpu.include_unavailable && gpu.validate().is_ok());
+    }
+
+    #[test]
+    fn search_matches_flavor_ids_data_centers_regions_and_cpu_kind() {
+        let offer = offer("cpu", "cpu-4-8", 0.12, (4, 8));
+        let places = vec![Place {
+            id: "EU-RO-1".into(),
+            region: "EUROPE".into(),
+            availability: Availability::High,
+        }];
+        assert!(matches_search(&offer, &places, "cpu3c"));
+        assert!(matches_search(&offer, &places, "EU-RO-1"));
+        assert!(matches_search(&offer, &places, "europe"));
+        assert!(matches_search(&offer, &places, "  "));
+        assert!(!matches_search(&offer, &places, "cpu5m"));
+        let mut hetzner = offer.clone();
+        hetzner.name = "cx43 · 4 vCPU · 8 GB · dedicated".into();
+        hetzner.flavors.clear();
+        hetzner.location = Some("fsn1".into());
+        assert!(matches_search(&hetzner, &[], "dedicated"));
+        assert!(matches_search(&hetzner, &[], "fsn1"));
+        assert!(!matches_search(&hetzner, &[], "shared"));
     }
 }
