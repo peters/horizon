@@ -2,12 +2,13 @@
 use std::io::{self, Read, Write};
 use toml_edit::{DocumentMut, Item, Table};
 
-const MANAGED: [&str; 5] = [
+const MANAGED: [&str; 6] = [
     "horizon-browser",
     "horizon-device",
     "horizon-cloud-companions",
     "horizon-local-network",
     "horizon-worker",
+    "horizon-github",
 ];
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,5 +118,15 @@ this is a literal string
         let disabled = reconcile(&enabled, "").unwrap();
         assert!(!disabled.contains("horizon-worker"));
         assert!(disabled.contains("model = 'selected'"));
+    }
+
+    #[test]
+    fn the_github_access_tool_is_managed_so_a_later_configuration_removes_it() {
+        let selected =
+            "[mcp_servers.horizon-github]\ncommand = '/usr/local/bin/horizon-worker-github'\nargs = ['mcp']\n";
+        let enabled = reconcile("model = 'selected'", selected).unwrap();
+        assert!(enabled.contains("horizon-worker-github"));
+        let disabled = reconcile(&enabled, "").unwrap();
+        assert!(!disabled.contains("horizon-github"));
     }
 }
