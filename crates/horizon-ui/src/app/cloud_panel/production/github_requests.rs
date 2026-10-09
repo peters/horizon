@@ -15,7 +15,8 @@ const POLL: Duration = Duration::from_secs(15);
 
 /// The pending requests (`None` when they could not be listed, which keeps the shown
 /// list), and for a decision whether the worker refused it or it did not arrive
-/// (`Some(None)` when the worker applied it); a list-only poll leaves the last refusal.
+/// (`Some(None)` when the worker applied it); a later list-only poll that succeeds
+/// clears the last refusal, so it shows until then and never stays for good.
 type Answer = (Option<Vec<Request>>, Option<Option<String>>);
 
 /// A cloud's pending requests and the last decision the worker refused.
@@ -38,11 +39,14 @@ impl State {
         let Some(rx) = &self.inflight else { return };
         match rx.try_recv() {
             Ok((list, decided)) => {
+                let listed = list.is_some();
                 if let Some(list) = list {
                     self.list = list;
                 }
-                if let Some(refused) = decided {
-                    self.refused = refused;
+                match decided {
+                    Some(refused) => self.refused = refused,
+                    None if listed => self.refused = None,
+                    None => {}
                 }
                 self.inflight = None;
             }
@@ -192,5 +196,10 @@ mod tests {
         state.receive();
         assert!(!state.busy());
         assert_eq!(state.refused.as_deref(), Some("This request expired."));
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.inflight = Some(rx);
+        tx.send((Some(Vec::new()), None)).unwrap();
+        state.receive();
+        assert_eq!(state.refused, None, "the next poll clears the refusal");
     }
 }

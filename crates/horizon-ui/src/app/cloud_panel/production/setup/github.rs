@@ -63,22 +63,18 @@ impl Card {
             let name = connect::app_name();
             let result = connect::start(&root, &name, horizon_core::open_url, cancel.clone())
                 .and_then(|created| created.recv().map_err(|_| horizon_core::cloud_runtime::Error::Busy)?)
-                // Settings closed meanwhile: nothing is saved, and the app's secret goes.
-                .and_then(|settings| match cancel.check() {
-                    Ok(()) => Ok(settings),
-                    Err(error) => {
-                        connect::discard(&root, &settings);
-                        Err(error.into())
-                    }
-                })
-                .and_then(|settings| match setup::save_github(&root, Some(settings.clone())) {
-                    Ok(committed) => Ok((committed, settings)),
-                    Err(error) => {
-                        // Unless the settings file already names this app, its secret goes too.
-                        connect::discard(&root, &settings);
-                        Err(error)
-                    }
-                })
+                // Settings closed meanwhile: the save, which checks under the settings lock,
+                // saves nothing, and the app's secret goes.
+                .and_then(
+                    |settings| match setup::save_github(&root, Some(settings.clone()), &cancel) {
+                        Ok(committed) => Ok((committed, settings)),
+                        Err(error) => {
+                            // Unless the settings file already names this app, its secret goes too.
+                            connect::discard(&root, &settings);
+                            Err(error)
+                        }
+                    },
+                )
                 .map(|(committed, settings)| {
                     open(&settings.installation_url());
                     let device_flow = connect::device_flow_enabled(&settings).map_err(|error| error.to_string());

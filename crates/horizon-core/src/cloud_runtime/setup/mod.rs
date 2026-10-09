@@ -196,6 +196,7 @@ impl Draft {
             });
         }
         write.commit(&self.settings, self.original.as_deref())?;
+        super::github::remember(self.settings.github.is_some());
         Ok(self.settings)
     }
 }
@@ -234,9 +235,16 @@ pub struct Committed {
 /// setting as it is. Unlike the form's save it needs no provider or agent credential,
 /// since Connect GitHub can come first. Run off the UI thread, as
 /// [`save_provider_key`]. An open form adopts the result with [`Draft::adopt_github`].
+/// `cancel` is checked under the settings lock, right before the commit, so a cancelled
+/// Connect flow saves nothing.
 /// # Errors
-/// Malformed saved settings, or settings that changed while this save ran.
-pub fn save_github(root: &Path, github: Option<super::github::Settings>) -> Result<Committed> {
+/// Malformed saved settings, settings that changed while this save ran, or a
+/// cancellation.
+pub fn save_github(
+    root: &Path,
+    github: Option<super::github::Settings>,
+    cancel: &super::Cancellation,
+) -> Result<Committed> {
     let mut write = storage::Transaction::new(root)?;
     let before = match std::fs::read(root.join("settings.json")) {
         Ok(bytes) => Some(bytes),
@@ -248,8 +256,10 @@ pub fn save_github(root: &Path, github: Option<super::github::Settings>) -> Resu
         |bytes| serde_json::from_slice::<Settings>(bytes).map_err(|_| Error::Json),
     )?;
     settings.github = github;
+    cancel.check()?;
     // Committed only over the bytes read above, so a concurrent writer is never overwritten.
     write.commit(&settings, before.as_deref())?;
+    super::github::remember(settings.github.is_some());
     // The bytes this save committed, never a later read of a file another writer may change.
     let after = storage::encode(&settings)?;
     Ok(Committed { before, after })

@@ -108,6 +108,9 @@ the access requests of agents.
 
 ### 6.3 G03 — Sign in a new cloud with one click
 
+> **CAUTION:** THE NEXT STEP RENTS COMPUTE FOR `gh-ask`. It costs money until the
+> cloud is deleted in the cleanup.
+
 1. Start a new cloud `gh-ask` from the checkout of `<repo-a>`.
 
    Result: The card shows the deployment steps.
@@ -154,6 +157,9 @@ the access requests of agents.
    Result: The card shows **Ready** and **GitHub: signed in as <login> · 1 repository**.
 
 ### 6.5 G05 — Skip the sign-in
+
+> **CAUTION:** THE NEXT STEP RENTS COMPUTE FOR `gh-skip`. It costs money until the
+> cloud is deleted in the cleanup.
 
 1. Start a new cloud `gh-skip` from the same checkout.
 
@@ -220,6 +226,9 @@ the access requests of agents.
    account, as for a person who never used Ask mode. The access of `gh-ask` also
    ends; G06 is complete, so no later task needs it.
 
+> **CAUTION:** THE NEXT STEP RENTS COMPUTE FOR `gh-auto`. It costs money until the
+> cloud is deleted in the cleanup.
+
 3. Start a new cloud `gh-auto` from the same checkout.
 
    Result: After the worker is ready, the browser shows GitHub's page to authorize
@@ -230,6 +239,9 @@ the access requests of agents.
    Result: The browser shows **Horizon received GitHub's answer and is finishing
    the sign-in. You can close this page.** The `gh-auto` card shows **Ready** and
    **GitHub: signed in as <login> · 1 repository**. It showed no code.
+
+> **CAUTION:** THE NEXT STEP RENTS COMPUTE FOR `gh-auto-2`. It costs money until
+> the cloud is deleted in the cleanup.
 
 5. Start a new cloud `gh-auto-2` from the same checkout.
 
@@ -262,6 +274,9 @@ the access requests of agents.
 
 ## 8. Cleanup
 
+> **CAUTION:** THE NEXT STEP DELETES FOUR CLOUDS AND THEIR WORKSPACES. Delete only
+> the clouds of this procedure.
+
 1. Delete the clouds `gh-ask`, `gh-skip`, `gh-auto` and `gh-auto-2` with **Delete cloud…**.
 
    Result: The board does not show them. The provider shows no worker for them.
@@ -270,9 +285,15 @@ the access requests of agents.
 
    Result: GitHub shows **Delete GitHub App**.
 
+> **CAUTION:** THE NEXT STEP DELETES THE GITHUB APP AND ENDS EVERY TOKEN IT GAVE
+> OUT. Delete only the test app of this procedure.
+
 3. Click **Delete GitHub App**, type the name and confirm.
 
    Result: GitHub deletes the app. All its tokens stop working.
+
+> **CAUTION:** THE NEXT STEP DELETES A BRANCH. Delete only `gh-ask-check` in the
+> test repository.
 
 4. Delete the branch `gh-ask-check` from `<repo-a>` if it exists.
 

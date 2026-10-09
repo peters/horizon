@@ -31,6 +31,20 @@ const SERVICE_DOWN: &str = "The worker's GitHub service is not running, so Git a
 /// The most grants `horizon-worker-github install` accepts.
 const WORKER_GRANTS: usize = 16;
 
+/// Whether this machine's settings name a GitHub App, as this process last saved or
+/// deployed with them. Every cloud's GitHub outcome comes from a deployment that set it.
+static CONFIGURED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a cloud can sign in to GitHub again: this machine has a GitHub App.
+#[must_use]
+pub fn configured() -> bool {
+    CONFIGURED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(super) fn remember(configured: bool) {
+    CONFIGURED.store(configured, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// How a new cloud gets its GitHub access.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -184,6 +198,7 @@ pub fn configure(
     runner: &Runner<'_>,
     legacy: bool,
 ) -> Result<bool> {
+    remember(settings.is_some());
     let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub: {text}")));
     // A cloud without GitHub access from the app may still have a credential binding
     // from cloud settings; the outcome says so instead of claiming no access.

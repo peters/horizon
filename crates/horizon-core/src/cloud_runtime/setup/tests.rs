@@ -347,7 +347,12 @@ fn an_open_form_keeps_saving_after_connect_github_saved_the_app() {
         client_secret_file: root.path().join("credentials/github-app"),
         mode: crate::cloud_runtime::github::Mode::Ask,
     };
-    let committed = save_github(root.path(), Some(app.clone())).unwrap();
+    let committed = save_github(
+        root.path(),
+        Some(app.clone()),
+        &crate::cloud_runtime::Cancellation::default(),
+    )
+    .unwrap();
     form.adopt_github(&committed, Some(app.clone()));
     form.settings.github.as_mut().unwrap().mode = crate::cloud_runtime::github::Mode::Automatic;
     let saved = form
@@ -359,7 +364,7 @@ fn an_open_form_keeps_saving_after_connect_github_saved_the_app() {
     );
     // A form opened before another change still sees that change as made elsewhere.
     let mut stale = Draft::load(root.path()).unwrap();
-    let other = save_github(root.path(), None).unwrap();
+    let other = save_github(root.path(), None, &crate::cloud_runtime::Cancellation::default()).unwrap();
     std::fs::write(root.path().join("settings.json"), b"{}").unwrap();
     stale.adopt_github(&other, None);
     assert!(stale.save().is_err());
@@ -375,7 +380,19 @@ fn connect_github_saves_before_any_provider_is_set_up() {
         client_secret_file: root.path().join("credentials/github-app-42"),
         mode: crate::cloud_runtime::github::Mode::Ask,
     };
-    save_github(root.path(), Some(app.clone())).expect("no RunPod key is needed");
+    let cancelled = crate::cloud_runtime::Cancellation::default();
+    cancelled.cancel();
+    assert!(save_github(root.path(), Some(app.clone()), &cancelled).is_err());
+    assert!(
+        !root.path().join("settings.json").exists(),
+        "a cancelled flow saves nothing"
+    );
+    save_github(
+        root.path(),
+        Some(app.clone()),
+        &crate::cloud_runtime::Cancellation::default(),
+    )
+    .expect("no RunPod key is needed");
     let draft = Draft::load(root.path()).unwrap();
     assert_eq!(draft.settings.github, Some(app));
     assert!(!draft.settings.runpod_configured());
