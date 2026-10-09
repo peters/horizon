@@ -10,6 +10,7 @@ use std::{
 };
 
 mod manifest;
+mod asks;
 
 fn settings(mode: Mode, secret: &std::path::Path) -> Settings {
     Settings {
@@ -419,48 +420,6 @@ fn an_approved_device_sign_in_returns_its_chain() {
         .unwrap_or_else(|_| panic!("the approved sign-in returns a chain"));
     task.join().unwrap();
     assert_eq!(chain.refresh_token.expose(), "ghr_synthetic");
-}
-
-#[test]
-fn requests_keep_only_well_formed_entries() {
-    let listed = requests::parse_list(
-        "{\"requests\":[\
-         {\"id\":\"r1\",\"repository\":\"acme/design-system\",\"access\":\"push\",\"reason\":\"Shared fix\",\"session\":\"panel-2\",\"agent\":\"claude\",\"created_at\":1},\
-         {\"id\":\"r 2\",\"repository\":\"acme/x\",\"access\":\"push\",\"reason\":\"x\"},\
-         {\"id\":\"r3\",\"repository\":\"acme/x\",\"access\":\"admin\",\"reason\":\"x\"},\
-         {\"id\":\"r4\",\"repository\":\"acme/x\",\"access\":\"read\",\"reason\":\"line\\nbreak\"}]}",
-    );
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].repository, "acme/design-system");
-    assert_eq!(listed[0].agent, "claude");
-    assert!(requests::parse_list("not json").is_empty());
-}
-
-#[test]
-fn a_refused_decision_is_explained() {
-    assert_eq!(
-        requests::parse_decision(
-            "{\"ok\":true,\"id\":\"r1\",\"decision\":\"allow-cloud\",\"repository\":\"acme/x\",\"access\":\"push\",\"status\":\"allowed\"}"
-        ),
-        None
-    );
-    assert!(
-        requests::parse_decision(
-            "{\"ok\":false,\"id\":\"r1\",\"error\":\"not_installed\",\"message\":\"The GitHub App is not installed\"}"
-        )
-        .unwrap()
-        .contains("not installed")
-    );
-    assert!(
-        requests::parse_decision("{\"ok\":false,\"error\":\"token_expired\"}")
-            .unwrap()
-            .contains("Connect GitHub again")
-    );
-    assert_eq!(
-        requests::parse_decision("{\"ok\":false,\"error\":\"Weird Text\"}").unwrap(),
-        "The worker refused the decision."
-    );
-    assert!(requests::parse_decision("").is_some());
 }
 
 #[test]

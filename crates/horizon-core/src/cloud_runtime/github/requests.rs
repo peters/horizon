@@ -81,13 +81,21 @@ pub(super) fn parse_list(output: &str) -> Vec<Request> {
                 && horizon_cloud::github::valid_repository(&request.repository)
                 && matches!(request.access.as_str(), "push" | "read")
                 && request.reason.len() <= 300
-                && !request.reason.chars().any(char::is_control)
+                && !request.reason.chars().any(misleading)
                 && [&request.session, &request.agent]
                     .iter()
-                    .all(|value| value.len() <= 100 && !value.chars().any(char::is_control))
+                    .all(|value| value.len() <= 100 && !value.chars().any(misleading))
         })
         .take(32)
         .collect()
+}
+
+/// A character an agent could use to make the approval card read differently from what
+/// it says: a control character or a bidirectional formatting character.
+fn misleading(character: char) -> bool {
+    character.is_control()
+        || matches!(character,
+            '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
 fn valid_id(id: &str) -> bool {
