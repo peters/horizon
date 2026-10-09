@@ -359,6 +359,18 @@ class VolumeCopyTests(ServiceTestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             service.reconcile(self.store, configure=failing, static=restored.append)
 
+    def test_the_socket_opens_only_after_the_repositories_are_reconciled(self):
+        socket_path = self.root / 'reconciled.sock'
+        seen = []
+        prepare = lambda: seen.append(socket_path.exists())  # noqa: E731
+        isolated = self.root / 'isolated'
+        isolated.touch()
+        with mock.patch.object(common, 'AGENT_ISOLATION', isolated):
+            server = service.start(self.store, socket_path, sleep=lambda _: None, prepare=prepare)
+        self.addCleanup(server.close)
+        self.assertEqual(seen, [False], 'reconciled once, before the socket existed')
+        self.assertTrue(socket_path.exists())
+
     def test_a_revocation_that_only_memory_holds_still_ends_serving(self):
         self.install()
         self.store.pending = dict(self.stored(), serial=self.stored()['serial'] + 1, state='revoked',

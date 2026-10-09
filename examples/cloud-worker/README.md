@@ -789,7 +789,8 @@ horizon-worker-github install < chain.json
   stays. Without a previous chain, the repositories of the static token file are
   configured again (`horizon-worker-git-auth restore`). Each start of the service
   configures the repositories for the stored chain, or for the static token file
-  without one, so an install that stopped between the two steps is undone. The
+  without one, before it opens its socket, so an install that stopped between the
+  two steps is undone and the supervisor publishes a service that answers. The
   install then removes the static token file, so one source of tokens
   remains.
 - The output is the same JSON as `status`.

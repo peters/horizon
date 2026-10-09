@@ -90,20 +90,24 @@ class CapabilitiesTests(unittest.TestCase):
         binaries = self.root / 'bin'
         binaries.mkdir()
         (binaries / 'horizon-worker-github').touch()
-        # A common helper elsewhere on PATH does not count: the service loads it beside itself.
+        # Helpers elsewhere on PATH do not count: the service loads them beside itself.
         elsewhere = self.root / 'elsewhere'
         elsewhere.mkdir()
-        (elsewhere / 'horizon-worker-github-common').touch()
+        helpers = ('horizon-worker-github-common', 'horizon-worker-git-auth')
+        for helper in helpers:
+            (elsewhere / helper).touch()
         for reported, missing, args, beside, expected in [
-                (declared, (), ('--git-auth',), True, True),
-                ({'horizon-worker-supervise': b''}, (), ('--git-auth',), True, False),
-                (declared, ('horizon-worker-github',), ('--git-auth',), True, False),
-                (declared, (), ('--git-auth',), False, False),
+                (declared, (), ('--git-auth',), helpers, True),
+                ({'horizon-worker-supervise': b''}, (), ('--git-auth',), helpers, False),
+                (declared, ('horizon-worker-github',), ('--git-auth',), helpers, False),
+                (declared, (), ('--git-auth',), ('horizon-worker-git-auth',), False),
+                (declared, (), ('--git-auth',), ('horizon-worker-github-common',), False),
                 # Without the agent isolation launcher the service would refuse to run.
-                (declared, ('horizon-worker-tailnet',), ('--git-auth',), True, False),
-                (declared, (), (), True, False)]:
-            common = binaries / 'horizon-worker-github-common'
-            common.touch() if beside else common.unlink(missing_ok=True)
+                (declared, ('horizon-worker-tailnet',), ('--git-auth',), helpers, False),
+                (declared, (), (), helpers, False)]:
+            for helper in helpers:
+                path = binaries / helper
+                path.touch() if helper in beside else path.unlink(missing_ok=True)
             with mock.patch('os.readlink', return_value='/usr/local/bin/horizon-worker-git-auth'):
                 status, output, _ = self.run_check(*args, missing=missing, reported=reported, bin_dir=str(binaries))
             self.assertEqual(status, 0, output)
