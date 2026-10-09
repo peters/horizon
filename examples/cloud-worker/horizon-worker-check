@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Validate real requested runtimes before allocation and on worker startup."""
 import argparse
+import atexit
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+import tempfile
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--capabilities-json')
@@ -65,8 +67,24 @@ def recorded_versions():
         raise ValueError('Invalid recorded agent versions')
     return value
 
+PROBE_HOME = None
+
+def probe_environment():
+    # Agent probes run with a throwaway home. An agent CLI writes its state directory even for
+    # --version (Codex creates ~/.codex), and this check runs as root while the workspace
+    # home belongs to the isolated agent, which then cannot read what root left there.
+    global PROBE_HOME
+    if PROBE_HOME is None:
+        PROBE_HOME = tempfile.mkdtemp(prefix='horizon-worker-check-')
+        atexit.register(shutil.rmtree, PROBE_HOME, True)
+    environment = {name: value for name, value in os.environ.items()
+                   if name not in {'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME',
+                                   'XDG_DATA_HOME', 'XDG_STATE_HOME'}}
+    environment['HOME'] = PROBE_HOME
+    return environment
+
 def require_version(agent, version):
-    output = subprocess.run([agent, '--version'], check=True, timeout=20,
+    output = subprocess.run([agent, '--version'], check=True, timeout=20, env=probe_environment(),
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
     reported = output.decode('utf-8', 'replace')
     # The version must stand alone: 1.0.4 does not match 1.0.41, 1.0.4-beta or the
@@ -81,6 +99,10 @@ def require(binary):
 
 def probe(command):
     subprocess.run(command, check=True, timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def probe_agent(agent):
+    subprocess.run([agent, '--version'], check=True, timeout=20, env=probe_environment(),
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def container_started():
     # Milliseconds since the epoch when PID 1 started, so Horizon can separate the
@@ -197,7 +219,7 @@ try:
         if agent in versions:
             require_version(agent, versions[agent])
         else:
-            probe([agent, '--version'])
+            probe_agent(agent)
     if selected['browsers'] or 'browserstack' in selected:
         require('horizon-browser')
     if 'browserstack' in selected:
@@ -224,6 +246,21 @@ try:
             raise ValueError('Worker Git wrapper is missing')
         # Contract 2: per-repository grants for the primary and its same-worker siblings.
         print('horizon-git-auth-contract=1\nhorizon-git-auth-contract=2')
+        # A refreshing GitHub App token chain held by a root service. The service alone is not
+        # enough: the supervisor must declare that it starts it, and the image must isolate
+        # agents (the launcher's identity is checked below), because both refuse to run without
+        # agent isolation.
+        # The service imports its common and agents helpers, and that the Git helper, from the
+        # service's own directory before it parses any operation.
+        service = shutil.which('horizon-worker-github')
+        beside = Path(service).resolve() if service else None
+        # The Git helper is also run from there, so it must be executable.
+        if (beside and all(beside.with_name(helper).is_file()
+                           for helper in ('horizon-worker-github-common', 'horizon-worker-github-agents'))
+                and os.access(beside.with_name('horizon-worker-git-auth'), os.X_OK)
+                and shutil.which('horizon-worker-tailnet') and helper_declares(
+                'horizon-worker-supervise', '--github-chain-contract', 'horizon-github-chain-contract=1')):
+            print('horizon-github-chain-contract=1')
     if args.ready:
         active = capabilities(json.loads(runtime.read_text()))
         if active != selected:

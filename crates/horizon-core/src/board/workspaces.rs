@@ -331,18 +331,19 @@ impl Board {
         // Remove workspace if it has no panels left.
         if let Some(ws_id) = ws_id {
             let is_empty = self.workspaces.iter().any(|ws| ws.id == ws_id && ws.panels.is_empty());
-            if is_empty {
-                if !self.retained_empty_workspaces.contains(&ws_id)
-                    && self
-                        .workspace(ws_id)
-                        .is_none_or(|workspace| workspace.remote_workspace.is_none())
-                {
-                    self.workspaces.retain(|ws| ws.id != ws_id);
-                    if self.active_workspace == Some(ws_id) {
-                        self.active_workspace = self.workspaces.first().map(|ws| ws.id);
-                    }
+            if is_empty
+                && !self.retained_empty_workspaces.contains(&ws_id)
+                && self
+                    .workspace(ws_id)
+                    .is_none_or(|workspace| workspace.remote_workspace.is_none())
+            {
+                self.workspaces.retain(|ws| ws.id != ws_id);
+                if self.active_workspace == Some(ws_id) {
+                    self.active_workspace = self.workspaces.first().map(|ws| ws.id);
                 }
             } else {
+                // A workspace kept without panels can still hold clouds in its preset,
+                // and they move up into the slots the closed panels leave.
                 self.reflow_workspace_layout(ws_id);
             }
         }

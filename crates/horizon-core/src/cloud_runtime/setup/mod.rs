@@ -40,6 +40,12 @@ pub struct Draft {
 }
 
 impl Draft {
+    /// The cloud root these settings belong to.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     #[must_use]
     pub fn has_saved_settings(&self) -> bool {
         self.original.is_some()
@@ -190,6 +196,7 @@ impl Draft {
             });
         }
         write.commit(&self.settings, self.original.as_deref())?;
+        super::github::remember(self.settings.github.is_some());
         Ok(self.settings)
     }
 }
@@ -216,6 +223,58 @@ pub fn save_provider_key(root: &Path, provider: Provider, key: &str) -> Result<S
         }
     }
     draft.save()
+}
+
+/// A settings file this machine wrote: its bytes before and after the write.
+pub struct Committed {
+    before: Option<Vec<u8>>,
+    after: Vec<u8>,
+}
+
+/// Saves the GitHub App of Connect GitHub, or forgets it, and keeps every other
+/// setting as it is. Unlike the form's save it needs no provider or agent credential,
+/// since Connect GitHub can come first. Run off the UI thread, as
+/// [`save_provider_key`]. An open form adopts the result with [`Draft::adopt_github`].
+/// `cancel` is checked under the settings lock, right before the commit, so a cancelled
+/// Connect flow saves nothing.
+/// # Errors
+/// Malformed saved settings, settings that changed while this save ran, or a
+/// cancellation.
+pub fn save_github(
+    root: &Path,
+    github: Option<super::github::Settings>,
+    cancel: &super::Cancellation,
+) -> Result<Committed> {
+    let mut write = storage::Transaction::new(root)?;
+    let before = match std::fs::read(root.join("settings.json")) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mut settings = before.as_ref().map_or_else(
+        || Ok(defaults(root)),
+        |bytes| serde_json::from_slice::<Settings>(bytes).map_err(|_| Error::Json),
+    )?;
+    settings.github = github;
+    cancel.check()?;
+    // Committed only over the bytes read above, so a concurrent writer is never overwritten.
+    write.commit(&settings, before.as_deref())?;
+    super::github::remember(settings.github.is_some());
+    // The bytes this save committed, never a later read of a file another writer may change.
+    let after = storage::encode(&settings)?;
+    Ok(Committed { before, after })
+}
+
+impl Draft {
+    /// Takes the GitHub App that [`save_github`] saved. When the form was opened from the
+    /// file that the save replaced, the form now counts the saved file as its starting
+    /// point, so its own Save does not see the save as a change made elsewhere.
+    pub fn adopt_github(&mut self, committed: &Committed, github: Option<super::github::Settings>) {
+        if self.original == committed.before {
+            self.original = Some(committed.after.clone());
+        }
+        self.settings.github = github;
+    }
 }
 
 fn authentication(binding: Option<&PathBuf>) -> Authentication {
@@ -261,6 +320,7 @@ fn defaults(root: &Path) -> Settings {
         git_credentials: Vec::new(),
         browserstack_credentials: Vec::new(),
         hetzner: None,
+        github: None,
         placement: None,
     }
 }

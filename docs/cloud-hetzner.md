@@ -233,7 +233,9 @@ with storage and IPv4 included. All providers is the default browsing scope;
 provider buttons narrow it. In stock only starts checked; below-minimum workers
 start hidden and can be inspected but cannot be selected. Hetzner's availability
 flag is advisory. **In stock only** does not hide an unlisted type. Its row shows
-**Unlisted · advisory**, and the three picks can use it.
+**Unlisted · advisory**, and the three picks can use it. When the settings exclude
+server types or locations from the Hetzner catalog, the dialog shows a note
+with those two counts. The list does not show the excluded types or locations.
 
 The estimate uses USD for comparisons and retains euro prices for billing.
 Reference rates come from the [ECB](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html),

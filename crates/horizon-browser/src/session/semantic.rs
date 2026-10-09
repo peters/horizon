@@ -1,5 +1,7 @@
 //! Semantic DOM actions executed on the Chromium driver's bound page.
 
+mod frames;
+
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -8,8 +10,8 @@ use crate::evaluation::EvaluationDeadline;
 use crate::frames::FrameSlot;
 use crate::input::BrowserInputCdpExt;
 use crate::semantic::{
-    bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
-    target_rect_expression, wait_scan_expression,
+    bounded_control_value, check_script_error, parse_target_rect, scroll_expression, target_rect_expression,
+    wait_scan_expression,
 };
 use crate::semantic_files::{
     ATTACHED_FILES_FUNCTION, FILE_INPUT_PROBE_FUNCTION, check_attachment_request, element_handle_expression,
@@ -142,7 +144,7 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         max_nodes: u32,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.evaluate_json(link, event_tx, frame_slot, &scan_expression(None, max_nodes))?;
+        let value = self.frame_scan(link, event_tx, frame_slot, None, max_nodes)?;
         let (generation, revision, nodes) = self.semantic.register_nodes(value)?;
         Ok(BrowserControlValue::Snapshot {
             snapshot: BrowserSnapshot {
@@ -186,13 +188,14 @@ impl DriverState {
         ),
         BrowserControlFailure,
     > {
-        let value = self.evaluate_json_within(
+        let mut value = self.evaluate_json_within(
             link,
             event_tx,
             frame_slot,
             &wait_scan_expression(selector, max_results),
             timeout,
         )?;
+        crate::semantic::clear_scan_frames(&mut value)?;
         let peeked = self.semantic.peek_nodes(&value)?;
         Ok((peeked.generation, peeked.nodes, peeked.summary, value))
     }
@@ -215,13 +218,7 @@ impl DriverState {
         max_results: u32,
         timeout: std::time::Duration,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.evaluate_json_within(
-            link,
-            event_tx,
-            frame_slot,
-            &scan_expression(Some(selector), max_results),
-            timeout,
-        )?;
+        let value = self.frame_scan_within(link, event_tx, frame_slot, Some(selector), max_results, timeout)?;
         let (generation, revision, nodes) = self.semantic.register_nodes(value)?;
         Ok(BrowserControlValue::Nodes {
             generation,
@@ -238,7 +235,11 @@ impl DriverState {
         target: &crate::BrowserTarget,
         count: u32,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let selector = self.semantic.resolve(target)?;
+        let resolved = self.semantic.resolve_target(target)?;
+        if let Some(frame) = resolved.frame {
+            return self.frame_click(link, event_tx, frame_slot, &frame, &resolved.selector, count);
+        }
+        let selector = resolved.selector;
         let value = self.evaluate_json(link, event_tx, frame_slot, &target_rect_expression(&selector, false))?;
         let (x, y) = parse_target_rect(&value)?;
         self.capture_teach_fingerprint(link, event_tx, frame_slot, Some((x, y)))?;
@@ -258,7 +259,11 @@ impl DriverState {
         target: &crate::BrowserTarget,
         value: &str,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let selector = self.semantic.resolve(target)?;
+        let resolved = self.semantic.resolve_target(target)?;
+        if let Some(frame) = resolved.frame {
+            return self.frame_fill(link, event_tx, frame_slot, &frame, &resolved.selector, value);
+        }
+        let selector = resolved.selector;
         let result = self.evaluate_json(link, event_tx, frame_slot, &target_rect_expression(&selector, true))?;
         let _ = parse_target_rect(&result)?;
         self.capture_teach_fingerprint(link, event_tx, frame_slot, None)?;

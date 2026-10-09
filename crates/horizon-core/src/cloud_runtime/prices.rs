@@ -30,21 +30,55 @@ pub fn price_list(settings: &Settings, cancel: &Cancellation) -> Result<(PriceLi
     ))
 }
 
+/// Catalog entries excluded by this machine's location settings.
+/// Fallback server-type preferences do not exclude catalog types.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HetznerExclusions {
+    /// Always zero: fallback preferences do not restrict the catalog.
+    pub server_types: usize,
+    pub locations: usize,
+}
+
+/// A Hetzner catalog narrowed to this machine's settings, with what those settings left out.
+pub struct HetznerCatalogReport {
+    pub catalog: HetznerCatalog,
+    pub exclusions: HetznerExclusions,
+}
+
 /// Hetzner's catalog for the locations this machine allows, or `None` without a Hetzner
 /// binding. Every server type stays listed: Hetzner's availability flag is advisory.
 /// # Errors
 /// Fails without a readable Hetzner token and on provider errors.
 pub fn hetzner_catalog(settings: &Settings, cancel: &Cancellation) -> Result<Option<HetznerCatalog>> {
+    Ok(hetzner_catalog_report(settings, cancel)?.map(|report| report.catalog))
+}
+
+/// As [`hetzner_catalog`], also counting the locations the settings leave out.
+/// # Errors
+/// Fails without a readable Hetzner token and on provider errors.
+pub fn hetzner_catalog_report(settings: &Settings, cancel: &Cancellation) -> Result<Option<HetznerCatalogReport>> {
     let Some(hetzner) = &settings.hetzner else {
         return Ok(None);
     };
     let mut catalog = Hetzner::new(hetzner.credential()?).catalog(cancel)?;
-    restrict_locations(&mut catalog, &hetzner.locations);
-    Ok(Some(catalog))
+    let exclusions = restrict_locations(&mut catalog, &hetzner.locations);
+    Ok(Some(HetznerCatalogReport { catalog, exclusions }))
 }
 
-fn restrict_locations(catalog: &mut HetznerCatalog, locations: &[String]) {
+/// Drops offers outside permitted locations and counts the distinct locations removed.
+fn restrict_locations(catalog: &mut HetznerCatalog, locations: &[String]) -> HetznerExclusions {
+    let excluded_locations = catalog
+        .offers
+        .iter()
+        .filter(|offer| !locations.contains(&offer.location))
+        .map(|offer| offer.location.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
     catalog.offers.retain(|offer| locations.contains(&offer.location));
+    HetznerExclusions {
+        server_types: 0,
+        locations: excluded_locations,
+    }
 }
 
 /// Live stock of the CPU size `profile` asks for.
@@ -132,5 +166,53 @@ mod tests {
         });
         let with: Settings = serde_json::from_value(with).unwrap();
         assert!(hetzner_catalog(&with, &cancel).is_err());
+    }
+
+    #[test]
+    fn settings_leave_out_distinct_locations_without_restricting_server_types() {
+        let mut catalog = HetznerCatalog {
+            offers: vec![
+                offer("cx23", "hel1"),
+                offer("cx23", "fsn1"),
+                offer("cx33", "hel1"),
+                offer("cpx42", "nbg1"),
+                offer("cpx42", "hel1"),
+            ],
+            volume_gb_month_eur: 0.05,
+            ipv4_month_eur: std::collections::BTreeMap::new(),
+            ipv4_hour_eur: std::collections::BTreeMap::new(),
+            regions: std::collections::BTreeMap::new(),
+        };
+        let exclusions = restrict_locations(&mut catalog, &["hel1".into()]);
+        assert_eq!(
+            exclusions,
+            HetznerExclusions {
+                server_types: 0,
+                locations: 2
+            }
+        );
+        assert_eq!(
+            catalog
+                .offers
+                .iter()
+                .map(|offer| (offer.server_type.as_str(), offer.location.as_str()))
+                .collect::<Vec<_>>(),
+            [("cx23", "hel1"), ("cx33", "hel1"), ("cpx42", "hel1")]
+        );
+    }
+
+    fn offer(server_type: &str, location: &str) -> horizon_cloud::hetzner::catalog::Offer {
+        horizon_cloud::hetzner::catalog::Offer {
+            server_type: server_type.into(),
+            location: location.into(),
+            cores: 2,
+            memory_gb: 4.0,
+            disk_gb: 40,
+            dedicated: false,
+            hourly_eur: 0.01,
+            monthly_eur: 4.0,
+            available: true,
+            recommended: false,
+        }
     }
 }

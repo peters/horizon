@@ -99,6 +99,26 @@ slot swaps them, and the order is kept across restarts. A collapsed card and a
 workspace without a preset (Default) leave the card where it is. No MCP tool
 moves or resizes a card; use the person's canvas for that.
 
+## GitHub access
+
+With Connect GitHub (Horizon **Cloud settings › GitHub**), each cloud's worker holds
+its own GitHub access, as the person, and renews it itself. The person connects
+GitHub and chooses its repositories; agents cannot set it up.
+
+- Git and `gh` work without a token in the environment. The worker's root service
+  answers for the cloud's repositories and its same-worker siblings. Agents never
+  see the refresh token.
+- On workers whose image provides it, `horizon-worker-github mcp` offers
+  `github_access` (`repository`, `access` `push` or `read`, `reason`). It asks the
+  person for access to one more repository. The person allows it for the cloud,
+  which gives every session of the cloud access to it, or denies it. The tool waits up to ten
+  minutes, then returns that the request still waits; ask again later with the same
+  repository instead of a new request.
+- Ask only for a repository the task needs, with a short, true reason. A
+  repository where the person's GitHub App is not installed cannot be allowed.
+- When the cloud has no GitHub access, do not ask the person for a token. Say that
+  GitHub is not connected for this cloud.
+
 ## Development-only registry
 
 The source example `cloud_deploy registry-mcp <registry-path>` exposes

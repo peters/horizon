@@ -25,10 +25,26 @@ impl TerminalHarness {
             WorkspaceId(7),
             PanelOptions {
                 kind: PanelKind::Command,
-                command: Some("/bin/sh".into()),
+                command: Some("/bin/bash".into()),
                 args: vec![
                     "-c".into(),
-                    r"stty -echo; printf '\033[?1003h\033[?1006hREADY'; i=0; while IFS= read -r line; do i=$((i+1)); printf '\rUPDATED-%s' $i; done".into(),
+                    // Canonical reads wait for a newline, so mouse reports sit in the
+                    // slave input queue. A full queue can block the PTY writer, and the
+                    // event-loop join then keeps the test process alive. Non-canonical
+                    // reads drain every byte and exit on EOF.
+                    r#"stty -echo -icanon min 1 time 0 || exit 1
+printf '\033[?1003h\033[?1006hREADY'
+i=0
+while IFS= read -r -n 1 byte; do
+  # bash read drops the delimiter, so a newline arrives as an empty byte.
+  if [ -z "$byte" ]; then
+    i=$((i + 1))
+    printf '\rUPDATED-%s' "$i"
+  fi
+done
+exit 0
+"#
+                    .into(),
                 ],
                 cwd: Some(state.path().to_path_buf()),
                 transcript_root: Some(state.path().to_path_buf()),
@@ -47,13 +63,7 @@ impl TerminalHarness {
             _state: state,
         };
         harness.wait_for_text("READY");
-        assert!(
-            harness
-                .panel
-                .terminal()
-                .expect("terminal")
-                .with_renderable_content(|content| { content.mode.intersects(TermMode::MOUSE_MODE) })
-        );
+        harness.wait_for_mouse_mode();
         harness
     }
 
@@ -61,17 +71,33 @@ impl TerminalHarness {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             self.panel.process_output();
-            if self.panel.had_recent_output()
-                && self
-                    .panel
-                    .terminal()
-                    .expect("terminal")
-                    .last_lines_text(20)
-                    .contains(text)
-            {
+            let seen = self
+                .panel
+                .terminal()
+                .expect("terminal")
+                .try_last_lines_text(20)
+                .is_some_and(|lines| lines.contains(text));
+            if seen {
                 return;
             }
             assert!(Instant::now() < deadline, "terminal did not produce {text}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn wait_for_mouse_mode(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            self.panel.process_output();
+            let enabled = self
+                .panel
+                .terminal()
+                .expect("terminal")
+                .try_with_renderable_content(|content| content.mode.intersects(TermMode::MOUSE_MODE));
+            if enabled == Some(true) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "terminal did not enable mouse reporting");
             std::thread::sleep(Duration::from_millis(10));
         }
     }

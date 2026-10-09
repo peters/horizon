@@ -28,6 +28,10 @@ class GitAuthenticationTests(unittest.TestCase):
         self.credential = mock.patch.object(auth, 'CREDENTIAL', self.path / 'credentials/github.json')
         self.credential.start()
         self.addCleanup(self.credential.stop)
+        # No chain service answers, so the helper uses its private file.
+        service = mock.patch.object(auth, 'SERVICE_SOCKET', self.path / 'no-service.sock')
+        service.start()
+        self.addCleanup(service.stop)
 
     def test_git_receives_token_only_for_exact_https_repository(self):
         for path in ('example/project', 'example/project.git', 'Example/Project.git'):
@@ -66,6 +70,22 @@ class GitAuthenticationTests(unittest.TestCase):
         self.assertEqual(env['GH_TOKEN'], self.value['token'])
         self.assertEqual(env['GH_REPO'], 'example/project')
         self.assertEqual(env['GH_HOST'], 'github.com')
+
+    def test_a_service_token_does_not_outlive_the_service_in_a_nested_gh(self):
+        # The service stopped answering and its chain replaced the static file: a nested gh must
+        # drop the token an outer wrapped gh injected, but keep a token the caller set.
+        for inherited, expected in [({'GH_TOKEN': 'ghu_from_service', auth.INJECTED: '1'}, None),
+                                    ({'GH_TOKEN': 'own-token'}, 'own-token'),
+                                    ({'GH_TOKEN': 'ghu_from_service', auth.INJECTED: '1', 'GITHUB_TOKEN': 'own-token'},
+                                     None)]:
+            with mock.patch.dict(auth.os.environ, dict(inherited, GH_REPO='example/project'), clear=True), \
+                    mock.patch.object(auth.sys, 'argv', ['gh', 'pr', 'list']), \
+                    mock.patch.object(auth.os, 'execve') as execute:
+                auth.main()
+            env = execute.call_args.args[2]
+            self.assertEqual(env.get('GH_TOKEN'), expected, inherited)
+            self.assertNotIn(auth.INJECTED, env)
+            self.assertEqual(env.get('GITHUB_TOKEN'), inherited.get('GITHUB_TOKEN'), 'the caller keeps its own token')
 
     def test_malformed_and_non_private_bindings_are_refused_without_secret_diagnostics(self):
         for key, value in [('repository', '../repo'), ('author_name', 'name\ninjection'),
@@ -126,6 +146,7 @@ class GitGrantTests(unittest.TestCase):
                         GIT_TERMINAL_PROMPT='0')
         (self.path / 'home').mkdir()
         for name, value in [('CREDENTIAL', self.path / 'credentials/github.json'),
+                            ('SERVICE_SOCKET', self.path / 'no-service.sock'),
                             ('GIT_DIR', self.path / 'repository.git'),
                             ('SIBLINGS', self.path / 'siblings'), ('HOME', str(self.path / 'home'))]:
             patcher = mock.patch.object(auth, name, value)

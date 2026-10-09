@@ -35,6 +35,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 |---|---|---|
 | board | The Horizon canvas that holds workspaces and panels. | canvas (in procedures) |
 | workspace | A named group of panels on the board. | — |
+| menu search field | The search control at the top of a menu. The **Move to Workspace** menu uses one. | search bar, default text frame |
 | panel | One terminal, agent, browser, device or cloud area on the board. | window, pane, tile |
 | session | The saved state of a board. An ephemeral session is not saved. | profile |
 | cloud | A Horizon cloud panel and its remote worker, storage and sessions. | cloud workspace, cloud panel instance |
@@ -65,6 +66,12 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | image-only profile | A profile without a `build` section. Horizon uses its image and builds nothing. | — |
 | base image | The public CPU worker image `ghcr.io/peters/horizon-worker-base`. Horizon pins it by digest. | default image, stock image |
 | quick start | The **New cloud** choice that runs a repository without `.horizon/cloud.yml` on the base image, with the built-in profile `quick-start`. | easy start, default cloud |
+| token chain | A GitHub App user access token, its refresh token and their expiry times. Each refresh gives a new token chain and cancels the old one. It is a secret. | token pair |
+| chain service | The worker service `horizon-worker-github serve`. It runs as root, refreshes the token chain and gives access tokens to agents. | GitHub daemon |
+| GitHub socket | The file `/run/horizon-worker/github.sock` on a worker. Agents ask the chain service through it. | agent socket |
+| fake GitHub | A small HTTP server on `127.0.0.1` that answers refresh requests with synthetic tokens. | mock GitHub |
+| access request | A request of an agent session for GitHub access to one repository, made with the `github_access` MCP tool. The person allows it or denies it in Horizon. | permission request |
+| cloud grant | Access that **Allow for this cloud** gives to every session of a cloud. The worker stores it with the token chain. | permanent grant |
 
 ## Install and build
 
@@ -113,6 +120,19 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | RFB | The read-only viewer transport between the native host and Device panel. |
 | NDJSON | One JSON object per line in the progress stream. |
 
+## Browser frame tests
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| Chromium | The local Chromium browser backend. | — |
+| Firefox | The local Firefox browser backend. | — |
+| Safari | The local Safari browser backend. | — |
+| geckodriver | The driver that starts and controls the local Firefox session. | — |
+| child frame | A document embedded in another browser document. | — |
+| cross-origin frame | A child frame whose origin differs from its parent document. | — |
+| HTTP fixture | A task-owned loopback server and synthetic pages for a browser test. | — |
+| document reference | A short-lived browser node reference tied to one document. | — |
+
 ## Technical verbs
 
 | Verb | Meaning |
@@ -126,6 +146,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | bind | Make a host path available at a path inside the fixture. |
 | pin | Record a host key, a commit or an image digest as the only accepted value. A client then refuses a different value. |
 | revoke | Remove the access that a credential gives at the provider or at the worker. |
+| refresh | Exchange a refresh token for a new token chain at GitHub. |
 | forward | Connect a port on the worker to a device through the Local Network Bridge. |
 
 ## Video capture

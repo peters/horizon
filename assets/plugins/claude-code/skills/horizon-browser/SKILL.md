@@ -69,11 +69,34 @@ one affects the others. Navigation and input are independent; forms, history,
 and live JavaScript state are not copied. This does not authorize helper panels
 as a workaround for iframe, popup, dialog, or consent interactions.
 
-Snapshots expose iframe boundaries as `iframe` nodes. If the current top-level
-semantic tools cannot reach the embedded frame content, use `browser_handoff`
-on the original panel only when its capabilities include `handoff`. Remote
-sessions do not support manual steering and return `unsupported_backend`;
-report that limitation. Do not open a separate panel for the frame.
+Snapshots expose iframe boundaries as `iframe` nodes. On local Chromium and
+Firefox, snapshots and queries also return child-frame nodes, including nodes
+inside cross-origin frames. Use their returned refs with `browser_act` `click`
+or `fill`. A frame navigation makes its old refs stale. If a frame changes during
+a scan, the scan returns `stale_reference`; take a new snapshot or query.
+Context events from unrelated pages do not invalidate this scan.
+Chromium ignores destruction of isolated execution contexts during a scan.
+Nested session retirement processes each tracked parent link once and preserves siblings.
+Direct selector actions, `browser_wait`, and `browser_evaluate` target the
+top-level document. Child-frame
+refs do not support `scroll` or `set_files`. Safari and remote sessions scan only
+the top-level document. If these tools cannot reach the embedded frame content,
+use `browser_handoff` on the original panel only when its capabilities include
+`handoff`. Remote sessions do not support manual steering and return
+`unsupported_backend`; report that limitation. Do not open a separate panel for
+the frame.
+
+Local fills support contenteditable elements, textareas, and input types `text`,
+`search`, `tel`, `url`, `email`, `password`, and `number`. Other controls and
+read-only fields return `element_not_editable`; use `set_files` for file inputs.
+If an onfocus handler redirects focus or an inert ancestor prevents focus, the
+fill returns `element_not_focused` before it clears the value or sends an input
+event. If an input handler moves focus during clearing, the fill stops before
+it sends the requested text to the field that receives focus. The check retains
+the original element even if the handler transfers its selector to another field.
+The focus and clearing checks wait for queued microtasks, including nested microtasks.
+If a focus or clearing handler disables the target, fill returns `element_disabled`.
+These checks cover native and ARIA disabled state, including queued changes.
 
 `browser_navigate` returns a typed outcome: by default it waits until the
 document committed and reports `committed_url`, `title` when known, `loading`,

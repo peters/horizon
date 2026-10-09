@@ -56,8 +56,9 @@ that workspace, and that a cast of one cloud card shows only that card.
 
 ### 6.1 BOTH — Workspace with a panel and a cloud
 
-1. Click the Cast icon of the terminal in workspace A. In the picker, select
-   the workspace source and the receiver. Click **Start**.
+1. Click the cast button after **Detach** in the toolbar of workspace A. In
+   the picker, check that the source is workspace A, then select the receiver.
+   Click **Start**.
 
    Result: The receiver shows the terminal and the cloud card, with the card
    header and body. The cast does not stop with `covered`.

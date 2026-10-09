@@ -40,7 +40,8 @@ class CapabilitiesTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def run_check(self, *args, missing=(), environment=None, reported=None, run=None, identities=(10001, 10001)):
+    def run_check(self, *args, missing=(), environment=None, reported=None, run=None, identities=(10001, 10001),
+                  bin_dir='/bin'):
         output = io.StringIO()
         def reply(command, **kwargs):
             if command[:1] == ['/usr/bin/id']:
@@ -53,7 +54,7 @@ class CapabilitiesTests(unittest.TestCase):
                 mock.patch('sys.argv', ['horizon-worker-check', *args]), \
                 mock.patch.dict(os.environ, environment or {}, clear=True), \
                 mock.patch('subprocess.run', side_effect=reply) as commands, \
-                mock.patch('shutil.which', side_effect=lambda name: None if name in missing else '/bin/' + name), \
+                mock.patch('shutil.which', side_effect=lambda name: None if name in missing else f'{bin_dir}/{name}'), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             try:
                 runpy.run_path(str(ROOT / 'horizon-worker-check'), run_name='__main__')
@@ -82,6 +83,44 @@ class CapabilitiesTests(unittest.TestCase):
             status, output, _ = self.run_check(missing=missing, reported=reported)
             self.assertEqual(status, 0, output)
             self.assertEqual('horizon-idle-report-contract=1' in output.splitlines(), expected, (reported, missing))
+
+    def test_github_chain_is_reported_only_with_the_service_and_a_supervisor_that_starts_it(self):
+        marker = 'horizon-github-chain-contract=1'
+        declared = {'horizon-worker-supervise': (marker + '\n').encode()}
+        binaries = self.root / 'bin'
+        binaries.mkdir()
+        (binaries / 'horizon-worker-github').touch()
+        # Helpers elsewhere on PATH do not count: the service loads them beside itself.
+        elsewhere = self.root / 'elsewhere'
+        elsewhere.mkdir()
+        helpers = ('horizon-worker-github-common', 'horizon-worker-github-agents', 'horizon-worker-git-auth')
+        for helper in helpers:
+            (elsewhere / helper).touch()
+        for reported, missing, args, beside, expected in [
+                (declared, (), ('--git-auth',), helpers, True),
+                ({'horizon-worker-supervise': b''}, (), ('--git-auth',), helpers, False),
+                (declared, ('horizon-worker-github',), ('--git-auth',), helpers, False),
+                (declared, (), ('--git-auth',), ('horizon-worker-git-auth', 'horizon-worker-github-agents'), False),
+                (declared, (), ('--git-auth',), ('horizon-worker-github-common', 'horizon-worker-git-auth'), False),
+                (declared, (), ('--git-auth',), ('horizon-worker-github-common', 'horizon-worker-github-agents'),
+                 False),
+                # Without the agent isolation launcher the service would refuse to run.
+                (declared, ('horizon-worker-tailnet',), ('--git-auth',), helpers, False),
+                (declared, (), (), helpers, False)]:
+            for helper in helpers:
+                path = binaries / helper
+                path.unlink(missing_ok=True)
+                if helper in beside:
+                    path.touch(mode=0o755)
+            with mock.patch('os.readlink', return_value='/usr/local/bin/horizon-worker-git-auth'):
+                status, output, _ = self.run_check(*args, missing=missing, reported=reported, bin_dir=str(binaries))
+            self.assertEqual(status, 0, output)
+            self.assertEqual(marker in output.splitlines(), expected, (reported, missing, args, beside))
+        # A Git helper beside the service that cannot run does not count either.
+        (binaries / 'horizon-worker-git-auth').chmod(0o644)
+        with mock.patch('os.readlink', return_value='/usr/local/bin/horizon-worker-git-auth'):
+            _, output, _ = self.run_check('--git-auth', reported=declared, bin_dir=str(binaries))
+        self.assertNotIn(marker, output.splitlines())
 
     def test_source_features_are_reported_only_when_the_source_helper_declares_them(self):
         for option, marker in [('--shallow-contract', 'horizon-source-shallow-contract=1'),
@@ -261,7 +300,7 @@ class CapabilitiesTests(unittest.TestCase):
         status, output, commands = self.run_check(reported=reported)
         self.assertEqual(status, 0, output)
         for agent in ['codex', 'claude']:
-            self.assertIn(mock.call([agent, '--version'], check=True, timeout=20,
+            self.assertIn(mock.call([agent, '--version'], check=True, timeout=20, env=mock.ANY,
                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL), commands)
         self.assertNotIn('grok', str(commands))
         for claude in [b'v2.1.281\n', b'Claude Code\n2.1.281\n']:
@@ -277,13 +316,32 @@ class CapabilitiesTests(unittest.TestCase):
         self.write('/etc/horizon-worker/agent-versions.json', {'codex': '0.156.1'})
         status, output, commands = self.run_check(reported=reported)
         self.assertEqual(status, 0, output)
-        self.assertIn(mock.call(['codex', '--version'], check=True, timeout=20,
+        self.assertIn(mock.call(['codex', '--version'], check=True, timeout=20, env=mock.ANY,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL), commands)
-        self.assertIn(mock.call(['claude', '--version'], check=True, timeout=20,
+        self.assertIn(mock.call(['claude', '--version'], check=True, timeout=20, env=mock.ANY,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), commands)
         status, output, _ = self.run_check(reported=dict(reported, codex=b'codex-cli 0.156.2\n'))
         self.assertEqual(status, 1)
         self.assertIn('codex does not report its recorded version 0.156.1', output)
+
+    def test_agent_probes_never_write_into_the_workspace_home(self):
+        # The check runs as root after the workspace home was handed to the isolated agent.
+        # An agent CLI that creates its state directory on --version (Codex creates ~/.codex)
+        # must not leave a root-owned directory there, or the agent cannot configure itself.
+        reported = {'codex': b'codex-cli 0.156.1\n', 'claude': b'2.1.281 (Claude Code)\n'}
+        environment = {'HOME': '/workspace/home', 'CODEX_HOME': '/workspace/home/.codex', 'PATH': '/usr/bin'}
+        for record in [None, {'codex': '0.156.1'}]:
+            if record is not None:
+                self.write('/etc/horizon-worker/agent-versions.json', record)
+            status, output, commands = self.run_check(environment=environment, reported=reported)
+            self.assertEqual(status, 0, output)
+            probes = [call for call in commands if call.args[0][1:] == ['--version'] and call.args[0][0] in {'codex', 'claude'}]
+            self.assertEqual(sorted(call.args[0][0] for call in probes), ['claude', 'codex'], record)
+            for call in probes:
+                probe = call.kwargs['env']
+                self.assertFalse(probe['HOME'].startswith('/workspace'), (record, probe))
+                self.assertNotIn('CODEX_HOME', probe)
+                self.assertEqual(probe['PATH'], '/usr/bin')
 
     def test_recorded_versions_must_be_plain_versions_of_known_agents(self):
         reported = {'codex': b'codex-cli 0.156.1\n', 'claude': b'2.1.281 (Claude Code)\n'}
@@ -368,6 +426,17 @@ class CapabilitiesTests(unittest.TestCase):
             self.configure()
         self.assertEqual(json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']['horizon-worker'],
                          {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']})
+
+    def test_agents_get_the_github_access_tool_where_the_image_has_the_service(self):
+        for agents, service, expected in [(['claude'], '/usr/local/bin/horizon-worker-github', True),
+                                          (['claude'], None, False), ([], '/usr/local/bin/horizon-worker-github', False)]:
+            self.write('/workspace/capabilities.json', {'agents': agents})
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                    mock.patch('shutil.which', side_effect=lambda name: service if name == 'horizon-worker-github' else None):
+                self.configure()
+            servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']
+            self.assertEqual(servers.get('horizon-github'), {'command': '/usr/local/bin/horizon-worker-github',
+                                                             'args': ['mcp']} if expected else None, (agents, service))
 
     @unittest.skipUnless(WORKER, "set HORIZON_TEST_CLOUD_WORKER to the matching built helper")
     def test_codex_and_grok_accept_the_stop_tool_and_drop_it_when_opted_out(self):

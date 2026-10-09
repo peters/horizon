@@ -1,4 +1,4 @@
-use super::{super::HorizonApp, Picker};
+use super::{super::HorizonApp, Anchor, Picker};
 use crate::theme;
 use egui::{Context, Id, Order, Pos2, Rect, Sense, Stroke, Vec2};
 use horizon_core::browser::manifest::cast::{CastOperation, CastOrientation, CastResolution, CastSource};
@@ -34,11 +34,13 @@ impl HorizonApp {
             .or_else(|| {
                 picker
                     .anchor
+                    .panel()
                     .and_then(|anchor| self.panel_screen_rects.get(&anchor).copied())
             })
             .unwrap_or(canvas);
         let source = picker
             .anchor
+            .panel()
             .and_then(|anchor| self.panel_screen_rects.get(&anchor))
             .map_or(source, |anchor| source.union(*anchor));
         let position = *picker.position.get_or_insert_with(|| {
@@ -135,18 +137,23 @@ impl HorizonApp {
         }
     }
     fn render_cast_icons(&mut self, ctx: &Context) {
-        if !self.host_dialog_open() {
+        // A full screen panel replaces the canvas for the frame, so the panel rectangles
+        // still hold the last canvas frame; icons drawn from them would float over it.
+        if !self.host_dialog_open() && self.fullscreen_panel.is_none() {
+            let canvas = self.canvas_rect(ctx);
             for panel in &self.board.panels {
                 let Some(&rect) = self.panel_screen_rects.get(&panel.id) else {
                     continue;
                 };
                 let id = panel.id;
                 let workspace = panel.workspace_id;
-                if self.workspace_is_detached(workspace) || !self.canvas_rect(ctx).intersects(rect) {
+                let scale = self.canvas_view.zoom;
+                let icon = cast_icon_rect(rect, scale);
+                // Only where the whole button lies on the canvas, never over the sidebar or toolbar.
+                if self.workspace_is_detached(workspace) || !canvas.contains_rect(icon) {
                     continue;
                 }
-                let scale = self.canvas_view.zoom;
-                let position = cast_icon_rect(rect, scale).min;
+                let position = icon.min;
                 let order = if self.board.focused == Some(id) {
                     Order::Foreground
                 } else {
@@ -164,7 +171,7 @@ impl HorizonApp {
                             .casting
                             .picker
                             .as_ref()
-                            .is_some_and(|picker| picker.anchor == Some(id));
+                            .is_some_and(|picker| picker.anchor == Anchor::Panel(id));
                         let active = self
                             .casting
                             .sessions
@@ -199,7 +206,7 @@ impl HorizonApp {
                     let source = CastSource::Panel {
                         id: panel.local_id.clone(),
                     };
-                    self.casting.toggle_picker(Some(id), workspace, source, ctx);
+                    self.casting.toggle_picker(Anchor::Panel(id), workspace, source, ctx);
                 }
             }
         }
@@ -245,7 +252,7 @@ fn cast_icon_rect(panel: Rect, scale: f32) -> Rect {
     )
 }
 
-fn paint_cast_icon(painter: &egui::Painter, rect: Rect, color: egui::Color32) {
+pub(in crate::app) fn paint_cast_icon(painter: &egui::Painter, rect: Rect, color: egui::Color32) {
     let scale = rect.width() / 20.0;
     let point = |x, y| rect.min + egui::vec2(x, y) * scale;
     let stroke = Stroke::new(1.5 * scale, color);
@@ -606,7 +613,7 @@ mod tests {
     fn receiver_menu_stays_above_picker_after_window_is_raised() {
         let ctx = Context::default();
         let mut picker = Picker {
-            anchor: Some(horizon_core::PanelId(1)),
+            anchor: Anchor::Panel(horizon_core::PanelId(1)),
             workspace: WorkspaceId(1),
             source: CastSource::Panel { id: "synthetic".into() },
             receiver: None,

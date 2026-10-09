@@ -47,41 +47,29 @@ impl Terminal {
     #[must_use]
     pub fn last_lines_text(&self, max_lines: usize) -> String {
         let term = self.term.lock();
-        let content = term.renderable_content();
-        let cols = usize::from(self.cols);
-        let rows = usize::from(self.rows);
-        let mut lines: Vec<String> = Vec::with_capacity(max_lines);
-        let mut current_line = String::with_capacity(cols);
-        let mut current_line_columns = 0;
-        let mut current_row: Option<usize> = None;
+        last_lines_from(term.renderable_content(), self.cols, self.rows, max_lines)
+    }
 
-        for indexed in content.display_iter {
-            let Ok(row) = usize::try_from(indexed.point.line.0) else {
-                continue;
-            };
-            if row >= rows {
-                continue;
-            }
-            if current_row != Some(row) {
-                if !current_line.is_empty() {
-                    lines.push(std::mem::take(&mut current_line));
-                }
-                current_row = Some(row);
-                current_line.clear();
-                current_line_columns = 0;
-            }
-            append_cell_text(
-                &mut current_line,
-                &mut current_line_columns,
-                indexed.point.column.0,
-                indexed.cell,
-            );
-        }
-        if !current_line.is_empty() {
-            lines.push(current_line);
-        }
-        let start = lines.len().saturating_sub(max_lines);
-        lines[start..].join("\n")
+    /// As [`Self::last_lines_text`], or `None` when the grid lock is busy.
+    ///
+    /// The PTY reader holds the fair-mutex lease across its read. A waiter that
+    /// takes that lease can stall until the read returns, so a test that only
+    /// needs a snapshot uses the unfair try-lock and retries instead.
+    #[must_use]
+    pub fn try_last_lines_text(&self, max_lines: usize) -> Option<String> {
+        let term = self.term.try_lock_unfair()?;
+        Some(last_lines_from(
+            term.renderable_content(),
+            self.cols,
+            self.rows,
+            max_lines,
+        ))
+    }
+
+    /// As [`Self::with_renderable_content`], or `None` when the grid lock is busy.
+    pub fn try_with_renderable_content<R>(&self, render: impl FnOnce(RenderableContent<'_>) -> R) -> Option<R> {
+        let term = self.term.try_lock_unfair()?;
+        Some(render(term.renderable_content()))
     }
 
     /// The text of each row in the viewport, top to bottom, as the user sees it:
@@ -270,6 +258,43 @@ impl Terminal {
         let term = self.term.lock();
         hyperlink_at_viewport_point(&term, usize::from(self.cols), row, col).is_some()
     }
+}
+
+fn last_lines_from(content: RenderableContent<'_>, cols: u16, rows: u16, max_lines: usize) -> String {
+    let cols = usize::from(cols);
+    let rows = usize::from(rows);
+    let mut lines: Vec<String> = Vec::with_capacity(max_lines);
+    let mut current_line = String::with_capacity(cols);
+    let mut current_line_columns = 0;
+    let mut current_row: Option<usize> = None;
+
+    for indexed in content.display_iter {
+        let Ok(row) = usize::try_from(indexed.point.line.0) else {
+            continue;
+        };
+        if row >= rows {
+            continue;
+        }
+        if current_row != Some(row) {
+            if !current_line.is_empty() {
+                lines.push(std::mem::take(&mut current_line));
+            }
+            current_row = Some(row);
+            current_line.clear();
+            current_line_columns = 0;
+        }
+        append_cell_text(
+            &mut current_line,
+            &mut current_line_columns,
+            indexed.point.column.0,
+            indexed.cell,
+        );
+    }
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
 }
 
 fn hyperlink_uri_at_viewport_point<T>(term: &Term<T>, cols: usize, row: usize, col: usize) -> Option<String> {

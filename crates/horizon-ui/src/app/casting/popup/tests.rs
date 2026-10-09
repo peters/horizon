@@ -29,7 +29,7 @@ fn session(receiver: &str, workspace: u64, ip: &str) -> (Session, std::thread::J
 }
 fn picker(session: &Session) -> Picker {
     Picker {
-        anchor: Some(horizon_core::PanelId(1)),
+        anchor: crate::app::casting::Anchor::Panel(horizon_core::PanelId(1)),
         workspace: session.workspace,
         source: session.source.clone(),
         receiver: Some(session.receiver_id.clone()),
@@ -163,7 +163,12 @@ fn only_a_live_session_overrides_the_requested_source() {
     let cloud = CastSource::Cloud {
         id: "synthetic-cloud".into(),
     };
-    state.toggle_picker(None, WorkspaceId(1), cloud.clone(), &ctx);
+    state.toggle_picker(
+        crate::app::casting::Anchor::Cloud(1),
+        WorkspaceId(1),
+        cloud.clone(),
+        &ctx,
+    );
     let live = state.picker.take().expect("picker");
     assert_eq!(live.source, CastSource::Application {}, "a live cast keeps its source");
     state.sessions[0].worker.stop();
@@ -172,7 +177,12 @@ fn only_a_live_session_overrides_the_requested_source() {
         assert!(Instant::now() < deadline, "the worker must finish");
         std::thread::sleep(Duration::from_millis(5));
     }
-    state.toggle_picker(None, WorkspaceId(1), cloud.clone(), &ctx);
+    state.toggle_picker(
+        crate::app::casting::Anchor::Cloud(1),
+        WorkspaceId(1),
+        cloud.clone(),
+        &ctx,
+    );
     let picker = state.picker.as_ref().expect("picker");
     assert_eq!(picker.source, cloud, "a finished cast does not replace the cloud");
     assert_eq!(picker.receiver.as_deref(), Some("first-tv"), "it still suggests its TV");

@@ -187,24 +187,38 @@ class SupervisionTests(unittest.TestCase):
         with mock.patch.dict(Supervisor.start.__globals__, AGENT_ISOLATION=isolation), \
                 mock.patch.object(subprocess, 'Popen', side_effect=popen):
             for start in [self.supervisor.start_control, *[lambda name=name: self.supervisor.start(name, ['service'])
-                                                           for name in ['xvfb', 'sshd', 'idle']]]:
+                                                           for name in ['xvfb', 'sshd', 'idle', 'github']]]:
                 with self.assertRaises(Launched):
                     start()
             isolation.unlink()
             with self.assertRaises(Launched):
                 self.supervisor.start_control()
         launcher = ['/usr/local/bin/horizon-worker-tailnet', 'agent']
-        (control, environment), xvfb, sshd, idle, (privileged, later) = launched
+        (control, environment), xvfb, sshd, idle, github, (privileged, later) = launched
         self.assertEqual(control, launcher + ['horizon-cloud-worker', 'serve'])
         self.assertEqual(xvfb[0], launcher + ['service'])
         self.assertEqual(sshd, (['service'], None))
         self.assertEqual(idle, (['service'], None))
+        self.assertEqual(github, (['service'], None), 'the GitHub chain service keeps root')
         self.assertEqual(privileged, ['horizon-cloud-worker', 'serve'], 'custom images without isolation')
         self.assertTrue(environment[HOST_INSTANCE_ENV])
         self.assertEqual(environment.get('PATH'), os.environ.get('PATH'), 'the rest of the environment is kept')
         self.assertEqual(later[HOST_INSTANCE_ENV], self.supervisor.host_instance)
         self.assertNotEqual(later[HOST_INSTANCE_ENV], environment[HOST_INSTANCE_ENV],
                             'each control service gets a new value')
+
+    def test_the_github_service_starts_after_the_one_shot_configuration(self):
+        # Both write the agent's global Git configuration.
+        calls = []
+
+        class Stop(Exception):
+            pass
+        with mock.patch.object(self.supervisor, 'configure', side_effect=lambda command: calls.append('configure')), \
+                mock.patch.object(self.supervisor, 'start_github', side_effect=lambda: calls.append('github')), \
+                mock.patch.object(self.supervisor, 'start_control', side_effect=Stop), \
+                self.assertRaises(Stop):
+            self.supervisor.run(False)
+        self.assertEqual(calls, ['configure', 'github'])
 
     def test_the_assigned_value_is_published_only_after_the_service_answers(self):
         published = self.root / 'browser-host-instance'
@@ -331,18 +345,48 @@ class SupervisionTests(unittest.TestCase):
                                    '--idle-stop-contract'], capture_output=True, timeout=10)
         self.assertEqual((declared.returncode, declared.stdout), (0, b'horizon-idle-stop-contract=1\n'))
 
-    def test_idle_watcher_is_owned_and_checked_only_when_started(self):
-        self.ready(False)
-        self.assertNotIn('idle', json.loads((self.root / 'services.json').read_text())['services'])
-        child = self.start('idle')
-        self.supervisor.publish(False)
-        self.assertIn('idle', json.loads((self.root / 'services.json').read_text())['services'])
-        CHECK(self.root, self.root)
-        self.stop_unreaped(child)
-        with self.assertRaisesRegex(ValueError, 'idle'):
-            self.supervisor.assert_running()
-        with self.assertRaisesRegex(ValueError, 'exited'):
+    def test_optional_services_are_owned_and_checked_only_when_started(self):
+        for service in ('idle', 'github'):
+            self.ready(False)
+            self.assertNotIn(service, json.loads((self.root / 'services.json').read_text())['services'])
+            child = self.start(service)
+            if service == 'github':
+                # Listed only once its socket answers.
+                self.supervisor.publish(False)
+                self.assertNotIn(service, json.loads((self.root / 'services.json').read_text())['services'])
+                self.assertFalse(self.supervisor.github_listed)
+                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self.addCleanup(listener.close)
+                listener.bind(str(self.root / 'github.sock'))
+                listener.listen(1)
+            self.supervisor.publish(False)
+            self.assertIn(service, json.loads((self.root / 'services.json').read_text())['services'])
             CHECK(self.root, self.root)
+            self.stop_unreaped(child)
+            if service == 'github':
+                # The worker keeps running without it and publishes its services again.
+                self.supervisor.assert_running()
+                self.assertNotIn(service, self.supervisor.children)
+                self.assertNotIn(service, json.loads((self.root / 'services.json').read_text())['services'])
+                CHECK(self.root, self.root)
+            else:
+                with self.assertRaisesRegex(ValueError, service):
+                    self.supervisor.assert_running()
+                with self.assertRaisesRegex(ValueError, 'exited'):
+                    CHECK(self.root, self.root)
+            self.supervisor.close()
+
+    def test_the_github_service_starts_only_with_agent_isolation(self):
+        isolation = self.root / 'agent-isolation'
+        started = []
+        with mock.patch.dict(Supervisor.start.__globals__, AGENT_ISOLATION=isolation), \
+                mock.patch.object(MODULE['shutil'], 'which', return_value='/usr/local/bin/horizon-worker-github'), \
+                mock.patch.object(self.supervisor, 'start', side_effect=lambda *args: started.append(args)):
+            self.supervisor.start_github()
+            self.assertEqual(started, [], 'agents would run as root and could read the chain')
+            isolation.touch()
+            self.supervisor.start_github()
+        self.assertEqual(started, [('github', ['horizon-worker-github', 'serve'])])
 
     def test_window_manager_must_own_its_live_root_registration(self):
         good = '_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x20020b'

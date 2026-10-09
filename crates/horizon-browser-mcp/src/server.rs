@@ -361,7 +361,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_snapshot",
-        description = "Return a bounded semantic snapshot with short-lived refs. Take a new snapshot after navigation or page changes."
+        description = "Return a bounded semantic snapshot with short-lived refs, including child frames on local Chromium and Firefox. Use frame refs for click and fill. Take a new snapshot after navigation or page changes."
     )]
     async fn browser_snapshot(
         &self,
@@ -386,7 +386,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_query",
-        description = "Query the top-level document with a CSS selector and return matching nodes with short-lived refs."
+        description = "Query the document and child frames on local Chromium and Firefox with a CSS selector. Use returned refs to click or fill fields inside cross-origin frames. Other backends query only the top-level document."
     )]
     async fn browser_query(&self, Parameters(input): Parameters<QueryInput>) -> Result<Json<NodesOutput>, String> {
         let receipt = self

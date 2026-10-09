@@ -38,7 +38,7 @@ pub(super) fn show(
                 )
                 .inner;
             ui.vertical(|ui| {
-                output_column(ui, id, runtime, status, size.y - hint_height);
+                output_column(ui, id, &launch.id, runtime, status, size.y - hint_height);
                 show_hint(ui, hint, status);
             });
             action
@@ -48,7 +48,14 @@ pub(super) fn show(
         let steps_height = (size.y * 0.55).max(250.0).min(size.y - 160.0);
         let action = steps_card(ui, id, launch, runtime, status, steps_height);
         ui.add_space(GAP);
-        output_column(ui, id, runtime, status, size.y - steps_height - GAP - hint_height);
+        output_column(
+            ui,
+            id,
+            &launch.id,
+            runtime,
+            status,
+            size.y - steps_height - GAP - hint_height,
+        );
         show_hint(ui, hint, status);
         action
     }
@@ -102,16 +109,28 @@ fn steps_card(
                     action
                 })
                 .inner;
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                ui.label(RichText::new(worker(runtime)).size(12.5).color(theme::FG_DIM()));
-                ui.label(
-                    RichText::new(machine(launch, runtime))
-                        .size(12.5)
-                        .color(theme::FG_SOFT()),
-                );
-                ui.separator();
-            });
-            action
+            let renew = ui
+                .with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    let renew = super::github::renew_button(ui, &launch.id, runtime);
+                    if let Some((line, connected)) = super::github::summary(runtime) {
+                        let color = if connected {
+                            theme::PALETTE_GREEN()
+                        } else {
+                            theme::FG_DIM()
+                        };
+                        ui.label(RichText::new(line).size(12.5).color(color));
+                    }
+                    ui.label(RichText::new(worker(runtime)).size(12.5).color(theme::FG_DIM()));
+                    ui.label(
+                        RichText::new(machine(launch, runtime))
+                            .size(12.5)
+                            .color(theme::FG_SOFT()),
+                    );
+                    ui.separator();
+                    renew
+                })
+                .inner;
+            if renew { Some(StepAction::Reconnect) } else { action }
         })
         .inner
 }
@@ -174,8 +193,11 @@ fn worker(runtime: &Runtime) -> String {
         )
 }
 
-fn output_column(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, status: &Status, height: f32) {
+fn output_column(ui: &mut egui::Ui, id: u32, cloud_id: &str, runtime: &mut Runtime, status: &Status, height: f32) {
     let bottom = ui.cursor().top() + height;
+    if super::github::waiting(runtime) {
+        super::github::prompt(ui, cloud_id, runtime);
+    }
     ui.horizontal(|ui| {
         ui.label(RichText::new("Output").size(12.0).color(theme::FG_DIM()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

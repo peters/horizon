@@ -295,6 +295,7 @@ fn the_manifest_asks_for_contents_and_pull_requests_only() {
         "Horizon (example)",
         "https://example.com",
         "http://127.0.0.1:1234/manifest",
+        "http://127.0.0.1/callback",
     );
     assert_eq!(manifest["public"], false);
     assert_eq!(manifest["hook_attributes"]["active"], false);
@@ -302,7 +303,8 @@ fn the_manifest_asks_for_contents_and_pull_requests_only() {
         manifest["default_permissions"],
         json!({"contents": "write", "pull_requests": "write", "metadata": "read"})
     );
-    assert_eq!(manifest["callback_urls"], json!(["http://127.0.0.1:1234/manifest"]));
+    assert_eq!(manifest["redirect_url"], "http://127.0.0.1:1234/manifest");
+    assert_eq!(manifest["callback_urls"], json!(["http://127.0.0.1/callback"]));
 }
 
 #[test]
@@ -375,4 +377,105 @@ fn a_token_answer_must_be_a_bearer_token() {
         task.join().unwrap();
         assert_eq!(result.unwrap_err(), Error::InvalidResponse);
     }
+}
+
+#[test]
+fn the_user_is_named_with_github_private_commit_address() {
+    let (client, requests, task) = github(vec![
+        (200, json!({"id": 7, "login": "octo-cat", "name": "Octo Cat"})),
+        (200, json!({"id": 8, "login": "plain", "name": null})),
+        (401, json!({"message": "Bad credentials"})),
+    ]);
+    let token = Secret::new("ghu_synthetic".into());
+    let user = client.user(&token).unwrap();
+    assert_eq!(user.email, "7+octo-cat@users.noreply.github.com");
+    assert_eq!(user.name, "Octo Cat");
+    assert_eq!(
+        client.user(&token).unwrap().name,
+        "plain",
+        "the login stands in for no name"
+    );
+    assert_eq!(client.user(&token).unwrap_err(), Error::Revoked);
+    task.join().unwrap();
+    assert_eq!(requests.lock().unwrap()[0].0, "GET /user HTTP/1.1");
+}
+
+#[test]
+fn installed_repositories_reads_every_page_of_every_installation() {
+    let page = |prefix: &str, from: usize, count: usize| -> Value {
+        let repositories: Vec<Value> = (from..from + count)
+            .map(|n| json!({"full_name": format!("Acme/{prefix}-{n}")}))
+            .collect();
+        json!({"total_count": 101, "repositories": repositories})
+    };
+    // Each installation has 101 repositories: the second is read in full although the
+    // first already gave more names than its own total.
+    let (client, requests, task) = github(vec![
+        (200, json!({"installations": [{"id": 1}, {"id": 2}]})),
+        (200, page("one", 0, 100)),
+        (200, page("one", 100, 1)),
+        (200, page("two", 0, 100)),
+        (200, page("two", 100, 1)),
+    ]);
+    let names = client
+        .installed_repositories(&Secret::new("ghu_synthetic".into()))
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(names.len(), 202);
+    assert!(names.contains(&"acme/two-100".to_owned()), "lowercased");
+    let lines: Vec<String> = requests.lock().unwrap().iter().map(|(line, _)| line.clone()).collect();
+    assert_eq!(
+        lines[4],
+        "GET /user/installations/2/repositories?per_page=100&page=2 HTTP/1.1"
+    );
+}
+
+#[test]
+fn repository_names_follow_github_rules() {
+    for good in ["acme/web", "a-b/c.d_e", "acme/.github"] {
+        assert!(valid_repository(good), "{good}");
+    }
+    for bad in ["acme", "acme/web/x", "acme/..", "-/x", "acme/we b", "acme/"] {
+        assert!(!valid_repository(bad), "{bad}");
+    }
+}
+
+#[test]
+fn an_installation_beyond_the_page_limit_is_an_error_not_partial_data() {
+    let full = |n: usize| -> Value {
+        let repositories: Vec<Value> = (0..100)
+            .map(|i| json!({"full_name": format!("acme/r-{n}-{i}")}))
+            .collect();
+        json!({"total_count": 5000, "repositories": repositories})
+    };
+    let mut responses = vec![(200, json!({"installations": [{"id": 1}]}))];
+    responses.extend((0..20).map(|n| (200, full(n))));
+    let (client, _requests, task) = github(responses);
+    let result = client.installed_repositories(&Secret::new("ghu_synthetic".into()));
+    task.join().unwrap();
+    assert_eq!(result.unwrap_err(), Error::TooMany);
+}
+
+#[test]
+fn a_device_sign_in_asks_for_a_scope_only_when_given_one() {
+    let code = json!({"device_code": "synthetic-device", "user_code": "WDJB-MJHT",
+                      "verification_uri": "https://github.com/login/device", "expires_in": 900, "interval": 5});
+    let (client, requests, task) = github(vec![(200, code.clone()), (200, code)]);
+    client
+        .start_device_with_scope("Ov23synthetic", "write:packages")
+        .unwrap();
+    client.start_device("Iv23synthetic").unwrap();
+    task.join().unwrap();
+    let sent = requests.lock().unwrap();
+    assert_eq!(
+        fields(&sent[0].1),
+        [
+            ("client_id".to_owned(), "Ov23synthetic".to_owned()),
+            ("scope".to_owned(), "write:packages".to_owned())
+        ]
+    );
+    assert_eq!(
+        fields(&sent[1].1),
+        [("client_id".to_owned(), "Iv23synthetic".to_owned())]
+    );
 }

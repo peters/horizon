@@ -598,6 +598,13 @@ changes:
 
    Result: The row shows the type and a permitted location. The fallback preferences do not hide the row.
 
+6. Read the note under the search field.
+
+   Result: When the settings exclude locations, the note gives their count.
+   The list does not show those locations. When the settings permit every
+   catalog location, the dialog shows no exclusion note.
+   The fallback type preferences do not add to the exclusion count.
+
 ### 6.16 C16 — Keep the unlisted Hetzner rows under In stock only
 
 1. Do task [C16](../new-cloud-picker.md#65-c16--unlisted-hetzner-offers) of the New cloud picker procedure.
@@ -671,8 +678,14 @@ changes:
 
 3. Compare the number of rows for the location with the number of rows of C15 in that location.
 
-   Result: The numbers are the same. The search finds only text in the row
-   title ([issue #1305](https://github.com/peters/horizon/issues/1305)).
+   Result: The numbers are the same.
+
+4. Search for a RunPod flavor id, a data center id, a region name, `shared` and `dedicated`.
+
+   Result: The flavor id shows the RunPod rows that use that flavor. The
+   data center id shows the rows that can run there. The region name shows the
+   rows in that region. `shared` and `dedicated` show the Hetzner rows of that
+   CPU kind.
 
 ### 6.20 C20 — Show EUR totals for Hetzner and USD totals for RunPod
 
@@ -852,8 +865,8 @@ changes:
 
 2. Examine the data center choices.
 
-   Result: No chip and no summary line shows `stock unknown`. If one does, link
-   [issue #1305](https://github.com/peters/horizon/issues/1305) in the report.
+   Result: No chip and no summary line shows `stock unknown`. If one does, record
+   a defect.
 
 ### 6.30 C30 — Show only RunPod GPU types for a GPU profile
 

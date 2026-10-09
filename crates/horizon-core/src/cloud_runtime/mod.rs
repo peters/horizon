@@ -11,6 +11,7 @@ pub mod cost;
 pub mod deployment;
 pub mod diagnosis;
 pub mod git_auth;
+pub mod github;
 pub mod image;
 pub mod lifecycle;
 pub mod local_network;
@@ -74,6 +75,8 @@ pub enum Event {
     Stopped(Box<state::Deployment>),
     Resumed,
     ClosedBrowsers(Vec<String>),
+    /// What a cloud's GitHub sign-in needs from the person or the host, or how it ended.
+    GitHub(github::Prompt),
     DesktopControl {
         active: Option<String>,
         last: Option<String>,

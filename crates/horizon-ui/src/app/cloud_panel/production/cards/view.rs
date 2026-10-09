@@ -362,6 +362,13 @@ impl HorizonApp {
             let on_screen = |rect: Rect| rect.intersects(layer.clip);
             let body_shown = body && on_screen(body_rect(group));
             let drawer_shown = runtime.drawer.is_some() && on_screen(drawer::placement(group));
+            // A sign-in or an access request shows over a cloud with panels too.
+            if super::github::overlay(runtime, body)
+                && on_screen(body_rect(group))
+                && let Some((request, decision)) = github_area(ctx, &layer, group, runtime, body)
+            {
+                chosen.github.push((group.issue, request, decision));
+            }
             if !body_shown && !drawer_shown {
                 continue;
             }
@@ -396,6 +403,9 @@ impl HorizonApp {
     }
 
     fn apply_chosen(&mut self, chosen: Chosen, ctx: &egui::Context) {
+        for (id, request, decision) in chosen.github {
+            self.decide_github_request(id, request, decision, ctx);
+        }
         for (id, action) in chosen.actions {
             self.apply_card_action(id, action, ctx);
         }
@@ -433,6 +443,8 @@ struct Chosen {
     cast: Option<u32>,
     layout: Option<(u32, Option<horizon_core::WorkspaceLayout>)>,
     resize: Option<(u32, (u16, u16))>,
+    /// A decision on an agent's GitHub access request: cloud, request, decision.
+    github: Vec<(u32, String, horizon_core::cloud_runtime::github::requests::Decision)>,
 }
 
 impl Chosen {
@@ -478,6 +490,34 @@ fn body_area(
         })
         .inner;
     step.and_then(|step| drawer::step_action(step, status, ctx))
+}
+
+/// GitHub at the top right over the cloud: the sign-in of a cloud whose body is hidden
+/// by its panels, and the access requests of its agents.
+fn github_area(
+    ctx: &egui::Context,
+    layer: &Layer,
+    group: &CloudGroup,
+    runtime: &Runtime,
+    body: bool,
+) -> Option<(String, horizon_core::cloud_runtime::github::requests::Decision)> {
+    let rect = body_rect(group);
+    let cloud_id = group.remote.as_ref().map_or("", |launch| launch.id.as_str());
+    let at = rect.right_top() + egui::vec2(-(super::github::REQUESTS_WIDTH + 16.0), 16.0);
+    egui::Area::new(Id::new(("cloud-github-requests", group.issue)))
+        .order(Order::Foreground)
+        .fixed_pos(at)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ctx.set_transform_layer(ui.layer_id(), layer.transform);
+            ui.set_clip_rect(layer.clip);
+            ui.set_width(super::github::REQUESTS_WIDTH);
+            if !body && super::github::waiting(runtime) {
+                super::github::prompt(ui, cloud_id, runtime);
+            }
+            super::github::requests(ui, runtime)
+        })
+        .inner
 }
 
 /// The drawer over the cloud's panels, above them in the Foreground order.

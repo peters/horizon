@@ -15,6 +15,8 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod api;
+pub use api::{User, valid_repository};
 #[cfg(test)]
 mod tests;
 
@@ -48,6 +50,8 @@ pub enum Error {
     Revoked,
     #[error("GitHub refused the request ({0}).")]
     Refused(String),
+    #[error("The GitHub App has more installations or repositories than Horizon reads.")]
+    TooMany,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -167,6 +171,18 @@ impl Client {
     /// # Errors
     /// Transport failures, a malformed answer, or the app's refusal.
     pub fn start_device(&self, client_id: &str) -> Result<DeviceCode> {
+        self.start_device_for(client_id, None)
+    }
+
+    /// Starts a device sign-in for the OAuth app with `client_id` that asks for `scope`,
+    /// such as `write:packages`. A GitHub App ignores scopes; its permissions apply.
+    /// # Errors
+    /// As [`Client::start_device`].
+    pub fn start_device_with_scope(&self, client_id: &str, scope: &str) -> Result<DeviceCode> {
+        self.start_device_for(client_id, Some(scope))
+    }
+
+    fn start_device_for(&self, client_id: &str, scope: Option<&str>) -> Result<DeviceCode> {
         #[derive(Deserialize)]
         struct Fields {
             device_code: Secret,
@@ -176,7 +192,11 @@ impl Client {
             #[serde(default)]
             interval: Option<u64>,
         }
-        let answer = self.oauth("/login/device/code", &[("client_id", client_id)])?;
+        let mut fields = vec![("client_id", client_id)];
+        if let Some(scope) = scope {
+            fields.push(("scope", scope));
+        }
+        let answer = self.oauth("/login/device/code", &fields)?;
         let fields: Fields = answer.parse()?;
         let secret = fields.device_code;
         let interval = fields.interval.unwrap_or(DEFAULT_INTERVAL).max(1);
@@ -503,15 +523,17 @@ fn safe_https_url(url: &str) -> bool {
 }
 
 /// The manifest for a private app that can read and write repository contents and
-/// pull requests as its user. Device Flow and expiring tokens are app settings the
-/// manifest cannot set; GitHub turns expiring tokens on for new apps.
+/// pull requests as its user. GitHub sends the manifest flow's code to
+/// `redirect_url`; user sign-ins return to `callback_url`. Device Flow and expiring
+/// tokens are app settings the manifest cannot set; GitHub turns expiring tokens on
+/// for new apps.
 #[must_use]
-pub fn manifest(name: &str, homepage: &str, redirect_url: &str) -> serde_json::Value {
+pub fn manifest(name: &str, homepage: &str, redirect_url: &str, callback_url: &str) -> serde_json::Value {
     serde_json::json!({
         "name": name,
         "url": homepage,
         "redirect_url": redirect_url,
-        "callback_urls": [redirect_url],
+        "callback_urls": [callback_url],
         "public": false,
         "request_oauth_on_install": false,
         "hook_attributes": {"url": homepage, "active": false},

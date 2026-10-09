@@ -580,7 +580,7 @@ mod clouds {
         let picker = app.casting.picker.as_ref().expect("Cast in Manage opens the picker");
         assert_eq!(picker.source, cloud_source());
         assert_eq!(picker.workspace, workspace);
-        assert_eq!(picker.anchor, None);
+        assert_eq!(picker.anchor, crate::app::casting::Anchor::Cloud(101));
     }
 
     #[test]

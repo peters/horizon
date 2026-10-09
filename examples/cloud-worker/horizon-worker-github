@@ -1,0 +1,495 @@
+#!/usr/bin/python3
+"""Root service that keeps a GitHub App user token chain fresh while the host is offline and
+gives agents the short-lived access token of their granted repositories over a Unix socket.
+Agents never read the chain. Never prints a token. Root operations: install (JSON on stdin),
+serve (started by horizon-worker-supervise), status, clear, requests and decide. Agents run
+`mcp` for the github_access tool."""
+import contextlib
+import http.client
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import random
+import re
+import secrets
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def load_common():
+    name = 'horizon_worker_github_common'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-common')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+common = load_common()
+agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_github_agents')
+auth = common.auth
+GIT_AUTH = common.GIT_AUTH
+Store = common.Store
+STATE = common.STATE
+TEST_URL = common.TEST_URL
+# The grants an install is configuring, kept while it runs. A live install holds the store
+# lock, so whoever gets the lock and still finds this file knows the install was cut off.
+INTENT = 'install.intent'
+MAX_INSTALL = 65536
+MAX_REPLY = 65536
+REFRESH_MARGIN = 30 * 60
+POLL_SECONDS = 60
+RETRY_BASE_SECONDS = 15
+RETRY_MAX_SECONDS = 15 * 60
+# Start attempts and the first wait between them, before serve exits for the supervisor.
+START_ATTEMPTS = 5
+START_WAIT_SECONDS = 2
+CLIENT_ID = re.compile(r'[A-Za-z0-9._-]{1,128}')
+ERROR_CODE = re.compile(r'[a-z0-9_]{1,64}')
+INSTALL_FIELDS = {'version', 'client_id', 'client_secret', 'login', 'author_name', 'author_email', 'grants', 'chain'}
+# Fields an installation may leave out.
+OPTIONAL_FIELDS = {'client_secret', 'login'}
+LOGIN = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?')
+GRANT_FIELDS = {'repository', 'target', 'access'}
+
+
+class Transient(Exception):
+    """A refresh that did not reach GitHub or got no usable reply; it is retried."""
+
+
+def validate_install(value, now):
+    if not isinstance(value, dict) or not INSTALL_FIELDS - OPTIONAL_FIELDS <= set(value) <= INSTALL_FIELDS:
+        raise ValueError('Invalid GitHub chain installation')
+    if type(value['version']) is not int or value['version'] != 1:
+        raise ValueError('Unsupported GitHub chain installation version')
+    if not isinstance(value['client_id'], str) or not CLIENT_ID.fullmatch(value['client_id']):
+        raise ValueError('Invalid GitHub App client')
+    if 'client_secret' in value and not auth.valid_token(value['client_secret']):
+        raise ValueError('Invalid GitHub App client')
+    if 'login' in value and not (isinstance(value['login'], str) and LOGIN.fullmatch(value['login'])):
+        raise ValueError('Invalid GitHub login')
+    chain = common.validate_chain(value['chain'])
+    if chain['refresh_expires_at'] <= now:
+        raise ValueError('The GitHub token chain expired')
+    grants = value['grants']
+    if not isinstance(grants, list) or not 1 <= len(grants) <= auth.MAX_GRANTS:
+        raise ValueError('Invalid GitHub grant list')
+    repositories, targets = set(), set()
+    for grant in grants:
+        if not isinstance(grant, dict) or set(grant) != GRANT_FIELDS or grant['access'] not in common.ACCESS:
+            raise ValueError('Invalid GitHub grant')
+        # The Git helper's own checks: repository, token characters and identity.
+        auth.validate({'repository': grant['repository'], 'token': chain['access_token'],
+                       'author_name': value['author_name'], 'author_email': value['author_email']})
+        auth.target_directory(grant['target'])
+        if grant['repository'].casefold() in repositories or grant['target'] in targets:
+            raise ValueError('Duplicate GitHub grant')
+        repositories.add(grant['repository'].casefold())
+        targets.add(grant['target'])
+    return value
+
+
+def token_endpoint(environ):
+    base, _, loopback = common.github_bases(environ)
+    return base + '/login/oauth/access_token', loopback
+
+
+def post_refresh(form, environ=os.environ, timeout=30):
+    """GitHub's JSON reply to one refresh. OAuth errors arrive as HTTP 200 with `error`."""
+    url, loopback = token_endpoint(environ)
+    request = urllib.request.Request(url, data=urllib.parse.urlencode(form).encode(), method='POST', headers={
+        'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'horizon-worker-github/1'})
+    try:
+        with common.opener(loopback).open(request, timeout=timeout) as response:
+            body = response.read(MAX_REPLY + 1)
+    except (OSError, http.client.HTTPException) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
+        raise Transient('transport') from None
+    try:
+        reply = json.loads(body) if len(body) <= MAX_REPLY else None
+    except ValueError:
+        reply = None
+    if not isinstance(reply, dict):
+        raise Transient('malformed_reply')
+    return reply
+
+
+def rotated_chain(reply, now):
+    access, refresh = reply.get('access_token'), reply.get('refresh_token')
+    lifetime, refresh_lifetime = reply.get('expires_in'), reply.get('refresh_token_expires_in')
+    if (not auth.valid_token(access) or not auth.valid_token(refresh)
+            or not common.timestamp(lifetime) or not common.timestamp(refresh_lifetime)
+            or str(reply.get('token_type', 'bearer')).lower() != 'bearer'):
+        raise Transient('malformed_reply')
+    return {'access_token': access, 'access_expires_at': now + lifetime,
+            'refresh_token': refresh, 'refresh_expires_at': now + refresh_lifetime}
+
+
+def refresh_once(store, now=time.time, post=post_refresh):
+    """One refresh check: 'absent', 'revoked', 'fresh', 'refreshed' or 'retry'."""
+    with store.lock():
+        state, _ = store.load()
+        if state is None:
+            return 'absent'
+        if state['state'] != 'ok':
+            return 'revoked'
+        started = int(now())
+        chain = state['chain']
+        if chain['refresh_expires_at'] <= started:
+            store.save(dict(state, state='revoked', last_error='refresh_expired'))
+            return 'revoked'
+        if chain['access_expires_at'] - started > REFRESH_MARGIN:
+            return 'fresh'
+        form = {'client_id': state['client_id'], 'grant_type': 'refresh_token',
+                'refresh_token': chain['refresh_token']}
+        # Only a chain from a web sign-in carries a secret; a device flow chain refreshes without one.
+        if state.get('client_secret'):
+            form['client_secret'] = state['client_secret']
+        try:
+            reply = post(form)
+            error = reply.get('error')
+            if error is None:
+                rotated = rotated_chain(reply, started)
+        except Transient as failure:
+            store.save(dict(state, last_error=str(failure)))
+            return 'retry'
+        if error is not None:
+            code = error if isinstance(error, str) and ERROR_CODE.fullmatch(error) else 'unknown_error'
+            if code == 'bad_refresh_token':
+                store.save(dict(state, state='revoked', last_error=code))
+                return 'revoked'
+            store.save(dict(state, last_error=code))
+            return 'retry'
+        # GitHub already invalidated the old chain: store the new one before any agent can use it.
+        store.save(dict(state, chain=rotated, last_refresh_at=started, last_error=None))
+        return 'refreshed'
+
+
+def retry_delay(failures, jitter=random.random):
+    ceiling = min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * 2 ** min(failures - 1, 16))
+    return ceiling * (0.5 + jitter() / 2)
+
+
+def next_check(store, now):
+    state, _ = store.load()
+    if state is None or state['state'] != 'ok':
+        return POLL_SECONDS
+    due = state['chain']['access_expires_at'] - REFRESH_MARGIN - now
+    return max(1, min(POLL_SECONDS, due))
+
+
+def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=random.random, log=print,
+                 configure=None, static=None):
+    """One refresh check; returns (delay before the next check, consecutive failures)."""
+    try:
+        # An install that was cut off, such as by a closed SSH connection, left repositories
+        # configured for a chain it never stored; the stored state decides again.
+        with store.lock():
+            if (store.runtime / INTENT).exists():
+                settle(store, configure or run_configure, static or run_restore)
+                log('GitHub repositories reconciled after an interrupted install', flush=True)
+    except Exception as error:
+        log('GitHub repositories not reconciled: ' + type(error).__name__, flush=True)
+    try:
+        # A rotated chain that no storage accepted is written again at every check.
+        with store.lock():
+            store.retry_pending()
+    except Exception as error:
+        log('GitHub token chain still not stored: ' + type(error).__name__, flush=True)
+    try:
+        outcome = refresh_once(store, now, post)
+    # Storage or lock failures are retried; the refresh thread must never end.
+    except Exception as error:
+        log('GitHub refresh failed: ' + type(error).__name__, flush=True)
+        outcome = 'retry'
+    if outcome == 'retry':
+        failures += 1
+        return retry_delay(failures, jitter), failures
+    if outcome in ('refreshed', 'revoked'):
+        log('GitHub token chain ' + outcome, flush=True)
+    return next_check(store, now()), 0
+
+
+def refresh_loop(store, sleep=time.sleep):
+    failures = 0
+    while True:
+        delay, failures = refresh_step(store, failures)
+        sleep(delay)
+
+
+def start(store, path, sleep=None, prepare=None):
+    """The listening socket, after up to START_ATTEMPTS tries with doubled waits, or None.
+    `prepare` runs after the checks and before the socket exists, until it succeeds once."""
+    sleep, attempts, wait = sleep or time.sleep, START_ATTEMPTS, START_WAIT_SECONDS
+    for attempt in range(attempts):
+        try:
+            if not common.AGENT_ISOLATION.exists():
+                raise ValueError('Agent isolation is not active')
+            common.github_bases(os.environ)
+            common.private_directory(store.runtime, create=True)
+            # Repeated on the next attempt when it fails: the socket never opens before it is done.
+            if prepare is not None:
+                prepare()
+                prepare = None
+            return agents.listen(path)
+        except (OSError, ValueError) as error:
+            print('GitHub access cannot start: ' + type(error).__name__, flush=True)
+            if attempt + 1 < attempts:
+                sleep(wait * 2 ** attempt)
+    return None
+
+
+def serve(store=None, path=agents.SOCKET):
+    """Runs for the worker's life. Returns 1 when it cannot start; the supervisor then drops
+    the service and the Git helper falls back to its private file."""
+    store = store or Store()
+    # The socket opens only after the repositories match the stored chain, so the supervisor
+    # never publishes a service that does not answer yet.
+    book = agents.Book(store.runtime)
+    server = start(store, path, prepare=lambda: reconcile(store))
+    if server is None:
+        return 1
+    threading.Thread(target=refresh_loop, args=(store,), daemon=True).start()
+    agents.accept_forever(server, store, book, status)
+    return 0
+
+
+def reconcile(store, configure=None, static=None):
+    """Configures the repositories for the stored chain, or for the static binding without
+    one. An install that stopped between its configuration and its save left the
+    repositories configured for a chain that was never stored; the stored state decides.
+    Raises ValueError when that fails, so the service does not open its socket over
+    repositories configured for another chain."""
+    try:
+        with store.lock():
+            settle(store, configure or run_configure, static or run_restore)
+    except Exception as error:
+        raise ValueError('GitHub repositories not reconciled: ' + type(error).__name__) from None
+
+
+def settle(store, configure, static):
+    """Under the store lock: configures the repositories for the stored chain, or for the
+    static binding without one, after forgetting the identities that a cut-off install
+    wrote, then drops that install's intent."""
+    try:
+        intent = common.read_json(store.runtime / INTENT)
+    except (OSError, ValueError, RecursionError):
+        intent = None
+    intended = intent.get('grants') if isinstance(intent, dict) and isinstance(intent.get('grants'), list) else []
+    state, _ = store.load()
+    # The repositories follow the stored grants whether or not the chain can be served now.
+    if state is not None:
+        configure({'grants': identity_grants(state), 'previous': intended})
+    else:
+        static({'previous': intended})
+    (store.runtime / INTENT).unlink(missing_ok=True)
+
+
+def run_configure(payload):
+    # The Git helper runs as the agent under isolation, because the agent owns the repositories.
+    subprocess.run([str(GIT_AUTH), 'configure'], input=json.dumps(payload).encode(), check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+
+
+def run_restore(payload):
+    # As the agent, like the configuration it undoes.
+    subprocess.run([str(GIT_AUTH), 'restore'], input=json.dumps(payload).encode(), check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+
+
+def run_retire():
+    # The static binding belongs to the agent under isolation, so the Git helper removes it.
+    subprocess.run([str(GIT_AUTH), 'clear'], check=True, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=60)
+
+
+def identity_grants(state):
+    return [{'repository': grant['repository'], 'target': grant['target'],
+             'author_name': state['author_name'], 'author_email': state['author_email']}
+            for grant in (state or {}).get('grants', [])]
+
+
+def same_account(previous, value):
+    """Whether a new chain belongs to the app and account of the previous one. Without a
+    login on both, the account is unknown, and no grant carries over."""
+    return (previous is not None and previous['client_id'] == value['client_id']
+            and bool(previous.get('login')) and previous.get('login') == value.get('login'))
+
+
+def install(value, store, now=time.time, configure=run_configure, retire=run_retire, static=run_restore):
+    """Configures each target repository, stores the chain, then retires the static binding.
+
+    The previous chain stays stored and served while the repositories are configured, so no
+    agent gets the new token before they are, and a worker that stops midway still holds the
+    previous chain. A failed configuration or save configures the previous chain's
+    repositories again, as far as that works, and keeps the previous chain. The static
+    binding goes last; one that cannot be removed stays as a fallback, which the service
+    overrides whenever it answers. Repositories allowed for the whole cloud carry over to a
+    new chain of the same app and account only. Returns status."""
+    validate_install(value, int(now()))
+    with store.lock():
+        try:
+            previous, _ = store.load()
+        except (OSError, ValueError):
+            previous = None
+        state = {key: value[key] for key in ('client_id', 'author_name', 'author_email', 'grants', 'chain')}
+        # Names this install for requests made under a chain without a login.
+        state['install_id'] = secrets.token_hex(8)
+        for optional in OPTIONAL_FIELDS:
+            if value.get(optional):
+                state[optional] = value[optional]
+        kept = same_account(previous, value)
+        if kept and previous.get('cloud_grants'):
+            state['cloud_grants'] = previous['cloud_grants']
+        # Written before any repository changes; if this process dies before its end, the
+        # service's next check finds it and reconciles. Without it nothing changes.
+        try:
+            common.write_private(common.private_directory(store.runtime, create=True), INTENT,
+                                 json.dumps({'grants': identity_grants(value)}))
+        except common.Unsynced:
+            pass  # In place on tmpfs, which needs no crash durability.
+        except (OSError, ValueError):
+            raise ValueError('No private GitHub storage accepted the install intent') from None
+        try:
+            configure({'grants': identity_grants(value), 'previous': identity_grants(previous)})
+            store.save(dict(state, version=1, state='ok', installed_at=int(now()), last_refresh_at=None,
+                            last_error=None), retain=False)
+        except BaseException:
+            restored = restore(previous, value, configure, static)
+            keep(store, previous)
+            # A rollback that did not finish leaves the intent, so the service still finishes it.
+            if restored:
+                (store.runtime / INTENT).unlink(missing_ok=True)
+            raise
+        (store.runtime / INTENT).unlink(missing_ok=True)
+        try:
+            retire()
+        except (OSError, subprocess.SubprocessError):
+            print('horizon-worker-github: the static Git binding could not be removed; the service '
+                  'still answers first.', file=sys.stderr)
+    # Requests of another app or account expire by themselves: each names its account.
+    return status(store)
+
+
+def restore(previous, value, configure, static):
+    """Configures the previous chain's repositories again after a failed install, as far as
+    that works; `keep` puts the previous chain itself back when a save replaced it. Without a
+    previous chain the static binding's configuration comes back, which the failed install's
+    configuration replaced. Returns whether that worked."""
+    try:
+        if previous is not None:
+            configure({'grants': identity_grants(previous), 'previous': identity_grants(value)})
+        else:
+            static({'previous': identity_grants(value)})
+    except Exception:
+        return False
+    return True
+
+
+def keep(store, previous):
+    """After a failed save, removes a copy of the new chain that no storage confirmed, so the
+    previous chain, or none, stays the stored one. Runs under the store lock."""
+    with contextlib.suppress(Exception):
+        current, _ = store.load()
+        if current is not None and current != previous:
+            if previous is None:
+                store.clear()
+            else:
+                store.save(previous, retain=False)
+
+
+def status(store, now=time.time):
+    state, persistent = store.load()
+    pending = len(agents.requests_report(agents.Book(store.runtime), state, now)['requests'])
+    if state is None:
+        return {'version': 1, 'state': 'absent', 'persistent': False, 'pending_write': False, 'login': None,
+                'access_expires_at': None, 'refresh_expires_at': None, 'last_refresh_at': None, 'last_error': None,
+                'repositories': [], 'pending_requests': pending}
+    # A cloud grant routes credentials only; it has no target repository on the worker.
+    repositories = [{key: grant[key] for key in ('repository', 'target', 'access')} for grant in state['grants']]
+    repositories += [{'repository': grant['repository'], 'target': None, 'access': grant['access']}
+                     for grant in state.get('cloud_grants', [])]
+    return {'version': 1, 'state': state['state'], 'persistent': persistent, 'pending_write': store.pending_write(),
+            'login': state.get('login'), 'access_expires_at': state['chain']['access_expires_at'],
+            'refresh_expires_at': state['chain']['refresh_expires_at'],
+            'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
+            'repositories': repositories, 'pending_requests': pending}
+
+
+def host_status(store, path=agents.SOCKET):
+    """The serving process's status, which also sees a chain that only its memory holds, with
+    `serving`. Without an answer, the status of the stored copies."""
+    reply = auth.call_service({'request': 'status'}, path)
+    if isinstance(reply, dict) and reply.pop('ok', None) is True:
+        return dict(reply, serving=True)
+    return dict(status(store), serving=False)
+
+
+def clear(store, retire=None):
+    """Removes the static Git binding first, then the chain. When the binding cannot be
+    removed, the chain stays, so agents never keep access while status reports none."""
+    (retire or run_retire)()
+    with store.lock():
+        store.clear()
+    agents.Book(store.runtime).clear()
+
+
+def print_json(value):
+    print(json.dumps(value, separators=(',', ':')))
+
+
+def main(argv):
+    operation = argv[0] if argv else ''
+    if argv == ['mcp']:
+        # The agent's own process: it asks the root service over the socket.
+        agents.serve_mcp()
+        return 0
+    if not (len(argv) == 1 and operation in ('install', 'serve', 'status', 'clear', 'requests')
+            or len(argv) == 3 and operation == 'decide' and argv[2] in agents.DECISIONS):
+        print('Usage: horizon-worker-github install|serve|status|clear|requests|mcp\n'
+              '       horizon-worker-github decide ID allow-cloud|deny', file=sys.stderr)
+        return 2
+    if os.geteuid() != 0:
+        print('horizon-worker-github runs as root only.', file=sys.stderr)
+        return 1
+    os.umask(0o077)
+    store = Store()
+    if operation == 'serve':
+        return serve(store)
+    elif operation == 'install':
+        # Without agent isolation agents run as root, so no chain may come to this worker.
+        if not common.AGENT_ISOLATION.exists():
+            raise ValueError('GitHub access requires agent isolation')
+        source = sys.stdin.buffer.read(MAX_INSTALL + 1)
+        if len(source) > MAX_INSTALL:
+            raise ValueError('GitHub chain installation is too large')
+        print_json(install(auth.parse(source.decode()), store))
+    elif operation == 'status':
+        print_json(host_status(store))
+    elif operation == 'requests':
+        print_json(agents.requests_report(agents.Book(store.runtime), store.load()[0]))
+    elif operation == 'decide':
+        print_json(agents.decide(store, agents.Book(store.runtime), argv[1], argv[2]))
+    else:
+        clear(store)
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (ValueError, OSError, RecursionError, UnicodeDecodeError, subprocess.SubprocessError):
+        print('Worker GitHub access failed; inspect the chain installation, target repositories and '
+              'private storage.', file=sys.stderr)
+        sys.exit(1)

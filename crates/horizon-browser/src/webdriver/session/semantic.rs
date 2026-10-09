@@ -1,10 +1,12 @@
 //! Semantic DOM actions for Firefox and Safari `WebDriver` sessions.
 
+mod frames;
+
 use serde_json::{Value, json};
 
 use crate::semantic::{
-    bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
-    target_rect_expression, wait_scan_expression,
+    bounded_control_value, check_script_error, parse_target_rect, scroll_expression, target_rect_expression,
+    wait_scan_expression,
 };
 use crate::semantic_files::{
     ATTACHED_FILES_FUNCTION, FILE_INPUT_PROBE_FUNCTION, RESET_FILE_INPUT_FUNCTION, check_attachment_request,
@@ -227,8 +229,10 @@ impl Driver {
                 "invalid_action_state",
                 "resize is observed from the driver loop",
             )),
-            BrowserControlAction::Snapshot { max_nodes } => self.semantic_snapshot(*max_nodes),
-            BrowserControlAction::Query { selector, max_results } => self.semantic_query(selector, *max_results),
+            BrowserControlAction::Snapshot { max_nodes } => self.semantic_snapshot(*max_nodes, event_tx),
+            BrowserControlAction::Query { selector, max_results } => {
+                self.semantic_query(selector, *max_results, event_tx)
+            }
             BrowserControlAction::WaitForSelector { .. } => Err(BrowserControlFailure::new(
                 "invalid_action_state",
                 "selector waits are observed from the driver loop",
@@ -268,8 +272,12 @@ impl Driver {
         }
     }
 
-    fn semantic_snapshot(&mut self, max_nodes: u32) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.guarded_semantic_scan(&scan_expression(None, max_nodes), None)?;
+    fn semantic_snapshot(
+        &mut self,
+        max_nodes: u32,
+        events: &BrowserEventSender,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        let value = self.frame_scan(None, max_nodes, events)?;
         let (generation, revision, nodes) = self.semantic.register_nodes(value)?;
         Ok(BrowserControlValue::Snapshot {
             snapshot: BrowserSnapshot {
@@ -286,8 +294,9 @@ impl Driver {
         &mut self,
         selector: &str,
         max_results: u32,
+        events: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.guarded_semantic_scan(&scan_expression(Some(selector), max_results), None)?;
+        let value = self.frame_scan(Some(selector), max_results, events)?;
         self.register_query(value)
     }
 
@@ -307,7 +316,8 @@ impl Driver {
         ),
         BrowserControlFailure,
     > {
-        let value = self.guarded_semantic_scan(&wait_scan_expression(selector, max_results), Some(timeout))?;
+        let mut value = self.guarded_semantic_scan(&wait_scan_expression(selector, max_results), Some(timeout))?;
+        crate::semantic::clear_scan_frames(&mut value)?;
         let peeked = self.semantic.peek_nodes(&value)?;
         Ok((self.semantic.generation(), peeked.nodes, peeked.summary, value))
     }
@@ -335,7 +345,11 @@ impl Driver {
         count: u32,
         event_tx: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let selector = self.semantic.resolve(target)?;
+        let resolved = self.semantic.resolve_target(target)?;
+        if let Some(frame) = resolved.frame {
+            return self.frame_click(&frame, &resolved.selector, count, event_tx);
+        }
+        let selector = resolved.selector;
         if self.remote_android_chromium && count == 1 {
             let (x, y) = self.remote_click_point(&selector)?;
             self.perform_click(x, y, count, event_tx)
@@ -407,7 +421,11 @@ impl Driver {
         value: &str,
         event_tx: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let selector = self.semantic.resolve(target)?;
+        let resolved = self.semantic.resolve_target(target)?;
+        if let Some(frame) = resolved.frame {
+            return self.frame_fill(&frame, &resolved.selector, value, event_tx);
+        }
+        let selector = resolved.selector;
         let result = self.evaluate_json(&target_rect_expression(&selector, !self.host.is_remote()))?;
         let _ = parse_target_rect(&result)?;
         self.capture_teach_fingerprint(None)?;

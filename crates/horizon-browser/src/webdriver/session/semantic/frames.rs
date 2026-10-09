@@ -1,0 +1,407 @@
+//! Child-frame scans and native input through the Firefox `BiDi` companion.
+
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+use crate::semantic::{
+    FrameTarget, MAX_SEMANTIC_FRAMES, append_frame_scan, bounded_control_value, frame_fill_expression,
+    parse_target_rect, scan_expression, scan_node_limit_reached, target_rect_expression,
+};
+use crate::session::BrowserEventSender;
+use crate::{BrowserButton, BrowserControlFailure, BrowserControlValue, BrowserInput, BrowserModifiers};
+
+use super::super::Driver;
+
+impl Driver {
+    pub(in crate::webdriver::session) fn frame_scan(
+        &mut self,
+        selector: Option<&str>,
+        max_nodes: u32,
+        events: &BrowserEventSender,
+    ) -> Result<Value, BrowserControlFailure> {
+        let deadline = Instant::now() + super::super::COMMAND_TIMEOUT;
+        let expression = scan_expression(selector, max_nodes);
+        let mut scan = self.guarded_semantic_scan(&expression, Some(remaining(deadline)?))?;
+        crate::semantic::clear_scan_frames(&mut scan)?;
+        if !self.firefox_bidi() || scan_node_limit_reached(&scan, max_nodes) {
+            return Ok(scan);
+        }
+        self.frame_scan_children(scan, &expression, max_nodes, events, deadline)
+    }
+
+    fn frame_scan_children(
+        &mut self,
+        mut scan: Value,
+        expression: &str,
+        max_nodes: u32,
+        events: &BrowserEventSender,
+        deadline: Instant,
+    ) -> Result<Value, BrowserControlFailure> {
+        let revision = self.semantic.scan_revision();
+        // The tree is rooted at this panel, never another page of a shared session.
+        let root = self.context_id.clone().ok_or_else(stale)?;
+        let tree = self.frame_command("browsingContext.getTree", &json!({"root":root}), events, deadline)?;
+        let contexts = child_contexts(&tree, &root)?;
+        self.semantic.track_bidi_scan_contexts(&contexts);
+        for context in contexts {
+            if scan_node_limit_reached(&scan, max_nodes) {
+                break;
+            }
+            let result = self.frame_command(
+                "script.evaluate",
+                &json!({
+                    "expression":format!("JSON.stringify(({expression}))"), "target":{"context":context},
+                    "awaitPromise":true,
+                }),
+                events,
+                deadline,
+            )?;
+            let realm = result
+                .get("realm")
+                .and_then(Value::as_str)
+                .ok_or_else(stale)?
+                .to_owned();
+            let child = json_result(&result)?;
+            append_frame_scan(&mut scan, child, &FrameTarget::Bidi { context, realm }, max_nodes)?;
+        }
+        if self.semantic.scan_revision() != revision {
+            return Err(stale());
+        }
+        Ok(scan)
+    }
+
+    fn frame_command(
+        &mut self,
+        method: &str,
+        params: &Value,
+        events: &BrowserEventSender,
+        deadline: Instant,
+    ) -> Result<Value, BrowserControlFailure> {
+        let link = self.bidi.as_mut().ok_or_else(stale)?;
+        let outcome = link.call(remaining(deadline)?, method, params);
+        self.host.record_bidi_result(method, params, &outcome.result);
+        for event in outcome.events {
+            self.handle_bidi_event(&event, events);
+        }
+        remaining(deadline)?;
+        outcome.result.map_err(|_| stale())
+    }
+
+    fn frame_value(
+        &mut self,
+        frame: &FrameTarget,
+        expression: &str,
+        events: &BrowserEventSender,
+    ) -> Result<Value, BrowserControlFailure> {
+        let FrameTarget::Bidi { realm, .. } = frame else {
+            return Err(stale());
+        };
+        let result = self
+            .call_bidi(
+                "script.evaluate",
+                &json!({
+                    "expression":format!("(async () => JSON.stringify(await ({expression})))()"), "target":{"realm":realm},
+                    "awaitPromise":true,
+                }),
+                events,
+            )
+            .map_err(|_| stale())?;
+        if !self.semantic.bidi_frame_is_current(frame) {
+            return Err(stale());
+        }
+        json_result(&result)
+    }
+
+    pub(in crate::webdriver::session) fn frame_fill(
+        &mut self,
+        frame: &FrameTarget,
+        selector: &str,
+        value: &str,
+        events: &BrowserEventSender,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        self.pending_classic_history_start = None;
+        let result = self.frame_value(frame, &frame_fill_expression(selector), events)?;
+        parse_target_rect(&result)?;
+        let FrameTarget::Bidi { context, .. } = frame else {
+            return Err(stale());
+        };
+        let mut payload = self
+            .actions
+            .payload(BrowserInput::InsertText { text: value.to_owned() });
+        payload["context"] = json!(context);
+        self.call_bidi("input.performActions", &payload, events)
+            .map_err(|_| BrowserControlFailure::new("input_failed", "child-frame text input failed"))?;
+        self.frames.demand();
+        Ok(BrowserControlValue::Accepted)
+    }
+
+    pub(in crate::webdriver::session) fn frame_click(
+        &mut self,
+        frame: &FrameTarget,
+        selector: &str,
+        count: u32,
+        events: &BrowserEventSender,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        self.pending_classic_history_start = None;
+        let result = self.frame_value(frame, &target_rect_expression(selector, false), events)?;
+        let (x, y) = parse_target_rect(&result)?;
+        let FrameTarget::Bidi { context, realm } = frame else {
+            return Err(stale());
+        };
+        let element = self.call_bidi("script.evaluate", &json!({
+            "expression":format!("document.querySelector({})", serde_json::to_string(selector).map_err(|_| stale())?),
+            "target":{"realm":realm}, "awaitPromise":false,
+        }), events).map_err(|_| stale())?;
+        if !self.semantic.bidi_frame_is_current(frame) {
+            return Err(stale());
+        }
+        let shared = element
+            .pointer("/result/sharedId")
+            .and_then(Value::as_str)
+            .ok_or_else(stale)?;
+        let mut payload = self
+            .actions
+            .click_payload(x, y, BrowserButton::Left, count, BrowserModifiers::none());
+        payload["context"] = json!(context);
+        // Element origin lets the browser map nested and transformed frame coordinates.
+        let pointer = payload["actions"]
+            .as_array_mut()
+            .and_then(|sources| sources.iter_mut().find(|source| source["type"] == "pointer"))
+            .ok_or_else(stale)?;
+        pointer["actions"][0]["origin"] = json!({"type":"element", "element":{"sharedId":shared}});
+        pointer["actions"][0]["x"] = json!(0);
+        pointer["actions"][0]["y"] = json!(0);
+        self.call_bidi("input.performActions", &payload, events)
+            .map_err(|_| BrowserControlFailure::new("input_failed", "child-frame pointer input failed"))?;
+        self.frames.demand();
+        Ok(BrowserControlValue::Accepted)
+    }
+}
+
+fn json_result(result: &Value) -> Result<Value, BrowserControlFailure> {
+    if result.get("type").and_then(Value::as_str) != Some("success") {
+        return Err(stale());
+    }
+    let text = result
+        .pointer("/result/value")
+        .and_then(Value::as_str)
+        .ok_or_else(stale)?;
+    let value = serde_json::from_str(text)
+        .map_err(|_| BrowserControlFailure::new("invalid_result", "frame returned invalid JSON"))?;
+    bounded_control_value(value)
+}
+
+fn child_contexts(tree: &Value, root: &str) -> Result<Vec<String>, BrowserControlFailure> {
+    let roots = tree.get("contexts").and_then(Value::as_array).ok_or_else(stale)?;
+    let root = roots
+        .iter()
+        .find(|entry| entry["context"].as_str() == Some(root))
+        .ok_or_else(stale)?;
+    let mut pending = vec![root];
+    let mut output = Vec::new();
+    while let Some(entry) = pending.pop() {
+        if let Some(children) = entry.get("children").and_then(Value::as_array) {
+            for child in children.iter().rev() {
+                output.push(
+                    child
+                        .get("context")
+                        .and_then(Value::as_str)
+                        .ok_or_else(stale)?
+                        .to_owned(),
+                );
+                if output.len() >= MAX_SEMANTIC_FRAMES {
+                    return Err(BrowserControlFailure::new(
+                        "frame_limit",
+                        "the page exceeds the semantic frame limit",
+                    ));
+                }
+                pending.push(child);
+            }
+        }
+    }
+    Ok(output)
+}
+fn stale() -> BrowserControlFailure {
+    BrowserControlFailure::new("stale_reference", "the child document changed; take a fresh snapshot")
+}
+
+fn remaining(deadline: Instant) -> Result<Duration, BrowserControlFailure> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|value| !value.is_zero())
+        .ok_or_else(|| BrowserControlFailure::new("frame_timeout", "frame observation exceeded its original bound"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::webdriver::session::PendingHistoryStart;
+    use crate::webdriver::session::viewport::tests::{events, fixture_driver};
+    use crate::webdriver::test_server::Server;
+    use crate::websocket::JsonWsLink;
+    use std::net::TcpListener;
+    use tungstenite::Message;
+
+    fn navigation_fixture() -> (JsonWsLink, std::thread::JoinHandle<Vec<Value>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            let mut commands = Vec::new();
+            while let Ok(Message::Text(text)) = socket.read() {
+                let command: Value = serde_json::from_str(&text).unwrap();
+                commands.push(command.clone());
+                if commands.len() == 1 {
+                    let navigation = json!({"method":"browsingContext.navigationStarted","params":{"context":"first","url":"https://example.test/"}});
+                    socket.send(Message::Text(navigation.to_string().into())).unwrap();
+                }
+                let response = json!({"id":command["id"],"type":"success","result":{"type":"success","realm":"realm","result":{"type":"string","value":"{\"x\":1,\"y\":1}","sharedId":"element"}}});
+                socket.send(Message::Text(response.to_string().into())).unwrap();
+            }
+            commands
+        });
+        (JsonWsLink::connect(&url).unwrap(), worker)
+    }
+
+    #[test]
+    fn frame_input_cannot_consume_a_previous_same_url_history_signal() {
+        for fill in [true, false] {
+            let classic = Server::start(Vec::new());
+            let (link, worker) = navigation_fixture();
+            let mut driver = fixture_driver(&classic, link);
+            let frame = FrameTarget::Bidi {
+                context: "child".into(),
+                realm: "realm".into(),
+            };
+            let mut scan = json!({"nodes":[{"selector":"#top"}]});
+            append_frame_scan(&mut scan, json!({"nodes":[{"selector":"#field"}]}), &frame, 2).unwrap();
+            let (generation, _, nodes) = driver.semantic.register_nodes(scan).unwrap();
+            driver.pending_classic_history_start = Some(PendingHistoryStart {
+                url: "https://example.test/".into(),
+                expires_at: Instant::now() + Duration::from_secs(30),
+            });
+            let result = if fill {
+                driver.frame_fill(&frame, "#field", "synthetic", &events())
+            } else {
+                driver.frame_click(&frame, "#field", 1, &events())
+            };
+            assert_eq!(result.unwrap_err().code, "stale_reference");
+            assert!(driver.semantic.generation() > generation);
+            for node in nodes {
+                assert_eq!(
+                    driver
+                        .semantic
+                        .resolve_target(&crate::BrowserTarget::Ref {
+                            reference: node.reference
+                        })
+                        .unwrap_err()
+                        .code,
+                    "stale_reference"
+                );
+            }
+            drop(driver);
+            let commands = worker.join().unwrap();
+            assert_eq!(commands.len(), 1);
+            assert_eq!(commands[0]["method"], "script.evaluate");
+        }
+    }
+
+    #[test]
+    fn tree_is_scoped_to_the_bound_page_and_includes_nested_children() {
+        let tree = json!({"contexts":[{"context":"other","children":[{"context":"foreign"}]},{"context":"page","children":[{"context":"child","children":[{"context":"nested","children":null}]}]}]});
+        assert_eq!(child_contexts(&tree, "page").unwrap(), vec!["child", "nested"]);
+        assert!(child_contexts(&tree, "missing").is_err());
+    }
+
+    #[test]
+    fn excessive_frame_trees_and_script_failures_are_rejected() {
+        let children: Vec<_> = (0..MAX_SEMANTIC_FRAMES)
+            .map(|n| json!({"context":n.to_string(),"children":null}))
+            .collect();
+        let tree = json!({"contexts":[{"context":"page","children":children}]});
+        assert_eq!(child_contexts(&tree, "page").unwrap_err().code, "frame_limit");
+        assert_eq!(
+            json_result(&json!({"type":"exception","exceptionDetails":{"text":"sensitive-page-error"}}))
+                .unwrap_err()
+                .code,
+            "stale_reference"
+        );
+        assert!(remaining(Instant::now().checked_sub(Duration::from_secs(1)).unwrap()).is_err());
+    }
+    #[test]
+    fn multi_frame_scan_rejects_an_earlier_child_invalidated_during_a_later_scan() {
+        for (event, affected) in [
+            (None, "child"),
+            (Some("browsingContext.navigationStarted"), "child"),
+            (Some("browsingContext.contextDestroyed"), "child"),
+            (Some("browsingContext.navigationStarted"), "foreign"),
+            (Some("browsingContext.contextDestroyed"), "foreign"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("ws://{}/", listener.local_addr().unwrap());
+            let worker = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut socket = tungstenite::accept(stream).unwrap();
+                let mut contexts = Vec::new();
+                while let Ok(Message::Text(text)) = socket.read() {
+                    let command: Value = serde_json::from_str(&text).unwrap();
+                    let result = if command["method"] == "browsingContext.getTree" {
+                        json!({"contexts":[{"context":"first","children":[{"context":"later"},{"context":"child"}]}]})
+                    } else {
+                        assert_eq!(command["method"], "script.evaluate");
+                        let context = command["params"]["target"]["context"].as_str().unwrap();
+                        contexts.push(context.to_owned());
+                        if context == "later"
+                            && let Some(method) = event
+                        {
+                            socket.send(Message::Text(json!({"method":method,"params":{"context":affected,"url":"https://example.test/same"}}).to_string().into())).unwrap();
+                        }
+                        json!({"type":"success","realm":format!("{context}-realm"),"result":{"type":"string","value":"{\"nodes\":[{\"selector\":\"#field\"}]}"}})
+                    };
+                    socket
+                        .send(Message::Text(
+                            json!({"id":command["id"],"type":"success","result":result})
+                                .to_string()
+                                .into(),
+                        ))
+                        .unwrap();
+                }
+                contexts
+            });
+            let classic = Server::start(Vec::new());
+            let mut driver = fixture_driver(&classic, JsonWsLink::connect(&url).unwrap());
+            let (generation, _, nodes) = driver
+                .semantic
+                .register_nodes(json!({"nodes":[{"selector":"#top"}]}))
+                .unwrap();
+            let result = driver.frame_scan_children(
+                json!({"nodes":[]}),
+                &scan_expression(None, 10),
+                10,
+                &events(),
+                Instant::now() + Duration::from_secs(3),
+            );
+            if event.is_some() && affected == "child" {
+                assert_eq!(result.unwrap_err().code, "stale_reference");
+            } else {
+                assert_eq!(result.unwrap()["nodes"].as_array().unwrap().len(), 2);
+            }
+            assert_eq!(driver.semantic.generation(), generation);
+            assert_eq!(
+                driver
+                    .semantic
+                    .resolve(&crate::BrowserTarget::Ref {
+                        reference: nodes[0].reference.clone()
+                    })
+                    .unwrap(),
+                "#top"
+            );
+            drop(driver);
+            assert_eq!(worker.join().unwrap(), ["child", "later"]);
+        }
+    }
+}

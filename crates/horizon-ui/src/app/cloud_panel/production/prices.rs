@@ -45,6 +45,10 @@ pub(super) struct State {
     list_job: Option<Job<(PriceList, Preferences)>>,
     /// Manual refresh invalidates current offers without removing their presentation.
     refreshed_after: Option<Instant>,
+    /// Instant stored by test [`Self::answered`]. A descheduled runner must not age that
+    /// fixture past [`FRESH`]. Backdating `list.at`, or [`Self::refresh`], uses the real rules.
+    #[cfg(test)]
+    fixture_answered_at: Option<Instant>,
     sizes: HashMap<SizeKey, Result<Fetched<SizeAvailability>, String>>,
     size_jobs: HashMap<SizeKey, Job<SizeAvailability>>,
     size_failed_at: HashMap<SizeKey, Instant>,
@@ -151,13 +155,22 @@ impl State {
     /// while a background refresh for it runs, for at most [`freshness::REFRESH_GRACE`].
     /// Agents' offers wait for [`Self::fresh_list`] instead.
     pub fn comparable_list(&self) -> Option<&Fetched<(PriceList, Preferences)>> {
-        self.list.as_ref().filter(|list| {
-            freshness::comparable(
-                Some(freshness::Answer::since(list.at, self.refreshed_after)),
-                FRESH,
-                freshness::Fetch::running(self.list_job.is_some()),
-            )
-        })
+        self.list.as_ref().filter(|list| self.list_is_comparable(list))
+    }
+
+    fn list_is_comparable(&self, list: &Fetched<(PriceList, Preferences)>) -> bool {
+        #[cfg(test)]
+        if self
+            .fixture_answered_at
+            .is_some_and(|anchor| list.at >= anchor && self.refreshed_after.is_none_or(|refresh| list.at >= refresh))
+        {
+            return true;
+        }
+        freshness::comparable(
+            Some(freshness::Answer::since(list.at, self.refreshed_after)),
+            FRESH,
+            freshness::Fetch::running(self.list_job.is_some()),
+        )
     }
 
     /// Whether the catalog shown is older than [`START_LIMIT`], so it cannot start a cloud.
@@ -487,18 +500,14 @@ impl State {
         if self.hetzner.displayed().is_none() && !self.hetzner.bound() {
             self.hetzner.answered(None);
         }
+        let at = Instant::now();
+        self.fixture_answered_at = Some(at);
         self.accept(Fetched {
             value: (list, preferences),
-            at: Instant::now(),
+            at,
         });
         for (profile, size) in sizes {
-            self.sizes.insert(
-                key(&profile),
-                Ok(Fetched {
-                    value: size,
-                    at: Instant::now(),
-                }),
-            );
+            self.sizes.insert(key(&profile), Ok(Fetched { value: size, at }));
         }
     }
 }

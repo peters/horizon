@@ -33,7 +33,7 @@ impl CastState {
     /// session.
     pub(super) fn toggle_picker(
         &mut self,
-        anchor: Option<horizon_core::PanelId>,
+        anchor: super::Anchor,
         workspace: WorkspaceId,
         source: CastSource,
         ctx: &Context,
@@ -41,7 +41,7 @@ impl CastState {
         let reopened = self
             .picker
             .as_ref()
-            .is_some_and(|picker| picker.anchor == anchor && picker.workspace == workspace && picker.anchor.is_some());
+            .is_some_and(|picker| picker.anchor == anchor && picker.workspace == workspace);
         self.close_picker(ctx);
         if reopened {
             return;

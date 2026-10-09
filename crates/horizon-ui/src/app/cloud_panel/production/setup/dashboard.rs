@@ -346,6 +346,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
         verified,
         ssh_ready,
         required_agents,
+        github,
         ..
     } = state;
     let draft = draft.as_deref_mut()?;
@@ -356,6 +357,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
     if ui.available_width() < STACKED_BELOW {
         fields::providers(ui, draft, edits);
         fields::agents(ui, draft, edits, fixed_agents);
+        super::github::card(ui, draft, github);
         action = registry::card(ui, draft, verified);
         fields::workspace(ui, draft, *ssh_ready, &readiness);
     } else {
@@ -364,6 +366,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
             columns[1].spacing_mut().item_spacing.y = GAP;
             fields::providers(&mut columns[0], draft, edits);
             fields::agents(&mut columns[0], draft, edits, fixed_agents);
+            super::github::card(&mut columns[1], draft, github);
             action = registry::card(&mut columns[1], draft, verified);
             fields::workspace(&mut columns[1], draft, *ssh_ready, &readiness);
         });

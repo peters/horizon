@@ -735,11 +735,257 @@ does not pick up the primary's token.
 Free-form input such as GraphQL queries is not inspected. This per-repository
 selection is routing, not isolation: every process in the
 container runs as the same user and can read the credential file, so the
-shared trust boundary described above still applies. Version 1 files keep their
+shared trust boundary described above still applies. The
+[GitHub access service](#github-access-that-refreshes-itself) removes that file
+and keeps its token chain out of agents' reach. Version 1 files keep their
 single-repository behavior. Every install first removes the identities the
 previous install wrote (global for version 1, per repository for version 2) where
 they are unchanged. Images that support version 2 also
 report `horizon-git-auth-contract=2` from `horizon-worker-check --git-auth`.
+
+### GitHub access that refreshes itself
+
+The token files above are static: they stop working when the token expires, and
+every agent can read them. The `horizon-worker-github` service replaces them with
+a GitHub App user token chain that the worker keeps fresh on its own, also while
+your computer is off. Agents never see the chain. They get only the current
+access token, and only for the repositories that you granted.
+
+A GitHub App user access token lasts 8 hours. Its refresh token lasts about six
+months. Each refresh gives a new access token and a new refresh token, and GitHub
+cancels the old pair at once. The service therefore writes the new pair to disk
+before any agent can use it.
+
+**Install.** Horizon sends the chain as root over SSH stdin:
+
+```bash
+horizon-worker-github install < chain.json
+```
+
+```json
+{"version": 1, "client_id": "Iv23...", "client_secret": "optional", "login": "optional",
+ "author_name": "Your Name", "author_email": "you@example.com",
+ "grants": [{"repository": "owner/name", "target": "primary", "access": "push"},
+            {"repository": "owner/library", "target": "sibling:library", "access": "read"}],
+ "chain": {"access_token": "...", "access_expires_at": 1800000000,
+           "refresh_token": "...", "refresh_expires_at": 1815000000}}
+```
+
+- The input is at most 64 KiB. Unknown or duplicate fields are refused.
+- `client_secret` is only for a chain from a web sign-in. A chain from the device
+  flow refreshes with `client_id` alone.
+- `login` is the GitHub account the chain acts as. `status` reports it, so Horizon
+  can show who a cloud acts as.
+- `target` is `primary` or `sibling:<alias>`, as in version 2 above. At most 16
+  grants are accepted, and repositories and targets must be unique.
+- The times are Unix seconds. A chain whose refresh token already expired is
+  refused.
+- Each target repository gets the same configuration as a version 2 install: a
+  clean HTTPS `origin`, no separate push URL and the author identity. The Git
+  helper does this work as the agent user, and it gets no token. The previous
+  chain stays stored and served until every repository is configured; only then
+  is the new chain stored. If the configuration or that save fails, the
+  repositories of the previous chain are configured again and the previous chain
+  stays. Without a previous chain, the repositories of the static token file are
+  configured again (`horizon-worker-git-auth restore`). Each start of the service
+  configures the repositories for the stored chain, or for the static token file
+  without one, before it opens its socket, so an install that stopped between the
+  two steps is undone. When that fails, the service does not start, and `status`
+  reports `"serving": false`. An install that is cut off while the service runs,
+  such as by a closed SSH connection, leaves an intent file with the grants it was
+  configuring, never a token; the service's next check, within a minute, finds it
+  and configures the repositories for the stored chain again, also a revoked one.
+  An install that cannot write the intent fails before it changes anything, and
+  one whose rollback fails leaves the intent for the service. The supervisor lists the service as running only
+  once its socket answers. The
+  install then removes the static token file, so one source of tokens
+  remains.
+- The output is the JSON of the stored copies, as `status` prints it without the
+  `serving` field, which only the running service can report.
+
+**Storage.** The chain is stored in `/workspace/.horizon-root/github/state.json`.
+The directory belongs to root with mode 0700, so the chain survives a container
+restart and agent isolation keeps agents out of it. The service writes each file
+atomically and syncs it to disk. It examines the actual modes after it creates
+the directory and the file, because some provider volumes accept `chmod` and
+still show other modes. If the volume does not keep private modes, the chain goes
+to `/run/horizon-github/` instead, and `status` reports `"persistent": false`.
+First the service removes an older chain from the volume, because a restart would
+serve it again; if it cannot remove it, the write fails.
+The tmpfs copy is lost when the container stops, so Horizon must install the chain
+again. Anyone who can read the volume at the provider can read a persistent
+chain, so use `clear` (or revoke the sign-in on GitHub) when you no longer
+want the worker to have access.
+
+If no storage accepts a refreshed chain, the service keeps it in memory, because
+GitHub already cancelled the stored one. It tries to write it again at every
+check, about once a minute, until a write succeeds. Until then it gives agents
+no token, neither from that chain nor from the cancelled one it replaced, `status` reports `"pending_write": true` and
+`"persistent": false`, and a restart of the service loses the chain. A volume
+write whose directory sync fails counts as stored only once tmpfs also holds a
+copy. Agents' requests wait while a write is under way, so they never get a token
+whose refresh token is not stored yet.
+
+**Agent isolation is required.** Without agent isolation, agents run as root and
+could read the chain. The supervisor starts the service only when
+`horizon-worker-tailnet isolate` marked the worker as isolated, and `install`
+refuses a chain without that mark. `horizon-worker-check --git-auth` reports the
+service only for an image that has the isolation launcher.
+
+**Refresh.** `horizon-worker-github serve` runs as root for the life of the
+worker. `horizon-worker-supervise` starts it whenever the image contains it and
+agents are isolated. If the service cannot open its socket, it tries five times
+with doubled waits from 2 seconds and then stops. The supervisor then removes it
+from the published services and the worker keeps running; Git and `gh` fall
+back to the static token file, and `status` reports `"serving": false`. The
+service is not started again until the worker restarts. It refreshes the chain
+when the access token expires in 30 minutes or less:
+
+- A network failure, a GitHub server error or an unusable reply is retried after
+  15 seconds, then with doubled waits up to 15 minutes, each with random jitter.
+- `bad_refresh_token` marks the chain `revoked`. The service stops refreshing and
+  agents get no token until Horizon installs a new chain.
+- A refresh token that expired marks the chain `revoked` without a request.
+- Other GitHub error codes are kept in `last_error` and retried.
+- The service talks only to `https://github.com` and does not follow redirects.
+  `HORIZON_WORKER_GITHUB_TEST_URL` points it at a fake GitHub for tests. It
+  accepts only `http://127.0.0.1:<port>`.
+
+If a reply is lost after GitHub already rotated the chain, the next refresh gets
+`bad_refresh_token` and the chain becomes `revoked`. Connect GitHub again in
+Horizon in that case.
+
+**Agent access.** Agents ask the service on `/run/horizon-worker/github.sock`.
+The socket accepts every local account, but the service reads the caller's user
+ID from the kernel (`SO_PEERCRED`) and answers only root and the agent user
+(UID 10001). It writes one line for each request to
+`/run/horizon-github/requests.log` with the time, user ID, process ID, the
+repository and the result, but never a token. Each request is one JSON line:
+
+- `{"request": "credential", "protocol": "https", "host": "github.com",
+  "path": "owner/name.git"}` answers with `username` and `password`, as Git's
+  credential helper needs them.
+- `{"request": "gh-token", "repository": "owner/name"}` answers with `token`,
+  `repository` and `access`.
+
+The reply never contains the refresh token or the client secret. A repository
+without a grant, a host other than github.com or plain HTTP gets a refusal. A
+token that expires within one minute is not given out. While a refreshed chain
+waits for its write, every request gets a refusal with `"state":"unstored"`.
+`horizon-worker-git-auth get` and the `gh` wrapper ask the socket first and fall
+back to the static file only when no service answers or it holds no chain
+(`"state":"absent"`). The `gh` wrapper still
+chooses the repository as described above. When it refuses a nested `gh`, it
+removes the `GH_TOKEN` that an outer wrapped `gh` injected, but keeps every token
+variable that you set yourself.
+
+`access: "read"` is a routing guard, not a GitHub permission. The service refuses
+a `read` grant only when the request names `git-receive-pack`. Git's credential
+requests normally carry only the repository path, so a push and a fetch look the
+same, and `gh` gets the same token for both. The token can do what the GitHub App
+and your account allow on that repository. To make a repository truly read-only
+for agents, limit the GitHub App's permissions or your own access to it. A
+process that keeps `GH_TOKEN` in its environment for more than 8 hours uses an
+expired token; start `gh` again to get the current one.
+
+**Asking for more access.** An agent that needs a repository without a grant
+asks you for it with the `github_access` MCP tool. You decide in Horizon:
+
+- **Allow for this cloud**: the worker stores a cloud grant with the chain, so it
+  survives a restart and a new chain of the same GitHub App and account. A chain
+  of another account, or one whose account is unknown, drops it.
+- **Deny**: the agent is told not to ask again.
+
+Access is per cloud. Every agent session of the cloud gets the same token, so a
+repository you allow reaches all of them; the grants route credentials and are
+not a boundary between sessions. Enforcement per repository and per task is
+tracked in issue #1393.
+
+`horizon-worker-configure` gives agents the tool whenever the image contains
+`horizon-worker-github`, also before you connect GitHub; until then the tool
+answers that GitHub is not connected. The tool runs
+`horizon-worker-github mcp` as the agent and uses the same socket:
+
+- `{"request": "request", "repository": "owner/name", "access": "push",
+  "reason": "..."}` records a request and answers `{"status": "pending",
+  "id": "..."}`. The reason has at most 300 bytes of UTF-8 and no control,
+  formatting, surrogate or line separator characters, such as the ones that
+  reorder text.
+  Asking for push while a read request of the same session waits turns it into
+  a push request with the new reason. A repository that the session already reaches answers
+  `"status": "allowed"` without a request. A second request of the same session
+  for the same repository answers with the first request. At most 32 requests
+  wait at the same time, and a request without a decision expires after 24
+  hours.
+- `{"request": "request-status", "id": "..."}` answers `pending`, `allowed`
+  (with `scope` `cloud`), `denied` or `expired`. Only the session that
+  asked can read its request.
+
+The service finds the asking session the same way the stop watcher does: it walks
+from the caller's process, which the kernel names, up to an agent pane of
+`horizon-worker-session`. That mapping only keeps requests apart per session; it
+is not an identity. The session's agent marker is writable by every process of the
+cloud, so Horizon shows the session that asks, never a verified agent, and the
+host's list carries no agent name. Access is per cloud anyway: every session of
+the cloud gets the same token for an allowed repository. The tool
+waits up to 10 minutes for your decision and then tells the agent to ask again
+later; that call returns the same request. Requests are kept in
+`/run/horizon-github/access-requests.json` (root only), so a container restart
+ends them. Each request belongs to the GitHub App and account of the chain it was
+made under; after an install for another app or account it counts as expired and
+is never decided for the new one.
+
+Horizon lists and decides requests as root over SSH:
+
+```bash
+horizon-worker-github requests
+# {"requests":[{"id":"9bf221fe23173feb","repository":"owner/extra","access":"push",
+#   "reason":"Push the fix","session":"<session>","created_at":1800000000}]}
+horizon-worker-github decide 9bf221fe23173feb allow-cloud   # or deny
+# {"ok":true,"id":"9bf221fe23173feb","decision":"allow-cloud","repository":"owner/extra",
+#   "access":"push","status":"allowed"}
+# {"ok":false,"id":"9bf221fe23173feb","error":"not_installed","message":"..."}
+```
+
+Before it allows, the worker asks GitHub for the repository with the current
+access token (`GET /repos/{owner}/{name}`), and for push it requires
+`permissions.push`. If that fails, the decision fails with one of these codes
+and the request stays pending: `not_installed` (GitHub answered 404),
+`no_push`, `token_invalid`, `forbidden`, `unreachable`, `token_expired` or
+`no_chain`. `too_many_grants` (a cloud takes at most 32 cloud grants, so the
+stored chain stays readable) and `chain_changed` (another chain was stored while
+GitHub was asked) also leave it pending. `unknown_request` and `not_pending` end
+the decision too. Both
+outcomes print JSON and exit with status 0. `read` and `push` keep the meaning
+described above: `permissions.push` reports your account's access, and the
+GitHub App's own permissions still limit what the token can do.
+
+**Status and removal.** Horizon runs these as root:
+
+```bash
+horizon-worker-github status
+# {"version":1,"state":"ok","persistent":true,"pending_write":false,"login":"octocat",
+#  "access_expires_at":...,"refresh_expires_at":...,"last_refresh_at":...,"last_error":null,
+#  "repositories":[{"repository":"owner/name","target":"primary","access":"push"},
+#                  {"repository":"owner/extra","target":null,"access":"push"}],
+#  "pending_requests":0,"serving":true}
+horizon-worker-github clear
+```
+
+`state` is `ok`, `revoked` or `absent`. A repository with `"target": null` is a
+cloud grant. `pending_requests` counts the requests that wait for you. `status` asks the running service over
+the socket, as root, so it also sees a chain that only the service's memory
+holds. Without an answer it reads the stored copies and reports
+`"serving": false`. `clear` first removes the static Git binding, and keeps the
+chain when it cannot, so agents never keep access while status reports no chain.
+Then it removes every copy of the chain with its cloud grants, durably, and every
+access request, and writes a root-only
+clear mark that the running service reads, so the service also drops a chain
+that only its memory holds. The service keeps running and answers that no chain
+exists. It does not revoke the sign-in on GitHub. Images with this service report
+`horizon-github-chain-contract=1` from `horizon-worker-check --git-auth`. The
+[test procedure](../../docs/testing/procedures/worker-github-chain.md) checks the
+service with a fake GitHub and with a real GitHub App.
 
 ## Repeatable capability image smoke
 

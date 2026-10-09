@@ -9,6 +9,7 @@ mod registry_mcp;
 use horizon_core::cloud_runtime::{
     self, Cancellation, Event,
     deployment::{self, replacement},
+    github::Prompt,
     repository,
     settings::Settings,
     state::Store,
@@ -245,6 +246,38 @@ fn print_event(event: Event) {
                 }
             }
         }
+        // The deployment waits for this sign-in, so the person needs its code or page here.
+        Event::GitHub(prompt) => match prompt {
+            Prompt::Device {
+                user_code,
+                verification_uri,
+                ..
+            } => println!("[{at:7.1}s] GitHub: enter {user_code} at {verification_uri}"),
+            Prompt::Web { url } => {
+                println!("[{at:7.1}s] GitHub: approve this cloud at {url}");
+                if let Err(error) = horizon_core::open_url(&url) {
+                    println!("[{at:7.1}s] GitHub: could not open the page: {error}");
+                }
+            }
+            Prompt::Connected {
+                login, repositories, ..
+            } => println!(
+                "[{at:7.1}s] GitHub: signed in as {login} for {}",
+                repositories.join(", ")
+            ),
+            Prompt::Ended { reason, .. } => println!("[{at:7.1}s] GitHub: {reason}"),
+            Prompt::Publish {
+                user_code,
+                verification_uri,
+                ..
+            } => println!("[{at:7.1}s] GitHub: to publish the image, enter {user_code} at {verification_uri}"),
+            Prompt::Published { allowed } => {
+                println!(
+                    "[{at:7.1}s] GitHub: image publishing {}",
+                    if allowed { "allowed" } else { "not allowed" }
+                );
+            }
+        },
         _ => {}
     }
 }
@@ -307,6 +340,10 @@ fn prepare_image(
                 registry.docker_config(request.profile.build.is_some())
             }),
         runner: &runner,
+        publisher: registry.is_none().then_some(cloud_runtime::github::publish::Publisher {
+            docker_config: &request.settings.docker_config,
+            cloud_id: &request.cloud_id,
+        }),
     };
     let digest = images.prepare(&request.profile, &snapshot, &request.cloud_id)?;
     if git_auth.is_some() {
