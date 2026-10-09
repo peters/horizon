@@ -77,7 +77,7 @@ impl WebDriverService {
             BackendKind::ChromiumCdp => return Err("Chromium does not use WebDriver service startup".to_string()),
         };
 
-        let mut permit_system_access = firefox_requests_system_access(config);
+        let mut permit_system_access = note_system_access(config);
         for attempt in 1..=STARTUP_ATTEMPTS {
             let webdriver_listener = reserve_loopback_listener()?;
             let address = webdriver_listener
@@ -124,20 +124,14 @@ impl WebDriverService {
                 }
                 if let Some(status) = process.child_status() {
                     let stderr = process.stderr_tail();
-                    let error = format!("{label} exited before becoming ready ({status}); stderr: {stderr}");
-                    if retry_without_system_access(permit_system_access, process.stderr_is_complete(), &stderr) {
-                        permit_system_access = false;
-                        tracing::warn!("{error}; retrying without --allow-system-access");
-                        if attempt == STARTUP_ATTEMPTS {
-                            return Err(error);
+                    let complete = process.stderr_is_complete();
+                    match driver_exit(label, status, &stderr, permit_system_access, complete, attempt)? {
+                        DriverExit::DropSystemAccess => {
+                            permit_system_access = false;
+                            break;
                         }
-                        break;
+                        DriverExit::Retry => break,
                     }
-                    if attempt == STARTUP_ATTEMPTS {
-                        return Err(error);
-                    }
-                    tracing::warn!(attempt, "{error}; retrying with fresh reserved ports");
-                    break;
                 }
                 if Instant::now() >= deadline {
                     let _ = process.kill();
@@ -149,6 +143,44 @@ impl WebDriverService {
         }
         Err(format!("{label} exhausted startup attempts"))
     }
+}
+
+enum DriverExit {
+    DropSystemAccess,
+    Retry,
+}
+
+fn note_system_access(config: &BrowserConfig) -> bool {
+    let permit = firefox_requests_system_access(config);
+    if permit {
+        tracing::warn!(
+            "geckodriver --allow-system-access is enabled; any local client that reaches this WebDriver port can run with Firefox UI privileges"
+        );
+    }
+    permit
+}
+
+fn driver_exit(
+    label: &str,
+    status: std::process::ExitStatus,
+    stderr: &str,
+    permit_system_access: bool,
+    stderr_complete: bool,
+    attempt: usize,
+) -> Result<DriverExit, String> {
+    let error = format!("{label} exited before becoming ready ({status}); stderr: {stderr}");
+    if retry_without_system_access(permit_system_access, stderr_complete, stderr) {
+        tracing::warn!("{error}; retrying without --allow-system-access");
+        if attempt == STARTUP_ATTEMPTS {
+            return Err(error);
+        }
+        return Ok(DriverExit::DropSystemAccess);
+    }
+    if attempt == STARTUP_ATTEMPTS {
+        return Err(error);
+    }
+    tracing::warn!(attempt, "{error}; retrying with fresh reserved ports");
+    Ok(DriverExit::Retry)
 }
 
 fn status_is_ready(status: &serde_json::Value) -> bool {
@@ -175,7 +207,8 @@ pub(super) fn firefox_service_arguments(
 /// that startup is retrying without that flag.
 #[must_use]
 pub(super) fn firefox_requests_system_access(config: &BrowserConfig) -> bool {
-    config.backend == BackendKind::FirefoxBidi
+    config.firefox_system_access
+        && config.backend == BackendKind::FirefoxBidi
         && config.automation_disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals
 }
 
@@ -305,7 +338,12 @@ mod tests {
             backend: BackendKind::SafariWebDriver,
             ..crate::BrowserConfig::default()
         };
-        assert!(super::firefox_requests_system_access(&config));
+        assert!(!super::firefox_requests_system_access(&config));
+        let opted_in = crate::BrowserConfig {
+            firefox_system_access: true,
+            ..config.clone()
+        };
+        assert!(super::firefox_requests_system_access(&opted_in));
         assert!(!super::firefox_requests_system_access(&browser_default));
         assert!(!super::firefox_requests_system_access(&safari));
         assert!(!super::retry_without_system_access(
@@ -319,15 +357,25 @@ mod tests {
             ""
         ));
         assert!(
-            super::firefox_service_arguments(&config, 9, 10, true)
+            !super::firefox_service_arguments(&config, 9, 10, true)
                 .iter()
                 .any(|argument| argument == "--allow-system-access")
         );
         assert!(
-            !super::firefox_service_arguments(&config, 9, 10, false)
+            super::firefox_service_arguments(&opted_in, 9, 10, true)
                 .iter()
                 .any(|argument| argument == "--allow-system-access")
         );
+        assert!(
+            !super::firefox_service_arguments(&opted_in, 9, 10, false)
+                .iter()
+                .any(|argument| argument == "--allow-system-access")
+        );
+        let browser_default_opt_in = crate::BrowserConfig {
+            firefox_system_access: true,
+            ..browser_default.clone()
+        };
+        assert!(!super::firefox_requests_system_access(&browser_default_opt_in));
     }
 
     #[test]

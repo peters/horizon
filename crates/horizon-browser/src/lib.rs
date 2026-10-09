@@ -115,6 +115,13 @@ pub struct BrowserConfig {
     pub hide_native_window: bool,
     /// Treatment of common script-visible browser-automation signals.
     pub automation_disclosure: AutomationDisclosurePolicy,
+    /// Pass geckodriver `--allow-system-access` for a minimized Firefox session.
+    ///
+    /// Mozilla documents this flag as full system access. Any local client that
+    /// can reach the driver port can then run with Firefox UI privileges for
+    /// the whole session. Leave this false. Minimized Firefox then uses the
+    /// preload fallback.
+    pub firefox_system_access: bool,
     /// Explicit Chromium executable (absolute path or PATH name).
     pub command: Option<String>,
     /// Explicit Firefox executable. Geckodriver still owns the process.
@@ -148,6 +155,7 @@ impl Default for BrowserConfig {
             headless: true,
             hide_native_window: false,
             automation_disclosure: AutomationDisclosurePolicy::default(),
+            firefox_system_access: false,
             command: None,
             firefox_command: None,
             geckodriver_command: None,
@@ -258,6 +266,7 @@ mod tests {
         assert_eq!(config.backend, BackendKind::FirefoxBidi);
         assert!(config.headless);
         assert!(!config.hide_native_window);
+        assert!(!config.firefox_system_access);
         assert_eq!(
             config.automation_disclosure,
             AutomationDisclosurePolicy::MinimizeCommonSignals

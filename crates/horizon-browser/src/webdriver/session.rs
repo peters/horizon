@@ -1117,7 +1117,12 @@ mod tests {
 
         assert_eq!(capabilities["moz:firefoxOptions"]["args"][0], "-headless");
         assert!(!firefox_args_include(&capabilities, "-remote-allow-system-access"));
-        assert!(geckodriver_allows_system_access(&config));
+        assert!(!geckodriver_allows_system_access(&config));
+        let opted_in = BrowserConfig {
+            firefox_system_access: true,
+            ..config.clone()
+        };
+        assert!(geckodriver_allows_system_access(&opted_in));
         assert_eq!(prefs["widget.gtk.overlay-scrollbars.enabled"], false);
         assert_eq!(prefs["ui.useOverlayScrollbars"], 0);
         assert_eq!(prefs["remote.bidi.dismiss_file_pickers.enabled"], true);
@@ -1144,6 +1149,7 @@ mod tests {
         assert!(!firefox_args_include(&visible, "-remote-allow-system-access"));
         assert!(geckodriver_allows_system_access(&BrowserConfig {
             headless: false,
+            firefox_system_access: true,
             ..config.clone()
         }));
 

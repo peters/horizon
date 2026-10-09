@@ -37,6 +37,7 @@ fn firefox_minimization_keeps_a_native_webdriver_getter_false() {
         browser: BrowserConfig {
             backend: BackendKind::FirefoxBidi,
             profile_root: Some(profiles.path().to_path_buf()),
+            firefox_system_access: true,
             ..BrowserConfig::default()
         },
         panel_local_id: "firefox-native-webdriver-flag".into(),

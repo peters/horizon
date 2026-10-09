@@ -20,6 +20,7 @@ It also tests the preload fallback and one synthetic sign-in check.
 - Use the candidate source checkout.
 - On Linux, Firefox and geckodriver must be on PATH.
 - Task 6.1 needs geckodriver 0.37 or newer.
+- System access stays off unless `firefox_system_access` is true.
 - This procedure does not test Chromium or Safari.
 - This procedure sends one synthetic Google identifier.
 - This procedure does not send a password.
@@ -57,13 +58,15 @@ It also tests the preload fallback and one synthetic sign-in check.
 1. Run `cargo test -p horizon-browser --test firefox_native_flag_live -- --ignored --nocapture`.
 
    Result: The test passes. The page title is `false native`.
+   The live test sets `firefox_system_access` to true.
    Geckodriver older than 0.37 uses the preload fallback.
 
 ### 6.2 LAUNCH-POLICY — Both disclosure policies
 
 1. Run `cargo test -p horizon-browser --lib firefox_screenshot_session_keeps_scrollbars_visible`.
 
-   Result: A minimize session asks geckodriver for `--allow-system-access`.
+   Result: A minimize session does not ask for `--allow-system-access`.
+   The same session asks for that argument when `firefox_system_access` is true.
    A `BrowserDefault` session does not ask for that argument.
    Firefox options do not include `-remote-allow-system-access`.
    This test does not start geckodriver.
@@ -74,7 +77,7 @@ It also tests the preload fallback and one synthetic sign-in check.
    The test matches `unexpected argument '--allow-system-access'`.
    The test matches `which wasn't expected`.
    The test does not match `address already in use`.
-   The argument list includes `--allow-system-access` only when the permit is true.
+   The argument list includes `--allow-system-access` only when the permit and the opt-in are true.
    An unfinished stderr tail drops `--allow-system-access`.
    A finished unrelated error keeps that argument.
    This test does not start geckodriver.

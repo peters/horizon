@@ -41,14 +41,17 @@ because that accessor is itself a detection signal. The engine reads native
 Client Hint values on a network-free temporary target and closes that target
 before attaching the caller's `about:blank` page, so it cannot enter caller
 history or frames. Title updates use protocol target metadata rather than a
-page-JS binding. Firefox first clears the Marionette and Remote Agent
-automation flags from the chrome context, so the native `navigator.webdriver`
-getter stays native and returns false. It changes a key pair only when both
-keys are already booleans: current Firefox uses `IsBrowserAutomationRunning`,
-and Firefox ESR 140 uses `Active`. A shared Firefox process does that once,
-on the session transport, before page commands are limited to one window. If
-the chrome context is unavailable, or neither key pair is already present,
-Firefox falls back to a narrow
+page-JS binding. Firefox can clear the Marionette and Remote Agent
+automation flags from the chrome context when `firefox_system_access` is
+true. That option starts geckodriver with `--allow-system-access`. Mozilla
+documents the flag as full system access for every local client that can
+reach the driver port, so it stays off unless you set it. The clear changes
+a key pair only when both keys are already booleans: current Firefox uses
+`IsBrowserAutomationRunning`, and Firefox ESR 140 uses `Active`. A shared
+Firefox process does that once, on the session transport, before page
+commands are limited to one window. If system access is off, the chrome
+context is unavailable, or neither key pair is already present, Firefox
+falls back to a narrow
 `navigator.webdriver` value shim installed with WebDriver BiDi
 `script.addPreloadScript` before the initial navigation. Startup fails when
 that fallback command is rejected, and also when the session cannot return
