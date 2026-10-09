@@ -156,13 +156,18 @@ fn candidates<'a>(parent: &'a Path, remote: &'a Remote) -> impl Iterator<Item = 
 
 /// The folder a clone of `remote` goes in: its owner's, unless a folder on the way there is
 /// a checkout, as when GitHub's `acme/tools` is cloned and GitLab's `acme/tools/widget`
-/// comes next. A clone never lands inside another repository, so it then goes straight
-/// under `parent`.
+/// comes next, or is anything but a plain folder: a link, which would take the clone out of
+/// `parent`, a file, or something that cannot be looked at. The clone then goes straight
+/// under `parent`, never inside another repository or elsewhere.
 fn clone_folder(parent: &Path, remote: &Remote) -> PathBuf {
     let mut folder = parent.to_owned();
     for segment in remote.owner.split('/') {
         folder.push(portable(segment));
-        if folder.join(".git").exists() {
+        let usable = match std::fs::symlink_metadata(&folder) {
+            Ok(meta) => meta.is_dir() && std::fs::symlink_metadata(folder.join(".git")).is_err(),
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        };
+        if !usable {
             return parent.to_owned();
         }
     }

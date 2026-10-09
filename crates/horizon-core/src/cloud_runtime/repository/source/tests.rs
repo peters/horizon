@@ -69,6 +69,24 @@ fn a_clone_never_lands_inside_another_checkout() {
     // Another repository of the same owner still goes in the owner's folder.
     let web = parse("acme/web").unwrap();
     assert_eq!(destination(temp.path(), &web), temp.path().join("acme/web"));
+    // An owner path that is a file is no folder to clone into.
+    std::fs::write(temp.path().join("octo"), "a file").unwrap();
+    assert_eq!(
+        destination(temp.path(), &parse("octo/web").unwrap()),
+        temp.path().join("web")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_owner_folder_never_takes_a_clone_elsewhere() {
+    let temp = tempfile::tempdir().unwrap();
+    let elsewhere = temp.path().join("elsewhere");
+    let parent = temp.path().join("code");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::create_dir_all(&parent).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, parent.join("acme")).unwrap();
+    assert_eq!(destination(&parent, &parse("acme/web").unwrap()), parent.join("web"));
 }
 
 #[test]
