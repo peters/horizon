@@ -51,21 +51,27 @@ impl Flavor {
 
 /// Whether `reported` is `flavor` or one of its size ids, such as `cpu3c-2-4`.
 ///
-/// `RunPod` documents `cpuAvailability[].id` as a size id. Catalogs today also send
-/// the family id. Either form names the same flavor; a shorter family never matches
-/// a longer one (`cpu3` is not `cpu3c`).
+/// `RunPod` documents `cpuAvailability[].id` as a size id: the family, then the vCPU
+/// count, then the memory in GB. Catalogs today also send the family id. Either form
+/// names the same flavor. A shorter family never matches a longer one (`cpu3` is not
+/// `cpu3c`), and a partial suffix such as `cpu3c-2` is not a size id.
 #[must_use]
 pub fn same_flavor(reported: &str, flavor: &str) -> bool {
-    let (shorter, longer) = if reported.len() <= flavor.len() {
-        (reported, flavor)
-    } else {
-        (flavor, reported)
+    reported == flavor || is_size_id(flavor, reported) || is_size_id(reported, flavor)
+}
+
+/// `reported` is `{family}-{vCPU}-{memory}`, with both counts made only of digits.
+fn is_size_id(family: &str, reported: &str) -> bool {
+    let Some(rest) = reported.strip_prefix(family).and_then(|rest| rest.strip_prefix('-')) else {
+        return false;
     };
-    longer == shorter
-        || longer.strip_prefix(shorter).is_some_and(|rest| {
-            let mut bytes = rest.bytes();
-            bytes.next() == Some(b'-') && bytes.next().is_some_and(|byte| byte.is_ascii_digit())
-        })
+    let Some((vcpu, memory)) = rest.split_once('-') else {
+        return false;
+    };
+    !vcpu.is_empty()
+        && !memory.is_empty()
+        && vcpu.bytes().all(|byte| byte.is_ascii_digit())
+        && memory.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// Whether any flavor offers `(cpu, memory_gb)` with this container disk. Flavors
@@ -273,5 +279,10 @@ mod tests {
         assert!(!same_flavor("cpu3c", "cpu5c"));
         assert!(!same_flavor("cpu3c-extra", "cpu3c"));
         assert!(!same_flavor("cpu3cx-2-4", "cpu3c"));
+        assert!(same_flavor("cpu3c-16-32", "cpu3c"));
+        assert!(!same_flavor("cpu3c-2", "cpu3c"));
+        assert!(!same_flavor("cpu3c-2garbage", "cpu3c"));
+        assert!(!same_flavor("cpu3c-2-", "cpu3c"));
+        assert!(!same_flavor("cpu3c-2-4extra", "cpu3c"));
     }
 }

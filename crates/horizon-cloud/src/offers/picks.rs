@@ -180,7 +180,8 @@ pub fn picks_matching(
 /// Whether `query` occurs in the worker's identity, flavor, location, data center or region.
 ///
 /// The row title is only part of that text. A search can name `cpu3c`, a data center
-/// such as `EU-RO-1`, a region such as `EUROPE`, or `shared` / `dedicated`.
+/// such as `EU-RO-1`, a region such as `EUROPE`, `shared` / `dedicated`, or the GPU
+/// memory line (`24 GB GPU memory`).
 #[must_use]
 pub fn matches_search(offer: &Offer, places: &[Place], query: &str) -> bool {
     let query = query.trim();
@@ -212,6 +213,9 @@ pub fn matches_search(offer: &Offer, places: &[Place], query: &str) -> bool {
     for place in places {
         push(&place.id);
         push(&place.region);
+    }
+    if let Some(gb) = offer.gpu_memory_gb {
+        push(&format!("{gb} GB GPU memory"));
     }
     haystack.to_lowercase().contains(&query)
 }
@@ -453,6 +457,10 @@ mod tests {
 
     #[test]
     fn search_matches_flavor_ids_data_centers_regions_and_cpu_kind() {
+        let gpu = offer("gpu", "A40", 0.5, (0, 24));
+        assert!(matches_search(&gpu, &[], "24 GB GPU memory"));
+        assert!(matches_search(&gpu, &[], "a40"));
+        assert!(!matches_search(&gpu, &[], "48 GB GPU memory"));
         let offer = offer("cpu", "cpu-4-8", 0.12, (4, 8));
         let places = vec![Place {
             id: "EU-RO-1".into(),
