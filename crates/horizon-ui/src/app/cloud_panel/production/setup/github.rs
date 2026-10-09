@@ -59,7 +59,14 @@ impl Card {
     }
 
     /// Saves the app with a changed mode, or forgets it on Disconnect, off the UI thread.
-    fn save(&mut self, ctx: &egui::Context, root: std::path::PathBuf, github: Option<github::Settings>) {
+    /// `previous` is the app a Disconnect leaves; this computer's own sign-in for it goes too.
+    fn save(
+        &mut self,
+        ctx: &egui::Context,
+        root: std::path::PathBuf,
+        github: Option<github::Settings>,
+        previous: Option<github::Settings>,
+    ) {
         let (tx, rx) = channel();
         self.saving = Some(rx);
         self.message = None;
@@ -70,6 +77,12 @@ impl Card {
                 github.clone(),
                 &horizon_core::cloud_runtime::Cancellation::default(),
             )
+            .and_then(|committed| {
+                if let Some(previous) = previous.as_ref().filter(|_| github.is_none()) {
+                    github::host::forget(&root, previous)?;
+                }
+                Ok(committed)
+            })
             .map(|committed| (committed, github))
             .map_err(|error| error.to_string());
             let _ = tx.send(result);
@@ -287,6 +300,7 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
             ui.ctx(),
             draft.root().to_owned(),
             Some(github::Settings { mode: chosen, ..github }),
+            None,
         );
     }
     caption(
@@ -297,7 +311,7 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
         .add_enabled(card.saving.is_none(), chrome_button("Disconnect"))
         .clicked()
     {
-        card.save(ui.ctx(), draft.root().to_owned(), None);
+        card.save(ui.ctx(), draft.root().to_owned(), None, Some(settings.clone()));
     }
 }
 

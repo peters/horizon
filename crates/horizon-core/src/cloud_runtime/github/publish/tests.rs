@@ -1,6 +1,10 @@
 use super::*;
 use crate::cloud_runtime::{Cancellation, github::tests::github};
-use std::sync::{Arc, Mutex};
+use horizon_cloud::github::Chain;
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime},
+};
 
 fn chain(access: &str, refresh: &str, access_in: Duration) -> Chain {
     Chain {
@@ -63,10 +67,11 @@ fn the_login_keeps_other_settings_and_replaces_a_ghcr_helper() {
 #[test]
 fn a_fresh_stored_chain_is_used_after_github_names_its_account() {
     let docker = tempfile::tempdir().unwrap();
-    save(
-        docker.path(),
+    stored::save(
+        &docker.path().join(STORE),
         "octo-cat",
         &chain("gho_fresh", "ghr_fresh", Duration::from_hours(4)),
+        false,
     )
     .unwrap();
     assert_eq!(mode(&docker.path().join(STORE)), 0o600);
@@ -79,10 +84,11 @@ fn a_fresh_stored_chain_is_used_after_github_names_its_account() {
 #[test]
 fn a_chain_near_its_expiry_is_renewed_and_stored_before_use() {
     let docker = tempfile::tempdir().unwrap();
-    save(
-        docker.path(),
+    stored::save(
+        &docker.path().join(STORE),
         "octo-cat",
         &chain("gho_old", "ghr_old", Duration::from_secs(60)),
+        false,
     )
     .unwrap();
     let (client, task) = github(vec![
@@ -94,17 +100,18 @@ fn a_chain_near_its_expiry_is_renewed_and_stored_before_use() {
     let (_, token) = current(docker.path(), &client).unwrap().unwrap();
     task.join().unwrap();
     assert_eq!(token.expose(), "gho_new");
-    let stored = load(docker.path()).unwrap();
+    let stored = stored::load(&docker.path().join(STORE)).unwrap();
     assert_eq!(stored.refresh_token.expose(), "ghr_new", "the rotated chain is stored");
 }
 
 #[test]
 fn a_chain_github_no_longer_renews_is_forgotten_so_the_card_asks_again() {
     let docker = tempfile::tempdir().unwrap();
-    save(
-        docker.path(),
+    stored::save(
+        &docker.path().join(STORE),
         "octo-cat",
         &chain("gho_old", "ghr_revoked", Duration::from_secs(60)),
+        false,
     )
     .unwrap();
     let (client, task) = github(vec![serde_json::json!({"error": "bad_refresh_token"})]);
@@ -153,17 +160,18 @@ fn a_skipped_publishing_sign_in_ends_with_a_clear_reason() {
 #[test]
 fn a_chain_is_kept_when_github_fails_without_revoking_it() {
     let docker = tempfile::tempdir().unwrap();
-    save(
-        docker.path(),
+    stored::save(
+        &docker.path().join(STORE),
         "octo-cat",
         &chain("gho_old", "ghr_old", Duration::from_secs(60)),
+        false,
     )
     .unwrap();
     let (client, task) = github(vec![serde_json::json!({"error": "unexpected_error"})]);
     assert!(current(docker.path(), &client).is_err());
     task.join().unwrap();
     assert_eq!(
-        load(docker.path()).unwrap().refresh_token.expose(),
+        stored::load(&docker.path().join(STORE)).unwrap().refresh_token.expose(),
         "ghr_old",
         "the chain stays for a retry"
     );

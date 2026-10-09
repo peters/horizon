@@ -79,6 +79,7 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
     }
     let enter = ui.input(|input| input.key_pressed(Key::Enter));
     step.choose_folder = form.source.status(ui, enter);
+    form.source.github_section(ui);
     step
 }
 
@@ -128,8 +129,12 @@ impl State {
         let unfinished = self.plan(&remote).resumable.clone();
         match self.failure.clone() {
             Some(Failure::SignIn(host)) => {
-                let origin = super::origin(&remote.url).to_owned();
-                self.sign_in(ui, &host, &origin, enter);
+                if self.offers_account(&remote) {
+                    self.connected_card(ui);
+                } else {
+                    let origin = super::origin(&remote.url).to_owned();
+                    self.sign_in(ui, &host, &origin, enter);
+                }
             }
             Some(Failure::Interrupted(text)) => {
                 ui.label(RichText::new(text).size(13.0).color(theme::PALETTE_YELLOW()));

@@ -11,14 +11,18 @@ use super::{
     Error, Event, Result, command::Runner, git_auth::Target, settings::validate_private_key_file, ssh::Connection,
     state::Deployment,
 };
-use horizon_cloud::github::{Client, Secret};
+use horizon_cloud::github::Client;
+/// A token or secret, wiped on drop and never printed.
+pub use horizon_cloud::github::Secret;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub mod connect;
+pub mod host;
 pub mod publish;
 pub mod requests;
 mod signin;
+mod stored;
 #[cfg(test)]
 mod tests;
 mod worker;

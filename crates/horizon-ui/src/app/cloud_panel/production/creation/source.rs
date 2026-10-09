@@ -1,5 +1,6 @@
 //! Where a new cloud's code comes from: a pasted link is cloned, a folder is used as it is.
 //! Git's own credentials do the signing in; a token is asked for only when Git has none.
+mod github;
 mod progress;
 mod view;
 
@@ -73,6 +74,13 @@ pub(in crate::app::cloud_panel::production) struct State {
     probe_cancel: Cancellation,
     probed: Option<String>,
     changed: Option<Instant>,
+    /// The connected GitHub App, read once when the dialog opens, or `None` without one.
+    account: Option<github::Account>,
+    account_read: bool,
+    /// The person chose to paste a token although GitHub is connected.
+    token_instead: bool,
+    /// The clone under way or last tried used the connected account's token.
+    connected: bool,
 }
 
 impl State {
@@ -148,6 +156,8 @@ impl State {
             self.folder = (!self.input.trim().is_empty() && holds_repository(&path)).then_some(path);
             self.failure = None;
             self.public = false;
+            self.token_instead = false;
+            self.connected = false;
             self.probe_cancel.cancel();
             self.probe = None;
             self.probed = None;
@@ -286,6 +296,7 @@ impl State {
         if let Some(path) = self.ready.take() {
             return Some(path);
         }
+        self.take_account_token(ctx);
         let job = self.job.as_ref()?;
         match job.receiver.try_recv() {
             Err(TryRecvError::Empty) => {
@@ -380,7 +391,11 @@ impl State {
             return Err("Checking access…");
         }
         if matches!(self.failure, Some(Failure::SignIn(_))) && self.token.trim().is_empty() {
-            return Err("Paste a token with read access to continue.");
+            return Err(if self.offers_account(&remote) {
+                "Clone it with your connected GitHub account, or paste a token."
+            } else {
+                "Paste a token with read access to continue."
+            });
         }
         if self.plan(&remote).resumable.is_some() {
             return Ok("Continue resumes the clone, then you choose where it runs.");
