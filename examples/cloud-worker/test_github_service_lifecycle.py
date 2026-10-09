@@ -272,6 +272,24 @@ class VolumeCopyTests(ServiceTestCase):
         self.assertEqual(self.stored()['chain'], chain(), 'the previous chain is stored again')
         self.assertIsNone(self.store.pending)
 
+    def test_a_failed_install_save_puts_the_volume_back_before_readers_look(self):
+        self.install()
+        previous = self.stored()
+        fsync, write = self.unconfirmed_volume()
+        with mock.patch.object(common, 'fsync_directory', side_effect=fsync), \
+                mock.patch.object(common, 'write_private', side_effect=write), \
+                self.assertRaisesRegex(ValueError, 'confirmed'):
+            self.store.save(dict(previous, chain=chain(access='ghu_synthetic-new')), retain=False)
+        self.assertEqual(self.store.volume_state(), previous, 'the volume holds the previous chain again')
+        self.assertEqual(self.store.load(serving=True)[0]['chain'], chain())
+        # Without a previous chain, the unconfirmed copy goes.
+        service.clear(self.store, retire=lambda: None)
+        with mock.patch.object(common, 'fsync_directory', side_effect=fsync), \
+                mock.patch.object(common, 'write_private', side_effect=write), \
+                self.assertRaisesRegex(ValueError, 'confirmed'):
+            self.store.save(dict(previous, chain=chain(access='ghu_synthetic-new')), retain=False)
+        self.assertIsNone(self.store.load(serving=True)[0])
+
     def test_a_serving_read_waits_for_a_write_under_way(self):
         self.install()
         read = []

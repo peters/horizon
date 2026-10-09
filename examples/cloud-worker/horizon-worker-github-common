@@ -356,14 +356,37 @@ class Store:
         # The outcome is recorded before readers may look again: a chain no storage confirmed
         # is pending before any serving read can see its volume copy.
         with self.commit():
+            before = self.volume_state()
             try:
                 persistent = self.write(state)
             except ValueError:
                 if retain:
                     self.keep_pending(state)
+                else:
+                    self.undo(state, before)
                 raise
             self.pending = None
         return persistent
+
+    def volume_state(self):
+        """The volume's copy as it is, or None without a readable one."""
+        try:
+            private_directory(self.persistent, create=False)
+            return read_private(self.persistent / STATE)
+        except (OSError, ValueError, RecursionError):
+            return None
+
+    def undo(self, state, before):
+        """After a failed write that left `state` on the volume, puts back what was there, before
+        the commit lock lets a serving read in, so no reader finds a chain no storage confirmed.
+        A process that stops here leaves the same uncertain copy as a crash after the rename."""
+        if self.volume_state() != state:
+            return
+        with contextlib.suppress(OSError, ValueError):
+            if before is None:
+                remove_durably(self.persistent, STATE)
+            else:
+                write_private(self.persistent, STATE, json.dumps(before, separators=(',', ':')))
 
     def retry_pending(self):
         """Writes a pending chain again. Returns True when nothing is left in memory only."""
