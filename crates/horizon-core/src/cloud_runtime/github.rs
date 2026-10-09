@@ -219,20 +219,7 @@ pub fn configure(
     // card still shows it and its agents' requests.
     let held = worker::status(connection, runner)?;
     let Some(settings) = settings else {
-        if let worker::Status::Current {
-            login,
-            repositories,
-            requests,
-            ..
-        } = held
-        {
-            say("the worker holds access from an earlier connection.");
-            // Without settings the cloud's grants are read only to compare them.
-            let whole = self::grants(state, runner).is_ok_and(|all| complete(&repositories, &all));
-            connected(login, repositories, requests);
-            return Ok(whole);
-        }
-        return Ok(false);
+        return disconnected(held, state, connection, runner);
     };
     let kept = match held {
         worker::Status::Unsupported => {
@@ -291,6 +278,45 @@ pub fn configure(
     )
 }
 
+/// A worker's access while GitHub is disconnected here: it keeps what it holds, which the
+/// card still shows with its agents' requests. A cloud that no longer has a repository on
+/// GitHub loses it, as with settings; a lookup that fails keeps it and the settings binding.
+fn disconnected(
+    held: worker::Status,
+    state: &Deployment,
+    connection: &Connection,
+    runner: &Runner<'_>,
+) -> Result<bool> {
+    let worker::Status::Current {
+        login,
+        repositories,
+        requests,
+        ..
+    } = held
+    else {
+        return Ok(false);
+    };
+    // The cloud's grants are read only to compare them.
+    let whole = match grants(state, runner) {
+        Ok(all) if all.is_empty() => {
+            remove(connection, runner)?;
+            return Ok(false);
+        }
+        Ok(all) => complete(&repositories, &all),
+        Err(_) => false,
+    };
+    (runner.emit)(Event::Output(
+        "GitHub: the worker holds access from an earlier connection.".into(),
+    ));
+    (runner.emit)(Event::GitHub(Prompt::Connected {
+        login,
+        repositories,
+        requests,
+        renewable: false,
+    }));
+    Ok(whole)
+}
+
 /// Removes the access a worker still holds for a cloud that no longer has a repository
 /// on GitHub, so it does not stay behind.
 fn retire(connection: &Connection, runner: &Runner<'_>) -> Result<()> {
@@ -298,11 +324,16 @@ fn retire(connection: &Connection, runner: &Runner<'_>) -> Result<()> {
         worker::status(connection, runner)?,
         worker::Status::Current { .. } | worker::Status::Unavailable
     ) {
-        worker::clear(connection, runner)?;
-        (runner.emit)(Event::Output(
-            "GitHub: removed the worker's access: this cloud no longer has a repository on GitHub.".into(),
-        ));
+        remove(connection, runner)?;
     }
+    Ok(())
+}
+
+fn remove(connection: &Connection, runner: &Runner<'_>) -> Result<()> {
+    worker::clear(connection, runner)?;
+    (runner.emit)(Event::Output(
+        "GitHub: removed the worker's access: this cloud no longer has a repository on GitHub.".into(),
+    ));
     Ok(())
 }
 
@@ -412,9 +443,10 @@ fn sign_in(
     })
 }
 
-/// Whether access to `repositories` reaches every grant of the cloud.
+/// Whether access to `repositories` reaches every grant of the cloud; never for a cloud
+/// without grants, which has nothing the app's access could replace a binding for.
 fn complete(repositories: &[String], grants: &[Grant]) -> bool {
-    grants.iter().all(|grant| covers(repositories, grant))
+    !grants.is_empty() && grants.iter().all(|grant| covers(repositories, grant))
 }
 
 /// Whether the worker holds access for checkouts this cloud no longer has, such as a

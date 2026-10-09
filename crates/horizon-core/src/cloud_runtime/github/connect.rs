@@ -175,7 +175,8 @@ fn created(code: &Secret, root: &Path) -> Result<Settings> {
     let app = Client::new()
         .convert_manifest(code)
         .map_err(|error| github_error(&error))?;
-    let path = root.join(SECRET_DIRECTORY).join(format!("github-app-{}", app.slug));
+    // Named by the app's immutable ID, which no later app reuses.
+    let path = root.join(SECRET_DIRECTORY).join(format!("github-app-{}", app.id));
     write_private(&path, app.client_secret.expose())?;
     let settings = Settings {
         app_id: app.id,
@@ -222,19 +223,15 @@ fn write_private(path: &Path, value: &str) -> Result<()> {
         }
     }
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    // Always a new file: an existing entry, a link included, is refused rather than followed
+    // or overwritten, so no saved app's secret is ever truncated.
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
-    // `mode` applies only to a new file; an existing one is made private before the write.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    }
     file.write_all(value.as_bytes())?;
     file.sync_all()?;
     // The new entry in its directory must survive a crash too, as the settings that name it.
@@ -283,6 +280,23 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o777)).unwrap();
         write_private(&directory.join("github-app-x"), "synthetic").unwrap();
+        assert!(
+            write_private(&directory.join("github-app-x"), "other").is_err(),
+            "an existing secret is never overwritten"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.join("github-app-x")).unwrap(),
+            "synthetic"
+        );
+        let target = root.path().join("target");
+        std::fs::write(&target, "kept").unwrap();
+        std::os::unix::fs::symlink(&target, directory.join("github-app-link")).unwrap();
+        assert!(write_private(&directory.join("github-app-link"), "synthetic").is_err());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "kept",
+            "a link is not followed"
+        );
         let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&directory), 0o700);
         assert_eq!(mode(&directory.join("github-app-x")), 0o600);

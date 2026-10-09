@@ -576,4 +576,8 @@ fn only_access_to_every_checkout_replaces_the_settings_binding() {
         &["Acme/Web".to_owned(), "acme/lib".to_owned(), "acme/extra".to_owned()],
         &grants
     ));
+    assert!(
+        !complete(&["acme/web".to_owned()], &[]),
+        "no grants is not complete access"
+    );
 }
