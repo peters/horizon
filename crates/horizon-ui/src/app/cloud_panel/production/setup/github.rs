@@ -72,22 +72,21 @@ impl Card {
         self.message = None;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            // This computer's sign-in for the app goes first, so a Disconnect that is saved
-            // never leaves it behind; one that fails after it only needs a new sign-in.
-            let forgot = match previous.as_ref().filter(|_| github.is_none()) {
-                Some(previous) => github::host::forget(&root, previous),
-                None => Ok(()),
+            let save = || {
+                setup::save_github(
+                    &root,
+                    github.clone(),
+                    &horizon_core::cloud_runtime::Cancellation::default(),
+                )
             };
-            let result = forgot
-                .and_then(|()| {
-                    setup::save_github(
-                        &root,
-                        github.clone(),
-                        &horizon_core::cloud_runtime::Cancellation::default(),
-                    )
-                })
-                .map(|committed| (committed, github))
-                .map_err(|error| error.to_string());
+            // A Disconnect forgets this computer's sign-in and saves under one lock, so no
+            // other Horizon window stores a chain for the app in between.
+            let result = match previous.as_ref().filter(|_| github.is_none()) {
+                Some(previous) => github::host::disconnect(&root, previous, save),
+                None => save(),
+            }
+            .map(|committed| (committed, github))
+            .map_err(|error| error.to_string());
             let _ = tx.send(result);
             ctx.request_repaint();
         });

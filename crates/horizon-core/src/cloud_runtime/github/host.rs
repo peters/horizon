@@ -31,13 +31,27 @@ fn lock(root: &Path, settings: &Settings) -> Result<std::fs::File> {
     })
 }
 
+/// Whether the machine settings in `root` still name the app of `settings`. Read leniently,
+/// for its ID only; settings that cannot be read do not name it.
+fn configured(root: &Path, settings: &Settings) -> bool {
+    std::fs::read(root.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.pointer("/github/app_id").and_then(serde_json::Value::as_u64))
+        == Some(settings.app_id)
+}
+
 /// The account and a usable access token of this computer's sign-in, renewed when close
-/// to its expiry, or `None` when it must sign in first.
+/// to its expiry, or `None` when it must sign in first. A Disconnect since the settings
+/// were read ends it.
 /// # Errors
 /// GitHub out of reach or not confirming the sign-in, which is then kept, or a local file
 /// that cannot be read or written.
 pub fn current(root: &Path, settings: &Settings) -> Result<Option<(String, Secret)>> {
     let _lock = lock(root, settings)?;
+    if !configured(root, settings) {
+        return stored::forget(&path(root, settings));
+    }
     // A chain from a web sign-in renews with the secret whatever the setting says now; a
     // device chain needs none, and the secret is then not sent.
     let secret = settings.client_secret().ok();
@@ -86,8 +100,12 @@ pub fn sign_in(
         Ok(user) => user,
         Err(error) => return Ok(Err(error.to_string())),
     };
-    // Locked only to store it: the sign-in itself waits for the person.
+    // Locked only to store it: the sign-in itself waits for the person. A Disconnect while
+    // it waited keeps the chain out.
     let _lock = lock(root, settings)?;
+    if !configured(root, settings) {
+        return Ok(Err("GitHub was disconnected while this computer signed in.".into()));
+    }
     stored::save(
         &path(root, settings),
         &user.login,
@@ -115,11 +133,16 @@ pub fn repositories(token: &Secret) -> std::result::Result<Vec<String>, String> 
     Ok(found)
 }
 
-/// Forgets this computer's sign-in for the app of `settings`, as on Disconnect.
+/// Disconnects the app of `settings`: forgets this computer's sign-in for it and runs
+/// `save`, which stores the settings without it, both under the sign-in's lock. No renewal
+/// or sign-in in another Horizon window can store a chain between the two, and one that
+/// comes after finds the app gone.
 /// # Errors
-/// A file that cannot be removed.
-pub fn forget(root: &Path, settings: &Settings) -> Result<()> {
-    stored::forget(&path(root, settings)).map(drop)
+/// A file that cannot be removed, which leaves the settings unsaved, or `save`'s error.
+pub fn disconnect<T>(root: &Path, settings: &Settings, save: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _lock = lock(root, settings)?;
+    stored::forget(&path(root, settings))?;
+    save()
 }
 
 #[cfg(test)]
