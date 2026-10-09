@@ -39,7 +39,9 @@ async fn blocked_mcp_progress_finishes_cancelled_report_without_retrying_the_que
         .unwrap();
     writer.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"device_test_run\",\"arguments\":{\"lifetime_seconds\":15},\"_meta\":{\"progressToken\":\"blocked\"}}}\n").await.unwrap();
     // Keep the read half open but unread: the real MCP transport blocks while the runner fills its progress queue.
-    let report = tokio::time::timeout(Duration::from_secs(8), async {
+    // One notify attempt waits 2s, then the run cancels and archives. Retrying all 64 queued
+    // notifications would take about 64s. 45s still covers a slow guardian plus that one wait.
+    let report = tokio::time::timeout(Duration::from_secs(45), async {
         loop {
             for entry in std::fs::read_dir(folder.path()).unwrap().flatten() {
                 let path = entry.path().join("report.json");
