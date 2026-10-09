@@ -908,7 +908,7 @@ answers that GitHub is not connected. The tool runs
 
 - `{"request": "request", "repository": "owner/name", "access": "push",
   "reason": "..."}` records a request and answers `{"status": "pending",
-  "id": "..."}`. The reason has at most 300 characters and no control,
+  "id": "..."}`. The reason has at most 300 bytes of UTF-8 and no control,
   formatting, surrogate or line separator characters, such as the ones that
   reorder text.
   Asking for push while a read request of the same session waits turns it into

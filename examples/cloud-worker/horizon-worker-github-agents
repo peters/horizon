@@ -49,7 +49,9 @@ CONNECTIONS = 16
 MAX_PENDING = 32
 # Cloud grants are stored with the chain, whose file has a size limit when it is read back.
 MAX_CLOUD_GRANTS = 32
+# In UTF-8 bytes, as Horizon reads them; also for the session and agent names it shows.
 REASON_LIMIT = 300
+NAME_LIMIT = 100
 REQUEST_SECONDS = 24 * 3600
 # Decided and expired requests stay readable for the session for one more day.
 RETAIN_SECONDS = 48 * 3600
@@ -125,14 +127,20 @@ def expire_other_accounts(data, current):
     return data
 
 
-def reportable(record):
-    """Whether every text of a record is valid Unicode, which the host's JSON parser needs."""
+def utf8_length(text):
+    """The UTF-8 length of `text`, or one past any limit when it is not valid Unicode."""
     try:
-        for key in ('repository', 'reason', 'session', 'agent'):
-            str(record[key]).encode('utf-8')
+        return len(text.encode('utf-8'))
     except UnicodeEncodeError:
-        return False
-    return True
+        return REASON_LIMIT + 1
+
+
+def reportable(record):
+    """Whether Horizon can show the record: valid Unicode within its limits. A record it
+    would leave out never reaches it, so a waiting card is never hidden."""
+    return (utf8_length(str(record['repository'])) <= REASON_LIMIT
+            and utf8_length(str(record['reason'])) <= REASON_LIMIT
+            and all(utf8_length(str(record[key])) <= NAME_LIMIT for key in ('session', 'agent')))
 
 
 def covered(grant_access, needed):
@@ -203,7 +211,7 @@ def valid_reason(reason):
     """One short line that reads as it is: no control, formatting, surrogate or line and
     paragraph separator characters, which could make the person's approval card read
     differently from what it asks, or keep the host from reading the list."""
-    return (isinstance(reason, str) and reason.strip() != '' and len(reason) <= REASON_LIMIT
+    return (isinstance(reason, str) and reason.strip() != '' and utf8_length(reason) <= REASON_LIMIT
             and not any(unicodedata.category(character) in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp') for character in reason))
 
 
@@ -213,7 +221,8 @@ def ask(request, state, book, now, identify):
     if not auth.valid_repository(repository) or access not in common.ACCESS:
         return refusal('ok', 'Name a repository as owner/name and the access as push or read.'), None
     if not valid_reason(reason):
-        return refusal('ok', 'Give a reason of at most %d characters on one line.' % REASON_LIMIT), repository
+        return refusal('ok', 'Give a reason of at most %d bytes (plain characters count one each) on one line.'
+                       % REASON_LIMIT), repository
     try:
         who = identify()
     except idle.Refused:
