@@ -441,9 +441,10 @@ def settle(store, configure, static):
         intent = None
     intended = intent.get('grants') if isinstance(intent, dict) and isinstance(intent.get('grants'), list) else []
     state, _ = store.load()
-    if state is not None and state['state'] == 'ok':
+    # The repositories follow the stored grants whether or not the chain can be served now.
+    if state is not None:
         configure({'grants': identity_grants(state), 'previous': intended})
-    elif state is None:
+    else:
         static({'previous': intended})
     (store.runtime / INTENT).unlink(missing_ok=True)
 
@@ -493,21 +494,26 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
         if value.get('login'):
             state['login'] = value['login']
         # Written before any repository changes; if this process dies before its end, the
-        # service's next check finds it and reconciles. A tmpfs that refuses it costs only that
-        # recovery, and one whose directory sync fails still holds it.
-        with contextlib.suppress(OSError, ValueError):
+        # service's next check finds it and reconciles. Without it nothing changes.
+        try:
             common.write_private(common.private_directory(store.runtime, create=True), INTENT,
                                  json.dumps({'grants': identity_grants(value)}))
+        except common.Unsynced:
+            pass  # In place on tmpfs, which needs no crash durability.
+        except (OSError, ValueError):
+            raise ValueError('No private GitHub storage accepted the install intent') from None
         try:
             configure({'grants': identity_grants(value), 'previous': identity_grants(previous)})
             store.save(dict(state, version=1, state='ok', installed_at=int(now()), last_refresh_at=None,
                             last_error=None), retain=False)
         except BaseException:
-            restore(previous, value, configure, static)
+            restored = restore(previous, value, configure, static)
             keep(store, previous)
+            # A rollback that did not finish leaves the intent, so the service still finishes it.
+            if restored:
+                (store.runtime / INTENT).unlink(missing_ok=True)
             raise
-        finally:
-            (store.runtime / INTENT).unlink(missing_ok=True)
+        (store.runtime / INTENT).unlink(missing_ok=True)
         try:
             retire()
         except (OSError, subprocess.SubprocessError):
@@ -520,12 +526,15 @@ def restore(previous, value, configure, static):
     """Configures the previous chain's repositories again after a failed install, as far as
     that works; `keep` puts the previous chain itself back when a save replaced it. Without a
     previous chain the static binding's configuration comes back, which the failed install's
-    configuration replaced."""
-    with contextlib.suppress(Exception):
+    configuration replaced. Returns whether that worked."""
+    try:
         if previous is not None:
             configure({'grants': identity_grants(previous), 'previous': identity_grants(value)})
         else:
             static({'previous': identity_grants(value)})
+    except Exception:
+        return False
+    return True
 
 
 def keep(store, previous):

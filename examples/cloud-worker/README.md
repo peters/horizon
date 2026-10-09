@@ -794,7 +794,9 @@ horizon-worker-github install < chain.json
   reports `"serving": false`. An install that is cut off while the service runs,
   such as by a closed SSH connection, leaves an intent file with the grants it was
   configuring, never a token; the service's next check, within a minute, finds it
-  and configures the repositories for the stored chain again. The supervisor lists the service as running only
+  and configures the repositories for the stored chain again, also a revoked one.
+  An install that cannot write the intent fails before it changes anything, and
+  one whose rollback fails leaves the intent for the service. The supervisor lists the service as running only
   once its socket answers. The
   install then removes the static token file, so one source of tokens
   remains.

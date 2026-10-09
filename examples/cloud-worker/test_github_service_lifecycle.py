@@ -345,6 +345,27 @@ class VolumeCopyTests(ServiceTestCase):
         self.install()
         self.assertFalse((self.store.runtime / service.INTENT).exists())
 
+    def test_a_failed_rollback_keeps_the_intent_for_the_service(self):
+        self.install()
+
+        def refuse(payload):
+            raise subprocess.CalledProcessError(1, 'configure')
+        with self.assertRaises(subprocess.CalledProcessError):
+            service.install(installation(chain=chain(access='ghu_synthetic-new')), self.store, now=lambda: NOW,
+                            configure=refuse, retire=lambda: None, static=refuse)
+        self.assertTrue((self.store.runtime / service.INTENT).exists(), 'the service finishes the rollback')
+
+    def test_a_revoked_chain_still_decides_the_repositories(self):
+        self.install()
+        with self.store.lock():
+            self.store.save(dict(self.stored(), state='revoked', last_error='bad_refresh_token'))
+        (self.store.runtime / service.INTENT).write_text(json.dumps({'grants': []}))
+        (self.store.runtime / service.INTENT).chmod(0o600)
+        configured = []
+        with self.store.lock():
+            service.settle(self.store, configured.append, lambda payload: self.fail('no static binding'))
+        self.assertEqual(configured[0]['grants'], service.identity_grants(self.stored()))
+
     def test_a_serving_read_waits_for_a_write_under_way(self):
         self.install()
         read = []
