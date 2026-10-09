@@ -258,7 +258,8 @@ def answer(request, state, now):
         return refusal('revoked', 'GitHub access on this worker was revoked; connect GitHub again in Horizon.'), None
     chain = state['chain']
     if chain['access_expires_at'] - now <= SERVE_MARGIN:
-        return refusal('ok', 'The GitHub access token expired; this worker cannot refresh it now.'), None
+        return refusal('ok', 'The GitHub access token has expired or expires within a minute, and this worker '
+                             'could not refresh it yet.'), None
     if request['request'] == 'credential':
         if request.get('protocol') != 'https' or request.get('host') != 'github.com':
             return refusal('ok', 'Only HTTPS access to github.com is granted.'), None

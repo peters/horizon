@@ -3,8 +3,8 @@ procedure: worker-github-chain
 feature: Worker GitHub access with a token chain that refreshes on the worker
 platforms: [linux]
 cost: none
-destructive: no
-secrets: [client ID of a test GitHub App, sign-in of a test GitHub account]
+destructive: yes
+secrets: [client ID of a test GitHub App, sign-in of a test GitHub account, real access and refresh token chain in <evidence>/reply.json and <evidence>/real-chain.json, SSH private key in <evidence>/key]
 owner: peters
 ---
 
@@ -163,10 +163,13 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 3. Examine the contract marker:
 
    ```bash
-   docker exec <c> horizon-worker-check --git-auth | grep -x horizon-github-chain-contract=1
+   docker exec <c> horizon-worker-check --git-auth > <evidence>/check.txt \
+     && grep -x horizon-github-chain-contract=1 <evidence>/check.txt
    ```
 
-   Result: The command shows `horizon-github-chain-contract=1`.
+   Result: The command exits with status 0 and shows
+   `horizon-github-chain-contract=1`. A failed check stops the command before the
+   marker is examined.
 
 4. Examine the services:
 
@@ -488,6 +491,9 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
 
    Result: The JSON shows `"state":"absent"`.
 
+> **CAUTION:** THE NEXT STEP DELETES A CONTAINER, A VOLUME AND AN IMAGE. Use only
+> the names that this run made.
+
 2. Remove the container, the volume and the image of this run:
 
    ```bash
@@ -505,9 +511,13 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
 
    Result: The test GitHub App is not in the list.
 
-4. Delete `<evidence>/reply.json` and `<evidence>/real-chain.json`.
+> **CAUTION:** THE NEXT STEP DELETES FILES THAT HOLD SECRETS. Delete only the files
+> of this run.
 
-   Result: No real token stays on the computer.
+4. Delete `<evidence>/reply.json`, `<evidence>/real-chain.json`, `<evidence>/key`
+   and `<evidence>/key.pub`.
+
+   Result: No real token and no private key of this run stays on the computer.
 
 ## 9. Record of results
 

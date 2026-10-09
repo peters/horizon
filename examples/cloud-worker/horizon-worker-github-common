@@ -290,9 +290,10 @@ class Store:
         return max(found, key=lambda copy: (copy[0]['serial'], not copy[1])) if found else (None, False)
 
     def pending_write(self):
-        """Whether the newest chain exists only in this process's memory."""
+        """Whether the newest chain waits for its write in this process's memory. Compared by
+        value: a stored copy can hold the same state while the write is still pending."""
         state, _ = self.load()
-        return state is not None and state is self.pending
+        return state is not None and self.pending is not None and state == self.pending
 
     def write(self, state):
         """Writes `state` as it is; returns whether the volume holds it durably. Raises
