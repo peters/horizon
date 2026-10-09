@@ -35,6 +35,10 @@ pub(in crate::app) struct State {
     /// When the settings the last fetch read were saved.
     settings_saved: Option<SystemTime>,
     refreshed_after: Option<Instant>,
+    /// Instant stored by test [`Self::answered`]. A descheduled runner must not age that
+    /// fixture past [`FRESH`]. Backdating `fetched.at`, or [`Self::refresh`], uses the real rules.
+    #[cfg(test)]
+    fixture_answered_at: Option<Instant>,
 }
 
 impl State {
@@ -179,13 +183,23 @@ impl State {
     /// The catalog while the dialog may compare with it: current, or gone stale while a
     /// background refresh for it runs. Failures are reported through [`Self::error`].
     pub fn comparable(&self) -> Option<&Fetched<Option<HetznerCatalog>>> {
-        self.fetched.as_ref().filter(|fetched| {
-            freshness::comparable(
-                Some(freshness::Answer::since(fetched.at, self.refreshed_after)),
-                FRESH,
-                freshness::Fetch::running(self.job.is_some()),
-            )
-        })
+        self.fetched
+            .as_ref()
+            .filter(|fetched| self.catalog_is_comparable(fetched))
+    }
+
+    fn catalog_is_comparable(&self, fetched: &Fetched<Option<HetznerCatalog>>) -> bool {
+        #[cfg(test)]
+        if self.fixture_answered_at.is_some_and(|anchor| {
+            fetched.at >= anchor && self.refreshed_after.is_none_or(|refresh| fetched.at >= refresh)
+        }) {
+            return true;
+        }
+        freshness::comparable(
+            Some(freshness::Answer::since(fetched.at, self.refreshed_after)),
+            FRESH,
+            freshness::Fetch::running(self.job.is_some()),
+        )
     }
 
     /// Until a catalog whose refresh is running stops counting as current, for waking an
@@ -303,10 +317,9 @@ impl State {
 impl State {
     pub fn answered(&mut self, catalog: Option<HetznerCatalog>) {
         self.bound = catalog.is_some();
-        self.fetched = Some(Fetched {
-            value: catalog,
-            at: Instant::now(),
-        });
+        let at = Instant::now();
+        self.fixture_answered_at = Some(at);
+        self.fetched = Some(Fetched { value: catalog, at });
     }
 
     /// A fetch that failed for a machine with a Hetzner binding.

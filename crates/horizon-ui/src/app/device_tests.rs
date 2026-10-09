@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use egui::{Context, Shape};
 use horizon_core::browser::manifest::device::{HostExclusion, HostPresentation, HostViewport};
 use horizon_core::{PanelId, PanelKind, RuntimeState, StartupChooser, StartupDecision, StartupPromptReason};
@@ -43,7 +45,10 @@ fn host(app: &HorizonApp, panel: PanelId) -> HostPresentation {
 
 fn append_text(shape: &Shape, text: &mut String) {
     match shape {
-        Shape::Text(shape) => text.push_str(&shape.galley.job.text),
+        Shape::Text(shape) => {
+            text.push('\n');
+            text.push_str(&shape.galley.job.text);
+        }
         Shape::Vec(shapes) => {
             for shape in shapes {
                 append_text(shape, text);
@@ -53,17 +58,32 @@ fn append_text(shape: &Shape, text: &mut String) {
     }
 }
 
+fn painted_text(output: &egui::FullOutput) -> String {
+    let mut text = String::new();
+    for shape in &output.shapes {
+        append_text(&shape.shape, &mut text);
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[test]
 fn invalid_restored_device_displays_its_failure_transcript() {
     let (_temp, ctx, mut app, panel) = device_app(None);
     assert!(app.board.panel(panel).expect("placeholder").device().is_none());
     assert!(app.board.panel(panel).expect("placeholder").terminal().is_some());
-    let mut text = String::new();
-    for _ in 0..2 {
-        for shape in render(&ctx, &mut app).shapes {
-            append_text(&shape.shape, &mut text);
+    // Replay is asynchronous. A short frame count misses it under load, and a
+    // deadline checked after the first render expires when that render is slow.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let text = loop {
+        if Instant::now() >= deadline {
+            break String::new();
         }
-    }
+        let text = painted_text(&render(&ctx, &mut app));
+        if text.contains("Device panel requires") {
+            break text;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
     assert!(
         text.contains("Device panel requires"),
         "restore failure was not painted: {text}"
