@@ -712,6 +712,7 @@ The menu fill is `PANEL_BG`. The well is an inset on that fill.
   color with `weak_text_color`, so a color on the hint text has no effect.
 - Text starts 28 from the left and stops 10 from the right.
 - A click on the mark or on the padding focuses the field. The click does not close the menu.
+- The well is not a keyboard focus target. The text edit is the only focus target of the field.
 - The menu focuses the field one time, when the menu opens.
 - A 1 px line of `alpha(FG, 28)` crosses the top of a focused well. The line
   starts 12 from each side. At rest and on hover the line is `alpha(FG, 16)`.

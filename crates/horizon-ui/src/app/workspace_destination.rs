@@ -230,7 +230,8 @@ fn render_results(
 
 fn render_menu_search_field(ui: &mut Ui, query: &mut String, id: egui::Id, opening: bool) -> Response {
     let width = ui.available_width();
-    let (rect, well) = ui.allocate_exact_size(Vec2::new(width, MENU_SEARCH_HEIGHT), Sense::click());
+    // `Sense::CLICK` is not focusable. The text edit is the field's only focus target.
+    let (rect, well) = ui.allocate_exact_size(Vec2::new(width, MENU_SEARCH_HEIGHT), Sense::CLICK);
     let _ = well.clone().on_hover_cursor(egui::CursorIcon::Text);
     let focused = opening || ui.memory(|memory| memory.has_focus(id));
     let hovered = ui
