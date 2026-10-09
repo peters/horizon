@@ -50,6 +50,8 @@ struct FirefoxLaunchIdentity {
     extra_args: Vec<String>,
     headless: bool,
     disclosure: crate::AutomationDisclosurePolicy,
+    /// Process-wide. A later page with a different value must not join.
+    system_access: bool,
 }
 
 impl GroupState {
@@ -67,6 +69,7 @@ impl GroupState {
             extra_args: config.extra_args.clone(),
             headless: config.headless,
             disclosure: config.automation_disclosure,
+            system_access: config.firefox_system_access,
         };
         if self.launch_identity.as_ref().is_some_and(|pinned| pinned != &identity) {
             return Err(
@@ -1185,6 +1188,10 @@ mod tests {
         config.profile_root = Some(std::path::PathBuf::from("profile-b"));
         assert!(state.pin_launch(&config, "group", false).is_err());
         config.profile_root = Some(std::path::PathBuf::from("profile-a"));
+        config.firefox_system_access = true;
+        assert!(state.pin_launch(&config, "group", false).is_err());
+        config.firefox_system_access = false;
+        assert!(state.pin_launch(&config, "group", false).is_ok());
         config.headless = !config.headless;
         assert!(state.pin_launch(&config, "group", false).is_err());
     }

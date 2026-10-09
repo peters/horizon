@@ -816,6 +816,16 @@ mod tests {
     }
 
     #[test]
+    fn firefox_system_access_stays_off_unless_the_config_sets_it() {
+        let off = Config::from_yaml("browser:\n  backend: firefox\n").expect("firefox section loads");
+        assert!(!off.browser.firefox_system_access);
+        let on = Config::from_yaml("browser:\n  backend: firefox\n  firefox_system_access: true\n")
+            .expect("explicit system access loads");
+        assert!(on.browser.firefox_system_access);
+        assert_eq!(on.browser.backend, crate::browser::BackendKind::FirefoxBidi);
+    }
+
+    #[test]
     fn browser_video_options_must_fit_engine_range() {
         let error = Config::from_yaml("browser:\n  video:\n    fps: 0\n").expect_err("fps must be rejected");
         assert!(error.to_string().contains("browser.video"));

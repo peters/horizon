@@ -38,7 +38,13 @@ python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
   --native-view --state /tmp/horizon-device-target
 ```
 
-Use a new state path if it already exists. The harness atomically allocates an
+Use a new state path if it already exists. Pass `--firefox-system-access` only
+with the Firefox disclosure procedure. The flag writes
+`browser.firefox_system_access: true` into the fixture config. Other runs leave
+that field false. Mozilla documents the matching geckodriver flag as full
+system access for clients that reach the fixture driver port.
+
+The harness atomically allocates an
 unused 1600×1000 Xvfb display, disables MIT-SHM and starts its own window manager.
 It launches an ephemeral Horizon with a heartbeat terminal and a plain Bash input
 terminal. A filesystem namespace masks the developer's home with private state

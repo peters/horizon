@@ -19,8 +19,9 @@ It also tests the preload fallback and one synthetic sign-in check.
 
 - Use the candidate source checkout.
 - On Linux, Firefox and geckodriver must be on PATH.
-- Task 6.1 needs geckodriver 0.37 or newer.
+- Tasks 6.1 and 6.6 need geckodriver 0.37 or newer.
 - System access stays off unless `firefox_system_access` is true.
+- Task 6.6 sets that field to true in the fixture config.
 - This procedure does not test Chromium or Safari.
 - This procedure sends one synthetic Google identifier.
 - This procedure does not send a password.
@@ -31,12 +32,14 @@ It also tests the preload fallback and one synthetic sign-in check.
 > **CAUTION:** CLICK NEXT ONE TIME WITH THE SYNTHETIC EMAIL ONLY, AND DO NOT TYPE A PASSWORD.
 >
 > **CAUTION:** USE ONLY THE ISOLATED DESKTOP. A click on the developer desktop can change a real session.
+>
+> **CAUTION:** TASK 6.6 SETS `firefox_system_access` TO TRUE IN THE FIXTURE ONLY. A LOCAL CLIENT THAT REACHES THAT DRIVER PORT CAN USE FIREFOX UI PRIVILEGES.
 
 ## 4. Equipment and preconditions
 
 - Rust and the workspace build tools.
 - Local Firefox and geckodriver on PATH.
-- For task 6.1, geckodriver 0.37 or newer.
+- For tasks 6.1 and 6.6, geckodriver 0.37 or newer.
 - Permission to bind a loopback port.
 - Permission to start a headless Firefox process.
 - For task 6.6, a frozen Horizon candidate and the local device fixture.
@@ -47,9 +50,13 @@ It also tests the preload fallback and one synthetic sign-in check.
 
    Result: The shell is in the checkout.
 
-2. If Firefox is a Snap, set `TMPDIR` to `~/tmp/horizon-firefox-disclosure`.
+2. If Firefox is a Snap, create the directory `~/tmp/horizon-firefox-disclosure`.
 
-   Result: The path is under the home directory. The name does not start with a dot.
+   Result: The directory exists. The path is under the home directory.
+
+3. If Firefox is a Snap, set `TMPDIR` to `~/tmp/horizon-firefox-disclosure`.
+
+   Result: The name does not start with a dot.
 
 ## 6. Tasks
 
@@ -107,9 +114,15 @@ It also tests the preload fallback and one synthetic sign-in check.
 
 ### 6.6 SIGN-IN — Google checks the browser after Next
 
-1. Start the local device fixture with the frozen candidate and `--native-view`.
+1. Start the local device fixture with `--native-view` and `--firefox-system-access`.
+
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon <frozen-candidate> \
+     --native-view --firefox-system-access --state <new-directory>
+   ```
 
    Result: The fixture prints a loopback VNC address. `viewer_url` is null.
+   The fixture config sets `browser.firefox_system_access` to true.
 
 2. Open that address with the public `device_panel` tool.
 
@@ -156,6 +169,7 @@ It also tests the preload fallback and one synthetic sign-in check.
 
 - Task 6.1 reports the title `false native`.
 - Tasks 6.2 through 6.5 pass.
+- Task 6.6 starts with `browser.firefox_system_access` set to true.
 - Task 6.6 shows "Couldn't find this account".
 - Task 6.6 does not show "This browser or app may not be secure."
 
