@@ -398,7 +398,7 @@ pub use workers::{Workers, workers};
 mod hetzner;
 mod picks;
 pub use hetzner::{DEPLOYABLE as HETZNER_DEPLOYABLE, hetzner, hetzner_catalog, hetzner_section};
-pub use picks::{Picks, Place, picks, picks_by, picks_matching, places};
+pub use picks::{Picks, Place, matches_search, picks, picks_by, picks_matching, places};
 
 #[cfg(test)]
 mod tests;

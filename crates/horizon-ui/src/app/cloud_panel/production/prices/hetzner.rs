@@ -1,7 +1,7 @@
 //! Hetzner's catalog, fetched beside the `RunPod` price list when this machine has a
 //! Hetzner binding, for agents' offer requests and the prices sent to workers.
 use super::{ANSWER_MARGIN_MILLIS, Fetched, Job, RETRY_FAILED, finished, spawn};
-use horizon_core::cloud_runtime::prices::{self, HetznerCatalog, freshness};
+use horizon_core::cloud_runtime::prices::{self, HetznerCatalog, HetznerExclusions, freshness};
 use std::{
     path::Path,
     time::{Duration, Instant, SystemTime},
@@ -13,7 +13,7 @@ const WAIT_FOR_FETCH: Duration = Duration::from_secs(20);
 const FRESH: Duration = Duration::from_mins(15);
 /// A fetch's catalog with the configured server types and locations, or the reason it
 /// failed for a machine with a Hetzner binding.
-type Fetch = Result<(Option<HetznerCatalog>, Vec<String>, Vec<String>), String>;
+type Fetch = Result<(Option<HetznerCatalog>, Vec<String>, Vec<String>, HetznerExclusions), String>;
 
 #[derive(Default)]
 pub(in crate::app) struct State {
@@ -23,6 +23,8 @@ pub(in crate::app) struct State {
     server_types: Vec<String>,
     /// The locations this machine's settings allow, in the order deployment tries them.
     locations: Vec<String>,
+    /// Server types and locations the settings left out of the latest catalog.
+    exclusions: HetznerExclusions,
     /// Whether the last finished fetch found a Hetzner binding, kept while the catalog is
     /// refreshed and when fetching it failed.
     bound: bool,
@@ -69,8 +71,9 @@ impl State {
                     .as_ref()
                     .map(|hetzner| (hetzner.server_types.clone(), hetzner.locations.clone()))
                     .unwrap_or_default();
-                match prices::hetzner_catalog(settings, cancel) {
-                    Ok(catalog) => Ok(Ok((catalog, server_types, locations))),
+                match prices::hetzner_catalog_report(settings, cancel) {
+                    Ok(Some(report)) => Ok(Ok((Some(report.catalog), server_types, locations, report.exclusions))),
+                    Ok(None) => Ok(Ok((None, server_types, locations, HetznerExclusions::default()))),
                     Err(error) if settings.hetzner.is_some() => Ok(Err(error.to_string())),
                     Err(error) => Err(error),
                 }
@@ -86,6 +89,7 @@ impl State {
         self.job = None;
         self.started = None;
         self.fetched = None;
+        self.exclusions = HetznerExclusions::default();
         self.error = None;
         self.failed_at = None;
     }
@@ -95,6 +99,7 @@ impl State {
     fn forget_if_settings_changed(&mut self, saved: Option<SystemTime>) {
         if self.job.is_none() && saved != self.settings_saved {
             self.fetched = None;
+            self.exclusions = HetznerExclusions::default();
             self.error = None;
             self.failed_at = None;
         }
@@ -107,13 +112,14 @@ impl State {
         }
         match finished {
             Some(Ok(Fetched {
-                value: Ok((catalog, server_types, locations)),
+                value: Ok((catalog, server_types, locations, exclusions)),
                 at,
             })) => {
                 self.bound = catalog.is_some();
                 self.fetched = Some(Fetched { value: catalog, at });
                 self.server_types = server_types;
                 self.locations = locations;
+                self.exclusions = exclusions;
                 self.error = None;
                 self.failed_at = None;
             }
@@ -160,6 +166,11 @@ impl State {
     #[cfg(test)]
     pub fn locations(&self) -> &[String] {
         &self.locations
+    }
+
+    /// Server types and locations the settings left out of the catalog on show.
+    pub fn exclusions(&self) -> HetznerExclusions {
+        self.exclusions
     }
 
     /// The reason the last fetch failed, while it is reported.
@@ -286,7 +297,7 @@ impl State {
             assert!(
                 sender
                     .send(Ok(Fetched {
-                        value: Ok((catalog, Vec::new(), Vec::new())),
+                        value: Ok((catalog, Vec::new(), Vec::new(), HetznerExclusions::default())),
                         at: Instant::now(),
                     }))
                     .is_ok()
@@ -310,6 +321,14 @@ impl State {
         self.answered_with_types(catalog, server_types);
         self.locations = locations.iter().map(|&name| name.to_owned()).collect();
     }
+
+    /// As [`State::answered`], with the types and locations the settings left out.
+    ///
+    /// The selector tests that read this note run on Unix only.
+    pub fn answered_with_exclusions(&mut self, catalog: Option<HetznerCatalog>, exclusions: HetznerExclusions) {
+        self.answered(catalog);
+        self.exclusions = exclusions;
+    }
 }
 
 /// A catalog as if Hetzner had just answered, for tests, which never contact it.
@@ -320,6 +339,7 @@ impl State {
         let at = Instant::now();
         self.fixture_answered_at = Some(at);
         self.fetched = Some(Fetched { value: catalog, at });
+        self.exclusions = HetznerExclusions::default();
     }
 
     /// A fetch that failed for a machine with a Hetzner binding.
