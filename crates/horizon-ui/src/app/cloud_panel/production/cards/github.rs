@@ -42,7 +42,7 @@ pub(super) fn prompt(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime) {
                     ..
                 } => device(ui, cloud_id, user_code, verification_uri),
                 Prompt::Web { url } => web(ui, cloud_id, url),
-                Prompt::Connected { .. } | Prompt::Ended(_) => {}
+                Prompt::Connected { .. } | Prompt::Ended { .. } => {}
             }
         });
     ui.add_space(12.0);
@@ -199,12 +199,7 @@ pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, 
 pub(super) fn renew_button(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime) -> bool {
     // Not for access a worker kept after GitHub was disconnected here, nor once GitHub is
     // disconnected: nothing could sign it in again.
-    if !github::configured()
-        || !matches!(
-            runtime.github,
-            Some(Prompt::Connected { renewable: true, .. } | Prompt::Ended(_))
-        )
-    {
+    if !github::configured() || !renewable(runtime.github.as_ref()) {
         return false;
     }
     let clicked = ui
@@ -215,6 +210,15 @@ pub(super) fn renew_button(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime)
         github::renew(cloud_id);
     }
     clicked
+}
+
+/// Whether a new sign-in can change this outcome: not for access a worker kept after a
+/// disconnect, a worker image without the service or a cloud without a GitHub repository.
+fn renewable(prompt: Option<&Prompt>) -> bool {
+    matches!(
+        prompt,
+        Some(Prompt::Connected { renewable: true, .. } | Prompt::Ended { renewable: true, .. })
+    )
 }
 
 /// One line for the steps card: who the cloud acts as on GitHub, or why it has no access.
@@ -234,7 +238,7 @@ pub(super) fn summary(runtime: &Runtime) -> Option<(String, bool)> {
             ),
             true,
         )),
-        Prompt::Ended(reason) => Some((format!("GitHub: {reason}"), false)),
+        Prompt::Ended { reason, .. } => Some((format!("GitHub: {reason}"), false)),
         Prompt::Device { .. } | Prompt::Web { .. } => None,
     }
 }
@@ -258,11 +262,28 @@ mod tests {
             summary(&runtime),
             Some(("GitHub: signed in as octo-cat · 2 repositories".into(), true))
         );
-        runtime.github = Some(Prompt::Ended("Skipped: this cloud has no GitHub access.".into()));
+        runtime.github = Some(Prompt::Ended {
+            reason: "Skipped: this cloud has no GitHub access.".into(),
+            renewable: true,
+        });
         assert_eq!(
             summary(&runtime),
             Some(("GitHub: Skipped: this cloud has no GitHub access.".into(), false))
         );
+    }
+
+    #[test]
+    fn connect_again_shows_only_where_a_sign_in_can_help() {
+        let ended = |renewable| Prompt::Ended {
+            reason: "x".into(),
+            renewable,
+        };
+        assert!(renewable(Some(&ended(true))), "a skipped or declined sign-in");
+        assert!(
+            !renewable(Some(&ended(false))),
+            "an image without the service or a cloud without GitHub"
+        );
+        assert!(!renewable(None));
     }
 
     #[test]

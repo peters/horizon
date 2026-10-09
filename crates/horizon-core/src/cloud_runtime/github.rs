@@ -31,8 +31,8 @@ const SERVICE_DOWN: &str = "The worker's GitHub service is not running, so Git a
 /// The most grants `horizon-worker-github install` accepts.
 const WORKER_GRANTS: usize = 16;
 
-/// Whether this machine's settings name a GitHub App, as this process last saved or
-/// deployed with them. Every cloud's GitHub outcome comes from a deployment that set it.
+/// Whether this machine's settings name a GitHub App, as this process last read or wrote
+/// the settings file. A deployment's older snapshot never sets it.
 static CONFIGURED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether a cloud can sign in to GitHub again: this machine has a GitHub App.
@@ -198,18 +198,17 @@ pub fn configure(
     runner: &Runner<'_>,
     legacy: bool,
 ) -> Result<bool> {
-    remember(settings.is_some());
     let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub: {text}")));
     // A cloud without GitHub access from the app may still have a credential binding
     // from cloud settings; the outcome says so instead of claiming no access.
-    let end = |reason: String| {
+    let end = |reason: String, renewable: bool| {
         let reason = if legacy {
             format!("{reason} Git uses the credential binding from cloud settings.")
         } else {
             reason
         };
         say(&reason);
-        (runner.emit)(Event::GitHub(Prompt::Ended(reason)));
+        (runner.emit)(Event::GitHub(Prompt::Ended { reason, renewable }));
     };
     let connected = |login, repositories, requests| {
         (runner.emit)(Event::GitHub(Prompt::Connected {
@@ -227,7 +226,7 @@ pub fn configure(
     };
     if settings.is_some() && grants.is_empty() {
         retire(connection, runner)?;
-        end("This cloud has no repository on GitHub.".into());
+        end("This cloud has no repository on GitHub.".into(), false);
         return Ok(false);
     }
     // Asked also without settings: a worker keeps its access after Disconnect, and the
@@ -239,11 +238,11 @@ pub fn configure(
     let kept = match held {
         worker::Status::Unsupported => {
             say("this worker image cannot hold GitHub access. Rebuild the image to add it.");
-            end("This worker image cannot hold GitHub access.".into());
+            end("This worker image cannot hold GitHub access.".into(), false);
             return Ok(false);
         }
         worker::Status::Unavailable => {
-            end(SERVICE_DOWN.into());
+            end(SERVICE_DOWN.into(), false);
             return Ok(false);
         }
         // A repository the worker does not reach stays out until the person chooses
@@ -285,8 +284,8 @@ pub fn configure(
                 connected(login, repositories, requests);
                 kept_complete
             }
-            Settled::Ended(reason) => {
-                end(reason);
+            Settled::Ended { reason, renewable } => {
+                end(reason, renewable);
                 false
             }
         },
@@ -364,16 +363,24 @@ enum Settled {
     Signed { complete: bool },
     /// GitHub refused before the worker got anything, so it keeps what it held.
     Kept(String, Held),
-    /// No access from the app.
-    Ended(String),
+    /// No access from the app; `renewable` when a new sign-in can resolve it.
+    Ended { reason: String, renewable: bool },
 }
 
 fn settle(signed: Signed, kept: Option<Held>) -> Settled {
     match (signed, kept) {
         (Signed::In { complete }, _) => Settled::Signed { complete },
         (Signed::Refused(reason), Some(kept)) => Settled::Kept(reason, kept),
-        // The worker took the new chain, so the access it held before is gone either way.
-        (Signed::Refused(reason) | Signed::Unserved(reason), _) => Settled::Ended(reason),
+        (Signed::Refused(reason), None) => Settled::Ended {
+            reason,
+            renewable: true,
+        },
+        // The worker took the new chain, so the access it held before is gone either way;
+        // a service that does not serve it is not something a sign-in resolves.
+        (Signed::Unserved(reason), _) => Settled::Ended {
+            reason,
+            renewable: false,
+        },
     }
 }
 

@@ -82,6 +82,7 @@ impl Settings {
     pub fn load(path: &Path) -> Result<Self> {
         let value: Self = serde_json::from_slice(&std::fs::read(path)?).map_err(|_| Error::Json)?;
         value.validate()?;
+        super::github::remember(value.github.is_some());
         Ok(value)
     }
 

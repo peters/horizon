@@ -59,10 +59,11 @@ impl Card {
     }
 
     /// Saves the app with a changed mode, or forgets it on Disconnect, off the UI thread.
-    fn save(&mut self, root: std::path::PathBuf, github: Option<github::Settings>) {
+    fn save(&mut self, ctx: &egui::Context, root: std::path::PathBuf, github: Option<github::Settings>) {
         let (tx, rx) = channel();
         self.saving = Some(rx);
         self.message = None;
+        let ctx = ctx.clone();
         std::thread::spawn(move || {
             let result = setup::save_github(
                 &root,
@@ -72,16 +73,18 @@ impl Card {
             .map(|committed| (committed, github))
             .map_err(|error| error.to_string());
             let _ = tx.send(result);
+            ctx.request_repaint();
         });
     }
 
     /// Creates the app with the manifest flow, saves it, and checks its device sign-in.
-    fn connect(&mut self, root: std::path::PathBuf) {
+    fn connect(&mut self, ctx: &egui::Context, root: std::path::PathBuf) {
         let (tx, rx) = channel();
         self.connecting = Some(rx);
         self.message = None;
         let cancel = horizon_core::cloud_runtime::Cancellation::default();
         self.abort = Some(Abort(cancel.clone()));
+        let ctx = ctx.clone();
         std::thread::spawn(move || {
             let name = connect::app_name();
             let result = connect::start(&root, &name, horizon_core::open_url, cancel.clone())
@@ -109,14 +112,18 @@ impl Card {
                 })
                 .map_err(|error| error.to_string());
             let _ = tx.send(result);
+            ctx.request_repaint();
         });
     }
 
-    fn check(&mut self, settings: github::Settings) {
+    fn check(&mut self, ctx: &egui::Context, settings: github::Settings) {
         let (tx, rx) = channel();
         self.checking = Some(rx);
+        // Each job wakes the UI when it finishes, so its outcome shows without input.
+        let ctx = ctx.clone();
         std::thread::spawn(move || {
             let _ = tx.send(connect::device_flow_enabled(&settings).map_err(|error| error.to_string()));
+            ctx.request_repaint();
         });
     }
 
@@ -176,7 +183,7 @@ impl Card {
             && self.checking.is_none()
             && let Some(settings) = &draft.settings.github
         {
-            self.check(settings.clone());
+            self.check(ui.ctx(), settings.clone());
         }
     }
 }
@@ -207,7 +214,7 @@ pub(super) fn card(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card) {
                 .add(primary_button("Connect GitHub").min_size(vec2(140.0, 30.0)))
                 .clicked()
             {
-                card.connect(draft.root().to_owned());
+                card.connect(ui.ctx(), draft.root().to_owned());
             }
         }
         if let Some(message) = &card.message {
@@ -277,6 +284,7 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
         && let Some(github) = draft.settings.github.clone()
     {
         card.save(
+            ui.ctx(),
             draft.root().to_owned(),
             Some(github::Settings { mode: chosen, ..github }),
         );
@@ -289,7 +297,7 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
         .add_enabled(card.saving.is_none(), chrome_button("Disconnect"))
         .clicked()
     {
-        card.save(draft.root().to_owned(), None);
+        card.save(ui.ctx(), draft.root().to_owned(), None);
     }
 }
 

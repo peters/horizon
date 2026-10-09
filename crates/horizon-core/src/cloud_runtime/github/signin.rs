@@ -40,8 +40,10 @@ pub enum Prompt {
         requests: bool,
         renewable: bool,
     },
-    /// The cloud continues without GitHub access, for this reason.
-    Ended(String),
+    /// The cloud continues without GitHub access, for this reason. `renewable` is whether
+    /// a new sign-in can resolve it, as for a skipped or declined one; a worker image
+    /// without the service or a cloud without a GitHub repository cannot.
+    Ended { reason: String, renewable: bool },
 }
 
 /// Clouds whose person chose to continue without GitHub access.

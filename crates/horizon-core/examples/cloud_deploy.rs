@@ -265,7 +265,7 @@ fn print_event(event: Event) {
                 "[{at:7.1}s] GitHub: signed in as {login} for {}",
                 repositories.join(", ")
             ),
-            Prompt::Ended(reason) => println!("[{at:7.1}s] GitHub: {reason}"),
+            Prompt::Ended { reason, .. } => println!("[{at:7.1}s] GitHub: {reason}"),
         },
         _ => {}
     }

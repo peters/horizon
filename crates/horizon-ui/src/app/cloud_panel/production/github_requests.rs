@@ -26,6 +26,9 @@ pub(super) struct State {
     pub(super) refused: Option<String>,
     inflight: Option<Receiver<Answer>>,
     next: Option<Instant>,
+    /// The repository of an Allow for this cloud under way, which joins the cloud's
+    /// connected repositories once the worker applies it.
+    allowing: Option<String>,
 }
 
 impl State {
@@ -35,23 +38,35 @@ impl State {
         self.inflight.is_some()
     }
 
-    fn receive(&mut self) {
-        let Some(rx) = &self.inflight else { return };
+    /// Takes the answer of the exchange under way. Returns the repository that an applied
+    /// Allow for this cloud added.
+    fn receive(&mut self) -> Option<String> {
+        let rx = self.inflight.as_ref()?;
         match rx.try_recv() {
             Ok((list, decided)) => {
                 let listed = list.is_some();
                 if let Some(list) = list {
                     self.list = list;
                 }
+                self.inflight = None;
+                let allowed = self.allowing.take();
                 match decided {
+                    Some(None) => {
+                        self.refused = None;
+                        return allowed;
+                    }
                     Some(refused) => self.refused = refused,
                     None if listed => self.refused = None,
                     None => {}
                 }
-                self.inflight = None;
+                None
             }
-            Err(TryRecvError::Disconnected) => self.inflight = None,
-            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.inflight = None;
+                self.allowing = None;
+                None
+            }
+            Err(TryRecvError::Empty) => None,
         }
     }
 }
@@ -75,7 +90,12 @@ impl HorizonApp {
             let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&group.issue) else {
                 continue;
             };
-            runtime.github_requests.receive();
+            if let Some(repository) = runtime.github_requests.receive()
+                && let Some(Prompt::Connected { repositories, .. }) = &mut runtime.github
+                && !repositories.iter().any(|held| held.eq_ignore_ascii_case(&repository))
+            {
+                repositories.push(repository);
+            }
             // Only a service that takes requests is asked for them.
             let connected = matches!(runtime.github, Some(Prompt::Connected { requests: true, .. }));
             let ready = runtime.stage == Some(Stage::Ready);
@@ -125,6 +145,12 @@ impl HorizonApp {
         let Some(state) = runtime.state.clone().filter(|state| state.worker.is_some()) else {
             return;
         };
+        runtime.github_requests.allowing = runtime
+            .github_requests
+            .list
+            .iter()
+            .find(|pending| pending.id == request && decision == Decision::AllowCloud)
+            .map(|pending| pending.repository.clone());
         // The decided request leaves the card at once; the next list confirms it.
         runtime.github_requests.list.retain(|pending| pending.id != request);
         runtime.github_requests.inflight = Some(spawn(root, launch.id, state, Some((request, decision)), ctx.clone()));
@@ -201,5 +227,14 @@ mod tests {
         tx.send((Some(Vec::new()), None)).unwrap();
         state.receive();
         assert_eq!(state.refused, None, "the next poll clears the refusal");
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.inflight = Some(rx);
+        state.allowing = Some("acme/design-system".into());
+        tx.send((Some(Vec::new()), Some(None))).unwrap();
+        assert_eq!(
+            state.receive().as_deref(),
+            Some("acme/design-system"),
+            "an applied Allow for this cloud joins the connected repositories"
+        );
     }
 }

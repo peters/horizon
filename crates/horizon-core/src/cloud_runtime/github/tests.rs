@@ -9,8 +9,8 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-mod manifest;
 mod asks;
+mod manifest;
 
 fn settings(mode: Mode, secret: &std::path::Path) -> Settings {
     Settings {
@@ -510,12 +510,18 @@ fn a_worker_that_took_a_new_chain_never_reports_its_old_access() {
     );
     assert_eq!(
         settle(Signed::Unserved("The service is down.".into()), held()),
-        Settled::Ended("The service is down.".into()),
-        "after the install the old chain is gone"
+        Settled::Ended {
+            reason: "The service is down.".into(),
+            renewable: false
+        },
+        "after the install the old chain is gone, and a sign-in does not start the service"
     );
     assert_eq!(
         settle(Signed::Refused("Skipped.".into()), None),
-        Settled::Ended("Skipped.".into())
+        Settled::Ended {
+            reason: "Skipped.".into(),
+            renewable: true
+        }
     );
     assert_eq!(
         settle(Signed::In { complete: false }, held()),
