@@ -567,7 +567,7 @@ fn a_stopped_clone_resumes_from_the_owners_folder_before_the_earlier_place() {
         )
         .unwrap();
     };
-    // One an earlier Horizon left straight under the parent still resumes.
+    // One that an earlier Horizon left straight under the parent still resumes.
     let earlier = temp.path().join("demo");
     stopped(&earlier);
     assert_eq!(resumable(temp.path(), &remote), Some(earlier));

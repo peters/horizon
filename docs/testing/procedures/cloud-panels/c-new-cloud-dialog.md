@@ -951,17 +951,21 @@ This task clones a small public repository on this computer. It starts no cloud.
    mv <data-home>/<folder>/octocat/Hello-World <data-home>/<folder>/Hello-World
    ```
 
-   Result: `<data-home>/<folder>/octocat` is empty.
+   Result: `<data-home>/<folder>/octocat` holds only the hidden
+   `.horizon-clone-claims` folder, where a clone keeps the lock of its folder.
 
 4. Open New cloud and type `https://github.com/octocat/Hello-World` again.
 
    Result: The dialog shows **ALREADY CLONED, CONTINUE USES IT**
    `<home>/<folder>/Hello-World`. No second clone starts.
 
-5. Close the dialog with **Cancel** and remove the clone:
+> **CAUTION:** THE NEXT STEP DELETES FOLDERS. Delete only the two folders that this
+> task made, in the private home of the fixture.
+
+5. Close the dialog with **Cancel** and remove the clone and its owner folder:
 
    ```sh
-   rm -rf <data-home>/<folder>/Hello-World && rmdir <data-home>/<folder>/octocat
+   rm -rf <data-home>/<folder>/Hello-World <data-home>/<folder>/octocat
    ```
 
    Result: Neither folder exists.
