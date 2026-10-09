@@ -55,6 +55,23 @@ fn names_the_owner_a_clone_is_kept_under() {
 }
 
 #[test]
+fn a_clone_never_lands_inside_another_checkout() {
+    let temp = tempfile::tempdir().unwrap();
+    // GitHub's acme/tools is cloned where new clones go.
+    std::fs::create_dir_all(temp.path().join("acme/tools/.git")).unwrap();
+    let widget = parse("https://gitlab.com/acme/tools/widget").unwrap();
+    assert_eq!(widget.owner, "acme/tools");
+    assert_eq!(
+        destination(temp.path(), &widget),
+        temp.path().join("widget"),
+        "not inside acme/tools"
+    );
+    // Another repository of the same owner still goes in the owner's folder.
+    let web = parse("acme/web").unwrap();
+    assert_eq!(destination(temp.path(), &web), temp.path().join("acme/web"));
+}
+
+#[test]
 fn an_owner_or_name_that_windows_reserves_gets_a_folder_it_can_make() {
     let temp = Path::new("/synthetic");
     let remote = parse("https://git.example.org/CON/team./com1.txt").unwrap();

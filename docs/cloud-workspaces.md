@@ -186,7 +186,9 @@ A pasted repository link is cloned on this computer first. Unless you choose
 another folder, the clone goes to `<folder>/<owner>/<repository>`, for example
 `~/github/acme/web`. `<folder>` is the first of `~/github`, `~/code`, `~/src`,
 `~/projects` and `~/dev` that exists, else `~/Horizon`. A GitLab link keeps all
-its groups, as in `~/github/group/subgroup/app`. A checkout of the same link that
+its groups, as in `~/github/group/subgroup/app`. When a folder on that way is
+already a checkout, the clone goes to `<folder>/<repository>` instead, so it never
+lands inside another repository. A checkout of the same link that
 is already there is used as it is, also one from an earlier Horizon at
 `<folder>/<repository>`.
 

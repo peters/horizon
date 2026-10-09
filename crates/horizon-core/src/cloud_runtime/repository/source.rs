@@ -151,15 +151,22 @@ const CANDIDATES: u32 = 25;
 /// The folders a clone of `remote` can land in, `parent/<owner>/<name>` first, in the
 /// order they are tried.
 fn candidates<'a>(parent: &'a Path, remote: &'a Remote) -> impl Iterator<Item = PathBuf> + 'a {
-    named(owner_folder(parent, remote), &remote.name)
+    named(clone_folder(parent, remote), &remote.name)
 }
 
-/// `parent/<owner>`, one folder for each group of a GitLab path.
-fn owner_folder(parent: &Path, remote: &Remote) -> PathBuf {
-    remote
-        .owner
-        .split('/')
-        .fold(parent.to_owned(), |folder, segment| folder.join(portable(segment)))
+/// The folder a clone of `remote` goes in: its owner's, unless a folder on the way there is
+/// a checkout, as when GitHub's `acme/tools` is cloned and GitLab's `acme/tools/widget`
+/// comes next. A clone never lands inside another repository, so it then goes straight
+/// under `parent`.
+fn clone_folder(parent: &Path, remote: &Remote) -> PathBuf {
+    let mut folder = parent.to_owned();
+    for segment in remote.owner.split('/') {
+        folder.push(portable(segment));
+        if folder.join(".git").exists() {
+            return parent.to_owned();
+        }
+    }
+    folder
 }
 
 /// A folder name for `segment` that every platform can make: Windows reserves device names
@@ -196,7 +203,7 @@ fn named(folder: PathBuf, name: &str) -> impl Iterator<Item = PathBuf> {
 pub fn destination(parent: &Path, remote: &Remote) -> PathBuf {
     candidates(parent, remote)
         .find(|path| !path.exists())
-        .unwrap_or_else(|| owner_folder(parent, remote).join(portable(&remote.name)))
+        .unwrap_or_else(|| clone_folder(parent, remote).join(portable(&remote.name)))
 }
 
 /// The checkout of `remote` already under `parent`, so a second request reuses it: any of the
