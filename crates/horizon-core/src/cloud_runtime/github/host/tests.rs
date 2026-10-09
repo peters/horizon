@@ -51,3 +51,31 @@ fn a_disconnect_forgets_the_sign_in_and_a_later_use_finds_the_app_gone() {
     assert!(current(root.path(), &settings(42)).unwrap().is_none());
     assert!(!path(root.path(), &settings(42)).exists());
 }
+
+#[test]
+fn a_web_sign_in_without_a_readable_secret_says_so_and_keeps_the_chain() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("settings.json"), r#"{"github":{"app_id":42}}"#).unwrap();
+    // Close to its expiry, so it renews first; the secret file does not exist.
+    let chain = horizon_cloud::github::Chain {
+        access_token: Secret::new("ghu_synthetic".into()),
+        access_expires_at: std::time::SystemTime::now() + std::time::Duration::from_secs(60),
+        refresh_token: Secret::new("ghr_synthetic".into()),
+        refresh_expires_at: std::time::SystemTime::now() + std::time::Duration::from_hours(400),
+    };
+    let web = Settings {
+        client_secret_file: root.path().join("credentials/github-app-42"),
+        mode: Mode::Automatic,
+        ..settings(42)
+    };
+    stored::save(&path(root.path(), &web), "octo-cat", &chain, true).unwrap();
+    let error = current(root.path(), &web).expect_err("the missing secret is this computer's error");
+    assert!(
+        !error.to_string().contains("GitHub"),
+        "not taken for a refusal by GitHub: {error}"
+    );
+    assert!(
+        stored::load(&path(root.path(), &web)).is_some(),
+        "the chain stays for when the secret is back"
+    );
+}

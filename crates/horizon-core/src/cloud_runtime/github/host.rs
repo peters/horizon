@@ -53,13 +53,12 @@ pub fn current(root: &Path, settings: &Settings) -> Result<Option<(String, Secre
         return stored::forget(&path(root, settings));
     }
     // A chain from a web sign-in renews with the secret whatever the setting says now; a
-    // device chain needs none, and the secret is then not sent.
-    let secret = settings.client_secret().ok();
+    // device chain needs none, and the secret is then not read.
     stored::current(
         &path(root, settings),
         &Client::new(),
         &settings.client_id,
-        secret.as_ref(),
+        Some(&|| settings.client_secret()),
     )
     .map_err(|kept| match kept {
         Kept::Unreachable => Error::Invalid("GitHub could not be reached. Check the network and try again."),

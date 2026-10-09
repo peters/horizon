@@ -231,42 +231,22 @@ pub struct Committed {
     after: Vec<u8>,
 }
 
-/// Saves the GitHub App of Connect GitHub, or forgets it, and keeps every other
-/// setting as it is. Unlike the form's save it needs no provider or agent credential,
-/// since Connect GitHub can come first. Run off the UI thread, as
+/// Saves the GitHub App of Connect GitHub, changes its mode, or forgets it, and keeps
+/// every other setting as it is. Unlike the form's save it needs no provider or agent
+/// credential, since Connect GitHub can come first. Run off the UI thread, as
 /// [`save_provider_key`]. An open form adopts the result with [`Draft::adopt_github`].
-/// `cancel` is checked under the settings lock, right before the commit, so a cancelled
-/// Connect flow saves nothing.
+/// `shown` is the app ID the caller showed, `None` for no app: settings that name another
+/// app, or none, were saved by another Horizon window since, and are left as they are, so
+/// a stale window never replaces or disconnects an app it did not show. `cancel` is checked
+/// under the settings lock, right before the commit, so a cancelled Connect flow saves
+/// nothing.
 /// # Errors
-/// Malformed saved settings, settings that changed while this save ran, or a
-/// cancellation.
+/// Malformed saved settings, settings that changed while this save ran or no longer name
+/// `shown`, or a cancellation.
 pub fn save_github(
     root: &Path,
+    shown: Option<u64>,
     github: Option<super::github::Settings>,
-    cancel: &super::Cancellation,
-) -> Result<Committed> {
-    write_github(root, github, None, cancel)
-}
-
-/// Changes the mode of the GitHub App `app_id`, or forgets it, as [`save_github`], but only
-/// while the settings still name that app. Settings that name another app, or none, were
-/// saved by another Horizon window since this one showed the app, and are left as they are.
-/// # Errors
-/// As [`save_github`], and settings that no longer name the app.
-pub fn change_github(
-    root: &Path,
-    app_id: u64,
-    github: Option<super::github::Settings>,
-    cancel: &super::Cancellation,
-) -> Result<Committed> {
-    write_github(root, github, Some(app_id), cancel)
-}
-
-/// Saves `github`, when `replaces` is set only over settings that name that app.
-fn write_github(
-    root: &Path,
-    github: Option<super::github::Settings>,
-    replaces: Option<u64>,
     cancel: &super::Cancellation,
 ) -> Result<Committed> {
     let mut write = storage::Transaction::new(root)?;
@@ -279,7 +259,7 @@ fn write_github(
         || Ok(defaults(root)),
         |bytes| serde_json::from_slice::<Settings>(bytes).map_err(|_| Error::Json),
     )?;
-    if replaces.is_some_and(|app_id| settings.github.as_ref().map(|github| github.app_id) != Some(app_id)) {
+    if settings.github.as_ref().map(|github| github.app_id) != shown {
         return Err(Error::Invalid(
             "GitHub was changed in another Horizon window. Close and reopen the settings to see it.",
         ));

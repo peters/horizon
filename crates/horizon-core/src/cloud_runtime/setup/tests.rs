@@ -349,6 +349,7 @@ fn an_open_form_keeps_saving_after_connect_github_saved_the_app() {
     };
     let committed = save_github(
         root.path(),
+        None,
         Some(app.clone()),
         &crate::cloud_runtime::Cancellation::default(),
     )
@@ -364,7 +365,13 @@ fn an_open_form_keeps_saving_after_connect_github_saved_the_app() {
     );
     // A form opened before another change still sees that change as made elsewhere.
     let mut stale = Draft::load(root.path()).unwrap();
-    let other = save_github(root.path(), None, &crate::cloud_runtime::Cancellation::default()).unwrap();
+    let other = save_github(
+        root.path(),
+        Some(42),
+        None,
+        &crate::cloud_runtime::Cancellation::default(),
+    )
+    .unwrap();
     std::fs::write(root.path().join("settings.json"), b"{}").unwrap();
     stale.adopt_github(&other, None);
     assert!(stale.save().is_err());
@@ -382,13 +389,14 @@ fn connect_github_saves_before_any_provider_is_set_up() {
     };
     let cancelled = crate::cloud_runtime::Cancellation::default();
     cancelled.cancel();
-    assert!(save_github(root.path(), Some(app.clone()), &cancelled).is_err());
+    assert!(save_github(root.path(), None, Some(app.clone()), &cancelled).is_err());
     assert!(
         !root.path().join("settings.json").exists(),
         "a cancelled flow saves nothing"
     );
     save_github(
         root.path(),
+        None,
         Some(app.clone()),
         &crate::cloud_runtime::Cancellation::default(),
     )
@@ -399,7 +407,7 @@ fn connect_github_saves_before_any_provider_is_set_up() {
 }
 
 #[test]
-fn a_change_of_the_github_app_applies_only_while_the_settings_name_it() {
+fn a_github_save_applies_only_while_the_settings_name_the_shown_app() {
     let root = tempfile::tempdir().unwrap();
     let app = |app_id| crate::cloud_runtime::github::Settings {
         app_id,
@@ -409,20 +417,24 @@ fn a_change_of_the_github_app_applies_only_while_the_settings_name_it() {
         mode: crate::cloud_runtime::github::Mode::Ask,
     };
     let cancel = crate::cloud_runtime::Cancellation::default();
-    // Another window replaced app 42 with app 43 since this one showed 42.
-    save_github(root.path(), Some(app(43)), &cancel).unwrap();
+    // Another window connected app 43 while this one showed app 42, or no app.
+    save_github(root.path(), None, Some(app(43)), &cancel).unwrap();
     let automatic = crate::cloud_runtime::github::Settings {
         mode: crate::cloud_runtime::github::Mode::Automatic,
         ..app(42)
     };
-    assert!(change_github(root.path(), 42, Some(automatic), &cancel).is_err());
-    assert!(change_github(root.path(), 42, None, &cancel).is_err());
+    assert!(save_github(root.path(), Some(42), Some(automatic), &cancel).is_err());
+    assert!(save_github(root.path(), Some(42), None, &cancel).is_err());
+    assert!(
+        save_github(root.path(), None, Some(app(44)), &cancel).is_err(),
+        "a stale Connect never replaces a connected app"
+    );
     assert_eq!(Draft::load(root.path()).unwrap().settings.github, Some(app(43)));
     // The app the settings name changes as asked.
-    change_github(root.path(), 43, None, &cancel).expect("the shown app is still the saved one");
+    save_github(root.path(), Some(43), None, &cancel).expect("the shown app is still the saved one");
     assert_eq!(Draft::load(root.path()).unwrap().settings.github, None);
     assert!(
-        change_github(root.path(), 43, None, &cancel).is_err(),
+        save_github(root.path(), Some(43), None, &cancel).is_err(),
         "a second Disconnect finds nothing to change"
     );
 }

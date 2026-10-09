@@ -45,12 +45,13 @@ impl From<Error> for Kept {
 
 /// The account and a usable access token of the chain at `path`, renewing it when it is
 /// close to its expiry, or `None` when the person must sign in: there is no chain, or
-/// GitHub said it is gone, and then it is forgotten.
+/// GitHub said it is gone, and then it is forgotten. `client_secret` reads the app's
+/// secret, which only a chain from a web sign-in renews with; `None` for an app without one.
 pub(super) fn current(
     path: &Path,
     client: &Client,
     client_id: &str,
-    client_secret: Option<&Secret>,
+    client_secret: Option<&dyn Fn() -> Result<Secret>>,
 ) -> std::result::Result<Option<(String, Secret)>, Kept> {
     let Some(stored) = load(path) else {
         return Ok(None);
@@ -59,8 +60,17 @@ pub(super) fn current(
     let token = if stored.access_expires_at > now + MARGIN {
         stored.access_token
     } else if stored.refresh_expires_at > now {
-        let secret = if stored.web { client_secret } else { None };
-        match client.refresh(client_id, secret, &stored.refresh_token) {
+        // A secret that cannot be read is this computer's error, never GitHub's refusal.
+        let secret = match (stored.web, client_secret) {
+            (false, _) => None,
+            (true, Some(read)) => Some(read()?),
+            (true, None) => {
+                return Err(Kept::Local(Error::Invalid(
+                    "A web sign-in renews only with its app's secret",
+                )));
+            }
+        };
+        match client.refresh(client_id, secret.as_ref(), &stored.refresh_token) {
             // The old chain stopped working with this answer: store the new one first.
             Ok(chain) => {
                 save(path, &stored.login, &chain, stored.web)?;

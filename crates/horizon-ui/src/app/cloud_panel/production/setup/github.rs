@@ -74,9 +74,9 @@ impl Card {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let save = || {
-                setup::change_github(
+                setup::save_github(
                     &root,
-                    shown.app_id,
+                    Some(shown.app_id),
                     github.clone(),
                     &horizon_core::cloud_runtime::Cancellation::default(),
                 )
@@ -107,10 +107,10 @@ impl Card {
             let name = connect::app_name();
             let result = connect::start(&root, &name, horizon_core::open_url, cancel.clone())
                 .and_then(|created| created.recv().map_err(|_| horizon_core::cloud_runtime::Error::Busy)?)
-                // Settings closed meanwhile: the save, which checks under the settings lock,
-                // saves nothing, and the app's secret goes.
+                // Settings closed meanwhile, or another window connected an app: the save,
+                // which checks under the settings lock, saves nothing, and the app's secret goes.
                 .and_then(
-                    |settings| match setup::save_github(&root, Some(settings.clone()), &cancel) {
+                    |settings| match setup::save_github(&root, None, Some(settings.clone()), &cancel) {
                         Ok(committed) => Ok((committed, settings)),
                         Err(error) => {
                             // Unless the settings file already names this app, its secret goes too.
