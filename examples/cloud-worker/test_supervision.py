@@ -337,6 +337,15 @@ class SupervisionTests(unittest.TestCase):
             self.ready(False)
             self.assertNotIn(service, json.loads((self.root / 'services.json').read_text())['services'])
             child = self.start(service)
+            if service == 'github':
+                # Listed only once its socket answers.
+                self.supervisor.publish(False)
+                self.assertNotIn(service, json.loads((self.root / 'services.json').read_text())['services'])
+                self.assertFalse(self.supervisor.github_listed)
+                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self.addCleanup(listener.close)
+                listener.bind(str(self.root / 'github.sock'))
+                listener.listen(1)
             self.supervisor.publish(False)
             self.assertIn(service, json.loads((self.root / 'services.json').read_text())['services'])
             CHECK(self.root, self.root)

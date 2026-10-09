@@ -370,7 +370,7 @@ def accept_forever(server, store):
 
 def start(store, path, sleep=None, prepare=None):
     """The listening socket, after up to START_ATTEMPTS tries with doubled waits, or None.
-    `prepare` runs once, after the checks and before the socket exists."""
+    `prepare` runs after the checks and before the socket exists, until it succeeds once."""
     sleep, attempts, wait = sleep or time.sleep, START_ATTEMPTS, START_WAIT_SECONDS
     for attempt in range(attempts):
         try:
@@ -378,6 +378,7 @@ def start(store, path, sleep=None, prepare=None):
                 raise ValueError('Agent isolation is not active')
             common.github_bases(os.environ)
             common.private_directory(store.runtime, create=True)
+            # Repeated on the next attempt when it fails: the socket never opens before it is done.
             if prepare is not None:
                 prepare()
                 prepare = None
@@ -406,7 +407,9 @@ def serve(store=None, path=SOCKET):
 def reconcile(store, configure=None, static=None):
     """Configures the repositories for the stored chain, or for the static binding without
     one. An install that stopped between its configuration and its save left the
-    repositories configured for a chain that was never stored; the stored state decides."""
+    repositories configured for a chain that was never stored; the stored state decides.
+    Raises ValueError when that fails, so the service does not open its socket over
+    repositories configured for another chain."""
     try:
         with store.lock():
             state, _ = store.load()
@@ -415,8 +418,7 @@ def reconcile(store, configure=None, static=None):
             elif state is None:
                 (static or run_restore)({'previous': []})
     except Exception as error:
-        # Missing checkouts or a stopped Git helper leave the configuration as it was.
-        print('GitHub repositories not reconciled: ' + type(error).__name__, flush=True)
+        raise ValueError('GitHub repositories not reconciled: ' + type(error).__name__) from None
 
 
 def run_configure(payload):

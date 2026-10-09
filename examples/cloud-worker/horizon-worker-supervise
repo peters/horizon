@@ -113,6 +113,17 @@ def vnc_ready():
         return False
 
 
+def socket_ready(path):
+    """Whether a service listens on the Unix socket `path`."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(1)
+            connection.connect(str(path))
+        return True
+    except OSError:
+        return False
+
+
 def check_ready(runtime=RUNTIME, workspace=WORKSPACE):
     selected = json.loads((workspace / 'capabilities.json').read_text())
     state = json.loads((runtime / 'services.json').read_text())
@@ -197,6 +208,9 @@ class Supervisor:
         self.stopping = False
         # The desktop selection of the published services, once they are published.
         self.published = None
+        # Whether the published services include the GitHub service, which counts only once
+        # its socket answers.
+        self.github_listed = False
 
     def start(self, name, command, environment=None):
         # With agent isolation the control service is the agents' browser host, so it runs as
@@ -290,7 +304,13 @@ class Supervisor:
     def publish(self, desktop):
         self.assert_running(configuring=True)
         self.published = desktop
-        names = SERVICES | (DESKTOP if desktop else set()) | (OPTIONAL & set(self.children))
+        optional = OPTIONAL & set(self.children)
+        # The GitHub service reconciles the repositories before it opens its socket; until then
+        # Git falls back to the static binding, so it is not published as running.
+        if 'github' in optional and not socket_ready(self.runtime / 'github.sock'):
+            optional.discard('github')
+        self.github_listed = 'github' in optional
+        names = SERVICES | (DESKTOP if desktop else set()) | optional
         state = {'supervisor': process_identity(os.getpid()),
                  'services': {name: self.identities[name] for name in sorted(names)}}
         pending = self.runtime / 'services.new'
@@ -322,6 +342,9 @@ class Supervisor:
         unhealthy_since = None
         while True:
             self.assert_running(configuring=True)
+            if ('github' in self.children and not self.github_listed
+                    and socket_ready(self.runtime / 'github.sock')):
+                self.publish(desktop)
             if desktop and time.monotonic() >= next_desktop_check:
                 started = time.monotonic()
                 healthy = desktop_ready(self.children['openbox'].pid)

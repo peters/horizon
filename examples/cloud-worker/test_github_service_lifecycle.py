@@ -380,7 +380,7 @@ class VolumeCopyTests(ServiceTestCase):
         service.reconcile(self.store, configure=configured.append, static=restored.append)
         self.assertEqual(configured[-1], {'grants': service.identity_grants(self.stored()), 'previous': []})
         failing = mock.Mock(side_effect=subprocess.CalledProcessError(1, 'configure'))
-        with contextlib.redirect_stdout(io.StringIO()):
+        with self.assertRaisesRegex(ValueError, 'not reconciled'):
             service.reconcile(self.store, configure=failing, static=restored.append)
 
     def test_the_socket_opens_only_after_the_repositories_are_reconciled(self):
@@ -394,6 +394,18 @@ class VolumeCopyTests(ServiceTestCase):
         self.addCleanup(server.close)
         self.assertEqual(seen, [False], 'reconciled once, before the socket existed')
         self.assertTrue(socket_path.exists())
+
+    def test_a_failed_reconciliation_never_opens_the_socket(self):
+        socket_path = self.root / 'unreconciled.sock'
+        isolated = self.root / 'isolated'
+        isolated.touch()
+
+        def prepare():
+            raise ValueError('GitHub repositories not reconciled: CalledProcessError')
+        with mock.patch.object(common, 'AGENT_ISOLATION', isolated), contextlib.redirect_stdout(io.StringIO()):
+            server = service.start(self.store, socket_path, sleep=lambda _: None, prepare=prepare)
+        self.assertIsNone(server, 'the service ends and the supervisor retires it')
+        self.assertFalse(socket_path.exists())
 
     def test_a_revocation_that_only_memory_holds_still_ends_serving(self):
         self.install()
