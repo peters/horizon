@@ -58,8 +58,9 @@ It also tests the preload fallback and a sign-in field on a browser panel.
 
 1. Run `cargo test -p horizon-browser --lib firefox_screenshot_session_keeps_scrollbars_visible`.
 
-   Result: A minimize session starts geckodriver with `--allow-system-access`.
-   A `BrowserDefault` session does not start geckodriver with that argument.
+   Result: A minimize session asks geckodriver for `--allow-system-access`.
+   A driver that rejects that argument starts without it.
+   A `BrowserDefault` session does not ask for that argument.
    Firefox options do not include `-remote-allow-system-access`.
 
 ### 6.3 SHARED-CLEAR — One clear for a shared process

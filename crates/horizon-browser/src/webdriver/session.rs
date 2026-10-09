@@ -1158,7 +1158,7 @@ mod tests {
     }
 
     fn geckodriver_allows_system_access(config: &crate::BrowserConfig) -> bool {
-        super::super::service::firefox_service_arguments(config, 9, 10)
+        super::super::service::firefox_service_arguments(config, 9, 10, true)
             .iter()
             .any(|argument| argument == "--allow-system-access")
     }

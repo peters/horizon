@@ -77,6 +77,7 @@ impl WebDriverService {
             BackendKind::ChromiumCdp => return Err("Chromium does not use WebDriver service startup".to_string()),
         };
 
+        let mut permit_system_access = true;
         for attempt in 1..=STARTUP_ATTEMPTS {
             let webdriver_listener = reserve_loopback_listener()?;
             let address = webdriver_listener
@@ -94,7 +95,12 @@ impl WebDriverService {
                 .map_err(|error| format!("failed to read reserved Firefox BiDi port: {error}"))?
                 .map(|address| address.port());
             let args = if config.backend == BackendKind::FirefoxBidi {
-                firefox_service_arguments(config, address.port(), bidi_port.unwrap_or(address.port()))
+                firefox_service_arguments(
+                    config,
+                    address.port(),
+                    bidi_port.unwrap_or(address.port()),
+                    permit_system_access,
+                )
             } else {
                 service_args(config.backend, address.port(), bidi_port, base_args.clone())
             };
@@ -117,10 +123,15 @@ impl WebDriverService {
                     });
                 }
                 if let Some(status) = process.child_status() {
-                    let error = format!(
-                        "{label} exited before becoming ready ({status}); stderr: {}",
-                        process.stderr_tail()
-                    );
+                    let stderr = process.stderr_tail();
+                    if permit_system_access && geckodriver_rejected_system_access(&stderr) {
+                        permit_system_access = false;
+                        tracing::warn!(
+                            "geckodriver rejected --allow-system-access; continuing without chrome-context access: {stderr}"
+                        );
+                        continue;
+                    }
+                    let error = format!("{label} exited before becoming ready ({status}); stderr: {stderr}");
                     if attempt == STARTUP_ATTEMPTS {
                         return Err(error);
                     }
@@ -143,14 +154,26 @@ fn status_is_ready(status: &serde_json::Value) -> bool {
     status.pointer("/value/ready").and_then(serde_json::Value::as_bool) == Some(true)
 }
 
-pub(super) fn firefox_service_arguments(config: &BrowserConfig, port: u16, bidi_port: u16) -> Vec<String> {
+pub(super) fn firefox_service_arguments(
+    config: &BrowserConfig,
+    port: u16,
+    bidi_port: u16,
+    permit_system_access: bool,
+) -> Vec<String> {
     let mut extra = Vec::new();
     // geckodriver 0.37 rejects this privilege inside `moz:firefoxOptions`.
-    // The process flag is what opens the chrome context for the native flag.
-    if config.automation_disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals {
+    // Older drivers reject the process flag, so startup retries without it.
+    if permit_system_access && config.automation_disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals
+    {
         extra.push("--allow-system-access".to_string());
     }
     service_args(BackendKind::FirefoxBidi, port, Some(bidi_port), extra)
+}
+
+pub(super) fn geckodriver_rejected_system_access(stderr: &str) -> bool {
+    let text = stderr.to_ascii_lowercase();
+    text.contains("allow-system-access")
+        && (text.contains("unexpected") || text.contains("unrecognized") || text.contains("unknown"))
 }
 
 fn service_args(backend: BackendKind, port: u16, bidi_port: Option<u16>, mut extra: Vec<String>) -> Vec<String> {
@@ -204,7 +227,7 @@ pub(super) fn prepare_profile(path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SafariLease, service_args, status_is_ready};
+    use super::{SafariLease, geckodriver_rejected_system_access, service_args, status_is_ready};
     use crate::BackendKind;
 
     #[test]
@@ -216,6 +239,28 @@ mod tests {
         assert_eq!(
             service_args(BackendKind::SafariWebDriver, 5555, None, Vec::new()),
             ["--port", "5555"]
+        );
+    }
+
+    #[test]
+    fn older_geckodriver_can_start_without_system_access() {
+        assert!(geckodriver_rejected_system_access(
+            "geckodriver: error: unexpected argument '--allow-system-access' found"
+        ));
+        assert!(!geckodriver_rejected_system_access("address already in use"));
+        let config = crate::BrowserConfig {
+            backend: BackendKind::FirefoxBidi,
+            ..crate::BrowserConfig::default()
+        };
+        assert!(
+            super::firefox_service_arguments(&config, 9, 10, true)
+                .iter()
+                .any(|argument| argument == "--allow-system-access")
+        );
+        assert!(
+            !super::firefox_service_arguments(&config, 9, 10, false)
+                .iter()
+                .any(|argument| argument == "--allow-system-access")
         );
     }
 

@@ -77,6 +77,20 @@ impl GroupState {
         Ok(())
     }
 
+    /// Clear the flags for a process that just started.
+    ///
+    /// A panel retry keeps this group after the previous process is reaped.
+    /// The old decision must not skip the clear or suppress the preload.
+    fn clear_replacement_native_automation_flag(
+        &mut self,
+        transport: &dyn ClassicTransport,
+        session_id: &str,
+    ) -> Result<(), String> {
+        self.native_automation_flag_cleared = false;
+        self.native_flag_decided = false;
+        self.clear_native_automation_flag(transport, session_id)
+    }
+
     /// Clear the native automation flags once on the session transport.
     ///
     /// Page commands cannot switch `moz/context`. Doing it here, before the
@@ -206,7 +220,7 @@ impl SharedFirefoxSession {
             let DriverHost::Local(service) = host else {
                 return Err("shared Firefox requires a local service".into());
             };
-            if let Err(error) = state.clear_native_automation_flag(&service.http, &session.id) {
+            if let Err(error) = state.clear_replacement_native_automation_flag(&service.http, &session.id) {
                 service.delete_session(&session.id);
                 drop(service);
                 return Err(error);
@@ -991,6 +1005,24 @@ mod tests {
             page.post("/session/session/moz/context", &json!({"context": "chrome"}))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn shared_process_clears_again_after_the_firefox_process_is_replaced() {
+        let server = Server::start(vec![
+            Reply::json(200, &json!({"value": null})),
+            Reply::json(200, &json!({"value": true})),
+            Reply::json(200, &json!({"value": null})),
+        ]);
+        let http = HttpClient::new(([127, 0, 0, 1], server.port).into()).expect("client");
+        let mut state = minimized_state();
+        state.native_automation_flag_cleared = true;
+        state.native_flag_decided = true;
+        state
+            .clear_replacement_native_automation_flag(&http, "session")
+            .expect("replacement clear");
+        assert!(state.native_automation_flag_cleared);
+        assert_eq!(server.recorded().len(), 3);
     }
 
     #[test]
