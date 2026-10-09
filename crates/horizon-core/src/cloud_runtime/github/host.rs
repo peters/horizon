@@ -11,6 +11,8 @@ use crate::cloud_runtime::Cancellation;
 use horizon_cloud::github::{Client, Secret};
 use std::path::{Path, PathBuf};
 
+const DISCONNECTED: &str = "GitHub was disconnected in Horizon's settings. Connect it again there to use it here.";
+
 /// The start of the name of each sign-in of this computer, where a cloud's sign-in uses its
 /// cloud. Each sign-in has its own, so nothing that ends one ends another.
 const SIGN_IN: &str = "horizon-this-computer";
@@ -84,6 +86,10 @@ pub fn sign_in(
     cancel: &Cancellation,
     show: &dyn Fn(Prompt),
 ) -> Result<std::result::Result<(String, Secret), String>> {
+    // A dialog left open after a Disconnect in another window asks GitHub for nothing.
+    if !configured(root, settings) {
+        return Ok(Err(DISCONNECTED.into()));
+    }
     let emit = |event| {
         if let Event::GitHub(prompt) = event {
             show(prompt);
@@ -112,7 +118,7 @@ pub fn sign_in(
     let _lock = lock(root, settings)?;
     cancel.check()?;
     if !configured(root, settings) {
-        return Ok(Err("GitHub was disconnected while this computer signed in.".into()));
+        return Ok(Err(DISCONNECTED.into()));
     }
     stored::save(
         &path(root, settings),

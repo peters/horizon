@@ -335,9 +335,10 @@ after one approval.
    Result: The field shows its link. The dialog says that the repository is
    private and offers **Clone with GitHub** in place of a token field.
 
-4. Click **Clone with GitHub**, then **Continue**.
+4. Click **Clone with GitHub**.
 
-   Result: The clone finishes without a token field. `git -C <clone> config --get
+   Result: The clone starts by itself and finishes without a token field. The
+   dialog then shows **Preparing cloud…** and the cloud's choices. `git -C <clone> config --get
    remote.origin.url` shows the plain `https://github.com/<owner>/<repo-b>.git` link,
    and `.git/config` holds no token.
 

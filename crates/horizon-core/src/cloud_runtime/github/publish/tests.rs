@@ -176,3 +176,21 @@ fn a_chain_is_kept_when_github_fails_without_revoking_it() {
         "the chain stays for a retry"
     );
 }
+
+#[test]
+fn a_stored_chain_reads_back_as_written() {
+    let docker = tempfile::tempdir().unwrap();
+    let path = docker.path().join(STORE);
+    stored::save(
+        &path,
+        "octo-cat",
+        &chain("gho_a\"b", "ghr_c", Duration::from_hours(4)),
+        true,
+    )
+    .unwrap();
+    let back = stored::load(&path).expect("the written chain loads");
+    assert_eq!(back.login, "octo-cat");
+    assert_eq!(back.access_token.expose(), "gho_a\"b");
+    assert_eq!(back.refresh_token.expose(), "ghr_c");
+    assert!(back.web);
+}

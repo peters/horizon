@@ -13,7 +13,7 @@ use super::{
 use base64::Engine as _;
 use horizon_cloud::github::{Client, Secret};
 use std::path::Path;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 /// Horizon's own OAuth app "Horizon": public, with device sign-in on. Its tokens carry
 /// scopes, which the package registry requires.
@@ -142,13 +142,14 @@ fn sign_in(docker_config: &Path, client: &Client, cloud_id: &str, runner: &Runne
 fn write_auth(docker_config: &Path, login: &str, token: &Secret) -> Result<()> {
     let path = docker_config.join("config.json");
     let existing = Zeroizing::new(read_private(&path)?.unwrap_or_default());
-    let mut config: serde_json::Value = if existing.is_empty() {
+    let mut config = Config(if existing.is_empty() {
         serde_json::json!({})
     } else {
         serde_json::from_slice(&existing)
             .map_err(|_| Error::Invalid("Horizon's Docker configuration is not valid JSON"))?
-    };
+    });
     let object = config
+        .0
         .as_object_mut()
         .ok_or(Error::Invalid("Horizon's Docker configuration is not valid JSON"))?;
     if object.contains_key("credsStore") {
@@ -159,15 +160,38 @@ fn write_auth(docker_config: &Path, login: &str, token: &Secret) -> Result<()> {
     if let Some(helpers) = object.get_mut("credHelpers").and_then(serde_json::Value::as_object_mut) {
         helpers.remove(REGISTRY);
     }
-    let auth = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(format!("{login}:{}", token.expose())));
+    let plain = Zeroizing::new(format!("{login}:{}", token.expose()));
+    let auth = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(plain.as_bytes()));
     let auths = object
         .entry("auths")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or(Error::Invalid("Horizon's Docker configuration is not valid JSON"))?;
     auths.insert(REGISTRY.into(), serde_json::json!({ "auth": auth.as_str() }));
-    let bytes = Zeroizing::new(serde_json::to_vec_pretty(&config).map_err(|_| Error::Json)?);
+    // Sized up front, so no reallocation frees an unwiped copy.
+    let mut bytes = Zeroizing::new(Vec::with_capacity(existing.len() * 2 + 8192));
+    serde_json::to_writer_pretty(&mut *bytes, &config.0).map_err(|_| Error::Json)?;
     write_private(docker_config, "config.json", &bytes)
+}
+
+/// A parsed Docker configuration. It holds the login of every registry, this one's and
+/// others', so each of its strings is wiped when it is dropped.
+struct Config(serde_json::Value);
+
+impl Drop for Config {
+    fn drop(&mut self) {
+        wipe(&mut self.0);
+    }
+}
+
+/// Wipes every string in `value`.
+fn wipe(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => text.zeroize(),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(wipe),
+        serde_json::Value::Object(map) => map.values_mut().for_each(wipe),
+        _ => {}
+    }
 }
 
 #[cfg(test)]

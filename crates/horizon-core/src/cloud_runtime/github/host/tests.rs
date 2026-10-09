@@ -135,3 +135,14 @@ fn a_web_sign_in_renews_with_the_secret_whatever_the_setting_says_now() {
     assert_eq!(stored.refresh_token.expose(), "ghr_new", "the rotated chain is stored");
     assert!(stored.web, "and still renews with the secret");
 }
+
+#[test]
+fn a_disconnected_app_asks_github_for_no_sign_in() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("settings.json"), "{}").unwrap();
+    let ended = sign_in(root.path(), &settings(42), &Cancellation::default(), &|_| {
+        panic!("no code or page is shown")
+    })
+    .unwrap();
+    assert_eq!(ended.err().as_deref(), Some(DISCONNECTED));
+}

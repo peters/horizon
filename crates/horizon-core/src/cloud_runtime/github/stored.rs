@@ -4,7 +4,7 @@
 //! chain.
 use super::{Error, Result};
 use horizon_cloud::github::{Chain, Client, Error as GitHubError, Secret};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
     io::{Read as _, Write as _},
@@ -137,23 +137,36 @@ pub(super) fn load(path: &Path) -> Option<Stored> {
 
 /// Stores `chain` for `login` at `path`, replacing what was there in one rename.
 pub(super) fn save(path: &Path, login: &str, chain: &Chain, web: bool) -> Result<()> {
+    /// Borrowed, so no copy of a token outlives the wiped buffer below.
+    #[derive(Serialize)]
+    struct Fields<'a> {
+        login: &'a str,
+        access_token: &'a str,
+        access_expires_at: u64,
+        refresh_token: &'a str,
+        refresh_expires_at: u64,
+        web: bool,
+    }
     let seconds = |at: SystemTime| at.duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs());
-    let value = Zeroizing::new(
-        serde_json::json!({
-            "login": login,
-            "access_token": chain.access_token.expose(),
-            "access_expires_at": seconds(chain.access_expires_at),
-            "refresh_token": chain.refresh_token.expose(),
-            "refresh_expires_at": seconds(chain.refresh_expires_at),
-            "web": web,
-        })
-        .to_string(),
-    );
+    // Sized up front, so no reallocation frees an unwiped copy.
+    let mut value = Zeroizing::new(Vec::with_capacity(8192));
+    serde_json::to_writer(
+        &mut *value,
+        &Fields {
+            login,
+            access_token: chain.access_token.expose(),
+            access_expires_at: seconds(chain.access_expires_at),
+            refresh_token: chain.refresh_token.expose(),
+            refresh_expires_at: seconds(chain.refresh_expires_at),
+            web,
+        },
+    )
+    .map_err(|_| Error::Json)?;
     let (Some(directory), Some(name)) = (path.parent(), path.file_name().and_then(|name| name.to_str())) else {
         return Err(Error::Invalid("A Horizon credential file needs a directory and a name"));
     };
     private_directory(directory)?;
-    write_private(directory, name, value.as_bytes())
+    write_private(directory, name, &value)
 }
 
 pub(super) fn valid_login(login: &str) -> bool {
@@ -184,7 +197,8 @@ pub(super) fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
     if !metadata.is_file() || metadata.len() > MAX_FILE {
         return Err(Error::Invalid("A Horizon credential file is not a private file"));
     }
-    let mut bytes = Vec::new();
+    // Sized for the whole read up front, so no reallocation frees an unwiped copy.
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0) + 1);
     file.take(MAX_FILE).read_to_end(&mut bytes)?;
     Ok(Some(bytes))
 }

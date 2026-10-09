@@ -272,6 +272,12 @@ fn matching<'a>(repositories: &'a [String], filter: &str) -> Vec<&'a String> {
         .collect()
 }
 
+/// Whether the field holds a link rather than a name to narrow the list by.
+fn names_a_link(input: &str) -> bool {
+    let input = input.trim();
+    input.contains(':') || input.to_ascii_lowercase().contains("github.com")
+}
+
 fn exchange(
     root: &Path,
     settings: &github::Settings,
@@ -400,7 +406,9 @@ impl super::State {
             return;
         }
         let elsewhere = self.remote.as_ref().is_some_and(|remote| remote.host != "github.com");
-        let picked = self.remote.is_some();
+        // A typed `owner/name` narrows the list; a link in the field, pasted or picked, is
+        // the choice.
+        let picked = self.remote.is_some() && names_a_link(&self.input);
         let Some(account) = self.account.as_mut() else {
             return;
         };
@@ -563,5 +571,42 @@ mod tests {
         assert!(state.token.is_empty(), "the token is not used");
         assert!(state.job.is_none() && !state.connected, "no clone started");
         assert!(state.account_for.is_none());
+    }
+
+    #[test]
+    fn a_typed_name_narrows_the_list_and_a_link_sets_it_aside() {
+        assert!(!names_a_link("acme/web"));
+        assert!(!names_a_link(" web "));
+        for link in [
+            "https://github.com/acme/web",
+            "github.com/acme/web",
+            "git@github.com:acme/web.git",
+        ] {
+            assert!(names_a_link(link), "{link}");
+        }
+        let mut state = super::super::State::default();
+        let mut account = account();
+        account.repositories = Some(vec!["acme/api".into(), "acme/web".into()]);
+        state.account = Some(account);
+        let texts = |state: &mut super::super::State| -> Vec<String> {
+            egui::Context::default()
+                .run_ui(egui::RawInput::default(), |ui| state.github_section(ui))
+                .discard_textures()
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect()
+        };
+        state.input = "acme/web".into();
+        let _ = state.remote();
+        let shown = texts(&mut state);
+        assert!(shown.iter().any(|text| text == "acme/web"), "{shown:?}");
+        assert!(!shown.iter().any(|text| text == "acme/api"));
+        state.input = "https://github.com/acme/web".into();
+        let _ = state.remote();
+        assert!(!texts(&mut state).iter().any(|text| text == "acme/web"));
     }
 }
