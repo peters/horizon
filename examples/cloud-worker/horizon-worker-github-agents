@@ -58,7 +58,7 @@ RETAIN_SECONDS = 48 * 3600
 # Access is per cloud: every agent session uses the same token, so an allowed repository
 # reaches all of them (#1393 tracks enforcement per task).
 DECISIONS = ('allow-cloud', 'deny')
-KINDS = ('credential', 'gh-token', 'request', 'request-status', 'state')
+KINDS = ('credential', 'gh-token', 'request', 'request-status')
 TOOL = 'github_access'
 WAIT_SECONDS = 600
 POLL_SECONDS = 5
@@ -246,7 +246,7 @@ def request_status(request, state, book, now, identify):
 def answer(request, store, book, now, identify):
     """The reply to one agent request, and the repository it named for the log. Only a chain
     that may be served counts; one that is not stored yet is refused as `unstored`, never as
-    `absent`, which would send Git to the static file."""
+    `absent`, which would send gh to the static file."""
     if not isinstance(request, dict) or request.get('request') not in KINDS:
         return refusal('refused', 'Malformed GitHub request.'), None
     state = store.load(serving=True)[0]
@@ -256,8 +256,6 @@ def answer(request, store, book, now, identify):
         return refusal('absent', 'No GitHub token chain is installed on this worker.'), None
     if state['state'] != 'ok':
         return refusal('revoked', 'GitHub access on this worker was revoked; connect GitHub again in Horizon.'), None
-    if request['request'] == 'state':
-        return {'ok': True, 'state': 'ok'}, None
     if request['request'] == 'request':
         return ask(request, state, book, now, identify)
     if request['request'] == 'request-status':

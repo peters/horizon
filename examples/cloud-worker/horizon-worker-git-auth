@@ -15,16 +15,18 @@ CREDENTIAL = Path('/run/horizon-credentials/github.json')
 # agents with short-lived access tokens. While it holds a chain, it replaces the file above.
 SERVICE_SOCKET = Path('/run/horizon-worker/github.sock')
 SERVICE_TIMEOUT = 10
-# The service's Git proxy. With a chain, Git reaches github.com only through it, and it adds
-# the token to requests for granted repositories, so Git never holds the token. Git trusts the
+# The service's Git proxy. While the service runs, Git reaches github.com only through it, and
+# it adds a token to requests for granted repositories, so Git never holds one. Git trusts the
 # authority that the service makes for it, and only for github.com.
 PROXY_PORT = 47281
 PROXY_AUTHORITY = '/run/horizon-worker/github-ca.pem'
 GITHUB = 'https://github.com/'
 ROUTE = (('http.' + GITHUB + '.proxy', 'http://127.0.0.1:%d' % PROXY_PORT),
          ('http.' + GITHUB + '.sslCAInfo', PROXY_AUTHORITY))
-# The worker has no SSH key for github.com, so its SSH remotes go over HTTPS, and the proxy.
-SSH_FORMS = ('git@github.com:', 'ssh://git@github.com/')
+# Other ways to write a GitHub remote go over HTTPS to github.com too, and so through the proxy.
+# The worker has no SSH key for github.com.
+REWRITTEN = ('git@github.com:', 'ssh://git@github.com/', 'http://github.com/', 'https://www.github.com/',
+             'http://www.github.com/')
 # Set by the gh wrapper when it injects a service token, so a nested gh can drop it.
 INJECTED = 'HORIZON_GH_TOKEN_INJECTED'
 GIT_DIR = Path('/workspace/repository.git')
@@ -140,7 +142,8 @@ def parse(source):
 def read_grants():
     """Return (version, grants) from the private file, or None when no binding exists."""
     try:
-        fd = os.open(CREDENTIAL, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        # Nonblocking: the Git proxy reads it as root, and a FIFO must not stop it.
+        fd = os.open(CREDENTIAL, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
     with os.fdopen(fd, 'rb') as source:
@@ -203,15 +206,13 @@ def forget_identities(env, previous):
 
 def install(value):
     version, entries = grants(value)
-    # A static binding beside a chain leaves Git routed through the proxy, as the service set it.
-    configure(version, entries, [previous_grants()], proxy=None if chain_held() else False)
+    configure(version, entries, [previous_grants()])
     write_private(value)
 
 
-def configure(version, entries, previous, proxy=False):
+def configure(version, entries, previous):
     """Point each target repository at a clean HTTPS origin with its grant's identity, after
-    removing the identities that each install in `previous` wrote. With `proxy` True, Git
-    reaches github.com through the chain service's proxy; False, directly; None leaves it."""
+    removing the identities that each install in `previous` wrote."""
     directories = [target_directory(entry['target']) for entry in entries]
     env = dict(os.environ, HOME=HOME)
     # Refuse before any configuration or token write when a target is absent or not a bare repository.
@@ -225,8 +226,6 @@ def configure(version, entries, previous, proxy=False):
     git(env, 'config', '--global', 'credential.https://github.com.useHttpPath', 'true')
     git(env, 'config', '--global', '--replace-all', 'credential.https://github.com.helper',
         '/usr/local/bin/horizon-worker-git-auth')
-    if proxy is not None:
-        route(env, proxy)
     for entry, directory in zip(entries, directories):
         # Version 1 keeps its global identity; version 2 scopes identity to each repository.
         config = ['config', '--global'] if version == 1 else ['--git-dir=' + str(directory), 'config']
@@ -242,23 +241,15 @@ def configure(version, entries, previous, proxy=False):
 
 def route(env, proxy):
     """Sends Git's github.com requests through the service's proxy, or stops doing so. Only
-    the values this helper wrote are removed."""
-    rewrite = 'url.' + GITHUB + '.insteadOf'
-    if proxy:
-        for key, value in ROUTE:
-            git(env, 'config', '--global', '--replace-all', key, value)
-        git(env, 'config', '--global', '--replace-all', rewrite, SSH_FORMS[0])
-        git(env, 'config', '--global', '--add', rewrite, SSH_FORMS[1])
-        return
-    for key, value in ROUTE + tuple((rewrite, form) for form in SSH_FORMS):
+    the values this helper writes are removed, and writing them again changes nothing. The
+    remote URLs stay github.com URLs, so gh still finds the repository of a checkout."""
+    values = ROUTE + tuple(('url.' + GITHUB + '.insteadOf', form) for form in REWRITTEN)
+    for key, value in values:
         if git_output(env, 'config', '--global', '--fixed-value', '--get-all', key, value) is not None:
             git(env, 'config', '--global', '--fixed-value', '--unset-all', key, value)
-
-
-def chain_held(ask=None):
-    """Whether the chain service answers and holds a token chain; Git then stays routed through
-    its proxy whatever static binding is installed."""
-    return (ask or ask_service)({'request': 'state'}) is not None
+    if proxy:
+        for key, value in values:
+            git(env, 'config', '--global', '--add', key, value)
 
 
 IDENTITY_FIELDS = FIELDS - {'token'}
@@ -271,7 +262,7 @@ def configure_chain(value):
         raise ValueError('Invalid Git configuration')
     entries = checked_grants(value['grants'], IDENTITY_FIELDS)
     previous = checked_grants(value['previous'], IDENTITY_FIELDS, minimum=0)
-    configure(2, entries, [previous_grants(), (2, previous)], proxy=True)
+    configure(2, entries, [previous_grants(), (2, previous)])
     # The static binding stays until the service has stored its chain and configured every
     # repository; horizon-worker-github then removes it with `clear`.
 
@@ -286,9 +277,7 @@ def restore_static(value):
     if loaded:
         configure(loaded[0], loaded[1], [failed])
     else:
-        env = dict(os.environ, HOME=HOME)
-        forget_identities(env, failed)
-        route(env, proxy=False)
+        forget_identities(dict(os.environ, HOME=HOME), failed)
 
 
 def write_private(value):
@@ -473,15 +462,13 @@ def ask_service(request):
     return None if reply is None or reply.get('state') == 'absent' else reply
 
 
-def service_credential(request, ask=ask_service):
-    """Git's credential from the chain service, '' when it refuses, or None without a chain."""
+def service_credential(request, ask=call_service):
+    """'' while the chain service answers: Git then goes through its proxy, which adds the token
+    of the chain or of the static binding itself, so Git gets no credential. None when no
+    service answers; the caller then falls back to the private file."""
     fields = dict(line.split('=', 1) for line in request.splitlines() if '=' in line)
     reply = ask({'request': 'credential', **{key: fields.get(key, '') for key in ('protocol', 'host', 'path')}})
-    if reply is None:
-        return None
-    if reply.get('ok') is True and valid_token(reply.get('password')):
-        return 'username=x-access-token\npassword=' + reply['password'] + '\n\n'
-    return ''
+    return None if reply is None else ''
 
 
 def service_environment(env, argv, ask=ask_service):
@@ -535,9 +522,10 @@ def main():
         restore_static(parse(source))
     elif operation == 'clear':
         CREDENTIAL.unlink(missing_ok=True)
-    elif operation == 'unroute':
-        # At worker start and when the chain service ends: Git reaches github.com directly again.
-        route(dict(os.environ, HOME=HOME), proxy=False)
+    elif operation in ('route', 'unroute'):
+        # The service routes Git through its proxy once it listens; the worker's start and the
+        # end of the service route Git to github.com directly again.
+        route(dict(os.environ, HOME=HOME), proxy=operation == 'route')
     elif operation == 'get':
         request = sys.stdin.read(8192)
         reply = service_credential(request)

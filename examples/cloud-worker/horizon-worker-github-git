@@ -165,24 +165,43 @@ def usable_state(store):
 
 
 class Plan:
-    """How the proxy sends one request: with the token (`token` set), or without it, when
-    `refusal` explains a reply that GitHub refuses."""
+    """How the proxy sends one request: with a token (`token` set, from the `chain` or the
+    `static` binding), or without one, when `refusal` explains a reply that GitHub refuses."""
 
-    def __init__(self, repository, token=None, refusal=None):
-        self.repository, self.token, self.refusal = repository, token, refusal
+    def __init__(self, repository, token=None, refusal=None, source=None):
+        self.repository, self.token, self.refusal, self.source = repository, token, refusal, source
 
 
-def plan(store, repository, access, now):
-    """The Plan for one request. Raises Refusal for a push that no grant covers."""
+def static_binding(repository, read=None):
+    """(repository, token) of the static binding from cloud settings for `repository`, or None.
+    The agent's Git helper wrote that file, so it is read only as a private regular file,
+    without following a link or waiting on a FIFO."""
+    try:
+        loaded = (read or auth.read_grants)()
+    except (OSError, ValueError, RecursionError, UnicodeDecodeError):
+        return None
+    for entry in loaded[1] if loaded else ():
+        if auth.same_repository(repository, entry['repository']):
+            return entry['repository'], entry['token']
+    return None
+
+
+def plan(store, repository, access, now, static=static_binding):
+    """The Plan for one request. A grant of the chain comes first; the static binding serves
+    a repository that the chain has no grant for, and its token's own permissions decide what
+    it may do. Raises Refusal for a push that neither covers."""
     state, problem = usable_state(store)
     granted, name = agents.granted_access(state, repository) if state is not None else (None, repository)
     if granted is not None and agents.covered(granted, access):
         if state['chain']['access_expires_at'] - now <= common.SERVE_MARGIN:
             raise refusal(503, 'the GitHub access token expired and this worker could not refresh it yet.')
-        return Plan(name, token=state['chain']['access_token'])
+        return Plan(name, token=state['chain']['access_token'], source='chain')
     if granted is not None:
         raise refusal(403, '%s is granted for reading only. Ask for push access with the github_access tool.'
                       % name)
+    bound = static(repository)
+    if bound is not None:
+        return Plan(bound[0], token=bound[1], source='static')
     if access == 'push':
         raise refusal(403, problem or ('%s has no GitHub grant on this worker. Ask for access with the '
                                        'github_access tool.' % repository))
@@ -204,25 +223,40 @@ def upstream(environ=os.environ):
     return relay.Upstream(host, int(port), tls=False)
 
 
-def address_hex(host):
-    """An IPv4 address as /proc/net/tcp writes it."""
-    return '%08X' % struct.unpack('=I', socket.inet_aton(host))[0]
+def address_hex(host, mapped=False):
+    """An IPv4 address as /proc/net/tcp writes it, or as /proc/net/tcp6 writes it mapped to
+    IPv6: each 32-bit word in host byte order."""
+    data = socket.inet_pton(socket.AF_INET6, '::ffff:' + host) if mapped else socket.inet_aton(host)
+    return ''.join('%08X' % word for word in struct.unpack('=%dI' % (len(data) // 4), data))
 
 
-def socket_owner(connection, table=Path('/proc/net/tcp')):
+TABLES = (Path('/proc/net/tcp'), Path('/proc/net/tcp6'))
+
+
+def socket_owner(connection, tables=TABLES):
     """The UID that owns the client end of an established loopback connection, as the kernel
-    reports it, or None. A socket that its process already closed reports root, so only an
-    established one with an inode counts."""
+    reports it, or None. An IPv6 client that reaches the IPv4 port is in the second table. A
+    socket that its process already closed reports root, so only an established one with an
+    inode counts."""
     client, server = connection.getpeername(), connection.getsockname()
-    local = '%s:%04X' % (address_hex(client[0]), client[1])
-    remote = '%s:%04X' % (address_hex(server[0]), server[1])
-    with open(table) as lines:
-        next(lines, None)
-        for line in lines:
-            fields = line.split()
-            if len(fields) > 9 and fields[1] == local and fields[2] == remote:
-                return int(fields[7]) if fields[3] == '01' and fields[9] != '0' else None
+    for mapped, table in enumerate(tables):
+        local = '%s:%04X' % (address_hex(client[0], mapped), client[1])
+        remote = '%s:%04X' % (address_hex(server[0], mapped), server[1])
+        with contextlib.suppress(FileNotFoundError), open(table) as lines:
+            next(lines, None)
+            for line in lines:
+                fields = line.split()
+                if len(fields) > 9 and fields[1] == local and fields[2] == remote:
+                    return int(fields[7]) if fields[3] == '01' and fields[9] != '0' else None
     return None
+
+
+def owner_allowed(connection, allowed, tables=TABLES):
+    """Whether an account in `allowed` holds the client end of `connection` now."""
+    try:
+        return socket_owner(connection, tables) in allowed
+    except (OSError, ValueError):
+        return False
 
 
 def read_tunnel(connection):
@@ -242,9 +276,10 @@ def read_tunnel(connection):
 class Exchange:
     """One Git request inside one tunnel."""
 
-    def __init__(self, store, stream, output, environ, headed):
+    def __init__(self, store, stream, output, environ, headed, owned=lambda: True):
         self.store, self.stream, self.output, self.environ = store, stream, output, environ
-        self.headed = headed
+        # `owned` tells whether the allowed account still holds the client end.
+        self.headed, self.owned = headed, owned
         self.record = {'request': 'invalid', 'repository': None, 'granted': False}
         self.request = None
         # Set once the reply to the client may have begun; no refusal can follow it.
@@ -266,6 +301,10 @@ class Exchange:
         self.record['request'] = kind + '-' + access
         chosen = plan(self.store, repository, access, time.time())
         self.record['granted'] = chosen.token is not None
+        # Checked again before anything reaches GitHub: the account that opened the
+        # connection must still hold it.
+        if not self.owned():
+            raise refusal(403, 'this account may not use the GitHub access of this worker.')
         # An LFS reply is examined for the token, so it must come uncompressed.
         fields = [(field, value) for field, value in request.fields if field in REQUEST_FIELDS
                   and not (kind == 'lfs' and field in ('accept-encoding', 'content-encoding'))]
@@ -295,6 +334,9 @@ class Exchange:
             if not REDIRECT.fullmatch(response.getheader('Location') or ''):
                 raise refusal(403, 'GitHub redirected the request for %s away from github.com.' % chosen.repository)
             keep = REPLY_FIELDS | {'location'}
+        elif response.status == 401 and chosen.source == 'static':
+            raise refusal(403, 'GitHub refused the credential binding from cloud settings for %s.'
+                          % chosen.repository)
         elif response.status == 401 and chosen.token is not None:
             raise refusal(403, 'GitHub refused the sign-in of this worker for %s. Connect GitHub again in '
                                'Horizon.' % chosen.repository)
@@ -325,10 +367,10 @@ def refuse_tunnel(connection, status):
     connection.sendall(relay.head(status, [('Content-Length', '0')]))
 
 
-def tunnel_exchange(tls, store, environ, headed):
+def tunnel_exchange(tls, store, environ, headed, owned=lambda: True):
     """The Git request inside an open tunnel. Returns its log record."""
     with tls.makefile('rb') as stream, tls.makefile('wb') as output:
-        exchange = Exchange(store, stream, output, environ, headed)
+        exchange = Exchange(store, stream, output, environ, headed, owned)
         try:
             exchange.run()
         except relay.Refusal as refused:
@@ -349,7 +391,7 @@ def tunnel_exchange(tls, store, environ, headed):
         return exchange.record
 
 
-def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, table=Path('/proc/net/tcp')):
+def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, tables=TABLES):
     """Answers one connection: the tunnel, one Git request in it, then the end."""
     current = [connection]
 
@@ -363,8 +405,9 @@ def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, t
     uid = None
     try:
         connection.settimeout(TIMEOUT)
+        # Before any byte is read, so another account cannot hold a slot.
         with contextlib.suppress(OSError, ValueError):
-            uid = socket_owner(connection, table)
+            uid = socket_owner(connection, tables)
         if uid not in allowed:
             return refuse_tunnel(connection, 403)
         try:
@@ -376,7 +419,8 @@ def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, t
         connection.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
         current[0] = context.wrap_socket(connection, server_side=True)
         with current[0] as tls:
-            record = tunnel_exchange(tls, store, environ, watchdog.cancel)
+            record = tunnel_exchange(tls, store, environ, watchdog.cancel,
+                                     lambda: owner_allowed(tls, (uid,), tables))
     except (ssl.SSLError, relay.ClientGone, TimeoutError, ConnectionError):
         pass
     finally:

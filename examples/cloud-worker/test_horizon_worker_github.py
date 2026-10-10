@@ -498,12 +498,14 @@ class SocketTests(ServiceTestCase):
             reply = auth.ask_service({'request': 'gh-token', 'repository': 'example/project'})
         self.assertEqual((reply['ok'], reply['state']), (False, 'ok'))
 
-    def test_without_a_chain_the_helper_falls_back_to_its_private_file(self):
+    def test_without_a_chain_gh_falls_back_to_the_private_file_and_git_only_without_a_service(self):
         service.clear(self.store, retire=lambda: None)
         self.assertIsNone(auth.ask_service({'request': 'gh-token', 'repository': 'example/project'}))
-        self.assertIsNone(auth.service_credential('protocol=https\nhost=github.com\npath=example/project\n'))
+        # The service's proxy serves the static binding to Git, so the helper gives Git nothing.
+        self.assertEqual(auth.service_credential('protocol=https\nhost=github.com\npath=example/project\n'), '')
         with mock.patch.object(auth, 'SERVICE_SOCKET', self.root / 'missing.sock'):
             self.assertIsNone(auth.ask_service({'request': 'gh-token', 'repository': 'example/project'}))
+            self.assertIsNone(auth.service_credential('protocol=https\nhost=github.com\npath=example/project\n'))
 
     def test_gh_receives_the_targeted_token_and_drops_only_an_injected_one(self):
         env = auth.service_environment({'GH_REPO': 'example/library'}, ['pr', 'list'])

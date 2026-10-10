@@ -268,7 +268,7 @@ def serve(store=None, path=agents.SOCKET, proxy=gitproxy.ADDRESS, authority=gitp
     # The socket opens only after the repositories match the stored chain, so the supervisor
     # never publishes a service that does not answer yet.
     book = agents.Book(store.runtime)
-    servers = start(store, path, prepare=lambda: reconcile(store), proxy=proxy, authority=authority)
+    servers = start(store, path, prepare=lambda: prepare(store), proxy=proxy, authority=authority)
     if servers is None:
         return 1
     server, git_proxy = servers
@@ -307,6 +307,20 @@ def settle(store, configure, static):
     else:
         static({'previous': intended})
     (store.runtime / INTENT).unlink(missing_ok=True)
+
+
+def prepare(store, route=None):
+    """Before the service answers: the repositories match the stored chain, and Git reaches
+    github.com through the proxy, whose port the service already holds. The proxy serves the
+    static binding too, so Git is routed with or without a chain."""
+    reconcile(store)
+    (route or run_route)()
+
+
+def run_route():
+    # As the agent, who owns the Git configuration.
+    subprocess.run([str(GIT_AUTH), 'route'], check=True, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=60)
 
 
 def run_configure(payload):
