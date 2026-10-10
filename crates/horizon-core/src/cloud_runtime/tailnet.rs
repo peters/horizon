@@ -140,7 +140,7 @@ impl DeviceName {
         }
         let snapshot: Snapshot = serde_json::from_slice(bytes).ok()?;
         let name = snapshot.devices.into_iter().next()?.name;
-        let name = name.trim_end_matches('.');
+        let name = name.strip_suffix('.').unwrap_or(&name);
         valid_dns_name(name).then(|| Self {
             name: name.into(),
             observed: true,
@@ -189,6 +189,41 @@ fn valid_dns_name(name: &str) -> bool {
         })
 }
 
+// The worker publishes atomic snapshots in one sequential five-second loop. Its first
+// post-configure publication can finish a status read started before configure; the
+// second publication observes a status read that started afterward.
+const FRESH_SNAPSHOT: &str = r#"import os, sys, time
+path = sys.argv[1]
+deadline = time.monotonic() + float(sys.argv[2])
+def generation(file):
+    info = os.fstat(file.fileno())
+    return info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns
+try:
+    with open(path, "rb") as file:
+        previous = generation(file)
+except OSError:
+    previous = None
+remaining = 2
+while time.monotonic() < deadline:
+    time.sleep(0.05)
+    try:
+        with open(path, "rb") as file:
+            current = generation(file)
+            if current == previous:
+                continue
+            previous = current
+            remaining -= 1
+            if remaining == 0:
+                data = file.read(65537)
+                if len(data) > 65536:
+                    sys.exit(1)
+                sys.stdout.buffer.write(data)
+                sys.exit(0)
+    except OSError:
+        pass
+sys.exit(1)
+"#;
+
 /// Read only the public device snapshot, without copying its peers into logs or state.
 /// The read follows enrollment; every deployment/reconnection refreshes the observation.
 /// # Errors
@@ -220,9 +255,9 @@ fn device_name(
         runner.cancel,
         || {
             runner.private_exchange(
-                &mut connection.pinned_command("cat /run/horizon-tailnet-devices/devices.json"),
-                &[],
-                Duration::from_secs(10),
+                &mut connection.pinned_command("/usr/bin/python3 - /run/horizon-tailnet-devices/devices.json 12"),
+                FRESH_SNAPSHOT.as_bytes(),
+                Duration::from_secs(15),
             )
         },
     )
@@ -309,6 +344,128 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // The worker's Python reader runs against an isolated Unix snapshot fixture.
+    fn a_fresh_snapshot_requires_two_publications_and_cancellation_never_falls_back() {
+        const OBSERVE_READS: &str = r#"import os, sys
+original = os.fstat
+def observe(fd):
+    result = original(fd)
+    with open(sys.argv[3], "a") as output:
+        output.write(str(result.st_ino) + "\n")
+    return result
+os.fstat = observe
+exec(sys.stdin.read())
+"#;
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp.path().join("devices.json");
+        let reads = temp.path().join("reads");
+        let cancel = horizon_cloud::Cancellation::default();
+        for cancelled in [false, true] {
+            let initial = publish_fixture(&snapshot, "old.example.ts.net");
+            std::fs::write(&reads, "").unwrap();
+            std::thread::scope(|scope| {
+                let (send, receive) = std::sync::mpsc::channel();
+                let fixture = &snapshot;
+                let observations = &reads;
+                let cancellation = &cancel;
+                scope.spawn(move || {
+                    let runner = Runner {
+                        cancel: cancellation,
+                        emit: &|_| panic!("snapshot reads never emit peer data"),
+                        secrets: vec![],
+                    };
+                    let result = observe_device_name(true, "cloud1", true, cancellation, || {
+                        runner.private_exchange(
+                            std::process::Command::new("python3")
+                                .args(["-c", OBSERVE_READS])
+                                .arg(fixture)
+                                .arg("12")
+                                .arg(observations),
+                            FRESH_SNAPSHOT.as_bytes(),
+                            Duration::from_secs(15),
+                        )
+                    });
+                    send.send(result).unwrap();
+                });
+                await_fixture_read(&reads, initial);
+                // An in-flight status query may still publish its pre-configure name.
+                let older = publish_fixture(&snapshot, "in-flight.example.ts.net");
+                await_fixture_read(&reads, older);
+                assert!(
+                    receive.try_recv().is_err(),
+                    "one publication cannot establish freshness"
+                );
+                if cancelled {
+                    cancel.cancel();
+                    assert!(receive.recv_timeout(Duration::from_secs(5)).unwrap().is_err());
+                } else {
+                    publish_fixture(&snapshot, "renamed-worker-7.example.ts.net.");
+                    let actual = receive.recv_timeout(Duration::from_secs(5)).unwrap().unwrap().unwrap();
+                    assert_eq!(actual.name, "renamed-worker-7.example.ts.net");
+                    assert!(actual.observed);
+                }
+            });
+        }
+    }
+
+    #[test]
+    #[cfg(unix)] // A stopped Unix publisher cannot make a cached name a fresh observation.
+    fn an_unconfirmed_snapshot_returns_only_the_contract_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp.path().join("devices.json");
+        publish_fixture(&snapshot, "cached.example.ts.net");
+        let cancel = horizon_cloud::Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| panic!("snapshot reads never emit peer data"),
+            secrets: vec![],
+        };
+        for stable in [false, true] {
+            let identity = observe_device_name(true, "cloud1", stable, &cancel, || {
+                runner.private_exchange(
+                    std::process::Command::new("python3").arg("-").arg(&snapshot).arg("12"),
+                    FRESH_SNAPSHOT.as_bytes(),
+                    Duration::from_secs(1),
+                )
+            })
+            .unwrap();
+            assert_eq!(identity.is_some(), stable);
+            if let Some(identity) = identity {
+                assert_eq!(identity.name, "horizon-cloud-cloud1");
+                assert!(!identity.observed);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn publish_fixture(path: &Path, name: &str) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        let pending = path.with_extension("pending");
+        std::fs::write(&pending, serde_json::json!({"devices": [{"name": name}]}).to_string()).unwrap();
+        std::fs::rename(pending, path).unwrap();
+        std::fs::metadata(path).unwrap().ino()
+    }
+
+    #[cfg(unix)]
+    fn await_fixture_read(path: &Path, inode: u64) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .lines()
+                .any(|line| line == inode.to_string())
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reader did not observe the fixture generation"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
     fn snapshot_keeps_the_first_devices_actual_dns_name() {
         let snapshot = br#"{"devices":[{"name":"renamed-worker-1.example.ts.net.","online":false},{"name":"peer.example.ts.net."}]}"#;
         let identity = DeviceName::published(snapshot).unwrap();
@@ -328,6 +485,8 @@ mod tests {
             br#"{"devices":[{"name":"bad\nname"}]}"#,
             br#"{"devices":[{"name":"-name.example"}]}"#,
             br#"{"devices":[{"name":"name..example"}]}"#,
+            br#"{"devices":[{"name":"name.example.."}]}"#,
+            br#"{"devices":[{"name":"name.example..."}]}"#,
             b"invalid",
         ] {
             assert!(DeviceName::published(json).is_none());

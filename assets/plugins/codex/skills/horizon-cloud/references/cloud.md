@@ -75,8 +75,12 @@ suffix. Horizon removes the final DNS dot. A full reported name includes the
 MagicDNS domain. A bare name does not include an unknown domain.
 
 Connect again to refresh this saved observation. Horizon reads the snapshot after
-enrollment during each deployment or reconnection. It does not poll the tailnet
-from the drawer. If the snapshot is unavailable, only an image with
+enrollment during each deployment or reconnection. The worker needs its existing
+`/usr/bin/python3` and atomic inventory publisher. Horizon waits for two new
+snapshot generations. The second generation excludes an earlier status read that
+was still in progress during reconnection. The read has a 15-second limit and
+can be cancelled. It does not poll the tailnet from the drawer. If freshness
+cannot be confirmed, only an image with
 `horizon-tailnet-contract=2` supplies the derived stable name. Older images do
 not supply a derived name. This fallback is an expected short name; it is not a
 confirmed device identity or full MagicDNS address. No tailnet selection means

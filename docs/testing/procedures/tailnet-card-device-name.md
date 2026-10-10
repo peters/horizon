@@ -51,7 +51,9 @@ This procedure tests the device name and copy action in **Connections** >
 
    Result: The first device supplies the actual name. Renames, collision suffixes,
    and the MagicDNS domain remain. The final DNS dot is removed. Invalid data
-   does not select a peer. A failed bounded read supplies a stable fallback only
+   does not select a peer. Zero or one final DNS dot is valid; more dots are not.
+   A first in-progress publication does not establish freshness. Two later atomic
+   generations supply the saved observation. A failed bounded read supplies a stable fallback only
    for contract 2. Cancellation returns an error. No selection makes no read.
 
 3. Run the saved record test.
@@ -121,6 +123,9 @@ During an authorized deployment or reconnection, Horizon reads the public device
 snapshot after enrollment. The name is a saved observation, not a continuous
 poll. A later administrator rename requires another connection. This procedure
 uses synthetic data; it does not authorize a real connection or cloud operation.
+The read waits for two new generations from the worker inventory publisher.
+The worker must have its existing `/usr/bin/python3`. If the read exceeds its
+15-second limit or cannot confirm freshness, Horizon shows no observed name.
 
 ## 7. Evidence and cleanup
 
