@@ -1,8 +1,9 @@
 use super::*;
 use crate::diagnostic::{Cause, GuardianReason, Operation, Reason};
-use crate::{Kind, Request, Spec, storage::Directory};
+use crate::{Error, Kind, Request, Spec, storage::Directory};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::Path;
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -12,14 +13,17 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        fn private() -> tempfile::TempDir {
+        Self::under(&std::env::temp_dir())
+    }
+    fn under(parent: &Path) -> Self {
+        fn private(parent: &Path) -> tempfile::TempDir {
             tempfile::Builder::new()
                 .permissions(std::fs::Permissions::from_mode(0o700))
-                .tempdir()
+                .tempdir_in(parent.canonicalize().unwrap())
                 .unwrap()
         }
-        let root = private();
-        let state = private();
+        let root = private(parent);
+        let state = private(parent);
         let spec = Request::new(root.path(), state.path(), vec!["synthetic".into()], Kind::Build, 1, 2)
             .unwrap()
             .spec;
@@ -55,6 +59,34 @@ fn cause() -> Cause {
         operation: Operation::Guardian,
         reason: Reason::ChannelClosed,
     }
+}
+
+#[test]
+fn trusted_temporary_parent_alias_is_canonicalized_without_accepting_aliased_state() {
+    let parent = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let canonical = parent.path().canonicalize().unwrap();
+    let alias = canonical.join("trusted-parent-alias");
+    std::os::unix::fs::symlink(&canonical, &alias).unwrap();
+    let fixture = Fixture::under(&alias);
+    let aliased_state = alias.join(fixture.state.path().file_name().unwrap());
+    assert!(matches!(
+        Request::new(
+            fixture.root.path(),
+            &aliased_state,
+            vec!["synthetic".into()],
+            Kind::Build,
+            1,
+            2
+        ),
+        Err(Error::StateUnavailable)
+    ));
+    assert_eq!(
+        fixture.log.record(cause(), Duration::from_secs(1)),
+        Ok(Retention::Recorded)
+    );
 }
 
 #[test]
