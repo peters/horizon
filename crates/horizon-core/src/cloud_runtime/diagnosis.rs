@@ -76,7 +76,8 @@ const PUSH_REFUSED: &str = "The registry refused to publish the image. On ghcr.i
 /// the preflight of a saved publishing credential.
 const PUBLISHING: [&str; 2] = ["uploading image", "publishing credential"];
 
-const DOCKER_NOT_RESPONDING: &str = "Docker stopped answering, so its commands wait without end. Restart Docker, then retry.";
+const DOCKER_NOT_RESPONDING: &str =
+    "Docker stopped answering, so its commands wait without end. Restart Docker, then retry.";
 
 /// A name still held after a timed-out create: the client was stopped, the daemon kept
 /// or never finished the container, which a hung daemon does.
@@ -548,14 +549,14 @@ mod tests {
 
         let summary = "Docker is not responding: worker image contract creation did not finish and Docker did not \
              answer a health check";
-        let found = diagnose(
-            ["Docker did not answer docker version within 5 s"].into_iter(),
-            summary,
-        )
-        .unwrap();
+        let found = diagnose(["Docker did not answer docker version within 5 s"].into_iter(), summary).unwrap();
         assert_eq!(found.cause, "Docker did not answer docker version within 5 s");
         assert_eq!(found.meaning, Some(DOCKER_NOT_RESPONDING));
-        assert_eq!(meaning(summary), Some(DOCKER_NOT_RESPONDING), "the summary alone says it too");
+        assert_eq!(
+            meaning(summary),
+            Some(DOCKER_NOT_RESPONDING),
+            "the summary alone says it too"
+        );
 
         for docker in [DOCKER_NOT_RESPONDING, DOCKER_NAME_IN_USE, DOCKER_NOT_RUNNING] {
             assert!(restarts_docker(docker));

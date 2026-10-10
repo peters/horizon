@@ -5,6 +5,7 @@ use egui::{RichText, Vec2};
 use horizon_core::{Board, cloud_panel::CloudGroup};
 mod body;
 mod cost;
+mod docker;
 mod drawer;
 mod github;
 mod machine;

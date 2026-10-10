@@ -112,11 +112,12 @@ pub enum Setup {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Plan {
     /// Horizon restarts Docker by running `steps` in order once the person confirms.
-    /// `shown` is the same as one command a person would type.
+    /// `shown` says what runs; `command` is what a person can type instead.
     Restart {
         setup: Setup,
         steps: Vec<Vec<String>>,
         shown: String,
+        command: Option<String>,
     },
     /// Horizon runs nothing: the person restarts Docker as `instructions` say,
     /// with `command` to copy when there is one.
@@ -139,8 +140,7 @@ impl Plan {
     #[must_use]
     pub fn command(&self) -> Option<&str> {
         match self {
-            Self::Restart { shown, .. } => Some(shown),
-            Self::Manual { command, .. } => command.as_deref(),
+            Self::Restart { command, .. } | Self::Manual { command, .. } => command.as_deref(),
         }
     }
 }
@@ -163,11 +163,13 @@ const MAC_REOPEN: [&str; 11] = [
     "tell application \"Docker\" to activate",
 ];
 
-fn restart(setup: Setup, argv: &[&str], shown: &str) -> Plan {
+/// A restart a person could also type as `command`.
+fn restart(setup: Setup, argv: &[&str], command: &str) -> Plan {
     Plan::Restart {
         setup,
         steps: vec![argv.iter().map(|&part| part.to_owned()).collect()],
-        shown: shown.to_owned(),
+        shown: command.to_owned(),
+        command: Some(command.to_owned()),
     }
 }
 
@@ -253,11 +255,16 @@ fn linux(facts: &Facts, socket: &Path) -> Plan {
     let system = [Path::new("/var/run/docker.sock"), Path::new("/run/docker.sock")].contains(&socket);
     if system && facts.system_unit {
         return if facts.pkexec {
-            restart(
-                Setup::Service,
-                &["pkexec", "systemctl", "restart", "docker.service"],
-                SERVICE_COMMAND,
-            )
+            Plan::Restart {
+                setup: Setup::Service,
+                steps: vec![
+                    ["pkexec", "systemctl", "restart", "docker.service"]
+                        .map(str::to_owned)
+                        .to_vec(),
+                ],
+                shown: "pkexec systemctl restart docker".to_owned(),
+                command: Some(SERVICE_COMMAND.to_owned()),
+            }
         } else {
             manual(
                 Setup::Service,
@@ -280,7 +287,12 @@ fn mac(facts: &Facts, socket: &Path) -> Plan {
     if facts.desktop_cli {
         restart(Setup::Desktop, &["docker", "desktop", "restart"], DESKTOP_CLI)
     } else if facts.desktop_app {
-        restart(Setup::Desktop, &MAC_REOPEN, "Quit Docker Desktop, then open it again")
+        Plan::Restart {
+            setup: Setup::Desktop,
+            steps: vec![MAC_REOPEN.map(str::to_owned).to_vec()],
+            shown: "quit Docker Desktop, wait until it has quit, then open it again".to_owned(),
+            command: None,
+        }
     } else {
         manual(
             Setup::Desktop,
@@ -349,7 +361,17 @@ mod tests {
 
         facts.user_unit = false;
         let found = plan(&facts);
-        assert!(matches!(found, Plan::Manual { setup: Setup::Rootless, command: None, .. }), "{found:?}");
+        assert!(
+            matches!(
+                found,
+                Plan::Manual {
+                    setup: Setup::Rootless,
+                    command: None,
+                    ..
+                }
+            ),
+            "{found:?}"
+        );
     }
 
     #[test]
@@ -361,25 +383,35 @@ mod tests {
             let found = plan(&facts);
             assert_eq!(steps(&found), ["pkexec systemctl restart docker.service"], "{socket}");
             assert_eq!(found.setup(), Setup::Service);
+            assert_eq!(
+                found.command(),
+                Some(SERVICE_COMMAND),
+                "a person types sudo, not pkexec"
+            );
 
             facts.pkexec = false;
             let found = plan(&facts);
-            assert!(steps(&found).is_empty(), "{socket}: without pkexec Horizon runs nothing");
+            assert!(
+                steps(&found).is_empty(),
+                "{socket}: without pkexec Horizon runs nothing"
+            );
             assert_eq!(found.command(), Some(SERVICE_COMMAND));
         }
         // A system socket that no systemd unit runs is not restarted.
         let mut facts = linux("unix:///var/run/docker.sock");
         facts.pkexec = true;
-        assert!(matches!(plan(&facts), Plan::Manual { setup: Setup::Unknown, .. }));
+        assert!(matches!(
+            plan(&facts),
+            Plan::Manual {
+                setup: Setup::Unknown,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn docker_on_another_machine_is_never_restarted_from_here() {
-        for host in [
-            "ssh://builder@build.example",
-            "tcp://192.0.2.10:2376",
-            "fd://",
-        ] {
+        for host in ["ssh://builder@build.example", "tcp://192.0.2.10:2376", "fd://"] {
             for os in [Os::Linux, Os::MacOs, Os::Windows] {
                 let mut facts = linux(host);
                 facts.os = os;
@@ -407,7 +439,13 @@ mod tests {
         facts.pkexec = true;
         assert!(steps(&plan(&facts)).is_empty());
         facts.endpoint = None;
-        assert!(matches!(plan(&facts), Plan::Manual { setup: Setup::Unknown, .. }));
+        assert!(matches!(
+            plan(&facts),
+            Plan::Manual {
+                setup: Setup::Unknown,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -415,12 +453,21 @@ mod tests {
         let mut facts = linux("unix:///home/person/.docker/desktop/docker.sock");
         facts.user_unit = true;
         facts.desktop_unit = true;
-        assert_eq!(steps(&plan(&facts)), ["systemctl --user restart docker-desktop.service"]);
+        assert_eq!(
+            steps(&plan(&facts)),
+            ["systemctl --user restart docker-desktop.service"]
+        );
         facts.desktop_cli = true;
         assert_eq!(steps(&plan(&facts)), ["docker desktop restart"]);
         facts.desktop_cli = false;
         facts.desktop_unit = false;
-        assert!(matches!(plan(&facts), Plan::Manual { setup: Setup::Desktop, .. }));
+        assert!(matches!(
+            plan(&facts),
+            Plan::Manual {
+                setup: Setup::Desktop,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -430,16 +477,29 @@ mod tests {
             home: Some("/Users/person".into()),
             ..Facts::none(Os::MacOs)
         };
-        assert!(matches!(plan(&facts), Plan::Manual { setup: Setup::Desktop, .. }));
+        assert!(matches!(
+            plan(&facts),
+            Plan::Manual {
+                setup: Setup::Desktop,
+                ..
+            }
+        ));
         facts.desktop_app = true;
         let reopen = plan(&facts);
         assert_eq!(steps(&reopen), [MAC_REOPEN.join(" ")]);
+        assert_eq!(reopen.command(), None, "the script is not a command to copy");
         facts.desktop_cli = true;
         assert_eq!(steps(&plan(&facts)), ["docker desktop restart"]);
 
         // Colima's socket is not Docker Desktop's, whatever is installed.
         facts.endpoint = Some(Endpoint::Socket("/Users/person/.colima/default/docker.sock".into()));
-        assert!(matches!(plan(&facts), Plan::Manual { setup: Setup::Unknown, .. }));
+        assert!(matches!(
+            plan(&facts),
+            Plan::Manual {
+                setup: Setup::Unknown,
+                ..
+            }
+        ));
         // The desktop context is Docker Desktop's, wherever its socket is.
         facts.context = Some(DESKTOP_CONTEXT.into());
         assert_eq!(steps(&plan(&facts)), ["docker desktop restart"]);
@@ -451,7 +511,14 @@ mod tests {
             endpoint: Some(Endpoint::parse("npipe:////./pipe/dockerDesktopLinuxEngine")),
             ..Facts::none(Os::Windows)
         };
-        assert!(matches!(plan(&facts), Plan::Manual { setup: Setup::Desktop, command: None, .. }));
+        assert!(matches!(
+            plan(&facts),
+            Plan::Manual {
+                setup: Setup::Desktop,
+                command: None,
+                ..
+            }
+        ));
         facts.desktop_cli = true;
         assert_eq!(steps(&plan(&facts)), ["docker desktop restart"]);
 

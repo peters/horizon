@@ -224,7 +224,12 @@ fn opened(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) -> Option<StepA
             if ui.add(button("Copy error")).clicked() {
                 action = Some(StepAction::CopyError);
             }
+            super::docker::button(ui, failure);
         });
+        let retry = status.primary.and_then(super::status::Primary::retry_label);
+        if super::docker::status(ui, failure, retry) {
+            action = Some(StepAction::Retry);
+        }
         return action;
     }
     let measured = runtime.progress.measured();

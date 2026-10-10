@@ -418,17 +418,18 @@ mod tests {
             );
             match result {
                 Err(Error::DockerNotResponding("worker image contract creation")) if stuck => {
-                    assert_eq!(
-                        *lines.borrow(),
-                        ["Docker did not answer docker version within 5 s"]
-                    );
+                    assert_eq!(*lines.borrow(), ["Docker did not answer docker version within 5 s"]);
                 }
                 Err(Error::Invalid(TIMED_OUT)) if !stuck => assert!(lines.borrow().is_empty()),
                 other => panic!("{version}: {other:?}"),
             }
         }
         // Any other program's timeout is a plain one, with no health check.
-        let result = runner.run("test", Command::new("sh").args(["-c", "sleep 30"]), Duration::from_millis(150));
+        let result = runner.run(
+            "test",
+            Command::new("sh").args(["-c", "sleep 30"]),
+            Duration::from_millis(150),
+        );
         assert!(matches!(result, Err(Error::Invalid(TIMED_OUT))), "{result:?}");
     }
 

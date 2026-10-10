@@ -46,9 +46,13 @@ impl Default for Target {
 /// What a health check found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Health {
-    Answering { version: String },
+    Answering {
+        version: String,
+    },
     /// Docker refused the connection or is not running; `detail` is what the CLI said.
-    NotRunning { detail: String },
+    NotRunning {
+        detail: String,
+    },
     /// Docker accepted no answer in time: the daemon is stuck.
     NotResponding,
     /// No Docker CLI to ask.
@@ -107,11 +111,15 @@ impl Target {
         let mut command = self.docker();
         command.args(["version", "--format", "{{.Server.Version}}"]);
         match bounded(command, timeout) {
-            Ran::Exited { success: true, stdout, .. } if !stdout.trim().is_empty() => Health::Answering {
+            Ran::Exited {
+                success: true, stdout, ..
+            } if !stdout.trim().is_empty() => Health::Answering {
                 version: stdout.trim().to_owned(),
             },
             Ran::Exited { stderr, .. } => Health::NotRunning {
-                detail: last_line(&stderr).unwrap_or("Docker did not report its version").to_owned(),
+                detail: last_line(&stderr)
+                    .unwrap_or("Docker did not report its version")
+                    .to_owned(),
             },
             Ran::TimedOut => Health::NotResponding,
             Ran::Failed(_) => Health::Missing,
@@ -157,9 +165,16 @@ impl Target {
             return (None, Some(Endpoint::parse(host)));
         }
         let mut command = self.docker();
-        command.args(["context", "inspect", "--format", "{{.Name}}\t{{.Endpoints.docker.Host}}"]);
+        command.args([
+            "context",
+            "inspect",
+            "--format",
+            "{{.Name}}\t{{.Endpoints.docker.Host}}",
+        ]);
         match bounded(command, LOOKUP_TIMEOUT) {
-            Ran::Exited { success: true, stdout, .. } => match stdout.trim().split_once('\t') {
+            Ran::Exited {
+                success: true, stdout, ..
+            } => match stdout.trim().split_once('\t') {
                 Some((name, host)) if !host.is_empty() => (Some(name.to_owned()), Some(Endpoint::parse(host))),
                 _ => (None, None),
             },
@@ -272,7 +287,10 @@ enum Ran {
 /// Runs `command` for at most `timeout`. A process it leaves behind holding its
 /// output open cannot hold the caller longer than a second past the exit.
 fn bounded(mut command: Command, timeout: Duration) -> Ran {
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return Ran::Failed(error),
@@ -334,7 +352,15 @@ mod tests {
     #[test]
     fn a_docker_command_names_its_target_and_other_programs_have_none() {
         let mut command = Command::new("/usr/local/bin/docker");
-        command.args(["--config", "/state/docker", "--host", "ssh://build.example", "create", "--host", "x"]);
+        command.args([
+            "--config",
+            "/state/docker",
+            "--host",
+            "ssh://build.example",
+            "create",
+            "--host",
+            "x",
+        ]);
         assert_eq!(
             Target::of(&command),
             Some(Target {
@@ -359,7 +385,9 @@ mod tests {
         };
         assert_eq!(
             target("echo 29.8.1").probe(PROBE_TIMEOUT),
-            Health::Answering { version: "29.8.1".into() }
+            Health::Answering {
+                version: "29.8.1".into()
+            }
         );
         assert_eq!(
             target("echo 'Cannot connect to the Docker daemon at unix:///run/docker.sock.' >&2; exit 1")
@@ -438,7 +466,11 @@ mod tests {
         assert_eq!(*phases.borrow(), [Phase::Running("true".into()), Phase::Waiting]);
 
         let refused = target.restart(
-            &[vec!["sh".into(), "-c".into(), "echo 'Interactive authentication required.' >&2; exit 1".into()]],
+            &[vec![
+                "sh".into(),
+                "-c".into(),
+                "echo 'Interactive authentication required.' >&2; exit 1".into(),
+            ]],
             &|_| {},
         );
         assert_eq!(
@@ -455,7 +487,10 @@ mod tests {
         let mut command = Command::new("sh");
         command.args(["-c", "sleep 30 & echo done"]);
         let started = Instant::now();
-        assert!(matches!(bounded(command, Duration::from_secs(10)), Ran::Exited { success: true, .. }));
+        assert!(matches!(
+            bounded(command, Duration::from_secs(10)),
+            Ran::Exited { success: true, .. }
+        ));
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
