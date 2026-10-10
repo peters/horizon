@@ -59,7 +59,7 @@ pub(super) fn new_session_capabilities(
             let profile = config.profile_dir(panel_local_id);
             prepare_profile(&profile)?;
             let mut options = Map::new();
-            let mut args = Vec::with_capacity(4 + config.extra_args.len());
+            let mut args = Vec::with_capacity(5 + config.extra_args.len());
             if config.headless {
                 args.push("-headless".to_string());
             }
@@ -105,6 +105,57 @@ pub(super) fn new_session_capabilities(
             Ok(Value::Object(capabilities))
         }
         BackendKind::ChromiumCdp => Err("Chromium does not create a WebDriver session".to_string()),
+    }
+}
+
+/// Outcome of clearing Firefox's native `navigator.webdriver` flag.
+pub(in crate::webdriver) enum FirefoxNativeFlagClear {
+    /// Content processes will see a native getter that returns false.
+    Cleared,
+    /// The session is still in the content context, so the preload can run.
+    Unavailable(String),
+    /// The session was left in the chrome context and must be discarded.
+    Unsafe(String),
+}
+
+/// Clear the Marionette and Remote Agent automation flags before any
+/// caller-supplied document is created. Restores the content context first.
+pub(in crate::webdriver) fn clear_firefox_native_automation_flag(
+    transport: &dyn ClassicTransport,
+    session_id: &str,
+) -> FirefoxNativeFlagClear {
+    let session = format!("/session/{session_id}");
+    // A lost response can still leave Firefox in the chrome context. Always
+    // try to return to content, and discard the session if that is unconfirmed.
+    let chrome_switch = transport.post(&format!("{session}/moz/context"), &json!({ "context": "chrome" }));
+    let executed = if chrome_switch.is_ok() {
+        Some(transport.post(
+            &format!("{session}/execute/sync"),
+            &json!({
+                "script": crate::disclosure::FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT,
+                "args": []
+            }),
+        ))
+    } else {
+        None
+    };
+    if let Err(error) = transport.post(&format!("{session}/moz/context"), &json!({ "context": "content" })) {
+        return FirefoxNativeFlagClear::Unsafe(format!("Firefox could not return from the chrome context: {error}"));
+    }
+    match chrome_switch {
+        Err(error) => FirefoxNativeFlagClear::Unavailable(format!("Firefox chrome context was unavailable: {error}")),
+        Ok(_) => match executed {
+            Some(Ok(response)) if crate::disclosure::firefox_native_automation_flag_cleared(&response) => {
+                FirefoxNativeFlagClear::Cleared
+            }
+            Some(Ok(_)) => {
+                FirefoxNativeFlagClear::Unavailable("Firefox left the native automation flag set".to_string())
+            }
+            Some(Err(error)) => FirefoxNativeFlagClear::Unavailable(format!(
+                "Firefox could not clear the native automation flag: {error}"
+            )),
+            None => FirefoxNativeFlagClear::Unavailable("Firefox chrome context was not confirmed".to_string()),
+        },
     }
 }
 

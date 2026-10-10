@@ -18,6 +18,12 @@ fn startup_publishes_unverified_before_navigation_and_stays_unverified_while_pen
     let owner = Arc::new(Owner(Mutex::new(None), Mutex::new(Vec::new()), Mutex::new(Vec::new())));
     driver.config.coordination = Some(owner.clone());
     driver.config.browser.backend = crate::BackendKind::SafariWebDriver;
+    driver.disclosure_status = crate::disclosure::established_disclosure_status(
+        driver.config.browser.automation_disclosure,
+        driver.config.browser.backend,
+        false,
+        false,
+    );
     driver.config.initial_url = Some("https://example.test/slow".into());
     driver.remote_orientation = Some(crate::remote::RemoteOrientationState {
         support: OrientationSupport::Supported,
@@ -63,6 +69,12 @@ fn startup_publishes_unverified_before_navigation_and_stays_unverified_while_pen
 fn explicit_driver(classic: &Server, link: crate::websocket::JsonWsLink) -> Driver {
     let mut driver = fixture_driver(classic, link);
     driver.config.browser.backend = crate::BackendKind::SafariWebDriver;
+    driver.disclosure_status = crate::disclosure::established_disclosure_status(
+        driver.config.browser.automation_disclosure,
+        driver.config.browser.backend,
+        false,
+        false,
+    );
     let mut request = crate::webdriver::remote::tests::request(&classic.endpoint(""));
     request.capabilities["appium:orientation"] = json!("LANDSCAPE");
     driver.config.remote = Some(request);

@@ -229,6 +229,11 @@ impl DriverState {
     fn coordination_state(&self) -> CoordinationState {
         CoordinationState {
             backend: self.config.browser.backend,
+            automation_disclosure: self
+                .config
+                .browser
+                .automation_disclosure
+                .ready_status(self.config.browser.backend),
             browser_ws: self.browser_ws.clone(),
             target_id: self.target_id.clone().unwrap_or_default(),
             url: self.url.clone(),

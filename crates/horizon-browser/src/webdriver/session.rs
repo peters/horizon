@@ -58,6 +58,9 @@ const MAX_COMMAND_BURST: usize = 4;
 #[allow(clippy::struct_excessive_bools)] // independent per-concern driver flags
 struct Driver {
     config: BrowserSessionConfig,
+    /// Disclosure this session established. A Firefox preload getter is not
+    /// reported as a native clear.
+    disclosure_status: crate::AutomationDisclosureStatus,
     host: DriverHost,
     /// Where `close` records what a remote release established, for the
     /// host's teardown signal.
@@ -258,6 +261,18 @@ pub(crate) fn run_webdriver(
     let _ = event_tx.send(BrowserEvent::Stopped { code: None });
 }
 
+fn safari_input_for_host(
+    host: &DriverHost,
+    session_id: &str,
+    backend: crate::BackendKind,
+) -> Result<Option<safari::InputState>, String> {
+    if host.is_remote() {
+        Ok(None)
+    } else {
+        initial_safari_input(host.transport(), session_id, backend)
+    }
+}
+
 impl Driver {
     fn prepare_ready(
         &mut self,
@@ -409,14 +424,12 @@ impl Driver {
             bidi,
             context_id,
             automation_ws,
+            disclosure,
         } = establish_bidi(config, &mut host, &session_id, &capabilities, stop_requested)?;
-        let safari = if host.is_remote() {
-            None
-        } else {
-            initial_safari_input(host.transport(), &session_id, config.browser.backend)?
-        };
+        let safari = safari_input_for_host(&host, &session_id, config.browser.backend)?;
         Ok(Self {
             config: config.clone(),
+            disclosure_status: disclosure,
             host,
             remote_release,
             remote_device,
@@ -563,11 +576,7 @@ impl Driver {
             backend: self.config.browser.backend,
             capabilities,
             bidi: self.bidi.is_some(),
-            automation_disclosure: self
-                .config
-                .browser
-                .automation_disclosure
-                .ready_status(self.config.browser.backend),
+            automation_disclosure: self.disclosure_status,
         }
     }
 
@@ -1116,6 +1125,13 @@ mod tests {
         let prefs = &capabilities["moz:firefoxOptions"]["prefs"];
 
         assert_eq!(capabilities["moz:firefoxOptions"]["args"][0], "-headless");
+        assert!(!firefox_args_include(&capabilities, "-remote-allow-system-access"));
+        assert!(!geckodriver_allows_system_access(&config));
+        let opted_in = BrowserConfig {
+            firefox_system_access: true,
+            ..config.clone()
+        };
+        assert!(geckodriver_allows_system_access(&opted_in));
         assert_eq!(prefs["widget.gtk.overlay-scrollbars.enabled"], false);
         assert_eq!(prefs["ui.useOverlayScrollbars"], 0);
         assert_eq!(prefs["remote.bidi.dismiss_file_pickers.enabled"], true);
@@ -1123,7 +1139,7 @@ mod tests {
         let visible = new_session_capabilities(
             &BrowserConfig {
                 headless: false,
-                ..config
+                ..config.clone()
             },
             "panel",
             true,
@@ -1139,6 +1155,57 @@ mod tests {
                 .as_array()
                 .is_some_and(|args| args.iter().all(|argument| argument != "-headless"))
         );
+        assert!(!firefox_args_include(&visible, "-remote-allow-system-access"));
+        assert!(geckodriver_allows_system_access(&BrowserConfig {
+            headless: false,
+            firefox_system_access: true,
+            ..config.clone()
+        }));
+
+        let browser_default_config = BrowserConfig {
+            automation_disclosure: crate::AutomationDisclosurePolicy::BrowserDefault,
+            ..config
+        };
+        let browser_default =
+            new_session_capabilities(&browser_default_config, "panel", true, false).unwrap_or_default();
+        assert!(!firefox_args_include(&browser_default, "-remote-allow-system-access"));
+        assert!(!geckodriver_allows_system_access(&browser_default_config));
+    }
+
+    #[test]
+    fn native_flag_clear_requires_the_system_access_opt_in() {
+        let minimized = BrowserConfig {
+            backend: BackendKind::FirefoxBidi,
+            ..BrowserConfig::default()
+        };
+        assert!(!super::startup::firefox_attempts_native_flag_clear(&minimized, true));
+        let opted_in = BrowserConfig {
+            firefox_system_access: true,
+            ..minimized.clone()
+        };
+        assert!(super::startup::firefox_attempts_native_flag_clear(&opted_in, true));
+        assert!(!super::startup::firefox_attempts_native_flag_clear(&opted_in, false));
+        let browser_default = BrowserConfig {
+            automation_disclosure: crate::AutomationDisclosurePolicy::BrowserDefault,
+            firefox_system_access: true,
+            ..minimized
+        };
+        assert!(!super::startup::firefox_attempts_native_flag_clear(
+            &browser_default,
+            true
+        ));
+    }
+
+    fn geckodriver_allows_system_access(config: &crate::BrowserConfig) -> bool {
+        super::super::service::firefox_service_arguments(config, 9, 10, true)
+            .iter()
+            .any(|argument| argument == "--allow-system-access")
+    }
+
+    fn firefox_args_include(capabilities: &serde_json::Value, argument: &str) -> bool {
+        capabilities["moz:firefoxOptions"]["args"]
+            .as_array()
+            .is_some_and(|args| args.iter().any(|value| value.as_str() == Some(argument)))
     }
 
     #[test]
