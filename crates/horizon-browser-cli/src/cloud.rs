@@ -78,10 +78,13 @@ mod tests {
         let options = parse(&["stop", "cloud-1", "-o", "-"]).unwrap();
         let plan: horizon_browser_cli::Plan = serde_json::from_value(options.plan()).unwrap();
         assert_eq!(plan.steps[0].tool, "cloud_list");
-        assert_eq!(plan.steps[0].arguments, json!({"operation": "stop", "cloud": "cloud-1"}));
+        assert_eq!(
+            json!(plan.steps[0].arguments),
+            json!({"operation": "stop", "cloud": "cloud-1"})
+        );
         assert_eq!(options.output, Some(PathBuf::from("-")));
         let list: horizon_browser_cli::Plan = serde_json::from_value(parse(&["list"]).unwrap().plan()).unwrap();
-        assert_eq!(list.steps[0].arguments, json!({"operation": "list"}));
+        assert_eq!(json!(list.steps[0].arguments), json!({"operation": "list"}));
     }
     #[test]
     fn malformed_commands_do_not_create_a_plan() {
