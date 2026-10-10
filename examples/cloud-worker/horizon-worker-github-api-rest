@@ -120,7 +120,8 @@ def read_allowed(rest):
         return True
     if parts[0] in PRIVATE_READS or parts[0] == 'branches' and 'protection' in parts[2:]:
         return False
-    return not (parts[0] == 'actions' and len(parts) > 1 and parts[1] in PRIVATE_ACTIONS)
+    # Also nested, such as a workflow's permissions or an environment's secrets.
+    return not (parts[0] == 'actions' and any(part in PRIVATE_ACTIONS for part in parts[1:]))
 
 
 def change_allowed(rest, method):

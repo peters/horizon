@@ -306,41 +306,69 @@ class Exchange:
         first = next(candidate for candidate in found if candidate.usable)
         schema = self.broker.schema.get(lambda query: self.broker.call(rest.API, 'POST', '/graphql', first.token,
                                                                        query, sent=granted))
-        plan, refused = None, None
+        named = policy.named_repositories(schema, body)
+        refused = None
         for candidate in found:
             try:
-                plan = policy.plan(schema, body, candidate.allowed)
-                break
+                status, reply = self.graphql_with(candidate, schema, body, named, granted)
+            except Elsewhere as error:
+                refused = refused or error.refused
+                continue
             except policy.Refused as error:
-                refused = refused or error
-        if plan is None:
-            self.record['outcome'] = 'refused'
-            return graphql_refused(self.output, str(refused))
-        if not candidate.usable:
-            self.record['outcome'] = 'refused'
-            return graphql_refused(self.output, EXPIRED)
+                refused = error
+                break
+            text = json.dumps(reply)
+            if candidate.token in text:
+                raise refusal(502, 'the GraphQL reply from GitHub held this worker\'s sign-in; it was not passed on.')
+            self.started = True
+            relay.refuse(self.output, status, '', 'application/json; charset=utf-8', text)
+            self.record['outcome'] = 'relayed'
+            return None
+        self.record['outcome'] = 'refused'
+        return graphql_refused(self.output, str(refused))
+
+    def graphql_with(self, candidate, schema, body, named, granted):
+        """(status, checked reply) of a GraphQL request sent with `candidate`. Raises Elsewhere
+        when the request may still go with the next candidate: this one reaches none of the
+        repositories that the request names or that its IDs are in. Its grants come first, as
+        for REST and Git, so a repository that it grants for reading only, or whose token
+        expires, never gets the next candidate's token."""
+        def elsewhere(error, names):
+            if candidate.source == 'chain' and any(candidate.allowed(name, 'read') for name in names):
+                return error
+            return Elsewhere(error)
         try:
-            if plan.ids:
-                status, reply = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
-                                                 policy.lookup(schema, plan.ids), sent=granted)
-                policy.check_lookup(reply if status == 200 else None, plan.ids, candidate.allowed)
-            features = [('GraphQL-Features', value) for value in request.values('graphql-features')]
-            status, reply = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
-                                             plan.body(body.get('variables') or {}), features, sent=granted)
-            if status == 401:
-                raise policy.Refused('GitHub refused the sign-in of this worker. Connect GitHub again in Horizon.')
-            if not isinstance(reply, dict):
-                raise policy.Refused('GitHub\'s GraphQL reply was not JSON; try again.')
-            policy.verify(plan, reply, candidate.allowed)
+            plan = policy.plan(schema, body, candidate.allowed)
         except policy.Refused as error:
-            self.record['outcome'] = 'refused'
-            return graphql_refused(self.output, str(error))
-        text = json.dumps(reply)
-        if candidate.token in text:
-            raise refusal(502, 'the GraphQL reply from GitHub held this worker\'s sign-in; it was not passed on.')
-        self.started = True
-        relay.refuse(self.output, status, '', 'application/json; charset=utf-8', text)
-        self.record['outcome'] = 'relayed'
+            raise elsewhere(error, named) from None
+        if not candidate.usable:
+            raise policy.Refused(EXPIRED)
+        looked = None
+        if plan.ids:
+            status, looked = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
+                                              policy.lookup(schema, plan.ids), sent=granted)
+            looked = looked if status == 200 else None
+            try:
+                policy.check_lookup(looked, plan.ids, candidate.allowed)
+            except policy.Refused as error:
+                raise elsewhere(error, policy.lookup_repositories(looked)) from None
+        features = [('GraphQL-Features', value) for value in self.request.values('graphql-features')]
+        status, reply = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
+                                         plan.body(body.get('variables') or {}), features, sent=granted)
+        if status == 401:
+            raise policy.Refused('GitHub refused the sign-in of this worker. Connect GitHub again in Horizon.')
+        if not isinstance(reply, dict):
+            raise policy.Refused('GitHub\'s GraphQL reply was not JSON; try again.')
+        policy.verify(plan, reply, candidate.allowed)
+        return status, reply
+
+
+class Elsewhere(policy.Refused):
+    """A refusal after which the next candidate may serve the request."""
+
+    def __init__(self, refused):
+        super().__init__(str(refused))
+        self.refused = refused
 
 
 def handle(connection, broker, allowed=ALLOWED_UIDS):

@@ -991,7 +991,7 @@ The broker does these steps for each connection:
     It also refuses reads of the repository's collaborators, invitations, teams,
     hooks, keys, environments, forks, topics, rulesets, branch protection, and
     Actions, Dependabot and Codespaces secrets, variables, runners and
-    permissions: a read of variables returns their values. It reads each path
+    permissions, also nested ones such as a workflow's permissions: a read of variables returns their values. It reads each path
     segment percent-decoded, as GitHub does.
   - `/repositories/ID/...`, which GitHub uses in its page links. The broker asks
     GitHub for the current name of the repository for each request, and then
@@ -1037,6 +1037,11 @@ asks GitHub for once per start:
   labels and reviews. Before it is sent, the broker asks GitHub what each ID of
   its input is. Each must be a repository with a `push` grant, a thing in one,
   or a user, bot or team.
+- The chain's token serves a request first. The static token file's token serves
+  it only when the chain reaches none of the repositories that the request names
+  or that its IDs are in, so a repository that the chain grants for reading only,
+  or whose token expires, never gets the static token. A `node` or `nodes` read of
+  a repository that only the static file binds is refused while a chain exists.
 - A refusal is a GraphQL error, which `gh` prints as `GraphQL: Horizon: ...`.
 
 The broker writes one line for each connection to the request log below, with

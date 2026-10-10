@@ -201,6 +201,8 @@ class RestTests(BrokerTestCase):
                 ('GET', '/repositories/111/collaborators', 403, 'stay with the person'),
                 ('GET', '/repos/example/project/%61ctions/%76ariables', 403, 'stay with the person'),
                 ('GET', '/repos/example/project/actions\\variables', 400, 'backslash'),
+                ('GET', '/repos/example/project/actions/workflows/ci.yml/permissions', 403, 'stay with the person'),
+                ('GET', '/repos/example/project/actions/workflows/ci.yml/%70ermissions', 403, 'stay with the person'),
                 ('GET', '/repos/example/project/%68ooks', 403, 'stay with the person'),
                 ('PUT', '/repos/example/project/%61ctions/secrets/X', 403, 'only pull requests'),
                 ('GET', '/repos/example/project/forks', 403, 'stay with the person'),
@@ -328,6 +330,30 @@ class GraphQLTests(BrokerTestCase):
         reply = self.graphql('query($id: ID!) { node(id: $id) { ...on PullRequest { title } } }', {'id': 'PR_1'})
         self.assertNotIn('secret"', json.dumps(reply['data']))
         self.assertIn('example/secret', reply['errors'][0]['message'])
+
+    def test_the_chain_comes_first_and_the_static_binding_serves_only_what_it_does_not_reach(self):
+        bind_static(self.credential, 'example/library', 'example/bound')
+        query = 'mutation($input: AddCommentInput!) { addComment(input: $input) { clientMutationId } }'
+
+        def answer(body):
+            token = self.api.seen[-1][3]
+            if 'nodes(ids: $ids)' in body['query']:
+                repository = {'I_lib': 'example/library', 'I_bound': 'example/bound'}[body['variables']['ids'][0]]
+                # The chain's token does not see the repository that only the static binding binds.
+                if repository == 'example/bound' and token == 'token ' + ACCESS:
+                    return {'data': {'nodes': [None]}}
+                return {'data': {'nodes': [{'__typename': 'Issue', 'held': {'nameWithOwner': repository}}]}}
+            return {'data': {'addComment': {'clientMutationId': None}}}
+        self.api.graphql = answer
+        # The chain grants example/library for reading only: the static binding's push token
+        # is never tried for it.
+        reply = self.graphql(query, {'input': {'subjectId': 'I_lib', 'body': 'b'}})
+        self.assertIn('example/library has no GitHub grant', reply['errors'][0]['message'])
+        self.assertNotIn('token ' + STATIC, [item[3] for item in self.api.seen])
+        # A repository that the chain does not reach goes with the static binding.
+        reply = self.graphql(query, {'input': {'subjectId': 'I_bound', 'body': 'b'}})
+        self.assertEqual(reply, {'data': {'addComment': {'clientMutationId': None}}})
+        self.assertEqual(self.api.seen[-1][3], 'token ' + STATIC)
 
     def test_a_mutation_is_sent_only_after_its_ids_resolve_to_a_pushable_repository(self):
         sent = []
