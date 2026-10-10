@@ -1,13 +1,24 @@
 //! Release the session lock explicitly, even when a spawned child inherited a descriptor.
-use std::fs::File;
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 pub(crate) struct SessionLock {
     file: File,
+    root: PathBuf,
 }
 
 impl SessionLock {
-    pub(super) const fn new(file: File) -> Self {
-        Self { file }
+    pub(super) fn new(file: File, root: &Path) -> Self {
+        Self {
+            file,
+            root: root.to_owned(),
+        }
+    }
+
+    pub(super) fn root(&self) -> &Path {
+        &self.root
     }
 }
 

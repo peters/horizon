@@ -239,6 +239,11 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   identities and prepares/seals handoffs; `repository.rs` fingerprints repository
   contents. Terminal shutdown workers own cancellation and PTY exit, keeping
   filesystem work outside the UI shutdown path.
+- `cloud_runtime/chatgpt/store/snapshot.rs` holds one session guard for each
+  credential snapshot. It reads the registration files and active account under
+  that guard. Sign-in, refresh, sign-out and settings save use the same guard.
+  `store/activation.rs` recovers interrupted publication. `store/locking.rs`
+  releases the lock when its guard drops.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
 - Shared domain helpers belong here when both core and UI need them.

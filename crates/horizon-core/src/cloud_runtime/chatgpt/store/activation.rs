@@ -56,14 +56,6 @@ fn prepare(root: &Path, record: &Record) -> Result<Zeroizing<Vec<u8>>> {
     Ok(bytes)
 }
 
-/// Readers cannot observe an interrupted publication or compete with its writer.
-pub(super) fn ensure_recovered(root: &Path) -> Result<()> {
-    if read_private(&directory(root).join(JOURNAL))?.is_some() {
-        let _guard = super::session_lock(root)?;
-    }
-    Ok(())
-}
-
 /// Called while the common session lock is held. True means the intended record won.
 pub(super) fn recover(root: &Path) -> Result<bool> {
     let path = directory(root).join(JOURNAL);
@@ -141,8 +133,9 @@ mod tests {
     #[test]
     fn sign_in_publishes_a_complete_pair_and_removes_its_journal() {
         let root = tempfile::tempdir().unwrap();
-        let _guard = super::super::session_lock(root.path()).unwrap();
+        let guard = super::super::session_lock(root.path()).unwrap();
         activate(root.path(), &record("client-a")).unwrap();
+        drop(guard);
         assert!(
             super::super::super::status(root.path())
                 .unwrap()

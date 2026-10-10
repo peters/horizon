@@ -11,11 +11,13 @@ use zeroize::Zeroizing;
 
 mod activation;
 mod locking;
+mod snapshot;
 #[cfg(windows)]
 mod windows;
 
 pub(super) use activation::activate;
 pub(crate) use locking::SessionLock;
+pub(super) use snapshot::{connections, default_registration, default_registration_locked, registration};
 
 const DIRECTORY: &str = "chatgpt";
 const HOST_ID_FILE: &str = "host_id";
@@ -156,7 +158,7 @@ pub(super) fn session_lock(root: &Path) -> Result<SessionLock> {
         fs::TryLockError::WouldBlock => Error::Invalid("another sign-in operation is in progress"),
         fs::TryLockError::Error(error) => Error::Io(error),
     })?;
-    let guard = SessionLock::new(file);
+    let guard = SessionLock::new(file, root);
     activation::recover(root)?;
     Ok(guard)
 }
@@ -487,15 +489,6 @@ pub(super) fn save(root: &Path, record: &Record) -> Result<()> {
     Ok(())
 }
 
-/// Reads the requested account mapping even when the active account changed.
-pub(super) fn registration(root: &Path, client_id: &str) -> Result<Option<Record>> {
-    if !valid_client_id(client_id) {
-        return Err(Error::Invalid("the client ID is not safe in a file name"));
-    }
-    activation::ensure_recovered(root)?;
-    read_record(&file(root, client_id))
-}
-
 fn active_client_id(root: &Path) -> Result<Option<String>> {
     let active = read_text(&directory(root).join(ACTIVE_FILE))?;
     if active.as_deref().is_some_and(|id| !valid_client_id(id)) {
@@ -513,66 +506,15 @@ pub(super) fn set_active(root: &Path, client_id: &str) -> Result<()> {
     private_file(&directory(root).join(ACTIVE_FILE), client_id.as_bytes())
 }
 
-/// Every saved registration, newest first.
-/// # Errors
-/// A connection file was malformed.
-pub(super) fn connections(root: &Path) -> Result<Vec<Connection>> {
-    let mut found = read_records(root)?;
-    found.sort_by_key(|record| std::cmp::Reverse(record.saved_at_unix));
-    Ok(found.into_iter().map(Connection::from).collect())
-}
-
-/// The registration this host signs in as by default: the active one, else the most
-/// recently saved one.
-/// # Errors
-/// A connection file was malformed.
-pub(super) fn default_registration(root: &Path) -> Result<Option<Record>> {
-    let mut found = read_records(root)?;
-    found.sort_by_key(|record| std::cmp::Reverse(record.saved_at_unix));
-    let active = active_client_id(root)?;
-    let index = active
-        .as_ref()
-        .and_then(|id| found.iter().position(|record| &record.client_id == id));
-    Ok(index
-        .map(|index| found.remove(index))
-        .or_else(|| found.into_iter().next()))
-}
-
-fn read_records(root: &Path) -> Result<Vec<Record>> {
-    activation::ensure_recovered(root)?;
-    let mut records = Vec::new();
-    let directory = directory(root);
-    if !directory_exists(&directory)? {
-        return Ok(records);
-    }
-    verify_directory(&directory)?;
-    let entries = fs::read_dir(directory)?;
-    for entry in entries {
-        let entry = entry?;
-        let file_name = entry.file_name();
-        let Some(name) = file_name.to_str() else { continue };
-        if !name.to_ascii_lowercase().ends_with(".json") {
-            continue;
-        }
-        if let Some(record) = read_record(&entry.path())? {
-            if name != format!("{}.json", record.client_id) {
-                return Err(Error::Malformed);
-            }
-            records.push(record);
-        }
-    }
-    Ok(records)
-}
-
 /// Marks the first-sign-in plan-usage confirmation as shown.
 /// # Errors
 /// The registration could not be read or written.
 pub(super) fn confirm_usage(root: &Path, client_id: &str) -> Result<()> {
-    let _lock = session_lock(root)?;
+    let lock = session_lock(root)?;
     if !valid_client_id(client_id) {
         return Err(Error::Invalid("the client ID is not safe in a file name"));
     }
-    let mut record = registration(root, client_id)?.ok_or(Error::Missing)?;
+    let mut record = registration(&lock, client_id)?.ok_or(Error::Missing)?;
     record.usage_confirmed = true;
     save(root, &record)
 }
@@ -581,11 +523,12 @@ pub(super) fn confirm_usage(root: &Path, client_id: &str) -> Result<()> {
 /// and client mapping for a later sign-in.
 /// # Errors
 /// The registration could not be read or written.
-pub(super) fn clear_tokens(root: &Path, client_id: &str) -> Result<()> {
+pub(super) fn clear_tokens(lock: &SessionLock, client_id: &str) -> Result<()> {
+    let root = lock.root();
     if !valid_client_id(client_id) {
         return Err(Error::Invalid("the client ID is not safe in a file name"));
     }
-    let mut record = registration(root, client_id)?.ok_or(Error::Missing)?;
+    let mut record = registration(lock, client_id)?.ok_or(Error::Missing)?;
     record.access_token = None;
     record.refresh_token = None;
     record.token_type = None;
@@ -610,7 +553,7 @@ pub(super) fn clear_tokens(root: &Path, client_id: &str) -> Result<()> {
 /// # Errors
 /// The registration could not be read or written.
 pub(super) fn replace_tokens(
-    root: &Path,
+    lock: &SessionLock,
     client_id: &str,
     access_token: &str,
     refresh_token: &str,
@@ -618,10 +561,11 @@ pub(super) fn replace_tokens(
     earliest_refresh_at: Option<i64>,
     scopes: Vec<String>,
 ) -> Result<()> {
+    let root = lock.root();
     if !valid_client_id(client_id) {
         return Err(Error::Invalid("the client ID is not safe in a file name"));
     }
-    let mut record = registration(root, client_id)?.ok_or(Error::Missing)?;
+    let mut record = registration(lock, client_id)?.ok_or(Error::Missing)?;
     record.access_token = Some(Zeroizing::new(access_token.to_owned()));
     record.refresh_token = Some(Zeroizing::new(refresh_token.to_owned()));
     record.token_type = Some("Bearer".into());
@@ -642,7 +586,7 @@ pub(super) fn now_unix() -> i64 {
 mod tests {
     use super::*;
 
-    fn test_record(client_id: &str, subject: &str) -> Record {
+    pub(super) fn test_record(client_id: &str, subject: &str) -> Record {
         Record {
             email: Some("peters@example.com".into()),
             issuer: "https://auth.openai.com".into(),
@@ -704,7 +648,7 @@ mod tests {
             draft.openai_auth = Authentication::ChatGpt;
             draft.chatgpt = Some(Connection::from(test_record("client-a", "account-a")));
             match state {
-                "signed-out" => clear_tokens(root.path(), "client-a").unwrap(),
+                "signed-out" => clear_tokens(&session_lock(root.path()).unwrap(), "client-a").unwrap(),
                 "changed" => {
                     save(root.path(), &test_record("client-b", "account-b")).unwrap();
                     set_active(root.path(), "client-b").unwrap();
@@ -741,7 +685,10 @@ mod tests {
         save(root.path(), &test_record("client-b", "account-b")).unwrap();
         set_active(root.path(), "client-b").unwrap();
         assert_eq!(
-            registration(root.path(), "client-a").unwrap().unwrap().subject,
+            registration(&session_lock(root.path()).unwrap(), "client-a")
+                .unwrap()
+                .unwrap()
+                .subject,
             "account-a"
         );
         assert_eq!(default_registration(root.path()).unwrap().unwrap().subject, "account-b");
@@ -861,7 +808,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         save(root.path(), &test_record("oaiapp_one", "user-1")).unwrap();
         set_active(root.path(), "oaiapp_one").unwrap();
-        clear_tokens(root.path(), "oaiapp_one").unwrap();
+        clear_tokens(&session_lock(root.path()).unwrap(), "oaiapp_one").unwrap();
         let loaded = default_registration(root.path()).unwrap().unwrap();
         assert_eq!(loaded.client_id, "oaiapp_one");
         assert!(loaded.access_token.is_none());

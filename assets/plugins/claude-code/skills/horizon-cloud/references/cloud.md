@@ -176,6 +176,8 @@ out that account, reopen settings before saving. An uncertain sign-out clears
 the card's cached account status until settings load it again.
 Empty access and refresh tokens are rejected before storage.
 A private journal lets Horizon recover an interrupted sign-in publication.
+Credential readers hold the session lock until all records and the active account
+selection are read. A concurrent sign-in cannot change part of that snapshot.
 It restores the previous account selection if the credential write did not finish.
 Refresh waits for the provider's earliest time. A refused or malformed response
 does not change the saved token pair.

@@ -6,8 +6,8 @@ pub(super) fn refresh(root: &Path, client_id: &str) -> Result<()> {
 }
 
 fn refresh_with(root: &Path, client_id: &str, request: impl FnOnce(&str, &str) -> Result<TokenResponse>) -> Result<()> {
-    let _lock = store::session_lock(root)?;
-    let record = store::registration(root, client_id)?.ok_or(Error::Missing)?;
+    let lock = store::session_lock(root)?;
+    let record = store::registration(&lock, client_id)?.ok_or(Error::Missing)?;
     // A request before the provider's earliest time can invalidate the rotating grant.
     if record.earliest_refresh_at.is_some_and(|time| time > store::now_unix()) {
         return Err(Error::Invalid("the session is not refreshable yet"));
@@ -26,7 +26,7 @@ fn refresh_with(root: &Path, client_id: &str, request: impl FnOnce(&str, &str) -
         return Err(Error::Malformed);
     }
     store::replace_tokens(
-        root,
+        &lock,
         client_id,
         &token.access_token,
         rotated,
@@ -131,7 +131,9 @@ mod tests {
                 Ok(response("new-access", Some("new-refresh"), scope))
             })
             .unwrap();
-            let stored = store::registration(root.path(), "client-a").unwrap().unwrap();
+            let stored = store::registration(&store::session_lock(root.path()).unwrap(), "client-a")
+                .unwrap()
+                .unwrap();
             assert_eq!(stored.access_token.as_deref().unwrap().as_str(), "new-access");
             assert_eq!(stored.refresh_token.as_deref().unwrap().as_str(), "new-refresh");
             assert_eq!(stored.id_token.as_str(), "old-id");

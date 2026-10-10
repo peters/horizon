@@ -316,7 +316,7 @@ fn percent_decode(value: &str) -> String {
 }
 
 fn finish(root: &Path, attempt: &Attempt, callback: Callback, cancel: &Cancellation) -> Result<super::Connection> {
-    let _lock = store::session_lock(root)?;
+    let lock = store::session_lock(root)?;
     let (code, client_id) = match callback {
         Callback::Denied(description) => {
             let detail = description.unwrap_or_else(|| "sign-in was declined".into());
@@ -350,7 +350,7 @@ fn finish(root: &Path, attempt: &Attempt, callback: Callback, cancel: &Cancellat
         .ok_or_else(|| Error::Provider("ChatGPT finished sign-in without a refresh token. Try again.".into()))?;
     let id_token = token.id_token.ok_or(Error::IdToken)?;
     let (subject, email) = id_token::validate(&id_token, &client_id, &attempt.nonce)?;
-    let previous = store::registration(root, &client_id)?;
+    let previous = store::registration(&lock, &client_id)?;
     // The issued client ID remains bound to its original account and workspace.
     // A new account uses a new dynamic registration, including after sign-out.
     if let Some(record) = &previous
@@ -464,10 +464,10 @@ fn exchange(code: &str, client_id: &str, code_verifier: &str, redirect_uri: &str
 /// # Errors
 /// The registration could not be read or written.
 pub(super) fn sign_out(root: &Path, client_id: &str) -> Result<Option<bool>> {
-    let _lock = store::session_lock(root)?;
-    let record = store::registration(root, client_id)?.ok_or(Error::Missing)?;
+    let lock = store::session_lock(root)?;
+    let record = store::registration(&lock, client_id)?.ok_or(Error::Missing)?;
     let confirmed = record.refresh_token.as_ref().and_then(|token| revoke(token, client_id));
-    store::clear_tokens(root, client_id)?;
+    store::clear_tokens(&lock, client_id)?;
     Ok(confirmed)
 }
 
