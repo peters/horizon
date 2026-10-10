@@ -218,6 +218,9 @@ warning, oversized output or timeout must stop credential access.
   show an error and release the form. A failed sign-in must stop its callback.
 - ID-token tests must reject a missing or empty key ID, even with a valid
   signature from a key that also has no key ID.
+- Signed ID-token tests must reject a missing or malformed issuance time.
+  They must accept a time 60 seconds in the future and reject 61 seconds.
+  Expired and not-yet-valid tokens must still fail.
 - The sign-in publication tests must recover an interruption before or after the
   credential commit. An activation failure must not publish new credentials.
 - The snapshot test must prevent a concurrent writer between the record read and

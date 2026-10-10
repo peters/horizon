@@ -11,6 +11,7 @@ use serde::Deserialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const ISSUER: &str = "https://auth.openai.com";
+const ISSUED_AT_LEEWAY_SECONDS: i64 = 60;
 
 #[derive(Deserialize)]
 struct Discovery {
@@ -53,6 +54,7 @@ struct Claims {
     #[serde(default)]
     azp: Option<String>,
     exp: i64,
+    iat: i64,
     #[serde(default)]
     nbf: Option<i64>,
     sub: String,
@@ -96,6 +98,19 @@ pub(super) fn validate_with_jwks(
     nonce: &str,
     keys: &[Key],
 ) -> Result<(String, Option<String>)> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |age| i64::try_from(age.as_secs()).unwrap_or(0));
+    validate_with_jwks_at(token, client_id, nonce, keys, now)
+}
+
+fn validate_with_jwks_at(
+    token: &str,
+    client_id: &str,
+    nonce: &str,
+    keys: &[Key],
+    now: i64,
+) -> Result<(String, Option<String>)> {
     let mut parts = token.split('.');
     let (Some(header_b64), Some(payload_b64), Some(signature_b64), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
@@ -117,11 +132,11 @@ pub(super) fn validate_with_jwks(
     if claims.nonce != nonce {
         return Err(Error::IdToken);
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |age| i64::try_from(age.as_secs()).unwrap_or(0));
-    // No clock-skew allowance: expired and not-yet-valid tokens are refused.
-    if claims.exp <= now || claims.nbf.is_some_and(|not_before| now < not_before) {
+    // Expiry and not-before remain strict; issuance allows at most one minute of clock skew.
+    if claims.exp <= now
+        || claims.nbf.is_some_and(|not_before| now < not_before)
+        || claims.iat > now.saturating_add(ISSUED_AT_LEEWAY_SECONDS)
+    {
         return Err(Error::IdToken);
     }
 
@@ -205,13 +220,67 @@ mod tests {
     const EC_JWK: &str = r#"{"kty":"EC","crv":"P-256","kid":"test-es256","alg":"ES256","x":"L0o9jqv-iyqNtruTacH6Loz5oR1h2sqeJ_kEegbc1fc","y":"vR5bMZmnGfbGCmPmmDpjCzJWY2g70RUPJbCz-k5b7hs"}"#;
     const EC_TOKEN: &str = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtZXMyNTYifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6MjEwNjkxNDAyMywiaWF0IjoxNzkxNTU0MDIzLCJzdWIiOiJ1c2VyLTEyMyIsIm5vbmNlIjoibm9uY2UtYWJjIiwiZW1haWwiOiJwZXRlcnNAZXhhbXBsZS5jb20ifQ.JAfaoH4Iu0Q-4gZ6MuABb8t9SzTDwO5nDK8ejkJsEU5RWo0yNKG2iGAyqe51zq8M_0E8QGOUE_Dyh2bK3sqNZg";
     /// A valid signature from a different key; its issuer is not `OpenAI`'s.
-    const EC_BADISSUER_JWK: &str = r#"{"kty":"EC","crv":"P-256","kid":"test-es256-badissuer","alg":"ES256","x":"8l1rbO9oiJ_EF72BodoQ5GjB2nCMoVEl6oK9t0nel9w","y":"IVDm3FBFY6AhJRQixOIUA5G7yaNxp0GkL4kCxckknsc"}"#;
-    const EC_BADISSUER_TOKEN: &str = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtZXMyNTYtYmFkaXNzdWVyIn0.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5pbnZhbGlkIiwiYXVkIjoib2FpYXBwX3Rlc3RfY2xpZW50IiwiZXhwIjoyMTA2OTE0MDIzLCJzdWIiOiJ1c2VyLTc4OSIsIm5vbmNlIjoibm9uY2UtYmFkaXNzIiwiZW1haWwiOiJ1c2VyQGV4YW1wbGUuY29tIn0.RP3HlLhkdnU4TVkYmz5bXtPvDjDO2N-_E-JrFcU1tDnXldktolLXD3DRnOUIYECeQc-dkaoCMr51yvMtCLrpaQ";
+    const EC_BADISSUER_JWK: &str = r#"{"kty":"EC","crv":"P-256","kid":"test-es256-badissuer","alg":"ES256","x":"FTCJZB1DxFGvGM5bg_oQtnL3QqYtN8qyLhuqf2ttKFQ","y":"PseYzcCT95eODxQAX0ZFsHhP6iRAyJ2nJ-JeudxvOLU"}"#;
+    const EC_BADISSUER_TOKEN: &str = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtZXMyNTYtYmFkaXNzdWVyIn0.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5pbnZhbGlkIiwiYXVkIjoib2FpYXBwX3Rlc3RfY2xpZW50IiwiZXhwIjoyMTA2OTE0MDIzLCJzdWIiOiJ1c2VyLTc4OSIsIm5vbmNlIjoibm9uY2UtYmFkaXNzIiwiZW1haWwiOiJ1c2VyQGV4YW1wbGUuY29tIiwiaWF0IjowfQ.dz6hBGSEGamAzJjK9tqI36I3BN9-RQHplAri1y-ESb94Ho4_JY3PoqCi7CNBOl6WESSAH3zcQ2kTFHEiymK3oA";
     const RSA_JWK: &str = r#"{"kty":"RSA","kid":"test-rs256","alg":"RS256","n":"ow5LDzKGK8M2q1xSbpIAAobQxxw0FTGakK1UZUtGDr0hnxgvXfa_OUEe6dBH2D_aFOfultXyW367tOvBPgWUc5XHGOI8C00QqWuStr45UJwaHP46BSoU6koYvybsSP7F82H5Iiaw53bhLJ5J8H-cxzoRMAlvPVvQLtaHyMyYc1LS_HqSvUbHrZkeG7TRgcTJvv7-6NQP3m07OuziKeX2D7y_6Pppybr2MPVPpdXr5pJ6RTuutldC8IN2SpaLlZeMqOPj-ZFIuG_E3UVdaR5gq_ghyJvucK4CMIT0KRb6xhriKCyudIxeTFPDqBg9T22uPBnv7a3xAhFZolxbIbeYUQ","e":"AQAB"}"#;
     const RSA_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtcnMyNTYifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6MjEwNjkxNDAyMywiaWF0IjoxNzkxNTU0MDIzLCJzdWIiOiJ1c2VyLTQ1NiIsIm5vbmNlIjoibm9uY2UtcnMiLCJlbWFpbCI6InJzYUBleGFtcGxlLmNvbSJ9.WcVaTbCECprsOvtTmt6AdsDFbz-ISg-23gVWTVIoQcI9ozY5xinBeM0Ta13CfxosEbszkQBM71SPb-bomRsWkJ4-sbDV3tL1TrjacaihqQvahLYNJF7wCPOiLMKB_S_Y5VMzC8I5zTLOCtBFqbxA8xzw8I4DgfarOI1pBZABSzoNgBFI-7jNuE3giAtGv41EMetwET7JTr-F3qYK_xl0CCHxMbc7Neqkn2pU7QCEDkFFTJ1xeptn-3dWvrsGRZb1CK540iwdnsqZ25h5HC5iPginQXI6vPj-_UrHFFFbj_FHYZ1u-88NRee4K7w_i3tJp6DOGiQvWq_5J0RDVFoYlw";
 
     fn jwks(json: &str) -> Jwks {
         serde_json::from_str(&format!("{{\"keys\":[{json}]}}")).expect("test jwks parses")
+    }
+
+    fn signed_claims(claims: &serde_json::Value) -> (String, Key) {
+        use ring::{
+            rand::SystemRandom,
+            signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair},
+        };
+        let random = SystemRandom::new();
+        let private = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &random).unwrap();
+        let signer = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, private.as_ref(), &random).unwrap();
+        let public = signer.public_key().as_ref();
+        let key: Key = serde_json::from_value(serde_json::json!({
+            "kty":"EC", "crv":"P-256", "kid":"issued-at",
+            "x":URL_SAFE_NO_PAD.encode(&public[1..33]), "y":URL_SAFE_NO_PAD.encode(&public[33..])
+        }))
+        .unwrap();
+        let input = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","kid":"issued-at"}"#),
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).unwrap())
+        );
+        let signature = signer.sign(&random, input.as_bytes()).unwrap();
+        verify("ES256", &key, input.as_bytes(), signature.as_ref()).unwrap();
+        (format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature.as_ref())), key)
+    }
+
+    #[test]
+    fn signed_tokens_require_issued_at_and_bound_future_clock_skew() {
+        let now = 1_791_554_023;
+        for (issued_at, accepted) in [
+            (None, false),
+            (Some(serde_json::Value::Null), false),
+            (Some(serde_json::json!("1791554023")), false),
+            (Some(serde_json::json!(1.5)), false),
+            (Some(serde_json::json!(true)), false),
+            (Some(serde_json::json!(u64::MAX)), false),
+            (Some(serde_json::json!(now - 1)), true),
+            (Some(serde_json::json!(now)), true),
+            (Some(serde_json::json!(now + ISSUED_AT_LEEWAY_SECONDS)), true),
+            (Some(serde_json::json!(now + ISSUED_AT_LEEWAY_SECONDS + 1)), false),
+        ] {
+            let mut claims = serde_json::json!({
+                "iss":ISSUER, "aud":"issued-client", "sub":"synthetic-user", "nonce":"issued-nonce", "exp":now + 3600
+            });
+            if let Some(value) = issued_at {
+                claims["iat"] = value;
+            }
+            let (token, key) = signed_claims(&claims);
+            let result = validate_with_jwks_at(&token, "issued-client", "issued-nonce", &[key], now);
+            assert_eq!(result.is_ok(), accepted);
+            if !accepted {
+                assert!(matches!(result, Err(Error::Malformed | Error::IdToken)));
+            }
+        }
     }
 
     #[test]
@@ -325,26 +394,26 @@ mod tests {
 
     #[test]
     fn signed_audience_arrays_allow_only_the_issued_client() {
-        let keys = jwks(r#"{"kty":"EC","crv":"P-256","kid":"audience-fixture","x":"ygYA7utTHj-p2ziVf60S2yJOk2fZ2lBmNoBWxZltRN8","y":"DZobeasPkiRlChyabgjmlvRg4foe--4uVVbhjX2v7ps"}"#).keys;
+        let keys = jwks(r#"{"kty":"EC","crv":"P-256","kid":"audience-fixture","x":"lce8dDTgm52PN6vkCQkhdT-gn_nvwaE-GHW-vnxE8dg","y":"HeVIrlBOZ43s3yBi356rp3edm08XzzreLbIHghju-Ws"}"#).keys;
         for (token, accepted) in [
             (
-                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfdGVzdF9jbGllbnQiXSwiZXhwIjo0MTAyNDQ0ODAwLCJzdWIiOiJzeW50aGV0aWMtYXVkaWVuY2UtdXNlciIsIm5vbmNlIjoiYXVkaWVuY2Utbm9uY2UifQ.h-DK7ernIxHpgoF8B6kMBt5LfE9SQabhorJnkUuotAsnWL-e7Klj15HyVI7yFtJF25ZHS4rzlOK3Zha9oAAXYQ",
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfdGVzdF9jbGllbnQiXSwiZXhwIjo0MTAyNDQ0ODAwLCJzdWIiOiJzeW50aGV0aWMtYXVkaWVuY2UtdXNlciIsIm5vbmNlIjoiYXVkaWVuY2Utbm9uY2UiLCJpYXQiOjB9.9c-lyOThLqR-wTuVcdGFEFwMTIe1IdpaAWRwn2znvBDUt1ykFYIDJcuIP-stCIsbU87s78SJOgWl659C7tgk8A",
                 true,
             ),
             (
-                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfb3RoZXJfY2xpZW50Il0sImV4cCI6NDEwMjQ0NDgwMCwic3ViIjoic3ludGhldGljLWF1ZGllbmNlLXVzZXIiLCJub25jZSI6ImF1ZGllbmNlLW5vbmNlIn0.8F6IAB9MwHY0iyXAd7si3zkO1UojS_aned9Nt-yht_dDkcrHyr1yVbhbXD45kXkze-lECkPcw1adWQKzUJNnvw",
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfb3RoZXJfY2xpZW50Il0sImV4cCI6NDEwMjQ0NDgwMCwic3ViIjoic3ludGhldGljLWF1ZGllbmNlLXVzZXIiLCJub25jZSI6ImF1ZGllbmNlLW5vbmNlIiwiaWF0IjowfQ.DYWMPIcjaWiOgKxreZXReTLSCPWx80_qamrKdiPPXPmNQR71A6VIDoxhXXB992NUCBb6FOszkapK_DokM5u9JA",
                 false,
             ),
             (
-                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6W10sImV4cCI6NDEwMjQ0NDgwMCwic3ViIjoic3ludGhldGljLWF1ZGllbmNlLXVzZXIiLCJub25jZSI6ImF1ZGllbmNlLW5vbmNlIn0.FpEyuYv98CEtkkgSwiqpOPuYpDVcCnuit08_SFnf25Jt4KLdzjPpyo3NokZR7kLtZ06G6phrmHiWPXlCh6RGbw",
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6W10sImV4cCI6NDEwMjQ0NDgwMCwic3ViIjoic3ludGhldGljLWF1ZGllbmNlLXVzZXIiLCJub25jZSI6ImF1ZGllbmNlLW5vbmNlIiwiaWF0IjowfQ.J5THN4JQXW4yANMQfHM2DNkNYzBUt83jQw28GVTVL4OUOODgnjhF5Qwf6Td1QAfNQbFZ24pmXLHQmqLTNMNITA",
                 false,
             ),
             (
-                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfdGVzdF9jbGllbnQiLCJ1bnRydXN0ZWQtY2xpZW50Il0sImV4cCI6NDEwMjQ0NDgwMCwic3ViIjoic3ludGhldGljLWF1ZGllbmNlLXVzZXIiLCJub25jZSI6ImF1ZGllbmNlLW5vbmNlIiwiYXpwIjoib2FpYXBwX3Rlc3RfY2xpZW50In0.woLdjSNPssHGEcryfRNdsbRFIuXyg9ovPSSmeVpa4gYiuFJYO4KNqGtEltqk-qPQXwhdWq53rkyLGsJun0cOPA",
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfdGVzdF9jbGllbnQiLCJ1bnRydXN0ZWQtY2xpZW50Il0sImV4cCI6NDEwMjQ0NDgwMCwic3ViIjoic3ludGhldGljLWF1ZGllbmNlLXVzZXIiLCJub25jZSI6ImF1ZGllbmNlLW5vbmNlIiwiYXpwIjoib2FpYXBwX3Rlc3RfY2xpZW50IiwiaWF0IjowfQ.x6yVQRdttaCsgR_LZeqoQ5bwb21hOOE5tLABn2TkaMTE1SZHI7udPrtOd7NOCoEsmFCJN7h1DW-eo7vxsLahzA",
                 false,
             ),
             (
-                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfdGVzdF9jbGllbnQiXSwiZXhwIjo0MTAyNDQ0ODAwLCJzdWIiOiJzeW50aGV0aWMtYXVkaWVuY2UtdXNlciIsIm5vbmNlIjoiYXVkaWVuY2Utbm9uY2UiLCJhenAiOiJvYWlhcHBfb3RoZXJfY2xpZW50In0.4JEL8cR-kGTJIG9Aq8ReUbkWEvxnZi79fmz-T4QCZDxxdPj2qYMkt71_kuqNkBNn6UZm36bKoQNeaCeCqaiCQw",
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfdGVzdF9jbGllbnQiXSwiZXhwIjo0MTAyNDQ0ODAwLCJzdWIiOiJzeW50aGV0aWMtYXVkaWVuY2UtdXNlciIsIm5vbmNlIjoiYXVkaWVuY2Utbm9uY2UiLCJhenAiOiJvYWlhcHBfb3RoZXJfY2xpZW50IiwiaWF0IjowfQ.ZyGt97CUDrgM_KwFlg0nqbMRH80cRY_atwCMYEIciTCR8p_Ehh0GlEkU5LAwAxPQWNnkC0G08ZEKKf_2stn8xQ",
                 false,
             ),
         ] {
@@ -363,18 +432,18 @@ mod tests {
 
     #[test]
     fn signed_tokens_must_be_within_their_validity_window() {
-        let keys = jwks(r#"{"kty":"EC","crv":"P-256","kid":"time-fixture","x":"5Ey59VqcSYAd6qPO0n8eLNtZVueFrWHatmx_GLAwVFs","y":"b9yvan1-wusxKf9QJIsYbKMvJ5RI0EIUqPTaEJF6VK4"}"#).keys;
+        let keys = jwks(r#"{"kty":"EC","crv":"P-256","kid":"time-fixture","x":"1x4MwaYqv_1CqixZWySiunR2x0vXt5T-xrAtfJmI000","y":"e6hrPXFqVrhp6VLT3kThbOYgF36up3n63KdMTavx7l0"}"#).keys;
         for (token, accepted) in [
             (
-                "eyJhbGciOiJFUzI1NiIsImtpZCI6InRpbWUtZml4dHVyZSJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjoxLCJzdWIiOiJzeW50aGV0aWMtdGltZS11c2VyIiwibm9uY2UiOiJ0aW1lLW5vbmNlIn0.TFVs6FV5zNMaWPreND9e1DZb5Gk_0b0TFq3PmWiAKLvmFJU4VFhNs1i5OlqkZFPJsUcMlOyUAdB-zi8MEIGk1w",
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6InRpbWUtZml4dHVyZSJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjoxLCJzdWIiOiJzeW50aGV0aWMtdGltZS11c2VyIiwibm9uY2UiOiJ0aW1lLW5vbmNlIiwiaWF0IjowfQ.-wLLr9EDQ_uFbu3g2wFWi-WrefUoBCTsONXkMaxBAfte4dfjj1dkr2Dxr4Zv8FTILN7cNlQXKYNkzymzU-Xhaw",
                 true,
             ),
             (
-                "eyJhbGciOiJFUzI1NiIsImtpZCI6InRpbWUtZml4dHVyZSJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjo0MTAyNDQ0Nzk5LCJzdWIiOiJzeW50aGV0aWMtdGltZS11c2VyIiwibm9uY2UiOiJ0aW1lLW5vbmNlIn0.Pm0lA2k2yKcwMFG2yDpZ_AN7SKVNbrqYZUDPUzHIOECqBb6wo4NTwq1Xo8r4OWSnVOO_U_bJjyHl8cIazyGgyA",
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6InRpbWUtZml4dHVyZSJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjo0MTAyNDQ0Nzk5LCJzdWIiOiJzeW50aGV0aWMtdGltZS11c2VyIiwibm9uY2UiOiJ0aW1lLW5vbmNlIiwiaWF0IjowfQ.mUioqIeaFOewWAJuZUakUQ595wQtkAJw55JG7AtRRwLnZk6iasIcoqaLK0-4kUeHMZTrKaTIWNIzgXDh5xPcJA",
                 false,
             ),
             (
-                "eyJhbGciOiJFUzI1NiIsImtpZCI6InRpbWUtZml4dHVyZSJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6MSwibmJmIjowLCJzdWIiOiJzeW50aGV0aWMtdGltZS11c2VyIiwibm9uY2UiOiJ0aW1lLW5vbmNlIn0.rAAnysCgQ92D5RNNQ0h0lCgNwnnDqkFHrgtyrC8ZaCFJlZOdB7aFZozdv0OXTFyYA8Hi5RILDYPAo8f-DhipnQ",
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6InRpbWUtZml4dHVyZSJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6MSwibmJmIjowLCJzdWIiOiJzeW50aGV0aWMtdGltZS11c2VyIiwibm9uY2UiOiJ0aW1lLW5vbmNlIiwiaWF0IjowfQ.nyj-t5LbdpTMgjBdRyYQ3p0m9jGZf9LjiJO9tElG6S6QtgLwoljkQ7XRw7tYvoNrYK694PlZ1oDkWnjxvM8uDg",
                 false,
             ),
         ] {

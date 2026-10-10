@@ -207,6 +207,8 @@ out that account, reopen settings before saving. If sign-out fails, the card
 keeps the last known account and shows the error. Reopen settings to check it.
 After sign-out, the card reads the selected account again. Another selected
 account stays visible. A missing or empty token key ID is refused.
+An ID token must include its issuance time. A time more than 60 seconds in the
+future is refused. Expiration and not-before checks have no clock-skew allowance.
 Local tokens are cleared before remote revocation starts. Remote requests do not
 hold the session lock after that clear. Discovery endpoints must use HTTPS on
 the trusted provider origin. Provider requests do not follow redirects.
