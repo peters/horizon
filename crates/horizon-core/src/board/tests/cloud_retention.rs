@@ -321,16 +321,14 @@ fn running_cloud_member_parks_with_its_last_screen() {
     assert_eq!((placeholder.rows(), placeholder.cols()), size);
     assert!(panel.park_cloud().unwrap());
     assert_eq!(panel.cloud_wait(), Some(CloudWait::Parked));
-    assert!(text(&board).contains("This panel is parked."), "{}", text(&board));
-    let released = |board: &Board| board.panel(member).unwrap().terminal().unwrap().pty_released();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !released(&board) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "a parked placeholder must release its PTY"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let parked = board.panel(member).unwrap();
+    assert!(parked.terminal().is_none(), "a parked placeholder keeps no terminal");
+    let screen = parked.parked_screen().unwrap();
+    assert!(
+        screen.lines().iter().any(|line| line == "This panel is parked."),
+        "{screen:?}"
+    );
+    assert_eq!(screen.size(), size);
 }
 
 #[cfg(unix)]

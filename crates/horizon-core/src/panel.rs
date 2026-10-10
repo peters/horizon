@@ -472,6 +472,10 @@ impl Panel {
     ) -> Result<Self> {
         let mut panel = spawn::placeholder_panel(id, workspace_id, opts, spawn::Placeholder::Cloud(wait))?;
         panel.cloud_wait = Some(wait);
+        // A parked member keeps no terminal, also one restored as parked.
+        if wait == CloudWait::Parked {
+            panel.show_parked_placeholder();
+        }
         Ok(panel)
     }
 

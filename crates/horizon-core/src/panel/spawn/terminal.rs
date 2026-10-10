@@ -331,6 +331,14 @@ pub(in crate::panel) fn placeholder_terminal(panel: &Panel, rows: u16, cols: u16
     )
 }
 
+/// The rows that a placeholder for `placeholder` shows, as text.
+pub(in crate::panel) fn placeholder_lines(title: &str, placeholder: Placeholder<'_>) -> Vec<String> {
+    String::from_utf8_lossy(&placeholder_replay_bytes(title, placeholder))
+        .split("\r\n")
+        .map(str::to_owned)
+        .collect()
+}
+
 fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8> {
     match placeholder {
         Placeholder::RestoreFailure(error_message) => format!(

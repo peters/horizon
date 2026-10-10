@@ -2,7 +2,7 @@ mod device;
 mod terminal;
 
 use terminal::spawn_terminal;
-pub(super) use terminal::{Placeholder, placeholder_panel, placeholder_terminal};
+pub(super) use terminal::{Placeholder, placeholder_lines, placeholder_panel, placeholder_terminal};
 #[cfg(test)]
 use terminal::{disconnected_snapshot_launch_command, prepare_transcript_restore};
 

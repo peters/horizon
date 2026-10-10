@@ -1,6 +1,6 @@
 //! Parking of cloud members. A parked member has no SSH client, PTY or terminal grid;
 //! it keeps only the text of its last screen. Its agent continues in tmux on the worker.
-use super::{CloudWait, Panel};
+use super::{CloudWait, Panel, spawn};
 use crate::{agents::AgentStatus, editor::PanelContent, error::Result};
 
 /// The last screen of a parked member, as passive text, and the size of the terminal
@@ -44,7 +44,7 @@ impl Panel {
     pub fn park_cloud(&mut self) -> Result<bool> {
         match self.cloud_wait {
             Some(CloudWait::Parked) => return Ok(false),
-            Some(_) => return self.show_cloud_wait(CloudWait::Parked),
+            Some(_) => return Ok(self.show_parked_placeholder()),
             None => {}
         }
         let Some(terminal) = self.terminal() else {
@@ -56,6 +56,21 @@ impl Panel {
         }
         self.cloud_wait = Some(CloudWait::Parked);
         Ok(true)
+    }
+
+    /// Makes a placeholder say, as passive text, that its panel is parked. It keeps the
+    /// size of the placeholder's terminal, which shuts down. Returns whether it changed.
+    pub(crate) fn show_parked_placeholder(&mut self) -> bool {
+        let Some((rows, cols)) = self.terminal().map(|terminal| (terminal.rows(), terminal.cols())) else {
+            return false;
+        };
+        let lines = spawn::placeholder_lines(&self.title, spawn::Placeholder::Cloud(CloudWait::Parked));
+        let screen = ParkedScreen::new(lines, rows, cols);
+        if let PanelContent::Terminal(mut old) = std::mem::replace(&mut self.content, PanelContent::Parked(screen)) {
+            old.request_shutdown();
+        }
+        self.cloud_wait = Some(CloudWait::Parked);
+        true
     }
 
     /// The last screen of a parked member.
