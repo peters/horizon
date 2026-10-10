@@ -198,7 +198,6 @@ fn windows(facts: &Facts, pipe: &str) -> Plan {
 
 /// Docker Desktop restarts through its own CLI when it has one, else as `instructions` say.
 fn desktop(facts: &Facts, instructions: &str) -> Plan {
-    let shown = DESKTOP_CLI.join(" ");
     if facts.desktop_cli {
         let docker: Vec<&str> = facts.docker.iter().map(String::as_str).collect();
         let docker = if docker.is_empty() {
@@ -207,6 +206,18 @@ fn desktop(facts: &Facts, instructions: &str) -> Plan {
             &docker[..]
         };
         let argv = [docker, &DESKTOP_CLI[1..]].concat();
+        // The person sees and can copy what runs, with the cloud's options.
+        let shown = argv
+            .iter()
+            .map(|part| {
+                if part.contains(char::is_whitespace) {
+                    format!("\"{part}\"")
+                } else {
+                    (*part).to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         restart(&argv, &shown, Some(&shown))
     } else {
         manual(instructions, None)
@@ -356,10 +367,11 @@ mod tests {
             .into();
         let config = "/usr/local/bin/docker --config /state/docker desktop restart";
         assert_eq!(runs(&facts).as_deref(), Ok(config));
-        assert_eq!(
-            plan(&facts).command(),
-            Some("docker desktop restart"),
-            "a person types plain docker"
-        );
+        assert_eq!(plan(&facts).command(), Some(config), "what is shown is what runs");
+        facts.docker = ["docker", "--config", "/Users/person/Horizon state/docker"]
+            .map(String::from)
+            .into();
+        let quoted = "docker --config \"/Users/person/Horizon state/docker\" desktop restart";
+        assert_eq!(plan(&facts).command(), Some(quoted));
     }
 }
