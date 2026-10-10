@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::group::{child_exit_success, exited, terminate};
-use crate::{Error, Event, Kind, Result, Spec, storage};
+use crate::{DiagnosticLog, Error, Event, Kind, Result, Spec, diagnostic::GuardianReason, storage};
 
 #[derive(Serialize)]
 struct Receipt {
@@ -82,7 +82,17 @@ impl Task {
     }
 }
 
-fn no_child_failure(directory: &storage::Directory, receipt: &mut Receipt, error: Error) -> Result<()> {
+fn no_child_failure(
+    directory: &storage::Directory,
+    receipt: &mut Receipt,
+    log: &DiagnosticLog,
+    error: Error,
+) -> Result<()> {
+    log.guardian(if error == Error::Timeout {
+        GuardianReason::LifetimeExpired
+    } else {
+        GuardianReason::StartFailed
+    });
     receipt.complete = true;
     directory.save(receipt)?;
     emit(&Event::Failed {
@@ -129,6 +139,7 @@ pub(crate) fn run() -> Result<()> {
         task_identity: None,
     };
     directory.save(&receipt)?;
+    let log = DiagnosticLog::create(&spec, receipt.guardian_pid, directory.clone_held()?)?;
     emit(&Event::Armed {})?;
     let mut start = String::new();
     input
@@ -137,32 +148,31 @@ pub(crate) fn run() -> Result<()> {
         .read_line(&mut start)
         .map_err(|_| Error::Invalid)?;
     if start != "start\n" {
-        return no_child_failure(&directory, &mut receipt, Error::StartFailed);
+        return no_child_failure(&directory, &mut receipt, &log, Error::StartFailed);
     }
     let (stop_send, stop_receive) = mpsc::channel();
     std::thread::Builder::new()
         .name("native-process-parent".into())
         .spawn(move || {
-            let mut byte = [0];
-            let _ = input.read(&mut byte);
-            let _ = stop_send.send(());
+            let mut close = String::new();
+            let _ = input.take(16).read_line(&mut close);
+            let _ = stop_send.send(close == "close\n");
         })
         .map_err(|_| Error::StartFailed)?;
     if crate::lifetime::remaining(spec.deadline_millis).is_err() {
-        return no_child_failure(&directory, &mut receipt, Error::Timeout);
+        return no_child_failure(&directory, &mut receipt, &log, Error::Timeout);
     }
-    let log = Arc::new(Mutex::new((directory.new_file("output.log")?, 0_usize)));
     let task = Task::new(&receipt.task)?;
     receipt.task_identity = Some(task.identity()?);
     directory.save(&receipt)?;
     let mut command = child_command(&spec, &task);
     if crate::lifetime::remaining(spec.deadline_millis).is_err() {
         task.retire()?;
-        return no_child_failure(&directory, &mut receipt, Error::Timeout);
+        return no_child_failure(&directory, &mut receipt, &log, Error::Timeout);
     }
     let Ok(mut child) = command.spawn() else {
         task.retire()?;
-        return no_child_failure(&directory, &mut receipt, Error::StartFailed);
+        return no_child_failure(&directory, &mut receipt, &log, Error::StartFailed);
     };
     receipt.child_pid = Some(child.id());
     let mut readers = Readers::new();
@@ -171,21 +181,26 @@ pub(crate) fn run() -> Result<()> {
         &spec,
         &receipt,
         &directory,
-        Arc::clone(&log),
+        &log,
         &stop_receive,
         &mut readers,
     );
+    if let Err(error) = outcome
+        && error != Error::Timeout
+    {
+        let reason = match error {
+            Error::StartFailed => GuardianReason::StartFailed,
+            _ => GuardianReason::ChildFailed,
+        };
+        log.guardian(reason);
+    }
     let cleanup = stop_child(&mut child, &spec, &readers);
     readers.finish()?;
     cleanup?;
     if matches!(spec.kind, Kind::Backend) && !readers.backend_closed.load(Ordering::Acquire) {
         return Err(Error::CleanupUncertain);
     }
-    log.lock()
-        .map_err(|_| Error::StateUnavailable)?
-        .0
-        .sync_all()
-        .map_err(|_| Error::StateUnavailable)?;
+    log.sync()?;
     // Closing the parent's pipe makes a qualified backend helper clean its nested process group.
     task.retire()?;
     receipt.complete = true;
@@ -210,6 +225,9 @@ fn child_command(spec: &Spec, task: &Task) -> Command {
         .current_dir(".")
         .env_clear()
         .envs(&spec.environment)
+        .env("TMPDIR", &task.path)
+        .env("TEMP", &task.path)
+        .env("TMP", &task.path)
         .env("HORIZON_APP_BACKEND_DIR", &task.path)
         .env("HORIZON_APP_BACKEND_HEARTBEAT", "stdin")
         .stdin(Stdio::piped())
@@ -283,15 +301,15 @@ fn monitor(
     spec: &Spec,
     receipt: &Receipt,
     directory: &storage::Directory,
-    log: Arc<Mutex<(std::fs::File, usize)>>,
-    stop: &mpsc::Receiver<()>,
+    log: &DiagnosticLog,
+    stop: &mpsc::Receiver<bool>,
     readers: &mut Readers,
 ) -> Result<bool> {
     directory.save(receipt)?;
     emit(&Event::Started {})?;
     let (events_send, events) = mpsc::channel();
     let stderr = child.stderr.take().ok_or(Error::StartFailed)?;
-    let stderr_log = Arc::clone(&log);
+    let stderr_log = log.clone();
     readers.spawn("native-process-stderr", stderr, stderr_log, None, None)?;
     let stdout = child.stdout.take().ok_or(Error::StartFailed)?;
     let backend = matches!(spec.kind, Kind::Backend);
@@ -299,17 +317,27 @@ fn monitor(
     readers.spawn(
         "native-process-stdout",
         stdout,
-        log,
+        log.clone(),
         backend.then_some(events_send),
         closed,
     )?;
     let startup = Instant::now() + Duration::from_secs(spec.startup_seconds);
     let mut ready = !backend;
     loop {
-        if stop.try_recv() != Err(mpsc::TryRecvError::Empty) {
-            return Ok(false);
+        match stop.try_recv() {
+            Ok(true) => return Ok(false),
+            Ok(false) | Err(mpsc::TryRecvError::Disconnected) => {
+                log.guardian(GuardianReason::ParentDisconnected);
+                return Ok(false);
+            }
+            Err(mpsc::TryRecvError::Empty) => (),
         }
-        if crate::lifetime::remaining(spec.deadline_millis).is_err() || !ready && Instant::now() >= startup {
+        if crate::lifetime::remaining(spec.deadline_millis).is_err() {
+            log.guardian(GuardianReason::LifetimeExpired);
+            return Err(Error::Timeout);
+        }
+        if !ready && Instant::now() >= startup {
+            log.guardian(GuardianReason::StartupExpired);
             return Err(Error::Timeout);
         }
         if exited(child)? {
@@ -349,7 +377,7 @@ impl Readers {
         &mut self,
         name: &str,
         input: impl Read + Send + 'static,
-        log: Arc<Mutex<(std::fs::File, usize)>>,
+        log: DiagnosticLog,
         ready: Option<mpsc::Sender<Result<u16>>>,
         closed: Option<Cleanup>,
     ) -> Result<()> {
@@ -359,7 +387,7 @@ impl Readers {
             .spawn(move || {
                 let result = drain(
                     input,
-                    &log,
+                    &|bytes| log.append(bytes),
                     ready,
                     closed.as_ref().map(|(cleaning, closed)| (&**cleaning, &**closed)),
                 );
@@ -382,7 +410,7 @@ impl Readers {
 
 fn drain(
     mut input: impl Read,
-    log: &Mutex<(std::fs::File, usize)>,
+    log: &impl Fn(&[u8]) -> Result<()>,
     mut ready: Option<mpsc::Sender<Result<u16>>>,
     closed: Option<(&Mutex<Option<uuid::Uuid>>, &AtomicBool)>,
 ) -> Result<()> {
@@ -398,17 +426,9 @@ fn drain(
         if count == 0 {
             break;
         }
-        let mut output = log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let retained = count.min((4 * 1024 * 1024_usize).saturating_sub(output.1));
-        if failure.is_none() {
-            match output.0.write_all(&chunk[..retained]) {
-                Ok(()) => output.1 += retained,
-                Err(_) => {
-                    failure = Some(Error::StateUnavailable);
-                }
-            }
+        if failure.is_none() && log(&chunk[..count]).is_err() {
+            failure = Some(Error::StateUnavailable);
         }
-        drop(output);
         if ready.is_some() || closed.is_some() {
             for byte in &chunk[..count] {
                 if *byte == b'\n' {
@@ -474,6 +494,12 @@ fn code(error: Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn append(log: &Mutex<(std::fs::File, usize)>, bytes: &[u8]) -> Result<()> {
+        let mut output = log.lock().unwrap();
+        output.0.write_all(bytes).map_err(|_| Error::StateUnavailable)?;
+        output.1 += bytes.len();
+        Ok(())
+    }
 
     #[test]
     fn buffered_pre_cleanup_ack_cannot_become_valid_at_the_read_parse_boundary() {
@@ -501,7 +527,7 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         let log = Mutex::new((file.reopen().unwrap(), 0));
         assert_eq!(
-            drain(input, &log, None, Some((&nonce, &closed))),
+            drain(input, &|bytes| append(&log, bytes), None, Some((&nonce, &closed))),
             Err(Error::CleanupUncertain)
         );
         assert!(!closed.load(Ordering::Acquire));
@@ -526,7 +552,12 @@ mod tests {
         let log = Mutex::new((file.reopen().unwrap(), 0));
         let closed = AtomicBool::new(false);
         assert_eq!(
-            drain(&mut input, &log, None, Some((&cleaning, &closed))),
+            drain(
+                &mut input,
+                &|bytes| append(&log, bytes),
+                None,
+                Some((&cleaning, &closed))
+            ),
             Err(Error::StateUnavailable)
         );
         assert_eq!(input.position(), count as u64);
@@ -538,7 +569,10 @@ mod tests {
         let log = Mutex::new((std::fs::File::open(file.path()).unwrap(), 0));
         let bytes = vec![b'x'; 16_384];
         let mut input = std::io::Cursor::new(bytes);
-        assert_eq!(drain(&mut input, &log, None, None), Err(Error::StateUnavailable));
+        assert_eq!(
+            drain(&mut input, &|bytes| append(&log, bytes), None, None),
+            Err(Error::StateUnavailable)
+        );
         assert_eq!(input.position(), 16_384);
         assert_eq!(log.lock().unwrap().1, 0);
         let readers = Readers::new();

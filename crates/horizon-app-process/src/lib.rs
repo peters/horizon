@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod client;
+pub mod diagnostic;
+mod output;
+pub use output::DiagnosticLog;
 #[cfg(unix)]
 mod group;
 #[cfg(unix)]

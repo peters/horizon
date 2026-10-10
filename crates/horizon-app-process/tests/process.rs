@@ -7,7 +7,11 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use horizon_app_process::{Error, Event, Kind, Request, client::Process};
+use horizon_app_process::{
+    Error, Event, Kind, Request,
+    client::Process,
+    diagnostic::{Cause, Operation, Reason, Retention},
+};
 use serde_json::Value;
 
 struct PrivateTemp {
@@ -29,6 +33,23 @@ fn private_temp() -> std::io::Result<PrivateTemp> {
         _directory: directory,
         path,
     })
+}
+
+fn retain_evidence(state: &Path, label: &str) {
+    let Some(path) = std::env::var_os("HORIZON_PROCESS_TEST_EVIDENCE_DIR") else {
+        return;
+    };
+    let directory = horizon_app_process::storage::Directory::open(Path::new(&path)).unwrap();
+    for name in ["output.log", "process.json", "host-diagnostic.json"] {
+        let bytes = match std::fs::read(state.join(name)) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("synthetic evidence unavailable: {:?}", error.kind()),
+        };
+        let mut file = directory.new_file(&format!("{label}-{name}")).unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync_all().unwrap();
+    }
 }
 
 fn worker() -> &'static Path {
@@ -190,7 +211,7 @@ fn malformed_readiness_and_deadline_fail_without_public_process_diagnostics() {
         vec!["python3".into(), "-c".into(), "import json,sys,signal; signal.signal(signal.SIGTERM,lambda *args:None); request=json.loads(sys.stdin.read()); print(json.dumps({'native_backend_closed':1,'nonce':request['nonce']}),flush=True)".into()],
         Kind::Backend,
         1,
-        2,
+        10,
     )
     .unwrap();
     let mut process = Process::start(worker(), request, |_, _| Ok(())).unwrap();
@@ -202,6 +223,9 @@ fn malformed_readiness_and_deadline_fail_without_public_process_diagnostics() {
         matches!(process.next(Duration::from_secs(5)).unwrap(), Event::Failed { code } if code == "app_process_timeout")
     );
     process.close().unwrap();
+    let output = std::fs::read_to_string(state.path().join("output.log")).unwrap();
+    assert!(output.contains("Guardian: StartupExpired"));
+    assert!(!output.contains("Guardian: LifetimeExpired"));
 }
 
 #[test]
@@ -218,6 +242,9 @@ fn losing_parent_pipe_stops_backend_and_records_completion() {
     let mut guardian = Command::new(worker())
         .arg("--guard")
         .env_clear()
+        .env("TMPDIR", std::env::temp_dir())
+        .env("TEMP", std::env::temp_dir())
+        .env("TMP", std::env::temp_dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(errors))
@@ -583,4 +610,159 @@ fn cooperative_backend_cleanup_can_acknowledge_after_more_than_two_seconds() {
     let receipt: Value = serde_json::from_slice(&std::fs::read(state.path().join("process.json")).unwrap()).unwrap();
     assert_eq!(receipt["complete"], true);
     assert!(!Path::new(receipt["task"].as_str().unwrap()).exists());
+}
+
+#[test]
+fn retained_capability_logs_first_host_cause_after_normal_close() {
+    let root = private_temp().unwrap();
+    let state = private_temp().unwrap();
+    let mut log = None;
+    let request = Request::new(root.path(), state.path(), backend(), Kind::Backend, 2, 10).unwrap();
+    let mut process =
+        Process::start_with_diagnostics(worker(), request, |_, _| Ok(()), |value| log = Some(value)).unwrap();
+    ready(&mut process);
+    process.close().unwrap();
+    let cause = Cause::Io {
+        operation: Operation::Guardian,
+        kind: std::io::ErrorKind::BrokenPipe,
+    };
+    let log = log.unwrap();
+    assert_eq!(log.record(cause, Duration::from_secs(1)), Ok(Retention::Recorded));
+    assert_eq!(
+        log.record(
+            Cause::State {
+                operation: Operation::Output,
+                reason: Reason::TransportFailed
+            },
+            Duration::from_secs(1)
+        ),
+        Ok(Retention::AlreadyRecorded)
+    );
+    let output = std::fs::read_to_string(state.path().join("output.log")).unwrap();
+    assert_eq!(
+        output.matches("app_host_unavailable: Guardian: I/O BrokenPipe").count(),
+        1
+    );
+    assert!(!output.contains("Output: TransportFailed"));
+    let receipt: Value = serde_json::from_slice(&std::fs::read(state.path().join("process.json")).unwrap()).unwrap();
+    assert_eq!(receipt["complete"], true);
+    retain_evidence(state.path(), "after-close");
+}
+
+#[test]
+fn startup_journal_failure_retains_capability_without_authorizing_child() {
+    let root = private_temp().unwrap();
+    let state = private_temp().unwrap();
+    let mut log = None;
+    let request = Request::new(
+        root.path(),
+        state.path(),
+        vec!["touch".into(), "forbidden".into()],
+        Kind::Build,
+        2,
+        3,
+    )
+    .unwrap();
+    assert!(matches!(
+        Process::start_with_diagnostics(
+            worker(),
+            request,
+            |_, _| Err(Error::StateUnavailable),
+            |value| log = Some(value)
+        ),
+        Err(Error::StateUnavailable)
+    ));
+    let cause = Cause::State {
+        operation: Operation::Guardian,
+        reason: Reason::MissingState,
+    };
+    assert_eq!(
+        log.unwrap().record(cause, Duration::from_secs(1)),
+        Ok(Retention::Recorded)
+    );
+    assert!(!root.path().join("forbidden").exists());
+    assert!(
+        std::fs::read_to_string(state.path().join("output.log"))
+            .unwrap()
+            .contains("app_host_unavailable: Guardian: MissingState")
+    );
+    retain_evidence(state.path(), "startup-failure");
+}
+
+#[test]
+fn guardian_and_declared_child_use_the_trusted_private_temp_namespace() {
+    let root = private_temp().unwrap();
+    let state = private_temp().unwrap();
+    let request = Request::new(
+        root.path(),
+        state.path(),
+        vec![
+            "python3".into(),
+            "-c".into(),
+            "import os; print(os.environ['TMPDIR']); print(os.environ['TEMP']); print(os.environ['TMP'])".into(),
+        ],
+        Kind::Build,
+        2,
+        3,
+    )
+    .unwrap();
+    let mut process = Process::start(worker(), request, |_, _| Ok(())).unwrap();
+    loop {
+        if matches!(
+            process.next(Duration::from_secs(5)).unwrap(),
+            Event::Complete { success: true }
+        ) {
+            break;
+        }
+    }
+    process.close().unwrap();
+    let receipt: Value = serde_json::from_slice(&std::fs::read(state.path().join("process.json")).unwrap()).unwrap();
+    let task = Path::new(receipt["task"].as_str().unwrap());
+    assert_eq!(task.parent().unwrap(), std::env::temp_dir().canonicalize().unwrap());
+    let output = std::fs::read_to_string(state.path().join("output.log")).unwrap();
+    assert_eq!(output.lines().collect::<Vec<_>>(), vec![task.to_str().unwrap(); 3]);
+}
+
+#[test]
+fn real_guardian_stdout_stderr_and_host_cause_share_one_physical_log_cap() {
+    let root = private_temp().unwrap();
+    let state = private_temp().unwrap();
+    let script = r"import json,sys,threading; print(json.dumps({'native_backend_ready':1,'port':33327}),flush=True); flood=lambda stream:[(stream.write('x'*8192+'\n'),stream.flush()) for _ in range(400)]; a=threading.Thread(target=flood,args=(sys.stdout,)); b=threading.Thread(target=flood,args=(sys.stderr,)); a.start(); b.start(); request=json.loads(sys.stdin.read()); a.join(); b.join(); print(json.dumps({'native_backend_closed':1,'nonce':request['nonce']}),flush=True)";
+    let request = Request::new(
+        root.path(),
+        state.path(),
+        vec!["python3".into(), "-c".into(), script.into()],
+        Kind::Backend,
+        2,
+        20,
+    )
+    .unwrap();
+    let mut log = None;
+    let mut process =
+        Process::start_with_diagnostics(worker(), request, |_, _| Ok(()), |value| log = Some(value)).unwrap();
+    assert_eq!(ready(&mut process), 33327);
+    assert_eq!(
+        log.unwrap().record(
+            Cause::Io {
+                operation: Operation::Guardian,
+                kind: std::io::ErrorKind::BrokenPipe
+            },
+            Duration::from_secs(2)
+        ),
+        Ok(Retention::Recorded)
+    );
+    process.close().unwrap();
+    let bytes = std::fs::read(state.path().join("output.log")).unwrap();
+    assert!(bytes.len() <= 4 * 1024 * 1024);
+    assert!(bytes.len() >= 4 * 1024 * 1024 - 1024);
+    assert_eq!(
+        String::from_utf8(bytes)
+            .unwrap()
+            .matches("app_host_unavailable: Guardian: I/O BrokenPipe")
+            .count(),
+        1
+    );
+    let receipt: Value = serde_json::from_slice(&std::fs::read(state.path().join("process.json")).unwrap()).unwrap();
+    assert_eq!(receipt["complete"], true);
+    retain_evidence(state.path(), "concurrent-cap");
 }
