@@ -145,6 +145,32 @@ after one approval.
 
    Result: The shell shows **Permission denied**.
 
+8. In the same panel, push a branch and open a draft pull request from the
+   checkout, without `GH_REPO`:
+
+   ```bash
+   cd <checkout> && git switch -c gh-ask-check \
+       && git commit -q --allow-empty -m "Horizon check" \
+       && git push -q origin gh-ask-check \
+       && gh pr create --draft --head gh-ask-check --title "Horizon check" --body "Test."
+   ```
+
+   Result: Git asks for no password. `gh` shows the URL of a new draft pull
+   request on `<owner>/<repo-a>`.
+
+9. Close the pull request and delete its branch:
+
+   ```bash
+   gh pr close gh-ask-check --delete-branch
+   ```
+
+   Result: `gh` shows that it closed the pull request and deleted the branch.
+
+10. In the same panel, run `git config --global --get-regexp '^http\.'`.
+
+    Result: The command shows the proxy `http://127.0.0.1:47281` and the
+    authority `/run/horizon-worker/github-ca.pem` for `https://github.com/`.
+
 ### 6.4 G04 — Reconnect without a new sign-in
 
 1. Click **Reconnect** on the `gh-ask` card.
@@ -354,7 +380,8 @@ after one approval.
   sign-in of the app needs one, and later clouds need none.
 - A reconnect does not ask again.
 - A skipped sign-in leaves the cloud **Ready** without GitHub access.
-- Agents push without a password and cannot read the stored chain.
+- Agents push and open a pull request from a checkout without a password, and
+  cannot read the stored chain.
 - A request for a repository outside the installation is not allowed.
 - **Allow for this cloud** and **Deny** reach the agent.
 - An allowed repository reaches every agent session of the cloud.

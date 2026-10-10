@@ -123,7 +123,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
            secret = base64.b64decode(sent[6:]).decode().partition(':')[2] if sent.startswith('Basic ') else ''
            with open('/root/github/seen.log', 'a') as log:
                log.write('%s %s\n' % (repository, 'token' if secret else 'none'))
-           if repository in PRIVATE and not secret.startswith('ghu_synthetic-'):
+           if repository in PRIVATE and not secret.startswith(('ghu_synthetic-', 'ghp_synthetic-')):
                self.send_response(401)
                self.end_headers()
                return
@@ -169,7 +169,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    serves the Git repositories in `/root/github` and records in
    `/root/github/seen.log` whether each Git request had a token, but never the
    token. `example/project`, `example/extra` and `example/secret` are private:
-   they need a `ghu_synthetic-` token.
+   they need a `ghu_synthetic-` token, or the `ghp_synthetic-` token of a static
+   binding.
 
 ## 6. Tasks
 
@@ -283,12 +284,15 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    ```bash
    docker exec <c> horizon-worker-tailnet agent /usr/bin/git --git-dir=/workspace/repository.git config remote.origin.url
-   docker exec <c> horizon-worker-tailnet agent /usr/bin/git config --global --get-all url.http://127.0.0.1:47281/.insteadOf
+   docker exec <c> horizon-worker-tailnet agent /usr/bin/git config --global --get-regexp '^(http|url)\.'
    ```
 
    Result: The first command shows `https://github.com/example/project.git`. The
-   second command shows `https://github.com/`, `git@github.com:` and
-   `ssh://git@github.com/`: Git goes to GitHub through the Git proxy.
+   second command shows `http.https://github.com/.proxy http://127.0.0.1:47281`,
+   `http.https://github.com/.sslcainfo /run/horizon-worker/github-ca.pem` and
+   `url.https://github.com/.insteadof` lines for `git@github.com:`,
+   `ssh://git@github.com/`, `http://github.com/`, `https://www.github.com/` and
+   `http://www.github.com/`: Git goes to GitHub through the Git proxy.
 
 ### 6.4 C3: Refresh
 
@@ -329,7 +333,18 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: The command shows `refs/heads/main`.
 
-3. Clone a private repository that has no grant:
+3. In the clone of step 1, ask the `gh` wrapper for its token without `GH_REPO`:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project \
+       && git remote get-url origin && env -u GH_REPO gh auth token'
+   ```
+
+   Result: The command shows `https://github.com/example/project.git`, then
+   `ghu_synthetic-1`. The remote URL stays a GitHub URL, so the wrapper finds
+   the repository of the checkout.
+
+4. Clone a private repository that has no grant:
 
    ```bash
    docker exec <c> horizon-worker-tailnet agent git clone -q https://github.com/example/secret.git /workspace/home/secret
@@ -338,7 +353,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    Result: The command fails. It shows `remote: Horizon: example/secret has no
    GitHub grant on this worker`. It does not ask for a user name.
 
-4. Clone a public repository that has no grant. Then try to push to it:
+5. Clone a public repository that has no grant. Then try to push to it:
 
    ```bash
    docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home \
@@ -351,7 +366,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    Result: The clone works. The push fails and shows `remote: Horizon:
    example/public has no GitHub grant on this worker`.
 
-5. Examine what the fake GitHub received:
+6. Examine what the fake GitHub received:
 
    ```bash
    docker exec <c> sort -u /root/github/seen.log
@@ -360,7 +375,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    Result: `example/project` shows `token`. `example/secret` and
    `example/public` show only `none`.
 
-6. Ask the socket for a Git credential as the agent user:
+7. Ask the socket for a Git credential as the agent user:
 
    ```bash
    printf 'protocol=https\nhost=github.com\npath=example/project.git\n\n' \
@@ -369,7 +384,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: The command shows nothing. Git gets no token.
 
-7. Ask the `gh` wrapper for its token:
+8. Ask the `gh` wrapper for its token:
 
    ```bash
    docker exec <c> horizon-worker-tailnet agent /usr/bin/env GH_REPO=example/project gh auth token
@@ -377,7 +392,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: The command shows `ghu_synthetic-1`.
 
-8. Do step 7 again with `GH_REPO=example/other`.
+9. Do step 8 again with `GH_REPO=example/other`.
 
    Result: The command shows `horizon: no Git grant for this repository`. It shows
    no token.
@@ -478,6 +493,40 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: The command fails and shows `remote: Horizon: GitHub access on this
    worker was revoked`.
+
+6. Install a static binding for `example/secret`, as Horizon does for a
+   `git_credentials` binding that the app does not reach:
+
+   ```bash
+   printf '%s' '{"version":2,"grants":[{"repository":"example/secret","target":"primary",
+   "token":"ghp_synthetic-static","author_name":"Test Author",
+   "author_email":"author@example.invalid"}]}' \
+       | docker exec -i <c> horizon-worker-git-auth install
+   ```
+
+   Result: The command exits with status 0.
+
+7. Read `example/secret` and examine the Git configuration:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent git ls-remote https://github.com/example/secret.git; echo "exit=$?"
+   docker exec <c> horizon-worker-tailnet agent /usr/bin/git config --global --get http.https://github.com/.proxy
+   ```
+
+   Result: The first command shows `exit=0`. The second command shows
+   `http://127.0.0.1:47281`: the binding goes through the Git proxy too.
+
+8. Do step 7 of task C4 again with the path `example/secret.git`.
+
+   Result: The command shows nothing. Git gets no token from the binding either.
+
+9. Remove the binding:
+
+   ```bash
+   docker exec <c> horizon-worker-git-auth clear
+   ```
+
+   Result: The command exits with status 0.
 
 ### 6.9 R1: Request outside an agent session
 
@@ -698,7 +747,8 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
   adds the token only for a granted repository. A private repository without a
   grant and a push without a grant fail with a `remote: Horizon:` message.
 - The socket gives Git no token. The `gh` wrapper gets the access token only for
-  a granted repository.
+  a granted repository, and finds the repository of a checkout without `GH_REPO`.
+- A static binding also goes through the Git proxy. Git gets no token from it.
 - The agent user cannot read the token chain. No reply and no log line contains
   a token.
 - The token chain survives a recreated container.
