@@ -80,7 +80,7 @@ def lfs_selection(value):
 def manifest(root):
     try:
         value = json.loads((root / 'manifest.json').read_text())
-    except ValueError as error:
+    except (ValueError, RecursionError) as error:
         raise SourceError(str(error)) from error
     if not isinstance(value, dict) or any(not isinstance(value.get(key), list) for key in ('modules', 'assets')):
         raise SourceError('Invalid source manifest')
@@ -89,7 +89,8 @@ def manifest(root):
         if not isinstance(item, dict) or not isinstance(item.get('path'), str):
             raise SourceError('Invalid committed source path')
         path = PurePosixPath(item['path'])
-        if path.is_absolute() or not path.parts or any(p in ('.', '..', '.git') for p in path.parts) \
+        if path.is_absolute() or not path.parts or str(path) != item['path'] \
+                or any(p in ('.', '..', '.git') for p in path.parts) \
                 or any(c == '\0' or unicodedata.category(c) == 'Cs' for c in item['path']):
             raise SourceError('Invalid committed source path')
     for module in value['modules']:
@@ -118,8 +119,13 @@ def import_source(root, upload):
                 raise SourceError('Unexpected source archive member')
             archive.extractall(folder, filter='data')
         value = manifest(folder)
-        if (root / 'manifest.json').exists() and manifest(root) != value:
-            raise SourceError('Cloud source dependency identity mismatch')
+        if (root / 'manifest.json').exists():
+            try:
+                matches = manifest(root) == value
+            except RecursionError as error:
+                raise SourceError(str(error)) from error
+            if not matches:
+                raise SourceError('Cloud source dependency identity mismatch')
         root.mkdir(parents=True, exist_ok=True)
         for asset in value['assets']:
             oid = asset['oid']

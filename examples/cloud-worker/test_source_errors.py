@@ -45,7 +45,7 @@ class SourceErrorTests(unittest.TestCase):
                 archive.addfile(member, io.BytesIO(content))
 
     def test_request_and_transfer_failures_do_not_call_the_crash_hook(self):
-        cases = ['usage', 'worktree', 'dependencies', 'missing-upload', 'archive', 'json', 'json-encoding', 'git', 'lock']
+        cases = ['usage', 'worktree', 'dependencies', 'missing-upload', 'archive', 'json', 'json-encoding', 'json-depth', 'git', 'lock']
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -69,6 +69,9 @@ class SourceErrorTests(unittest.TestCase):
                 elif case == 'json-encoding':
                     self.archive(workspace, b'\xff')
                     reason = b'decode'
+                elif case == 'json-depth':
+                    self.archive(workspace, b'[' * 1100 + b']' * 1100)
+                    reason = b'recursion'
                 elif case == 'git':
                     manifest = {'modules': [{'path': 'module', 'revision': 'a' * 40}], 'assets': []}
                     self.archive(workspace, json.dumps(manifest).encode(), b'invalid pack')
@@ -77,7 +80,11 @@ class SourceErrorTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertEqual(result.stdout, b'')
                 self.assertIn(b'horizon-worker-source:', result.stderr)
-                self.assertIn(reason, result.stderr)
+                if case == 'json-depth':
+                    self.assertTrue(b'recursion' in result.stderr or b'Invalid source manifest' in result.stderr,
+                                    result.stderr)
+                else:
+                    self.assertIn(reason, result.stderr)
                 self.assertNotIn(b'CRASH_HOOK_CALLED', result.stderr)
                 self.assertNotIn(b'Traceback', result.stderr)
                 self.assertFalse((workspace / 'source' / 'manifest.json').exists())
@@ -107,6 +114,9 @@ class SourceErrorTests(unittest.TestCase):
                 cases.append({'modules': [], 'assets': [], key: invalid})
             for item in (None, [], {}, {'path': None}, {'path': []}, {'path': 1}, {'path': 'bad\0path'}, {'path': 'bad\ud800path'}):
                 cases.append({'modules': [], 'assets': [], key: [item]})
+        for path in ('./module', 'module/./child', 'module//child', 'module/', '.', '../module'):
+            cases.append({'modules': [{'path': path, 'revision': 'a' * 40}], 'assets': []})
+            cases.append({'modules': [], 'assets': [{'path': path, 'oid': 'a' * 64, 'size': 1}]})
         for revision in (None, [], 1, '', 'invalid'):
             cases.append({'modules': [{'path': 'module', 'revision': revision}], 'assets': []})
         for oid in (None, [], 1, '', 'invalid'):
@@ -171,6 +181,43 @@ class SourceErrorTests(unittest.TestCase):
                 self.assertEqual((result.returncode, result.stdout, result.stderr), (0, contract, b''))
                 self.assertFalse(workspace.exists())
 
+    def test_manifest_comparison_recursion_is_a_source_rejection(self):
+        class RecursiveManifest(dict):
+            def __eq__(self, other):
+                raise RecursionError('manifest comparison depth exceeded')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / 'workspace'
+            source = workspace / 'source'
+            source.mkdir(parents=True)
+            original = b'{"modules": [], "assets": []}'
+            (source / 'manifest.json').write_bytes(original)
+            self.archive(workspace, original)
+            script = root / 'helper.py'
+            script.write_text(SOURCE.read_text().replace('/workspace', str(workspace)))
+            helper = runpy.run_path(str(script), run_name='horizon_worker_source')
+            entry = helper['entry']
+            with mock.patch.object(helper['os'], 'umask'), mock.patch.dict(entry.__globals__, manifest=mock.Mock(side_effect=[
+                    {'modules': [], 'assets': []}, RecursiveManifest()])):
+                with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                    self.assertEqual(entry(['import']), 1)
+                self.assertEqual(stderr.getvalue(), 'horizon-worker-source: manifest comparison depth exceeded\n')
+            self.assertEqual((source / 'manifest.json').read_bytes(), original)
+            self.assertTrue((workspace / 'horizon-source.tar').exists())
+
+    def test_parser_recursion_error_is_a_source_rejection(self):
+        helper = runpy.run_path(str(SOURCE), run_name='horizon_worker_source')
+        entry = helper['entry']
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'manifest.json').write_text('{"modules": [], "assets": []}')
+            with mock.patch.object(helper['json'], 'loads', side_effect=RecursionError('manifest depth exceeded')):
+                with mock.patch.dict(entry.__globals__, main=lambda arguments: helper['manifest'](root)):
+                    with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                        self.assertEqual(entry(['import']), 1)
+                    self.assertEqual(stderr.getvalue(), 'horizon-worker-source: manifest depth exceeded\n')
+
     def test_expected_errors_keep_the_diagnostic_and_unexpected_errors_propagate(self):
         helper = runpy.run_path(str(SOURCE), run_name='horizon_worker_source')
         entry = helper['entry']
@@ -183,7 +230,7 @@ class SourceErrorTests(unittest.TestCase):
                 with mock.patch.dict(entry.__globals__, main=mock.Mock(side_effect=error)):
                     self.assertEqual(entry(['import']), 1)
                 self.assertEqual(stderr.getvalue(), f'horizon-worker-source: {error}\n')
-        for error_type in (ValueError, RuntimeError):
+        for error_type in (ValueError, RuntimeError, RecursionError):
             with self.subTest(unexpected=error_type), contextlib.redirect_stderr(io.StringIO()) as stderr:
                 with mock.patch.dict(entry.__globals__, main=mock.Mock(side_effect=error_type('unexpected defect'))):
                     with self.assertRaisesRegex(error_type, 'unexpected defect'):
