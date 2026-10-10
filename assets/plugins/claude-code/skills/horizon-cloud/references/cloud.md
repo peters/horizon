@@ -140,9 +140,10 @@ with parked terminals or a stopped worker. **This PC** holds workspaces without 
 cloud. Each row shows a status dot and one status line, for example the last line
 of a parked agent. A **Parked** row is compact: its status line is the hover and
 accessibility text of its dot. A group header shows the hourly cost of its running
-workers.
-A click on a row goes to its workspace, and a parked cloud then attaches. No MCP
-tool reads or changes this list. To find a cloud for the person, name its
+workers. A click on a row goes to its workspace, and a parked cloud then attaches.
+A group with idle clouds shows **Stop idle…**: the person selects idle clouds and
+sees the hourly saving before their workers stop. No MCP tool reads or changes
+this list. To find a cloud for the person, name its
 workspace and its group.
 
 ## GitHub access
