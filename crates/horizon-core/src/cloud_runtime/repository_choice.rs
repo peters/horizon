@@ -14,8 +14,8 @@ const MAX_ENTRIES: usize = 1_000;
 pub struct Choices(BTreeMap<String, WorkspacePlacement>);
 
 /// The name under which `repository`, as the New cloud field holds it, is kept: a local
-/// folder by its full path (`~` is the home folder), a link without a trailing slash or
-/// `.git`. `None` for an empty field.
+/// folder by its full path (`~` is the home folder; a relative folder that exists counts),
+/// a link without a trailing slash or `.git`. `None` for an empty field.
 #[must_use]
 pub fn key(repository: &str) -> Option<String> {
     let trimmed = repository.trim().trim_end_matches('/');
@@ -23,8 +23,9 @@ pub fn key(repository: &str) -> Option<String> {
         return None;
     }
     let path = crate::dir_search::expand_tilde(trimmed);
-    if path.is_absolute() {
-        // A folder keeps its whole name, also one that ends in `.git`.
+    // A folder keeps its whole name, also one that ends in `.git`. A relative folder that
+    // exists is kept by its full path too, so `repo` and `./repo` are one repository.
+    if path.is_absolute() || path.is_dir() {
         let full = path.canonicalize().unwrap_or(path);
         return Some(full.to_string_lossy().into_owned());
     }
@@ -112,6 +113,12 @@ mod tests {
         let folder = repository.path().join("project");
         let checkout = format!("{}.git", folder.display());
         assert_ne!(key(&checkout), key(&folder.to_string_lossy()), "a folder keeps .git");
+        // A relative folder that exists is kept by its full path.
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(
+            key("."),
+            Some(here.canonicalize().unwrap().to_string_lossy().into_owned())
+        );
         let home = crate::dir_search::expand_tilde("~/code/app");
         assert_eq!(key("~/code/app"), key(&home.to_string_lossy()));
     }
