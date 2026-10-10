@@ -271,6 +271,7 @@ fn header(connection: &Connection) -> std::result::Result<(i32, i32), IndexError
 fn check_header(connection: &Connection) -> std::result::Result<bool, IndexError> {
     match header(connection)? {
         (APPLICATION_ID, version) if version > SCHEMA_VERSION => Err(IndexError::Newer(version)),
+        (APPLICATION_ID, SCHEMA_VERSION) => check_schema(connection).map(|()| true),
         (APPLICATION_ID, version) if version > 0 => Ok(true),
         (0, 0) => {
             let tables: i64 = connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
@@ -282,6 +283,36 @@ fn check_header(connection: &Connection) -> std::result::Result<bool, IndexError
         }
         _ => Err(IndexError::Damaged("the file is not a Horizon runtime index".into())),
     }
+}
+
+/// Refuses an index that has the current schema version but not its tables and columns,
+/// so that a save sets it aside instead of failing on it every time.
+fn check_schema(connection: &Connection) -> std::result::Result<(), IndexError> {
+    let expected = Connection::open_in_memory()?;
+    expected.execute_batch(&MIGRATIONS.concat())?;
+    let found = columns(connection)?;
+    for (table, columns) in columns(&expected)? {
+        if found.get(&table) != Some(&columns) {
+            return Err(IndexError::Damaged(format!(
+                "the table {table} does not have the columns of schema version {SCHEMA_VERSION}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The name and type of the columns of each table, in order.
+fn columns(connection: &Connection) -> rusqlite::Result<HashMap<String, Vec<(String, String)>>> {
+    let mut tables: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut select = connection.prepare(
+        "SELECT t.name, c.name, c.type FROM sqlite_schema AS t JOIN pragma_table_info(t.name) AS c
+         WHERE t.type = 'table' ORDER BY t.name, c.cid",
+    )?;
+    let mut query = select.query([])?;
+    while let Some(row) = query.next()? {
+        tables.entry(row.get(0)?).or_default().push((row.get(1)?, row.get(2)?));
+    }
+    Ok(tables)
 }
 
 fn open_for_read(path: &Path) -> std::result::Result<Option<Connection>, IndexError> {

@@ -317,6 +317,31 @@ fn a_damaged_index_falls_back_to_runtime_yaml_and_a_save_sets_it_aside() {
 }
 
 #[test]
+fn an_index_without_the_tables_of_its_version_is_set_aside_and_rebuilt() {
+    let fixture = Fixture::new();
+    let state = board();
+    let session = fixture.create(state.clone());
+    fixture.store.index.forget(&session);
+    Connection::open(fixture.index(&session))
+        .expect("open index")
+        .execute_batch("DROP TABLE panels")
+        .expect("drop a table");
+
+    assert_eq!(value(&fixture.loaded(&session)), value(&state));
+    fixture
+        .store
+        .save_runtime_state(&session, &state)
+        .expect("save over an index without its tables");
+
+    assert_eq!(value(&indexed(&fixture.index(&session))), value(&state));
+    let aside = index_files(&fixture.home.session_dir(&session))
+        .into_iter()
+        .filter(|name| name.contains(".damaged-") && name.ends_with(|last: char| last.is_ascii_digit()))
+        .count();
+    assert_eq!(aside, 1);
+}
+
+#[test]
 fn an_index_from_a_newer_horizon_is_refused_and_never_changed() {
     let fixture = Fixture::new();
     let state = board();
