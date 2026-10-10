@@ -168,14 +168,15 @@ fn binding(
     }
 }
 
-/// `open`: the entry was added for a cloud's repository, whose push needs these fields.
+/// `open`: the entry was just added for a cloud's repository, whose push needs these
+/// fields. It opens them even when an earlier entry at this place was closed.
 fn expiry_and_publishing(ui: &mut Ui, draft: &mut Draft, saved_publish: bool, open: bool) {
     egui::CollapsingHeader::new(
         RichText::new("Expiry and publishing")
             .size(12.0)
             .color(theme::FG_SOFT()),
     )
-    .default_open(open)
+    .open(open.then_some(true))
     .show(ui, |ui| {
         field(
             ui,

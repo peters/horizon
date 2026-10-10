@@ -9,13 +9,14 @@ use horizon_core::cloud_runtime::{
     settings::Settings,
 };
 
-/// The cloud's repository, its state when no binding covers it, and whether the card
-/// still has to bring it into view.
+/// The cloud's repository, its state when no binding covers it, whether the card still
+/// has to bring it into view, and whether its new entry has opened its publishing fields.
 #[derive(Default)]
 pub(super) struct Needed {
     target: Option<String>,
     repository: Option<registry::Needed>,
     reveal: bool,
+    opened: bool,
 }
 
 impl Needed {
@@ -25,6 +26,7 @@ impl Needed {
             reveal: target.is_some(),
             target,
             repository,
+            opened: false,
         }
     }
 
@@ -43,13 +45,17 @@ impl Needed {
             .filter(|needed| !drafts.iter().any(|draft| draft.repository == needed.repository))
     }
 
-    /// Whether `draft` is the new entry for this repository, whose publishing fields open.
-    pub(super) fn added(&self, draft: &Draft) -> bool {
-        draft.original.is_none()
+    /// Whether `draft` is the new entry for this repository and its publishing fields still
+    /// have to open. Asking ends it, so the person can close them again.
+    pub(super) fn added(&mut self, draft: &Draft) -> bool {
+        let added = !self.opened
+            && draft.original.is_none()
             && self
                 .repository
                 .as_ref()
-                .is_some_and(|needed| needed.repository == draft.repository)
+                .is_some_and(|needed| needed.repository == draft.repository);
+        self.opened |= added;
+        added
     }
 }
 
@@ -256,13 +262,20 @@ mod tests {
             repository: pending.repository.clone(),
             ..Draft::default()
         });
-        assert!(state.needed.added(&draft.registries[0]), "its publishing fields open");
         let shown = texts(&mut state);
         assert!(
             !shown.iter().any(|text| text == "Not set up"),
             "the entry replaces the block"
         );
-        assert!(shown.iter().any(|text| text == "Publishing credential"), "{shown:?}");
+        assert!(
+            shown.iter().any(|text| text == "Publishing credential"),
+            "its publishing fields open: {shown:?}"
+        );
+        let draft = state.draft.as_deref().unwrap();
+        assert!(
+            !state.needed.added(&draft.registries[0]),
+            "once, so the person can close them again"
+        );
     }
 
     #[test]
