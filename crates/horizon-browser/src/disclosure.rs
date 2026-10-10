@@ -16,15 +16,53 @@ pub enum AutomationDisclosurePolicy {
 }
 
 /// Disclosure behavior established for an active backend session.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AutomationDisclosureStatus {
     /// The caller selected [`AutomationDisclosurePolicy::BrowserDefault`].
+    #[default]
     BrowserDefault,
-    /// The backend installed its common-signal minimization before navigation.
+    /// Native minimization is active. Firefox cleared its automation flags, or
+    /// Chromium started with the standard automation flag suppressed.
     CommonSignalsMinimized,
+    /// Firefox installed the script getter because the native flag clear was
+    /// unavailable. Sign-in pages can reject that getter.
+    PreloadFallback,
     /// The selected backend cannot establish pre-document minimization.
     UnsupportedByBackend,
+}
+
+impl AutomationDisclosureStatus {
+    /// Stable public name. UI, CLI, and MCP use this spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BrowserDefault => "browser_default",
+            Self::CommonSignalsMinimized => "common_signals_minimized",
+            Self::PreloadFallback => "preload_fallback",
+            Self::UnsupportedByBackend => "unsupported_by_backend",
+        }
+    }
+}
+
+/// Status a session can publish after startup. Minimized local Firefox reports
+/// the native clear and the preload getter as different outcomes.
+#[must_use]
+pub(crate) fn established_disclosure_status(
+    policy: AutomationDisclosurePolicy,
+    backend: crate::BackendKind,
+    firefox_bidi: bool,
+    native_cleared: bool,
+) -> AutomationDisclosureStatus {
+    if firefox_bidi && policy == AutomationDisclosurePolicy::MinimizeCommonSignals {
+        if native_cleared {
+            AutomationDisclosureStatus::CommonSignalsMinimized
+        } else {
+            AutomationDisclosureStatus::PreloadFallback
+        }
+    } else {
+        policy.ready_status(backend)
+    }
 }
 
 impl AutomationDisclosurePolicy {
@@ -183,6 +221,35 @@ fn rewrite_headless_chrome_brands(metadata: &serde_json::Map<String, serde_json:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimized_firefox_reports_preload_fallback_until_the_native_flag_clears() {
+        use AutomationDisclosurePolicy::{BrowserDefault, MinimizeCommonSignals};
+        use AutomationDisclosureStatus::{BrowserDefault as DefaultStatus, CommonSignalsMinimized, PreloadFallback};
+
+        let firefox = crate::BackendKind::FirefoxBidi;
+        assert_eq!(
+            established_disclosure_status(MinimizeCommonSignals, firefox, true, true),
+            CommonSignalsMinimized
+        );
+        assert_eq!(
+            established_disclosure_status(MinimizeCommonSignals, firefox, true, false),
+            PreloadFallback
+        );
+        assert_eq!(
+            established_disclosure_status(BrowserDefault, firefox, true, false),
+            DefaultStatus
+        );
+        assert_eq!(
+            established_disclosure_status(MinimizeCommonSignals, firefox, false, false),
+            CommonSignalsMinimized
+        );
+        assert_eq!(PreloadFallback.as_str(), "preload_fallback");
+        assert_eq!(
+            serde_json::to_string(&PreloadFallback).ok().as_deref(),
+            Some("\"preload_fallback\"")
+        );
+    }
 
     #[test]
     fn safari_reports_unsupported_minimization_without_overclaiming() {

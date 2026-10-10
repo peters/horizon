@@ -121,6 +121,11 @@ pub struct BrowserManifest {
     pub panel_local_id: String,
     #[serde(default)]
     pub backend: horizon_browser::BackendKind,
+    /// Disclosure this session established. `preload_fallback` means Firefox
+    /// installed a script getter. `common_signals_minimized` means the native
+    /// Firefox flag clear or Chromium's suppressed automation flag.
+    #[serde(default)]
+    pub automation_disclosure: horizon_browser::AutomationDisclosureStatus,
     /// Configured remote target name when the session runs at a remote grid.
     /// Never an endpoint or a credential; agents see the name only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -732,6 +737,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.panel_local_id = panel_local_id.to_string();
             adopt_driver_host(manifest, host_instance());
             manifest.backend = state.backend;
+            manifest.automation_disclosure = state.automation_disclosure;
             manifest.remote_target.clone_from(&state.remote_target);
             manifest.remote_device.clone_from(&state.remote_device);
             manifest.remote_file_upload = state.remote_file_upload;
@@ -752,6 +758,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     fn update(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
         driver_update(panel_local_id, |manifest| {
             manifest.backend = state.backend;
+            manifest.automation_disclosure = state.automation_disclosure;
             manifest.remote_target.clone_from(&state.remote_target);
             manifest.remote_device.clone_from(&state.remote_device);
             manifest.remote_file_upload = state.remote_file_upload;
@@ -948,6 +955,7 @@ mod tests {
         BrowserManifest {
             panel_local_id: id.to_string(),
             backend: horizon_browser::BackendKind::ChromiumCdp,
+            automation_disclosure: Default::default(),
             remote_target: None,
             remote_device: None,
             remote_file_upload: false,

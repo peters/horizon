@@ -58,6 +58,9 @@ const MAX_COMMAND_BURST: usize = 4;
 #[allow(clippy::struct_excessive_bools)] // independent per-concern driver flags
 struct Driver {
     config: BrowserSessionConfig,
+    /// Disclosure this session established. A Firefox preload getter is not
+    /// reported as a native clear.
+    disclosure_status: crate::AutomationDisclosureStatus,
     host: DriverHost,
     /// Where `close` records what a remote release established, for the
     /// host's teardown signal.
@@ -258,6 +261,18 @@ pub(crate) fn run_webdriver(
     let _ = event_tx.send(BrowserEvent::Stopped { code: None });
 }
 
+fn safari_input_for_host(
+    host: &DriverHost,
+    session_id: &str,
+    backend: crate::BackendKind,
+) -> Result<Option<safari::InputState>, String> {
+    if host.is_remote() {
+        Ok(None)
+    } else {
+        initial_safari_input(host.transport(), session_id, backend)
+    }
+}
+
 impl Driver {
     fn prepare_ready(
         &mut self,
@@ -409,14 +424,12 @@ impl Driver {
             bidi,
             context_id,
             automation_ws,
+            disclosure,
         } = establish_bidi(config, &mut host, &session_id, &capabilities, stop_requested)?;
-        let safari = if host.is_remote() {
-            None
-        } else {
-            initial_safari_input(host.transport(), &session_id, config.browser.backend)?
-        };
+        let safari = safari_input_for_host(&host, &session_id, config.browser.backend)?;
         Ok(Self {
             config: config.clone(),
+            disclosure_status: disclosure,
             host,
             remote_release,
             remote_device,
@@ -563,11 +576,7 @@ impl Driver {
             backend: self.config.browser.backend,
             capabilities,
             bidi: self.bidi.is_some(),
-            automation_disclosure: self
-                .config
-                .browser
-                .automation_disclosure
-                .ready_status(self.config.browser.backend),
+            automation_disclosure: self.disclosure_status,
         }
     }
 

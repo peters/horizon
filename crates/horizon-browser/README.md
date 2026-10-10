@@ -57,7 +57,9 @@ commands are limited to one window. If system access is off, the chrome
 context is unavailable, or neither key pair is already present, Firefox
 falls back to a narrow
 `navigator.webdriver` value shim installed with WebDriver BiDi
-`script.addPreloadScript` before the initial navigation. Startup fails when
+`script.addPreloadScript` before the initial navigation. That session
+reports `AutomationDisclosureStatus::PreloadFallback`. A completed native
+clear reports `CommonSignalsMinimized`. Startup fails when
 that fallback command is rejected, and also when the session cannot return
 from the chrome context. Chromium panels minimizing common signals also use a
 reserved nonzero loopback DevTools port so Chromium does not enable its port-zero

@@ -28,7 +28,16 @@ reveal a helper panel as a workaround. Only when the user explicitly requests
 another independent browser session may you call `browser_create` with
 `allow_additional: true`. Omit `backend` to use Horizon's
 configured browser, or select `chromium`, `firefox`, or `safari` when the
-platform supports it. To run at a configured remote target instead of a
+platform supports it. Read `automation_disclosure` on `browser_list` and
+`browser_panel`. `common_signals_minimized` means the native
+`navigator.webdriver` getter is still native. On Firefox that result needs
+`firefox_system_access: true` and geckodriver 0.37 or newer. The option passes
+geckodriver `--allow-system-access`. Mozilla documents that flag as full
+system access for any local client that can reach the driver port. Leave it
+false unless that privilege is acceptable. `preload_fallback` means Firefox
+installed a script getter that returns false. Sign-in pages can reject that
+getter. The default minimized Firefox session uses that fallback. Chromium
+does not install it. To run at a configured remote target instead of a
 local browser, pass `target` with its name and omit `backend`; Horizon
 resolves the provider and credentials from its configuration, and a
 refusal carries a typed code and at most the target, provider or credential

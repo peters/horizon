@@ -11,6 +11,9 @@ pub(crate) const PREPARE_FAILURE: &str = "failed to clear stale browser coordina
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CoordinationState {
     pub backend: crate::BackendKind,
+    /// Disclosure this session established. A Firefox preload getter is
+    /// `PreloadFallback`, not the same value as a native flag clear.
+    pub automation_disclosure: crate::AutomationDisclosureStatus,
     pub browser_ws: String,
     pub target_id: String,
     pub url: String,

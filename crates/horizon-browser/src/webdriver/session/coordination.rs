@@ -265,6 +265,7 @@ impl Driver {
     fn coordination_state(&self) -> CoordinationState {
         CoordinationState {
             backend: self.config.browser.backend,
+            automation_disclosure: self.disclosure_status,
             browser_ws: self.automation_ws.clone(),
             target_id: self.context_id.clone().unwrap_or_default(),
             url: self.url.clone(),

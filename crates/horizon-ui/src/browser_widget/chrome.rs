@@ -187,9 +187,19 @@ fn backend_picker(
                 }
             });
     });
-    if let Some(hint) = remote_hint {
+    let disclosure = browser
+        .active_backend_capabilities()
+        .map(|active| active.automation_disclosure.as_str());
+    let hint = match (disclosure, remote_hint) {
+        (Some(status), Some(remote)) => format!("{status}. {remote}"),
+        (Some(status), None) => status.to_string(),
+        (None, Some(remote)) => remote.to_string(),
+        (None, None) => String::new(),
+    };
+    if !hint.is_empty() {
         // The configured target fixes the browser; the picker stays visible
-        // so the family is still readable, but never actionable.
+        // so the family is still readable, but never actionable. The
+        // disclosure name says whether Firefox kept the native getter.
         picker.response.on_hover_text(hint);
     }
     if selected == previous {

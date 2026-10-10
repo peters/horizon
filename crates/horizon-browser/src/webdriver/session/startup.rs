@@ -182,6 +182,7 @@ pub(super) struct BidiLink {
     pub(super) bidi: Option<JsonWsLink>,
     pub(super) context_id: Option<String>,
     pub(super) automation_ws: String,
+    pub(super) disclosure: crate::AutomationDisclosureStatus,
 }
 
 /// Connect the `BiDi` channel a local browser advertised. A remote grid may
@@ -274,10 +275,17 @@ pub(super) fn establish_bidi(
         context_id = None;
     }
     let automation_ws = bidi.as_ref().and(ws_url).unwrap_or_default().to_string();
+    let disclosure = crate::disclosure::established_disclosure_status(
+        config.browser.automation_disclosure,
+        config.browser.backend,
+        firefox_bidi,
+        native_flag_cleared,
+    );
     Ok(BidiLink {
         bidi,
         context_id,
         automation_ws,
+        disclosure,
     })
 }
 

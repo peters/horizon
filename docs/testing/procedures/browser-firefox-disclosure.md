@@ -67,6 +67,7 @@ It also tests the preload fallback and one synthetic sign-in check.
    Result: The test passes. The page title is `false native`.
    The live test sets `firefox_system_access` to true.
    That title requires geckodriver 0.37 or newer.
+   The panel reports `automation_disclosure` as `common_signals_minimized`.
 
 ### 6.2 LAUNCH-POLICY — Both disclosure policies
 
