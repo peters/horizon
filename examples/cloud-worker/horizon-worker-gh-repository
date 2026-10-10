@@ -1,6 +1,6 @@
 """Which GitHub repository a gh invocation targets, for the gh wrapper of
 horizon-worker-git-auth: from --repo/-R, GH_REPO, the working directory's origin or what the
-arguments imply. A module that horizon-worker-git-auth loads, not a command."""
+arguments imply; and which binding answers a Git credential request. A module that horizon-worker-git-auth loads, not a command."""
 import re
 import subprocess
 import sys
@@ -129,6 +129,24 @@ def gh_repository(env, argv):
         return None
     return repository
 
+
+def same_repository(requested, repository):
+    """ASCII-only comparison: Unicode case folding would let another path match."""
+    return requested.isascii() and requested.lower() == repository.lower()
+
+
+def credential_reply(entries, request):
+    """Only the exactly requested HTTPS repository receives its own Git credential."""
+    fields = dict(line.split('=', 1) for line in request.splitlines() if '=' in line)
+    path = fields.get('path', '')
+    if path.endswith('.git'):
+        path = path[:-4]
+    if fields.get('protocol') != 'https' or fields.get('host') != 'github.com':
+        return ''
+    for entry in entries or ():
+        if same_repository(path, entry['repository']):
+            return 'username=x-access-token\npassword=' + entry['token'] + '\n\n'
+    return ''
 
 if __name__ == '__main__':
     sys.exit('horizon-worker-gh-repository is a module of horizon-worker-git-auth, not a command.')
