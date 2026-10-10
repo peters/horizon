@@ -5,6 +5,7 @@ import fcntl
 import io
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -103,7 +104,7 @@ class StartTests(ServiceTestCase):
             server, git_proxy = service.start(self.store, path, sleep=waits.append, proxy=proxy,
                                               authority=self.root / 'ca.pem')
         self.addCleanup(server.close)
-        self.addCleanup(git_proxy.server.close)
+        self.addCleanup(git_proxy.close)
         self.assertTrue(path.exists())
         self.assertEqual(git_proxy.server.getsockname()[0], '127.0.0.1')
         self.assertIn('BEGIN CERTIFICATE', (self.root / 'ca.pem').read_text())
@@ -125,6 +126,28 @@ class StartTests(ServiceTestCase):
         self.assertIn('GitHub access cannot start: OSError', output.getvalue())
         self.assertEqual(prepared, [], 'repositories are never sent to a port the service does not hold')
         self.assertFalse(path.exists())
+
+    def test_git_is_routed_only_to_a_proxy_that_answers(self):
+        socket_path = self.root / 'answering.sock'
+        probe = service.gitproxy.listen(('127.0.0.1', 0))
+        address = probe.getsockname()
+        probe.close()
+        answers = []
+
+        def prepare():
+            # Git routed now reaches the proxy at once: here a refusal for this test account.
+            with socket.create_connection(address, timeout=10) as client:
+                client.sendall(b'CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n')
+                answers.append(client.recv(64))
+        isolated = self.root / 'isolated'
+        isolated.touch()
+        with mock.patch.object(common, 'AGENT_ISOLATION', isolated):
+            server, git_proxy = service.start(self.store, socket_path, sleep=lambda _: None, prepare=prepare,
+                                              proxy=address, authority=self.root / 'ca.pem')
+        self.addCleanup(server.close)
+        self.addCleanup(git_proxy.close)
+        self.assertEqual(len(answers), 1)
+        self.assertTrue(answers[0].startswith(b'HTTP/1.1 403'), answers)
 
     def test_install_needs_agent_isolation(self):
         source = io.TextIOWrapper(io.BytesIO(json.dumps(installation()).encode()))
@@ -470,7 +493,7 @@ class VolumeCopyTests(ServiceTestCase):
             server, git_proxy = service.start(self.store, socket_path, sleep=lambda _: None, prepare=prepare,
                                               proxy=('127.0.0.1', 0), authority=self.root / 'ca.pem')
         self.addCleanup(server.close)
-        self.addCleanup(git_proxy.server.close)
+        self.addCleanup(git_proxy.close)
         self.assertEqual(seen, [False], 'reconciled once, before the socket existed')
         self.assertTrue(socket_path.exists())
 

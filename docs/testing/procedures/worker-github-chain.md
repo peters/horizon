@@ -424,8 +424,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    ```
 
    Result: Each line shows `uid` 10001. The lines of the socket also show a
-   `pid`, and the lines of the Git proxy show a kind such as `git-push`. The
-   count is `0`.
+   `pid`, and the lines of the Git proxy show a kind such as `git-push` and an
+   `outcome` such as `relayed`. The count is `0`.
 
 ### 6.7 C6: Container recreation
 

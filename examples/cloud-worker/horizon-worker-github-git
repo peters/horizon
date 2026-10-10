@@ -3,7 +3,8 @@ https://github.com/ request through this proxy on 127.0.0.1:47281 (`http.<url>.p
 trusts a certificate authority that the root service makes at each start
 (`http.<url>.sslCAInfo`). The proxy ends the tunnel itself, reads each Git request, and adds
 the cloud's access token only to a request for a repository the caller is granted, so Git never
-holds the token (gh still gets one from the service until the API broker replaces that). A read of another repository goes to GitHub without the token, which
+holds the token. It guards Git only: gh still gets the token from the service until the API
+broker replaces that. A read of another repository goes to GitHub without the token, which
 serves only public repositories; a push to one is refused. Remote URLs stay as they are, so
 gh still recognizes them. A module that horizon-worker-github loads, not a command."""
 import base64
@@ -279,14 +280,28 @@ def read_tunnel(connection):
     return parts[1].decode('ascii', 'replace').lower()
 
 
-class Exchange:
-    """One Git request inside one tunnel."""
+def new_record(request):
+    """The log record of one connection. `granted` is set once a request head with a token
+    went to GitHub; `outcome` is how the connection ended (see OUTCOMES)."""
+    return {'request': request, 'repository': None, 'granted': False, 'outcome': None}
 
-    def __init__(self, store, stream, output, environ, headed, owned=lambda: True):
+
+# relayed: GitHub's reply went to the client in full. refused: the proxy answered itself.
+# unreachable: GitHub could not be reached, and the client was told. client-gone: the client
+# left, timed out or broke its TLS. github-cut: GitHub's reply broke off after it began.
+# failed: an unexpected error.
+OUTCOMES = ('relayed', 'refused', 'unreachable', 'client-gone', 'github-cut', 'failed')
+
+
+class Exchange:
+    """One Git request inside one tunnel. It updates `record` in place, so the log keeps what
+    happened also when the connection ends early."""
+
+    def __init__(self, store, stream, output, environ, headed, owned=lambda: True, record=None):
         self.store, self.stream, self.output, self.environ = store, stream, output, environ
         # `owned` tells whether the allowed account still holds the client end.
         self.headed, self.owned = headed, owned
-        self.record = {'request': 'invalid', 'repository': None, 'granted': False}
+        self.record = record if record is not None else new_record('invalid')
         self.request = None
         # Set once the reply to the client may have begun; no refusal can follow it.
         self.started = False
@@ -317,18 +332,20 @@ class Exchange:
         if chosen.token is not None:
             secrets = (chosen.token, credential(chosen.token).split(' ', 1)[1])
             fields.append(('Authorization', credential(chosen.token)))
-            self.record['granted'] = True
         if data is None:
             relay.continue_if_asked(request, self.output)
-            pieces, length = relay.body(request), request.length
+            # A failed read from the client is ClientGone, never a failure to reach GitHub.
+            pieces, length = relay.from_client(relay.body(request)), request.length
         else:
             pieces, length = [data], len(data)
         target = upstream(self.environ)
         connection = target.connect(TIMEOUT)
         try:
             try:
-                response = relay.send(connection, target, request.method, request.target, fields, pieces, length)
+                response = relay.send(connection, target, request.method, request.target, fields, pieces, length,
+                                      sent=lambda: self.record.update(granted=chosen.token is not None))
             except (OSError, http.client.HTTPException):
+                self.record['outcome'] = 'unreachable'
                 raise refusal(502, 'this worker could not reach GitHub; try again.') from None
             self.reply(response, chosen, kind, secrets)
         finally:
@@ -352,7 +369,13 @@ class Exchange:
         if kind == 'lfs':
             if (response.getheader('Content-Encoding') or 'identity').lower() != 'identity':
                 raise refusal(502, 'the Git LFS reply from GitHub is compressed, so it cannot be examined.')
-            data = response.read(MAX_LFS_REPLY + 1)
+            try:
+                data = response.read(MAX_LFS_REPLY + 1)
+            except (OSError, http.client.HTTPException):
+                data = None
+            if data is None or (response.length and len(data) <= MAX_LFS_REPLY):
+                self.record['outcome'] = 'github-cut'
+                raise refusal(502, 'the Git LFS reply from GitHub broke off.')
             if len(data) > MAX_LFS_REPLY:
                 raise refusal(502, 'the Git LFS reply from GitHub is too large.')
             text = data.decode('latin-1')
@@ -360,6 +383,7 @@ class Exchange:
                 raise refusal(502, 'the Git LFS reply from GitHub held this worker\'s sign-in; it was not passed on.')
         self.started = True
         relay.relay(self.output, response, keep, secrets, data, self.request.version == 'HTTP/1.1')
+        self.record['outcome'] = 'relayed'
 
 
 class Proxy:
@@ -382,20 +406,32 @@ def refuse_tunnel(connection, status):
     connection.sendall(relay.head(status, [('Content-Length', '0')]))
 
 
-def tunnel_exchange(tls, store, environ, headed, owned=lambda: True):
-    """The Git request inside an open tunnel. Returns its log record."""
+# A failure of the client's end of the tunnel.
+CLIENT_ERRORS = (relay.ClientGone, ssl.SSLError, TimeoutError, ConnectionError)
+
+
+def tunnel_exchange(tls, store, environ, headed, owned=lambda: True, record=None):
+    """The Git request inside an open tunnel; updates `record` in place. Returns whether the
+    client got a whole answer, which the tunnel may then end cleanly."""
     with tls.makefile('rb') as stream, tls.makefile('wb') as output:
-        exchange = Exchange(store, stream, output, environ, headed, owned)
+        exchange = Exchange(store, stream, output, environ, headed, owned, record)
+        record = exchange.record
         try:
             exchange.run()
+            return True
         except relay.Refusal as refused:
             if not exchange.started:
+                record['outcome'] = record['outcome'] or 'refused'
                 if exchange.request is not None:
                     relay.drain(exchange.request)
                 relay.refuse(output, refused.status, refused.message)
-        except relay.ClientGone:
-            pass
+                return True
+        except CLIENT_ERRORS:
+            record['outcome'] = 'client-gone'
+        except relay.UpstreamGone:
+            record['outcome'] = 'github-cut'
         except Exception:
+            record['outcome'] = 'failed'
             # Unexpected, such as unreadable storage: Git gets a reason, not an empty reply.
             if not exchange.started:
                 with contextlib.suppress(OSError):
@@ -403,7 +439,7 @@ def tunnel_exchange(tls, store, environ, headed, owned=lambda: True):
             raise
         finally:
             headed()
-        return exchange.record
+        return False
 
 
 def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, tables=TABLES):
@@ -416,7 +452,8 @@ def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, t
     watchdog = threading.Timer(HEAD_SECONDS, cut)
     watchdog.daemon = True
     watchdog.start()
-    record = {'request': 'tunnel', 'repository': None, 'granted': False}
+    # Made here and updated in place, so it is logged however the connection ends.
+    record = new_record('tunnel')
     uid = None
     try:
         connection.settimeout(TIMEOUT)
@@ -424,24 +461,38 @@ def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, t
         with contextlib.suppress(OSError, ValueError):
             uid = socket_owner(connection, tables)
         if uid not in allowed:
+            record['outcome'] = 'refused'
             return refuse_tunnel(connection, 403)
         try:
             tunnel = read_tunnel(connection)
         except relay.Refusal as refused:
+            record['outcome'] = 'refused'
             return refuse_tunnel(connection, refused.status)
         if tunnel != TUNNEL:
+            record['outcome'] = 'refused'
             return refuse_tunnel(connection, 403)
         connection.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
-        current[0] = context.wrap_socket(connection, server_side=True)
+        record['request'] = 'invalid'
+        # wrap_socket detaches `connection`, so the watchdog cuts the TLS socket instead, and
+        # the handshake runs after that, within the client's time for its request head.
+        current[0] = context.wrap_socket(connection, server_side=True, do_handshake_on_connect=False)
         with current[0] as tls:
-            record = tunnel_exchange(tls, store, environ, watchdog.cancel,
-                                     lambda: owner_allowed(tls, (uid,), tables))
-            # close_notify: Git's GnuTLS reports a tunnel that ends without it as an error.
-            tls.settimeout(CLOSE_SECONDS)
-            with contextlib.suppress(OSError, ValueError):
-                tls.unwrap()
-    except (ssl.SSLError, relay.ClientGone, TimeoutError, ConnectionError):
-        pass
+            try:
+                tls.do_handshake()
+            except OSError as error:
+                raise relay.ClientGone() from error
+            # close_notify: Git's GnuTLS reports a tunnel that ends without it as an error. A
+            # reply that broke off gets none, so the client never takes it for a whole one.
+            if tunnel_exchange(tls, store, environ, watchdog.cancel, lambda: owner_allowed(tls, (uid,), tables),
+                               record):
+                tls.settimeout(CLOSE_SECONDS)
+                with contextlib.suppress(OSError, ValueError):
+                    tls.unwrap()
+    except CLIENT_ERRORS:
+        record['outcome'] = record['outcome'] or 'client-gone'
+    except Exception:
+        record['outcome'] = record['outcome'] or 'failed'
+        raise
     finally:
         watchdog.cancel()
         with contextlib.suppress(OSError):

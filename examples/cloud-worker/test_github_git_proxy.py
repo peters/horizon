@@ -32,14 +32,20 @@ class FakeGitHub(http.server.ThreadingHTTPServer):
 
     def __init__(self, root):
         super().__init__(('127.0.0.1', 0), GitHandler)
-        self.root, self.seen = root, []
-        # How Git replies end: `length`, `chunked`, or `close` (the end of the connection).
+        # `heads`: each request's path once its head arrived, before its body.
+        self.root, self.seen, self.heads = root, [], []
+        # How Git replies end: `length`, `chunked`, `close` (the end of the connection), or
+        # `cut`: the connection ends before the announced length.
         self.framing = 'length'
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
     @property
     def url(self):
         return 'http://127.0.0.1:%d' % self.server_address[1]
+
+    def handle_error(self, request, client_address):
+        # A client that the proxy cut off on purpose is not an error of the fake.
+        pass
 
 
 class GitHandler(http.server.BaseHTTPRequestHandler):
@@ -65,6 +71,7 @@ class GitHandler(http.server.BaseHTTPRequestHandler):
         path, _, query = self.path.partition('?')
         repository = '/'.join(path.split('/')[1:3]).removesuffix('.git')
         authorization = self.headers.get('Authorization')
+        self.server.heads.append(path)
         data, chunked = self.body()
         self.server.seen.append((self.command, path, authorization, chunked))
         expected = ['Basic ' + base64.b64encode(('x-access-token:' + token).encode()).decode()
@@ -115,6 +122,8 @@ class GitHandler(http.server.BaseHTTPRequestHandler):
             self.send_header(*field)
         if self.server.framing == 'length':
             self.send_header('Content-Length', str(len(payload)))
+        elif self.server.framing == 'cut':
+            self.send_header('Content-Length', str(len(payload) + 100))
         elif self.server.framing == 'chunked':
             self.send_header('Transfer-Encoding', 'chunked')
             self.send_header('Connection', 'close')
@@ -145,7 +154,10 @@ def bind_static(path, *repositories):
 
 @unittest.skipUnless(shutil.which('git') and shutil.which('openssl') and Path('/proc/net/tcp').exists(),
                      'needs Git, OpenSSL and Linux /proc')
-class GitProxyTests(ServiceTestCase):
+class ProxyTestCase(ServiceTestCase):
+    """A real proxy with its own authority, served to the test's account, in front of a fake
+    GitHub with the repositories in PRIVATE and example/public."""
+
     def setUp(self):
         super().setUp()
         self.install()
@@ -201,6 +213,45 @@ class GitProxyTests(ServiceTestCase):
         git('commit', '-q', '--allow-empty', '-m', 'change', cwd=worktree, env=env)
         return git('push', '-q', 'origin', 'HEAD:main', cwd=worktree, env=env, check=False)
 
+    def tunnel(self, target=b'github.com:443', ragged=True):
+        """A connection with an open tunnel to the proxy's github.com, or the refusal. Unless
+        `ragged`, a TLS end without close_notify raises."""
+        connection = socket.create_connection(self.server.getsockname(), timeout=10)
+        connection.sendall(b'CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (target, target))
+        head = b''
+        while not head.endswith(b'\r\n\r\n'):
+            byte = connection.recv(1)
+            if not byte:
+                break
+            head += byte
+        if not head.startswith(b'HTTP/1.1 200'):
+            connection.close()
+            return head
+        client = ssl.create_default_context(cafile=str(self.authority))
+        return client.wrap_socket(connection, server_hostname='github.com', suppress_ragged_eofs=ragged)
+
+    def exchange(self, raw):
+        with self.tunnel() as connection:
+            connection.sendall(raw)
+            data = b''
+            with contextlib.suppress(ssl.SSLError):
+                while chunk := connection.recv(65536):
+                    data += chunk
+        return data
+
+    def records(self, count=1, seconds=5):
+        """The proxy's log records once at least `count` were written: each connection logs
+        after its client sees the end."""
+        log = self.store.runtime / service.agents.LOG
+        deadline = time.monotonic() + seconds
+        while True:
+            lines = log.read_text().splitlines() if log.exists() else []
+            if len(lines) >= count or time.monotonic() > deadline:
+                return [json.loads(line) for line in lines]
+            time.sleep(0.05)
+
+
+class GitProxyTests(ProxyTestCase):
     def test_git_fetches_and_pushes_granted_repositories_with_a_token_it_never_sees(self):
         env = self.routed()
         result, project = self.clone('example/project', env)
@@ -363,31 +414,6 @@ class GitProxyTests(ServiceTestCase):
         self.assertEqual(refused.exception.status, 403)
         self.assertEqual(exchange.record['granted'], False)
         self.assertEqual(self.github.seen, [])
-
-    def tunnel(self, target=b'github.com:443'):
-        """A connection with an open tunnel to the proxy's github.com, or the refusal."""
-        connection = socket.create_connection(self.server.getsockname(), timeout=10)
-        connection.sendall(b'CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (target, target))
-        head = b''
-        while not head.endswith(b'\r\n\r\n'):
-            byte = connection.recv(1)
-            if not byte:
-                break
-            head += byte
-        if not head.startswith(b'HTTP/1.1 200'):
-            connection.close()
-            return head
-        client = ssl.create_default_context(cafile=str(self.authority))
-        return client.wrap_socket(connection, server_hostname='github.com')
-
-    def exchange(self, raw):
-        with self.tunnel() as connection:
-            connection.sendall(raw)
-            data = b''
-            with contextlib.suppress(ssl.SSLError):
-                while chunk := connection.recv(65536):
-                    data += chunk
-        return data
 
     def test_requests_that_parsers_could_read_differently_or_that_leave_the_repository_are_refused(self):
         def request(target, *fields, method=b'GET', body=b''):

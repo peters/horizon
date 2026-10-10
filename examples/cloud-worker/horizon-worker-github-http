@@ -1,6 +1,6 @@
-"""Strict HTTP/1.1 pieces that the worker's GitHub relays share: one request from a local
-client, its body as it arrives, the request to GitHub and GitHub's reply relayed back. Every
-connection carries one request. A module that horizon-worker-github loads, not a command."""
+"""Strict HTTP pieces that the worker's GitHub relays share: one HTTP/1.1 or HTTP/1.0
+request from a local client, its body as it arrives, the request to GitHub and GitHub's reply
+relayed back. Every connection carries one request. A module that horizon-worker-github loads, not a command."""
 import contextlib
 import http.client
 import re
@@ -31,7 +31,21 @@ class Refusal(Exception):
 
 
 class ClientGone(Exception):
-    """The client closed its connection or sent less than it announced."""
+    """The client closed its connection, sent less than it announced, timed out or broke
+    its TLS."""
+
+
+class UpstreamGone(Exception):
+    """GitHub's reply failed or ended early after the relay began to pass it on."""
+
+
+def from_client(pieces):
+    """`pieces` of a request body, with a failed read from the client raised as ClientGone,
+    so that it is not taken for a failure of GitHub."""
+    try:
+        yield from pieces
+    except OSError as error:
+        raise ClientGone() from error
 
 
 class Request:
@@ -185,9 +199,10 @@ class Upstream:
         return http.client.HTTPConnection(self.host, self.port, timeout=timeout)
 
 
-def send(connection, upstream, method, target, fields, pieces, length):
+def send(connection, upstream, method, target, fields, pieces, length, sent=None):
     """Sends one request with exactly `fields`, the Host field and the body framing; returns
-    the reply. `length` is the body's size, or None to send it chunked as it arrives."""
+    the reply. `length` is the body's size, or None to send it chunked as it arrives. `sent`
+    is called once the request head went out."""
     connection.putrequest(method, target, skip_host=True, skip_accept_encoding=True)
     connection.putheader('Host', upstream.host)
     for name, value in fields:
@@ -195,6 +210,8 @@ def send(connection, upstream, method, target, fields, pieces, length):
     if length is None:
         connection.putheader('Transfer-Encoding', 'chunked')
         connection.endheaders()
+        if sent is not None:
+            sent()
         for piece in pieces:
             connection.send(b'%X\r\n%s\r\n' % (len(piece), piece))
         connection.send(b'0\r\n\r\n')
@@ -202,6 +219,8 @@ def send(connection, upstream, method, target, fields, pieces, length):
         if length or method not in ('GET', 'HEAD'):
             connection.putheader('Content-Length', str(length))
         connection.endheaders()
+        if sent is not None:
+            sent()
         for piece in pieces:
             connection.send(piece)
     return connection.getresponse()
@@ -234,11 +253,26 @@ def reply_fields(response, keep, secrets=()):
     return fields
 
 
+def upstream_piece(response):
+    """The next piece of GitHub's reply as it arrives, or b'' at its end. Raises UpstreamGone
+    when the reply fails or ends before its announced length."""
+    try:
+        # read1 hands on what has arrived, so Git's progress and keepalives are not held back.
+        piece = response.read1(PIECE)
+    except (OSError, http.client.HTTPException) as error:
+        raise UpstreamGone() from error
+    if not piece and response.length:
+        raise UpstreamGone()
+    return piece
+
+
 def relay(output, response, keep, secrets=(), data=None, chunked=True):
     """Writes GitHub's reply to the client: status, kept fields and the body, which is `data`
     when the caller already read it. A body of unknown length goes chunked when `chunked` (an
     HTTP/1.1 client), so the client sees where it ends; an HTTP/1.0 client reads to the end of
-    the connection."""
+    the connection. Raises ClientGone when the client cannot take the reply, and UpstreamGone
+    when GitHub's reply breaks off; the reply then has no end, so the client sees that it is
+    cut."""
     fields = reply_fields(response, keep, secrets)
     if data is not None:
         fields.append(('Content-Length', str(len(data))))
@@ -247,20 +281,19 @@ def relay(output, response, keep, secrets=(), data=None, chunked=True):
         chunked = False
     elif chunked:
         fields.append(('Transfer-Encoding', 'chunked'))
-    output.write(head(response.status, fields, response.reason))
-    if data is not None:
-        output.write(data)
-    else:
-        # read1 hands on what has arrived, so Git's progress and keepalives are not held back.
-        while True:
-            piece = response.read1(PIECE)
-            if not piece:
-                break
-            output.write(b'%X\r\n%s\r\n' % (len(piece), piece) if chunked else piece)
-            output.flush()
-        if chunked:
-            output.write(b'0\r\n\r\n')
-    output.flush()
+    try:
+        output.write(head(response.status, fields, response.reason))
+        if data is not None:
+            output.write(data)
+        else:
+            while piece := upstream_piece(response):
+                output.write(b'%X\r\n%s\r\n' % (len(piece), piece) if chunked else piece)
+                output.flush()
+            if chunked:
+                output.write(b'0\r\n\r\n')
+        output.flush()
+    except OSError as error:
+        raise ClientGone() from error
 
 
 if __name__ == '__main__':

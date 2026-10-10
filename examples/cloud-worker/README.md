@@ -758,7 +758,8 @@ to GitHub through the service's Git proxy, which adds the current access token
 only to requests for the repositories that you granted. A static token file stays
 as a fallback for the repositories that the GitHub App does not reach, and the
 proxy adds its token for those repositories. The `gh` wrapper still gets the
-access token of a granted repository from the service.
+full access token from the service for any granted repository, so for now the
+proxy guards Git only (see **Agent access** below).
 
 A GitHub App user access token lasts 8 hours. Its refresh token lasts about six
 months. Each refresh gives a new access token and a new refresh token, and GitHub
@@ -872,8 +873,8 @@ Horizon in that case.
 authority, writes its certificate to `/run/horizon-worker/github-ca.pem` and
 deletes its key at once. It keeps a `github.com` certificate from that authority
 in its private runtime directory. It holds `127.0.0.1:47281` from its first
-start attempt. Then, before it opens its socket, the Git helper routes Git as the
-agent user (`horizon-worker-git-auth route`). It writes the route to
+start attempt and answers there before Git is routed to it. Then, before the
+service opens its socket, the Git helper routes Git as the agent user (`horizon-worker-git-auth route`). It writes the route to
 `/workspace/home/.config/git/horizon-route` and adds that file once as an
 `include.path` of the agent's global Git configuration:
 
@@ -905,9 +906,11 @@ The proxy does these steps for each connection:
   another configuration and never comes here. It does this before it reads a
   byte, and it does it again before it sends anything to GitHub.
 - It accepts only `CONNECT github.com:443` and ends the TLS of the tunnel itself.
-  A client has 30 seconds to send the request head. At most 32 connections are
+  A client has 30 seconds for the tunnel request, the TLS handshake and the
+  request head together. At most 32 connections are
   served at the same time.
-- It accepts one strict HTTP/1.1 request in the tunnel for the host `github.com`.
+- It accepts one strict HTTP/1.1 or HTTP/1.0 request in the tunnel for the host
+  `github.com`.
   It refuses an absolute URL, a folded or non-ASCII field, a body with two
   lengths or a transfer coding other than `chunked`.
 - It accepts only the Git and Git LFS requests of one repository: `info/refs`
@@ -935,13 +938,24 @@ The proxy does these steps for each connection:
   a password. Git shows each refusal as `remote: Horizon: ...`.
 - It passes on GitHub's reply as it arrives, so Git shows its progress. A reply
   without a length goes to Git in chunks, and the proxy ends the TLS of the
-  tunnel with `close_notify`, so Git sees where the reply ends. It never
-  passes on a reply field that holds the token, and it refuses an LFS reply that
-  holds the token.
+  tunnel with `close_notify`, so Git sees where the reply ends. When GitHub's
+  reply breaks off, the tunnel ends without `close_notify`, so Git reports an
+  error instead of a short reply. It never passes on a reply field that holds
+  the token, and it refuses an LFS reply that holds the token.
 
-The proxy writes one line for each request to the request log below. The line
-has the kind (`git-read`, `git-push`, `lfs-read` or `lfs-push`), the repository,
-the user ID and whether the proxy added the token.
+The proxy writes one line for each connection to the request log below, also
+when the client or GitHub ends it early. The line has these fields:
+
+- `request`: the kind. `git-read`, `git-push`, `lfs-read` or `lfs-push` for a
+  request whose access is known; `lfs` for an LFS batch request that was
+  refused before its operation was read; `tunnel` for a connection that did not
+  get a tunnel; `invalid` for a tunnel without a valid Git request.
+- `repository`, `uid` and `at` (the time).
+- `granted`: `true` when a request with a token went to GitHub.
+- `outcome`: `relayed` (GitHub's reply went to Git in full), `refused` (the
+  proxy answered itself), `unreachable` (GitHub could not be reached),
+  `client-gone` (the client left, timed out or broke its TLS), `github-cut`
+  (GitHub's reply broke off) or `failed` (an unexpected error).
 
 **Agent access.** Agents ask the service on `/run/horizon-worker/github.sock`.
 The socket accepts every local account, but the service reads the caller's user
@@ -967,9 +981,15 @@ chooses the repository as described above. When it refuses a nested `gh`, it
 removes the `GH_TOKEN` that an outer wrapped `gh` injected, but keeps every token
 variable that you set yourself.
 
-For Git, `access: "read"` is enforced: the proxy refuses each push. For `gh`, it
-is a routing guard: `gh` gets the same token for a read and a write. The token
-can do what the GitHub App and your account allow on that repository. A process
+For Git through the proxy, `access: "read"` is enforced: the proxy refuses each
+push. **Until the API broker of issue #1393 is done, the proxy guards Git only.**
+`gh-token` gives the chain's full access token for every granted repository, and
+`read` is only a routing guard there: `gh` gets the same token for a read and a
+write. That token is not limited to one repository. It can do what the GitHub
+App and your account allow on every repository that the App reaches. An agent
+can read it with `gh auth token` and then use it with `curl`, or with
+`git -c http.proxy=` past the proxy. Grant the GitHub App only the repositories
+that every agent of the cloud may use. A process
 that keeps `GH_TOKEN` in its environment for more than 8 hours uses an expired
 token; start `gh` again to get the current one.
 

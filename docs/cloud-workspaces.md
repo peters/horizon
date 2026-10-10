@@ -337,8 +337,10 @@ cloud** and **Deny**. The worker checks that the app reaches the repository
 before it allows anything.
 
 Access is per cloud. Every agent session of a cloud can use each repository the
-cloud has access to. Put work that must not reach a repository in a cloud without
-access to it.
+cloud has access to. The Git proxy limits Git only. `gh` still gets the full
+access token, and an agent can use that token outside `gh` for every repository
+that the app reaches. Put work that must not reach a repository in a cloud without
+access to it, and install the app only on the repositories that agents may use.
 
 **Disconnect** stops new clouds from getting access. It does not end the access
 of running clouds: delete the app on GitHub for that. Deleting the app ends every
