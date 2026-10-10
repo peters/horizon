@@ -174,6 +174,11 @@ On Unix, credential reads reject a directory that another user owns or can acces
 Save checks the current saved account again. If another window changes or signs
 out that account, reopen settings before saving. An uncertain sign-out clears
 the card's cached account status until settings load it again.
+Empty access and refresh tokens are rejected before storage.
+A private journal lets Horizon recover an interrupted sign-in publication.
+It restores the previous account selection if the credential write did not finish.
+Refresh waits for the provider's earliest time. A refused or malformed response
+does not change the saved token pair.
 
 - Git and `gh` work without a token in the environment. The worker's root service
   answers for the cloud's repositories and its same-worker siblings. Agents never

@@ -15,6 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod refresh;
+
 const AUTHORIZE_URL: &str = "https://auth.openai.com/api/accounts/authorize";
 const TOKEN_URL: &str = "https://auth.openai.com/api/accounts/oauth/token";
 const RESOURCE: &str = "https://api.openai.com/v1";
@@ -384,8 +386,7 @@ fn finish(root: &Path, attempt: &Attempt, callback: Callback, cancel: &Cancellat
             .map_or(0, |age| i64::try_from(age.as_secs()).unwrap_or(0)),
     };
     cancel.check().map_err(|_| Error::Declined)?;
-    store::save(root, &stored)?;
-    store::set_active(root, &client_id)?;
+    store::activate(root, &stored)?;
     Ok(super::Connection::from(stored))
 }
 
@@ -397,9 +398,9 @@ fn requested_scopes() -> Vec<String> {
 
 #[derive(serde::Deserialize)]
 struct TokenResponse {
-    #[serde(deserialize_with = "store::protected_string")]
+    #[serde(deserialize_with = "nonempty_string")]
     access_token: zeroize::Zeroizing<String>,
-    #[serde(default, deserialize_with = "store::protected_token")]
+    #[serde(default, deserialize_with = "nonempty_token")]
     refresh_token: Option<zeroize::Zeroizing<String>>,
     #[serde(default, deserialize_with = "store::protected_token")]
     id_token: Option<zeroize::Zeroizing<String>>,
@@ -411,6 +412,26 @@ struct TokenResponse {
     scope: Option<String>,
     #[serde(default)]
     earliest_refresh_at: Option<i64>,
+}
+
+fn nonempty_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<zeroize::Zeroizing<String>, D::Error> {
+    let token = store::protected_string(deserializer)?;
+    if token.trim().is_empty() {
+        return Err(serde::de::Error::custom("an access token must not be empty"));
+    }
+    Ok(token)
+}
+
+fn nonempty_token<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<zeroize::Zeroizing<String>>, D::Error> {
+    let token = store::protected_token(deserializer)?;
+    if token.as_ref().is_some_and(|token| token.trim().is_empty()) {
+        return Err(serde::de::Error::custom("a refresh token must not be empty"));
+    }
+    Ok(token)
 }
 
 /// Exchanges the authorization code for tokens at the token endpoint. No client
@@ -482,52 +503,7 @@ fn revoke(refresh_token: &str, client_id: &str) -> Option<bool> {
 /// # Errors
 /// The registration has no refresh token, or the token endpoint refused the refresh.
 pub(super) fn refresh(root: &Path, client_id: &str) -> Result<()> {
-    let _lock = store::session_lock(root)?;
-    let record = store::registration(root, client_id)?.ok_or(Error::Missing)?;
-    // Rotating before the provider allows it can invalidate the grant, so the stored
-    // earliest time holds the request.
-    if let Some(not_before) = record.earliest_refresh_at
-        && not_before > store::now_unix()
-    {
-        return Err(Error::Invalid("the session is not refreshable yet"));
-    }
-    let refresh_token = record
-        .refresh_token
-        .as_ref()
-        .ok_or(Error::Invalid("The connection has no refresh token"))?;
-    let form = [
-        ("grant_type", "refresh_token"),
-        ("client_id", client_id),
-        ("refresh_token", refresh_token.as_str()),
-        ("resource", RESOURCE),
-    ];
-    let response = ureq::post(TOKEN_URL)
-        .config()
-        .timeout_global(Some(Duration::from_secs(30)))
-        .http_status_as_error(false)
-        .build()
-        .send_form(form)
-        .map_err(|error| Error::Provider(error.to_string()))?;
-    let status = response.status();
-    if !(200..300).contains(&status.as_u16()) {
-        return Err(Error::Provider(format!("the sign-in service answered {status}")));
-    }
-    let token: TokenResponse = super::response::read(response.into_body(), "token refresh")?;
-    let rotated = token.refresh_token.as_ref().ok_or_else(|| {
-        Error::Provider("ChatGPT rotated the session without a new refresh token. Sign in again.".into())
-    })?;
-    store::replace_tokens(
-        root,
-        client_id,
-        &token.access_token,
-        rotated,
-        token.expires_in.unwrap_or(3600),
-        token.earliest_refresh_at,
-        token.scope.as_deref().map_or_else(
-            || record.scopes.clone(),
-            |scope| scope.split_whitespace().map(str::to_owned).collect(),
-        ),
-    )
+    refresh::refresh(root, client_id)
 }
 
 #[derive(serde::Deserialize)]
@@ -538,6 +514,20 @@ struct Discovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_token_values_are_malformed_before_a_registration_can_be_written() {
+        for (access, refresh) in [("", "refresh"), ("access", ""), ("  ", "refresh"), ("access", "  ")] {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "access_token": access, "refresh_token": refresh, "id_token": "synthetic-id"
+            }))
+            .unwrap();
+            assert!(matches!(
+                super::super::response::parse::<TokenResponse>(&bytes, "synthetic exchange"),
+                Err(Error::Malformed)
+            ));
+        }
+    }
 
     #[test]
     fn a_pre_cancelled_attempt_does_not_open_the_browser_or_create_credentials() {

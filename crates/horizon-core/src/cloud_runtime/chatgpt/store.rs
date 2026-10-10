@@ -9,8 +9,13 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod activation;
+mod locking;
 #[cfg(windows)]
 mod windows;
+
+pub(super) use activation::activate;
+pub(crate) use locking::SessionLock;
 
 const DIRECTORY: &str = "chatgpt";
 const HOST_ID_FILE: &str = "host_id";
@@ -125,7 +130,7 @@ pub(super) fn protected_string<'de, D: serde::Deserializer<'de>>(
 }
 
 /// Serialize operations which can replace a rotating session's token set.
-pub(super) fn session_lock(root: &Path) -> Result<fs::File> {
+pub(super) fn session_lock(root: &Path) -> Result<SessionLock> {
     let directory = directory(root);
     private_directory(&directory)?;
     let path = directory.join("session.lock");
@@ -147,9 +152,13 @@ pub(super) fn session_lock(root: &Path) -> Result<fs::File> {
     if !file.metadata()?.is_file() {
         return Err(Error::Invalid("the session lock must be a regular file"));
     }
-    file.try_lock()
-        .map_err(|_| Error::Invalid("another sign-in operation is in progress"))?;
-    Ok(file)
+    file.try_lock().map_err(|error| match error {
+        fs::TryLockError::WouldBlock => Error::Invalid("another sign-in operation is in progress"),
+        fs::TryLockError::Error(error) => Error::Io(error),
+    })?;
+    let guard = SessionLock::new(file);
+    activation::recover(root)?;
+    Ok(guard)
 }
 
 /// The serialized form, borrowing the record's tokens so the only encoding happens
@@ -483,6 +492,7 @@ pub(super) fn registration(root: &Path, client_id: &str) -> Result<Option<Record
     if !valid_client_id(client_id) {
         return Err(Error::Invalid("the client ID is not safe in a file name"));
     }
+    activation::ensure_recovered(root)?;
     read_record(&file(root, client_id))
 }
 
@@ -529,6 +539,7 @@ pub(super) fn default_registration(root: &Path) -> Result<Option<Record>> {
 }
 
 fn read_records(root: &Path) -> Result<Vec<Record>> {
+    activation::ensure_recovered(root)?;
     let mut records = Vec::new();
     let directory = directory(root);
     if !directory_exists(&directory)? {

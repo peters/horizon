@@ -165,6 +165,13 @@ Settings save requires a provider. Do not create or deploy a cloud.
 - The settings regression test must reject a stale or fabricated account status.
   The existing API-key settings and key file must remain unchanged.
 - The UI regression test must clear cached account status after an uncertain sign-out.
+- The token-response tests must reject empty access and refresh tokens.
+- The sign-in publication tests must recover an interruption before or after the
+  credential commit. An activation failure must not publish new credentials.
+- The refresh tests must prevent an early provider request. They must replace both
+  tokens on success and preserve the record on a refused or malformed response.
+- The Unix lock test must permit a new operation while a copied descriptor stays
+  open after the preceding operation ends.
 - On Windows, use the system Windows PowerShell installation. The saved
   directory and each credential file must have a protected discretionary
   access control list (DACL). It must grant full control only to the current

@@ -60,7 +60,7 @@ pub fn status(root: &Path) -> Result<Option<Connection>> {
 }
 
 /// Keep the verified current registration stable until settings have committed.
-pub(crate) fn lock_plan(root: &Path, expected_client: Option<&str>) -> Result<std::fs::File> {
+pub(crate) fn lock_plan(root: &Path, expected_client: Option<&str>) -> Result<store::SessionLock> {
     let guard = store::session_lock(root)?;
     let connection = status(root)?.ok_or(Error::Missing)?;
     if Some(connection.client_id.as_str()) != expected_client || !connection.can_use_plan() {
