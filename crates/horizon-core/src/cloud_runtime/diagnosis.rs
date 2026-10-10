@@ -76,6 +76,15 @@ const PUSH_REFUSED: &str = "The registry refused to publish the image. On ghcr.i
 /// the preflight of a saved publishing credential.
 const PUBLISHING: [&str; 2] = ["uploading image", "publishing credential"];
 
+const DOCKER_NOT_RESPONDING: &str = "Docker stopped answering, so its commands wait without end. Restart Docker, then retry.";
+
+/// A name still held after a timed-out create: the client was stopped, the daemon kept
+/// or never finished the container, which a hung daemon does.
+const DOCKER_NAME_IN_USE: &str = "A container from an earlier attempt still has this name. This usually follows a Docker \
+     command that hung and was stopped, so Docker itself may be stuck. Restart Docker, then retry.";
+
+const DOCKER_NOT_RUNNING: &str = "Docker is not running on this computer. Start it, then retry.";
+
 /// A well-known cause: any of `patterns`, and when `context` is not empty, one of
 /// those words in the line or the failure summary too.
 struct Known {
@@ -93,11 +102,16 @@ const fn known(patterns: &'static [&'static str], meaning: &'static str) -> Know
 }
 
 /// Well-known causes, first match wins. Keep patterns lowercase.
-const MEANINGS: [Known; 12] = [
+const MEANINGS: [Known; 14] = [
     known(
         &["no space left on device", "disk full", "disk quota exceeded"],
         "The disk filled up. Free space on this computer or the worker, or grow the workspace.",
     ),
+    known(
+        &["docker is not responding", "docker did not answer"],
+        DOCKER_NOT_RESPONDING,
+    ),
+    known(&["is already in use by container"], DOCKER_NAME_IN_USE),
     known(
         &["permission denied (publickey"],
         "The SSH key was refused. The worker does not trust this cloud's key.",
@@ -162,9 +176,16 @@ const MEANINGS: [Known; 12] = [
     ),
     known(
         &["cannot connect to the docker daemon", "is the docker daemon running"],
-        "Docker is not running on this computer. Start it, then retry.",
+        DOCKER_NOT_RUNNING,
     ),
 ];
+
+/// Whether `meaning` says that Docker itself is stuck or stopped, which restarting
+/// Docker can fix.
+#[must_use]
+pub fn restarts_docker(meaning: &str) -> bool {
+    [DOCKER_NOT_RESPONDING, DOCKER_NAME_IN_USE, DOCKER_NOT_RUNNING].contains(&meaning)
+}
 
 /// How many failure lines before the newest one may explain it.
 const EXPLAINING_LINES: usize = 4;
@@ -513,6 +534,35 @@ mod tests {
             assert!(meaning(line).is_some_and(|text| text.contains(wanted)), "{line}");
         }
         assert_eq!(meaning("everything fine"), None);
+    }
+
+    #[test]
+    fn a_stuck_docker_is_named_rather_than_its_symptom() {
+        const CONFLICT: &str = "docker: Error response from daemon: Conflict. The container name \"/horizon-contract-0b1c\" \
+             is already in use by container \"0123456789ab\". You have to remove (or rename) that container to be able to \
+             reuse that name.";
+        let summary = "worker image contract creation failed; inspect deployment output";
+        let found = diagnose([CONFLICT].into_iter(), summary).unwrap();
+        assert_eq!(found.cause, CONFLICT);
+        assert_eq!(found.meaning, Some(DOCKER_NAME_IN_USE));
+
+        let summary = "Docker is not responding: worker image contract creation did not finish and Docker did not \
+             answer a health check";
+        let found = diagnose(
+            ["Docker did not answer docker version within 5 s"].into_iter(),
+            summary,
+        )
+        .unwrap();
+        assert_eq!(found.cause, "Docker did not answer docker version within 5 s");
+        assert_eq!(found.meaning, Some(DOCKER_NOT_RESPONDING));
+        assert_eq!(meaning(summary), Some(DOCKER_NOT_RESPONDING), "the summary alone says it too");
+
+        for docker in [DOCKER_NOT_RESPONDING, DOCKER_NAME_IN_USE, DOCKER_NOT_RUNNING] {
+            assert!(restarts_docker(docker));
+        }
+        assert!(!restarts_docker(REGISTRY_REFUSED));
+        // A plain timeout is not a stuck Docker.
+        assert!(!meaning("Local operation timed out").is_some_and(restarts_docker));
     }
 
     #[test]
