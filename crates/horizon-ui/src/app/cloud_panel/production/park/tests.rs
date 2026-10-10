@@ -578,6 +578,11 @@ impl Parking {
         self.statuses = statuses.into_iter().map(|status| (status.id.clone(), status)).collect();
     }
 
+    /// Attaches the terminals of the cloud, as when it became ready in view.
+    pub(in crate::app::cloud_panel::production) fn attach_for_test(&mut self) {
+        self.tracker = Some(ParkTracker::attached());
+    }
+
     /// As [`Parking::park_with`], from a read that started at `started`.
     pub(in crate::app::cloud_panel::production) fn read_with(
         &mut self,
