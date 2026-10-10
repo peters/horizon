@@ -72,8 +72,9 @@ const PUSH_REFUSED: &str = "The registry refused to publish the image. On ghcr.i
      another registry, add a publishing credential for its image repository in Cloud settings › Container \
      registry. Then retry.";
 
-/// The summary of a failed image push.
-const PUSHING: &str = "uploading image";
+/// Words of the summaries that a publishing credential fails: a failed image push, and
+/// the preflight of a saved publishing credential.
+const PUBLISHING: [&str; 2] = ["uploading image", "publishing credential"];
 
 /// A well-known cause: any of `patterns`, and when `context` is not empty, one of
 /// those words in the line or the failure summary too.
@@ -107,6 +108,9 @@ const MEANINGS: [Known; 12] = [
             "from registry: unauthorized",
             "from registry: unauthenticated",
             "requested access to the resource is denied",
+            // Docker's words for a push to a registry that wants a login it does not have.
+            "push access denied",
+            "no basic auth credentials",
         ],
         REGISTRY_REFUSED,
     ),
@@ -220,10 +224,31 @@ pub fn meaning_in(line: &str, summary: &str) -> Option<&'static str> {
         })
         .map(|known| known.meaning);
     // A registry refusal while the image uploads is a missing publishing login.
-    if meaning == Some(REGISTRY_REFUSED) && summary.contains(PUSHING) {
+    if meaning == Some(REGISTRY_REFUSED) && PUBLISHING.iter().any(|word| summary.contains(word)) {
         return Some(PUSH_REFUSED);
     }
     meaning
+}
+
+/// What fixes a well-known cause where a retry alone fails again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Remedy {
+    /// A publishing credential for the image repository in Cloud settings › Container
+    /// registry, for a refused push.
+    PublishingLogin,
+    /// A worker pull credential for the image repository in Cloud settings › Container
+    /// registry, for a refused pull.
+    PullLogin,
+}
+
+/// The fix for a failure whose meaning is `meaning`, when Horizon offers one.
+#[must_use]
+pub fn remedy(meaning: &str) -> Option<Remedy> {
+    match meaning {
+        PUSH_REFUSED => Some(Remedy::PublishingLogin),
+        REGISTRY_REFUSED => Some(Remedy::PullLogin),
+        _ => None,
+    }
 }
 
 /// Whether a line reports a failure rather than progress or a retry.
@@ -332,6 +357,44 @@ mod tests {
         .meaning
         .unwrap();
         assert_eq!(pull, REGISTRY_REFUSED);
+    }
+
+    #[test]
+    fn a_registry_refusal_is_fixed_by_a_login_and_other_causes_by_a_retry() {
+        let lines = ["error from registry: unauthenticated: User cannot be authenticated with the token provided."];
+        for (summary, fix) in [
+            (SUMMARY, Remedy::PublishingLogin),
+            (
+                "Publishing credential preflight failed; check the saved login, repository push permissions and registry connectivity before retrying",
+                Remedy::PublishingLogin,
+            ),
+            (
+                "Worker pull credential preflight failed; check the saved login, repository permissions and registry connectivity before retrying",
+                Remedy::PullLogin,
+            ),
+            ("Readiness failed", Remedy::PullLogin),
+        ] {
+            let meaning = diagnose(lines.into_iter(), summary).unwrap().meaning.unwrap();
+            assert_eq!(remedy(meaning), Some(fix), "{summary}");
+        }
+        let without_login = [
+            "push access denied, repository does not exist or may require authorization: authorization failed: \
+             no basic auth credentials",
+        ];
+        let meaning = diagnose(without_login.into_iter(), SUMMARY).unwrap().meaning.unwrap();
+        assert_eq!(meaning, PUSH_REFUSED);
+        assert_eq!(remedy(meaning), Some(Remedy::PublishingLogin));
+        for line in [
+            "write /var/lib/docker: no space left on device",
+            "provider API: unauthorized",
+            "dial tcp: lookup registry.invalid: no such host",
+        ] {
+            let meaning = diagnose([line].into_iter(), "Requesting a worker failed")
+                .unwrap()
+                .meaning
+                .unwrap();
+            assert_eq!(remedy(meaning), None, "{line}");
+        }
     }
 
     #[test]
