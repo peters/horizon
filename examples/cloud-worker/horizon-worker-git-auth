@@ -293,7 +293,8 @@ def install_as_root(value, agent=None):
         found = os.fstat(legacy.fileno())
         if stat.S_ISREG(found.st_mode) and found.st_uid == AGENT_UID:
             legacy.truncate(0)
-    with contextlib.suppress(IsADirectoryError, PermissionError):
+    # Any failure but a directory there stops the install before the agent step.
+    with contextlib.suppress(IsADirectoryError):
         CREDENTIAL.unlink(missing_ok=True)
     agent = agent or (lambda operation, data: subprocess.run(
         [*AGENT_RUNNER, operation], input=json.dumps(data).encode(), check=True, cwd='/workspace',
@@ -305,8 +306,7 @@ def install_as_root(value, agent=None):
         agent('install-identity', {'binding': stripped(value), 'previous': previous})
         write_private(value, ROOT_CREDENTIAL)
     except BaseException:
-        # Identities and token go back to one binding: the root-only one, else the earlier one,
-        # also when the agent step failed part way.
+        # Back to one binding (root-only, else earlier), also after a partial agent step.
         if kept is not None and kept is earlier and not ROOT_CREDENTIAL.exists():
             with contextlib.suppress(ValueError, OSError):
                 write_private(earlier, ROOT_CREDENTIAL)
