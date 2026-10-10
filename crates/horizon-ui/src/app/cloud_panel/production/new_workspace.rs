@@ -11,12 +11,14 @@ use horizon_core::{
 use std::path::PathBuf;
 
 /// The workspace New workspace made for the cloud, and what it asked for.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Intent {
     workspace: WorkspaceId,
-    /// Cloud GPU: the first GPU profile whenever a repository's profiles arrive without the
-    /// person's pick among them.
+    /// Cloud GPU: the first GPU profile of each repository the dialog reads.
     gpu: bool,
+    /// The repository Cloud GPU last chose a profile for. A reread of it keeps the person's
+    /// pick; another repository gets its own GPU profile.
+    chosen_for: Option<String>,
     /// Cloud GPU found no GPU profile, so the dialog says the cloud runs on a CPU worker.
     no_gpu: bool,
 }
@@ -30,6 +32,7 @@ impl HorizonApp {
             form.new_workspace = Some(Intent {
                 workspace,
                 gpu,
+                chosen_for: None,
                 no_gpu: false,
             });
         }
@@ -94,10 +97,16 @@ impl HorizonApp {
     }
 }
 
-/// The profile Cloud GPU asked for in `config`: its first GPU profile. With none, the dialog
-/// keeps the default and says so.
+/// The profile Cloud GPU asks for in `config`, read for the dialog's repository: its first
+/// GPU profile, once for each repository, so a reread keeps the person's pick. With none,
+/// the dialog keeps its profile and says the cloud runs on a CPU worker.
 pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option<String> {
+    let repository = form.repository.clone();
     let intent = form.new_workspace.as_mut().filter(|intent| intent.gpu)?;
+    if intent.chosen_for.as_deref() == Some(repository.as_str()) {
+        return None;
+    }
+    intent.chosen_for = Some(repository);
     let found = config
         .profiles
         .iter()
@@ -110,7 +119,7 @@ pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option
 /// What the dialog says above its fields for a workspace from New workspace, and the This PC
 /// choice of a repository whose `cloud.yml` asks for it. True when the person chose This PC.
 pub(super) fn notes(ui: &mut Ui, form: &Production) -> bool {
-    if form.new_workspace.is_some_and(|intent| intent.no_gpu) {
+    if form.new_workspace.as_ref().is_some_and(|intent| intent.no_gpu) {
         ui.label(
             RichText::new(
                 "This repository has no GPU profile, so the cloud runs on a CPU worker. For a GPU, add a profile \

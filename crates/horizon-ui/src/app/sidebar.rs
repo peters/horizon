@@ -1,7 +1,7 @@
 mod new_workspace;
 mod toolbar;
 
-pub(in crate::app) use new_workspace::NewWorkspace;
+pub(in crate::app) use new_workspace::{NewWorkspace, menu as new_workspace_menu};
 
 use std::collections::HashMap;
 

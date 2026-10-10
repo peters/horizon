@@ -42,7 +42,7 @@ impl NewWorkspace {
 }
 
 /// The menu that `button` opens. Without cloud workspaces ready, only This PC can be chosen.
-pub(super) fn menu(button: &Response, cloud_ready: bool) -> Option<NewWorkspace> {
+pub(in crate::app) fn menu(button: &Response, cloud_ready: bool) -> Option<NewWorkspace> {
     let mut chosen = None;
     // The sidebar is drawn above the canvas, so the menu goes on the Tooltip order and
     // above the sidebar's own layer, as the sidebar's other menus do.

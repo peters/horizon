@@ -1016,6 +1016,7 @@ This task starts no cloud. `<local>` is a new repository whose committed
    then **This PC** above the presets.
 
 7. Click **Cloud** in that menu. Type `<home>/smoke/local` in the repository field.
+   This is `<data-home>/smoke/local` from step 1, as the fixture shows it.
 
    Result: The dialog shows **This repository runs on This PC** and
    **Open on This PC**.

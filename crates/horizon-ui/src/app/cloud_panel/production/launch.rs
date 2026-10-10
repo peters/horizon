@@ -170,11 +170,17 @@ impl HorizonApp {
                     let prepared = loaded.prepared;
                     form.launch.ready_profiles = loaded.ready_profiles;
                     form.repository = prepared.repository.to_string_lossy().into_owned();
+                    // Cloud GPU from New workspace takes each repository's first GPU profile;
+                    // a reread of the same repository keeps the person's pick.
+                    if let Some(name) = super::new_workspace::gpu_profile(form, &prepared.config) {
+                        form.selected_profile = name;
+                        form.launch.selector.profile_changed();
+                        form.size = None;
+                        form.placement = Placement::default();
+                        form.provider = None;
+                    }
                     if !prepared.config.profiles.contains_key(&form.selected_profile) {
-                        // Cloud GPU from New workspace starts on the first GPU profile, also
-                        // for another repository typed later; the person's own pick stays.
-                        form.selected_profile = super::new_workspace::gpu_profile(form, &prepared.config)
-                            .unwrap_or_else(|| prepared.config.default.clone());
+                        form.selected_profile.clone_from(&prepared.config.default);
                         form.launch.selector.profile_changed();
                         form.size = None;
                         form.placement = Placement::default();

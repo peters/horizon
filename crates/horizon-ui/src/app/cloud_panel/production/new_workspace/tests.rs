@@ -53,35 +53,30 @@ fn texts(form: &Production) -> (bool, Vec<String>) {
 }
 
 #[test]
-fn cloud_gpu_takes_the_first_gpu_profile_and_says_when_there_is_none() {
+fn cloud_gpu_takes_each_repositorys_first_gpu_profile_and_says_when_there_is_none() {
     let (_temp, mut app) = test_app();
     let workspace = app.board.create_workspace("cloud");
     let form = &mut app.cloud_prototype.production;
-    form.new_workspace = Some(Intent {
+    let intent = |gpu| Intent {
         workspace,
-        gpu: true,
+        gpu,
+        chosen_for: None,
         no_gpu: false,
-    });
-    assert_eq!(gpu_profile(form, &config(GPU_TOO)).as_deref(), Some("gpu"));
-    assert_eq!(
-        gpu_profile(form, &config(GPU_TOO)).as_deref(),
-        Some("gpu"),
-        "also for another repository typed later"
-    );
-    form.new_workspace = Some(Intent {
-        workspace,
-        gpu: true,
-        no_gpu: false,
-    });
+    };
+    form.new_workspace = Some(intent(true));
+    form.repository = "/synthetic/cpu-only".into();
     assert_eq!(gpu_profile(form, &config(CPU_ONLY)), None);
     let (_, shown) = texts(form);
     assert!(shown.iter().any(|text| text.contains("no GPU profile")), "{shown:?}");
+    // Another repository, although it also has `dev`, gets its own GPU profile.
+    form.repository = "/synthetic/gpu-too".into();
+    assert_eq!(gpu_profile(form, &config(GPU_TOO)).as_deref(), Some("gpu"));
+    let (_, shown) = texts(form);
+    assert!(!shown.iter().any(|text| text.contains("no GPU profile")), "{shown:?}");
+    // A reread of the same repository keeps the person's pick.
+    assert_eq!(gpu_profile(form, &config(GPU_TOO)), None);
     // Plain Cloud asks for nothing.
-    form.new_workspace = Some(Intent {
-        workspace,
-        gpu: false,
-        no_gpu: false,
-    });
+    form.new_workspace = Some(intent(false));
     assert_eq!(gpu_profile(form, &config(GPU_TOO)), None);
 }
 
@@ -121,7 +116,7 @@ fn a_cancelled_cloud_takes_away_only_the_empty_workspace_new_workspace_made() {
     assert_eq!(app.board.workspaces.len(), before + 1, "the empty cloud workspace goes");
     // A workspace with something in it stays.
     app.create_new_workspace(&ctx, NewWorkspace::CloudGpu, None);
-    let intent = app.cloud_prototype.production.new_workspace.unwrap();
+    let intent = app.cloud_prototype.production.new_workspace.clone().unwrap();
     assert!(intent.gpu);
     let note = PanelOptions {
         kind: horizon_core::PanelKind::Editor,
