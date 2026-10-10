@@ -893,6 +893,37 @@ the last line of the session. In a detached window or a fullscreen cloud, a park
 panel shows only its snapshot until it attaches. The worker needs only Python 3
 and tmux for this.
 
+### Cloud list
+
+The sidebar groups the workspaces by what they need from you:
+
+| Group | Workspaces |
+|---|---|
+| **Needs you** | A cloud that failed, waits for a decision, asks for GitHub access, or has a parked session that ended or is not found. |
+| **Cloud** | A cloud that is attached, not deployed yet, or busy with an operation. |
+| **Parked** | A cloud with parked terminals, or with a stopped worker. |
+| **This PC** | A workspace without a cloud. |
+
+Each group header shows how many workspaces it has. At the right of the header
+line, a summary in secondary text shows the hourly rate of the running workers of
+the group, **no local cost** for **Parked**, and **live** for **This PC**. The
+summary never wraps. When the sidebar is narrow, it shows fewer parts, and then a
+shortened first part. Hover over it to see all of it.
+
+Each row shows a status dot, the workspace name and one status line. The status
+line is the last line with words on the screen of the primary terminal (the first
+agent, else the focused terminal, else the first terminal). Frames, prompts and
+footer hints are not status lines. For a parked cloud, the line comes from the
+session status that the worker sends. A parked row is compact: it shows only the
+dot and the name, and its dot shows the status line on hover. A filled dot is
+green when an agent works, yellow when the workspace waits for you, red when an
+operation failed, the accent color while Horizon works on the cloud, and grey when
+nothing runs. A ring is a parked cloud (green when an agent still works on the
+worker), or a stopped worker.
+
+Click a row to go to its workspace. A parked cloud then attaches, as described in
+[Parked terminals](#parked-terminals).
+
 A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
 runtime card. Compute replacement retains the same network workspace but stops
 processes, discards temporary container files and reconnects recorded sessions on

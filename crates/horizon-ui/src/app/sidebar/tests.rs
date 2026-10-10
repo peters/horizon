@@ -310,3 +310,35 @@ fn workspace_row_reveal_gate_covers_accordion_and_panel_count() {
     assert_eq!(app.workspace_row_reveal(false, solo, &one), Some(only));
     assert_eq!(app.workspace_row_reveal(false, workspace, &two), None);
 }
+
+#[test]
+fn a_compact_parked_dot_tells_a_screen_reader_its_status_line() {
+    use horizon_core::cloud_list::{Dot, Group, Row};
+    let workspace = super::WorkspaceSidebarEntry {
+        id: horizon_core::WorkspaceId(7),
+        name: "sample".to_owned(),
+        color: egui::Color32::WHITE,
+        is_active: false,
+        detached: false,
+        capabilities: crate::app::workspace::WorkspaceLayoutCapabilities {
+            can_arrange: true,
+            can_detach: false,
+        },
+        panels: Vec::new(),
+        row: Row {
+            group: Group::Parked,
+            dot: Dot::Parked { working: true },
+            line: "tests passed".to_owned(),
+            hourly_rate: None,
+        },
+    };
+    let labels = crate::test_egui::accesskit_texts(|ui| {
+        ui.horizontal(|ui| super::rows::render_sidebar_workspace_row_contents(ui, &workspace, false));
+    });
+    assert!(
+        labels
+            .iter()
+            .any(|(label, _)| label == "Parked · an agent is working on the worker\ntests passed"),
+        "{labels:?}"
+    );
+}

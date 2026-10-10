@@ -19,6 +19,21 @@ impl DiscardTextures for egui::FullOutput {
 /// Labels and disabled flags from one headless pass with AccessKit enabled.
 #[cfg(test)]
 pub(crate) fn accesskit_labels(draw: impl FnMut(&mut egui::Ui)) -> Vec<(String, bool)> {
+    accesskit_nodes(draw, egui::accesskit::Node::label)
+}
+
+/// What a screen reader reads from each node of one headless pass: its label, or the
+/// value that egui gives a text label instead. Each comes with its disabled flag.
+#[cfg(test)]
+pub(crate) fn accesskit_texts(draw: impl FnMut(&mut egui::Ui)) -> Vec<(String, bool)> {
+    accesskit_nodes(draw, |node| node.label().or_else(|| node.value()))
+}
+
+#[cfg(test)]
+fn accesskit_nodes(
+    draw: impl FnMut(&mut egui::Ui),
+    text: impl Fn(&egui::accesskit::Node) -> Option<&str>,
+) -> Vec<(String, bool)> {
     let ctx = egui::Context::default();
     ctx.enable_accesskit();
     let output = ctx
@@ -34,9 +49,6 @@ pub(crate) fn accesskit_labels(draw: impl FnMut(&mut egui::Ui)) -> Vec<(String, 
     update
         .nodes
         .into_iter()
-        .filter_map(|(_, node)| {
-            let label = node.label()?.to_string();
-            Some((label, node.is_disabled()))
-        })
+        .filter_map(|(_, node)| Some((text(&node)?.to_owned(), node.is_disabled())))
         .collect()
 }

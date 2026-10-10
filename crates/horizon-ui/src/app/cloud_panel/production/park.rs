@@ -35,6 +35,18 @@ pub(super) struct Parking {
     policy: ParkPolicy,
 }
 
+impl Parking {
+    /// Whether the terminals of the cloud are parked.
+    pub(super) fn is_parked(&self) -> bool {
+        self.tracker.is_some_and(|tracker| tracker.is_parked())
+    }
+
+    /// The last status of each parked terminal, by its panel's local id.
+    pub(super) fn statuses(&self) -> &HashMap<String, SessionStatus> {
+        &self.statuses
+    }
+}
+
 /// The tmux session of each parked panel in `locals`, by session id, from the
 /// sessions that the cloud's record holds.
 fn parked_sessions(sessions: Vec<super::Session>, locals: &[String]) -> HashMap<String, String> {
@@ -92,6 +104,17 @@ fn agent_status(status: Option<&SessionStatus>) -> AgentStatus {
         AgentStatus::Working
     } else {
         AgentStatus::Idle
+    }
+}
+
+/// What a parked session does, in words.
+pub(super) fn activity_text(activity: SessionActivity) -> String {
+    match activity {
+        SessionActivity::Working => "Working".to_owned(),
+        SessionActivity::Idle => "Idle".to_owned(),
+        SessionActivity::Exited(Some(code)) => format!("Ended with status {code}"),
+        SessionActivity::Exited(None) => "Ended".to_owned(),
+        SessionActivity::Missing => "Session not found".to_owned(),
     }
 }
 
@@ -525,13 +548,7 @@ impl HorizonApp {
         let error = runtime.and_then(|runtime| runtime.parking.error.as_deref());
         match (status, error) {
             (Some(status), _) => {
-                let activity = match status.activity {
-                    SessionActivity::Working => "Working".to_owned(),
-                    SessionActivity::Idle => "Idle".to_owned(),
-                    SessionActivity::Exited(Some(code)) => format!("Ended with status {code}"),
-                    SessionActivity::Exited(None) => "Ended".to_owned(),
-                    SessionActivity::Missing => "Session not found".to_owned(),
-                };
+                let activity = activity_text(status.activity);
                 match status.last_line() {
                     Some(line) => format!("Parked · {activity} · {line}"),
                     None => format!("Parked · {activity}"),
@@ -588,4 +605,4 @@ impl HorizonApp {
 }
 
 #[cfg(all(test, unix))]
-mod tests;
+pub(super) mod tests;

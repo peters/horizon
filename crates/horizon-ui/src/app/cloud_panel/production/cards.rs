@@ -7,6 +7,7 @@ mod body;
 mod cost;
 mod drawer;
 mod github;
+pub(super) mod list;
 mod machine;
 mod next;
 mod output;
