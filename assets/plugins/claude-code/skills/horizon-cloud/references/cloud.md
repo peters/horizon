@@ -256,3 +256,5 @@ destination first and forwards the remaining arguments to OpenSSH. It supplies
 tailnet host keys and strict host-key checking before those arguments.
 Horizon does not override those trust options. See the verified
 [wrapper source](https://github.com/tailscale/tailscale/blob/3caf7d9e7dcaba589cfc58beda596929733e4fea/cmd/tailscale/cli/ssh.go#L105-L156).
+
+The probe requires a complete engine release version. It accepts build metadata and the Community or Enterprise suffix. Development and release-candidate versions do not pass admission. CPU, memory and free storage must be positive even when no profile is selected.

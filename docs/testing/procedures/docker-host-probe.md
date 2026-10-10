@@ -27,7 +27,7 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
 - The repository build prerequisites from `AGENTS.md`.
 - OpenSSH on Linux and macOS.
 - For the optional live lane, an authorized Linux host with Tailscale SSH access.
-- For a successful engine probe, Docker Engine 28 or later and measurable free space on its native Linux storage filesystem.
+- For a successful engine probe, stable Docker Engine 28 or later and measurable free space on its native Linux storage filesystem.
 - The Linux engine host must have `uname` and a `stat` tool with filesystem format support for `%a` and `%S`.
 
 ## 4. Setup
@@ -46,7 +46,7 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
    cargo test -p horizon-core cloud_runtime::docker_host
    ```
 
-   Result: All focused tests pass. Missing credentials produce a blocker with a remedy.
+   Result: All focused tests pass. Missing credentials produce a blocker with a remedy. A malformed or prerelease engine version cannot pass admission. Zero CPU, memory or free storage blocks admission with or without a selected profile.
 
 ### 5.2 DHP-TRUST — Connection identity and compatibility
 

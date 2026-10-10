@@ -253,6 +253,27 @@ fn gib(bytes: u64) -> String {
     let tenth = bytes / 107_374_182;
     format!("{}.{}", tenth / 10, tenth % 10)
 }
+fn private_ports_supported(version: &str) -> bool {
+    semver::Version::parse(version).is_ok_and(|version| {
+        version.major >= 28 && (version.pre.is_empty() || matches!(version.pre.as_str(), "ce" | "ee"))
+    })
+}
+
+fn capacity_fits(info: &Info, profile: Option<&Profile>) -> bool {
+    info.cpu > 0
+        && info.mem_total > 0
+        && profile.is_none_or(|profile| {
+            info.cpu >= u64::from(profile.cpu) && info.mem_total >= u64::from(profile.memory_gb) * 1_073_741_824
+        })
+}
+
+fn storage_fits(free: u64, profile: Option<&Profile>) -> bool {
+    free > 0
+        && profile.is_none_or(|profile| {
+            free >= (u64::from(profile.storage.volume_gb) + u64::from(profile.storage.container_gb)) * 1_000_000_000
+        })
+}
+
 fn engine_checks(
     result: &mut Probe,
     info: &Info,
@@ -265,12 +286,7 @@ fn engine_checks(
     result.memory_bytes = Some(info.mem_total);
     result.architecture = Some(info.architecture.clone());
     result.check("Docker engine", CheckState::Ready, "Docker engine answered", None);
-    let safe_ports = info
-        .server_version
-        .split('.')
-        .next()
-        .and_then(|value| value.parse::<u32>().ok())
-        .is_some_and(|major| major >= 28);
+    let safe_ports = private_ports_supported(&info.server_version);
     result.check(
         "Private SSH port",
         if safe_ports {
@@ -279,7 +295,7 @@ fn engine_checks(
             CheckState::Blocked
         },
         format!("Docker {}", info.server_version),
-        (!safe_ports).then_some("Use Docker Engine 28 or later so localhost-published ports are private."),
+        (!safe_ports).then_some("Use a stable Docker Engine 28 or later so localhost-published ports are private."),
     );
     result.check(
         "Container platform",
@@ -324,9 +340,7 @@ fn engine_checks(
         },
         (!native && !transport.0.allow_emulation).then_some("Use an x86 host or explicitly enable x86 emulation."),
     );
-    let fits = profile.is_none_or(|profile| {
-        info.cpu >= u64::from(profile.cpu) && info.mem_total >= u64::from(profile.memory_gb) * 1_073_741_824
-    });
+    let fits = capacity_fits(info, profile);
     result.check(
         "Compute capacity",
         if fits { CheckState::Ready } else { CheckState::Blocked },
@@ -335,9 +349,7 @@ fn engine_checks(
     );
     if let Ok(free) = transport.disk_free(runner, &info.docker_root_dir) {
         result.free_bytes = Some(free);
-        let enough = profile.is_none_or(|profile| {
-            free >= (u64::from(profile.storage.volume_gb) + u64::from(profile.storage.container_gb)) * 1_000_000_000
-        });
+        let enough = storage_fits(free, profile);
         result.check(
             "Workspace storage",
             if enough { CheckState::Ready } else { CheckState::Blocked },
@@ -396,6 +408,45 @@ mod tests {
             operating_system: "Ubuntu".into(),
             kernel_version: "6.8.0".into(),
         }
+    }
+
+    #[test]
+    fn private_ports_require_a_complete_supported_engine_release() {
+        for version in ["28.0.0", "29.1.3", "28.1.2+dfsg1", "28.0.1-ce", "28.0.1-ee"] {
+            assert!(private_ports_supported(version), "{version}");
+        }
+        for version in [
+            "",
+            "28",
+            "28.0",
+            "28.not-a-version",
+            "28.0.invalid",
+            "28.0.0.1",
+            "28.0.0-rc.1",
+            "28.0.0-dev",
+            "28.0.0+",
+            "27.9.9",
+        ] {
+            assert!(!private_ports_supported(version), "{version}");
+        }
+    }
+
+    #[test]
+    fn storage_requires_free_space_with_or_without_a_profile() {
+        let mut profile = crate::cloud_runtime::repository::launch::quick_start::builtin()
+            .unwrap()
+            .profiles
+            .into_values()
+            .next()
+            .unwrap();
+        profile.storage.volume_gb = 1;
+        profile.storage.container_gb = 0;
+        assert!(!storage_fits(0, None));
+        assert!(storage_fits(1, None));
+        assert!(!storage_fits(999_999_999, Some(&profile)));
+        assert!(storage_fits(1_000_000_000, Some(&profile)));
+        profile.storage.volume_gb = 0;
+        assert!(!storage_fits(0, Some(&profile)));
     }
 
     #[test]
@@ -478,7 +529,7 @@ mod tests {
             "storage":{"container_gb":0,"volume_gb":0}
         }))
         .unwrap();
-        let check = |info: &Info, profile: &Profile| {
+        let check = |info: &Info, profile: Option<&Profile>| {
             let mut report = Probe {
                 host_id: host.id.clone(),
                 observed_at: 0,
@@ -493,21 +544,37 @@ mod tests {
                 info,
                 &Transport(&host),
                 &runner,
-                Some(profile),
+                profile,
                 CheckState::Ready,
             )
             .unwrap();
             report
         };
         let mut info = engine(root.path());
-        let ready = check(&info, &profile);
+        let ready = check(&info, Some(&profile));
         assert!(ready.ready());
         assert!(ready.free_bytes.is_some());
+        for (cpu, memory) in [(0, info.mem_total), (info.cpu, 0), (0, 0)] {
+            let mut missing = engine(root.path());
+            missing.cpu = cpu;
+            missing.mem_total = memory;
+            let blocked = check(&missing, None);
+            assert!(!blocked.ready());
+            assert!(
+                blocked
+                    .checks
+                    .iter()
+                    .any(|row| row.name == "Compute capacity" && row.state == CheckState::Blocked)
+            );
+        }
+        assert!(check(&info, None).ready());
+        info.server_version = "28.not-a-version".into();
+        assert!(!check(&info, None).ready());
         profile.cpu = 3;
         profile.memory_gb = 5;
         info.server_version = "27.5.0".into();
         info.architecture = "aarch64".into();
-        let blocked = check(&info, &profile);
+        let blocked = check(&info, Some(&profile));
         for name in ["Private SSH port", "Worker architecture", "Compute capacity"] {
             assert!(
                 blocked
