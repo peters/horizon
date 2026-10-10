@@ -105,12 +105,12 @@ def serve():
             while child.poll() is None:
                 try:
                     valid = publish_devices()
-                    if quarantined and valid and not (STATE / 'revocation-pending').exists():
+                    if quarantined and valid is True and not (STATE / 'revocation-pending').exists():
                         if stop_owned_daemon(child):
                             quarantine = False
-                    elif not quarantined and valid:
+                    elif not quarantined and valid is True:
                         ready.touch(mode=0o600)
-                    elif not valid:
+                    elif (not quarantined and valid is not True) or valid is False:
                         quarantine = True
                         quarantine_owned_daemon(child, ready)
                 except RevocationPending:
@@ -209,7 +209,7 @@ def publish_devices(locked=False):
     report = read_status()
     if (STATE / 'revocation-pending').exists() or (report.get('BackendState') == 'Running' and not tagged(report)):
         revoke_enrollment(report, locked)
-        return True
+        return None
     own = report.get('Self')
     if report.get('BackendState') != 'Running':
         own = None
@@ -218,7 +218,10 @@ def publish_devices(locked=False):
     write_devices([{'name': value.get('DNSName') or value.get('HostName', ''),
                    'addresses': value.get('TailscaleIPs', []), 'online': bool(value.get('Online'))}
                   for value in values])
-    return report.get('BackendState') in {'Running', 'NeedsLogin'}
+    # A control-only daemon must survive login waits without exposing listeners.
+    if report.get('BackendState') == 'NeedsLogin':
+        return None
+    return report.get('BackendState') == 'Running' and tagged(report)
 
 
 def write_devices(devices):

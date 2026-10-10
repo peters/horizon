@@ -151,19 +151,93 @@ class SupervisorTests(unittest.TestCase):
     def generations(self, reports):
         class Done(BaseException): pass
         children, commands = [], []
+        original_publish = worker.publish_devices
         def spawn(args, **kwargs):
             child = OwnedChild(); children.append(child); commands.append(args)
             return child
-        def report():
+        def report(locked=False):
+            if locked:
+                return original_publish(locked=True)
             if not reports: raise Done()
             result = reports.pop(0)
             if isinstance(result, BaseException): raise result
-            return result
+            return result() if callable(result) else result
         with patch.object(worker.subprocess, 'Popen', side_effect=spawn), \
                 patch.object(worker, 'publish_devices', side_effect=report), \
                 patch.object(worker.time, 'sleep'), patch.object(worker.signal, 'signal'):
             with self.assertRaises(Done): worker.serve()
         return commands, children
+
+    def actual_snapshot(self, joined, tags):
+        original = worker.publish_devices
+        def publish():
+            self.joined = joined
+            self.tags = tags
+            return original()
+        return publish
+
+    def test_production_status_keeps_login_control_alive_until_sole_tag_verified(self):
+        pending = self.actual_snapshot(False, [])
+        verified = self.actual_snapshot(True, [worker.WORKER_TAG])
+        commands, children = self.generations([pending, pending, verified])
+        self.assertEqual(len(commands), 2)
+        self.assertFalse(any('proxy' in arg or 'socks5' in arg for arg in commands[0]))
+        self.assertIn('--socks5-server=127.0.0.1:1055', commands[1])
+        self.assertTrue(children[0].exited)
+
+    def test_production_extra_tag_revocation_never_admits_listener_generation(self):
+        pending = self.actual_snapshot(False, [])
+        overbroad = self.actual_snapshot(True, [worker.WORKER_TAG, 'tag:admin'])
+        verified = self.actual_snapshot(True, [worker.WORKER_TAG])
+        commands, children = self.generations([pending, overbroad, pending, verified])
+        self.assertEqual(len(commands), 2)
+        self.assertFalse(any('proxy' in arg or 'socks5' in arg for arg in commands[0]))
+        self.assertEqual(self.calls.count(('logout',)), 1)
+        self.assertIn('--socks5-server=127.0.0.1:1055', commands[1])
+
+    def test_production_lost_authentication_closes_only_owned_proxy_and_stays_quarantined(self):
+        verified = self.actual_snapshot(True, [worker.WORKER_TAG])
+        pending = self.actual_snapshot(False, [])
+        commands, children = self.generations([verified, pending, pending])
+        self.assertEqual(len(commands), 3)
+        self.assertIn('--socks5-server=127.0.0.1:1055', commands[1])
+        self.assertTrue(children[1].exited)
+        self.assertFalse(any('proxy' in arg or 'socks5' in arg for arg in commands[2]))
+        self.assertFalse((self.runtime / 'proxy-ready').exists())
+
+    def test_needslogin_keeps_one_listener_free_owned_generation(self):
+        commands, children = self.generations([None, None])
+        self.assertEqual(len(commands), 1)
+        self.assertFalse(any('proxy' in arg or 'socks5' in arg for arg in commands[0]))
+        self.assertTrue(children[0].exited, 'Only final fixture exit stops the control daemon')
+
+    def test_login_pending_then_verified_running_promotes_only_after_verification(self):
+        commands, children = self.generations([None, True])
+        self.assertEqual(len(commands), 2)
+        self.assertFalse(any('proxy' in arg or 'socks5' in arg for arg in commands[0]))
+        self.assertIn('--socks5-server=127.0.0.1:1055', commands[1])
+        self.assertTrue(children[0].exited)
+
+    def test_lost_login_closes_proxy_before_reenrollment_control_generation(self):
+        commands, children = self.generations([True, None, None])
+        self.assertEqual(len(commands), 3)
+        self.assertIn('--socks5-server=127.0.0.1:1055', commands[1])
+        self.assertTrue(children[1].exited)
+        self.assertFalse(any('proxy' in arg or 'socks5' in arg for arg in commands[2]))
+        self.assertFalse((self.runtime / 'proxy-ready').exists())
+
+    def test_actual_prelogin_snapshot_is_control_only(self):
+        self.assertIsNone(worker.publish_devices())
+        self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text()), {'devices': []})
+        self.assertFalse(self.joined)
+
+    def test_confirmed_revocation_cannot_qualify_a_proxy_generation(self):
+        self.assertEqual(self.configure('work', fixture.KEY), 'ready\n')
+        self.tags = []
+        self.assertIsNone(worker.publish_devices())
+        self.assertFalse(self.joined)
+        self.assertFalse((self.state / 'selection').exists())
+        self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text()), {'devices': []})
 
     def test_first_generation_has_no_proxy_until_persistent_identity_is_checked(self):
         commands, children = self.generations([True])
