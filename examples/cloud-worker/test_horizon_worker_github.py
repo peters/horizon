@@ -1,6 +1,7 @@
 """The worker GitHub token chain service, with synthetic tokens and a fake GitHub on the
 loopback address. Never use account credentials here."""
 import contextlib
+import faulthandler
 import functools
 import http.server
 import importlib.machinery
@@ -85,8 +86,15 @@ def rotated(number):
                        'refresh_token_expires_in': 15724800, 'token_type': 'bearer', 'scope': ''})
 
 
+# A test of the GitHub service that runs this long is stuck, such as on a socket that never
+# answers: every thread's stack goes to stderr and the run ends, instead of hanging CI.
+STUCK_SECONDS = 180
+
+
 class ServiceTestCase(unittest.TestCase):
     def setUp(self):
+        faulthandler.dump_traceback_later(STUCK_SECONDS, exit=True)
+        self.addCleanup(faulthandler.cancel_dump_traceback_later)
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
