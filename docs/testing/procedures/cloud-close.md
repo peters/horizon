@@ -91,7 +91,7 @@ closes with **Remove cloud**.
 
 Give each task an ID. A report uses the ID to give a result.
 
-### 6.1 C01 — Close a deployed cloud
+### 6.1 C01: Close a deployed cloud
 
 1. On the card of `demo-api`, click **×**.
 
@@ -107,7 +107,7 @@ Give each task an ID. A report uses the ID to give a result.
 
    Result: The dialog closes. The cloud stays on the board.
 
-### 6.2 C02 — Remove a cloud after its deletion cannot start
+### 6.2 C02: Remove a cloud after its deletion cannot start
 
 1. On the card of `demo-api`, click **×**. Then click **Delete cloud resources**.
 
@@ -126,7 +126,7 @@ Give each task an ID. A report uses the ID to give a result.
    Result: The dialog closes. The cloud `demo-api` and its panel go off the
    board and the sidebar.
 
-### 6.3 C03 — Remove a cloud that has no resources
+### 6.3 C03: Remove a cloud that has no resources
 
 1. On the card of `scratch-notes`, click **×**.
 
@@ -138,7 +138,7 @@ Give each task an ID. A report uses the ID to give a result.
    Result: The dialog closes. The cloud `scratch-notes` and its panel go off
    the board.
 
-### 6.4 C04 — Close a cloud that has storage but no worker request
+### 6.4 C04: Close a cloud that has storage but no worker request
 
 1. In the sidebar, click `image-push`. On its card, click **×**.
 
