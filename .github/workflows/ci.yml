@@ -170,7 +170,9 @@ jobs:
       - run: cargo package --locked -p horizon-device --features cli
       - name: Native input lifecycle
         run: |
-          xvfb-run -a -s '-screen 0 1280x800x24 -nolisten tcp -extension MIT-SHM' bash -eu -c '
+          # Without -noreset, Xvfb resets when its last client disconnects, and it closes a
+          # client that connects during the reset with ECONNRESET. Each test connects anew.
+          xvfb-run -a -s '-screen 0 1280x800x24 -nolisten tcp -extension MIT-SHM -noreset' bash -eu -c '
             device_test_dir=$(mktemp -d)
             trap '\''rm -rf "$device_test_dir"'\'' EXIT
             printf '\''{"id":"ci-device","endpoint":{"kind":"local_x11","display":"%s"}}'\'' "$DISPLAY" > "$device_test_dir/target.json"
