@@ -101,6 +101,23 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("note  ui-gif:", out)
 
+    def test_ui_gif_must_be_embedded(self):
+        self.write("crates/horizon-ui/src/app/panel.rs")
+        self.write("docs/testing/procedures/panel.md")
+        self.commit()
+        for body in ["The recording is recording.gif.\n", "See https://github.com/user-attachments/assets/abc for details.\n"]:
+            with self.subTest(body=body):
+                self.assertIn("error ui-gif:", self.run_check(body=body)[1])
+        for body in ["<img src=\"https://example.invalid/a.gif\" width=\"600\">\n", "https://github.com/user-attachments/assets/abc\n"]:
+            with self.subTest(body=body):
+                self.assertEqual(self.run_check(body=body)[0], 0)
+
+    def test_untracked_files_give_a_note(self):
+        self.write("crates/horizon-core/src/lib.rs")
+        self.commit()
+        self.write("crates/horizon-core/src/new.rs")
+        self.assertIn("note  uncommitted:", self.run_check()[1])
+
     def test_ui_gif_is_a_note_without_body(self):
         self.write("crates/horizon-ui/src/app/panel.rs")
         self.write("docs/testing/procedures/panel.md")

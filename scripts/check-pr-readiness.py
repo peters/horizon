@@ -51,6 +51,15 @@ def changed_files(repo, base):
     return files
 
 
+def is_media(line):
+    """An embedded image or video: Markdown image syntax, an <img> or <video> tag, or an
+    attachment URL alone on its line, which GitHub shows as media. A file name in prose
+    does not count."""
+    line = line.strip()
+    return bool(re.search(r"!\[[^\]]*\]\([^)\s]+\)|<(img|video)\b[^>]*\bsrc=", line, re.I)
+                or re.fullmatch(r"https://github\.com/user-attachments/assets/\S+", line))
+
+
 def is_test(path):
     return "/tests/" in path or path.endswith(("tests.rs", "_test.rs", "_tests.rs")) or Path(path).name.startswith("test_")
 
@@ -82,7 +91,7 @@ def check(repo, base, title, body, scope_approved, no_visible_change):
             notes.append(("ui-gif", "UI files changed: pass --body FILE to check for the animated GIF."))
         else:
             lines = [l for l in body.splitlines() if l.strip()]
-            media = [i for i, l in enumerate(lines) if re.search(r"\.gif\b|user-attachments/assets/", l, re.I)]
+            media = [i for i, l in enumerate(lines) if is_media(l)]
             if not media:
                 errors.append(("ui-gif", "UI files changed, but the PR body has no animated GIF of the change."))
             elif media[0] >= 15:
@@ -105,7 +114,7 @@ def check(repo, base, title, body, scope_approved, no_visible_change):
     if SKIP_MARKER in git(repo, "log", "-1", "--format=%B"):
         notes.append(("skip-marker", "The head commit has the skip marker, so GitHub runs no CI for this head. "
                       "Push the final head without it."))
-    if git(repo, "status", "--porcelain", "--untracked-files=no").strip():
+    if git(repo, "status", "--porcelain").strip():
         notes.append(("uncommitted", "There are uncommitted changes; the check covers committed changes only."))
     return errors, notes
 
