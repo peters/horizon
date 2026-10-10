@@ -96,7 +96,7 @@ impl Card {
     }
 
     /// Creates the app with the manifest flow, saves it, and checks its device sign-in.
-    fn connect(&mut self, ctx: &egui::Context, root: std::path::PathBuf) {
+    fn connect(&mut self, ctx: &egui::Context, root: std::path::PathBuf, docker_config: std::path::PathBuf) {
         let (tx, rx) = channel();
         self.connecting = Some(rx);
         self.message = None;
@@ -104,7 +104,7 @@ impl Card {
         self.abort = Some(Abort(cancel.clone()));
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let name = connect::app_name();
+            let name = connect::app_name(connect::known_login(&root, &docker_config).as_deref());
             let result = connect::start(&root, &name, horizon_core::open_url, cancel.clone())
                 .and_then(|created| created.recv().map_err(|_| horizon_core::cloud_runtime::Error::Busy)?)
                 // Settings closed meanwhile, or another window connected an app: the save,
@@ -225,14 +225,14 @@ pub(super) fn card(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card) {
         } else {
             caption(
                 ui,
-                "Horizon creates a private GitHub App that belongs to you. You choose which repositories \
-                 it can use. Each cloud then signs in once and renews its own access.",
+                "Horizon creates a GitHub App that belongs to you. You choose which accounts and \
+                 repositories it is installed on. Each cloud then signs in once and renews its own access.",
             );
             if ui
                 .add(primary_button("Connect GitHub").min_size(vec2(140.0, 30.0)))
                 .clicked()
             {
-                card.connect(ui.ctx(), draft.root().to_owned());
+                card.connect(ui.ctx(), draft.root().to_owned(), draft.settings.docker_config.clone());
             }
         }
         if let Some(message) = &card.message {

@@ -46,6 +46,9 @@ after one approval.
 - For G09: a checkout whose `.horizon/cloud.yml` profile builds an image to a test
   package `ghcr.io/<owner>/<test-image>`, and no image repository bound for it in
   **Cloud settings › Container registry**.
+- For G11: a test organization `<org>` that the GitHub account owns, with a test
+  repository `<org>/<repo-c>`, and a local checkout of `<repo-c>` with a committed
+  `.horizon/cloud.yml`.
 - A browser that is signed in to the GitHub account. It is the default browser.
 
 ## 5. Setup
@@ -65,7 +68,9 @@ after one approval.
 
 2. Click **Create GitHub App** in the browser.
 
-   Result: GitHub shows the installation page of the new app.
+   Result: GitHub shows the installation page of the new app. If a private app has
+   the same name, GitHub's form says that the name is taken. Then change the name in
+   the form, record it, and click **Create GitHub App** again.
 
 3. Select **Only select repositories**.
 
@@ -81,7 +86,11 @@ after one approval.
 
 6. Look at the GitHub card in Horizon.
 
-   Result: The card shows **Connected** and **App: horizon-<suffix>**.
+   Result: The card shows **Connected** and **App: horizon-for-<login>** when this
+   computer kept an earlier GitHub sign-in and no public app has that name. Otherwise,
+   also when GitHub did not answer the name check, it shows **App: horizon-<suffix>**.
+   If you changed the name in step 2, it shows the slug of the name that you
+   recorded. The app's page on GitHub shows its description.
 
 7. Run `stat -c '%a' ~/.horizon/cloud/credentials/github-app-*`.
 
@@ -345,33 +354,78 @@ after one approval.
 
 ### 6.10 G10 — Pick and clone a private repository
 
-1. Open **New cloud** while GitHub is connected. Under **Where is your code?**,
+G08 disconnected the first test app. This task connects a second test app, which
+this task and G11 use.
+
+> **CAUTION:** THE NEXT STEP GIVES THE SECOND TEST APP ACCESS TO `<repo-a>` AND
+> `<repo-b>`. Select only these two test repositories; agents in the test clouds
+> push to the repositories that the app is installed on.
+
+1. In Cloud settings, click **Connect GitHub** and do steps 2 to 5 of G01 again.
+   Select `<repo-a>` and `<repo-b>`. Then do G02 again.
+
+   Result: The card shows **Connected** and **Device sign-in is on.** The mode is
+   **Ask**. The app name obeys the rule of G01 step 6.
+
+2. Open **New cloud** while GitHub is connected. Under **Where is your code?**,
    click **Pick from your GitHub repositories**.
 
    Result: The first time, a box asks to sign in to GitHub on this computer, with a
    code in Ask mode. In Automatic mode the browser returns by itself.
 
-2. Approve the code on GitHub if one shows.
+3. Approve the code on GitHub if one shows.
 
    Result: The dialog lists `<owner>/<repo-a>` and `<owner>/<repo-b>`.
    `stat -c '%a' ~/.horizon/cloud/credentials/github-host-*.json` shows `600`.
 
-3. Type `repo-b`, then click `<owner>/<repo-b>`.
+4. Type `repo-b`, then click `<owner>/<repo-b>`.
 
    Result: The field shows its link. The dialog says that the repository is
    private and offers **Clone with GitHub** in place of a token field.
 
-4. Click **Clone with GitHub**.
+5. Click **Clone with GitHub**.
 
    Result: The clone starts by itself and finishes without a token field. The
    dialog then shows **Preparing cloud…** and the cloud's choices. `git -C <clone> config --get
    remote.origin.url` shows the plain `https://github.com/<owner>/<repo-b>.git` link,
    and `.git/config` holds no token.
 
-5. Close the dialog, open **New cloud** again and click **Pick from your GitHub
+6. Close the dialog, open **New cloud** again and click **Pick from your GitHub
    repositories**.
 
    Result: The list shows without a sign-in.
+
+### 6.11 G11: Install the app on an organization
+
+1. On GitHub, open the settings of the second test app, then **Advanced**.
+
+   Result: GitHub shows **Make private**. The app is public, so other accounts can
+   install it.
+
+> **CAUTION:** THE NEXT STEP RENTS COMPUTE FOR `gh-org`. It costs money until the
+> cleanup deletes the cloud.
+
+2. Open the checkout of `<repo-c>` and start a cloud `gh-org` in Ask mode. Approve
+   the code on GitHub.
+
+   Result: The steps card shows **GitHub: the app is not installed on
+   <org>/<repo-c>.** It also says that the app installs on `<org>` only when it is
+   public, and it shows the links to the **Advanced** page and the installation
+   page.
+
+> **CAUTION:** THE NEXT STEP GIVES THE TEST APP ACCESS TO A REPOSITORY OF `<org>`.
+> Select only the test repository `<repo-c>`, not all repositories of `<org>`.
+
+3. Open the installation page, select `<org>`, then select `<repo-c>` and click
+   **Install**.
+
+   Result: GitHub shows the app installed on `<org>`.
+
+4. Click **Connect GitHub** again on the `gh-org` card. Approve the code on GitHub.
+
+   Result: The card shows the cloud connected to `<org>/<repo-c>`. The deployment
+   output shows no line of JSON from the worker's GitHub service, and no diagnosis
+   names such a line as the root cause.
 
 ## 7. Pass criteria
 
@@ -388,27 +442,29 @@ after one approval.
 - The first push to `ghcr.io` asks once to publish images, and a later push does not.
 - New cloud lists the connected repositories after one sign-in of this computer and
   clones a private one without a token.
+- A new app is public. An organization installs it and its cloud gets access.
 
 ## 8. Cleanup
 
-> **CAUTION:** THE NEXT STEP DELETES SIX CLOUDS AND THEIR WORKSPACES. Delete only
+> **CAUTION:** THE NEXT STEP DELETES SEVEN CLOUDS AND THEIR WORKSPACES. Delete only
 > the clouds of this procedure.
 
-1. Delete the clouds `gh-ask`, `gh-skip`, `gh-auto`, `gh-auto-2`, `gh-publish` and
-   `gh-publish-2` with **Delete cloud…**.
+1. Delete the clouds `gh-ask`, `gh-skip`, `gh-auto`, `gh-auto-2`, `gh-publish`,
+   `gh-publish-2` and `gh-org` with **Delete cloud…**.
 
    Result: The board does not show them. The provider shows no worker for them.
 
-2. On GitHub, open the settings of the app, then **Advanced**.
+2. On GitHub, open the settings of the first test app, then **Advanced**.
 
    Result: GitHub shows **Delete GitHub App**.
 
 > **CAUTION:** THE NEXT STEP DELETES THE GITHUB APP AND ENDS EVERY TOKEN IT GAVE
-> OUT. Delete only the test app of this procedure.
+> OUT. Delete only the two test apps of this procedure.
 
-3. Click **Delete GitHub App**, type the name and confirm.
+3. Click **Delete GitHub App**, type the name and confirm. Do steps 2 and 3 again
+   for the second test app from G10.
 
-   Result: GitHub deletes the app. All its tokens stop working.
+   Result: GitHub deletes the two apps. All their tokens stop working.
 
 > **CAUTION:** THE NEXT STEP DELETES A BRANCH. Delete only `gh-ask-check` in the
 > test repository.

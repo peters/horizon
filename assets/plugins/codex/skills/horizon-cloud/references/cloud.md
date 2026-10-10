@@ -133,6 +133,13 @@ GitHub and chooses its repositories; agents cannot set it up.
   repository instead of a new request.
 - Ask only for a repository the task needs, with a short, true reason. A
   repository where the person's GitHub App is not installed cannot be allowed.
+- For an organization's repository, the person installs their GitHub App on that
+  organization too. Apps that Connect GitHub creates are public so that an
+  organization can install them; an app only reaches repositories where it is
+  installed. An app that an older Horizon created is private and installs only on
+  its owner's account: its owner first selects **Make public** in the app's
+  **Advanced** settings on GitHub. Tell the person these steps; agents cannot take
+  them.
 - When the cloud has no GitHub access, do not ask the person for a token. Say that
   GitHub is not connected for this cloud.
 - On this computer, **New cloud** lists the repositories the person's GitHub App is
