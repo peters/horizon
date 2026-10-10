@@ -185,7 +185,7 @@ impl HorizonApp {
         };
         // Held until the cloud is discarded. Only another controller's operation stops the
         // removal: a record that cannot be locked otherwise is no operation under way.
-        let _record = match self.lock_cloud_record(id) {
+        let record = match self.lock_cloud_record(id) {
             Ok(record) => record,
             Err(error @ super::cloud_runtime::Error::Busy) => {
                 self.close_failed(id, "Could not remove the cloud", true, Some(error.to_string()));
@@ -200,6 +200,12 @@ impl HorizonApp {
             tracing::warn!(cloud = %launch.id, "removed from Horizon while its provider resources may remain");
         }
         self.discard_cloud(index, ctx);
+        // A record directory that only taking the lock created leaves with the cloud.
+        if let Some((store, true)) = record
+            && let Err(error) = store.remove_if_empty()
+        {
+            tracing::warn!(%error, "kept the record directory of a removed cloud");
+        }
     }
 
     /// Removes cloud `id`, which has nothing at its provider. A removal the saved record

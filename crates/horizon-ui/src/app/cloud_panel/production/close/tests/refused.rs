@@ -205,6 +205,18 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     drop(other);
     app.remove_cloud_anyway(101, &ctx);
     assert!(app.cloud_prototype.groups.0.is_empty());
+    assert!(path.exists(), "its record directory stays");
+}
+
+#[test]
+#[cfg(unix)] // Durable cloud records require Unix directory durability.
+fn removing_anyway_leaves_no_record_directory_it_created() {
+    let (temp, mut app) = test_app();
+    add_cloud(&mut app, temp.path(), Some(deployment()));
+    app.request_cloud_close(101);
+    app.remove_cloud_anyway(101, &egui::Context::default());
+    assert!(app.cloud_prototype.groups.0.is_empty());
+    assert!(!temp.path().join("fixture").exists());
 }
 
 #[test]

@@ -218,6 +218,26 @@ impl Store {
         File::open(&self.root)?.sync_all()?;
         Ok(())
     }
+
+    /// Releases the lock and removes the record directory when the lock file is all it
+    /// holds, as when only taking the lock created it.
+    /// # Errors
+    /// The directory cannot be read or removed.
+    pub fn remove_if_empty(self) -> Result<()> {
+        let lock = self.root.join("operation.lock");
+        for entry in std::fs::read_dir(&self.root)? {
+            if entry?.path() != lock {
+                return Ok(());
+            }
+        }
+        // Unlinked while still held: a controller that opens it now creates a new lock
+        // file, which keeps the directory, instead of locking the one being removed.
+        std::fs::remove_file(&lock)?;
+        let root = self.root.clone();
+        drop(self);
+        std::fs::remove_dir(root)?;
+        Ok(())
+    }
 }
 
 impl Drop for Store {
@@ -286,6 +306,21 @@ mod tests {
             temp.path().join("cloud-123")
         );
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+    #[test]
+    #[cfg(unix)]
+    fn only_a_record_directory_holding_just_its_lock_is_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let fresh = root.path().join("fresh");
+        Store::lock(&fresh).unwrap().remove_if_empty().unwrap();
+        assert!(!fresh.exists());
+
+        let kept = root.path().join("kept");
+        let store = Store::lock(&kept).unwrap();
+        std::fs::write(kept.join("workspace-volume.required"), b"").unwrap();
+        store.remove_if_empty().unwrap();
+        assert!(kept.join("operation.lock").exists());
+        assert!(Store::lock(&kept).is_ok(), "the lock was released");
     }
     #[test]
     #[cfg(unix)]

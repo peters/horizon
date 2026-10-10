@@ -529,10 +529,11 @@ impl HorizonApp {
     }
 
     /// Locks the saved record of cloud `id`, so no other controller operates on it while
-    /// it is held. `None` when the cloud has no record directory to lock.
+    /// it is held, and says whether taking the lock created its directory. `None` when
+    /// Horizon keeps no cloud records.
     /// # Errors
     /// `Busy` while another controller owns it, or the lock cannot be taken.
-    pub(super) fn lock_cloud_record(&self, id: u32) -> cloud_runtime::Result<Option<Store>> {
+    pub(super) fn lock_cloud_record(&self, id: u32) -> cloud_runtime::Result<Option<(Store, bool)>> {
         let Some(launch) = self
             .cloud_prototype
             .groups
@@ -547,10 +548,8 @@ impl HorizonApp {
             return Ok(None);
         };
         let path = cloud_runtime::state::cloud_directory(root, &launch.id)?;
-        if !path.try_exists()? {
-            return Ok(None);
-        }
-        Store::lock(&path).map(Some)
+        let created = !path.try_exists()?;
+        Store::lock(&path).map(|store| Some((store, created)))
     }
 
     fn cloud_removal_error(&mut self, id: u32, message: String) {
