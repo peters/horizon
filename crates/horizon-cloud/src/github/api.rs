@@ -1,6 +1,6 @@
 //! REST calls made with a user access token: who the token acts as, and which
-//! repositories the app may reach for that user. A repository's size can also be read
-//! without one.
+//! repositories the app may reach for that user. A repository's size, and whether a
+//! public app has a slug, can also be read without one.
 use super::{Client, Error, Result, Secret, read};
 use serde::Deserialize;
 use std::fmt::Write as _;
@@ -125,6 +125,23 @@ impl Client {
         }
         let fields: Fields = self.request(token, &format!("/repos/{repository}"))?;
         fields.size.checked_mul(1024).ok_or(Error::InvalidResponse)
+    }
+
+    /// Whether a public app has the slug `slug`. GitHub shows no private app here, so
+    /// `false` does not prove that the name is free.
+    /// # Errors
+    /// An invalid slug, transport failures, or an answer other than found or not found.
+    pub fn app_exists(&self, slug: &str) -> Result<bool> {
+        #[derive(Deserialize)]
+        struct Fields {}
+        if !super::valid_slug(slug) {
+            return Err(Error::InvalidResponse);
+        }
+        match self.request::<Fields>(None, &format!("/apps/{slug}")) {
+            Ok(Fields {}) => Ok(true),
+            Err(Error::Refused(status)) if status == "HTTP 404" => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     fn get<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {

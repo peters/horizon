@@ -21,7 +21,7 @@ const CLIENT_ID: &str = "Ov23liPNCPgWraJDo6XM";
 const SCOPE: &str = "write:packages";
 const REGISTRY: &str = "ghcr.io";
 /// The chain, private, in Horizon's Docker configuration directory.
-const STORE: &str = "horizon-github-packages.json";
+pub(super) const STORE: &str = "horizon-github-packages.json";
 const LOCK: &str = "horizon-github-packages.lock";
 
 const SKIPPED: &str = "This cloud's image goes to ghcr.io, and Horizon was not allowed to publish it. \

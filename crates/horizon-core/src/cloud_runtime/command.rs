@@ -45,6 +45,23 @@ impl Runner<'_> {
         }
         self.spawn(name, command, timeout)
     }
+    /// Like [`Runner::run`] for a command whose stdout is only parsed: stdout stays out of
+    /// the output, while stderr still shows to explain a failure.
+    ///
+    /// # Errors
+    /// Reports spawn failure, cancellation, timeout and unsuccessful exit.
+    pub fn run_parsed(&self, name: &'static str, command: &mut Command, timeout: Duration) -> Result<String> {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut output = Vec::new();
+        self.capture(name, command, timeout, 4 * 1024 * 1024, false, |bytes| {
+            output.extend_from_slice(bytes);
+            Ok(())
+        })?;
+        Ok(self.redact(String::from_utf8_lossy(&output).into_owned()))
+    }
     /// # Errors
     /// Sends a caller-selected private file on stdin without exposing it in argv or output.
     pub fn private_input(&self, command: &mut Command, input: &std::path::Path) -> Result<()> {
@@ -460,6 +477,41 @@ mod tests {
             )
             .unwrap();
         assert_eq!(output, "[REDACTED]");
+    }
+
+    #[test]
+    fn parsed_stdout_stays_out_of_the_output_and_stderr_shows() {
+        let events = std::cell::RefCell::new(Vec::new());
+        let cancel = Cancellation::default();
+        let emit = |event| events.borrow_mut().push(event);
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &emit,
+            secrets: vec![],
+        };
+        let status = r#"echo '{"state":"ok","last_error":null}'"#;
+        let output = runner
+            .run_parsed("test", Command::new("sh").args(["-c", status]), Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(output.trim(), r#"{"state":"ok","last_error":null}"#);
+        let failing = format!("{status}; echo denied >&2; exit 1");
+        let error = runner
+            .run_parsed(
+                "test",
+                Command::new("sh").args(["-c", &failing]),
+                Duration::from_secs(2),
+            )
+            .unwrap_err();
+        assert!(matches!(error, Error::Command("test")));
+        let lines: Vec<String> = events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Output(line) => Some(line.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines, ["denied"], "only stderr is output");
     }
 
     #[test]

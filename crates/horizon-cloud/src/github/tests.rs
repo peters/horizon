@@ -293,11 +293,14 @@ fn an_expired_manifest_code_is_a_refusal() {
 fn the_manifest_asks_for_contents_and_pull_requests_only() {
     let manifest = manifest(
         "Horizon (example)",
+        "Gives clouds access.",
         "https://example.com",
         "http://127.0.0.1:1234/manifest",
         "http://127.0.0.1/callback",
     );
     assert_eq!(manifest["public"], true, "an organization can install it");
+    assert_eq!(manifest["description"], "Gives clouds access.");
+    assert_eq!(manifest["url"], "https://example.com");
     assert_eq!(manifest["hook_attributes"]["active"], false);
     assert_eq!(
         manifest["default_permissions"],
@@ -305,6 +308,29 @@ fn the_manifest_asks_for_contents_and_pull_requests_only() {
     );
     assert_eq!(manifest["redirect_url"], "http://127.0.0.1:1234/manifest");
     assert_eq!(manifest["callback_urls"], json!(["http://127.0.0.1/callback"]));
+}
+
+#[test]
+fn a_public_app_slug_is_found_and_a_missing_one_is_not() {
+    let (client, requests, task) = github(vec![
+        (200, json!({"id": 7, "slug": "horizon-for-octo-cat"})),
+        (404, json!({"message": "Not Found"})),
+        (500, json!({})),
+    ]);
+    assert_eq!(client.app_exists("horizon-for-octo-cat"), Ok(true));
+    assert_eq!(client.app_exists("horizon-for-octo-cat"), Ok(false));
+    assert_eq!(
+        client.app_exists("horizon-for-octo-cat"),
+        Err(Error::Refused("HTTP 500".into()))
+    );
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests[0].0, "GET /apps/horizon-for-octo-cat HTTP/1.1");
+    assert_eq!(
+        client.app_exists("../user"),
+        Err(Error::InvalidResponse),
+        "no path injection"
+    );
 }
 
 #[test]

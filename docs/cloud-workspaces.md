@@ -295,6 +295,10 @@ with no token to create or copy.
 1. Horizon opens GitHub in your browser with a GitHub App already described.
    You click **Create GitHub App**. Horizon keeps the app's client
    secret in `credentials/github-app-<app>` (0600) and never keeps its private key.
+   The app is named **Horizon for <login>** when Horizon already knows your GitHub
+   login from an earlier sign-in on this computer and no public app has that name;
+   otherwise it is **Horizon** and a short random suffix. GitHub's form lets you
+   change the name before you create the app.
 2. GitHub shows the installation page. You choose the repositories that clouds
    may reach. **Choose repositories** on the card opens this page again. To give
    clouds the repositories of an organization, install the app on that

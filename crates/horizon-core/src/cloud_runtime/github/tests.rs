@@ -568,15 +568,15 @@ fn a_repository_of_another_account_needs_a_public_app() {
     );
     let org = not_installed(&app, "Octo-Cat", "acme/web");
     assert!(
-        org.starts_with("the app is not installed on acme/web. The app belongs to Octo-Cat"),
+        org.starts_with("the app is not installed on acme/web. The app installs on acme only when it is public"),
         "{org}"
     );
     assert!(
-        org.contains("select Make public at https://github.com/settings/apps/horizon-example/advanced"),
+        org.contains("its owner selects Make public at https://github.com/settings/apps/horizon-example/advanced"),
         "{org}"
     );
     assert!(
-        org.ends_with("add it to acme at https://github.com/apps/horizon-example/installations/new"),
+        org.ends_with("Then add it to acme at https://github.com/apps/horizon-example/installations/new"),
         "{org}"
     );
 }

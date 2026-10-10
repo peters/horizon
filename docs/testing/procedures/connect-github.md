@@ -84,7 +84,9 @@ after one approval.
 
 6. Look at the GitHub card in Horizon.
 
-   Result: The card shows **Connected** and **App: horizon-<suffix>**.
+   Result: The card shows **Connected** and **App: horizon-for-<login>** when this
+   computer kept an earlier GitHub sign-in, otherwise **App: horizon-<suffix>**. The
+   app's page on GitHub shows its description.
 
 7. Run `stat -c '%a' ~/.horizon/cloud/credentials/github-app-*`.
 

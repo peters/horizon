@@ -22,12 +22,55 @@ const TIMEOUT: Duration = Duration::from_mins(10);
 const SECRET_DIRECTORY: &str = "credentials";
 /// Shown as the app's homepage on GitHub.
 const HOMEPAGE: &str = "https://github.com/peters/horizon";
+/// Shown on the app's page on GitHub.
+const DESCRIPTION: &str = "Gives Horizon cloud workers short-lived access to the repositories you choose. \
+                           Horizon created this app on your computer and never stores its private key. \
+                           You choose where it is installed and can remove it at any time.";
+/// The longest app name GitHub accepts.
+const MAX_NAME: usize = 34;
 
-/// A name for a new app. GitHub needs app names to be unique, so a short random
-/// suffix follows "Horizon"; the person may rename the app on GitHub.
+/// A name for a new app: "Horizon for <login>" when the person's GitHub `login` is known
+/// and that name fits and is free; otherwise, since GitHub needs app names to be unique, a
+/// short random suffix follows "Horizon". Only a public app shows as taken, so GitHub's
+/// form may still refuse the name of a private one; the person can change it there, and
+/// may rename the app on GitHub later.
 #[must_use]
-pub fn app_name() -> String {
+pub fn app_name(login: Option<&str>) -> String {
+    name_for(login, |slug| Client::new().app_exists(slug) != Ok(false))
+}
+
+/// [`app_name`] where `taken` tells whether an app has a slug; a name that may be taken
+/// is not used.
+pub(super) fn name_for(login: Option<&str>, taken: impl FnOnce(&str) -> bool) -> String {
+    if let Some(login) = login.filter(|login| super::stored::valid_login(login)) {
+        let name = format!("Horizon for {login}");
+        // GitHub's slug of the name: lowercase, a hyphen for each space.
+        if name.len() <= MAX_NAME && !taken(&format!("horizon-for-{}", login.to_ascii_lowercase())) {
+            return name;
+        }
+    }
     format!("Horizon {}", &uuid::Uuid::new_v4().simple().to_string()[..6])
+}
+
+/// The GitHub login of a sign-in this computer already keeps, read without the network:
+/// the permission to publish images in `docker_config`, else this computer's sign-in for
+/// an earlier app in `root`.
+#[must_use]
+pub fn known_login(root: &Path, docker_config: &Path) -> Option<String> {
+    let earlier = std::fs::read_dir(root.join(SECRET_DIRECTORY))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("github-host-") && name.ends_with(".json"))
+        });
+    std::iter::once(docker_config.join(super::publish::STORE))
+        .chain(earlier)
+        .find_map(|path| super::stored::load(&path))
+        .map(|stored| stored.login)
 }
 
 /// Starts the manifest flow and opens its first page with `open`. The receiver gets
@@ -147,6 +190,7 @@ pub(super) fn redirect_code(query: &str, state: &str) -> Option<Secret> {
 pub(super) fn start_page(port: u16, state: &str, name: &str) -> String {
     let manifest = horizon_cloud::github::manifest(
         name,
+        DESCRIPTION,
         HOMEPAGE,
         &format!("http://127.0.0.1:{port}/created"),
         "http://127.0.0.1/callback",

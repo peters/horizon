@@ -480,7 +480,8 @@ fn sign_in(
 
 /// What to do for a repository the app is not installed on. Another account, such as an
 /// organization, can install the app only when it is public, and an app that Horizon
-/// created before its apps were public is private.
+/// created before its apps were public is private. The signed-in user need not own the
+/// app, so the text names only the owner's step.
 fn not_installed(settings: &Settings, login: &str, repository: &str) -> String {
     let owner = repository.split_once('/').map_or(repository, |(owner, _)| owner);
     if owner.eq_ignore_ascii_case(login) {
@@ -490,8 +491,8 @@ fn not_installed(settings: &Settings, login: &str, repository: &str) -> String {
         );
     }
     format!(
-        "the app is not installed on {repository}. The app belongs to {login}, so it installs on {owner} \
-         only when it is public: if it is private, select Make public at {}, then add it to {owner} at {}",
+        "the app is not installed on {repository}. The app installs on {owner} only when it is public: \
+         if it is private, its owner selects Make public at {}. Then add it to {owner} at {}",
         settings.visibility_url(),
         settings.installation_url()
     )
