@@ -28,8 +28,28 @@ pub(super) struct Offer {
     pub(super) reason: Option<String>,
 }
 
-/// `failure` is what stopped this close's last deletion or removal.
-pub(super) fn offer(runtime: &Runtime, deployment_started: bool, failure: Option<&str>) -> Offer {
+/// What stopped the last attempt of a close.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Failure {
+    /// A deletion of the provider resources was tried, or could not start. Until then
+    /// the close only offers it.
+    pub(super) deletion_tried: bool,
+    pub(super) reason: String,
+}
+
+impl Failure {
+    /// `what` failed, with the `error` its attempt reported.
+    pub(super) fn new(what: &str, deletion_tried: bool, error: Option<&str>) -> Self {
+        Self {
+            deletion_tried,
+            reason: error.map_or_else(|| format!("{what}."), |error| format!("{what}: {error}")),
+        }
+    }
+}
+
+/// `held` is whether the saved record may hold provider resources, and `failure` what
+/// stopped this close's last deletion or removal.
+pub(super) fn offer(runtime: &Runtime, deployment_started: bool, held: bool, failure: Option<&Failure>) -> Offer {
     if runtime.busy() {
         return Offer {
             primary: None,
@@ -38,29 +58,39 @@ pub(super) fn offer(runtime: &Runtime, deployment_started: bool, failure: Option
         };
     }
     let state = runtime.state.as_ref();
+    let reason = failure.map(|failure| failure.reason.clone());
     if runtime.state_unavailable || (state.is_none() && deployment_started) {
         return Offer {
             primary: None,
             remove_anyway: true,
-            reason: Some(failure.unwrap_or(STATE_UNKNOWN).into()),
+            reason: Some(reason.unwrap_or_else(|| STATE_UNKNOWN.into())),
         };
     }
-    if let Some(failure) = failure {
-        return Offer {
+    match failure.map(|failure| failure.deletion_tried) {
+        Some(true) => Offer {
             primary: state
                 .is_some_and(|state| state.spec.is_some())
                 .then_some(Primary::Delete),
             remove_anyway: true,
-            reason: Some(failure.into()),
-        };
-    }
-    let empty = state.is_none_or(|state| {
-        state.stage == Stage::Deleted || (state.operation == CreateState::Prepared && state.spec.is_none())
-    });
-    Offer {
-        primary: Some(if empty { Primary::Remove } else { Primary::Delete }),
-        remove_anyway: false,
-        reason: None,
+            reason,
+        },
+        // Whatever refused the removal may still be at the provider: delete it first.
+        Some(false) => Offer {
+            primary: Some(Primary::Delete),
+            remove_anyway: false,
+            reason,
+        },
+        None => {
+            let empty = !held
+                && state.is_none_or(|state| {
+                    state.stage == Stage::Deleted || (state.operation == CreateState::Prepared && state.spec.is_none())
+                });
+            Offer {
+                primary: Some(if empty { Primary::Remove } else { Primary::Delete }),
+                remove_anyway: false,
+                reason: None,
+            }
+        }
     }
 }
 

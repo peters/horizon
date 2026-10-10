@@ -891,14 +891,19 @@ The **×** on the header of a cloud opens a dialog. If the cloud has a worker or
 storage at its provider, the primary action is **Delete cloud resources**.
 Horizon deletes them in the background, and the card shows the steps. When the
 deletion is complete, Horizon removes the cloud and its panels. A cloud that
-has no worker or storage shows **Remove cloud** instead.
+has no worker or storage shows **Remove cloud** instead. If Horizon then finds
+storage in the record of the cloud, the dialog shows the reason and
+**Delete cloud resources**.
 
-If the deletion fails, or if Horizon cannot read the resource state of the
-cloud, the dialog shows the reason and **Remove from Horizon anyway**. This
-action removes the cloud and its panels from Horizon, but it does not delete
-the resources at the provider. The dialog names the resources that can remain.
-They can cost money until you delete them at the provider. Horizon keeps the
-state directory of the cloud. **Cancel** keeps the cloud.
+If the deletion fails or cannot start, or if Horizon cannot read the resource
+state of the cloud, the dialog shows the reason and **Remove from Horizon
+anyway**. This action removes the cloud and its panels from Horizon, but it
+does not delete the resources at the provider. The dialog names the resources
+that can remain. They can cost money until you delete them at the provider.
+Horizon keeps the state directory of the cloud. **Cancel** keeps the cloud.
+
+While a different operation of the cloud runs, for example a deployment or a
+provider check, the dialog tells you to wait and shows only **Cancel**.
 
 ### Parked terminals
 

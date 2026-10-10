@@ -3,14 +3,17 @@ use std::collections::{BTreeMap, BTreeSet};
 mod offer;
 
 use super::{HorizonApp, Runtime, Stage, cards::wording, lifecycle::Action};
-use offer::Primary;
+use offer::{Failure, Primary};
 
 #[derive(Default)]
 pub(super) struct State {
     confirming: Option<u32>,
     deleting: BTreeSet<u32>,
-    /// Per cloud, what stopped its close: the dialog then offers to remove it anyway.
-    failed: BTreeMap<u32, String>,
+    /// Per cloud, what stopped its close: the dialog then asks again with the reason.
+    failed: BTreeMap<u32, Failure>,
+    /// The clouds whose saved record, read when their close was asked, may hold
+    /// provider resources.
+    held: BTreeSet<u32>,
     /// Per closing cloud, the panels that were showing when its disposal took over.
     hidden: BTreeMap<u32, Vec<String>>,
 }
@@ -45,27 +48,46 @@ impl HorizonApp {
     /// The × of a cloud: its close always offers to delete its resources first, so a
     /// failure from an earlier close, possibly since retried from the card, is forgotten.
     pub(in crate::app::cloud_panel) fn request_cloud_close(&mut self, id: u32) {
+        let held = self.cloud_holds_resources(id);
         let close = &mut self.cloud_prototype.production.close;
         close.failed.remove(&id);
+        if held {
+            close.held.insert(id);
+        } else {
+            close.held.remove(&id);
+        }
         close.confirming = Some(id);
+    }
+
+    /// Forgets the dialog and what an earlier attempt of cloud `id`'s close left.
+    fn end_close_confirmation(&mut self, id: u32) {
+        let close = &mut self.cloud_prototype.production.close;
+        close.confirming = None;
+        close.failed.remove(&id);
     }
 
     pub(in crate::app::cloud_panel) fn render_cloud_close_confirmation(&mut self, ctx: &egui::Context) {
         let Some(id) = self.cloud_prototype.production.close.confirming else {
             return;
         };
-        let Some(group) = self.cloud_prototype.groups.0.iter().find(|group| group.issue == id) else {
-            self.cloud_prototype.production.close.confirming = None;
-            self.cloud_prototype.production.close.failed.remove(&id);
+        let Some((group, launch)) = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.issue == id)
+            .and_then(|group| Some((group, group.remote.as_ref()?)))
+        else {
+            self.end_close_confirmation(id);
             return;
         };
-        let Some(launch) = &group.remote else { return };
         let close = &self.cloud_prototype.production.close;
         let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
         let offer = offer::offer(
             runtime,
             launch.deployment_started,
-            close.failed.get(&id).map(String::as_str),
+            close.held.contains(&id),
+            close.failed.get(&id),
         );
         let remains = offer
             .remove_anyway
@@ -132,18 +154,11 @@ impl HorizonApp {
             );
         }
         if cancelled || dismissed {
-            self.cloud_prototype.production.close.confirming = None;
-            self.cloud_prototype.production.close.failed.remove(&id);
+            self.end_close_confirmation(id);
             return;
         }
         match chosen {
-            Some(Choice::Primary(Primary::Remove)) => {
-                if self.remove_deleted_cloud(id, ctx) {
-                    self.cloud_prototype.production.close.confirming = None;
-                } else {
-                    self.close_failed(id, "Could not remove the cloud");
-                }
-            }
+            Some(Choice::Primary(Primary::Remove)) => self.remove_for_close(id, ctx),
             Some(Choice::Primary(Primary::Delete)) => self.delete_for_close(id, ctx),
             Some(Choice::RemoveAnyway) => self.remove_cloud_anyway(id, ctx),
             None => {}
@@ -153,7 +168,7 @@ impl HorizonApp {
     /// Removes cloud `id` from Horizon after its deletion failed or could not run,
     /// leaving whatever its provider still holds.
     fn remove_cloud_anyway(&mut self, id: u32, ctx: &egui::Context) {
-        self.cloud_prototype.production.close.confirming = None;
+        self.end_close_confirmation(id);
         let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
             return;
         };
@@ -172,40 +187,67 @@ impl HorizonApp {
         self.discard_cloud(index, ctx);
     }
 
+    /// Removes cloud `id`, which has nothing at its provider. A removal the saved record
+    /// refuses keeps the dialog open, now offering to delete what it holds.
+    fn remove_for_close(&mut self, id: u32, ctx: &egui::Context) {
+        let (removed, error) = self.close_step(id, |app| app.remove_deleted_cloud(id, ctx));
+        if removed {
+            self.cloud_prototype.production.close.confirming = None;
+        } else {
+            self.close_failed(id, "Could not remove the cloud", false, error);
+        }
+    }
+
     /// Starts deleting the resources of cloud `id`; the cloud closes once they are gone.
     /// A deletion that cannot start keeps the dialog open with the reason.
     fn delete_for_close(&mut self, id: u32, ctx: &egui::Context) {
         self.cloud_prototype.production.close.failed.remove(&id);
-        self.change_production_worker(id, Action::Delete, ctx);
-        let started = self
-            .cloud_prototype
-            .production
-            .runtimes
-            .get(&id)
-            .is_some_and(|runtime| {
+        let (started, error) = self.close_step(id, |app| {
+            app.change_production_worker(id, Action::Delete, ctx);
+            app.cloud_prototype.production.runtimes.get(&id).is_some_and(|runtime| {
                 runtime.receiver.is_some() && runtime.stage.is_some_and(|stage| Stage::DELETION.contains(&stage))
-            });
+            })
+        });
         if started {
             self.cloud_prototype.production.close.confirming = None;
             self.cloud_prototype.production.close.deleting.insert(id);
         } else {
-            self.close_failed(id, "Could not delete the cloud resources");
+            self.close_failed(id, "Could not delete the cloud resources", true, error);
         }
     }
 
-    /// Records why closing cloud `id` stopped short, and asks again unless another
-    /// cloud's close is being asked.
-    fn close_failed(&mut self, id: u32, what: &str) {
-        let error = self
+    /// Runs one step of cloud `id`'s close, which reports whether it went ahead, and
+    /// returns the error the step itself reported. An earlier error the card showed is
+    /// not the step's: it stays shown only when the step stopped without one.
+    fn close_step(&mut self, id: u32, step: impl FnOnce(&mut Self) -> bool) -> (bool, Option<String>) {
+        let earlier = self
             .cloud_prototype
             .production
             .runtimes
-            .get(&id)
-            .and_then(|runtime| runtime.error.as_deref())
-            .filter(|error| *error != super::DELETED_RESOURCES_MESSAGE);
-        let reason = error.map_or_else(|| format!("{what}."), |error| format!("{what}: {error}"));
+            .get_mut(&id)
+            .and_then(|runtime| runtime.error.take());
+        let went_ahead = step(self);
+        let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
+            return (went_ahead, None);
+        };
+        if runtime.error.is_none() && !went_ahead {
+            runtime.error = earlier;
+            return (went_ahead, None);
+        }
+        (went_ahead, runtime.error.clone())
+    }
+
+    /// Records why closing cloud `id` stopped short, and asks again unless another
+    /// cloud's close is being asked. `error` is what the attempt itself reported.
+    fn close_failed(&mut self, id: u32, what: &str, deletion_tried: bool, error: Option<String>) {
+        if !self.cloud_prototype.groups.0.iter().any(|group| group.issue == id) {
+            return;
+        }
+        let error = error.filter(|error| error != super::DELETED_RESOURCES_MESSAGE);
         let close = &mut self.cloud_prototype.production.close;
-        close.failed.insert(id, reason);
+        close
+            .failed
+            .insert(id, Failure::new(what, deletion_tried, error.as_deref()));
         close.confirming.get_or_insert(id);
     }
 
@@ -230,7 +272,11 @@ impl HorizonApp {
             }
         }
         self.cloud_prototype.production.runtimes.remove(&id);
-        self.cloud_prototype.production.close.failed.remove(&id);
+        let close = &mut self.cloud_prototype.production.close;
+        close.failed.remove(&id);
+        close.held.remove(&id);
+        close.deleting.remove(&id);
+        close.hidden.remove(&id);
         super::cards::forget_log_heights(ctx, id);
         self.save_cloud_prototype();
         self.release_removed_cloud_workspace(&group.workspace, ctx);
@@ -318,14 +364,21 @@ impl HorizonApp {
                 // removal then closes them, or declines while the record still holds resources
                 // and leaves the cloud, with its panels, as it was.
                 self.restore_closing_panels(id);
-                if !self.remove_deleted_cloud(id, ctx) {
-                    self.close_failed(id, "Could not remove the cloud");
+                let (removed, error) = self.close_step(id, |app| app.remove_deleted_cloud(id, ctx));
+                if !removed {
+                    self.close_failed(id, "Could not remove the cloud", true, error);
                 }
             } else {
                 // The deletion stopped short: the cloud stays, with its failure in the header,
                 // and the dialog asks again, now offering to remove it anyway.
                 self.restore_closing_panels(id);
-                self.close_failed(id, "Could not delete the cloud resources");
+                let error = self
+                    .cloud_prototype
+                    .production
+                    .runtimes
+                    .get(&id)
+                    .and_then(|runtime| runtime.error.clone());
+                self.close_failed(id, "Could not delete the cloud resources", true, error);
             }
         }
     }

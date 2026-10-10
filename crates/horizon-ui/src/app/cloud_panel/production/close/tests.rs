@@ -6,6 +6,8 @@ use horizon_core::cloud_runtime::state::Deployment;
 #[cfg(unix)]
 use horizon_core::cloud_runtime::{CreateState, state::Store};
 
+mod refused;
+
 fn deployment() -> Deployment {
     serde_json::from_value(serde_json::json!({
         "version": 1, "cloud_id": "fixture", "repository": "/synthetic", "revision": "a".repeat(40),
@@ -57,7 +59,7 @@ fn failed_image_push_closes_without_worker_deletion_and_rechecks_storage() {
     add_cloud(&mut app, temp.path(), Some(state));
     let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
     runtime.error = Some("error from registry: denied".into());
-    assert_eq!(offer::offer(runtime, true, None).primary, Some(Primary::Remove));
+    assert_eq!(offer::offer(runtime, true, false, None).primary, Some(Primary::Remove));
 
     std::fs::write(path.join("workspace-volume.required"), "").unwrap();
     app.remove_deleted_cloud(101, &egui::Context::default());
@@ -390,9 +392,12 @@ fn a_deletion_that_cannot_start_asks_again_and_can_remove_anyway() {
     assert_eq!(close.confirming, Some(101), "the dialog stays open");
     assert!(!close.closing(101));
     let failure = close.failed[&101].clone();
-    assert!(failure.starts_with("Could not delete the cloud resources"), "{failure}");
+    assert!(
+        failure.reason.starts_with("Could not delete the cloud resources"),
+        "{failure:?}"
+    );
     let runtime = &app.cloud_prototype.production.runtimes[&101];
-    let offer = offer::offer(runtime, true, Some(&failure));
+    let offer = offer::offer(runtime, true, true, Some(&failure));
     assert!(offer.remove_anyway, "only now may the cloud leave without its deletion");
 
     app.remove_cloud_anyway(101, &ctx);
@@ -418,7 +423,7 @@ fn a_failed_close_deletion_reopens_the_dialog_with_its_failure() {
     let close = &app.cloud_prototype.production.close;
     assert_eq!(close.confirming, Some(101));
     assert_eq!(
-        close.failed[&101],
+        close.failed[&101].reason,
         "Could not delete the cloud resources: provider timed out"
     );
     assert_eq!(app.cloud_prototype.groups.0.len(), 1, "nothing is removed by itself");
@@ -432,14 +437,6 @@ fn a_failed_close_deletion_reopens_the_dialog_with_its_failure() {
 }
 
 #[test]
-fn a_busy_cloud_is_not_removed_anyway() {
-    let (temp, mut app) = test_app();
-    let (_panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
-    app.remove_cloud_anyway(101, &egui::Context::default());
-    assert_eq!(app.cloud_prototype.groups.0.len(), 1);
-}
-
-#[test]
 fn cancel_forgets_the_failure_so_the_next_close_deletes_first() {
     let (temp, mut app) = test_app();
     add_cloud(&mut app, temp.path(), Some(deployment()));
@@ -448,7 +445,7 @@ fn cancel_forgets_the_failure_so_the_next_close_deletes_first() {
         .production
         .close
         .failed
-        .insert(101, "Could not delete the cloud resources.".into());
+        .insert(101, Failure::new("Could not delete the cloud resources", true, None));
     let ctx = egui::Context::default();
     for _ in 0..2 {
         let _ = ctx
