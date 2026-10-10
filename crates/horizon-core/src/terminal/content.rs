@@ -2,7 +2,7 @@ use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 
 use super::logical_line::{RowJoin, logical_line_at_viewport_point};
 use super::{
-    Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, TermDamage, Terminal, TerminalEventProxy,
+    Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, Terminal, TerminalEventProxy,
     current_cwd_for_pid, find_file_path_at_column, find_url_at_column, viewport_to_point,
 };
 
@@ -208,11 +208,6 @@ impl Terminal {
     pub fn with_renderable_content<R>(&self, render: impl FnOnce(RenderableContent<'_>) -> R) -> R {
         let term = self.term.lock();
         render(term.renderable_content())
-    }
-
-    pub fn with_damage<R>(&self, update: impl FnOnce(TermDamage<'_>) -> R) -> R {
-        let mut term = self.term.lock();
-        update(term.damage())
     }
 
     pub fn reset_damage(&self) {

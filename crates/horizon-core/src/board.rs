@@ -564,12 +564,6 @@ impl Board {
     }
 
     #[must_use]
-    pub fn workspace_for_panel(&self, id: PanelId) -> Option<&Workspace> {
-        self.panel_workspace_id(id)
-            .and_then(|workspace_id| self.workspace(workspace_id))
-    }
-
-    #[must_use]
     pub fn workspace_id_by_local_id(&self, local_id: &str) -> Option<WorkspaceId> {
         self.workspaces
             .iter()

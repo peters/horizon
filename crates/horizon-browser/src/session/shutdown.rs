@@ -125,11 +125,6 @@ impl BrowserShutdownSignal {
     }
 
     #[must_use]
-    pub fn completed_with_profile_cleanup(profile_dir: std::path::PathBuf) -> Self {
-        Self::completed().with_profile_cleanup(profile_dir)
-    }
-
-    #[must_use]
     pub fn is_complete(&self) -> bool {
         self.process_is_complete() && self.profile_cleanup_is_complete()
     }

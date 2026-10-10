@@ -15,7 +15,6 @@
 //! Both are plain `ws://` to 127.0.0.1, so no TLS is involved.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
@@ -30,7 +29,6 @@ use tungstenite::protocol::WebSocket;
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(16);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_DEVTOOLS_JSON_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Error, Debug)]
 pub enum CdpError {
@@ -419,97 +417,6 @@ fn host_port_from_ws_url(ws_url: &str) -> Result<String> {
     }
 }
 
-/// Fetch a JSON document from the `DevTools` HTTP endpoint.
-///
-/// The browser never closes these connections even with `Connection: close`, so
-/// this reads exactly `Content-Length` bytes instead of to EOF.
-///
-/// # Errors
-/// Fails on any network or framing error, including a response header block
-/// that exceeds the 64 KB bound.
-pub fn fetch_json(host_port: &str, path: &str) -> std::io::Result<Value> {
-    let socket = host_port.parse::<SocketAddr>().map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "devtools http: invalid socket address",
-        )
-    })?;
-    if socket.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "devtools http: non-loopback endpoint is not allowed",
-        ));
-    }
-    let mut stream = TcpStream::connect_timeout(&socket, HANDSHAKE_TIMEOUT)?;
-    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
-    stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes())?;
-    let mut buf = Vec::new();
-    loop {
-        let mut byte = [0u8; 1];
-        if stream.read(&mut byte)? != 1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "devtools http: short header",
-            ));
-        }
-        buf.push(byte[0]);
-        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-            break;
-        }
-        if buf.len() > 64 * 1024 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "devtools http: header too large",
-            ));
-        }
-    }
-    let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "devtools http: malformed header",
-        ));
-    };
-    let header_end = pos + 4;
-    let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-    let Some(length) = headers.lines().find_map(|line| {
-        line.strip_prefix("Content-Length:")
-            .or_else(|| line.strip_prefix("content-length:"))
-            .and_then(|v| v.trim().parse::<usize>().ok())
-    }) else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "devtools http: missing Content-Length",
-        ));
-    };
-    validate_devtools_body_length(length)?;
-    let mut body = vec![0u8; length];
-    let mut got = 0usize;
-    while got < length {
-        let n = stream.read(&mut body[got..])?;
-        if n == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "devtools http: short body",
-            ));
-        }
-        got += n;
-    }
-    serde_json::from_slice(&body).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
-}
-
-fn validate_devtools_body_length(length: usize) -> std::io::Result<()> {
-    if length <= MAX_DEVTOOLS_JSON_BYTES {
-        Ok(())
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "devtools http: body too large",
-        ))
-    }
-}
-
 /// Parse the `DevTools listening on ws://...` line from browser stderr.
 #[must_use]
 pub fn parse_devtools_ws_url(line: &str) -> Option<String> {
@@ -629,18 +536,6 @@ mod tests {
         assert!(host_port_from_ws_url("http://x").is_err());
         assert!(host_port_from_ws_url("ws://localhost:43977/devtools/page/xyz").is_err());
         assert!(host_port_from_ws_url("ws://127.0.0.2:43977/devtools/page/xyz").is_err());
-    }
-
-    #[test]
-    fn fetch_json_rejects_non_loopback_endpoints() {
-        let err = fetch_json("192.168.0.1:9222", "/json/version").unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-    }
-
-    #[test]
-    fn fetch_json_bounds_reported_body_length() {
-        assert!(validate_devtools_body_length(MAX_DEVTOOLS_JSON_BYTES).is_ok());
-        assert!(validate_devtools_body_length(MAX_DEVTOOLS_JSON_BYTES + 1).is_err());
     }
 
     #[test]

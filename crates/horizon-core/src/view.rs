@@ -31,13 +31,6 @@ impl CanvasViewState {
     }
 
     #[must_use]
-    pub fn is_identity(self) -> bool {
-        (self.pan_offset[0]).abs() <= f32::EPSILON
-            && (self.pan_offset[1]).abs() <= f32::EPSILON
-            && (self.zoom - DEFAULT_CANVAS_ZOOM).abs() <= f32::EPSILON
-    }
-
-    #[must_use]
     pub fn canvas_to_screen(self, canvas_origin: [f32; 2], canvas_point: [f32; 2]) -> [f32; 2] {
         [
             canvas_origin[0] + self.pan_offset[0] + canvas_point[0] * self.zoom,
