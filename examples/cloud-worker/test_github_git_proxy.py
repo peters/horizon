@@ -3,6 +3,7 @@ that runs `git http-backend` on the loopback address. Synthetic tokens only."""
 import base64
 import contextlib
 import http.server
+import io
 import json
 import os
 from pathlib import Path
@@ -340,6 +341,28 @@ class GitProxyTests(ServiceTestCase):
             return data
         self.assertIn(b'malformed Git LFS batch request', batch(b'{"operation":"upload","operation":"download"}'))
         self.assertIn(b'granted for reading only', batch(b'{"operation":"upload","objects":[]}', expect=True))
+
+    def test_a_refused_request_that_waits_for_a_continue_gets_its_refusal_at_once(self):
+        started = time.monotonic()
+        with self.tunnel() as connection:
+            connection.sendall(b'POST /example/secret.git/git-receive-pack HTTP/1.1\r\nHost: github.com\r\n'
+                               b'Content-Type: application/x-git-receive-pack-request\r\n'
+                               b'Content-Length: 4096\r\nExpect: 100-continue\r\n\r\n')
+            reply = connection.recv(65536)
+        self.assertTrue(reply.startswith(b'HTTP/1.1 403'), reply[:200])
+        self.assertIn(b'no GitHub grant', reply)
+        self.assertLess(time.monotonic() - started, 8)
+        self.assertEqual(self.github.seen, [])
+
+    def test_the_log_says_granted_only_when_a_token_was_added(self):
+        raw = b'GET /example/project.git/info/refs?service=git-upload-pack HTTP/1.1\r\nHost: github.com\r\n\r\n'
+        exchange = gitproxy.Exchange(self.store, io.BytesIO(raw), io.BytesIO(), {service.TEST_URL: self.github.url},
+                                     lambda: None, owned=lambda: False)
+        with self.assertRaises(relay.Refusal) as refused:
+            exchange.run()
+        self.assertEqual(refused.exception.status, 403)
+        self.assertEqual(exchange.record['granted'], False)
+        self.assertEqual(self.github.seen, [])
 
     def tunnel(self, target=b'github.com:443'):
         """A connection with an open tunnel to the proxy's github.com, or the refusal."""

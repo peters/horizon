@@ -47,6 +47,8 @@ class Request:
         self.length = 0
         # Set once reading the body began; a drain then cannot read it again.
         self.consumed = False
+        # Set once the relay answered `Expect: 100-continue`.
+        self.continued = False
 
     def values(self, name):
         return [value for field, value in self.fields if field == name]
@@ -152,8 +154,10 @@ def read_body(request, limit):
 
 def drain(request, limit=1 << 20):
     """Reads and drops a small body the relay refused, so the client reads the refusal
-    instead of a reset connection. A larger or broken body is left; the connection ends."""
-    if not request.consumed and (request.chunked or request.length):
+    instead of a reset connection. A larger or broken body is left; the connection ends.
+    A client that waits for `100 Continue` does not send its body, so none is read."""
+    waiting = (request.field('expect') or '').lower() == '100-continue' and not request.continued
+    if not request.consumed and not waiting and (request.chunked or request.length):
         with contextlib.suppress(Refusal, ClientGone, OSError, ValueError):
             for _ in body(request, limit):
                 pass
@@ -161,7 +165,8 @@ def drain(request, limit=1 << 20):
 
 def continue_if_asked(request, output):
     """Answers `Expect: 100-continue` once the relay accepted the request."""
-    if (request.field('expect') or '').lower() == '100-continue':
+    if (request.field('expect') or '').lower() == '100-continue' and not request.continued:
+        request.continued = True
         output.write(b'HTTP/1.1 100 Continue\r\n\r\n')
         output.flush()
 

@@ -306,7 +306,6 @@ class Exchange:
             access, data = batch(relay.read_body(request, MAX_LFS_REQUEST))
         self.record['request'] = kind + '-' + access
         chosen = plan(self.store, repository, access, time.time())
-        self.record['granted'] = chosen.token is not None
         # Checked again before anything reaches GitHub: the account that opened the
         # connection must still hold it.
         if not self.owned():
@@ -318,6 +317,7 @@ class Exchange:
         if chosen.token is not None:
             secrets = (chosen.token, credential(chosen.token).split(' ', 1)[1])
             fields.append(('Authorization', credential(chosen.token)))
+            self.record['granted'] = True
         if data is None:
             relay.continue_if_asked(request, self.output)
             pieces, length = relay.body(request), request.length
