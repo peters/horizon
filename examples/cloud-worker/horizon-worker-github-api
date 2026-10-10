@@ -48,7 +48,7 @@ HEAD_SECONDS = 30
 TIMEOUT = 300
 MAX_GRAPHQL_REQUEST = 1 << 20
 MAX_GRAPHQL_REPLY = 64 << 20
-MAX_IDS_CACHE = 1024
+EXPIRED = 'the GitHub access token expired and this worker could not refresh it yet.'
 REQUEST_FIELDS = {'accept', 'accept-encoding', 'content-type', 'user-agent', 'x-github-api-version', 'time-zone',
                   'if-none-match', 'if-modified-since', 'graphql-features', 'range', 'if-range'}
 REPLY_FIELDS = {'cache-control', 'content-disposition', 'content-encoding', 'content-range', 'content-type',
@@ -83,24 +83,26 @@ class Destination:
 
 class Candidate:
     """A token and the repositories it may be used for: the chain's grants, or one static
-    binding from cloud settings, whose token's own permissions decide what it may do."""
+    binding from cloud settings, whose token's own permissions decide what it may do. A chain
+    whose token expires within SERVE_MARGIN is not `usable`, but its grants still come first:
+    a repository that it grants gets the expiry refusal, never the static binding's token."""
 
-    def __init__(self, token, allowed, source):
-        self.token, self.allowed, self.source = token, allowed, source
+    def __init__(self, token, allowed, source, usable=True):
+        self.token, self.allowed, self.source, self.usable = token, allowed, source, usable
 
 
 def candidates(store, now, static=None):
-    """The tokens that may serve a request now, the chain's first, and the reason when there
-    is none."""
+    """The tokens for a request, the chain's first, and the reason when none may serve."""
     found = []
     state, problem = gitproxy.usable_state(store)
-    if state is not None and state['chain']['access_expires_at'] - now > common.SERVE_MARGIN:
+    if state is not None:
         def chain_allowed(repository, access, state=state):
             granted, _ = agents.granted_access(state, repository)
             return granted is not None and agents.covered(granted, access)
-        found.append(Candidate(state['chain']['access_token'], chain_allowed, 'chain'))
-    elif state is not None:
-        problem = 'the GitHub access token expired and this worker could not refresh it yet.'
+        usable = state['chain']['access_expires_at'] - now > common.SERVE_MARGIN
+        found.append(Candidate(state['chain']['access_token'], chain_allowed, 'chain', usable))
+        if not usable:
+            problem = EXPIRED
     try:
         loaded = (static or auth.read_grants)()
     except (OSError, ValueError, RecursionError, UnicodeDecodeError):
@@ -132,24 +134,22 @@ class Schema:
 
 
 class Broker:
-    """The broker's shared state: the token store, the schema and the repository names that
-    `/repositories/ID` paths resolved to."""
+    """The broker's shared state: the token store and the schema."""
 
     def __init__(self, store, environ, static=None):
         self.store, self.environ, self.static = store, environ, static
         self.schema = Schema()
-        self.names = {}
-        self.names_lock = threading.Lock()
 
     def candidates(self):
         found, problem = candidates(self.store, time.time(), self.static)
-        if not found:
+        if not any(candidate.usable for candidate in found):
             raise refusal(403, problem or 'this worker has no GitHub sign-in. Connect GitHub in Horizon.')
         return found
 
-    def call(self, host, method, target, token, body=None, extra=()):
+    def call(self, host, method, target, token, body=None, extra=(), sent=lambda: None):
         """(status, JSON reply) of a request that the broker makes itself, with the `extra`
-        fields of the client's request that GitHub reads."""
+        fields of the client's request that GitHub reads. `sent` runs once the request head
+        with the token went out."""
         destination = Destination(host, self.environ)
         connection = destination.connect(60)
         data = None if body is None else json.dumps(body).encode()
@@ -159,7 +159,7 @@ class Broker:
             fields.append(('Content-Type', 'application/json'))
         try:
             response = relay.send(connection, destination, method, target, fields,
-                                  [data] if data else [], len(data) if data else 0)
+                                  [data] if data else [], len(data) if data else 0, sent=sent)
             payload = response.read(MAX_GRAPHQL_REPLY + 1)
         except (OSError, http.client.HTTPException):
             raise refusal(502, 'this worker could not reach GitHub; try again.') from None
@@ -172,47 +172,45 @@ class Broker:
         except ValueError:
             return response.status, None
 
-    def resolve(self, repository_id, candidate):
-        """The owner/name of a repository ID, as GitHub tells it with the candidate's token."""
-        key = (candidate.source, candidate.token[-8:], repository_id)
-        with self.names_lock:
-            if key in self.names:
-                return self.names[key]
-        status, reply = self.call(rest.API, 'GET', '/repositories/' + repository_id, candidate.token)
-        name = reply.get('full_name') if status == 200 and isinstance(reply, dict) else None
-        if not isinstance(name, str) or not auth.valid_repository(name):
-            return None
-        with self.names_lock:
-            if len(self.names) >= MAX_IDS_CACHE:
-                self.names.clear()
-            self.names[key] = name
-        return name
+    def resolve(self, repository_id, found, sent=lambda: None):
+        """The current owner/name of a repository ID, as GitHub tells it with the first token
+        that sees it. Asked for each request: a rename changes the name of an ID."""
+        for candidate in found:
+            if not candidate.usable:
+                continue
+            status, reply = self.call(rest.API, 'GET', '/repositories/' + repository_id, candidate.token, sent=sent)
+            name = reply.get('full_name') if status == 200 and isinstance(reply, dict) else None
+            if isinstance(name, str) and auth.valid_repository(name):
+                return name
+        return None
 
 
-def choose(broker, route):
-    """(candidate or None, repository) for a REST route; refuses a repository without a grant."""
+def choose(broker, route, sent=lambda: None):
+    """(candidate or None, repository) for a REST route; refuses a repository without a grant.
+    `sent` runs when the broker sends a token to GitHub itself, to resolve a repository ID."""
     if route.kind == 'content':
         return None, None
     found = broker.candidates()
     if route.kind == 'plain':
-        return found[0], None
+        return next(candidate for candidate in found if candidate.usable), None
     wanted = list(route.repositories) if route.kind == 'search' else [route.repository]
+    if route.repository_id is not None:
+        name = broker.resolve(route.repository_id, found, sent)
+        if name is None:
+            raise refusal(403, 'the repository with ID %s has no GitHub grant on this worker. Ask for access '
+                               'with the github_access tool.' % route.repository_id)
+        wanted = [name]
     for candidate in found:
-        names = wanted
-        if route.repository_id is not None:
-            name = broker.resolve(route.repository_id, candidate)
-            if name is None:
-                continue
-            names = [name]
-        if all(candidate.allowed(name, route.access) for name in names):
-            return candidate, names[0]
+        if all(candidate.allowed(name, route.access) for name in wanted):
+            if not candidate.usable:
+                raise refusal(503, EXPIRED)
+            return candidate, wanted[0]
         # The chain's grant comes first, as for Git: a repository that the chain grants for
         # reading only is not pushed to with the static binding's token.
-        if candidate.source == 'chain' and all(candidate.allowed(name, 'read') for name in names):
+        if candidate.source == 'chain' and all(candidate.allowed(name, 'read') for name in wanted):
+            if not candidate.usable:
+                raise refusal(503, EXPIRED)
             break
-    if route.repository_id is not None:
-        raise refusal(403, 'the repository with ID %s has no GitHub grant on this worker. Ask for access with '
-                           'the github_access tool.' % route.repository_id)
     missing = [name for name in wanted if not any(candidate.allowed(name, 'read') for candidate in found)]
     if missing:
         raise refusal(403, '%s has no GitHub grant on this worker. Ask for access with the github_access tool.'
@@ -261,7 +259,7 @@ class Exchange:
         self.record.update(request=route.kind, host=host)
         if route.kind == 'graphql':
             return self.graphql(request)
-        candidate, repository = choose(self.broker, route)
+        candidate, repository = choose(self.broker, route, lambda: self.record.update(granted=True))
         self.record['repository'] = repository
         self.forward(request, route, candidate)
 
@@ -299,10 +297,15 @@ class Exchange:
             body = json.loads(relay.read_body(request, MAX_GRAPHQL_REQUEST))
         except (ValueError, RecursionError):
             raise refusal(400, 'the GraphQL request is not JSON.') from None
+
+        def granted():
+            # A token went to GitHub, also for a request that the policy refuses after it.
+            self.record['granted'] = True
+
         found = self.broker.candidates()
-        first = found[0]
+        first = next(candidate for candidate in found if candidate.usable)
         schema = self.broker.schema.get(lambda query: self.broker.call(rest.API, 'POST', '/graphql', first.token,
-                                                                       query))
+                                                                       query, sent=granted))
         plan, refused = None, None
         for candidate in found:
             try:
@@ -313,15 +316,17 @@ class Exchange:
         if plan is None:
             self.record['outcome'] = 'refused'
             return graphql_refused(self.output, str(refused))
+        if not candidate.usable:
+            self.record['outcome'] = 'refused'
+            return graphql_refused(self.output, EXPIRED)
         try:
             if plan.ids:
                 status, reply = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
-                                                 policy.lookup(schema, plan.ids))
+                                                 policy.lookup(schema, plan.ids), sent=granted)
                 policy.check_lookup(reply if status == 200 else None, plan.ids, candidate.allowed)
-            self.record['granted'] = True
             features = [('GraphQL-Features', value) for value in request.values('graphql-features')]
             status, reply = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
-                                             plan.body(body.get('variables') or {}), features)
+                                             plan.body(body.get('variables') or {}), features, sent=granted)
             if status == 401:
                 raise policy.Refused('GitHub refused the sign-in of this worker. Connect GitHub again in Horizon.')
             if not isinstance(reply, dict):

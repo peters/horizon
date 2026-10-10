@@ -15,7 +15,7 @@ from unittest import mock
 
 from test_github_git_proxy import STATIC, bind_static
 from test_github_graphql_policy import TYPES
-from test_horizon_worker_github import ACCESS, NOW, ServiceTestCase, service
+from test_horizon_worker_github import ACCESS, NOW, ServiceTestCase, chain, service
 
 broker = service.broker
 rest = broker.rest
@@ -248,6 +248,29 @@ class RestTests(BrokerTestCase):
         self.assertEqual(status, 403)
         self.assertIn(b'reading only', payload)
         self.assertEqual(len(self.api.seen), seen)
+
+    def test_an_expiring_chain_keeps_its_repositories_from_the_static_binding(self):
+        bind_static(self.credential, 'example/project', 'example/bound')
+        with mock.patch.object(broker.time, 'time', return_value=chain()['access_expires_at'] - 30):
+            status, _, payload = self.send('POST', '/repos/example/project/issues', body={'title': 't'})
+            self.assertEqual(status, 503)
+            self.assertIn(b'expired', payload)
+            self.assertEqual(self.api.seen, [])
+            reply = self.graphql('{ repository(owner: "example", name: "project") { name } }')
+            self.assertIn('expired', reply['errors'][0]['message'])
+            self.assertEqual(self.send('GET', '/repos/example/bound')[0], 200)
+            self.assertEqual(self.api.seen[-1][3], 'token ' + STATIC)
+
+    def test_a_repository_id_is_resolved_for_each_request(self):
+        self.assertEqual(self.send('GET', '/repositories/111/issues')[0], 200)
+        # The repository was renamed to a name without a grant.
+        with mock.patch.dict(IDS, {'111': 'example/secret'}):
+            status, _, payload = self.send('GET', '/repositories/111/issues')
+        self.assertEqual(status, 403)
+        self.assertNotEqual(self.api.seen[-1][2], '/repositories/111/issues')
+        # The lookup itself carried the token, so the refused request's log says so.
+        record = self.records(3)[-1]
+        self.assertEqual((record['granted'], record['outcome']), (True, 'refused'))
 
     def test_other_accounts_and_a_missing_sign_in_are_refused(self):
         self.allowed[:] = [os.getuid() + 1]

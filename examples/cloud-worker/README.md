@@ -989,8 +989,8 @@ The broker does these steps for each connection:
     collaborators, hooks, keys, secrets, variables, environments, rulesets,
     runners and branch protection, a transfer and a delete of the repository.
   - `/repositories/ID/...`, which GitHub uses in its page links. The broker asks
-    GitHub for the name of the repository first, and then applies the rules
-    above.
+    GitHub for the current name of the repository for each request, and then
+    applies the rules above.
   - `/search/issues`, `/search/commits`, `/search/code` and
     `/search/repositories` with one `q` that has a `repo:` qualifier for each
     repository, all granted, and no `OR`, `AND`, `NOT`, parentheses, `org:`,
@@ -1005,6 +1005,8 @@ The broker does these steps for each connection:
   The request does not go to GitHub.
 - It uses the token of the chain for a repository that the chain grants, and
   the token of the static token file for a repository that only that file binds.
+  While the chain's token expires and is not refreshed yet, a repository that the
+  chain grants gets a refusal, never the static file's token.
   It sends on only the fields that `gh` needs, never the client's
   `Authorization` or cookies, and never passes on a reply field that holds the
   token.
@@ -1035,7 +1037,9 @@ asks GitHub for once per start:
 The broker writes one line for each connection to the request log below, with
 `kind` set to `api`, the `host`, the `request` kind (`repository`, `search`,
 `plain`, `content`, `graphql` or `invalid`), `repository`, `uid`, `pid`,
-`granted` and `outcome` as for the Git proxy.
+`granted` and `outcome` as for the Git proxy. `granted` is also true when the
+broker itself sent the token to GitHub for the request, to resolve a repository
+ID or to look up the IDs of a mutation, and then refused it.
 
 **Agent access.** Agents ask the service on `/run/horizon-worker/github.sock`.
 The socket accepts every local account, but the service reads the caller's user
