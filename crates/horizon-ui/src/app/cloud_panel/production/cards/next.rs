@@ -9,20 +9,20 @@ pub(super) enum Next {
     /// Retries as the header's own button does.
     Retry(Primary),
     /// Opens Cloud settings on the cloud's image repository, where a login fixes a
-    /// registry refusal that a retry would only repeat. `pull` tells that the refused step
-    /// pulls the image rather than pushes it.
+    /// registry refusal that a retry would only repeat. `pull` tells that the registry
+    /// refused the worker pull credential rather than a publishing one.
     ContainerRegistry { pull: bool },
 }
 
 impl Next {
     pub(super) fn of(status: &Status) -> Option<Self> {
         let failure = status.failure.as_ref()?;
-        if failure.remedy() == Some(Remedy::RegistryLogin)
+        if let Some(remedy) = failure.remedy()
             && status.binds_image
-            && let Some(stage) = moving_the_image(status)
+            && moves_the_image(status)
         {
             return Some(Self::ContainerRegistry {
-                pull: stage != Stage::Push,
+                pull: remedy == Remedy::PullLogin,
             });
         }
         status
@@ -46,16 +46,15 @@ impl Next {
     }
 }
 
-/// The failed step when it moves the cloud's own image, whose repository Container registry
+/// Whether the failed step moves the cloud's own image, whose repository Container registry
 /// binds. A refusal while the image builds is about a base image the recipe pulls.
-fn moving_the_image(status: &Status) -> Option<Stage> {
+fn moves_the_image(status: &Status) -> bool {
     let track = &status.track;
     track
         .current
         .filter(|_| track.failed)
         .and_then(|index| track.stages.get(index))
-        .copied()
-        .filter(|stage| {
+        .is_some_and(|stage| {
             matches!(
                 stage,
                 Stage::Validate | Stage::Push | Stage::Replace | Stage::Provision | Stage::Readiness
@@ -136,6 +135,22 @@ mod tests {
         assert_eq!(
             Next::of(&status).and_then(Next::action),
             Some(Action::ContainerRegistry { pull: true })
+        );
+    }
+
+    #[test]
+    fn a_refused_publishing_preflight_keeps_the_pull_state() {
+        let runtime = failed(
+            Stage::Validate,
+            &[
+                "Error response from daemon: Get \"https://registry.example/v2/\": unauthorized: authentication required",
+            ],
+            "Publishing credential preflight failed; check the saved login, repository push permissions and registry connectivity before retrying",
+        );
+        let status = of(&runtime, Occupancy::default(), SystemTime::now());
+        assert_eq!(
+            Next::of(&status).and_then(Next::action),
+            Some(Action::ContainerRegistry { pull: false })
         );
     }
 
