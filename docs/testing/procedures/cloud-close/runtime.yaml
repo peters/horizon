@@ -1,0 +1,193 @@
+version: 3
+window:
+  width: 1600.0
+  height: 1000.0
+  x: null
+  y: null
+canvas_view:
+  pan_offset:
+  - 0.0
+  - 0.0
+  zoom: 1.0
+active_workspace_local_id: 704f3ccd-3386-4556-ab0c-5301d6359628
+focused_panel_local_id: cff5c496-bf6f-454c-9ffc-0b87bb2c4c39
+workspaces:
+- local_id: 3deffa24-d79c-496b-a892-245a74ab7b5a
+  name: demo-api
+  cwd: null
+  position:
+  - 0.0
+  - 40.0
+  template: null
+  layout: Grid
+  panels:
+  - local_id: 31c4bfd5-ae2f-4bad-ad19-47120d479de4
+    name: notes
+    name_is_custom: true
+    kind: editor
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    resume: fresh
+    work_resume:
+      enabled: false
+      max_downtime_seconds: 10800
+    position:
+    - 14.0
+    - 168.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null
+- local_id: 704f3ccd-3386-4556-ab0c-5301d6359628
+  name: scratch-notes
+  cwd: null
+  position:
+  - 1720.0
+  - 40.0
+  template: null
+  layout: Grid
+  panels:
+  - local_id: cff5c496-bf6f-454c-9ffc-0b87bb2c4c39
+    name: notes
+    name_is_custom: true
+    kind: editor
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    resume: fresh
+    work_resume:
+      enabled: false
+      max_downtime_seconds: 10800
+    position:
+    - 1734.0
+    - 868.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null
+cloud_groups:
+- remote:
+    deployment_started: true
+    id: demo-api
+    revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    profile_name: dev
+    profile:
+      provider: runpod
+      image: registry.example/worker
+      cpu: 4
+      memory_gb: 8
+      gpu: false
+      build: null
+      storage:
+        container_gb: 20
+        volume_gb: 20
+      bootstrap:
+        readiness_seconds: 600
+        contract_version: 1
+      capabilities:
+        agents:
+        - codex
+        - claude
+        - grok
+        browsers:
+        - chromium
+        desktop: true
+  issue: 101
+  title: demo-api
+  workspace: 3deffa24-d79c-496b-a892-245a74ab7b5a
+  environment:
+    id: issue-101
+    image: development-image (mock)
+    connection: LocalPrototype
+    profile: null
+    provider: null
+  cwd: /tmp/demo-repo
+  position:
+  - 0.0
+  - 40.0
+  workspace_position:
+  - 0.0
+  - 40.0
+  size:
+  - 548.0
+  - 482.0
+  collapsed: false
+  layout: Grid
+  panels:
+  - 31c4bfd5-ae2f-4bad-ad19-47120d479de4
+  hidden: []
+- remote:
+    deployment_started: false
+    id: scratch-notes
+    revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    profile_name: dev
+    profile:
+      provider: runpod
+      image: registry.example/worker
+      cpu: 4
+      memory_gb: 8
+      gpu: false
+      build: null
+      storage:
+        container_gb: 20
+        volume_gb: 20
+      bootstrap:
+        readiness_seconds: 600
+        contract_version: 1
+      capabilities:
+        agents:
+        - codex
+        - claude
+        - grok
+        browsers:
+        - chromium
+        desktop: true
+  issue: 102
+  title: scratch-notes
+  workspace: 704f3ccd-3386-4556-ab0c-5301d6359628
+  environment:
+    id: issue-102
+    image: development-image (mock)
+    connection: LocalPrototype
+    profile: null
+    provider: null
+  cwd: /tmp/demo-repo
+  position:
+  - 1720.0
+  - 740.0
+  workspace_position:
+  - 1720.0
+  - 40.0
+  size:
+  - 548.0
+  - 482.0
+  collapsed: false
+  layout: Grid
+  panels:
+  - cff5c496-bf6f-454c-9ffc-0b87bb2c4c39
+  hidden: []
+browser:
+  backend: chromium
+  headless: true
+  hide_native_window: false
+  automation_disclosure: minimize_common_signals
+  command: null
+  firefox_command: null
+  geckodriver_command: null
+  safaridriver_command: null
+  extra_args: []
+  quality: 60
+  every_nth_frame: 1
+  profile_root: null
+  video:
+    quality: 90
+    compression_level: 4
+    fps: 10
+    max_file_bytes: 536870912

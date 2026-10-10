@@ -103,17 +103,17 @@ impl HorizonApp {
                 }
                 ui.add_space(12.0);
                 ui.horizontal_wrapped(|ui| {
-                    let label = match offer.primary {
-                        Some(Primary::Delete) => Some("Delete cloud resources"),
-                        Some(Primary::Remove) => Some("Remove cloud"),
-                        None => None,
-                    };
-                    if let (Some(primary), Some(label)) = (offer.primary, label)
-                        && ui
+                    if let Some(primary) = offer.primary {
+                        let label = match primary {
+                            Primary::Delete => "Delete cloud resources",
+                            Primary::Remove => "Remove cloud",
+                        };
+                        if ui
                             .add(egui::Button::new(label).fill(crate::theme::BTN_CLOSE()))
                             .clicked()
-                    {
-                        chosen = Some(Choice::Primary(primary));
+                        {
+                            chosen = Some(Choice::Primary(primary));
+                        }
                     }
                     if offer.remove_anyway && ui.button("Remove from Horizon anyway").clicked() {
                         chosen = Some(Choice::RemoveAnyway);

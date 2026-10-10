@@ -1,0 +1,7 @@
+#!/bin/bash
+# The fixture runs `<this> --config <path> --ephemeral`. Seed a session store and
+# restore it instead. The candidate binary is `horizon` in the same directory.
+set -e
+here=$(dirname "$(readlink -f "$0")")
+python3 "$here/seed.py" "$2"
+exec "$here/horizon" --config "$2"
