@@ -1,6 +1,6 @@
 //! Agent requests for the cloud list: the clouds in the caller's workspace, and
 //! attach, park and stop of one of them, as the sidebar and the cloud card do.
-use super::super::bulk_stop::IdleStop;
+use super::super::{Stage, bulk_stop::IdleStop};
 use super::HorizonApp;
 use crate::app::browser_requests::actor_panel;
 use horizon_core::{
@@ -61,12 +61,27 @@ impl HorizonApp {
                 .collect();
             return Ok(json!({ "clouds": clouds }));
         }
+        // A caller that stopped waiting gets no change it did not see.
+        if manifest::now_millis() >= request.deadline_at_millis {
+            return Err("cloud_list_expired: the request expired before Horizon answered it; nothing changed".into());
+        }
         let wanted = list.cloud.as_deref().unwrap_or_default();
         let index = in_workspace
             .filter(|(_, id)| id == wanted)
             .map(|(index, _)| index)
             .next()
             .ok_or("cloud_list_unknown_cloud: no cloud with this ID in your workspace; read list first")?;
+        // Two saved clouds with one ID, in any workspace, make the ID ambiguous.
+        let same_id = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .filter(|group| group.remote.as_ref().is_some_and(|remote| remote.id == wanted))
+            .count();
+        if same_id != 1 {
+            return Err("cloud_list_ambiguous_cloud: more than one cloud has this ID; use the sidebar".into());
+        }
         let group = &self.cloud_prototype.groups.0[index];
         let issue = group.issue;
         match list.operation {
@@ -81,9 +96,13 @@ impl HorizonApp {
                 if parking.is_some_and(super::super::park::Parking::is_parked) {
                     return Ok(json!({ "cloud": wanted, "park": "parked" }));
                 }
-                // A cloud whose terminals still attach after Ready is not tracked yet.
-                if runtime.is_none_or(|runtime| runtime.needs_attach)
-                    || !parking.is_some_and(super::super::park::Parking::attached)
+                // A cloud whose terminals still attach after Ready, or that is in another
+                // operation, is not tracked.
+                if runtime.is_none_or(|runtime| {
+                    runtime.needs_attach
+                        || runtime.stage != Some(Stage::Ready)
+                        || runtime.state.as_ref().is_none_or(|state| state.stage != Stage::Ready)
+                }) || !parking.is_some_and(super::super::park::Parking::attached)
                 {
                     return Err("cloud_list_not_ready: only a ready cloud parks".into());
                 }

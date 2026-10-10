@@ -107,6 +107,14 @@ fn park_parks_an_attached_cloud_only_while_it_is_out_of_view() {
     );
 
     runtime(&mut app).needs_attach = false;
+    runtime(&mut app).stage = Some(Stage::Stopping);
+    let error = app.answer_cloud_list(&park, &ctx).unwrap_err();
+    assert!(
+        error.starts_with("cloud_list_not_ready"),
+        "another operation runs: {error}"
+    );
+
+    runtime(&mut app).stage = Some(Stage::Ready);
     app.board.focus(member(&app, "one"));
     let error = app.answer_cloud_list(&park, &ctx).unwrap_err();
     assert!(error.starts_with("cloud_list_in_view"), "{error}");
@@ -131,4 +139,27 @@ fn stop_stops_only_an_idle_cloud() {
     runtime(&mut app).stage = Some(Stage::Ready);
     assert_eq!(app.answer_cloud_list(&stop, &ctx).unwrap()["stop"], "stopping");
     assert_eq!(runtime(&mut app).operation, Some(Action::Stop));
+}
+
+#[test]
+fn an_expired_request_or_an_ambiguous_cloud_changes_nothing() {
+    let (_temp, mut app, actor) = cloud_with_agent();
+    let ctx = egui::Context::default();
+    let mut stop = request(&actor, "stop", Some("fixture"));
+    stop.deadline_at_millis = manifest::now_millis() - 1;
+    let error = app.answer_cloud_list(&stop, &ctx).unwrap_err();
+    assert!(error.starts_with("cloud_list_expired"), "{error}");
+    let mut list = request(&actor, "list", None);
+    list.deadline_at_millis = manifest::now_millis() - 1;
+    assert!(app.answer_cloud_list(&list, &ctx).is_ok(), "a read is still answered");
+
+    let mut copy = app.cloud_prototype.groups.0[0].clone();
+    copy.issue = 2;
+    copy.workspace = "elsewhere".into();
+    app.cloud_prototype.groups.0.push(copy);
+    let error = app
+        .answer_cloud_list(&request(&actor, "stop", Some("fixture")), &ctx)
+        .unwrap_err();
+    assert!(error.starts_with("cloud_list_ambiguous_cloud"), "{error}");
+    assert_eq!(runtime(&mut app).operation, None);
 }
