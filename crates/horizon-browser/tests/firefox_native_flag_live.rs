@@ -11,8 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use horizon_browser::{
-    BackendKind, BrowserCommand, BrowserConfig, BrowserEvent, BrowserSession, BrowserSessionConfig, FrameSlot,
-    start_session,
+    BackendKind, BrowserConfig, BrowserEvent, BrowserSession, BrowserSessionConfig, FrameSlot, start_session,
 };
 
 const FIXTURE: &str = r#"<!doctype html><title>pending</title>
@@ -53,7 +52,11 @@ fn firefox_minimization_keeps_a_native_webdriver_getter_false() {
     .expect("start");
 
     let (title, disclosure) = wait_for_title_and_disclosure(&session);
-    assert!(session.send(BrowserCommand::Stop));
+    let shutdown = session.shutdown_signal().with_profile_cleanup(profiles.keep());
+    assert!(
+        shutdown.wait(Duration::from_secs(15)) || shutdown.force_cleanup(Duration::from_secs(5)),
+        "Firefox teardown and profile cleanup must complete"
+    );
     assert_eq!(title, "false native", "page title reported {title}");
     assert_eq!(
         disclosure,
