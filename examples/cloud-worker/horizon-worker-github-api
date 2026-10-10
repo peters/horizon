@@ -354,6 +354,8 @@ class Exchange:
             raise policy.Refused(EXPIRED)
         looked = None
         if plan.ids:
+            # The ID lookup carries the token too: checked again right before it.
+            policy.plan(schema, body, candidate.allowed)
             status, looked = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
                                               policy.lookup(schema, plan.ids), sent=granted)
             looked = looked if status == 200 else None
