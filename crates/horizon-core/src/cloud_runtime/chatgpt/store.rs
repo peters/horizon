@@ -17,7 +17,7 @@ mod windows;
 
 pub(super) use activation::activate;
 pub(crate) use locking::SessionLock;
-pub(super) use snapshot::{connections, default_registration, default_registration_locked, registration};
+pub(super) use snapshot::{Selection, connections, default_registration, default_registration_locked, registration};
 
 const DIRECTORY: &str = "chatgpt";
 const HOST_ID_FILE: &str = "host_id";
@@ -583,10 +583,10 @@ pub(super) fn now_unix() -> i64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
-    pub(super) fn test_record(client_id: &str, subject: &str) -> Record {
+    pub(in super::super) fn test_record(client_id: &str, subject: &str) -> Record {
         Record {
             email: Some("peters@example.com".into()),
             issuer: "https://auth.openai.com".into(),

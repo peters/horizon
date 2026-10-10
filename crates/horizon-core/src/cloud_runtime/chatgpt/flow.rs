@@ -45,6 +45,7 @@ struct Attempt {
     id_token_hint: Option<zeroize::Zeroizing<String>>,
     login_hint: Option<String>,
     host_id: String,
+    selection: store::Selection,
 }
 
 impl Attempt {
@@ -85,7 +86,10 @@ impl Attempt {
     /// is a first-time dynamic registration.
     fn prepare(root: &Path, port: u16) -> Result<Self> {
         let host_id = store::host_id(root)?;
-        let (client_id, registering, id_token_hint, login_hint) = match store::default_registration(root)? {
+        let lock = store::session_lock(root)?;
+        let previous = store::default_registration_locked(&lock)?;
+        let selection = store::Selection::capture(&lock, previous.as_ref())?;
+        let (client_id, registering, id_token_hint, login_hint) = match previous {
             Some(record) if record.access_token.is_some() && record.refresh_token.is_some() => (
                 record.client_id,
                 false,
@@ -104,6 +108,7 @@ impl Attempt {
             id_token_hint,
             login_hint,
             host_id,
+            selection,
         })
     }
 }
@@ -345,6 +350,9 @@ fn percent_decode(value: &str) -> String {
 
 fn finish(root: &Path, attempt: &Attempt, callback: Callback, cancel: &Cancellation) -> Result<super::Connection> {
     let lock = store::session_lock(root)?;
+    // Keep the guard through publication: another browser attempt cannot replace
+    // the selected account between this check and the credential commit.
+    attempt.selection.verify(&lock)?;
     let (code, client_id) = match callback {
         Callback::Denied(description) => {
             let detail = description.unwrap_or_else(|| "sign-in was declined".into());
@@ -595,6 +603,72 @@ mod tests {
 
     fn attempt(root: &std::path::Path) -> Attempt {
         Attempt::prepare(root, 1455).unwrap()
+    }
+
+    #[test]
+    fn a_second_first_time_attempt_cannot_finish_after_another_account_wins() {
+        let root = tempfile::tempdir().unwrap();
+        let first = attempt(root.path());
+        let second = attempt(root.path());
+        assert!(first.registering && second.registering);
+        let lock = store::session_lock(root.path()).unwrap();
+        first.selection.verify(&lock).unwrap();
+        store::activate(root.path(), &store::tests::test_record("client-winner", "account-a")).unwrap();
+        drop(lock);
+        let record_path = root.path().join("chatgpt/client-winner.json");
+        let before = std::fs::read(&record_path).unwrap();
+        assert!(matches!(
+            finish(root.path(), &second, Callback::Denied(None), &Cancellation::default()),
+            Err(Error::Provider(message)) if message.contains("saved account changed")
+        ));
+        assert_eq!(std::fs::read(record_path).unwrap(), before);
+        let connections = store::connections(root.path()).unwrap();
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].client_id, "client-winner");
+        assert!(connections[0].signed_in);
+    }
+
+    #[test]
+    fn a_pending_attempt_refuses_changed_tokens_sign_out_and_selection() {
+        for change in ["rotation", "sign-out", "selection"] {
+            let root = tempfile::tempdir().unwrap();
+            let original = store::tests::test_record("client-old", "account-a");
+            let lock = store::session_lock(root.path()).unwrap();
+            store::activate(root.path(), &original).unwrap();
+            drop(lock);
+            let pending = attempt(root.path());
+            let lock = store::session_lock(root.path()).unwrap();
+            pending.selection.verify(&lock).unwrap();
+            match change {
+                "rotation" => {
+                    let mut rotated = store::registration(&lock, "client-old").unwrap().unwrap();
+                    rotated.access_token = Some(zeroize::Zeroizing::new("new-access".into()));
+                    rotated.refresh_token = Some(zeroize::Zeroizing::new("new-refresh".into()));
+                    store::save(root.path(), &rotated).unwrap();
+                }
+                "sign-out" => store::clear_tokens(&lock, "client-old").unwrap(),
+                "selection" => {
+                    store::activate(root.path(), &store::tests::test_record("client-new", "account-b")).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            drop(lock);
+            let path = root.path().join("chatgpt/client-old.json");
+            let before = std::fs::read(&path).unwrap();
+            let selected = store::default_registration(root.path()).unwrap().unwrap().client_id;
+            assert!(
+                matches!(
+                    finish(root.path(), &pending, Callback::Denied(None), &Cancellation::default()),
+                    Err(Error::Provider(message)) if message.contains("saved account changed")
+                ),
+                "{change}"
+            );
+            assert_eq!(std::fs::read(path).unwrap(), before, "{change}");
+            assert_eq!(
+                store::default_registration(root.path()).unwrap().unwrap().client_id,
+                selected
+            );
+        }
     }
 
     #[test]

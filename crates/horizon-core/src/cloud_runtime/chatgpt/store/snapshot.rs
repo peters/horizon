@@ -4,6 +4,35 @@ use super::{
     verify_directory,
 };
 
+/// The selected account and its exact record when a browser attempt starts.
+#[derive(PartialEq, Eq)]
+pub(in super::super) struct Selection {
+    active_client_id: Option<String>,
+    record_digest: Option<Vec<u8>>,
+}
+
+impl Selection {
+    pub(in super::super) fn capture(lock: &SessionLock, record: Option<&Record>) -> Result<Self> {
+        let bytes = record.map(super::encode).transpose()?;
+        Ok(Self {
+            active_client_id: super::active_client_id(lock.root())?,
+            record_digest: bytes
+                .as_ref()
+                .map(|bytes| ring::digest::digest(&ring::digest::SHA256, bytes).as_ref().to_vec()),
+        })
+    }
+
+    pub(in super::super) fn verify(&self, lock: &SessionLock) -> Result<()> {
+        let record = default_registration_locked(lock)?;
+        if *self != Self::capture(lock, record.as_ref())? {
+            return Err(Error::Provider(
+                "The saved account changed while signing in. Try again.".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn read_guard(root: &Path) -> Result<Option<SessionLock>> {
     let path = directory(root);
     if !directory_exists(&path)? {

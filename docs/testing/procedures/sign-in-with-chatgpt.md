@@ -171,6 +171,9 @@ Settings save requires a provider. Do not create or deploy a cloud.
 - The snapshot test must prevent a concurrent writer between the record read and
   the active account read. Concurrent readers must fail closed while the writer
   holds the session lock.
+- A second first-time sign-in must not finish after another account becomes
+  active. A pending sign-in must refuse changed tokens, sign-out or selection.
+  The winning record and account selection must remain unchanged.
 - The callback tests must enforce the deadline when connections are queued or a
   client sends an incomplete request. A partial HTTP callback must be refused.
 - The refresh tests must prevent an early provider request. They must replace both
