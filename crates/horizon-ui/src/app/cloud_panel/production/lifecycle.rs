@@ -528,6 +528,31 @@ impl HorizonApp {
         removable(root, launch).map(|(_, allowed)| !allowed)
     }
 
+    /// Locks the saved record of cloud `id`, so no other controller operates on it while
+    /// it is held. `None` when the cloud has no record directory to lock.
+    /// # Errors
+    /// `Busy` while another controller owns it, or the lock cannot be taken.
+    pub(super) fn lock_cloud_record(&self, id: u32) -> cloud_runtime::Result<Option<Store>> {
+        let Some(launch) = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.issue == id)
+            .and_then(|group| group.remote.as_ref())
+        else {
+            return Ok(None);
+        };
+        let Some(root) = &self.cloud_prototype.root else {
+            return Ok(None);
+        };
+        let path = cloud_runtime::state::cloud_directory(root, &launch.id)?;
+        if !path.try_exists()? {
+            return Ok(None);
+        }
+        Store::lock(&path).map(Some)
+    }
+
     fn cloud_removal_error(&mut self, id: u32, message: String) {
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
             runtime.error = Some(message.clone());

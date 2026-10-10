@@ -171,3 +171,30 @@ fn an_unreadable_record_offers_only_remove_anyway() {
         "{offer:?}"
     );
 }
+
+#[test]
+#[cfg(unix)] // Durable cloud records require Unix directory durability.
+fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
+    let (temp, mut app) = test_app();
+    let path = temp.path().join("fixture");
+    let other = Store::lock(&path).unwrap();
+    add_cloud(&mut app, temp.path(), Some(deployment()));
+    app.request_cloud_close(101);
+    let ctx = egui::Context::default();
+    app.delete_for_close(101, &ctx);
+    assert!(current_offer(&app).remove_anyway, "the deletion could not start");
+
+    app.remove_cloud_anyway(101, &ctx);
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1, "its operation still runs");
+    assert!(app.cloud_close_confirmation_open(), "the dialog asks again");
+    let failure = &app.cloud_prototype.production.close.failed[&101];
+    assert!(failure.deletion_tried, "removing anyway stays offered");
+    assert_eq!(
+        failure.reason,
+        "Could not remove the cloud: Another controller owns this cloud operation"
+    );
+
+    drop(other);
+    app.remove_cloud_anyway(101, &ctx);
+    assert!(app.cloud_prototype.groups.0.is_empty());
+}

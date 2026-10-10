@@ -181,6 +181,19 @@ impl HorizonApp {
         {
             return;
         }
+        // Held until the cloud is discarded. Only another controller's operation stops the
+        // removal: a record that cannot be locked otherwise is no operation under way.
+        let _record = match self.lock_cloud_record(id) {
+            Ok(record) => record,
+            Err(error @ super::cloud_runtime::Error::Busy) => {
+                self.close_failed(id, "Could not remove the cloud", true, Some(error.to_string()));
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "removing a cloud whose record cannot be locked");
+                None
+            }
+        };
         if let Some(launch) = &self.cloud_prototype.groups.0[index].remote {
             tracing::warn!(cloud = %launch.id, "removed from Horizon while its provider resources may remain");
         }
