@@ -126,7 +126,12 @@ an API key still signs in through its own terminal.
 This is account setup on this machine, as with Connect GitHub. The flow opens
 the system browser. It does not add a Horizon browser-panel operation. Only
 the person authorizes the account. Settings save requires a renewable sign-in
-and the plan access grant. Public account status contains no tokens. An account with no grant shows **Needs plan access**.
+and the plan access grant. Public account status contains no tokens. An
+account with no grant shows **Needs plan access**. On Windows, the system
+Windows PowerShell installation must be available. Horizon verifies a
+protected discretionary access control list (DACL) for the current user
+before it writes or reads credentials.
+A cancelled attempt does not open a new authorization page.
 
 - Git and `gh` work without a token in the environment. The worker's root service
   answers for the cloud's repositories and its same-worker siblings. Agents never

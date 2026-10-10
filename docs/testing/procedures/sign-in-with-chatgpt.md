@@ -83,7 +83,7 @@ subscription choice changes to **ChatGPT plan** when the form opens.
 
 3. Examine the cloud root on the machine.
 
-   Result: A `chatgpt` directory with an owner-only directory mode holds one
+   Result: A `chatgpt` directory with owner-only access permissions holds one
    file per sign-in and an `active` file. No settings file or deployment state
    contains an access token or a refresh token.
 
@@ -161,8 +161,11 @@ Settings save requires a provider. Do not create or deploy a cloud.
 - No token value appears in any settings file, deployment state, log or UI
   text.
 - On Unix, the stored directory mode is `0700` and the file mode is `0600`.
-- On Windows, examine access permissions under the private user profile.
-  The automated file-mode test does not prove Windows access permissions.
+- On Windows, use the system Windows PowerShell installation. The saved
+  directory and each credential file must have a protected discretionary
+  access control list (DACL). It must grant full control only to the current
+  user security identifier (SID). The Windows regression test
+  must reject a file and a directory after another SID gains read access.
 - Record real-account sign-in separately from tests with synthetic credentials.
   A synthetic fixture proves local card states, not provider authentication.
 

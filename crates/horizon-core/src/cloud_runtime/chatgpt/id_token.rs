@@ -1,5 +1,5 @@
 //! ID-token validation: signature against `OpenAI`'s published JWKS, plus issuer,
-//! audience, expiry and nonce checks. A token that does not validate is an error,
+//! audience, validity window and nonce checks. A token that does not validate is an error,
 //! never a warning.
 use super::{CONFIG_URL, Error, Result};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -51,6 +51,8 @@ struct Claims {
     #[serde(default)]
     azp: Option<String>,
     exp: i64,
+    #[serde(default)]
+    nbf: Option<i64>,
     sub: String,
     nonce: String,
     #[serde(default)]
@@ -116,7 +118,8 @@ pub(super) fn validate_with_jwks(
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |age| i64::try_from(age.as_secs()).unwrap_or(0));
-    if claims.exp <= now {
+    // No clock-skew allowance: expired and not-yet-valid tokens are refused.
+    if claims.exp <= now || claims.nbf.is_some_and(|not_before| now < not_before) {
         return Err(Error::IdToken);
     }
 
@@ -278,6 +281,38 @@ mod tests {
             .unwrap();
             let result = validate_with_jwks(token, "oaiapp_test_client", "audience-nonce", &keys);
             assert_eq!(result.is_ok(), accepted);
+        }
+    }
+
+    #[test]
+    fn signed_tokens_must_be_within_their_validity_window() {
+        let keys = jwks(r#"{"kty":"EC","kid":"time-fixture","x":"5Ey59VqcSYAd6qPO0n8eLNtZVueFrWHatmx_GLAwVFs","y":"b9yvan1-wusxKf9QJIsYbKMvJ5RI0EIUqPTaEJF6VK4"}"#).keys;
+        for (token, accepted) in [
+            (
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6InRpbWUtZml4dHVyZSJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjoxLCJzdWIiOiJzeW50aGV0aWMtdGltZS11c2VyIiwibm9uY2UiOiJ0aW1lLW5vbmNlIn0.TFVs6FV5zNMaWPreND9e1DZb5Gk_0b0TFq3PmWiAKLvmFJU4VFhNs1i5OlqkZFPJsUcMlOyUAdB-zi8MEIGk1w",
+                true,
+            ),
+            (
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6InRpbWUtZml4dHVyZSJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjo0MTAyNDQ0Nzk5LCJzdWIiOiJzeW50aGV0aWMtdGltZS11c2VyIiwibm9uY2UiOiJ0aW1lLW5vbmNlIn0.Pm0lA2k2yKcwMFG2yDpZ_AN7SKVNbrqYZUDPUzHIOECqBb6wo4NTwq1Xo8r4OWSnVOO_U_bJjyHl8cIazyGgyA",
+                false,
+            ),
+            (
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6InRpbWUtZml4dHVyZSJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6MSwibmJmIjowLCJzdWIiOiJzeW50aGV0aWMtdGltZS11c2VyIiwibm9uY2UiOiJ0aW1lLW5vbmNlIn0.rAAnysCgQ92D5RNNQ0h0lCgNwnnDqkFHrgtyrC8ZaCFJlZOdB7aFZozdv0OXTFyYA8Hi5RILDYPAo8f-DhipnQ",
+                false,
+            ),
+        ] {
+            let (input, signature) = token.rsplit_once('.').unwrap();
+            verify(
+                "ES256",
+                &keys[0],
+                input.as_bytes(),
+                &URL_SAFE_NO_PAD.decode(signature).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                validate_with_jwks(token, "oaiapp_test_client", "time-nonce", &keys).is_ok(),
+                accepted
+            );
         }
     }
 

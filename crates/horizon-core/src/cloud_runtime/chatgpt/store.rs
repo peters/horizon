@@ -9,6 +9,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+#[cfg(windows)]
+mod windows;
+
 const DIRECTORY: &str = "chatgpt";
 const HOST_ID_FILE: &str = "host_id";
 const ACTIVE_FILE: &str = "active";
@@ -138,7 +141,9 @@ pub(super) fn session_lock(root: &Path) -> Result<fs::File> {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    let file = options.open(path)?;
+    let file = options.open(&path)?;
+    #[cfg(windows)]
+    windows::protect(&path)?;
     if !file.metadata()?.is_file() {
         return Err(Error::Invalid("the session lock must be a regular file"));
     }
@@ -247,6 +252,8 @@ fn private_directory(path: &Path) -> Result<()> {
     directory_exists(path)?;
     fs::create_dir_all(path)?;
     directory_exists(path)?;
+    #[cfg(windows)]
+    windows::protect(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -262,6 +269,8 @@ fn private_file(path: &Path, bytes: &[u8]) -> Result<()> {
     };
     private_directory(directory)?;
     let mut temp = tempfile::Builder::new().prefix(".chatgpt-").tempfile_in(directory)?;
+    #[cfg(windows)]
+    windows::protect(temp.path())?;
     temp.write_all(bytes)?;
     temp.flush()?;
     temp.as_file().sync_all()?;
@@ -289,6 +298,8 @@ fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
     if !directory_exists(parent)? {
         return Ok(None);
     }
+    #[cfg(windows)]
+    windows::verify(parent)?;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -304,6 +315,8 @@ fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(windows)]
+    windows::verify(path)?;
     let file = options.open(path)?;
     let metadata = file.metadata()?;
     #[cfg(unix)]

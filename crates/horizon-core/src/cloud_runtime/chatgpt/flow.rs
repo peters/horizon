@@ -113,6 +113,7 @@ pub(super) fn start(
     open: fn(&str) -> std::io::Result<()>,
     cancel: Cancellation,
 ) -> Result<Receiver<Result<super::Connection>>> {
+    cancel.check().map_err(|_| Error::Declined)?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     let attempt = Attempt::prepare(root, port)?;
@@ -120,9 +121,11 @@ pub(super) fn start(
     let root: PathBuf = root.to_owned();
     let (tx, rx) = channel();
     let opening_cancel = cancel.clone();
+    opening_cancel.check().map_err(|_| Error::Declined)?;
     std::thread::spawn(move || {
         let _ = tx.send(serve(&listener, &attempt, &root, &cancel));
     });
+    opening_cancel.check().map_err(|_| Error::Declined)?;
     if let Err(error) = open(&url) {
         opening_cancel.cancel();
         return Err(error.into());
@@ -535,6 +538,21 @@ struct Discovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pre_cancelled_attempt_does_not_open_the_browser_or_create_credentials() {
+        fn unexpected_open(_: &str) -> std::io::Result<()> {
+            panic!("a cancelled attempt must not open the browser");
+        }
+        let root = tempfile::tempdir().unwrap();
+        let cancel = Cancellation::default();
+        cancel.cancel();
+        assert!(matches!(
+            start(root.path(), unexpected_open, cancel),
+            Err(Error::Declined)
+        ));
+        assert!(!root.path().join("chatgpt").exists());
+    }
 
     #[test]
     fn code_challenge_is_the_base64url_sha256_of_the_verifier() {
