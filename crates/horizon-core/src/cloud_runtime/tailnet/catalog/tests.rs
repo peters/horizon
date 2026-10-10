@@ -426,3 +426,215 @@ fn windows_cloud_ownership_refuses_before_selection_or_credential_mutation() {
     }
     assert!(!cloud.join("operation.lock").exists());
 }
+
+fn setup_files(f: &Fixture) -> Vec<(PathBuf, Vec<u8>)> {
+    let files = [
+        ("credentials/compute-fixture", b"synthetic credential".as_slice()),
+        (
+            "credentials/registry-pull-fixture",
+            b"synthetic registry credential".as_slice(),
+        ),
+        ("identity-fixture/ed25519", b"synthetic private identity".as_slice()),
+        ("identity-fixture/ed25519.pub", b"synthetic public identity".as_slice()),
+    ];
+    files
+        .into_iter()
+        .map(|(name, bytes)| {
+            let path = f.root.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            (path, bytes.to_vec())
+        })
+        .collect()
+}
+
+fn setup_retained(f: &Fixture, files: &[(PathBuf, Vec<u8>)]) {
+    for (path, bytes) in files {
+        assert_eq!(&std::fs::read(path).unwrap(), bytes);
+        assert!(!path.parent().unwrap().join("operation.lock").exists());
+    }
+    assert_eq!(std::fs::read_dir(f.root.path().join("credentials")).unwrap().count(), 2);
+    assert_eq!(
+        std::fs::read_dir(f.root.path().join("identity-fixture"))
+            .unwrap()
+            .count(),
+        2
+    );
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Cloud lifecycle ownership requires Unix directory durability")]
+fn setup_directories_are_untouched_while_real_pending_clouds_still_fence_removal() {
+    for pending in [false, true] {
+        let f = Fixture::new();
+        let files = setup_files(&f);
+        let cloud = f.cloud("cloud-a", Some("other"));
+        if pending {
+            pending_request(&cloud, "work", false);
+            assert!(f.remove(|_| Ok(())).is_err());
+            f.retained();
+        } else {
+            f.remove(|_| Ok(())).unwrap();
+            assert_eq!(f.deleted.load(Ordering::SeqCst), 1);
+        }
+        setup_retained(&f, &files);
+    }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Cloud lifecycle ownership requires Unix directory durability")]
+fn settings_namespace_collisions_preserve_every_cloud_evidence_file() {
+    for directory in ["credentials", "identity-fixture"] {
+        for file in [
+            "tailnet.json",
+            "deployment.json",
+            "tailnet-commit-fixture.pending",
+            "hetzner.json",
+            "operation.lock",
+        ] {
+            let f = Fixture::new();
+            let files = setup_files(&f);
+            let path = f.root.path().join(directory).join(file);
+            std::fs::write(&path, b"retained cloud evidence").unwrap();
+            assert!(f.remove(|_| Ok(())).is_err());
+            f.retained();
+            assert_eq!(std::fs::read(&path).unwrap(), b"retained cloud evidence");
+            for (path, bytes) in &files {
+                assert_eq!(&std::fs::read(path).unwrap(), bytes);
+            }
+        }
+    }
+}
+
+#[test]
+fn incomplete_identity_and_unknown_settings_entries_refuse_without_cloud_lock_creation() {
+    for directory in ["identity-empty", "credentials"] {
+        let f = Fixture::new();
+        let path = f.root.path().join(directory);
+        std::fs::create_dir(&path).unwrap();
+        if directory == "credentials" {
+            std::fs::write(path.join("unknown-state"), b"retained unknown evidence").unwrap();
+        }
+        assert!(f.remove(|_| Ok(())).is_err());
+        assert!(!path.join("operation.lock").exists());
+        f.retained();
+    }
+}
+
+// These fixtures require Unix directory symlink semantics.
+#[cfg(unix)]
+#[test]
+fn settings_directory_and_key_symlinks_remain_fail_closed() {
+    use std::os::unix::fs::symlink;
+    for directory_link in [false, true] {
+        let f = Fixture::new();
+        let files = setup_files(&f);
+        let target = f.root.path().join("original-fixture");
+        if directory_link {
+            std::fs::rename(f.root.path().join("credentials"), &target).unwrap();
+            symlink(&target, f.root.path().join("credentials")).unwrap();
+        } else {
+            let key = f.root.path().join("identity-fixture/ed25519");
+            std::fs::rename(&key, &target).unwrap();
+            symlink(&target, &key).unwrap();
+        }
+        assert!(f.remove(|_| Ok(())).is_err());
+        f.retained();
+        assert!(!f.root.path().join("credentials/operation.lock").exists());
+        assert!(!f.root.path().join("identity-fixture/operation.lock").exists());
+        assert!(std::fs::symlink_metadata(&target).is_ok());
+        assert_eq!(files.len(), 4);
+    }
+}
+
+fn registry_settings(f: &Fixture, directory: &str) {
+    std::fs::write(f.root.path().join("settings.json"), serde_json::to_vec(&serde_json::json!({
+        "runpod_key_file": f.root.path().join("credentials/compute-fixture"),
+        "ssh_identity_file": f.root.path().join("identity-fixture/ed25519"),
+        "docker_config": f.root.path().join("docker"), "registry_pull_auth_id": null,
+        "cpu_flavors": [], "gpu_types": [],
+        "registries": {"root": f.root.path().join(directory), "bindings": [{
+            "repository": "registry.example/worker", "publish": null,
+            "pull": {"username": "fixture", "secret_file": f.root.path().join("credentials/registry-pull-fixture"), "expires_at": null},
+            "read_only_confirmed": true, "generation": "fixture-generation", "retired": []
+        }]}
+    })).unwrap()).unwrap();
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Cloud lifecycle ownership requires Unix directory durability")]
+fn only_the_bound_registry_directory_is_excluded_and_membership_drift_refuses() {
+    for drift in ["none", "cloud state", "settings", "credential membership"] {
+        let f = Fixture::new();
+        let files = setup_files(&f);
+        registry_settings(&f, "custom-registry");
+        let registry = f.root.path().join("custom-registry");
+        std::fs::create_dir(&registry).unwrap();
+        let journal = registry.join("fixture-generation.json");
+        std::fs::write(&journal, b"synthetic registry journal").unwrap();
+        f.cloud("registry", Some("other"));
+        let result = f.remove(|boundary| {
+            if boundary == Boundary::Owned {
+                match drift {
+                    "cloud state" => std::fs::write(registry.join("deployment.json"), b"retained cloud evidence")?,
+                    "settings" => registry_settings(&f, "different-registry"),
+                    "credential membership" => std::fs::write(
+                        f.root.path().join("credentials/compute-new"),
+                        b"new synthetic credential",
+                    )?,
+                    _ => {}
+                }
+            }
+            Ok(())
+        });
+        // The final classification guard must run after the Owned checkpoint too.
+        if drift == "none" {
+            result.unwrap();
+            setup_retained(&f, &files);
+        } else {
+            assert!(result.is_err());
+            f.retained();
+        }
+        assert_eq!(std::fs::read(&journal).unwrap(), b"synthetic registry journal");
+        assert!(!registry.join("operation.lock").exists());
+        assert!(f.root.path().join("registry/operation.lock").exists());
+    }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Cloud lifecycle ownership requires Unix directory durability")]
+fn custom_credential_names_require_exact_settings_binding_and_never_hide_cloud_state() {
+    for name in [
+        "custom-provider-token",
+        "browser-config.yaml",
+        "deployment.json",
+        "tailnet-commit-fixture.pending",
+    ] {
+        for bound in [false, true] {
+            let f = Fixture::new();
+            let files = setup_files(&f);
+            registry_settings(&f, "custom-registry");
+            let custom = f.root.path().join("credentials").join(name);
+            std::fs::write(&custom, b"synthetic custom credential").unwrap();
+            if bound {
+                let settings_path = f.root.path().join("settings.json");
+                let mut settings: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+                settings["runpod_key_file"] = serde_json::to_value(&custom).unwrap();
+                std::fs::write(&settings_path, serde_json::to_vec(&settings).unwrap()).unwrap();
+            }
+            f.cloud("cloud-a", Some("other"));
+            let allowed = bound && !matches!(name, "deployment.json" | "tailnet-commit-fixture.pending");
+            let result = f.remove(|_| Ok(()));
+            assert_eq!(result.is_ok(), allowed, "{name} bound={bound}");
+            if !allowed {
+                f.retained();
+            }
+            assert_eq!(std::fs::read(&custom).unwrap(), b"synthetic custom credential");
+            assert!(!custom.parent().unwrap().join("operation.lock").exists());
+            for (path, bytes) in &files {
+                assert_eq!(&std::fs::read(path).unwrap(), bytes);
+            }
+        }
+    }
+}
