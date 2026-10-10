@@ -29,6 +29,19 @@ fn bindings_reject_shell_options_and_ambiguous_credentials() {
     binding.context = Some("default; whoami".into());
     assert!(binding.validate().is_err());
 }
+
+#[test]
+fn docker_context_names_follow_engine_rules() {
+    let mut binding = host();
+    for name in ["default", "build.prod", "Stage_1+cpu-test"] {
+        binding.context = Some(name.into());
+        assert!(binding.validate().is_ok(), "{name}");
+    }
+    for name in ["", "a", ".prod", "-config", "prod/blue", "prod blue", "default; whoami"] {
+        binding.context = Some(name.into());
+        assert!(binding.validate().is_err(), "{name}");
+    }
+}
 #[test]
 fn missing_ssh_identity_is_a_blocker_without_attempting_docker() {
     let report = probe(&host(), None, &crate::cloud_runtime::Cancellation::default()).unwrap();

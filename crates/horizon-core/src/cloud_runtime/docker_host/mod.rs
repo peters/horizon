@@ -53,11 +53,7 @@ impl Binding {
         if !horizon_cloud::valid_id(&self.id) || self.name.trim().is_empty() || self.name.len() > 128 {
             return Err(Error::Invalid("Give the Docker host a stable ID and a name"));
         }
-        if self
-            .context
-            .as_deref()
-            .is_some_and(|name| !horizon_cloud::valid_id(name))
-        {
+        if self.context.as_deref().is_some_and(|name| !valid_context_name(name)) {
             return Err(Error::Invalid("Invalid Docker context"));
         }
         if let Some(ssh) = &self.ssh {
@@ -87,4 +83,12 @@ impl Binding {
         }
         Ok(())
     }
+}
+
+fn valid_context_name(name: &str) -> bool {
+    name.len() >= 2
+        && name.bytes().next().is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.+-".contains(&byte))
 }

@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, net::IpAddr, process::Command, time::Duration};
 struct Status {
     backend_state: String,
     #[serde(default)]
-    peer: BTreeMap<String, Peer>,
+    peer: Option<BTreeMap<String, Peer>>,
 }
 
 #[derive(Deserialize)]
@@ -61,7 +61,8 @@ fn status_missing(output: &str, host: &str) -> Option<Missing> {
     }
     let host = host.trim_end_matches('.');
     let ip = host.parse::<IpAddr>().ok();
-    let mut peers = status.peer.values().filter(|peer| {
+    let map = status.peer.unwrap_or_default();
+    let mut peers = map.values().filter(|peer| {
         ip.is_some_and(|ip| peer.tailscale_ips.contains(&ip))
             || peer.dns_name.trim_end_matches('.').eq_ignore_ascii_case(host)
             || peer
@@ -125,6 +126,24 @@ mod tests {
         ] {
             assert!(status_missing(&status, "build").is_some());
         }
+    }
+
+    #[test]
+    fn signed_out_clients_with_null_or_missing_peers_need_sign_in() {
+        for status in [
+            r#"{"BackendState":"NeedsLogin","Peer":null}"#,
+            r#"{"BackendState":"NeedsLogin"}"#,
+        ] {
+            let missing = status_missing(status, "build").unwrap();
+            assert_eq!(missing.detail, "Tailscale is stopped or signed out on this computer");
+            assert_eq!(missing.remedy, "Start Tailscale and sign in to the host's tailnet.");
+        }
+        assert_eq!(
+            status_missing(r#"{"BackendState":"Running","Peer":null}"#, "build")
+                .unwrap()
+                .detail,
+            "This host is not in the local Tailscale network map"
+        );
     }
 
     #[test]

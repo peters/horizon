@@ -51,11 +51,11 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
 
 1. Examine the focused test results for binding and SSH trust cases.
 
-   Result: Invalid hosts, users and credential paths fail validation. Key authentication remains the default for older JSON bindings.
+   Result: Invalid hosts, users and credential paths fail validation. Valid Docker context names can contain dots. Key authentication remains the default for older JSON bindings.
 
 2. Examine the Tailscale trust test results.
 
-   Result: Unknown hosts, ambiguous names, expired keys and absent host keys block the probe before SSH.
+   Result: Unknown hosts, ambiguous names, expired keys and absent host keys block the probe before SSH. A signed-out client receives a sign-in remedy when its peer map is null or absent.
 
 ### 5.3 DHP-STORAGE — Admission and cancellation
 
