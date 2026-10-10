@@ -138,8 +138,8 @@ fn time_text(runtime: &Runtime, stage: Stage, mark: &Mark) -> Option<String> {
 }
 
 /// Every step top to bottom. The running step shows its measured progress, a failed
-/// one its cause with its next action and Copy error.
-pub(super) fn vertical(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) -> Option<StepAction> {
+/// one its cause with its next action and Copy error. A failure no step owns follows the list.
+pub(super) fn vertical(ui: &mut egui::Ui, id: u32, runtime: &Runtime, status: &Status) -> Option<StepAction> {
     let mut action = None;
     let stages = status.track.stages;
     ui.spacing_mut().item_spacing.y = 0.0;
@@ -169,14 +169,7 @@ pub(super) fn vertical(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) ->
             );
         }
         if open {
-            ui.horizontal(|ui| {
-                ui.add_space(26.0);
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 5.0;
-                    action = opened(ui, runtime, status).or(action);
-                });
-            });
-            ui.add_space(8.0);
+            action = opened_beside_marks(ui, id, runtime, status).or(action);
         }
         // The connector runs from this mark to the next one.
         if index + 1 < stages.len() {
@@ -194,17 +187,32 @@ pub(super) fn vertical(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) ->
             );
         }
     }
+    if status.track.current.is_none() && status.failure.is_some() {
+        ui.add_space(4.0);
+        action = opened_beside_marks(ui, id, runtime, status).or(action);
+    }
     action
 }
 
-fn opened(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) -> Option<StepAction> {
+/// An opened step's content, indented to the step names.
+fn opened_beside_marks(ui: &mut egui::Ui, id: u32, runtime: &Runtime, status: &Status) -> Option<StepAction> {
+    let action = ui
+        .horizontal(|ui| {
+            ui.add_space(26.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 5.0;
+                opened(ui, id, runtime, status)
+            })
+            .inner
+        })
+        .inner;
+    ui.add_space(8.0);
+    action
+}
+
+fn opened(ui: &mut egui::Ui, id: u32, runtime: &Runtime, status: &Status) -> Option<StepAction> {
     if let Some(failure) = &status.failure {
-        ui.label(
-            RichText::new(failure.headline())
-                .monospace()
-                .size(13.0)
-                .color(theme::PALETTE_RED()),
-        );
+        let cause = super::cause::show(ui, ("steps", id), runtime.progress.attempt(), failure.headline());
         if let Some(meaning) = failure.meaning {
             ui.label(RichText::new(meaning).size(12.0).color(theme::FG_SOFT()));
         } else if failure.cause.is_some() {
@@ -224,6 +232,7 @@ fn opened(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) -> Option<StepA
             if ui.add(button("Copy error")).clicked() {
                 action = Some(StepAction::CopyError);
             }
+            cause.toggle(ui);
         });
         return action;
     }
@@ -364,8 +373,9 @@ pub(super) fn horizontal(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) 
 
 #[cfg(test)]
 mod tests {
-    use super::super::status::Track;
+    use super::super::status::{self, Track};
     use super::*;
+    use crate::test_egui::DiscardTextures;
 
     #[test]
     fn a_skipped_step_is_neither_done_nor_pending_and_says_so() {
@@ -398,5 +408,87 @@ mod tests {
         let runtime = Runtime::default();
         assert_eq!(time_text(&runtime, Stage::Build, &marks[1]).as_deref(), Some("skipped"));
         assert_eq!(time_text(&runtime, Stage::Validate, &marks[0]), None);
+    }
+
+    const CONFLICT: &str = "Error response from daemon: Conflict. The container name \"/horizon-contract-00000000-1111-2222-3333-444444444444\" is already in use by container \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\". You have to remove (or rename) that container to be able to reuse that name.";
+
+    fn failed_runtime() -> Runtime {
+        let mut runtime = Runtime {
+            stage: Some(Stage::Readiness),
+            ..Default::default()
+        };
+        runtime.progress.stage(Stage::Readiness, std::time::Instant::now());
+        runtime.push_log("starting the contract container".into());
+        runtime.push_log(CONFLICT.into());
+        runtime.error = Some("Readiness check failed; inspect deployment output".into());
+        runtime
+    }
+
+    /// Every text one frame of the step list draws at `width`, with where it was drawn.
+    fn steps_texts(runtime: &Runtime, status: &Status, width: f32) -> Vec<(String, egui::Rect)> {
+        egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(width);
+                vertical(ui, 1, runtime, status);
+            })
+            .discard_textures()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.visual_bounding_rect())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn cause_rect(texts: &[(String, egui::Rect)]) -> egui::Rect {
+        let causes: Vec<_> = texts
+            .iter()
+            .filter(|(text, _)| text.starts_with("Error response from daemon"))
+            .collect();
+        assert_eq!(causes.len(), 1, "the cause is shown once: {texts:?}");
+        causes[0].1
+    }
+
+    #[test]
+    fn a_long_cause_beside_the_steps_takes_three_rows_and_offers_show_more() {
+        let runtime = failed_runtime();
+        let failed = status::of(&runtime, status::Occupancy::default(), std::time::SystemTime::now());
+        assert_eq!(
+            failed.failure.as_ref().and_then(|failure| failure.cause.as_deref()),
+            Some(CONFLICT)
+        );
+        let width = 360.0;
+        let texts = steps_texts(&runtime, &failed, width);
+        let cause = cause_rect(&texts);
+        assert!(
+            cause.right() <= width + 1.0,
+            "the cause stays inside the steps: {cause:?}"
+        );
+        assert!(
+            cause.height() <= 3.0 * 13.0 * 1.4,
+            "the cause is cut after three rows: {cause:?}"
+        );
+        for label in ["Retry deploy", "Copy error", "Show more"] {
+            assert!(texts.iter().any(|(text, _)| text == label), "{label} in {texts:?}");
+        }
+    }
+
+    #[test]
+    fn a_failure_no_step_owns_still_shows_its_cause_under_the_steps() {
+        let runtime = failed_runtime();
+        let mut failed = status::of(&runtime, status::Occupancy::default(), std::time::SystemTime::now());
+        failed.track.current = None;
+        failed.track.failed = false;
+        let texts = steps_texts(&runtime, &failed, 360.0);
+        let cause = cause_rect(&texts);
+        let last_step = texts
+            .iter()
+            .filter(|(text, _)| text.as_str() == Stage::Ready.label())
+            .map(|(_, rect)| rect.bottom())
+            .next()
+            .expect("the Ready step");
+        assert!(cause.top() >= last_step, "the cause follows the list");
+        assert!(texts.iter().any(|(text, _)| text == "Copy error"), "{texts:?}");
     }
 }

@@ -7,6 +7,8 @@ mod creation;
 mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
+#[cfg(debug_assertions)]
+mod failure_preview;
 mod first_panel;
 mod github_requests;
 mod idle;
@@ -23,6 +25,8 @@ mod offers;
 mod park;
 mod preparation;
 mod presentation;
+#[cfg(debug_assertions)]
+mod preview;
 mod prices;
 mod progress;
 mod readiness;
@@ -762,6 +766,8 @@ impl HorizonApp {
             log_preview::seed(self, ctx);
             #[cfg(debug_assertions)]
             stopped_preview::seed(self, ctx);
+            #[cfg(debug_assertions)]
+            failure_preview::seed(self);
         }
     }
     /// Reconnects each resumed worker. The reconnect that finishes a resume is still that

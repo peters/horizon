@@ -89,7 +89,7 @@ mod tests {
         let status = of(runtime, Occupancy::default(), SystemTime::now());
         egui::Context::default()
             .run_ui(egui::RawInput::default(), |ui| {
-                super::super::steps::vertical(ui, runtime, &status);
+                super::super::steps::vertical(ui, 1, runtime, &status);
             })
             .discard_textures()
             .shapes
