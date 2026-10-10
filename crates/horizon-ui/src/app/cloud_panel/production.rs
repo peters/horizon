@@ -811,6 +811,12 @@ impl HorizonApp {
         if let Some(reason) = group.unavailable_panel_reason(options.kind) {
             return Err(horizon_core::Error::Config(reason.into()));
         }
+        // The preparation is about to lock and save the record.
+        if runtime.preparation.is_some() {
+            return Err(horizon_core::Error::Config(
+                "The cloud is preparing its deployment; add the panel when it is ready".into(),
+            ));
+        }
         let root = self
             .cloud_prototype
             .root
