@@ -129,7 +129,7 @@ fn seed_idle_stop(app: &mut HorizonApp, delay: Duration, ctx: &egui::Context) ->
 /// daemon fails a real one, so both cards offer the same Restart Docker. No record
 /// binds a worker, so nothing reaches a provider.
 fn seed_docker_stuck(app: &mut HorizonApp) -> bool {
-    if !accepts_preview(app) {
+    if !super::preview::accepts(app) {
         return false;
     }
     let Some(launch) = preview_launch() else {
