@@ -267,6 +267,7 @@ fn private_file(path: &Path, bytes: &[u8]) -> Result<()> {
     {
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+        fs::File::open(directory)?.sync_all()?;
     }
     Ok(())
 }

@@ -123,6 +123,10 @@ cloud root on the person's machine. Agents cannot run the sign-in, and worker
 handoff of the saved sign-in is not implemented yet: a worker's Codex without
 an API key still signs in through its own terminal.
 
+This is account setup on this machine, as with Connect GitHub. The flow opens
+the system browser. It does not add a Horizon browser-panel operation. Only
+the person authorizes the account.
+
 - Git and `gh` work without a token in the environment. The worker's root service
   answers for the cloud's repositories and its same-worker siblings. Agents never
   see the refresh token.

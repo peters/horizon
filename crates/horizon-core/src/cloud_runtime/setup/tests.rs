@@ -48,6 +48,42 @@ fn a_codex_setting_without_a_key_derives_the_chatgpt_sign_in() {
 }
 
 #[test]
+fn unsupported_plan_authentication_preserves_saved_agent_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let mut base = prepared(root.path());
+    with_agent_credentials(&mut base);
+    let saved = base.save().unwrap();
+    let settings = std::fs::read(root.path().join("settings.json")).unwrap();
+    let key_path = saved.anthropic_api_key_file.unwrap();
+    let key = std::fs::read(&key_path).unwrap();
+    for agents in [vec![Agent::Claude], vec![Agent::Codex]] {
+        let mut draft = Draft::load(root.path()).unwrap();
+        draft.settings.default_agents = agents;
+        draft.anthropic_auth = Authentication::ChatGpt;
+        draft.chatgpt = Some(super::super::chatgpt::Connection {
+            client_id: "oaiapp_synthetic".into(),
+            email: None,
+            subject: "synthetic-user".into(),
+            scopes: vec!["chatgpt.tokens.use.direct".into()],
+            plan_usage: true,
+            usage_confirmed: true,
+            signed_in: true,
+            saved_at_unix: 1,
+        });
+        assert!(
+            draft
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("supported only for Codex")
+        );
+        assert!(draft.save().is_err());
+        assert_eq!(std::fs::read(root.path().join("settings.json")).unwrap(), settings);
+        assert_eq!(std::fs::read(&key_path).unwrap(), key);
+    }
+}
+
+#[test]
 fn first_use_keeps_secrets_out_of_settings_and_preserves_saved_bindings() {
     let root = tempfile::tempdir().unwrap();
     let mut draft = prepared(root.path());

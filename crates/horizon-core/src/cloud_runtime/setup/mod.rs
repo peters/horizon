@@ -170,6 +170,11 @@ impl Draft {
             ),
         ] {
             if mode == Authentication::ChatGpt {
+                if agent != Agent::Codex {
+                    return Err(Error::Invalid(
+                        "ChatGPT plan authentication is supported only for Codex",
+                    ));
+                }
                 // Only Codex offers the mode; a selected Codex needs a usable saved sign-in.
                 if require_chatgpt_sign_in
                     && self.selected_agents().contains(&agent)
