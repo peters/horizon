@@ -977,6 +977,65 @@ This task clones a small public repository on this computer. It starts no cloud.
 
    Result: Neither folder exists.
 
+### 6.33 C33 — Make a new workspace in the cloud, with a GPU or on This PC
+
+This task starts no cloud. `<local>` is a new repository whose committed
+`.horizon/cloud.yml` sets `placement: local`.
+
+1. Make `<local>`:
+
+   ```sh
+   mkdir -p <data-home>/smoke/local/.horizon && cd <data-home>/smoke/local && git init -q
+   printf 'version: 1\ndefault: dev\nplacement: local\nprofiles:\n  dev:\n    provider: runpod\n    image: <worker-image>\n    min_cpu: 2\n    min_memory_gb: 4\n' > .horizon/cloud.yml
+   git add -A && git -c user.name=smoke -c user.email=smoke@example.invalid commit -q -m local
+   ```
+
+   Result: `git -C <data-home>/smoke/local log --oneline` shows one commit.
+
+2. Click **New** in the sidebar.
+
+   Result: A menu shows **Cloud**, **Cloud GPU** and **This PC**, in that order.
+
+3. Click **This PC**.
+
+   Result: A new empty workspace shows. No dialog opens.
+
+4. Click **New**, then **Cloud**. Then click **Cancel** in **New cloud**.
+
+   Result: **New cloud** opens for a new workspace. After **Cancel**, that
+   workspace is gone and the sidebar shows the same workspaces as before.
+
+5. Click **New**, then **Cloud GPU**. Type `<repo>` in the repository field.
+
+   Result: The dialog reads the profiles and selects `runpod-gpu`, the first
+   profile with `gpu: true`. Click **Cancel**.
+
+6. Double-click an empty part of the canvas.
+
+   Result: The **New Workspace** menu shows **Cloud** and **Cloud GPU** first,
+   then **This PC** above the presets.
+
+7. Click **Cloud** in that menu. Type `<home>/smoke/local` in the repository field.
+   This is `<data-home>/smoke/local` from step 1, as the fixture shows it.
+
+   Result: The dialog shows **This repository runs on This PC** and
+   **Open on This PC**.
+
+8. Click **Open on This PC**.
+
+   Result: The dialog closes. The workspace has a terminal whose directory is
+   `<home>/smoke/local`.
+
+> **CAUTION:** THE NEXT STEP DELETES A FOLDER. Delete only `<data-home>/smoke/local`.
+
+9. Close the workspaces that this task made, then remove `<local>`:
+
+   ```sh
+   rm -rf <data-home>/smoke/local
+   ```
+
+   Result: The folder does not exist.
+
 ## 7. Pass criteria
 
 - C01 opens the dialog from the panel picker, the toolbar and **More**.
@@ -988,6 +1047,9 @@ This task clones a small public repository on this computer. It starts no cloud.
 - C31 shows that each worker runs in the place that the summary named.
 - C32 clones a pasted link into `<folder>/<owner>/<repository>` and uses an
   earlier checkout at `<folder>/<repository>` without a second clone.
+- C33 offers Cloud, Cloud GPU and This PC for a new workspace, takes away the
+  empty workspace of a cancelled Cloud, selects a GPU profile for Cloud GPU and
+  opens a `placement: local` repository on This PC.
 - No cloud starts in this area except through D01 and D02, or a watch that the
   operator permitted.
 

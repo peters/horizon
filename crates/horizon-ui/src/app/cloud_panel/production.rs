@@ -16,6 +16,7 @@ mod local_network;
 #[cfg(debug_assertions)]
 mod log_preview;
 mod machine_size;
+mod new_workspace;
 mod offer_publication;
 mod offers;
 mod park;
@@ -95,6 +96,8 @@ pub(super) struct Production {
     companions: companions::State,
     /// Prices sent to ready workers for their agents' cloud offers.
     offer_publication: offer_publication::State,
+    /// The workspace New workspace made for this dialog's cloud, and what it asked for.
+    new_workspace: Option<new_workspace::Intent>,
 }
 #[derive(Default, PartialEq, Eq)]
 pub(super) enum Confirmation {

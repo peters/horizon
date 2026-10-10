@@ -171,9 +171,12 @@ impl HorizonApp {
                             );
                             ui.add_space(18.0);
                             ui.horizontal_wrapped(|ui| {
-                                if ui.add(super::util::primary_button("New Workspace")).clicked() {
-                                    let name = format!("Workspace {}", self.board.workspaces.len() + 1);
-                                    self.create_workspace_visible(ctx, &name);
+                                // The same choice as New in the sidebar: the cloud first.
+                                let new_workspace = ui.add(super::util::primary_button("New Workspace"));
+                                if let Some(choice) =
+                                    super::sidebar::new_workspace_menu(&new_workspace, self.new_cloud_workspace_ready())
+                                {
+                                    self.create_new_workspace(ctx, choice, None);
                                 }
                                 if ui.add(super::util::chrome_button("New Terminal")).clicked() {
                                     if let Some(preset) = self.presets.first().cloned() {

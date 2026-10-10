@@ -5,6 +5,7 @@ use horizon_core::{RuntimeState, StartupDecision};
 use std::time::{Duration, Instant};
 
 mod local_profiles;
+mod new_workspace;
 mod profiles;
 mod reopening;
 mod repository_picker;

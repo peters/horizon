@@ -1,5 +1,6 @@
 mod agent_status;
 mod arrangement;
+mod empty_workspace;
 mod geometry;
 mod shutdown;
 mod workspaces;

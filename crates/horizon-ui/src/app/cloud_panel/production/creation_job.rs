@@ -215,6 +215,8 @@ impl HorizonApp {
             siblings,
         )?;
         self.cloud_prototype.production.creating = false;
+        // The workspace New workspace made now holds the cloud.
+        self.cloud_prototype.production.new_workspace = None;
         // What this dialog held (a clone, a token, a typed key, its checks) does not outlive it.
         self.cloud_prototype.production.source = super::creation::source::State::default();
         self.cloud_prototype.production.checks = super::creation::checks::State::default();

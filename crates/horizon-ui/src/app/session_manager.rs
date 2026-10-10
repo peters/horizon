@@ -254,6 +254,10 @@ impl HorizonApp {
         {
             self.casting.reset_for_session_switch();
         }
+        // A New cloud dialog ends before the board is saved, so a workspace New workspace made
+        // for a cloud that never came is not kept.
+        #[cfg(feature = "cloud-workspaces")]
+        self.close_cloud_creation_for_session_switch();
         let _ = self.auto_save_runtime_state();
         // Panel ids restart from 1 in the next board; a transcript finishing
         // after the switch must not inject into an unrelated same-id panel,

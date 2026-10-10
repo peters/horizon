@@ -88,6 +88,8 @@ impl HorizonApp {
         form.provider = None;
         form.creating = true;
         form.focus_title_on_open = true;
+        // Only New workspace marks a workspace it made; any other opening has none.
+        form.new_workspace = None;
         // With no repository yet, the dialog asks where the code is instead of reading nothing.
         if !form.repository.trim().is_empty() {
             self.read_cloud_profiles(ctx);
@@ -168,6 +170,15 @@ impl HorizonApp {
                     let prepared = loaded.prepared;
                     form.launch.ready_profiles = loaded.ready_profiles;
                     form.repository = prepared.repository.to_string_lossy().into_owned();
+                    // Cloud GPU from New workspace takes each repository's first GPU profile;
+                    // a reread of the same repository keeps the person's pick.
+                    if let Some(name) = super::new_workspace::gpu_profile(form, &prepared.config) {
+                        form.selected_profile = name;
+                        form.launch.selector.profile_changed();
+                        form.size = None;
+                        form.placement = Placement::default();
+                        form.provider = None;
+                    }
                     if !prepared.config.profiles.contains_key(&form.selected_profile) {
                         form.selected_profile.clone_from(&prepared.config.default);
                         form.launch.selector.profile_changed();

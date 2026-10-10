@@ -174,6 +174,27 @@ including for launching the declaring repository's own cloud.
 
 ## One-time machine setup
 
+A new workspace runs in the cloud by default. **New** in the sidebar and the
+**New Workspace** menu of the empty canvas show **Cloud** first, then
+**Cloud GPU** and **This PC**:
+
+- **Cloud** makes the workspace and opens **New cloud** for it.
+- **Cloud GPU** does the same and selects the first profile with `gpu: true`. When
+  the repository has no GPU profile, the dialog says so and keeps the default
+  profile on a CPU worker.
+- **This PC** makes a workspace on this computer, as before clouds. In the canvas
+  menu, the presets under **This PC** do this with a panel.
+
+When you cancel **New cloud** for a workspace that **Cloud** made, the empty
+workspace goes too, unless it is the only workspace on the board. When cloud workspaces are not ready on this computer, only
+**This PC** can be chosen.
+
+A repository can ask for This PC with `placement: local` at the top level of
+`.horizon/cloud.yml` (the default is `placement: cloud`). **New cloud** then shows
+**This repository runs on This PC** with **Open on This PC**, which opens a
+terminal in the repository in that workspace and closes the dialog. You can still
+start a cloud for it.
+
 In an existing workspace, choose **Cloud** from the panel-creation menu (or
 **Cloud > New cloud**), enter a title, and press Enter. Horizon discovers the Git
 root from the workspace directory, loads `.horizon/cloud.yml`, and uses its named
