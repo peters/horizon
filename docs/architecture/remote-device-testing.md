@@ -445,6 +445,66 @@ Repeated creation is not recovery.
 Unknown or missing ownership causes refusal.
 Reconciliation stops sessions and services before it retires uploads.
 
+### Recover local resources after a Linux reboot
+
+New guardian receipts contain the Linux kernel boot ID.
+If this ID differs from the current boot ID, the previous processes cannot remain alive.
+Exact reconciliation records this proof before it releases the local journal resource.
+It preserves the original receipt and does not signal a process ID.
+The proof can release a resource even if Linux reused its process ID.
+An unavailable boot ID keeps the resource uncertain.
+macOS does not support this automatic reboot proof.
+
+Older receipts contain no boot ID.
+Process absence alone cannot release these resources.
+A guardian crash can leave its child processes alive.
+Use the following operator procedure only after a real host reboot.
+
+1. Inspect the original owner's pending operations.
+
+   ```bash
+   horizon --native-reconcile-status --client /absolute/path/to/client.json
+   ```
+
+   Result: The output contains the current boot ID and the original owner's pending operation IDs.
+   The command requires the existing journal and original owner binding.
+   It refuses missing state or an unknown owner without creating files or directories.
+   This command does not clean up provider resources or local processes.
+
+2. Make sure each pending local operation started before the host reboot.
+
+   Result: Independent evidence establishes that the reboot stopped the original processes.
+   Use only the exact `run` and `tunnel` operations from the original client.
+   Include every pending local operation, also when it has no dispatched resource.
+
+> **CAUTION:** USE THIS CONFIRMATION ONLY AFTER A REAL HOST REBOOT.
+> A process crash or a missing process ID does not supply this proof.
+> Keep the original client, owner and private state.
+
+3. Run exact reconciliation with the current boot ID and all pending local operation IDs.
+
+   ```bash
+   horizon --native-reconcile --client /absolute/path/to/client.json \
+     --confirm-host-reboot CURRENT-BOOT-UUID \
+     --local-operations RUN-UUID,TUNNEL-UUID
+   ```
+
+   Result: The host checks ownership and the current boot ID.
+   The IDs must exactly match all pending owned `run` and `tunnel` operations.
+   Missing or extra IDs cause refusal before cleanup starts.
+   The existing journal and original owner binding must be present.
+   Each legacy guardian and recorded child must be absent.
+   A receipt from the current boot stays uncertain.
+   A private recovery record contains the exact operator confirmation.
+   The original guardian receipt stays unchanged.
+
+The confirmation is a trusted operator maintenance command.
+App contracts and MCP tool arguments cannot supply it.
+This command uses the normal session-before-local-before-upload cleanup order.
+It does not initialize a journal, create a new owner or replay an operation.
+The ID check does not prove that later receipt or provider cleanup can succeed.
+If any proof fails, preserve the original state and owner.
+
 Completed provider history retains 32 unreferenced records per owner, ordered by creation time.
 Active controller entries and unfinished cleanup remain protected.
 Local guardian history retains its separate directory-first retirement rule.

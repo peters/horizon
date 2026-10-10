@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod boot;
 pub mod client;
 #[cfg(unix)]
 mod group;

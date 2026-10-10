@@ -1,4 +1,5 @@
 //! Exclusive host actor ownership, shared by CLI, MCP and live native panels.
+use super::store::Initialization;
 use super::store::execution::Identity;
 use super::{Journal, Kind, Operation, Phase};
 use crate::{Error, Result};
@@ -34,6 +35,17 @@ impl Workspace {
     /// The owner/root come from the host's persisted workspace, never tool input.
     /// A different actor, missing lock, root drift or credential drift refuses execution.
     pub fn open(journal: Arc<Journal>, owner: Uuid, root: &Path) -> Result<Self> {
+        Self::open_mode(journal, owner, root, Initialization::Allowed)
+    }
+
+    /// # Errors
+    /// Requires an existing original-owner binding and unchanged root and credential realm.
+    /// Holds the normal exclusive leases without creating or rewriting ownership state.
+    pub fn open_existing(journal: Arc<Journal>, owner: Uuid, root: &Path) -> Result<Self> {
+        Self::open_mode(journal, owner, root, Initialization::Forbidden)
+    }
+
+    fn open_mode(journal: Arc<Journal>, owner: Uuid, root: &Path, initialization: Initialization) -> Result<Self> {
         if owner.is_nil() {
             return Err(Error::OwnershipRefused);
         }
@@ -45,7 +57,11 @@ impl Workspace {
         if root.canonicalize().map_err(|_| Error::OwnershipRefused)? != root {
             return Err(Error::OwnershipRefused);
         }
-        let lease = Lease(journal.store.claim(owner, &root, &root_file)?);
+        let lease = Lease(if initialization == Initialization::Allowed {
+            journal.store.claim(owner, &root, &root_file)?
+        } else {
+            journal.store.claim_existing(owner, &root, &root_file)?
+        });
         // The owner binding protects recovery identity; the directory lease also
         // serializes different owners, accounts and state directories on one root.
         let root_lease = Lease(root_file.try_clone().map_err(|_| Error::JournalUnavailable)?);
