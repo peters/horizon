@@ -261,9 +261,9 @@ pub(super) fn row(
     let signing_in = card.signing_in.is_some();
     // A signed-out registration is retained on disk; only a live connection shows
     // the connected row.
-    let connection = card.connection.clone().filter(|connection| connection.signed_in);
-    if let Some(connection) = connection {
-        card.connected(ui, root, &connection);
+    let connection = card.connection.take();
+    if let Some(connection) = connection.as_ref().filter(|connection| connection.signed_in) {
+        card.connected(ui, root, connection);
     } else {
         caption(
             ui,
@@ -279,6 +279,7 @@ pub(super) fn row(
             card.sign_in(ui.ctx(), root);
         }
     }
+    card.connection = connection;
     if signing_in {
         caption(ui, "Waiting for sign-in: finish in your browser, then come back here.");
         ui.horizontal_wrapped(|ui| {
