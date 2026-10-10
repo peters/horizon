@@ -201,6 +201,39 @@ class WorkflowTests(unittest.TestCase):
             "python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v", jobs["repo-checks"]
         )
 
+    def test_video_tool_installers_skip_local_runs(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        sites = workflow.count("run: bash scripts/install-ci-video-build-tools.sh")
+        guarded = re.findall(
+            r"- name: Install video assembler\n\s+if: \$\{\{ !env\.LOCALCI \}\}\n(?:\s+shell: bash\n)?"
+            r"\s+run: bash scripts/install-ci-video-build-tools\.sh",
+            workflow,
+        )
+        self.assertGreater(sites, 0)
+        self.assertEqual(len(guarded), sites)
+
+    def test_skipped_cloud_worker_tests_fail_on_github_and_warn_locally(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        match = re.search(
+            r"^( +)if grep -q 'skipped=' \"\$RUNNER_TEMP/cloud-worker-tests\.log\"; then\n.*?^\1fi\n",
+            workflow,
+            re.M | re.S,
+        )
+        self.assertIsNotNone(match)
+        check = "\n".join(line[len(match.group(1)):] for line in match.group(0).splitlines())
+        with tempfile.TemporaryDirectory() as temp:
+            Path(temp, "cloud-worker-tests.log").write_text("OK (skipped=1)\n")
+            for localci, code, annotation in [("", 1, "::error::"), ("true", 0, "::warning::")]:
+                with self.subTest(localci=localci):
+                    env = {"PATH": os.environ["PATH"], "RUNNER_TEMP": temp, "LOCALCI": localci}
+                    result = subprocess.run(["bash", "-c", check], env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, code)
+                    self.assertIn(annotation, result.stdout)
+            Path(temp, "cloud-worker-tests.log").write_text("OK\n")
+            result = subprocess.run(["bash", "-c", check], env={"PATH": os.environ["PATH"], "RUNNER_TEMP": temp},
+                                    capture_output=True, text=True)
+            self.assertEqual((result.returncode, result.stdout), (0, ""))
+
 
 if __name__ == "__main__":
     unittest.main()

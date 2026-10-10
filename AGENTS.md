@@ -140,8 +140,12 @@ localci skill install
 - Before each push, run `localci run` in the exact checkout that you will push.
   To run some jobs only, give their ids, for example `localci run clippy repo-checks`.
   `localci list` shows all jobs.
-- Each installer step has a condition with `!env.LOCALCI`, so localci does not
-  run it. Install the packages that these steps name one time on your computer.
+- Each apt and video tool installer step has a condition with `!env.LOCALCI`,
+  so localci does not run it. Install the packages that these steps name one
+  time on your computer.
+- Some setup commands still run locally: `rustup component add` for rustfmt
+  and clippy, and a `pip install` into a temporary virtual environment for the
+  casting benchmark check.
 - localci runs only the jobs for your operating system. The macOS and Windows
   jobs run on GitHub, or on a computer with that system.
 - Some cloud worker tests need root. A local run skips them with a warning.
@@ -262,7 +266,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 
 - For implementation work, create a focused branch in a separate worktree from fresh `origin/main` unless the user explicitly asks to use the current checkout. Keep unrelated files in the primary checkout untouched.
 - Run the full Horizon validation matrix in the exact worktree and commit that will be pushed. Complete applicable local UI smoke, including the PR GIF for UI changes described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before opening the PR. Any required cross-machine smoke must finish on the current head before reporting the PR ready to merge.
-- Before opening the PR, review the full diff yourself. Then do the local review loop in the localci skill: run the GitHub Copilot CLI review, fix the findings, run `localci`, and review again. Do not start a separate review agent. The local Copilot review and the Copilot review on the PR are the independent reviews. If `copilot` is not installed, your own review is the local review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates. If a third round of review finds new problems, stop and tell `peters`.
+- Always review the full diff yourself before you open a PR. Then do the local review loop in the localci skill: run the GitHub Copilot CLI review, fix the findings, run `localci`, and review again. Do not start a separate review agent. The local Copilot review and the Copilot review on the PR are the independent reviews. If `copilot` is not installed, your own review is the local review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates. If a third round of review finds new problems, stop and tell `peters`.
 - Open PRs ready for review by default, not as drafts, unless the user explicitly requests a draft. Include reproduction details for bug fixes, runtime or platform assumptions when relevant, and screenshots, logs, or completed smoke evidence for behavior-affecting changes.
 - Every PR gets an independent Copilot review. Request it after the PR exists through the REST API, using the login `copilot-pull-request-reviewer[bot]`. The POST returns 200 whether or not it registered, so the only proof is that the PR gained a `review_requested` event — count them either side of the request:
 
