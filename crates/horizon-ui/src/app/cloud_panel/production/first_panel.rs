@@ -1,8 +1,7 @@
 //! A freshly deployed cloud opens its first panel itself, so the person lands in a
-//! working session instead of an empty card. The view moves to it only while the
-//! person still looks at the cloud.
+//! working session instead of an empty card. It opens when the person is in the cloud's
+//! workspace, so it never takes the view or the focus from other work.
 use super::{Deployment, HorizonApp};
-use horizon_core::cloud_panel::park::Sight;
 
 /// Only a new deployment with nothing attached: a resumed or reconnected cloud, and one
 /// with sessions of its own, are left as the person had them.
@@ -10,9 +9,10 @@ fn state_opens_first_panel(state: &Deployment) -> bool {
     state.sessions.is_empty() && state.timeline.as_ref().is_some_and(|timeline| !timeline.reconnected)
 }
 
-/// Whether the view moves to the first panel of a cloud the person sees as `sight`.
-fn reveals_first_panel(sight: Sight) -> bool {
-    sight != Sight::Hidden
+/// Whether the first panel of a cloud in `workspace` opens now: only while the person is
+/// in that workspace, since the panel takes the view and the focus.
+fn opens_first_panel_now(workspace: &str, active: Option<&str>) -> bool {
+    active == Some(workspace)
 }
 
 impl super::Runtime {
@@ -45,32 +45,27 @@ impl HorizonApp {
             })
             .map(|group| group.issue)
             .collect();
+        let active = self
+            .board
+            .active_workspace
+            .and_then(|id| self.board.workspace(id))
+            .map(|workspace| workspace.local_id.clone());
         for issue in due {
+            let Some(group) = self.cloud_prototype.groups.0.iter().find(|group| group.issue == issue) else {
+                continue;
+            };
+            // A person who went to another workspace while the cloud deployed keeps their
+            // view and focus: the first panel waits until they come to the cloud's workspace.
+            if !opens_first_panel_now(&group.workspace, active.as_deref()) {
+                continue;
+            }
+            // Anything already open is the person's; the first panel is only for an empty cloud.
+            let first = group.panels.is_empty().then(|| group.first_panel_kind());
             if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) {
                 runtime.first_panel_due = false;
             }
-            // Anything already open is the person's; the first panel is only for an empty cloud.
-            let first = self
-                .cloud_prototype
-                .groups
-                .0
-                .iter()
-                .position(|group| group.issue == issue && group.panels.is_empty());
-            let Some(index) = first else {
-                continue;
-            };
-            let kind = self.cloud_prototype.groups.0[index].first_panel_kind();
-            // The panel comes into view only for a person who still looks at the cloud. A
-            // person who went elsewhere while it deployed keeps their view: the panel opens
-            // out of view, parks, and the cloud list shows its status line.
-            if reveals_first_panel(self.cloud_sight(index)) {
+            if let Some(kind) = first {
                 self.cloud_add_panel(ctx, issue, kind, None);
-            } else {
-                // A new panel takes the focus; here it stays with what the person uses.
-                let (focused, active) = (self.board.focused, self.board.active_workspace);
-                self.cloud_add_member(issue, kind, None);
-                self.board.focused = focused;
-                self.board.active_workspace = active;
             }
         }
     }
@@ -109,6 +104,8 @@ mod tests {
 
     fn add_ready_cloud(app: &mut HorizonApp, root: &std::path::Path) {
         let workspace = app.board.create_workspace("Fixture");
+        // The person is in the cloud's workspace, as after New cloud.
+        app.board.active_workspace = Some(workspace);
         let state = deployment(
             &serde_json::json!([]),
             &serde_json::json!({"reconnected": false, "spans": []}),
@@ -167,10 +164,21 @@ mod tests {
     }
 
     #[test]
-    fn the_view_moves_to_the_first_panel_only_while_the_person_looks_at_the_cloud() {
-        assert!(reveals_first_panel(Sight::InUse));
-        assert!(reveals_first_panel(Sight::Visible));
-        assert!(!reveals_first_panel(Sight::Hidden));
+    fn the_first_panel_waits_while_the_person_is_in_another_workspace() {
+        let (temp, mut app) = test_app();
+        add_ready_cloud(&mut app, temp.path());
+        let ctx = egui::Context::default();
+        let other = app.board.create_workspace("Elsewhere");
+        app.board.active_workspace = Some(other);
+        app.start_first_cloud_panels(&ctx);
+        assert!(
+            app.cloud_prototype.production.runtimes[&101].first_panel_due,
+            "it waits for the person"
+        );
+        assert!(app.cloud_prototype.error.is_none(), "and nothing was asked yet");
+        assert!(opens_first_panel_now("cloud", Some("cloud")));
+        assert!(!opens_first_panel_now("cloud", Some("local")));
+        assert!(!opens_first_panel_now("cloud", None));
     }
 
     #[test]

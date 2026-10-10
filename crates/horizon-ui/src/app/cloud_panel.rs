@@ -560,17 +560,13 @@ impl HorizonApp {
     }
 
     fn cloud_add_panel(&mut self, ctx: &egui::Context, issue: u32, kind: PanelKind, endpoint: Option<String>) {
-        if let Some(id) = self.cloud_add_member(issue, kind, endpoint) {
-            self.reveal_selected_panel(ctx, id);
-        }
-    }
-
-    /// Adds a panel of `kind` to cloud `issue` where its next panel goes, without moving
-    /// the view to it.
-    fn cloud_add_member(&mut self, issue: u32, kind: PanelKind, endpoint: Option<String>) -> Option<PanelId> {
-        let index = self.cloud_prototype.groups.0.iter().position(|g| g.issue == issue)?;
+        let Some(index) = self.cloud_prototype.groups.0.iter().position(|g| g.issue == issue) else {
+            return;
+        };
         let group = &self.cloud_prototype.groups.0[index];
-        let ws = self.board.workspace_id_by_local_id(&group.workspace)?;
+        let Some(ws) = self.board.workspace_id_by_local_id(&group.workspace) else {
+            return;
+        };
         let mut options = self.presets.iter().find(|p| p.kind == kind).map_or_else(
             || PanelOptions {
                 kind,
@@ -592,18 +588,15 @@ impl HorizonApp {
         options.transcript_root.clone_from(&self.transcript_root);
         if let Err(error) = self.prepare_cloud_remote_panel(index, &mut options) {
             self.cloud_prototype.error = Some(error.to_string());
-            return None;
+            return;
         }
         match self.create_cloud_member(index, options, ws) {
             Ok(id) => {
+                self.reveal_selected_panel(ctx, id);
                 self.cloud_prototype.error = None;
                 self.save_cloud_prototype();
-                Some(id)
             }
-            Err(e) => {
-                self.cloud_prototype.error = Some(e.to_string());
-                None
-            }
+            Err(e) => self.cloud_prototype.error = Some(e.to_string()),
         }
     }
 }

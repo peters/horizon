@@ -16,8 +16,8 @@ This procedure makes sure that Horizon parks the terminals of a cloud that stays
 out of view. A parked terminal has no local SSH client or terminal, it shows its
 last screen as dim text, and its session continues on the worker. The procedure
 also makes sure that the terminal attaches again when it comes into view, that it
-then shows the output of the session, and that the first panel of a new cloud does
-not move a view that went to another workspace.
+then shows the output of the session, and that the first panel of a new cloud
+waits while you are in another workspace.
 
 ## 2. Applicability
 
@@ -90,13 +90,13 @@ not move a view that went to another workspace.
    workspace in the sidebar. Wait until the cloud row in the sidebar shows that
    the cloud is ready.
 
-   Result: The canvas stays on the local workspace: the first panel of the cloud
-   opens out of view. After 2 minutes, the cloud row moves to **Parked**.
+   Result: The canvas and the focus stay on the local workspace. No panel of the
+   cloud opens, and its row says that it is ready.
 
 6. Click the name of the cloud workspace in the sidebar.
 
-   Result: The canvas moves to the cloud, which attaches. The cloud workspace
-   shows a shell panel.
+   Result: The canvas moves to the cloud, and its first panel opens: the cloud
+   workspace shows a shell panel.
 
 7. In the shell panel, type this command. Then push Enter.
 

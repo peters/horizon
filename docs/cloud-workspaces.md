@@ -911,10 +911,11 @@ the last line of the session. In a detached window or a fullscreen cloud, a park
 panel shows only its last screen until it attaches. The worker needs only Python 3
 and tmux for this.
 
-A new cloud opens its first panel when it becomes ready. The canvas moves to that
-panel only when the cloud is still in view. When you went to another workspace
-while the cloud deployed, your view stays where it is: the panel opens out of
-view, parks, and the cloud list shows its status line. Click the row to go to it.
+A new cloud opens its first panel when it becomes ready, and the canvas moves to
+it. When you went to another workspace while the cloud deployed, your view and
+focus stay where they are: the cloud list shows the cloud as ready, and the first
+panel opens when you come to the cloud's workspace, for example with a click on
+its row.
 
 ### Cloud list
 
