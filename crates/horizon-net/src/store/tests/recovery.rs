@@ -166,3 +166,65 @@ fn failed_widening_barrier_restart_denies_until_exact_confirmation_is_durable() 
     );
     Ok(())
 }
+
+#[test]
+#[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
+fn equivalent_identity_spellings_preserve_snapshot_and_restart_quarantine() -> Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let directory = temporary.path().join("state");
+    let original = granted_config();
+    let store = Store::open(directory.clone(), &mut original.clone())?;
+    let identity = store.enrolled_key()?;
+    drop(store);
+    let path = directory.join("00000000000000000000.json");
+    let snapshot = fs::read(&path)?;
+    let source = original.topology.nodes["node"].key.clone();
+    for (authority_alias, node_alias) in [(true, false), (false, true), (true, true)] {
+        let mut enrolled = original.clone();
+        if authority_alias {
+            enrolled.authority_key = format!("ed25519:{}", enrolled.authority_key);
+        }
+        if node_alias {
+            enrolled.topology.nodes.get_mut("node").ok_or(Error::Denied)?.key = format!("ed25519:{source}");
+        }
+        let store = Store::open(directory.clone(), &mut enrolled)?;
+        assert_eq!(store.enrolled_key()?, identity);
+        assert_eq!(enrolled.topology, original.topology);
+        assert_eq!(fs::read(&path)?, snapshot);
+        let controller = crate::Controller::new(enrolled.topology.clone())?;
+        controller.bind_store(store)?;
+        assert_eq!(
+            controller.status().policy_state,
+            crate::PolicyState::AwaitingConfirmation
+        );
+        assert!(controller.status().grants.iter().all(|grant| !grant.active));
+        assert!(matches!(
+            controller.authorize(&source, "self-service"),
+            Err(Error::Denied)
+        ));
+        assert!(!controller.apply(&controller.plan(original.topology.clone())?)?.changed);
+        assert_eq!(controller.status().policy_state, crate::PolicyState::Confirmed);
+        assert!(controller.authorize(&source, "self-service").is_ok());
+        assert_eq!(controller.topology(), original.topology);
+        assert_eq!(fs::read(&path)?, snapshot);
+        assert_eq!(fs::read_dir(&directory)?.count(), 2);
+        drop(controller);
+    }
+    let other_key = iroh::SecretKey::from_bytes(&[2; 32]).public().to_string();
+    let mut different_authority = original.clone();
+    different_authority.authority_key = format!("ed25519:{other_key}");
+    assert!(matches!(
+        Store::open(directory.clone(), &mut different_authority),
+        Err(Error::InvalidConfiguration(_))
+    ));
+    let mut different_node = original.clone();
+    different_node.secret_key = "02".repeat(32);
+    different_node.topology.nodes.get_mut("node").ok_or(Error::Denied)?.key = format!("ed25519:{other_key}");
+    assert!(matches!(
+        Store::open(directory.clone(), &mut different_node),
+        Err(Error::InvalidConfiguration(_))
+    ));
+    assert_eq!(fs::read(&path)?, snapshot);
+    assert_eq!(fs::read_dir(&directory)?.count(), 2);
+    Ok(())
+}

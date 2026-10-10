@@ -143,8 +143,8 @@ impl Store {
         if final_path.exists() {
             let previous: Snapshot = serde_json::from_slice(&read_private(&final_path)?)?;
             if previous.topology == *topology
-                && previous.authority_key == self.authority_key
-                && previous.node_key == self.node_key
+                && parse_key(&previous.authority_key)? == parse_key(&self.authority_key)?
+                && parse_key(&previous.node_key)? == parse_key(&self.node_key)?
             {
                 return self.sync_directory();
             }
