@@ -65,7 +65,8 @@ pub fn known_login(root: &Path, docker_config: &Path) -> Option<String> {
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("github-host-") && name.ends_with(".json"))
+                .and_then(|name| name.strip_prefix("github-host-")?.strip_suffix(".json"))
+                .is_some_and(|app_id| app_id.parse::<u64>().is_ok())
         });
     std::iter::once(docker_config.join(super::publish::STORE))
         .chain(earlier)
