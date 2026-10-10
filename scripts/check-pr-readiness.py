@@ -5,7 +5,7 @@ Copilot reports these rules as review findings, and each finding costs a review
 round. The check finds them in a second instead:
 
 - scope: more than 10 source or test files, or more than 1,500 lines, needs approval;
-- UI changes: a test procedure, and an animated GIF in the PR body (at the top);
+- UI changes: a test procedure, and an embedded animated GIF in the PR body (at the top);
 - features (a `feat` title): a test procedure;
 - the two bundled skill copies change together;
 - new test plans go under docs/testing/procedures/ or docs/testing/reports/.
@@ -52,12 +52,24 @@ def changed_files(repo, base):
 
 
 def is_media(line):
-    """An embedded image or video: Markdown image syntax, an <img> or <video> tag, or an
-    attachment URL alone on its line, which GitHub shows as media. A file name in prose
-    does not count."""
+    """An embedded animated GIF: Markdown image syntax, an <img> tag, or an attachment URL
+    alone on its line, which GitHub shows as media. A file name in prose, a still image
+    such as PNG or JPEG, and a video do not count. GitHub attachment URLs have no file
+    extension, so the check cannot see their type offline and accepts them."""
     line = line.strip()
-    return bool(re.search(r"!\[[^\]]*\]\([^)\s]+\)|<(img|video)\b[^>]*\bsrc=", line, re.I)
-                or re.fullmatch(r"https://github\.com/user-attachments/assets/\S+", line))
+    urls = re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", line)
+    urls += re.findall(r"<img\b[^>]*\bsrc=[\"']?([^\"'\s>]+)", line, re.I)
+    if re.fullmatch(r"https://github\.com/user-attachments/assets/\S+", line):
+        urls.append(line)
+    return any(is_gif_url(url) for url in urls)
+
+
+def is_gif_url(url):
+    path = url.split("?", 1)[0].split("#", 1)[0]
+    name = path.rsplit("/", 1)[-1]
+    if "." not in name:
+        return "/user-attachments/assets/" in path
+    return name.lower().endswith(".gif")
 
 
 def is_test(path):

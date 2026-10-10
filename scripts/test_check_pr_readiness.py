@@ -105,10 +105,12 @@ class ReadinessTests(unittest.TestCase):
         self.write("crates/horizon-ui/src/app/panel.rs")
         self.write("docs/testing/procedures/panel.md")
         self.commit()
-        for body in ["The recording is recording.gif.\n", "See https://github.com/user-attachments/assets/abc for details.\n"]:
+        for body in ["The recording is recording.gif.\n", "See https://github.com/user-attachments/assets/abc for details.\n",
+                     "![still](https://example.invalid/shot.png)\n", "<video src=\"https://example.invalid/a.mp4\"></video>\n"]:
             with self.subTest(body=body):
                 self.assertIn("error ui-gif:", self.run_check(body=body)[1])
-        for body in ["<img src=\"https://example.invalid/a.gif\" width=\"600\">\n", "https://github.com/user-attachments/assets/abc\n"]:
+        for body in ["<img src=\"https://example.invalid/a.gif\" width=\"600\">\n", "https://github.com/user-attachments/assets/abc\n",
+                     "![flow](https://github.com/user-attachments/assets/abc)\n"]:
             with self.subTest(body=body):
                 self.assertEqual(self.run_check(body=body)[0], 0)
 
