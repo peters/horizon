@@ -237,6 +237,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         session_restart: None,
         timeline: None,
         last_self_stop: None,
+        tailnet_device: None,
         siblings: None,
     };
     store.save(&state).unwrap();

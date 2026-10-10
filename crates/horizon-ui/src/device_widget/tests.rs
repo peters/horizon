@@ -721,6 +721,7 @@ fn native_caption_matches_inspection_without_paint_and_survives_disconnect() {
     native.recipes.push(NativeRecipeResult {
         recipe: "checkout".into(),
         passed: false,
+        blocked: false,
     });
     assert!(
         state

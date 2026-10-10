@@ -13,7 +13,9 @@ use super::super::remote::{
 };
 use super::super::service::WebDriverService;
 use super::bidi::{connect_bidi_with_startup_retry, discover_context, install_common_signal_preload, subscribe};
-use super::handshake::{NewSession, parse_new_session_response};
+use super::handshake::{
+    FirefoxNativeFlagClear, NewSession, clear_firefox_native_automation_flag, parse_new_session_response,
+};
 use super::semantic;
 
 /// Spawn the local driver process and create its classic session.
@@ -180,6 +182,7 @@ pub(super) struct BidiLink {
     pub(super) bidi: Option<JsonWsLink>,
     pub(super) context_id: Option<String>,
     pub(super) automation_ws: String,
+    pub(super) disclosure: crate::AutomationDisclosureStatus,
 }
 
 /// Connect the `BiDi` channel a local browser advertised. A remote grid may
@@ -223,12 +226,34 @@ pub(super) fn establish_bidi(
         host.delete_session(session_id);
         return Err("Firefox BiDi returned no top-level browsing context".to_string());
     }
+    // A shared process clears the flags once on its session transport, before
+    // page commands exist. Repeating that session-global switch here is refused.
+    let native_flag_cleared = if host.native_automation_flag_cleared() {
+        true
+    } else if shared {
+        false
+    } else if firefox_attempts_native_flag_clear(&config.browser, firefox_bidi) {
+        match clear_firefox_native_automation_flag(host.transport(), session_id) {
+            FirefoxNativeFlagClear::Cleared => true,
+            FirefoxNativeFlagClear::Unavailable(error) => {
+                tracing::warn!("Firefox native automation flag stayed set; using the preload fallback: {error}");
+                false
+            }
+            FirefoxNativeFlagClear::Unsafe(error) => {
+                host.delete_session(session_id);
+                return Err(error);
+            }
+        }
+    } else {
+        false
+    };
     if shared && let Some(link) = bidi.as_mut() {
-        super::bidi::subscribe_shared_page(link, host, config.browser.automation_disclosure)?;
+        super::bidi::subscribe_shared_page(link, host, config.browser.automation_disclosure, native_flag_cleared)?;
     }
     if !shared
         && firefox_bidi
         && config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
+        && !native_flag_cleared
         && let Some(link) = bidi.as_mut()
         && let Err(error) = install_common_signal_preload(link)
     {
@@ -249,11 +274,28 @@ pub(super) fn establish_bidi(
         context_id = None;
     }
     let automation_ws = bidi.as_ref().and(ws_url).unwrap_or_default().to_string();
+    let disclosure = crate::disclosure::established_disclosure_status(
+        config.browser.automation_disclosure,
+        config.browser.backend,
+        firefox_bidi,
+        native_flag_cleared,
+    );
     Ok(BidiLink {
         bidi,
         context_id,
         automation_ws,
+        disclosure,
     })
+}
+
+/// The privileged chrome-context clear runs only for opted-in local Firefox.
+///
+/// Older Firefox accepted chrome context without `--allow-system-access`.
+/// Gating only the geckodriver argument would still clear the native flags.
+pub(super) fn firefox_attempts_native_flag_clear(config: &crate::BrowserConfig, firefox_bidi: bool) -> bool {
+    firefox_bidi
+        && config.firefox_system_access
+        && config.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
 }
 
 /// Firefox `BiDi` is a local-host mode only; see [`super::Driver::firefox_bidi`].

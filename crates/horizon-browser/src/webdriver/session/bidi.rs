@@ -213,6 +213,7 @@ pub(super) fn subscribe_shared_page(
     link: &mut JsonWsLink,
     host: &mut super::super::host::DriverHost,
     disclosure: crate::AutomationDisclosurePolicy,
+    native_flag_cleared: bool,
 ) -> Result<(), String> {
     let context = host
         .shared_context()
@@ -248,7 +249,7 @@ pub(super) fn subscribe_shared_page(
         "intercept",
         "network.removeIntercept",
     )?;
-    if disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals {
+    if disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals && !native_flag_cleared {
         register(
             "script.addPreloadScript",
             json!({"functionDeclaration": COMMON_SIGNAL_PRELOAD_FUNCTION, "contexts": [context]}),

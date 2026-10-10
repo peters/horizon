@@ -30,7 +30,10 @@ pub fn show(
     interactive: bool,
 ) -> (bool, bool) {
     if let Some(identity) = browser.remote_identity_display() {
-        remote_identity_header(ui, identity);
+        let disclosure = browser
+            .active_backend_capabilities()
+            .map(|active| active.automation_disclosure.as_str());
+        remote_identity_header(ui, identity, disclosure);
     }
     let chrome_row = ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -108,8 +111,14 @@ pub fn show(
     (url_focused, clicked)
 }
 
-fn remote_identity_header(ui: &mut Ui, identity: &horizon_core::browser::RemoteIdentityDisplay) {
+fn remote_identity_header(
+    ui: &mut Ui,
+    identity: &horizon_core::browser::RemoteIdentityDisplay,
+    disclosure: Option<&str>,
+) {
     // A dedicated row keeps the hover target usable at the minimum panel width.
+    // Disclosure is read here because the cached identity text is built before
+    // the session publishes its status. The tooltip closure runs only while open.
     ui.add_sized(
         vec2(ui.available_width(), CHROME_HEIGHT),
         egui::Label::new(identity.label())
@@ -119,25 +128,15 @@ fn remote_identity_header(ui: &mut Ui, identity: &horizon_core::browser::RemoteI
     .on_hover_ui(|ui| {
         ui.set_max_width(crate::text::stable_tooltip_max_width(ui));
         ui.add(egui::Label::new(identity.tooltip()).wrap());
+        if let Some(status) = disclosure {
+            ui.label(status);
+        }
     });
 }
 
-/// Whether the backend picker may act, and the explanation shown when a
-/// remote target fixes the browser.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PickerState {
-    enabled: bool,
-    remote_hint: Option<&'static str>,
-}
-
-const REMOTE_PICKER_HINT: &str = "This panel runs at a remote device target, which fixes the browser";
-
-fn picker_state(browser: &BrowserPanelState, interactive: bool) -> PickerState {
-    let remote = browser.is_remote();
-    PickerState {
-        enabled: interactive && browser.teach().is_none() && !remote,
-        remote_hint: remote.then_some(REMOTE_PICKER_HINT),
-    }
+/// The picker acts only for an interactive local panel that is not teaching.
+fn picker_enabled(browser: &BrowserPanelState, interactive: bool) -> bool {
+    interactive && browser.teach().is_none() && !browser.is_remote()
 }
 
 fn backend_picker(
@@ -146,6 +145,8 @@ fn backend_picker(
     browser: &mut BrowserPanelState,
     interactive: bool,
 ) -> bool {
+    // Remote panels show the family and disclosure on the identity header.
+    // A picker on that row would be a second fixed control.
     if browser.is_remote() {
         return false;
     }
@@ -161,7 +162,7 @@ fn backend_picker(
             }
         },
     );
-    let PickerState { enabled, remote_hint } = picker_state(browser, interactive);
+    let enabled = picker_enabled(browser, interactive);
     let picker = ui.add_enabled_ui(enabled, |ui| {
         egui::ComboBox::from_id_salt(("browser-backend", panel_id))
             .selected_text(selected_text)
@@ -185,12 +186,14 @@ fn backend_picker(
                         }
                     }
                 }
-            });
+            })
     });
-    if let Some(hint) = remote_hint {
-        // The configured target fixes the browser; the picker stays visible
-        // so the family is still readable, but never actionable.
-        picker.response.on_hover_text(hint);
+    if let Some(status) = browser
+        .active_backend_capabilities()
+        .map(|active| active.automation_disclosure.as_str())
+    {
+        // The button owns hover input; the enclosing enabled scope does not.
+        picker.inner.response.on_hover_text(status);
     }
     if selected == previous {
         return false;
@@ -501,7 +504,7 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
 mod tests {
     use horizon_core::browser::{BackendKind, BrowserPanelState, BrowserStatus};
 
-    use super::{PickerState, REMOTE_PICKER_HINT, backend_picker, nav_widget_info, picker_state, sync_url_buffer};
+    use super::{backend_picker, nav_widget_info, picker_enabled, sync_url_buffer};
     use crate::test_egui::DiscardTextures;
 
     #[test]
@@ -515,13 +518,7 @@ mod tests {
             "ios_phone".to_string(),
             None,
         );
-        assert_eq!(
-            picker_state(&remote, true),
-            PickerState {
-                enabled: false,
-                remote_hint: Some(REMOTE_PICKER_HINT),
-            }
-        );
+        assert!(!picker_enabled(&remote, true), "a remote target fixes the browser");
         assert_eq!(
             remote.backend(),
             BackendKind::SafariWebDriver,
@@ -540,17 +537,145 @@ mod tests {
         assert_eq!(remote.backend(), BackendKind::SafariWebDriver);
 
         let local = BrowserPanelState::inert();
-        assert_eq!(
-            picker_state(&local, true),
-            PickerState {
-                enabled: true,
-                remote_hint: None,
+        assert!(picker_enabled(&local, true));
+        assert!(!picker_enabled(&local, false), "a non-interactive view never picks");
+    }
+
+    #[test]
+    fn disclosure_status_stays_visible_on_a_narrow_panel() {
+        for width in [720.0, 280.0] {
+            assert!(
+                hover_shows_status(local_disclosure_panel(), "common_signals_minimized", width),
+                "local picker hid common_signals_minimized at width {width}"
+            );
+            assert!(
+                hover_shows_status(remote_disclosure_panel(), "unsupported_by_backend", width),
+                "remote identity hid unsupported_by_backend at width {width}"
+            );
+        }
+    }
+
+    fn local_disclosure_panel() -> BrowserPanelState {
+        let local = BrowserPanelState::inert();
+        local
+            .frame_slot
+            .publish_backend_capabilities_for_tests(disclosure_capabilities(
+                BackendKind::FirefoxBidi,
+                true,
+                horizon_browser::AutomationDisclosureStatus::CommonSignalsMinimized,
+            ));
+        local
+    }
+
+    fn remote_disclosure_panel() -> BrowserPanelState {
+        let remote = BrowserPanelState::inert_remote("ios_phone", "browserstack");
+        remote
+            .frame_slot
+            .publish_backend_capabilities_for_tests(disclosure_capabilities(
+                BackendKind::ChromiumCdp,
+                false,
+                horizon_browser::AutomationDisclosureStatus::UnsupportedByBackend,
+            ));
+        remote
+    }
+
+    fn disclosure_capabilities(
+        backend: BackendKind,
+        bidi: bool,
+        automation_disclosure: horizon_browser::AutomationDisclosureStatus,
+    ) -> horizon_browser::ActiveBackendCapabilities {
+        horizon_browser::ActiveBackendCapabilities {
+            backend,
+            capabilities: horizon_browser::BackendCapabilities::remote_session(),
+            bidi,
+            automation_disclosure,
+        }
+    }
+
+    fn hover_shows_status(mut browser: BrowserPanelState, status: &str, width: f32) -> bool {
+        let height = 220.0;
+        for y in [4.0, 14.0, 24.0, 34.0, 44.0, 54.0] {
+            let mut x = 4.0;
+            while x < width {
+                if status_inside(&mut browser, status, width, height, egui::pos2(x, y)) {
+                    return true;
+                }
+                x += 12.0;
             }
-        );
+        }
+        false
+    }
+
+    fn status_inside(
+        browser: &mut BrowserPanelState,
+        status: &str,
+        width: f32,
+        height: f32,
+        pointer: egui::Pos2,
+    ) -> bool {
+        let ctx = egui::Context::default();
+        let mut pass = |time: f64, moved: bool| {
+            ctx.run_ui(hover_input_size(pointer, time, width, height, moved), |ui| {
+                let mut state = crate::browser_widget::BrowserUiState::default();
+                super::show(ui, horizon_core::PanelId(2), browser, &mut state, true);
+            })
+            .discard_textures()
+        };
+        let _ = pass(0.0, true);
+        let _ = pass(0.1, false);
+        let _ = pass(1.0, false);
+        shape_has_status(&pass(1.1, false), status, width, height)
+    }
+
+    fn shape_has_status(output: &egui::FullOutput, status: &str, width: f32, height: f32) -> bool {
+        fn walk(shape: &egui::Shape, status: &str, width: f32, height: f32) -> bool {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text.contains(status) => {
+                    let bounds = text.visual_bounding_rect();
+                    bounds.width() > 0.0
+                        && bounds.left() >= -1.0
+                        && bounds.right() <= width + 1.0
+                        && bounds.top() >= -1.0
+                        && bounds.bottom() <= height + 1.0
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().any(|shape| walk(shape, status, width, height)),
+                _ => false,
+            }
+        }
+        output
+            .shapes
+            .iter()
+            .any(|shape| walk(&shape.shape, status, width, height))
+    }
+
+    #[test]
+    fn remote_identity_hover_shows_the_disclosure_status() {
+        let remote = BrowserPanelState::inert_remote("ios_phone", "browserstack");
+        remote
+            .frame_slot
+            .publish_backend_capabilities_for_tests(horizon_browser::ActiveBackendCapabilities {
+                backend: BackendKind::ChromiumCdp,
+                capabilities: horizon_browser::BackendCapabilities::remote_session(),
+                bidi: false,
+                automation_disclosure: horizon_browser::AutomationDisclosureStatus::UnsupportedByBackend,
+            });
         assert!(
-            !picker_state(&local, false).enabled,
-            "a non-interactive view never picks"
+            hover_shows_status(remote, "unsupported_by_backend", 720.0),
+            "remote identity hover must show the disclosure status"
         );
+    }
+
+    fn hover_input_size(pointer: egui::Pos2, time: f64, width: f32, height: f32, moved: bool) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
+            time: Some(time),
+            events: if moved {
+                vec![egui::Event::PointerMoved(pointer)]
+            } else {
+                Vec::new()
+            },
+            ..egui::RawInput::default()
+        }
     }
 
     #[test]

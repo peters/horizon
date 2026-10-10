@@ -5,10 +5,7 @@ use horizon_browser::{
     BackendKind, BrowserConfig, BrowserEvent, BrowserSession, BrowserSessionConfig, FrameSlot, VideoCaptureHandle,
     start_session,
 };
-use horizon_browser_control::{
-    BrowserRuntimePaths,
-    manifest::{self, ManifestCoordination},
-};
+use horizon_browser_control::{BrowserRuntimePaths, manifest::ManifestCoordination};
 use horizon_browser_protocol::cloud_view::{CloudViewRequest, CloudViewResponse, CloudViewState};
 use std::{
     collections::BTreeMap,
@@ -25,7 +22,7 @@ pub struct HostedBrowser {
 pub struct Host {
     pub capabilities: horizon_cloud::Capabilities,
     pub browsers: BTreeMap<String, HostedBrowser>,
-    pub pending: Vec<manifest::BrowserCreateRequest>,
+    pub pending: Vec<super::queues::PendingCreate>,
     pub pending_cleanup: std::collections::BTreeSet<String>,
     root: PathBuf,
     closed: std::collections::BTreeSet<String>,

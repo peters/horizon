@@ -787,5 +787,56 @@ fn browser_handoff_resume_rejects_stale_request_and_lost_ownership() {
     agent.close();
 }
 
+#[test]
+fn list_and_panel_preserve_automation_disclosure() {
+    let home = tempfile::tempdir().expect("isolated home");
+    let workspace = || Some(ManifestWorkspace::new(HOST_A, "workspace-a", vec![AGENT_A.to_string()]));
+    let mut preload = manifest("preload-panel", workspace(), None);
+    preload.automation_disclosure = horizon_browser::AutomationDisclosureStatus::PreloadFallback;
+    write_manifest(home.path(), &preload);
+    let mut remote = manifest("remote-panel", workspace(), None);
+    remote.automation_disclosure = horizon_browser::AutomationDisclosureStatus::UnsupportedByBackend;
+    write_manifest(home.path(), &remote);
+    write_manifest(home.path(), &manifest("legacy-panel", workspace(), None));
+    let path = manifest_path_for_root(&horizon_root(home.path()), "legacy-panel");
+    let mut value: Value = serde_json::from_reader(std::fs::File::open(&path).expect("legacy file")).expect("json");
+    assert!(
+        value
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("automation_disclosure")
+            .is_some(),
+        "the fixture must omit the field the way an older manifest does"
+    );
+    std::fs::write(&path, serde_json::to_vec(&value).expect("encode")).expect("rewrite legacy manifest");
+
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
+    let listed = agent.call("browser_list", &json!({}));
+    assert_eq!(listed["isError"], false, "{listed}");
+    let panels = &listed["structuredContent"]["panels"];
+    for (id, expected) in [
+        ("preload-panel", "preload_fallback"),
+        ("remote-panel", "unsupported_by_backend"),
+        ("legacy-panel", "unreported"),
+    ] {
+        assert_eq!(listed_disclosure(panels, id), expected);
+        let panel = agent.call("browser_panel", &json!({ "panel_id": id }));
+        assert_eq!(panel["isError"], false, "{panel}");
+        assert_eq!(panel["structuredContent"]["automation_disclosure"], expected);
+    }
+    agent.close();
+}
+
+fn listed_disclosure<'a>(panels: &'a Value, id: &str) -> &'a str {
+    panels
+        .as_array()
+        .expect("browser_list panels")
+        .iter()
+        .find(|panel| panel["panel_id"] == id)
+        .unwrap_or_else(|| panic!("browser_list omitted {id}"))["automation_disclosure"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{id} disclosure was not a string"))
+}
+
 #[path = "workspace_scope/remote_handoff.rs"]
 mod remote_handoff;

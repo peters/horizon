@@ -16,15 +16,70 @@ pub enum AutomationDisclosurePolicy {
 }
 
 /// Disclosure behavior established for an active backend session.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AutomationDisclosureStatus {
     /// The caller selected [`AutomationDisclosurePolicy::BrowserDefault`].
     BrowserDefault,
-    /// The backend installed its common-signal minimization before navigation.
+    /// Native minimization is active. Firefox cleared its automation flags, or
+    /// Chromium started with the standard automation flag suppressed.
     CommonSignalsMinimized,
+    /// Firefox installed the script getter because the native flag clear was
+    /// unavailable. Sign-in pages can reject that getter.
+    PreloadFallback,
     /// The selected backend cannot establish pre-document minimization.
     UnsupportedByBackend,
+    /// An older manifest omitted this field. This is not an established result.
+    #[default]
+    Unreported,
+}
+
+impl AutomationDisclosureStatus {
+    /// Stable public name. UI, CLI, and MCP use this spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BrowserDefault => "browser_default",
+            Self::CommonSignalsMinimized => "common_signals_minimized",
+            Self::PreloadFallback => "preload_fallback",
+            Self::UnsupportedByBackend => "unsupported_by_backend",
+            Self::Unreported => "unreported",
+        }
+    }
+}
+
+/// Status published by the classic `WebDriver` startup path.
+///
+/// Minimized local Firefox reports the native clear and the preload getter as
+/// different outcomes. Remote Firefox and remote Chromium reach this helper
+/// without local minimization: remote allocation forwards the target
+/// capabilities and never passes `--disable-blink-features=AutomationControlled`.
+/// Both therefore report [`AutomationDisclosureStatus::UnsupportedByBackend`].
+/// Local Chromium reports its blink-flag result from the CDP session, not here.
+#[must_use]
+pub(crate) fn established_disclosure_status(
+    policy: AutomationDisclosurePolicy,
+    backend: crate::BackendKind,
+    firefox_bidi: bool,
+    native_cleared: bool,
+) -> AutomationDisclosureStatus {
+    if policy != AutomationDisclosurePolicy::MinimizeCommonSignals {
+        return policy.ready_status(backend);
+    }
+    if backend == crate::BackendKind::FirefoxBidi && firefox_bidi {
+        return if native_cleared {
+            AutomationDisclosureStatus::CommonSignalsMinimized
+        } else {
+            AutomationDisclosureStatus::PreloadFallback
+        };
+    }
+    if matches!(
+        backend,
+        crate::BackendKind::FirefoxBidi | crate::BackendKind::ChromiumCdp
+    ) {
+        return AutomationDisclosureStatus::UnsupportedByBackend;
+    }
+    policy.ready_status(backend)
 }
 
 impl AutomationDisclosurePolicy {
@@ -39,11 +94,54 @@ impl AutomationDisclosurePolicy {
     }
 }
 
-/// A callable `WebDriver` `BiDi` preload function used by Firefox. Chromium
-/// relies on `--disable-blink-features=AutomationControlled` instead of this
-/// getter, because a script-defined `navigator.webdriver` accessor is itself a
-/// detection signal. The function changes only the standard value and
-/// deliberately avoids broad fingerprint spoofing.
+/// Chrome-privileged Firefox script that clears the content-process automation
+/// flags read by `Navigator::Webdriver()`. The native getter stays in place and
+/// returns false. A page-world replacement getter is itself a detection signal,
+/// so this is the preferred minimization path.
+///
+/// Current Firefox reads `IsBrowserAutomationRunning` and also publishes the
+/// legacy `Active` keys. Those keys still back `Marionette.running` and
+/// `RemoteAgent.running`, so the script returns after the first present pair.
+/// Firefox ESR 140 reads only `Active` (`Navigator::Webdriver` calls
+/// `GetRunning()`), and that pair is the fallback. Shared data accepts any
+/// key, so a missing key must not be created: writing it and reading it back
+/// would report success while the native getter stays true. A pair is changed
+/// only when both keys are already booleans. No recognized pair means the
+/// preload fallback has to run.
+pub(crate) const FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT: &str = r#"const pairs = [
+    [
+        "Marionette:IsBrowserAutomationRunning",
+        "RemoteAgent:IsBrowserAutomationRunning"
+    ],
+    [
+        "Marionette:Active",
+        "RemoteAgent:Active"
+    ]
+];
+for (const keys of pairs) {
+    const present = keys.every((key) => typeof Services.ppmm.sharedData.get(key) === "boolean");
+    if (!present) {
+        continue;
+    }
+    for (const key of keys) {
+        Services.ppmm.sharedData.set(key, false);
+    }
+    Services.ppmm.sharedData.flush();
+    return keys.every((key) => Services.ppmm.sharedData.get(key) === false);
+}
+return false;"#;
+
+/// True when the chrome-context script reported both automation flags cleared.
+#[must_use]
+pub(crate) fn firefox_native_automation_flag_cleared(response: &serde_json::Value) -> bool {
+    response.get("value").and_then(serde_json::Value::as_bool) == Some(true)
+}
+
+/// Fallback Firefox preload used only when the native automation flag cannot
+/// be cleared. Chromium relies on `--disable-blink-features=AutomationControlled`
+/// instead of this getter, because a script-defined `navigator.webdriver`
+/// accessor is itself a detection signal. The function changes only the
+/// standard value and deliberately avoids broad fingerprint spoofing.
 pub(crate) const COMMON_SIGNAL_PRELOAD_FUNCTION: &str = r#"() => {
     const prototype = globalThis.Navigator && globalThis.Navigator.prototype;
     if (!prototype) return;
@@ -142,6 +240,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn minimized_firefox_reports_preload_fallback_until_the_native_flag_clears() {
+        use AutomationDisclosurePolicy::{BrowserDefault, MinimizeCommonSignals};
+        use AutomationDisclosureStatus::{
+            BrowserDefault as DefaultStatus, CommonSignalsMinimized, PreloadFallback, UnsupportedByBackend,
+        };
+
+        let firefox = crate::BackendKind::FirefoxBidi;
+        assert_eq!(
+            established_disclosure_status(MinimizeCommonSignals, firefox, true, true),
+            CommonSignalsMinimized
+        );
+        assert_eq!(
+            established_disclosure_status(MinimizeCommonSignals, firefox, true, false),
+            PreloadFallback
+        );
+        assert_eq!(
+            established_disclosure_status(BrowserDefault, firefox, true, false),
+            DefaultStatus
+        );
+        assert_eq!(
+            established_disclosure_status(MinimizeCommonSignals, firefox, false, false),
+            UnsupportedByBackend
+        );
+        assert_eq!(
+            established_disclosure_status(BrowserDefault, firefox, false, false),
+            DefaultStatus
+        );
+        assert_eq!(
+            established_disclosure_status(MinimizeCommonSignals, crate::BackendKind::ChromiumCdp, false, false),
+            UnsupportedByBackend
+        );
+        assert_eq!(
+            established_disclosure_status(BrowserDefault, crate::BackendKind::ChromiumCdp, false, false),
+            DefaultStatus
+        );
+        assert_eq!(PreloadFallback.as_str(), "preload_fallback");
+        assert_eq!(AutomationDisclosureStatus::Unreported.as_str(), "unreported");
+        assert_eq!(
+            serde_json::to_string(&PreloadFallback).ok().as_deref(),
+            Some("\"preload_fallback\"")
+        );
+    }
+
+    #[test]
     fn safari_reports_unsupported_minimization_without_overclaiming() {
         assert_eq!(
             AutomationDisclosurePolicy::MinimizeCommonSignals.ready_status(crate::BackendKind::SafariWebDriver),
@@ -158,6 +300,37 @@ mod tests {
         assert!(COMMON_SIGNAL_PRELOAD_FUNCTION.contains("webdriver"));
         assert!(COMMON_SIGNAL_PRELOAD_FUNCTION.contains("get: () => false"));
         assert!(!COMMON_SIGNAL_PRELOAD_FUNCTION.contains("userAgent"));
+    }
+
+    #[test]
+    fn firefox_native_flag_script_only_clears_the_automation_keys() {
+        let script = FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT;
+        assert!(script.contains("Marionette:IsBrowserAutomationRunning"));
+        assert!(script.contains("RemoteAgent:IsBrowserAutomationRunning"));
+        assert!(script.contains("Marionette:Active"));
+        assert!(script.contains("RemoteAgent:Active"));
+        let current = script.find("IsBrowserAutomationRunning").expect("current pair");
+        let legacy = script.find("Marionette:Active").expect("esr pair");
+        assert!(current < legacy, "current Firefox must be preferred over Active");
+        let check = script
+            .find("typeof Services.ppmm.sharedData.get(key) === \"boolean\"")
+            .expect("boolean check");
+        let write = script.find("sharedData.set(key, false)").expect("flag write");
+        let stop = script
+            .find("return keys.every((key) => Services.ppmm.sharedData.get(key) === false)")
+            .expect("stop after the first present pair");
+        assert!(check < write, "missing keys must not be created");
+        assert!(write < stop, "a present pair must be checked before the next pair");
+        assert!(!script.contains("cleared"), "a later pair must not also be cleared");
+        assert!(!script.contains("userAgent"));
+        assert!(!FIREFOX_NATIVE_AUTOMATION_FLAG_SCRIPT.contains("toString"));
+        assert!(firefox_native_automation_flag_cleared(
+            &serde_json::json!({ "value": true })
+        ));
+        assert!(!firefox_native_automation_flag_cleared(
+            &serde_json::json!({ "value": false })
+        ));
+        assert!(!firefox_native_automation_flag_cleared(&serde_json::json!({})));
     }
 
     #[test]

@@ -39,7 +39,7 @@ impl HorizonApp {
             return true;
         }
         #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_close_confirmation_open() {
+        if self.cloud_close_confirmation_open() || self.idle_stop_open() {
             return true;
         }
         self.cloud_creation_open() || self.browser_file_chooser_open()

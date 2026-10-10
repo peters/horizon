@@ -28,6 +28,8 @@ pub enum Error {
     Native(#[from] horizon_app_testing::Error),
     #[error("app_host_unavailable: native host execution is unavailable")]
     Unavailable,
+    #[error("app_host_unavailable: {0}")]
+    HostUnavailable(#[from] HostFailure),
     #[error("app_audit_unavailable: inspect the session before replaying a possibly completed action")]
     AuditUnavailable,
     #[error("app_local_cleanup_uncertain: reconcile the exact private guardian receipt")]
@@ -55,3 +57,22 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Public host diagnostics contain typed causes, never paths or application data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum HostFailure {
+    #[error("the retained evidence exceeded its 1 GiB byte limit")]
+    EvidenceBytes,
+    #[error("the retained evidence exceeded its 1024 file limit")]
+    EvidenceFiles,
+    #[error("the terminal report exceeded its 8 MiB limit or was already saved")]
+    ReportLimit,
+    #[error("the capture was empty or exceeded its byte limit")]
+    CaptureInvalid,
+    #[error("the evidence archive state lock failed")]
+    ArchiveState,
+    #[error("the evidence archive serialization failed")]
+    ArchiveSerialization,
+    #[error("the evidence archive write failed ({0:?})")]
+    ArchiveWrite(std::io::ErrorKind),
+}

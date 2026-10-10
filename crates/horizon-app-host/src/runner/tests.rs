@@ -24,6 +24,9 @@ struct Fake {
     failed_creates: AtomicUsize,
     create_cleanup_confirmed: bool,
     fail_reset_cleanup: Option<bool>,
+    fail_action: Option<Error>,
+    close_on_failed_reset: bool,
+    fail_close: bool,
 }
 impl Runtime for Fake {
     fn build(&self, platform: Platform, _control: &Control) -> Result<()> {
@@ -55,6 +58,15 @@ impl Runtime for Fake {
     }
     fn act(&self, session: Uuid, action: &Action) -> std::result::Result<Option<Uuid>, OperationFailure> {
         self.actions.fetch_add(1, Ordering::SeqCst);
+        if let Some(error) = self.fail_action {
+            if self.close_on_failed_reset && matches!(action, Action::Reset {}) {
+                self.close(session).unwrap();
+            }
+            return Err(OperationFailure {
+                error,
+                cleanup_confirmed: true,
+            });
+        }
         if matches!(action, Action::Reset {}) {
             if let Some(cleanup_confirmed) = self.fail_reset_cleanup {
                 return Err(OperationFailure {
@@ -90,9 +102,16 @@ impl Runtime for Fake {
         Ok(b"validated-redacted-fixture".to_vec())
     }
     fn close(&self, session: Uuid) -> Result<()> {
+        if self.close_on_failed_reset && !self.sessions.lock().unwrap().contains_key(&session) {
+            return Ok(());
+        }
         self.sessions.lock().unwrap().remove(&session).unwrap();
         self.active.fetch_sub(1, Ordering::SeqCst);
-        Ok(())
+        if self.fail_close {
+            Err(Error::CleanupUncertain)
+        } else {
+            Ok(())
+        }
     }
     fn release(&self, _app: Uuid) -> Result<()> {
         self.released.fetch_add(1, Ordering::SeqCst);
@@ -964,4 +983,284 @@ fn recipe_completion_follows_steps_with_lane_and_reset_session_before_cleanup() 
         assert!(events.last().unwrap().step.is_none());
         assert!(events.iter().all(|e| e.run == report.id));
     }
+}
+
+#[test]
+fn exhausted_evidence_blocks_every_later_step_without_losing_the_live_driver() {
+    let fake = Fake::default();
+    let mut first = recipe();
+    first.id = "first".into();
+    first.steps[0].action = Action::Home {};
+    first.steps.push(horizon_app_testing::recipe::Step {
+        id: "never-run".into(),
+        action: Action::Home {},
+    });
+    let recipes = [first, recipe()];
+    let plan = Plan {
+        targets: targets().into_iter().skip(1).take(1).collect(),
+        recipes: &recipes,
+        parallel: 1,
+        screenshots: true,
+        video: true,
+        logs_on_failure: true,
+    };
+    let events = Mutex::new(Vec::new());
+    let failure = Error::HostUnavailable(crate::HostFailure::EvidenceBytes);
+    let report = plan
+        .execute(
+            &fake,
+            &Control::new(Duration::from_secs(10)).unwrap(),
+            |session, _, _| {
+                assert!(fake.sessions.lock().unwrap().contains_key(&session));
+                Err(failure)
+            },
+            |event| {
+                events.lock().unwrap().push(event);
+                Ok(())
+            },
+        )
+        .unwrap();
+    let device = &report.devices[0];
+    assert_eq!(fake.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.screenshots.load(Ordering::SeqCst), 1);
+    assert_eq!(device.error.as_deref(), Some(failure.to_string().as_str()));
+    assert!(device.blocked && device.cleanup_confirmed);
+    assert!(!device.steps[0].blocked && !device.steps[0].passed);
+    assert_eq!(device.steps[0].error.as_deref(), device.error.as_deref());
+    assert!(
+        device.steps[1..]
+            .iter()
+            .all(|step| step.blocked && !step.passed && step.error.is_none() && step.screenshot.is_none())
+    );
+    assert!(fake.sessions.lock().unwrap().is_empty());
+    assert!(fake.media_calls.lock().unwrap().is_empty());
+    assert_eq!(device.media.len(), 5);
+    assert!(
+        device
+            .media
+            .iter()
+            .all(|media| media.error.as_deref() == device.error.as_deref())
+    );
+    let events = events.into_inner().unwrap();
+    let failures: Vec<_> = events.iter().filter(|event| event.phase == "lane_blocked").collect();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].error.as_deref(), device.error.as_deref());
+    assert!(serde_json::to_string(failures[0]).unwrap().contains("1 GiB"));
+    assert_eq!(events.iter().filter(|event| event.phase == "step").count(), 1);
+    assert_eq!(events.iter().filter(|event| event.phase == "recipe_blocked").count(), 1);
+}
+
+#[test]
+fn allocation_failure_publishes_every_blocked_recipe_when_progress_is_healthy() {
+    let fake = Fake {
+        fail_create: Some(Box::new(|_| Error::Unavailable)),
+        create_cleanup_confirmed: true,
+        ..Fake::default()
+    };
+    let mut next = recipe();
+    next.id = "next".into();
+    let recipes = [recipe(), next];
+    let plan = Plan {
+        targets: targets().into_iter().skip(1).take(1).collect(),
+        recipes: &recipes,
+        parallel: 1,
+        screenshots: true,
+        video: false,
+        logs_on_failure: false,
+    };
+    let events = Mutex::new(Vec::new());
+    let report = plan
+        .execute(
+            &fake,
+            &Control::new(Duration::from_secs(10)).unwrap(),
+            capture,
+            |event| {
+                events.lock().unwrap().push(event);
+                Ok(())
+            },
+        )
+        .unwrap();
+    let device = &report.devices[0];
+    assert!(device.blocked && device.cleanup_confirmed && device.session.is_none());
+    assert_eq!(device.error.as_deref(), Some(Error::Unavailable.to_string().as_str()));
+    assert_eq!(device.steps.len(), 2);
+    assert!(device.steps.iter().all(|step| step.blocked));
+    assert_eq!(fake.failed_creates.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(fake.screenshots.load(Ordering::SeqCst), 0);
+    let events = events.into_inner().unwrap();
+    let blocked: Vec<_> = events
+        .iter()
+        .filter(|event| event.phase == "recipe_blocked")
+        .map(|event| event.recipe.as_deref())
+        .collect();
+    assert_eq!(blocked, [Some("smoke"), Some("next")]);
+    assert_eq!(events.last().unwrap().phase, "lane_complete");
+}
+
+#[test]
+fn every_failed_reset_blocks_later_actions_after_the_original_session_closes() {
+    for failure in [
+        Error::Runtime(horizon_app_runtime::Error::CapacityUnavailable),
+        Error::CleanupUncertain,
+        Error::LocalCleanupUncertain(Uuid::new_v4()),
+    ] {
+        let fake = Fake {
+            fail_action: Some(failure),
+            close_on_failed_reset: true,
+            ..Fake::default()
+        };
+        let mut reset = recipe();
+        reset.id = "reset".into();
+        reset.steps[0].action = Action::Reset {};
+        reset.steps.push(recipe().steps.remove(0));
+        let recipes = [reset, recipe()];
+        let plan = Plan {
+            targets: targets().into_iter().skip(1).take(1).collect(),
+            recipes: &recipes,
+            parallel: 1,
+            screenshots: true,
+            video: false,
+            logs_on_failure: false,
+        };
+        let events = Mutex::new(Vec::new());
+        let report = plan
+            .execute(
+                &fake,
+                &Control::new(Duration::from_secs(10)).unwrap(),
+                capture,
+                |event| {
+                    events.lock().unwrap().push(event);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let device = &report.devices[0];
+        assert_eq!(device.error.as_deref(), Some(failure.to_string().as_str()));
+        assert!(device.blocked && device.cleanup_confirmed);
+        assert!(!device.steps[0].passed && !device.steps[0].blocked);
+        assert!(
+            device.steps[1..]
+                .iter()
+                .all(|step| step.blocked && step.screenshot.is_none())
+        );
+        assert_eq!(fake.actions.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.screenshots.load(Ordering::SeqCst), 0);
+        assert_eq!(fake.active.load(Ordering::SeqCst), 0);
+        assert!(fake.sessions.lock().unwrap().is_empty());
+        let events = events.into_inner().unwrap();
+        assert_eq!(events.iter().filter(|event| event.phase == "lane_blocked").count(), 1);
+        assert_eq!(events.iter().filter(|event| event.phase == "recipe_blocked").count(), 1);
+    }
+}
+
+#[test]
+fn invalid_screenshot_stops_actions_but_keeps_provider_diagnostics() {
+    let fake = Fake::default();
+    let mut first = recipe();
+    first.steps[0].action = Action::Home {};
+    let recipes = [first, recipe()];
+    let plan = Plan {
+        targets: targets().into_iter().skip(1).take(1).collect(),
+        recipes: &recipes,
+        parallel: 1,
+        screenshots: true,
+        video: true,
+        logs_on_failure: true,
+    };
+    let failure = Error::HostUnavailable(crate::HostFailure::CaptureInvalid);
+    let report = plan
+        .execute(
+            &fake,
+            &Control::new(Duration::from_secs(10)).unwrap(),
+            |session, kind, bytes| match kind {
+                CaptureKind::Screenshot => Err(failure),
+                CaptureKind::Provider(_) => capture(session, kind, bytes),
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+    let device = &report.devices[0];
+    assert_eq!(fake.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.screenshots.load(Ordering::SeqCst), 1);
+    assert_eq!(device.error.as_deref(), Some(failure.to_string().as_str()));
+    assert!(device.blocked && device.cleanup_confirmed && device.steps[1].blocked);
+    assert_eq!(fake.media_calls.lock().unwrap().len(), 5);
+    assert_eq!(device.media.len(), 5);
+    assert!(
+        device.media[..4]
+            .iter()
+            .all(|media| media.evidence.is_some() && media.error.is_none())
+    );
+    assert!(
+        device.media[4]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("app_media_unavailable:"))
+    );
+}
+
+#[test]
+fn forced_host_loss_blocks_later_recipes_and_retains_the_initial_cause() {
+    let failure = Error::Native(horizon_app_testing::Error::SessionClosed);
+    let fake = Fake {
+        fail_action: Some(failure),
+        fail_close: true,
+        ..Fake::default()
+    };
+    let mut first = recipe();
+    first.steps[0].action = Action::Home {};
+    let recipes = [first, recipe()];
+    let plan = Plan {
+        targets: targets().into_iter().skip(1).take(1).collect(),
+        recipes: &recipes,
+        parallel: 1,
+        screenshots: false,
+        video: true,
+        logs_on_failure: true,
+    };
+    let report = plan
+        .execute(&fake, &Control::new(Duration::from_secs(10)).unwrap(), capture, |_| {
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(fake.actions.load(Ordering::SeqCst), 1);
+    assert!(report.devices[0].steps[1].blocked);
+    assert_eq!(report.devices[0].error.as_deref(), Some(failure.to_string().as_str()));
+    assert!(!report.devices[0].cleanup_confirmed);
+    assert_eq!(fake.media_calls.lock().unwrap().len(), 5);
+    assert_eq!(report.devices[0].media.len(), 5);
+}
+
+#[test]
+fn failed_progress_sink_does_not_omit_blocked_recipes_from_the_terminal_report() {
+    let fake = Fake::default();
+    let recipes = [recipe(), recipe(), recipe()];
+    let plan = Plan {
+        targets: targets().into_iter().skip(1).take(1).collect(),
+        recipes: &recipes,
+        parallel: 1,
+        screenshots: true,
+        video: false,
+        logs_on_failure: false,
+    };
+    let report = plan
+        .execute(
+            &fake,
+            &Control::new(Duration::from_secs(10)).unwrap(),
+            capture,
+            |event| {
+                if matches!(event.phase, "build" | "session_created") {
+                    Ok(())
+                } else {
+                    Err(Error::Unavailable)
+                }
+            },
+        )
+        .unwrap();
+    assert_eq!(fake.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(report.devices[0].steps.len(), 3);
+    assert!(!report.devices[0].steps[0].blocked);
+    assert!(report.devices[0].steps[1..].iter().all(|step| step.blocked));
+    assert!(report.devices[0].cleanup_confirmed);
 }

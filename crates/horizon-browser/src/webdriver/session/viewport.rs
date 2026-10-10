@@ -304,11 +304,8 @@ pub(in crate::webdriver::session) mod tests {
         (JsonWsLink::connect(&url).unwrap(), worker)
     }
 
-    pub(in crate::webdriver::session) fn fixture_driver(classic: &Server, link: JsonWsLink) -> Driver {
-        // Use the existing loopback classic transport adapter without launching
-        // a process. The real Firefox resize and event paths run below; remote
-        // capability admission is intentionally not part of this fixture.
-        let request = crate::RemoteSessionRequest {
+    fn fixture_remote_request(classic: &Server) -> crate::RemoteSessionRequest {
+        crate::RemoteSessionRequest {
             adapter: horizon_browser_protocol::remote::RemoteAdapterKind::Webdriver,
             recovery: crate::RemoteAllocation::default(),
             endpoint: classic.endpoint(""),
@@ -327,7 +324,14 @@ pub(in crate::webdriver::session) mod tests {
                 os_version: None,
             },
             evidence: crate::DeviceEvidenceSource::Capabilities,
-        };
+        }
+    }
+
+    pub(in crate::webdriver::session) fn fixture_driver(classic: &Server, link: JsonWsLink) -> Driver {
+        // Use the existing loopback classic transport adapter without launching
+        // a process. The real Firefox resize and event paths run below; remote
+        // capability admission is intentionally not part of this fixture.
+        let request = fixture_remote_request(classic);
         let config = BrowserSessionConfig {
             browser: BrowserConfig {
                 backend: BackendKind::FirefoxBidi,
@@ -353,6 +357,12 @@ pub(in crate::webdriver::session) mod tests {
         let safari = None;
         Driver {
             config: config.clone(),
+            disclosure_status: crate::disclosure::established_disclosure_status(
+                config.browser.automation_disclosure,
+                config.browser.backend,
+                false,
+                false,
+            ),
             host,
             remote_release,
             remote_device: None,

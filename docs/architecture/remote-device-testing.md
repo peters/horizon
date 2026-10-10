@@ -355,9 +355,18 @@ Raw input, provider IDs, upload tokens, URLs and credentials do not enter receip
 Interactive screenshots retain the latest 32 captures for the host lifetime.
 Run reports and exported media survive normal host exit in private archives.
 At most eight archives are admitted across restarts.
-Each archive permits 1,024 evidence files within 120 MiB.
+Each archive permits 1,024 evidence files within 1 GiB.
+A limit failure names the byte or file limit in the step and lane result.
+The runner stops input and screenshot requests on the affected lane.
+The host can still get provider logs and video if the archive is available.
+The remaining steps have `blocked: true`. A recipe that cannot start has
+`recipe_blocked` progress and `BLOCKED` status in the native viewer.
+An ordinary assertion failure does not block later steps.
+The CLI publishes the original cause in one `lane_blocked` progress event on
+stderr. Keep this stream in the run's private `output.log`.
+Cleanup errors do not replace this first cause in the report.
 One separate terminal report has an 8 MiB reserve.
-The complete archive limit is 128 MiB.
+The complete archive limit is 1,032 MiB.
 
 Before builds or allocations, the host rejects runs that exceed the file budget.
 The estimate counts screenshots and possible failure logs and videos for every initial or reset allocation.

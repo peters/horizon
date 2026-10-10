@@ -1,6 +1,10 @@
+mod list;
+mod menus;
 mod new_workspace;
+mod rows;
 mod toolbar;
 
+pub(in crate::app) use list::{IdleCloud, ListCache};
 pub(in crate::app) use new_workspace::{NewWorkspace, menu as new_workspace_menu};
 
 use std::collections::HashMap;
@@ -9,6 +13,7 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder,
     Vec2,
 };
+use horizon_core::cloud_list::{Group, Row};
 use horizon_core::{PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
@@ -27,6 +32,8 @@ struct WorkspaceSidebarEntry {
     detached: bool,
     capabilities: WorkspaceLayoutCapabilities,
     panels: Vec<SidebarPanelEntry>,
+    /// The workspace's group, status dot and status line in the cloud list.
+    row: Row,
 }
 
 #[derive(Clone)]
@@ -57,6 +64,8 @@ struct SidebarActions {
     close_all_in_workspace: Option<WorkspaceId>,
     clear_layout: Option<WorkspaceId>,
     arrange_layout: Option<(WorkspaceId, WorkspaceLayout)>,
+    /// The group whose idle clouds the user chooses to stop.
+    stop_idle: Option<Group>,
 }
 
 #[derive(Clone, Copy)]
@@ -87,7 +96,7 @@ impl HorizonApp {
             .any(|workspace| !self.workspace_is_detached(workspace.id))
     }
 
-    pub(super) fn render_sidebar(&mut self, ctx: &Context) {
+    pub(in crate::app) fn render_sidebar(&mut self, ctx: &Context) {
         if !self.sidebar_visible {
             return;
         }
@@ -96,6 +105,7 @@ impl HorizonApp {
         let sidebar_origin = Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT);
         let sidebar_width = effective_sidebar_width(viewport.width());
         let sidebar_size = Vec2::new(sidebar_width, viewport.height() - TOOLBAR_HEIGHT);
+        self.refresh_sidebar_rows(std::time::Instant::now());
         let workspace_data = self.sidebar_workspace_data();
         let mut actions = SidebarActions::default();
 
@@ -147,6 +157,7 @@ impl HorizonApp {
                     detached: self.workspace_is_detached(workspace.id),
                     capabilities: self.workspace_layout_capabilities(workspace.id),
                     panels,
+                    row: self.sidebar_row(workspace.id),
                 }
             })
             .collect()
@@ -186,9 +197,7 @@ impl HorizonApp {
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
 
-                for workspace in workspace_data {
-                    self.render_sidebar_workspace(ui, workspace, actions, &mut drag_state);
-                }
+                self.render_sidebar_groups(ui, workspace_data, actions, &mut drag_state);
             });
 
         if drag_state.drop_requested {
@@ -246,12 +255,18 @@ impl HorizonApp {
         drag_state: &mut SidebarWorkspaceDragState,
     ) {
         let accordion = self.template_config.features.sidebar_accordion;
-        ui.add_space(4.0);
+        let compact = rows::is_compact(workspace);
+        ui.add_space(if compact { 1.0 } else { 2.0 });
 
-        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), 32.0)).1;
+        let height = if compact {
+            rows::COMPACT_ROW_HEIGHT
+        } else {
+            rows::ROW_HEIGHT
+        };
+        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), height)).1;
         let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
         let mut row_clicked = false;
-        paint_workspace_row_bg(
+        rows::paint_workspace_row_bg(
             ui,
             row_rect,
             workspace.color,
@@ -264,7 +279,7 @@ impl HorizonApp {
                 .max_rect(row_rect)
                 .layout(Layout::left_to_right(Align::Center)),
             |ui| {
-                let interaction = render_sidebar_workspace_row_contents(ui, workspace, accordion);
+                let interaction = rows::render_sidebar_workspace_row_contents(ui, workspace, accordion);
                 click_target_hovered |= interaction.hovered;
                 row_clicked |= interaction.clicked;
             },
@@ -300,7 +315,7 @@ impl HorizonApp {
                 self.render_sidebar_panel(ui, workspace, panel, actions);
             }
         }
-        ui.add_space(8.0);
+        ui.add_space(if compact { 1.0 } else { 4.0 });
     }
 
     /// The panel a workspace-row click reveals. Accordion rows (where panel
@@ -346,8 +361,8 @@ impl HorizonApp {
             drag_state.drop_requested = true;
         }
 
-        if sidebar_workspace_drop_should_dock(workspace.detached)
-            && let Some(dragged_workspace_id) = self.sidebar_drag_workspace.filter(|id| *id != workspace.id)
+        if let Some(dragged_workspace_id) = self.sidebar_drag_workspace.filter(|id| *id != workspace.id)
+            && list::accepts_drop(self.sidebar_row(dragged_workspace_id).group, workspace)
             && let Some(pointer_pos) = ui.ctx().pointer_interact_pos()
             && row_rect.expand2(Vec2::new(0.0, 4.0)).contains(pointer_pos)
         {
@@ -361,7 +376,7 @@ impl HorizonApp {
                 target_workspace_id: workspace.id,
                 insert,
             });
-            paint_workspace_drop_indicator(ui, row_rect, insert, workspace.color);
+            rows::paint_workspace_drop_indicator(ui, row_rect, insert, workspace.color);
         }
 
         if self.sidebar_drag_workspace == Some(workspace.id) && row_response.dragged() {
@@ -369,75 +384,6 @@ impl HorizonApp {
         } else if click_target_hovered {
             ui.ctx().set_cursor_icon(CursorIcon::Grab);
         }
-    }
-
-    fn show_workspace_context_menu(
-        response: &egui::Response,
-        workspace: &WorkspaceSidebarEntry,
-        actions: &mut SidebarActions,
-    ) {
-        response.context_menu(|ui| {
-            ui.set_min_width(160.0);
-            ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM()));
-            if ui
-                .add_enabled(
-                    workspace.capabilities.can_arrange,
-                    Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT())).frame(false),
-                )
-                .clicked()
-            {
-                actions.clear_layout = Some(workspace.id);
-                ui.close();
-            }
-            for layout in WorkspaceLayout::ALL {
-                let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT());
-                if ui
-                    .add_enabled(workspace.capabilities.can_arrange, Button::new(text).frame(false))
-                    .clicked()
-                {
-                    actions.arrange_layout = Some((workspace.id, layout));
-                    ui.close();
-                }
-            }
-
-            ui.separator();
-            let detach_label = if workspace.detached {
-                "Move to Main Window"
-            } else {
-                "Open in New Window"
-            };
-            if ui
-                .add_enabled(
-                    workspace.detached || workspace.capabilities.can_detach,
-                    Button::new(egui::RichText::new(detach_label).size(12.0).color(theme::FG_SOFT())).frame(false),
-                )
-                .on_disabled_hover_text("Cloud workspaces stay in the main window. Use the cloud's Full screen action.")
-                .clicked()
-            {
-                if workspace.detached {
-                    actions.reattach_workspace = Some(workspace.id);
-                } else {
-                    actions.detach_workspace = Some(workspace.id);
-                }
-                ui.close();
-            }
-
-            ui.separator();
-            if ui
-                .add(
-                    Button::new(
-                        egui::RichText::new("Close All Panels")
-                            .size(12.0)
-                            .color(theme::PALETTE_RED()),
-                    )
-                    .frame(false),
-                )
-                .clicked()
-            {
-                actions.close_all_in_workspace = Some(workspace.id);
-                ui.close();
-            }
-        });
     }
 
     fn render_sidebar_panel(
@@ -450,7 +396,7 @@ impl HorizonApp {
         let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), 30.0)).1;
         let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
         let mut row_clicked = false;
-        paint_panel_row_bg(ui, row_rect, workspace.color, panel.is_focused, click_target_hovered);
+        rows::paint_panel_row_bg(ui, row_rect, workspace.color, panel.is_focused, click_target_hovered);
 
         let mut close_clicked = false;
         ui.scope_builder(
@@ -530,60 +476,6 @@ impl HorizonApp {
         ui.add_space(1.0);
     }
 
-    fn show_sidebar_panel_context_menu(
-        &mut self,
-        response: &egui::Response,
-        workspace: &WorkspaceSidebarEntry,
-        panel_id: PanelId,
-        kind: horizon_core::PanelKind,
-        actions: &mut SidebarActions,
-    ) {
-        let popup = egui::Popup::context_menu(response)
-            .kind(egui::PopupKind::Tooltip)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-        let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
-        let shown = popup.show(|ui| {
-            ui.set_min_width(160.0);
-            if let Some(destination) = self.show_workspace_destination(ui, response, panel_id, workspace.id) {
-                self.board.assign_panel_to_workspace(panel_id, destination);
-                self.mark_runtime_dirty();
-            }
-
-            ui.separator();
-            if (kind.is_agent() || kind == horizon_core::PanelKind::Ssh)
-                && ui
-                    .add(
-                        Button::new(
-                            egui::RichText::new(if kind == horizon_core::PanelKind::Ssh {
-                                "Reconnect"
-                            } else {
-                                "Restart"
-                            })
-                            .size(12.0)
-                            .color(theme::FG_SOFT()),
-                        )
-                        .frame(false),
-                    )
-                    .clicked()
-            {
-                self.queue_panel_restart(panel_id);
-                ui.close();
-            }
-            if ui
-                .add(Button::new(egui::RichText::new("Close").size(12.0).color(theme::PALETTE_RED())).frame(false))
-                .clicked()
-            {
-                actions.close_panel = Some(panel_id);
-                ui.close();
-            }
-        });
-        if shown.is_some() {
-            response
-                .ctx
-                .memory_mut(|memory| memory.areas_mut().set_sublayer(response.layer_id, popup_layer));
-        }
-    }
-
     fn apply_sidebar_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
         if let Some(choice) = actions.create_workspace {
             self.create_new_workspace(ctx, choice, None);
@@ -618,6 +510,10 @@ impl HorizonApp {
         });
         if let Some(panel_id) = actions.focus_panel {
             self.board.focus(panel_id);
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(group) = actions.stop_idle {
+            self.request_idle_stop(group);
         }
 
         let pan_to_panel_workspace = actions
@@ -692,472 +588,5 @@ fn sidebar_workspace_shows_panels(is_active: bool, accordion: bool) -> bool {
     is_active || !accordion
 }
 
-/// Width left for the workspace name after the badges that follow it: the
-/// panel count (accordion rows only) and the `NEW WINDOW` badge (detached
-/// rows). Sizing the label to this width lets it truncate instead of running
-/// past the sidebar edge.
-fn sidebar_workspace_name_width(available_width: f32, detached: bool, accordion: bool) -> f32 {
-    let count_reserve = if accordion { 28.0 } else { 0.0 };
-    // Badge text plus the explicit 4px gap and egui's item spacing before it.
-    let detached_reserve = if detached { 76.0 } else { 0.0 };
-    (available_width - count_reserve - detached_reserve - 10.0).max(0.0)
-}
-
-fn render_sidebar_workspace_row_contents(
-    ui: &mut egui::Ui,
-    workspace: &WorkspaceSidebarEntry,
-    accordion: bool,
-) -> SidebarWorkspaceRowInteraction {
-    let mut hovered = false;
-    let mut clicked = false;
-
-    ui.add_space(14.0);
-
-    let bar_color = theme::alpha(workspace.color, if workspace.is_active { 240 } else { 110 });
-    let bar_rect = ui.allocate_space(Vec2::new(3.0, 22.0)).1;
-    ui.painter().rect_filled(bar_rect, CornerRadius::same(2), bar_color);
-
-    ui.add_space(8.0);
-
-    let name = egui::RichText::new(&workspace.name)
-        .color(if workspace.is_active {
-            theme::FG()
-        } else {
-            theme::FG_SOFT()
-        })
-        .size(13.0)
-        .strong();
-    // A sized, left-to-right scope (rather than `add_sized`, which centers)
-    // keeps the name flush left while letting long names truncate.
-    let name_width = sidebar_workspace_name_width(ui.available_width(), workspace.detached, accordion);
-    let name_response = ui
-        .allocate_ui_with_layout(
-            Vec2::new(name_width, 18.0),
-            Layout::left_to_right(Align::Center),
-            |ui| ui.add(egui::Label::new(name).truncate().sense(Sense::click())),
-        )
-        .inner;
-    hovered |= name_response.hovered();
-    clicked |= name_response.clicked();
-
-    if workspace.detached {
-        ui.add_space(4.0);
-        let detached_response = ui.add(
-            egui::Label::new(
-                egui::RichText::new("NEW WINDOW")
-                    .color(theme::FG_DIM())
-                    .size(8.5)
-                    .strong(),
-            )
-            .sense(Sense::click()),
-        );
-        hovered |= detached_response.hovered();
-        clicked |= detached_response.clicked();
-    }
-
-    if accordion {
-        let count_response = ui.add(
-            egui::Label::new(
-                egui::RichText::new(workspace.panels.len().to_string())
-                    .color(theme::FG_DIM())
-                    .size(11.0),
-            )
-            .sense(Sense::click()),
-        );
-        hovered |= count_response.hovered();
-        clicked |= count_response.clicked();
-    }
-
-    SidebarWorkspaceRowInteraction { hovered, clicked }
-}
-
-fn paint_workspace_row_bg(
-    ui: &mut egui::Ui,
-    workspace_rect: Rect,
-    workspace_color: Color32,
-    is_active: bool,
-    hovered: bool,
-    dragging: bool,
-) {
-    let workspace_bg = Rect::from_min_max(
-        Pos2::new(workspace_rect.min.x + 6.0, workspace_rect.min.y),
-        Pos2::new(workspace_rect.max.x - 6.0, workspace_rect.max.y),
-    );
-    if dragging {
-        ui.painter_at(workspace_bg).rect_filled(
-            workspace_bg,
-            CornerRadius::same(10),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.18), 180),
-        );
-    } else if is_active {
-        ui.painter_at(workspace_bg).rect_filled(
-            workspace_bg,
-            CornerRadius::same(10),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.12), 140),
-        );
-    } else if hovered {
-        ui.painter_at(workspace_bg).rect_filled(
-            workspace_bg,
-            CornerRadius::same(10),
-            theme::alpha(theme::PANEL_BG_ALT(), 160),
-        );
-    }
-}
-
-fn paint_workspace_drop_indicator(
-    ui: &egui::Ui,
-    workspace_rect: Rect,
-    insert: SidebarWorkspaceInsert,
-    workspace_color: Color32,
-) {
-    let y = match insert {
-        SidebarWorkspaceInsert::Before => workspace_rect.min.y + 1.0,
-        SidebarWorkspaceInsert::After => workspace_rect.max.y - 1.0,
-    };
-    let left = workspace_rect.min.x + 12.0;
-    let right = workspace_rect.max.x - 12.0;
-    ui.painter().line_segment(
-        [Pos2::new(left, y), Pos2::new(right, y)],
-        Stroke::new(2.0_f32, theme::alpha(workspace_color, 220)),
-    );
-}
-
-fn paint_panel_row_bg(ui: &mut egui::Ui, item_rect: Rect, workspace_color: Color32, is_focused: bool, hovered: bool) {
-    let bg_rect = Rect::from_min_max(
-        Pos2::new(item_rect.min.x + 6.0, item_rect.min.y),
-        Pos2::new(item_rect.max.x - 6.0, item_rect.max.y),
-    );
-    if is_focused {
-        ui.painter_at(bg_rect).rect_filled(
-            bg_rect,
-            CornerRadius::same(10),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.22), 200),
-        );
-        let edge = Rect::from_min_size(
-            Pos2::new(bg_rect.min.x, bg_rect.min.y + 4.0),
-            Vec2::new(2.0, bg_rect.height() - 8.0),
-        );
-        ui.painter().rect_filled(edge, CornerRadius::same(1), workspace_color);
-    } else if hovered {
-        ui.painter_at(bg_rect).rect_filled(
-            bg_rect,
-            CornerRadius::same(10),
-            theme::alpha(theme::PANEL_BG_ALT(), 180),
-        );
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::{
-        SidebarPanelEntry, SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock,
-        sidebar_workspace_insert_dock_side, sidebar_workspace_name_width, sidebar_workspace_shows_panels,
-    };
-    use horizon_core::WorkspaceDockSide;
-
-    #[test]
-    #[cfg(feature = "cloud-workspaces")]
-    fn sidebar_presets_preserve_independent_cloud_layouts() {
-        use horizon_core::{WorkspaceLayout, cloud_panel::CloudGroup};
-        for layout in [None, Some(WorkspaceLayout::Rows)] {
-            let (temp, mut app) = crate::app::test_support::test_app();
-            let cloud = app.board.create_workspace("cloud");
-            let ordinary = app.board.create_workspace("ordinary");
-            let first = app.board.create_panel(editor_panel_options("first"), cloud).unwrap();
-            let second = app.board.create_panel(editor_panel_options("second"), cloud).unwrap();
-            let local = app.board.workspace(cloud).unwrap().local_id.clone();
-            let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [24.0, 128.0]);
-            group.attach(&mut app.board, first);
-            group.attach(&mut app.board, second);
-            group.set_layout(&mut app.board, layout);
-            app.cloud_prototype.groups.0.push(group);
-            app.board.cloud_groups = app.cloud_prototype.groups.clone();
-            let geometry = |app: &crate::app::HorizonApp| {
-                [first, second].map(|id| {
-                    let panel = app.board.panel(id).unwrap();
-                    (panel.layout.position, panel.layout.size)
-                })
-            };
-            let before = geometry(&app);
-            let rows = app.sidebar_workspace_data();
-            assert!(rows.iter().find(|r| r.id == cloud).unwrap().capabilities.can_arrange);
-            assert!(!rows.iter().find(|r| r.id == cloud).unwrap().capabilities.can_detach);
-            assert!(rows.iter().find(|r| r.id == ordinary).unwrap().capabilities.can_arrange);
-            for parent in WorkspaceLayout::ALL {
-                app.apply_sidebar_actions(
-                    &egui::Context::default(),
-                    &super::SidebarActions {
-                        arrange_layout: Some((cloud, parent)),
-                        clear_layout: Some(cloud),
-                        ..Default::default()
-                    },
-                );
-                app.cloud_prototype.groups.reconcile(&mut app.board);
-                assert_eq!(geometry(&app), before);
-                assert_eq!(app.cloud_prototype.groups.0[0].layout, layout);
-                assert_eq!(app.board.workspace(cloud).unwrap().layout, Some(parent));
-            }
-            app.apply_sidebar_actions(
-                &egui::Context::default(),
-                &super::SidebarActions {
-                    arrange_layout: Some((ordinary, WorkspaceLayout::Columns)),
-                    ..Default::default()
-                },
-            );
-            assert_eq!(
-                app.board.workspace(ordinary).unwrap().layout,
-                Some(WorkspaceLayout::Columns)
-            );
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "cloud-workspaces")]
-    fn sidebar_cannot_detach_a_cloud_but_keeps_ordinary_workspace_actions() {
-        let (temp, mut app) = crate::app::test_support::test_app();
-        let cloud = app.board.create_workspace("cloud");
-        let ordinary = app.board.create_workspace("ordinary");
-        let local = app.board.workspace(cloud).unwrap().local_id.clone();
-        app.cloud_prototype
-            .groups
-            .0
-            .push(horizon_core::cloud_panel::CloudGroup::new(
-                1,
-                "Cloud".into(),
-                local,
-                temp.path().into(),
-                [0.0; 2],
-            ));
-        let rows = app.sidebar_workspace_data();
-        assert!(
-            rows.iter()
-                .find(|row| row.id == cloud)
-                .unwrap()
-                .capabilities
-                .can_arrange
-        );
-        assert!(!rows.iter().find(|row| row.id == cloud).unwrap().capabilities.can_detach);
-        assert!(
-            rows.iter()
-                .find(|row| row.id == ordinary)
-                .unwrap()
-                .capabilities
-                .can_arrange
-        );
-        assert!(
-            rows.iter()
-                .find(|row| row.id == ordinary)
-                .unwrap()
-                .capabilities
-                .can_detach
-        );
-        app.apply_sidebar_actions(
-            &egui::Context::default(),
-            &super::SidebarActions {
-                detach_workspace: Some(cloud),
-                ..super::SidebarActions::default()
-            },
-        );
-        assert!(!app.workspace_is_detached(cloud));
-    }
-
-    #[test]
-    #[cfg(feature = "cloud-workspaces")]
-    fn sidebar_focus_reveals_empty_and_collapsed_cloud_workspaces() {
-        for collapsed in [false, true] {
-            let (temp, mut app) = crate::app::test_support::test_app();
-            let workspace = app.board.create_workspace("fixture");
-            let mut group = horizon_core::cloud_panel::CloudGroup::new(
-                1,
-                "Fixture".into(),
-                app.board.workspace(workspace).unwrap().local_id.clone(),
-                temp.path().into(),
-                [1700.0, 900.0],
-            );
-            group.collapsed = collapsed;
-            app.cloud_prototype.groups.0.push(group);
-            assert!(app.board.workspace_bounds(workspace).is_none());
-            let ctx = egui::Context::default();
-            let (position, size) = app.workspace_focus_frame(workspace).unwrap();
-            app.pan_to_canvas_pos_aligned(&ctx, position, size, true);
-            let expected = app.pan_target.take();
-            assert!(expected.is_some());
-            app.apply_sidebar_actions(
-                &ctx,
-                &super::SidebarActions {
-                    pan_to_workspace: Some(workspace),
-                    ..Default::default()
-                },
-            );
-            assert_eq!(app.pan_target, expected);
-            assert_eq!(app.board.active_workspace, Some(workspace));
-        }
-    }
-
-    #[test]
-    fn sidebar_drop_docks_attached_workspace_against_attached_target() {
-        assert!(sidebar_workspace_drop_should_dock(false));
-    }
-
-    #[test]
-    fn sidebar_drop_preserves_detached_workspace_reposition_against_attached_target() {
-        assert!(sidebar_workspace_drop_should_dock(false));
-    }
-
-    #[test]
-    fn sidebar_drop_skips_board_docking_when_target_workspace_is_detached() {
-        assert!(!sidebar_workspace_drop_should_dock(true));
-    }
-
-    #[test]
-    fn sidebar_insert_side_maps_to_expected_dock_side() {
-        assert_eq!(
-            sidebar_workspace_insert_dock_side(SidebarWorkspaceInsert::Before),
-            WorkspaceDockSide::Left
-        );
-        assert_eq!(
-            sidebar_workspace_insert_dock_side(SidebarWorkspaceInsert::After),
-            WorkspaceDockSide::Right
-        );
-    }
-
-    #[test]
-    fn sidebar_keeps_panels_expanded_when_accordion_is_disabled() {
-        assert!(sidebar_workspace_shows_panels(false, false));
-        assert!(sidebar_workspace_shows_panels(true, false));
-    }
-
-    #[test]
-    fn sidebar_hides_panels_for_inactive_workspaces_when_accordion_is_enabled() {
-        assert!(!sidebar_workspace_shows_panels(false, true));
-    }
-
-    #[test]
-    fn sidebar_shows_panels_for_the_active_workspace_when_accordion_is_enabled() {
-        assert!(sidebar_workspace_shows_panels(true, true));
-    }
-
-    #[test]
-    fn accordion_name_width_fits_detached_row_at_minimum_sidebar() {
-        // 168px sidebar minus 14+3+8 leading chrome leaves 143px for name + badges.
-        let width = sidebar_workspace_name_width(143.0, true, true);
-        assert!(width < 48.0);
-        assert!((width - 29.0).abs() <= f32::EPSILON);
-    }
-
-    #[test]
-    fn flat_name_width_reserves_only_the_detached_badge() {
-        // Flat rows draw no panel count, so the name keeps that room.
-        assert!((sidebar_workspace_name_width(143.0, false, false) - 133.0).abs() <= f32::EPSILON);
-        assert!((sidebar_workspace_name_width(143.0, true, false) - 57.0).abs() <= f32::EPSILON);
-    }
-
-    #[test]
-    fn name_width_never_goes_negative() {
-        assert!(sidebar_workspace_name_width(20.0, true, true).abs() <= f32::EPSILON);
-    }
-
-    // `is_focused` is decorative in these tests: the reveal helpers read the
-    // board's own focus state, not the sidebar entry flag.
-    fn sidebar_entry(id: horizon_core::PanelId, is_focused: bool) -> SidebarPanelEntry {
-        SidebarPanelEntry {
-            id,
-            title: "panel".to_string(),
-            kind: horizon_core::PanelKind::Editor,
-            is_focused,
-        }
-    }
-
-    fn editor_panel_options(name: &str) -> horizon_core::PanelOptions {
-        horizon_core::PanelOptions {
-            name: Some(name.to_string()),
-            kind: horizon_core::PanelKind::Editor,
-            command: Some("seed".to_string()),
-            ..horizon_core::PanelOptions::default()
-        }
-    }
-
-    #[test]
-    fn workspace_reveal_panel_prefers_the_focused_panel_of_the_workspace() {
-        let (_temp, mut app) = crate::app::test_support::test_app();
-        let workspace = app.board.create_workspace("a");
-        let first = app
-            .board
-            .create_panel(editor_panel_options("first"), workspace)
-            .expect("panel");
-        let second = app
-            .board
-            .create_panel(editor_panel_options("second"), workspace)
-            .expect("panel");
-        app.board.focus(second);
-
-        let panels = [sidebar_entry(first, false), sidebar_entry(second, true)];
-        assert_eq!(app.workspace_reveal_panel(workspace, &panels), Some(second));
-    }
-
-    #[test]
-    fn workspace_reveal_panel_falls_back_to_first_panel() {
-        let (_temp, mut app) = crate::app::test_support::test_app();
-        let workspace = app.board.create_workspace("a");
-        let other = app.board.create_workspace("b");
-        let first = app
-            .board
-            .create_panel(editor_panel_options("first"), workspace)
-            .expect("panel");
-        let second = app
-            .board
-            .create_panel(editor_panel_options("second"), workspace)
-            .expect("panel");
-        let outsider = app
-            .board
-            .create_panel(editor_panel_options("other"), other)
-            .expect("panel");
-
-        // Focus lives in another workspace -> the workspace's first panel.
-        app.board.focus(outsider);
-        let panels = [sidebar_entry(first, false), sidebar_entry(second, false)];
-        assert_eq!(app.workspace_reveal_panel(workspace, &panels), Some(first));
-
-        // No focus at all -> first panel; no panels -> nothing to reveal.
-        app.board.focused = None;
-        assert_eq!(app.workspace_reveal_panel(workspace, &panels), Some(first));
-        assert_eq!(app.workspace_reveal_panel(other, &[]), None);
-    }
-
-    #[test]
-    fn workspace_row_reveal_gate_covers_accordion_and_panel_count() {
-        let (_temp, mut app) = crate::app::test_support::test_app();
-        let workspace = app.board.create_workspace("a");
-        let first = app
-            .board
-            .create_panel(editor_panel_options("first"), workspace)
-            .expect("panel");
-        let second = app
-            .board
-            .create_panel(editor_panel_options("second"), workspace)
-            .expect("panel");
-        let solo = app.board.create_workspace("solo");
-        let only = app
-            .board
-            .create_panel(editor_panel_options("only"), solo)
-            .expect("panel");
-        let empty = app.board.create_workspace("empty");
-
-        // Creation leaves focus on the last created panel (`only`), so put
-        // it back in `workspace` for the focused-in-workspace case.
-        app.board.focus(second);
-        let two = [sidebar_entry(first, false), sidebar_entry(second, true)];
-        let one = [sidebar_entry(only, false)];
-
-        // Accordion rows always reveal a panel: focused-in-workspace for
-        // multi-panel, the only panel for single-panel, nothing for empty.
-        assert_eq!(app.workspace_row_reveal(true, workspace, &two), Some(second));
-        assert_eq!(app.workspace_row_reveal(true, solo, &one), Some(only));
-        assert_eq!(app.workspace_row_reveal(true, empty, &[]), None);
-
-        // Flat rows only reveal single-panel workspaces; multi-panel rows
-        // keep panning to the workspace bounds (None).
-        assert_eq!(app.workspace_row_reveal(false, solo, &one), Some(only));
-        assert_eq!(app.workspace_row_reveal(false, workspace, &two), None);
-    }
-}
+mod tests;
