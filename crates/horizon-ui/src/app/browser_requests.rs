@@ -64,7 +64,7 @@ pub(super) struct BrowserCreateHostState {
     pub(super) claiming: bool,
     /// Panels whose visibility request runs on the coordination worker, with
     /// the visibility it sets; no stamp writes their manifests until it ends.
-    pub(super) visibility_in_flight: Vec<(String, bool)>,
+    pub(super) visibility_in_flight: Vec<super::browser_visibility_requests::VisibilityInFlight>,
     /// Does the coordination file work in order, off the UI thread.
     pub(super) io: HostIo,
 }
@@ -282,7 +282,7 @@ impl HorizonApp {
             !host
                 .visibility_in_flight
                 .iter()
-                .any(|(local_id, _)| *local_id == placement.local_id)
+                .any(|running| running.local_id == placement.local_id)
         });
         let skipped = placements.len() < before;
         let root = self.host_manifest_root().to_path_buf();

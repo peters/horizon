@@ -14,6 +14,16 @@ use super::browser_requests::{ActorPanel, actor_panel, browser_workspace, publis
 
 type Refusal = (&'static str, &'static str);
 
+/// A visibility request that runs on the coordination worker.
+pub(super) struct VisibilityInFlight {
+    pub(super) local_id: String,
+    request_id: String,
+    /// The visibility it sets.
+    visible: bool,
+    /// The visibility the panel has when it applies, unless the user changes it.
+    before: bool,
+}
+
 impl HorizonApp {
     pub(super) fn apply_browser_visibility_request(
         &mut self,
@@ -41,14 +51,17 @@ impl HorizonApp {
         }
         // No stamp writes this manifest until the request ends, so its
         // visibility changes only through the audited transaction.
-        self.browser_create_host
-            .visibility_in_flight
-            .push((request.panel_local_id.clone(), request.visible));
+        self.browser_create_host.visibility_in_flight.push(VisibilityInFlight {
+            local_id: request.panel_local_id.clone(),
+            request_id: request.request_id.clone(),
+            visible: request.visible,
+            before: original_visible,
+        });
         let published = request.clone();
         let applied = request.clone();
         self.browser_create_host.io.then(
             move || publish_visibility(&published, original_visible, &workspace),
-            move |app, published| app.finish_visibility_request(&applied, original_visible, published),
+            move |app, published| app.finish_visibility_request(&applied, published),
         );
     }
 
@@ -87,8 +100,8 @@ impl HorizonApp {
             .visibility_in_flight
             .iter()
             .rev()
-            .find(|(local_id, _)| *local_id == request.panel_local_id)
-            .map_or(panel.visible, |(_, visible)| *visible);
+            .find(|running| running.local_id == request.panel_local_id)
+            .map_or(panel.visible, |running| running.visible);
         Ok((before, workspace))
     }
 
@@ -97,44 +110,41 @@ impl HorizonApp {
     /// that placement, including a move made while the request ran. A panel
     /// that left the agent's workspace, or that the user showed or hid while
     /// the request ran, keeps what the board says: the user's change wins, and
-    /// the next stamp writes it to the manifest.
-    fn finish_visibility_request(
-        &mut self,
-        request: &BrowserVisibilityRequest,
-        original_visible: bool,
-        published: Option<bool>,
-    ) {
+    /// the next stamp writes it to the manifest. A request that leaves the
+    /// board as it was lets the next one for the panel start from the board.
+    fn finish_visibility_request(&mut self, request: &BrowserVisibilityRequest, published: Option<bool>) {
         let host = &mut self.browser_create_host;
-        if let Some(index) = host
+        let before = host
             .visibility_in_flight
             .iter()
-            .position(|(local_id, _)| *local_id == request.panel_local_id)
-        {
-            host.visibility_in_flight.remove(index);
-        }
+            .position(|running| running.request_id == request.request_id)
+            .map(|index| host.visibility_in_flight.remove(index).before);
         host.forget_stamped_placement();
-        match published {
-            Some(true) => {}
-            Some(false) => return,
-            None => {
-                self.fail_visibility(
-                    request,
-                    "manifest_update_failed",
-                    "browser panel visibility could not be updated",
-                );
-                return;
-            }
+        let applied = published == Some(true) && before.is_some_and(|before| self.show_published(request, before));
+        if !applied {
+            self.rebase_next_visibility_request(&request.panel_local_id);
         }
+        if published.is_none() {
+            self.fail_visibility(
+                request,
+                "manifest_update_failed",
+                "browser panel visibility could not be updated",
+            );
+        }
+    }
+
+    /// Applies a published request to the board when it still may. Says whether it did.
+    fn show_published(&mut self, request: &BrowserVisibilityRequest, before: bool) -> bool {
         let Some(panel_id) = self.board.panel_id_by_local_id(&request.panel_local_id) else {
-            return;
+            return false;
         };
         let still_applies = self.board.panel(panel_id).is_some_and(|panel| {
-            panel.visible == original_visible
+            panel.visible == before
                 && actor_panel(&self.board, &request.actor)
                     .is_some_and(|actor_panel| actor_panel.workspace_id == panel.workspace_id)
         });
         if !still_applies {
-            return;
+            return false;
         }
         let changed = self.board.set_panel_visible(panel_id, request.visible);
         if !request.visible && self.fullscreen_panel == Some(panel_id) {
@@ -148,6 +158,28 @@ impl HorizonApp {
         }
         if changed {
             self.mark_runtime_dirty();
+        }
+        true
+    }
+
+    /// The next request for the panel expected this one's visibility; it did not
+    /// reach the board, so that request starts from the board instead.
+    fn rebase_next_visibility_request(&mut self, local_id: &str) {
+        let Some(visible) = self
+            .board
+            .panel_id_by_local_id(local_id)
+            .and_then(|panel_id| self.board.panel(panel_id))
+            .map(|panel| panel.visible)
+        else {
+            return;
+        };
+        if let Some(next) = self
+            .browser_create_host
+            .visibility_in_flight
+            .iter_mut()
+            .find(|running| running.local_id == local_id)
+        {
+            next.before = visible;
         }
     }
 
@@ -243,10 +275,10 @@ mod tests {
         (temp, app, actor, other)
     }
 
-    fn request(app: &HorizonApp, actor: &str, visible: bool) -> BrowserVisibilityRequest {
+    fn request(app: &HorizonApp, actor: &str, id: &str, visible: bool) -> BrowserVisibilityRequest {
         let panel = app.board.panel(PanelId(900)).expect("browser");
         serde_json::from_value(serde_json::json!({
-            "request_id": "visibility-fixture",
+            "request_id": id,
             "actor": actor,
             "panel_local_id": panel.local_id,
             "visible": visible,
@@ -260,23 +292,38 @@ mod tests {
         app.board.panel(PanelId(900)).expect("browser").visible
     }
 
+    /// Registers `request` as running, as `apply_browser_visibility_request` does.
+    fn running(app: &mut HorizonApp, request: &BrowserVisibilityRequest) {
+        let actor_panel = actor_panel(&app.board, &request.actor).expect("actor");
+        let (before, _) = app.visibility_target(request, actor_panel).expect("target");
+        app.browser_create_host.visibility_in_flight.push(VisibilityInFlight {
+            local_id: request.panel_local_id.clone(),
+            request_id: request.request_id.clone(),
+            visible: request.visible,
+            before,
+        });
+    }
+
     #[test]
     #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_published_change_leaves_a_panel_that_left_the_workspace_or_that_the_user_changed() {
         let (_temp, mut app, actor, other) = fixture();
-        let hide = request(&app, &actor, false);
+        let hide = request(&app, &actor, "hide", false);
+        running(&mut app, &hide);
         let workspace = app.board.panel(PanelId(900)).expect("browser").workspace_id;
         app.board.assign_panel_to_workspace(PanelId(900), other);
-        app.finish_visibility_request(&hide, true, Some(true));
+        app.finish_visibility_request(&hide, Some(true));
         assert!(visible(&app), "a panel outside the agent's workspace is not hidden");
 
         app.board.assign_panel_to_workspace(PanelId(900), workspace);
-        let show = request(&app, &actor, true);
+        let show = request(&app, &actor, "show", true);
+        running(&mut app, &show);
         app.board.set_panel_visible(PanelId(900), false);
-        app.finish_visibility_request(&show, true, Some(true));
+        app.finish_visibility_request(&show, Some(true));
         assert!(!visible(&app), "the user hid the panel while the request ran");
 
-        app.finish_visibility_request(&show, false, Some(true));
+        running(&mut app, &show);
+        app.finish_visibility_request(&show, Some(true));
         assert!(visible(&app), "a request that still applies shows the panel");
     }
 
@@ -284,15 +331,19 @@ mod tests {
     #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_request_after_one_that_runs_starts_from_the_visibility_it_sets() {
         let (_temp, mut app, actor, _) = fixture();
-        let hide = request(&app, &actor, false);
+        let first = request(&app, &actor, "first", false);
+        running(&mut app, &first);
+        let second = request(&app, &actor, "second", false);
+        running(&mut app, &second);
         let actor_panel = actor_panel(&app.board, &actor).expect("actor");
-        let (before, _) = app.visibility_target(&hide, actor_panel).expect("target");
-        assert!(before, "the panel is shown");
-        app.browser_create_host
-            .visibility_in_flight
-            .push((hide.panel_local_id.clone(), false));
-        let show = request(&app, &actor, true);
+        let show = request(&app, &actor, "show", true);
         let (before, _) = app.visibility_target(&show, actor_panel).expect("target");
-        assert!(!before, "the hide that runs first sets what a rollback restores");
+        assert!(!before, "the hides that run first set what a rollback restores");
+
+        // The first hide fails: the board stays as it was, and the second starts from it.
+        app.finish_visibility_request(&first, Some(false));
+        assert!(visible(&app));
+        app.finish_visibility_request(&second, Some(true));
+        assert!(!visible(&app), "the second hide applies");
     }
 }
