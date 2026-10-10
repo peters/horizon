@@ -1,8 +1,9 @@
-//! What a running clone shows: its step, how far the step has come, the pace and the time left.
+//! What a running clone shows: its step, how far the phase under way has come with its pace and
+//! time left, and what the whole clone has received and for how long it has run.
 use crate::theme;
 use egui::{ProgressBar, RichText, Ui};
 use horizon_core::cloud_runtime::{Cancellation, repository::source::Snapshot};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The time left in the words a person would use: coarse, and never more exact than it is.
 pub(super) fn left(eta: Duration) -> String {
@@ -33,8 +34,9 @@ pub(super) fn title(snapshot: &Snapshot) -> String {
     }
 }
 
-/// The line under the bar: what was received and how fast, then the time left.
-pub(super) fn detail(snapshot: &Snapshot) -> String {
+/// The line under the bar, for the phase under way: how far, what Git received in it and how
+/// fast, and its time left at `now`, counted down between Git's lines.
+pub(super) fn detail(snapshot: &Snapshot, now: Instant) -> String {
     let mut parts = Vec::new();
     if let Some(percent) = snapshot.percent {
         parts.push(format!("{percent}%"));
@@ -42,10 +44,49 @@ pub(super) fn detail(snapshot: &Snapshot) -> String {
     if !snapshot.detail.is_empty() {
         parts.push(snapshot.detail.clone());
     }
-    if let Some(eta) = snapshot.eta {
-        parts.push(left(eta));
+    if let Some(ends) = snapshot.ends {
+        parts.push(match ends.checked_duration_since(now).filter(|left| !left.is_zero()) {
+            Some(left_now) => format!("{} in this phase", left(left_now)),
+            None => "almost done".into(),
+        });
     }
     parts.join(" · ")
+}
+
+/// The line for the whole clone at `now`: what it received, out of about how much when the
+/// host told the repository's size, and how long it has run.
+pub(super) fn whole(snapshot: &Snapshot, now: Instant) -> Option<String> {
+    let ran = now.saturating_duration_since(snapshot.started?);
+    let received = snapshot.received.saturating_add(snapshot.receiving);
+    let ran = format!("{} so far", elapsed(ran));
+    Some(match (received, snapshot.expected) {
+        (0, _) => ran,
+        (received, Some(expected)) => format!("Received {} of about {} · {ran}", size(received), size(expected)),
+        (received, None) => format!("Received {} · {ran}", size(received)),
+    })
+}
+
+/// A size the way Git writes it, without false precision.
+fn size(bytes: u64) -> String {
+    const KIB: u64 = 1 << 10;
+    const MIB: u64 = 1 << 20;
+    const GIB: u64 = 1 << 30;
+    match bytes {
+        bytes if bytes >= GIB => format!("{}.{} GiB", bytes / GIB, bytes % GIB * 10 / GIB),
+        bytes if bytes >= MIB => format!("{} MiB", bytes / MIB),
+        bytes if bytes >= KIB => format!("{} KiB", bytes / KIB),
+        bytes => format!("{bytes} bytes"),
+    }
+}
+
+/// How long something ran, to the second.
+fn elapsed(ran: Duration) -> String {
+    let seconds = ran.as_secs();
+    match (seconds / 3600, seconds / 60 % 60, seconds % 60) {
+        (0, 0, seconds) => format!("{seconds} s"),
+        (0, minutes, seconds) => format!("{minutes} min {seconds} s"),
+        (hours, minutes, _) => format!("{hours} h {minutes} min"),
+    }
 }
 
 /// Draws the progress of a clone with a Cancel button that raises `cancel`.
@@ -68,10 +109,16 @@ pub(super) fn show(ui: &mut Ui, snapshot: &Snapshot, cancel: &Cancellation) {
     } else {
         bar.animate(true)
     });
-    let detail = detail(snapshot);
+    // Both lines count live, between Git's own lines too.
+    let now = Instant::now();
+    let detail = detail(snapshot, now);
     if !detail.is_empty() {
         ui.label(RichText::new(detail).size(12.5).color(theme::FG_DIM()));
     }
+    if let Some(whole) = whole(snapshot, now) {
+        ui.label(RichText::new(whole).size(12.5).color(theme::FG_SOFT()));
+    }
+    ui.ctx().request_repaint_after(Duration::from_secs(1));
 }
 
 #[cfg(test)]
@@ -105,13 +152,51 @@ mod tests {
     }
 
     #[test]
-    fn the_detail_joins_what_is_known() {
+    fn the_detail_joins_what_is_known_and_counts_down_the_phase() {
+        let now = Instant::now();
         let mut snapshot = Snapshot::default();
-        assert_eq!(detail(&snapshot), "");
+        assert_eq!(detail(&snapshot, now), "");
         snapshot.detail = "12.30 MiB | 4.50 MiB/s".into();
-        assert_eq!(detail(&snapshot), "12.30 MiB | 4.50 MiB/s");
+        assert_eq!(detail(&snapshot, now), "12.30 MiB | 4.50 MiB/s");
         snapshot.percent = Some(45);
-        snapshot.eta = Some(Duration::from_secs(8));
-        assert_eq!(detail(&snapshot), "45% · 12.30 MiB | 4.50 MiB/s · about 8 s left");
+        snapshot.ends = Some(now + Duration::from_secs(8));
+        assert_eq!(
+            detail(&snapshot, now),
+            "45% · 12.30 MiB | 4.50 MiB/s · about 8 s left in this phase"
+        );
+        assert_eq!(
+            detail(&snapshot, now + Duration::from_secs(3)),
+            "45% · 12.30 MiB | 4.50 MiB/s · about 5 s left in this phase",
+            "live, between Git's lines"
+        );
+        assert_eq!(
+            detail(&snapshot, now + Duration::from_secs(9)),
+            "45% · 12.30 MiB | 4.50 MiB/s · almost done"
+        );
+    }
+
+    #[test]
+    fn the_whole_clone_says_what_arrived_out_of_about_how_much_and_for_how_long() {
+        let now = Instant::now();
+        let mut snapshot = Snapshot::default();
+        assert_eq!(whole(&snapshot, now), None, "before the clone starts");
+        snapshot.started = Some(now);
+        assert_eq!(
+            whole(&snapshot, now + Duration::from_secs(4)).as_deref(),
+            Some("4 s so far")
+        );
+        snapshot.received = 200 << 20;
+        snapshot.receiving = 48 << 20;
+        assert_eq!(
+            whole(&snapshot, now + Duration::from_secs(39)).as_deref(),
+            Some("Received 248 MiB · 39 s so far")
+        );
+        snapshot.expected = Some(314 << 20);
+        assert_eq!(
+            whole(&snapshot, now + Duration::from_secs(125)).as_deref(),
+            Some("Received 248 MiB of about 314 MiB · 2 min 5 s so far")
+        );
+        assert_eq!(size(1536 << 20), "1.5 GiB");
+        assert_eq!(size(900), "900 bytes");
     }
 }

@@ -537,8 +537,8 @@ mod tests {
         assert_eq!(plan.existing.as_deref(), Some(checkout.as_path()));
         assert_eq!(
             plan.destination,
-            temp.path().join("demo-atlas-2"),
-            "a fresh clone would go beside it"
+            temp.path().join("demo-org/demo-atlas"),
+            "a fresh clone would go in its owner's folder"
         );
     }
 
