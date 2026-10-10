@@ -54,7 +54,7 @@ ACCESS = ('push', 'read')
 SERVE_MARGIN = 60
 # What an agent's gh holds instead of a token: gh reaches GitHub through the API broker, which
 # drops it and adds the token of the grant that covers each request.
-PLACEHOLDER = 'horizon-api-broker'
+PLACEHOLDER = auth.PLACEHOLDER
 # Tests only: a fake GitHub on the loopback address. Nothing else is accepted.
 TEST_URL = 'HORIZON_WORKER_GITHUB_TEST_URL'
 CHAIN_FIELDS = {'access_token', 'access_expires_at', 'refresh_token', 'refresh_expires_at'}

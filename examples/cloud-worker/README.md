@@ -1068,9 +1068,12 @@ wrapper ask the socket first. The Git helper falls back to the static file only
 when no service answers; while the service answers, the proxy adds the token
 itself. The `gh` wrapper falls back to the static file also when the service holds
 no chain (`"state":"absent"`). The `gh` wrapper still
-chooses the repository as described above. When it refuses a nested `gh`, it
-removes the `GH_TOKEN` that an outer wrapped `gh` injected, but keeps every token
-variable that you set yourself.
+chooses the repository as described above. When the service refuses the
+repository, the wrapper removes the `GH_TOKEN` that an outer wrapped `gh`
+injected, but keeps every token variable that you set yourself. Without one, it
+gives `gh` the placeholder, so the API broker answers the request with its reason
+(such as `gh: Horizon: owner/name has no GitHub grant on this worker. ...`)
+instead of `gh` asking you to sign in.
 
 For Git through the proxy and `gh` through the API broker, `access: "read"` is
 enforced: a push or a change gets a refusal. No agent process holds the chain's

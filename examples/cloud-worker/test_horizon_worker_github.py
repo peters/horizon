@@ -516,9 +516,11 @@ class SocketTests(ServiceTestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             nested = auth.service_environment(dict(env, GH_REPO='example/other'), ['pr', 'list'])
             own = auth.service_environment({'GH_REPO': 'example/other', 'GH_TOKEN': 'own-token'}, ['pr', 'list'])
-        self.assertNotIn('GH_TOKEN', nested)
-        self.assertNotIn(auth.INJECTED, nested)
+        # The broker answers a repository without a grant with its reason; gh needs a token to ask.
+        self.assertEqual((nested['GH_TOKEN'], nested[auth.INJECTED]), (common.PLACEHOLDER, '1'))
+        self.assertEqual(nested['GH_REPO'], 'example/other')
         self.assertEqual(own['GH_TOKEN'], 'own-token')
+        self.assertNotIn(auth.INJECTED, own)
         # gh reads the routed configuration, whatever configuration the caller names.
         moved = auth.service_environment({'GH_REPO': 'example/library', 'GH_CONFIG_DIR': '/tmp/elsewhere',
                                           'XDG_CONFIG_HOME': '/tmp/xdg', 'HOME': '/tmp/home'}, ['pr', 'list'])

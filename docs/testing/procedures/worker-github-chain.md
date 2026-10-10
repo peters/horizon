@@ -355,8 +355,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> horizon-worker-tailnet agent git clone -q https://github.com/example/secret.git /workspace/home/secret
    ```
 
-   Result: The command fails. It shows `remote: Horizon: example/secret has no
-   GitHub grant on this worker`. It does not ask for a user name.
+   Result: The command fails. It shows a line that starts with `remote: Horizon:
+   example/secret has no GitHub grant on this worker`. It does not ask for a user name.
 
 5. Clone a public repository that has no grant. Then try to push to it:
 
@@ -368,8 +368,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
        && git -C public push -q origin HEAD:main'
    ```
 
-   Result: The clone works. The push fails and shows `remote: Horizon:
-   example/public has no GitHub grant on this worker`.
+   Result: The clone works. The push fails and shows a line that starts with
+   `remote: Horizon: example/public has no GitHub grant on this worker`.
 
 6. Examine what the fake GitHub received:
 
@@ -399,8 +399,9 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
 9. Do step 8 again with `GH_REPO=example/other`.
 
-   Result: The command shows `horizon: no Git grant for this repository`. It shows
-   no token.
+   Result: The command shows `horizon-api-broker` too. `gh` holds only the
+   placeholder, and the API broker refuses its requests for `example/other` with
+   its reason (step 12).
 
 10. Examine the route of `gh`:
 
@@ -418,7 +419,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
     docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project && gh api repos/example/project'
     ```
 
-    Result: The command shows `{"permissions":{"pull":true,"push":true}}`.
+    Result: The command shows `{"permissions": {"pull": true, "push": true}}`.
 
 12. Read a repository that has no grant, and a path outside a repository:
 
@@ -427,10 +428,10 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
     docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project && gh api user/repos'
     ```
 
-    Result: Both commands fail. The first shows `Horizon: example/secret has no
-    GitHub grant on this worker. Ask for access with the github_access tool.`
-    The second shows `Horizon: this worker does not let an agent reach
-    /user/repos`.
+    Result: Both commands fail. The first shows `gh: Horizon: example/secret has
+    no GitHub grant on this worker. Ask for access with the github_access tool.
+    (HTTP 403)`. The second shows a line that starts with `gh: Horizon: this
+    worker does not let an agent reach /user/repos`.
 
 13. Send the placeholder past the broker:
 
@@ -467,12 +468,15 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    ```bash
    docker exec <c> tail -3 /run/horizon-github/requests.log
+   docker exec <c> grep '"request":"git-' /run/horizon-github/requests.log | tail -1
    docker exec <c> grep -c 'ghu_\|ghr_' /run/horizon-github/requests.log
    ```
 
-   Result: Each line shows `uid` 10001. The lines of the socket also show a
-   `pid`, and the lines of the Git proxy show a kind such as `git-push` and an
-   `outcome` such as `relayed`. The count is `0`.
+   Result: Each line shows `uid` 10001. The last lines are of the socket
+   (`gh-token`, with a `pid`) and of the API broker (`"kind":"api"`). The line of
+   the Git proxy shows its kind in `request`, such as `git-push` or `git-read`, an
+   `outcome` such as `relayed`, and `"pid":null`: the proxy names no process in
+   its log. The count is `0`.
 
 ### 6.7 C6: Container recreation
 
@@ -516,9 +520,14 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
 ### 6.8 C7: Revoked chain
 
-1. Start the fake GitHub again. Do step 2 of task C2.
+1. Make sure that the fake GitHub runs:
 
-   Result: Both commands exit with status 0.
+   ```bash
+   docker exec <c> pgrep -f fake-github.py
+   ```
+
+   Result: The command shows one process ID. If it shows nothing, do step 2 of
+   task C2 again.
 
 2. Do step 3 of task C2 again with the refresh token `ghr_synthetic-revoked`.
 
@@ -577,7 +586,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
 ### 6.9 R1: Request outside an agent session
 
-1. Install a new chain. Do the steps 2, 3 and 4 of task C2 again.
+1. Install a new chain. Do the steps 3 and 4 of task C2 again. The fake GitHub
+   still runs.
 
    Result: The JSON shows `"state":"ok"` and `"pending_requests":0`.
 
@@ -691,7 +701,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> horizon-worker-github status
    ```
 
-   Result: The JSON shows `"state":"absent"`.
+   Result: `clear` shows nothing. The status JSON shows `"state":"absent"`.
 
 2. Examine the services:
 

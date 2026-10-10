@@ -37,6 +37,8 @@ REWRITTEN = ('git@github.com:', 'ssh://git@github.com/', 'http://github.com/', '
 ROUTE_FILE = '.config/git/horizon-route'
 # Set by the gh wrapper when it injects a service token, so a nested gh can drop it.
 INJECTED = 'HORIZON_GH_TOKEN_INJECTED'
+# What gh holds while the GitHub service's API broker adds the token.
+PLACEHOLDER = 'horizon-api-broker'
 GIT_DIR = Path('/workspace/repository.git')
 SIBLINGS = Path('/workspace/siblings')
 HOME = '/workspace/home'
@@ -512,7 +514,8 @@ def service_credential(request, ask=call_service):
 
 def service_environment(env, argv, ask=ask_service):
     """gh's environment with the chain service's token for the targeted repository, or None
-    without a chain. A refusal drops a token that an outer wrapped gh injected."""
+    without a chain. A refusal drops a token that an outer wrapped gh injected, and gives gh the
+    placeholder unless the caller set a token, so the API broker answers with its reason."""
     reply = ask({'request': 'gh-token', 'repository': gh_repository(env, list(argv)) or ''})
     if reply is None:
         return None
@@ -524,8 +527,11 @@ def service_environment(env, argv, ask=ask_service):
         env.update({'GH_TOKEN': reply['token'], 'GH_REPO': reply['repository'], 'GH_HOST': 'github.com',
                     INJECTED: '1'})
         return env
-    print('horizon: no Git grant for this repository; gh runs without Horizon credentials', file=sys.stderr)
-    return without_injected(env)
+    # The broker refuses the request with its reason, which gh prints; gh needs a token to send it.
+    env = without_injected(env)
+    if not any(env.get(variable) for variable in TOKEN_VARIABLES):
+        env.update({'GH_TOKEN': PLACEHOLDER, INJECTED: '1'})
+    return env
 
 
 def without_injected(env):
