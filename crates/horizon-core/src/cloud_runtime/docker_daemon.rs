@@ -9,7 +9,7 @@ use std::{
     ffi::OsStr,
     io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -23,6 +23,7 @@ const STEP_TIMEOUT: Duration = Duration::from_mins(5);
 /// How long Docker may take to answer after a restart.
 const ANSWER_TIMEOUT: Duration = Duration::from_mins(2);
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
+const CONTEXT_FORMAT: &str = "{{.Name}}\t{{.Endpoints.docker.Host}}";
 
 /// How Horizon runs the Docker CLI for a cloud: the program, its configuration
 /// directory and the daemon address from cloud settings.
@@ -53,10 +54,8 @@ pub enum Health {
     NotRunning {
         detail: String,
     },
-    /// Docker accepted no answer in time: the daemon is stuck.
+    /// Docker gave no answer in time: the daemon is stuck.
     NotResponding,
-    /// No Docker CLI to ask.
-    Missing,
 }
 
 impl Target {
@@ -105,12 +104,12 @@ impl Target {
         command
     }
 
-    /// Asks the daemon for its version, waiting at most `timeout`.
+    /// Asks the daemon for its version, waiting at most `timeout` or until `stop`.
     #[must_use]
-    pub fn probe(&self, timeout: Duration) -> Health {
+    pub fn probe(&self, timeout: Duration, stop: &dyn Fn() -> bool) -> Health {
         let mut command = self.docker();
         command.args(["version", "--format", "{{.Server.Version}}"]);
-        match bounded(command, timeout) {
+        match bounded(command, timeout, stop) {
             Ran::Exited {
                 success: true, stdout, ..
             } if !stdout.trim().is_empty() => Health::Answering {
@@ -122,7 +121,9 @@ impl Target {
                     .to_owned(),
             },
             Ran::TimedOut => Health::NotResponding,
-            Ran::Failed(_) => Health::Missing,
+            Ran::Failed(error) => Health::NotRunning {
+                detail: error.to_string(),
+            },
         }
     }
 
@@ -138,8 +139,8 @@ impl Target {
         });
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from);
-        let systemd = os == Os::Linux && on_path("systemctl");
+            .map(|home| PathBuf::from(&home).canonicalize().unwrap_or_else(|_| home.into()));
+        let systemd = os == Os::Linux && on_path("systemctl").is_some();
         let desktop_relevant = os != Os::Linux
             || context.as_deref() == Some("desktop-linux")
             || matches!((&endpoint, &home), (Some(Endpoint::Socket(path)), Some(home)) if path.starts_with(home.join(".docker")));
@@ -148,11 +149,10 @@ impl Target {
             context,
             runtime_dir: std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
             home,
-            user_unit: systemd && unit_loaded(true, "docker.service"),
-            system_unit: systemd && unit_loaded(false, "docker.service"),
-            pkexec: os == Os::Linux && on_path("pkexec"),
+            user_unit: systemd && unit_active(true),
+            system_unit: systemd && unit_active(false),
+            pkexec: on_path("pkexec").filter(|_| os == Os::Linux),
             desktop_cli: desktop_relevant && self.desktop_cli(),
-            desktop_app: os == Os::MacOs && Path::new("/Applications/Docker.app").is_dir(),
             endpoint,
         }
     }
@@ -164,13 +164,8 @@ impl Target {
             return (None, Some(Endpoint::parse(host)));
         }
         let mut command = self.docker();
-        command.args([
-            "context",
-            "inspect",
-            "--format",
-            "{{.Name}}\t{{.Endpoints.docker.Host}}",
-        ]);
-        match bounded(command, LOOKUP_TIMEOUT) {
+        command.args(["context", "inspect", "--format", CONTEXT_FORMAT]);
+        match bounded(command, LOOKUP_TIMEOUT, &|| false) {
             Ran::Exited {
                 success: true, stdout, ..
             } => match stdout.trim().split_once('\t') {
@@ -184,7 +179,10 @@ impl Target {
     fn desktop_cli(&self) -> bool {
         let mut command = Command::new(&self.program);
         command.args(["desktop", "version"]);
-        matches!(bounded(command, LOOKUP_TIMEOUT), Ran::Exited { success: true, .. })
+        matches!(
+            bounded(command, LOOKUP_TIMEOUT, &|| false),
+            Ran::Exited { success: true, .. }
+        )
     }
 
     /// Runs `argv`, then waits until Docker answers. `waiting` hears when the wait starts.
@@ -198,7 +196,7 @@ impl Target {
             command: shown.clone(),
             detail: detail.to_owned(),
         };
-        match bounded(command, STEP_TIMEOUT) {
+        match bounded(command, STEP_TIMEOUT, &|| false) {
             Ran::Exited { success: true, .. } => {}
             Ran::Exited { stderr, stdout, .. } => {
                 return Err(refused(
@@ -207,13 +205,13 @@ impl Target {
                         .unwrap_or("it gave no reason"),
                 ));
             }
-            Ran::TimedOut => return Err(RestartError::TimedOut { command: shown }),
+            Ran::TimedOut => return Err(refused("it did not finish in 5 minutes")),
             Ran::Failed(error) => return Err(refused(&error.to_string())),
         }
         waiting();
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         loop {
-            let health = self.probe(PROBE_TIMEOUT);
+            let health = self.probe(PROBE_TIMEOUT, &|| false);
             if let Health::Answering { version } = health {
                 return Ok(version);
             }
@@ -229,8 +227,6 @@ impl Target {
 pub enum RestartError {
     #[error("{command} failed: {detail}")]
     Refused { command: String, detail: String },
-    #[error("{command} did not finish in {} minutes", STEP_TIMEOUT.as_secs() / 60)]
-    TimedOut { command: String },
     #[error("Docker restarted but still does not answer{}", match last {
         Health::NotRunning { detail } => format!(": {detail}"),
         _ => String::new(),
@@ -238,18 +234,21 @@ pub enum RestartError {
     NotAnswering { last: Health },
 }
 
-fn unit_loaded(user: bool, unit: &str) -> bool {
+/// Whether systemd runs `docker.service` now. A hung daemon still counts as active; an
+/// installed unit that is stopped does not serve the socket in use.
+fn unit_active(user: bool) -> bool {
     let mut command = Command::new("systemctl");
     if user {
         command.arg("--user");
     }
-    command.args(["show", "--property=LoadState", "--value", unit]);
-    matches!(bounded(command, LOOKUP_TIMEOUT), Ran::Exited { success: true, stdout, .. } if stdout.trim() == "loaded")
+    command.args(["show", "--property=ActiveState", "--value", "docker.service"]);
+    matches!(bounded(command, LOOKUP_TIMEOUT, &|| false), Ran::Exited { success: true, stdout, .. } if stdout.trim() == "active")
 }
 
-fn on_path(program: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|directory| directory.join(program).is_file()))
+fn on_path(program: &str) -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|directory| directory.join(program))
+        .find(|path| path.is_file())
 }
 
 fn last_line(text: &str) -> Option<&str> {
@@ -266,13 +265,15 @@ enum Ran {
     Failed(std::io::Error),
 }
 
-/// Runs `command` for at most `timeout`. A process it leaves behind holding its
-/// output open cannot hold the caller longer than a second past the exit.
-fn bounded(mut command: Command, timeout: Duration) -> Ran {
+/// Runs `command` for at most `timeout`, or until `stop`. A process it leaves behind
+/// holding its output open cannot hold the caller longer than a second past the exit.
+fn bounded(mut command: Command, timeout: Duration, stop: &dyn Fn() -> bool) -> Ran {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return Ran::Failed(error),
@@ -293,19 +294,29 @@ fn bounded(mut command: Command, timeout: Duration) -> Ran {
                     stderr: collect(stderr),
                 };
             }
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            Ok(None) if Instant::now() < deadline && !stop() => thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                end(child);
                 return Ran::TimedOut;
             }
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                end(child);
                 return Ran::Failed(error);
             }
         }
     }
+}
+
+/// Kills the process group, as an `ssh` that `docker --host ssh://` starts is in it. A
+/// child that outlives the kill, such as the root `systemctl` that `pkexec` starts, is
+/// waited for on its own thread so that the caller never blocks on it.
+fn end(mut child: Child) {
+    #[cfg(unix)]
+    if let Some(id) = rustix::process::Pid::from_raw(child.id().cast_signed()) {
+        let _ = rustix::process::kill_process_group(id, rustix::process::Signal::KILL);
+    }
+    let _ = child.kill();
+    thread::spawn(move || child.wait());
 }
 
 fn read(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
@@ -318,31 +329,38 @@ fn read(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
     receiver
 }
 
+/// A `docker` program that runs `script` with the arguments it was given. It is returned
+/// once it starts: a child that another test thread forked while the file was open for
+/// writing keeps it busy until that child runs its own program.
+#[cfg(all(test, unix))]
+pub(super) fn fake_docker(directory: &Path, script: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = directory.join("docker");
+    std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for _ in 0..200 {
+        match Command::new(&path).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            Ok(child) => {
+                end(child);
+                return path;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("{}: {error}", path.display()),
+        }
+    }
+    panic!("{} stayed busy", path.display());
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    /// A `docker` program that runs `script` with the arguments it was given.
-    fn fake_docker(directory: &Path, script: &str) -> PathBuf {
-        let path = directory.join("docker");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
 
     #[test]
     fn a_docker_command_names_its_target_and_other_programs_have_none() {
         let mut command = Command::new("/usr/local/bin/docker");
-        command.args([
-            "--config",
-            "/state/docker",
-            "--host",
-            "ssh://build.example",
-            "create",
-            "--host",
-            "x",
-        ]);
+        command.args("--config /state/docker --host ssh://build.example create --host x".split(' '));
         let target = Target {
             program: "/usr/local/bin/docker".into(),
             config: Some("/state/docker".into()),
@@ -368,7 +386,7 @@ mod tests {
             version: version.into(),
         };
         assert_eq!(
-            target("echo \"$*\"").probe(PROBE_TIMEOUT),
+            target("echo \"$*\"").probe(PROBE_TIMEOUT, &|| false),
             answer(
                 "--config /state/docker --host unix:///run/user/1000/docker.sock version --format {{.Server.Version}}"
             ),
@@ -376,20 +394,15 @@ mod tests {
         );
         let refusal = "Cannot connect to the Docker daemon at unix:///run/docker.sock.";
         assert_eq!(
-            target(&format!("echo '{refusal}' >&2; exit 1")).probe(PROBE_TIMEOUT),
+            target(&format!("echo '{refusal}' >&2; exit 1")).probe(PROBE_TIMEOUT, &|| false),
             Health::NotRunning { detail: refusal.into() }
         );
         let started = Instant::now();
         assert_eq!(
-            target("exec sleep 30").probe(Duration::from_millis(300)),
+            target("exec sleep 30").probe(Duration::from_millis(300), &|| false),
             Health::NotResponding
         );
         assert!(started.elapsed() < Duration::from_secs(5));
-        let missing = Target {
-            program: temp.path().join("absent").join("docker"),
-            ..Target::default()
-        };
-        assert_eq!(missing.probe(PROBE_TIMEOUT), Health::Missing);
     }
 
     #[test]
@@ -446,7 +459,7 @@ mod tests {
         command.args(["-c", "sleep 30 & echo done"]);
         let started = Instant::now();
         assert!(matches!(
-            bounded(command, Duration::from_secs(10)),
+            bounded(command, Duration::from_secs(10), &|| false),
             Ran::Exited { success: true, .. }
         ));
         assert!(started.elapsed() < Duration::from_secs(5));

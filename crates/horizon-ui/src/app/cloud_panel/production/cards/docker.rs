@@ -13,6 +13,11 @@ use horizon_core::cloud_runtime::{
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
+/// Said instead of a restart when the cloud settings, which name the Docker a cloud
+/// uses, cannot be read: the local default may not be that Docker.
+const UNREADABLE_SETTINGS: &str = "Horizon could not read the cloud settings, so it does not know which Docker \
+     this cloud uses. Restart that Docker the way it was started, then retry.";
+
 /// What the person sees of a restart.
 #[derive(Clone, Debug, Default)]
 enum Step {
@@ -40,6 +45,11 @@ type Restart = fn(&Target, &[String], &dyn Fn()) -> Result<String, RestartError>
 
 struct State {
     step: Step,
+    /// Counts the person's choices, so a background job's late result after Close or
+    /// Cancel is dropped.
+    generation: u64,
+    /// The last pass that drew a failure Docker caused.
+    drawn: u64,
     inspect: Inspect,
     restart: Restart,
 }
@@ -48,6 +58,8 @@ impl Default for State {
     fn default() -> Self {
         Self {
             step: Step::Idle,
+            generation: 0,
+            drawn: 0,
             inspect,
             restart: Target::restart,
         }
@@ -70,35 +82,75 @@ impl Shared {
         change(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
-    fn set(&self, ctx: &egui::Context, step: Step) {
-        self.with(|state| state.step = step);
+    /// The step a failure drawn in this pass shows. A question or result that no
+    /// failure was drawn for in the pass before belongs to a failure that went away.
+    fn current(&self, ctx: &egui::Context) -> Step {
+        let pass = ctx.cumulative_pass_nr();
+        self.with(|state| {
+            let ended = matches!(
+                state.step,
+                Step::Confirm { .. } | Step::Answered(_) | Step::Failed { .. }
+            );
+            if ended && state.drawn + 1 < pass {
+                state.step = Step::Idle;
+                state.generation += 1;
+            }
+            state.drawn = pass;
+            state.step.clone()
+        })
+    }
+
+    /// The person's choice: it replaces whatever a background job would report.
+    fn choose(&self, ctx: &egui::Context, step: Step) -> u64 {
+        ctx.request_repaint();
+        self.with(|state| {
+            state.step = step;
+            state.generation += 1;
+            state.generation
+        })
+    }
+
+    /// A background job's report, dropped when the person chose something since.
+    fn report(&self, ctx: &egui::Context, generation: u64, change: impl FnOnce(&mut Step)) {
+        self.with(|state| {
+            if state.generation == generation {
+                change(&mut state.step);
+            }
+        });
         ctx.request_repaint();
     }
 
-    /// Runs `work` off the UI thread.
-    fn spawn(&self, ctx: &egui::Context, work: impl FnOnce(&Self, &egui::Context) + Send + 'static) {
+    /// Shows `step`, then runs `work` off the UI thread.
+    fn spawn(&self, ctx: &egui::Context, step: Step, work: impl FnOnce(&Self, &egui::Context, u64) + Send + 'static) {
+        let generation = self.choose(ctx, step);
         let (shared, thread_ctx) = (self.clone(), ctx.clone());
         let spawned = std::thread::Builder::new()
             .name("docker-restart".into())
-            .spawn(move || work(&shared, &thread_ctx));
+            .spawn(move || work(&shared, &thread_ctx, generation));
         if let Err(error) = spawned {
-            self.set(
-                ctx,
-                Step::Failed {
-                    error: format!("Horizon could not start the Docker restart: {error}."),
-                    command: None,
-                },
-            );
+            let error = format!("Horizon could not start the Docker restart: {error}.");
+            self.choose(ctx, Step::Failed { error, command: None });
         }
     }
 }
 
 fn inspect() -> (Target, Plan) {
+    // The path the cloud panel reads its settings from.
     let path = horizon_core::HorizonHome::resolve()
         .root()
         .join("cloud")
         .join("settings.json");
-    let target = Settings::load(&path).map_or_else(|_| Target::default(), |settings| Target::from_settings(&settings));
+    let Ok(settings) = Settings::load(&path) else {
+        let instructions = UNREADABLE_SETTINGS.into();
+        return (
+            Target::default(),
+            Plan::Manual {
+                instructions,
+                command: None,
+            },
+        );
+    };
+    let target = Target::from_settings(&settings);
     let plan = docker_daemon::plan(&target.facts());
     (target, plan)
 }
@@ -114,7 +166,7 @@ pub(super) fn button(ui: &mut egui::Ui, failure: &Failure) {
         return;
     }
     let shared = Shared::of(ui.ctx());
-    if !matches!(shared.with(|state| state.step.clone()), Step::Idle) {
+    if !matches!(shared.current(ui.ctx()), Step::Idle) {
         return;
     }
     if ui
@@ -122,10 +174,9 @@ pub(super) fn button(ui: &mut egui::Ui, failure: &Failure) {
         .on_hover_text("Find out how Docker runs on this computer and ask before restarting it")
         .clicked()
     {
-        shared.set(ui.ctx(), Step::Checking);
-        shared.spawn(ui.ctx(), |shared, ctx| {
+        shared.spawn(ui.ctx(), Step::Checking, |shared, ctx, generation| {
             let (target, plan) = (shared.with(|state| state.inspect))();
-            shared.set(ctx, Step::Confirm { target, plan });
+            shared.report(ctx, generation, |step| *step = Step::Confirm { target, plan });
         });
     }
 }
@@ -137,11 +188,10 @@ pub(super) fn status(ui: &mut egui::Ui, failure: &Failure, retry: Option<&str>) 
         return false;
     }
     let shared = Shared::of(ui.ctx());
-    let step = shared.with(|state| state.step.clone());
     let mut retried = false;
-    match step {
+    match shared.current(ui.ctx()) {
         Step::Idle => return false,
-        Step::Checking => busy(ui, "Checking how Docker runs on this computer…"),
+        Step::Checking => busy(ui, &shared, "Checking how Docker runs on this computer…"),
         Step::Confirm {
             target,
             plan: plan @ Plan::Restart { .. },
@@ -150,7 +200,7 @@ pub(super) fn status(ui: &mut egui::Ui, failure: &Failure, retry: Option<&str>) 
                 start(ui.ctx(), &shared, target, plan);
             }
             if ui.add(action_button("Cancel")).clicked() {
-                shared.set(ui.ctx(), Step::Idle);
+                shared.choose(ui.ctx(), Step::Idle);
             }
         }),
         Step::Confirm {
@@ -164,7 +214,7 @@ pub(super) fn status(ui: &mut egui::Ui, failure: &Failure, retry: Option<&str>) 
             command_and_close(ui, &shared, command.as_deref());
         }
         Step::Restarting { doing, since } => {
-            busy(ui, &format!("{doing} ({} s)", since.elapsed().as_secs()));
+            busy(ui, &shared, &format!("{doing} ({} s)", since.elapsed().as_secs()));
             ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
         }
         Step::Answered(version) => {
@@ -179,10 +229,10 @@ pub(super) fn status(ui: &mut egui::Ui, failure: &Failure, retry: Option<&str>) 
                     && ui.add(action_button(retry)).clicked()
                 {
                     retried = true;
-                    shared.set(ui.ctx(), Step::Idle);
+                    shared.choose(ui.ctx(), Step::Idle);
                 }
                 if ui.add(action_button("Close")).clicked() {
-                    shared.set(ui.ctx(), Step::Idle);
+                    shared.choose(ui.ctx(), Step::Idle);
                 }
             });
         }
@@ -207,31 +257,33 @@ fn start(ctx: &egui::Context, shared: &Shared, target: Target, plan: Plan) {
         return;
     };
     let argv = argv.clone();
-    shared.set(
-        ctx,
-        Step::Restarting {
-            doing: format!("Restarting Docker: {shown}"),
-            since: Instant::now(),
-        },
-    );
-    shared.spawn(ctx, move |shared, ctx| {
+    let step = Step::Restarting {
+        doing: format!("Restarting Docker: {shown}"),
+        since: Instant::now(),
+    };
+    shared.spawn(ctx, step, move |shared, ctx, generation| {
         let restart = shared.with(|state| state.restart);
         let waiting = || {
-            shared.with(|state| {
-                if let Step::Restarting { doing, .. } = &mut state.step {
+            shared.report(ctx, generation, |step| {
+                if let Step::Restarting { doing, .. } = step {
                     "Waiting for Docker to answer…".clone_into(doing);
                 }
             });
-            ctx.request_repaint();
         };
-        let step = match restart(&target, &argv, &waiting) {
+        let outcome = match restart(&target, &argv, &waiting) {
             Ok(version) => Step::Answered(version),
-            Err(error) => Step::Failed {
-                error: format!("Docker did not come back: {error}."),
-                command: plan.command().map(str::to_owned),
-            },
+            Err(error) => {
+                let lead = if matches!(error, RestartError::NotAnswering { .. }) {
+                    "Docker did not come back"
+                } else {
+                    "Docker was not restarted"
+                };
+                let error = format!("{lead}: {}.", error.to_string().trim_end_matches(['.', '!', '?']));
+                let command = plan.command().map(str::to_owned);
+                Step::Failed { error, command }
+            }
         };
-        shared.set(ctx, step);
+        shared.report(ctx, generation, |step| *step = outcome);
     });
 }
 
@@ -252,11 +304,15 @@ fn question(plan: &Plan) -> String {
     )
 }
 
-fn busy(ui: &mut egui::Ui, text: &str) {
+/// A job under way. Close stops waiting for it; a restart that already began goes on.
+fn busy(ui: &mut egui::Ui, shared: &Shared, text: &str) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add(egui::Spinner::new().size(14.0));
         ui.label(RichText::new(text).size(13.0).color(theme::FG_SOFT()));
+        if ui.add(action_button("Close")).clicked() {
+            shared.choose(ui.ctx(), Step::Idle);
+        }
     });
 }
 
@@ -271,7 +327,7 @@ fn command_and_close(ui: &mut egui::Ui, shared: &Shared, command: Option<&str>) 
             ui.ctx().copy_text(command.to_owned());
         }
         if ui.add(action_button("Close")).clicked() {
-            shared.set(ui.ctx(), Step::Idle);
+            shared.choose(ui.ctx(), Step::Idle);
         }
     });
 }
@@ -394,7 +450,7 @@ mod tests {
         }
         let registry = failure("error from registry: denied");
         assert!(!offered(&registry));
-        assert!(texts(&egui::Context::default(), &registry).is_empty());
+        assert_eq!(texts(&egui::Context::default(), &registry), Vec::<String>::new());
     }
 
     #[test]
@@ -408,6 +464,10 @@ mod tests {
             .iter()
             .find(|text| text.contains("Restart Docker?"))
             .expect("the question");
+        click(&ctx, &failure, "Cancel");
+        assert_eq!(texts(&ctx, &failure), ["Restart Docker…"], "Cancel restarts nothing");
+        click(&ctx, &failure, "Restart Docker…");
+        until(&ctx, &failure, "Restart Docker?");
         assert!(
             asked.contains("stops every container") && asked.contains(ROOTLESS),
             "{asked}"
@@ -418,13 +478,6 @@ mod tests {
             click(&ctx, &failure, "Retry deploy"),
             "Retry runs the cloud's own retry"
         );
-        assert_eq!(texts(&ctx, &failure), ["Restart Docker…"]);
-    }
-
-    #[test]
-    fn cancelling_the_question_restarts_nothing() {
-        let (ctx, failure, _) = asked(rootless, |_, _, _| panic!("a cancelled question restarts nothing"));
-        click(&ctx, &failure, "Cancel");
         assert_eq!(texts(&ctx, &failure), ["Restart Docker…"]);
     }
 
@@ -453,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_restart_says_why_and_gives_the_command_to_run() {
+    fn a_failed_restart_says_why_and_ends_with_its_failure() {
         let (ctx, failure, _) = asked(rootless, |_, _, _| {
             let last = docker_daemon::Health::NotResponding;
             Err(RestartError::NotAnswering { last })
@@ -464,5 +517,24 @@ mod tests {
         assert!(shown.iter().any(|text| text == error), "{shown:?}");
         assert!(shown.iter().any(|text| text == ROOTLESS), "{shown:?}");
         assert!(!shown.iter().any(|text| text == "Retry deploy"), "{shown:?}");
+        // A pass that draws no Docker failure, as when the cloud is retried, ends the result.
+        let _ = ctx.run_ui(RawInput::default(), |_| {}).discard_textures();
+        assert_eq!(texts(&ctx, &failure), ["Restart Docker…"]);
+    }
+
+    #[test]
+    fn closing_a_restart_under_way_drops_its_late_result() {
+        let (ctx, failure, _) = asked(rootless, |_, _, _| {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            Err(RestartError::Refused {
+                command: ROOTLESS.into(),
+                detail: "Access denied.".into(),
+            })
+        });
+        click(&ctx, &failure, "Restart Docker");
+        until(&ctx, &failure, "Restarting Docker: ");
+        click(&ctx, &failure, "Close");
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        assert_eq!(texts(&ctx, &failure), ["Restart Docker…"]);
     }
 }

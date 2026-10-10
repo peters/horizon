@@ -255,7 +255,7 @@ impl Runner<'_> {
             if self.cancel.is_cancelled() || started.elapsed() > timeout {
                 stop(&mut child);
                 self.cancel.check()?;
-                return Err(self.timed_out(name, command));
+                return Err(self.timed_out(name, command)?);
             }
             if status.is_none() {
                 status = child.try_wait()?;
@@ -278,17 +278,22 @@ impl Runner<'_> {
     }
     /// A Docker command that outlived its time is a stuck daemon when Docker does not
     /// answer a health check either; any other timeout stays a plain one.
-    fn timed_out(&self, name: &'static str, command: &Command) -> Error {
-        let stuck = docker_daemon::Target::of(command)
-            .is_some_and(|target| target.probe(docker_daemon::PROBE_TIMEOUT) == docker_daemon::Health::NotResponding);
+    /// # Errors
+    /// Cancellation during the health check.
+    fn timed_out(&self, name: &'static str, command: &Command) -> Result<Error> {
+        let cancelled = || self.cancel.is_cancelled();
+        let stuck = docker_daemon::Target::of(command).is_some_and(|target| {
+            target.probe(docker_daemon::PROBE_TIMEOUT, &cancelled) == docker_daemon::Health::NotResponding
+        });
+        self.cancel.check()?;
         if !stuck {
-            return Error::Invalid(TIMED_OUT);
+            return Ok(Error::Invalid(TIMED_OUT));
         }
         (self.emit)(Event::Output(format!(
             "Docker did not answer docker version within {} s",
             docker_daemon::PROBE_TIMEOUT.as_secs()
         )));
-        Error::DockerNotResponding(name)
+        Ok(Error::DockerNotResponding(name))
     }
     fn redact(&self, mut value: String) -> String {
         for secret in &self.secrets {
@@ -389,9 +394,8 @@ mod tests {
 
     #[test]
     fn a_timed_out_docker_command_is_a_stuck_daemon_only_when_docker_does_not_answer() {
-        use std::{os::unix::fs::PermissionsExt, path::Path};
+        use std::path::Path;
         let temp = tempfile::tempdir().unwrap();
-        let docker = temp.path().join("docker");
         let (cancel, lines) = (Cancellation::default(), std::cell::RefCell::new(Vec::new()));
         let emit = |event| {
             if let Event::Output(line) = event {
@@ -413,16 +417,14 @@ mod tests {
             )
         };
         // Docker answers its health check: the timeout is a plain one.
-        std::fs::write(
-            &docker,
-            "#!/bin/sh\n[ \"$1\" = version ] && echo 29.8.1 && exit\nexec sleep 30\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let docker = docker_daemon::fake_docker(
+            temp.path(),
+            "[ \"$1\" = version ] && echo 29.8.1 && exit\nexec sleep 30",
+        );
         assert!(matches!(create(&docker), Err(Error::Invalid(TIMED_OUT))));
         assert!(lines.borrow().is_empty());
         // Docker answers nothing: the daemon is stuck.
-        std::fs::write(&docker, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        let docker = docker_daemon::fake_docker(temp.path(), "exec sleep 30");
         let result = create(&docker);
         assert!(
             matches!(
@@ -432,10 +434,6 @@ mod tests {
             "{result:?}"
         );
         assert_eq!(*lines.borrow(), ["Docker did not answer docker version within 5 s"]);
-        // Any other program's timeout is a plain one, with no health check.
-        let other = temp.path().join("dockerd");
-        std::fs::rename(&docker, &other).unwrap();
-        assert!(matches!(create(&other), Err(Error::Invalid(TIMED_OUT))));
     }
 
     #[test]

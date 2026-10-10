@@ -14,15 +14,12 @@ pub enum Os {
 
 impl Os {
     #[must_use]
-    pub const fn current() -> Self {
-        if cfg!(target_os = "linux") {
-            Self::Linux
-        } else if cfg!(target_os = "macos") {
-            Self::MacOs
-        } else if cfg!(windows) {
-            Self::Windows
-        } else {
-            Self::Other
+    pub fn current() -> Self {
+        match std::env::consts::OS {
+            "linux" => Self::Linux,
+            "macos" => Self::MacOs,
+            "windows" => Self::Windows,
+            _ => Self::Other,
         }
     }
 }
@@ -63,16 +60,14 @@ pub struct Facts {
     /// `$XDG_RUNTIME_DIR`, where rootless Docker keeps its socket.
     pub runtime_dir: Option<PathBuf>,
     pub home: Option<PathBuf>,
-    /// systemd loaded the user unit `docker.service`, which runs rootless Docker.
+    /// systemd runs the user unit `docker.service`, which runs rootless Docker.
     pub user_unit: bool,
-    /// systemd loaded the system unit `docker.service`.
+    /// systemd runs the system unit `docker.service`.
     pub system_unit: bool,
-    /// `pkexec` is on `PATH` to ask for administrator rights.
-    pub pkexec: bool,
+    /// Where `pkexec` is on `PATH`, to ask for administrator rights.
+    pub pkexec: Option<PathBuf>,
     /// `docker desktop version` answered: Docker Desktop 4.37 or later with its CLI.
     pub desktop_cli: bool,
-    /// macOS: `/Applications/Docker.app` exists.
-    pub desktop_app: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -113,14 +108,6 @@ const DESKTOP_CLI: [&str; 3] = ["docker", "desktop", "restart"];
 const ROOTLESS: [&str; 4] = ["systemctl", "--user", "restart", "docker.service"];
 const SERVICE: [&str; 4] = ["pkexec", "systemctl", "restart", "docker.service"];
 const SERVICE_COMMAND: &str = "sudo systemctl restart docker";
-/// Quits Docker Desktop, waits until it has quit, then opens it again.
-const MAC_REOPEN: [&str; 5] = [
-    "quit app \"Docker\"",
-    "repeat while application \"Docker\" is running",
-    "delay 1",
-    "end repeat",
-    "tell application \"Docker\" to activate",
-];
 
 const NO_ENDPOINT: &str = "Horizon could not find out where this Docker runs. Restart Docker the way it was started on this computer, then retry.";
 const UNKNOWN: &str = "Horizon does not know how this Docker was started. Restart it the way it was started on this computer, then retry.";
@@ -154,7 +141,7 @@ pub fn plan(facts: &Facts) -> Plan {
         None => manual(NO_ENDPOINT, None),
         Some(Endpoint::Remote(host)) => manual(
             format!(
-                "This Docker runs at {host}, not on this computer, so Horizon does not restart it. Restart Docker on that machine, then retry."
+                "This Docker is at {host}. Horizon restarts only a Docker that it finds on a socket of this computer, so restart Docker at that address, then retry."
             ),
             None,
         ),
@@ -179,7 +166,7 @@ fn linux(facts: &Facts, socket: &Path) -> Plan {
         manual(ROOTLESS_WITHOUT_UNIT, None)
     } else if is_desktop(facts, socket, ".docker/desktop/docker.sock") {
         desktop(facts, DESKTOP_MENU)
-    } else if system && facts.system_unit && facts.pkexec {
+    } else if system && facts.system_unit && facts.pkexec.is_some() {
         restart(&SERVICE, "pkexec systemctl restart docker", Some(SERVICE_COMMAND))
     } else if system && facts.system_unit {
         manual(SERVICE_WITHOUT_PKEXEC, Some(SERVICE_COMMAND))
@@ -189,18 +176,10 @@ fn linux(facts: &Facts, socket: &Path) -> Plan {
 }
 
 fn mac(facts: &Facts, socket: &Path) -> Plan {
-    if !is_desktop(facts, socket, ".docker/run/docker.sock") {
-        manual(MAC_OTHER, None)
-    } else if facts.desktop_app && !facts.desktop_cli {
-        let mut argv = vec!["osascript"];
-        argv.extend(MAC_REOPEN.iter().flat_map(|line| ["-e", line]));
-        restart(
-            &argv,
-            "quit Docker Desktop, wait until it has quit, then open it again",
-            None,
-        )
-    } else {
+    if is_desktop(facts, socket, ".docker/run/docker.sock") {
         desktop(facts, DESKTOP_MENU)
+    } else {
+        manual(MAC_OTHER, None)
     }
 }
 
@@ -223,10 +202,13 @@ fn desktop(facts: &Facts, instructions: &str) -> Plan {
     }
 }
 
-/// Docker Desktop: its context, or its socket under the home directory at `relative`.
+/// Docker Desktop: its context, or its socket under the home directory at `relative` or,
+/// on macOS, inside the app's container where the socket link points.
 fn is_desktop(facts: &Facts, socket: &Path, relative: &str) -> bool {
     facts.context.as_deref() == Some(DESKTOP_CONTEXT)
-        || facts.home.as_deref().is_some_and(|home| socket == home.join(relative))
+        || facts.home.as_deref().is_some_and(|home| {
+            socket == home.join(relative) || socket.starts_with(home.join("Library/Containers/com.docker.docker"))
+        })
 }
 
 #[cfg(test)]
@@ -257,7 +239,7 @@ mod tests {
         let mut facts = Facts {
             user_unit: true,
             system_unit: true,
-            pkexec: true,
+            pkexec: Some("/usr/bin/pkexec".into()),
             ..linux("unix:///run/user/1000/docker.sock")
         };
         assert_eq!(runs(&facts).as_deref(), Ok("systemctl --user restart docker.service"));
@@ -272,17 +254,17 @@ mod tests {
         for socket in ["unix:///var/run/docker.sock", "unix:///run/docker.sock"] {
             let mut facts = Facts {
                 system_unit: true,
-                pkexec: true,
+                pkexec: Some("/usr/bin/pkexec".into()),
                 ..linux(socket)
             };
             assert_eq!(runs(&facts).as_deref(), Ok("pkexec systemctl restart docker.service"));
             assert!(plan(&facts).asks_password());
             assert_eq!(plan(&facts).command(), Some(SERVICE_COMMAND), "a person types sudo");
-            facts.pkexec = false;
+            facts.pkexec = None;
             assert_eq!(runs(&facts), Err(SERVICE_WITHOUT_PKEXEC.into()), "{socket}");
             assert_eq!(plan(&facts).command(), Some(SERVICE_COMMAND));
             // A system socket that no systemd unit runs is not restarted.
-            facts.pkexec = true;
+            facts.pkexec = Some("/usr/bin/pkexec".into());
             facts.system_unit = false;
             assert_eq!(runs(&facts), Err(UNKNOWN.into()), "{socket}");
         }
@@ -296,9 +278,8 @@ mod tests {
                     os,
                     user_unit: true,
                     system_unit: true,
-                    pkexec: true,
+                    pkexec: Some("/usr/bin/pkexec".into()),
                     desktop_cli: true,
-                    desktop_app: true,
                     ..linux(host)
                 };
                 let instructions = runs(&facts).expect_err(host);
@@ -308,7 +289,7 @@ mod tests {
         let mut facts = Facts {
             user_unit: true,
             system_unit: true,
-            pkexec: true,
+            pkexec: Some("/usr/bin/pkexec".into()),
             ..linux("unix:///srv/podman/podman.sock")
         };
         assert_eq!(runs(&facts), Err(UNKNOWN.into()));
@@ -342,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn docker_desktop_on_macos_without_its_cli_is_quit_and_opened_again() {
+    fn docker_desktop_on_macos_is_found_by_its_socket_or_context() {
         let mut facts = Facts {
             os: Os::MacOs,
             endpoint: Some(Endpoint::Socket("/Users/person/.docker/run/docker.sock".into())),
@@ -350,13 +331,11 @@ mod tests {
             ..Facts::default()
         };
         assert_eq!(runs(&facts), Err(DESKTOP_MENU.into()));
-        facts.desktop_app = true;
-        let reopen = "osascript -e quit app \"Docker\" -e repeat while application \"Docker\" is running -e delay 1 \
-                      -e end repeat -e tell application \"Docker\" to activate";
-        assert_eq!(runs(&facts).as_deref(), Ok(reopen));
-        assert_eq!(plan(&facts).command(), None, "the script is not a command to copy");
         facts.desktop_cli = true;
         assert_eq!(runs(&facts), Ok(DESKTOP_CLI.join(" ")));
+        let linked = "/Users/person/Library/Containers/com.docker.docker/Data/docker-cli.sock";
+        facts.endpoint = Some(Endpoint::Socket(linked.into()));
+        assert_eq!(runs(&facts), Ok(DESKTOP_CLI.join(" ")), "the target of the socket link");
         // Colima's socket is not Docker Desktop's, whatever is installed; its context is.
         facts.endpoint = Some(Endpoint::Socket("/Users/person/.colima/default/docker.sock".into()));
         assert_eq!(runs(&facts), Err(MAC_OTHER.into()));
