@@ -512,7 +512,7 @@ impl Plan<'_> {
                     },
                 );
                 if let Err(error) = outcome.as_ref()
-                    && lane_unavailable(error)
+                    && (matches!(step.action, Action::Reset {}) || lane_unavailable(error))
                 {
                     report.blocked = true;
                     failure = Some(*error);

@@ -25,6 +25,7 @@ struct Fake {
     create_cleanup_confirmed: bool,
     fail_reset_cleanup: Option<bool>,
     fail_action: Option<Error>,
+    close_on_failed_reset: bool,
     fail_close: bool,
 }
 impl Runtime for Fake {
@@ -58,6 +59,9 @@ impl Runtime for Fake {
     fn act(&self, session: Uuid, action: &Action) -> std::result::Result<Option<Uuid>, OperationFailure> {
         self.actions.fetch_add(1, Ordering::SeqCst);
         if let Some(error) = self.fail_action {
+            if self.close_on_failed_reset && matches!(action, Action::Reset {}) {
+                self.close(session).unwrap();
+            }
             return Err(OperationFailure {
                 error,
                 cleanup_confirmed: true,
@@ -98,6 +102,9 @@ impl Runtime for Fake {
         Ok(b"validated-redacted-fixture".to_vec())
     }
     fn close(&self, session: Uuid) -> Result<()> {
+        if self.close_on_failed_reset && !self.sessions.lock().unwrap().contains_key(&session) {
+            return Ok(());
+        }
         self.sessions.lock().unwrap().remove(&session).unwrap();
         self.active.fetch_sub(1, Ordering::SeqCst);
         if self.fail_close {
@@ -1089,6 +1096,62 @@ fn allocation_failure_publishes_every_blocked_recipe_when_progress_is_healthy() 
         .collect();
     assert_eq!(blocked, [Some("smoke"), Some("next")]);
     assert_eq!(events.last().unwrap().phase, "lane_complete");
+}
+
+#[test]
+fn every_failed_reset_blocks_later_actions_after_the_original_session_closes() {
+    for failure in [
+        Error::Runtime(horizon_app_runtime::Error::CapacityUnavailable),
+        Error::CleanupUncertain,
+        Error::LocalCleanupUncertain(Uuid::new_v4()),
+    ] {
+        let fake = Fake {
+            fail_action: Some(failure),
+            close_on_failed_reset: true,
+            ..Fake::default()
+        };
+        let mut reset = recipe();
+        reset.id = "reset".into();
+        reset.steps[0].action = Action::Reset {};
+        reset.steps.push(recipe().steps.remove(0));
+        let recipes = [reset, recipe()];
+        let plan = Plan {
+            targets: targets().into_iter().skip(1).take(1).collect(),
+            recipes: &recipes,
+            parallel: 1,
+            screenshots: true,
+            video: false,
+            logs_on_failure: false,
+        };
+        let events = Mutex::new(Vec::new());
+        let report = plan
+            .execute(
+                &fake,
+                &Control::new(Duration::from_secs(10)).unwrap(),
+                capture,
+                |event| {
+                    events.lock().unwrap().push(event);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let device = &report.devices[0];
+        assert_eq!(device.error.as_deref(), Some(failure.to_string().as_str()));
+        assert!(device.blocked && device.cleanup_confirmed);
+        assert!(!device.steps[0].passed && !device.steps[0].blocked);
+        assert!(
+            device.steps[1..]
+                .iter()
+                .all(|step| step.blocked && step.screenshot.is_none())
+        );
+        assert_eq!(fake.actions.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.screenshots.load(Ordering::SeqCst), 0);
+        assert_eq!(fake.active.load(Ordering::SeqCst), 0);
+        assert!(fake.sessions.lock().unwrap().is_empty());
+        let events = events.into_inner().unwrap();
+        assert_eq!(events.iter().filter(|event| event.phase == "lane_blocked").count(), 1);
+        assert_eq!(events.iter().filter(|event| event.phase == "recipe_blocked").count(), 1);
+    }
 }
 
 #[test]
