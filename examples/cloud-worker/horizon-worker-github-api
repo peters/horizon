@@ -361,6 +361,10 @@ class Exchange:
                 policy.check_lookup(looked, plan.ids, candidate.allowed)
             except policy.Refused as error:
                 raise elsewhere(error, policy.lookup_repositories(looked)) from None
+        # Checked again just before the request goes out: a task's session can end meanwhile.
+        policy.plan(schema, body, candidate.allowed)
+        if plan.ids:
+            policy.check_lookup(looked, plan.ids, candidate.allowed)
         features = [('GraphQL-Features', value) for value in self.request.values('graphql-features')]
         status, reply = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
                                          plan.body(body.get('variables') or {}), features, sent=granted)

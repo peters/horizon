@@ -236,8 +236,44 @@ class LateEndTests(BrokerTestCase):
         self.assertIn(b'any more', payload)
         self.assertEqual(self.api.seen, [])
 
+    def test_a_task_that_ends_while_a_graphql_request_is_planned_sends_no_query(self):
+        account = agents.account(self.store.load()[0])
+        with self.book.edit() as data:
+            data['task_grants'] = [grant('example/secret', 'read', tasks.root(os.getpid()), account)]
+        plan = service.broker.policy.plan
+        calls = []
+
+        def then_the_session_ends(*args):
+            planned = plan(*args)
+            calls.append(planned)
+            if len(calls) == 1:
+                with self.book.edit() as data:
+                    data['task_grants'] = []
+            return planned
+        with mock.patch.object(service.broker.policy, 'plan', then_the_session_ends):
+            reply = self.graphql('{ repository(owner: "example", name: "secret") { name } }')
+        self.assertIn('example/secret has no GitHub grant', reply['errors'][0]['message'])
+        self.assertEqual([item for item in self.api.seen if b'secret' in item[4]], [])
+
 
 class GitTests(ProxyTestCase):
+    def test_a_task_that_ends_while_git_is_answered_sends_no_token(self):
+        env = self.routed()
+        account = agents.account(self.store.load()[0])
+        with self.book.edit() as data:
+            data['task_grants'] = [grant('example/secret', 'read', tasks.root(os.getpid()), account)]
+        plan = service.gitproxy.plan
+
+        def then_the_session_ends(*args, **options):
+            planned = plan(*args, **options)
+            with self.book.edit() as data:
+                data['task_grants'] = []
+            return planned
+        with mock.patch.object(service.gitproxy, 'plan', then_the_session_ends):
+            result, _ = self.clone('example/secret', env)
+        self.assertIn('any more', result.stderr)
+        self.assertEqual([item for item in self.github.seen if item[2]], [], 'no token reached GitHub')
+
     def test_git_reaches_a_repository_allowed_for_its_task_and_other_sessions_do_not(self):
         env = self.routed()
         result, _ = self.clone('example/secret', env)

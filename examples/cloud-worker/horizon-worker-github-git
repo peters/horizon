@@ -354,6 +354,12 @@ class Exchange:
         target = upstream(self.environ)
         connection = target.connect(TIMEOUT)
         try:
+            # Planned again just before the token goes out: a task's session can end while the
+            # request is read.
+            if chosen.token is not None and plan(self.store, repository, access, time.time(),
+                                                 holders=self.holders).token != chosen.token:
+                raise refusal(403, '%s has no GitHub grant on this worker any more. Ask for access with the '
+                                   'github_access tool.' % repository)
             try:
                 response = relay.send(connection, target, request.method, request.target, fields, pieces, length,
                                       sent=lambda: self.record.update(granted=chosen.token is not None))
