@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CODE = {".rs", ".py", ".sh", ".ps1", ".js", ".cjs", ".mjs", ".ts", ".tsx", ".swift", ".kt", ".java", ".c", ".h", ".m"}
 SKILL_COPIES = ("assets/plugins/claude-code/skills/", "assets/plugins/codex/skills/")
-UI_SOURCE = "crates/horizon-ui/src/"
+UI_CRATE = "crates/horizon-ui/"
 PROCEDURES = "docs/testing/procedures/"
 MAX_FILES = 10
 MAX_LINES = 1500
@@ -72,6 +72,15 @@ def is_gif_url(url):
     return name.lower().endswith(".gif")
 
 
+def is_ui(path):
+    """A file that changes what Horizon shows: UI source, an embedded UI asset, or the
+    UI build script. Tests do not count."""
+    if not path.startswith(UI_CRATE) or is_test(path):
+        return False
+    rest = path[len(UI_CRATE):]
+    return (rest.startswith("src/") and rest.endswith(".rs")) or rest.startswith("assets/") or rest == "build.rs"
+
+
 def is_test(path):
     return "/tests/" in path or path.endswith(("tests.rs", "_test.rs", "_tests.rs")) or Path(path).name.startswith("test_")
 
@@ -92,8 +101,13 @@ def check(repo, base, title, body, scope_approved, no_visible_change):
                        f"{MAX_FILES} files or {MAX_LINES} lines needs explicit approval from peters. After the "
                        "approval, run again with --scope-approved, or split the PR."))
 
-    procedure_changed = any(p.startswith(PROCEDURES) and p.endswith(".md") and not p.endswith("TEMPLATE.md") for p in paths)
-    ui = sorted(p for p in paths if p.startswith(UI_SOURCE) and p.endswith(".rs") and not is_test(p))
+    # A deleted procedure does not count: the rule needs a procedure in the result.
+    procedure_changed = any(p.startswith(PROCEDURES) and p.endswith(".md") and not p.endswith("TEMPLATE.md")
+                            for p, _, _, status in files if status != "D")
+    ui = sorted(p for p in paths if is_ui(p))
+    if ui and no_visible_change and not (body and re.search(r"no visible (change|behavior)", body, re.I)):
+        errors.append(("ui-not-visible", "--no-visible-change needs a PR body (--body) that says the change has "
+                       "no visible behavior, for example \"No visible change: ...\"."))
     if ui and not no_visible_change:
         if not procedure_changed:
             errors.append(("ui-procedure", f"{len(ui)} UI source files changed (for example {ui[0]}), but no test "
@@ -119,7 +133,8 @@ def check(repo, base, title, body, scope_approved, no_visible_change):
                                "bundled skill copies together."))
 
     for path, _, _, status in files:
-        if status == "A" and re.fullmatch(r"docs/testing/[^/]+\.md", path):
+        if (status == "A" and path.startswith("docs/testing/") and path.endswith(".md")
+                and not path.startswith((PROCEDURES, "docs/testing/reports/"))):
             errors.append(("test-plan-location", f"{path} is a new plan directly under docs/testing/. Put a "
                            f"procedure under {PROCEDURES} or a report under docs/testing/reports/."))
 

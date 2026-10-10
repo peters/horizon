@@ -135,7 +135,23 @@ class ReadinessTests(unittest.TestCase):
         self.write("crates/horizon-ui/src/app/panel.rs")
         self.commit()
         self.assertEqual(self.run_check()[0], 1)
-        self.assertEqual(self.run_check("--no-visible-change")[0], 0)
+        self.assertIn("error ui-not-visible:", self.run_check("--no-visible-change")[1])
+        self.assertIn("error ui-not-visible:", self.run_check("--no-visible-change", body="Refactor.\n")[1])
+        self.assertEqual(self.run_check("--no-visible-change", body="No visible change: a refactor.\n")[0], 0)
+
+    def test_ui_assets_count_as_ui(self):
+        self.write("crates/horizon-ui/assets/logo.png")
+        self.commit()
+        self.assertIn("error ui-procedure:", self.run_check()[1])
+
+    def test_deleted_procedure_does_not_count(self):
+        self.write("docs/testing/procedures/old.md")
+        self.commit()
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.git("rm", "-q", "docs/testing/procedures/old.md")
+        self.write("crates/horizon-ui/src/app/panel.rs")
+        self.commit()
+        self.assertIn("error ui-procedure:", self.run_check()[1])
 
     def test_feature_title_needs_procedure(self):
         self.write("crates/horizon-core/src/lib.rs")
@@ -155,8 +171,11 @@ class ReadinessTests(unittest.TestCase):
 
     def test_new_plans_go_under_procedures(self):
         self.write("docs/testing/2026-10-10-thing-smoke.md")
+        self.write("docs/testing/lane/nested-plan.md")
+        self.write("docs/testing/reports/2026-10-10-run.md")
         self.commit()
-        self.assertIn("error test-plan-location:", self.run_check()[1])
+        out = self.run_check()[1]
+        self.assertEqual(out.count("error test-plan-location:"), 2)
 
     def test_skip_marker_on_head_is_a_note(self):
         self.write("crates/horizon-core/src/lib.rs")

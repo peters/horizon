@@ -280,7 +280,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   - the two bundled skill copies;
   - the place of new test plans.
 
-  Fix each error. If `peters` approved a larger PR, add `--scope-approved`. If the UI files change no visible behavior, say so in the PR body and add `--no-visible-change`.
+  Fix each error. If `peters` approved a larger PR, add `--scope-approved`. If the UI files change no visible behavior, write `No visible change:` and the reason in the PR body, and add `--no-visible-change`.
 - Open PRs ready for review by default, not as drafts, unless the user explicitly requests a draft. Include reproduction details for bug fixes, runtime or platform assumptions when relevant, and screenshots, logs, or completed smoke evidence for behavior-affecting changes.
 - Every PR gets an independent Copilot review. Request it after the PR exists through the REST API, using the login `copilot-pull-request-reviewer[bot]`. The POST returns 200 whether or not it registered, so the only proof is that the PR gained a `review_requested` event — count them either side of the request:
 
