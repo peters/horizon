@@ -34,7 +34,7 @@ It also tests the disclosure status on the local picker and the remote identity 
 >
 > **CAUTION:** USE ONLY THE ISOLATED DESKTOP. A click on the developer desktop can change a real session.
 >
-> **CAUTION:** TASK 6.6 SETS `firefox_system_access` TO TRUE IN THE FIXTURE ONLY. A LOCAL CLIENT THAT REACHES THAT DRIVER PORT CAN USE FIREFOX UI PRIVILEGES.
+> **CAUTION:** TASKS 6.1 AND 6.6 SET `firefox_system_access` TO TRUE. A LOCAL CLIENT THAT REACHES THAT DRIVER PORT CAN USE FIREFOX UI PRIVILEGES.
 
 ## 4. Equipment and preconditions
 
@@ -62,6 +62,8 @@ It also tests the disclosure status on the local picker and the remote identity 
 ## 6. Tasks
 
 ### 6.1 NATIVE-GETTER — Native getter returns false
+
+> **CAUTION:** THIS STEP ENABLES FIREFOX UI PRIVILEGES FOR ANY LOCAL CLIENT THAT REACHES THE DRIVER PORT. USE ONLY THE ISOLATED TEST SESSION.
 
 1. Run `cargo test -p horizon-browser --test firefox_native_flag_live -- --ignored --nocapture`.
 
@@ -118,6 +120,8 @@ It also tests the disclosure status on the local picker and the remote identity 
 ### 6.6 SIGN-IN — Google checks the browser after Next
 
 `device_panel` is the view only. Send input with `horizon-device` on the fixture target.
+
+> **CAUTION:** THIS STEP ENABLES FIREFOX UI PRIVILEGES FOR ANY LOCAL CLIENT THAT REACHES THE DRIVER PORT. USE ONLY THE ISOLATED TEST SESSION.
 
 1. Start the local device fixture with `--native-view` and `--firefox-system-access`.
 

@@ -550,6 +550,7 @@ impl FrameSlot {
     }
 
     /// Publish negotiated capabilities so a UI test can render disclosure status.
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn publish_backend_capabilities_for_tests(&self, capabilities: crate::ActiveBackendCapabilities) {
         self.publish_backend_capabilities(capabilities);
