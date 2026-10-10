@@ -475,6 +475,7 @@ When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `Micro
 Use this procedure when Horizon uses too much memory or CPU, or stops unexpectedly.
 The cgroup commands require Linux cgroup v2. The profiler and debugger commands require the corresponding tools and privileged access.
 The process-tree command requires `pstree`. The build-scope example requires access to the systemd user manager.
+The child-memory command requires Python 3.
 
 A large process group does not prove a memory leak in Horizon.
 Separate the main process, child processes, file cache, and temporary files before you select a fix.
@@ -509,7 +510,30 @@ Separate the main process, child processes, file cache, and temporary files befo
    ```bash
    cat "/proc/$horizon_pid/smaps_rollup"
    pstree -p "$horizon_pid"
-   ps -eo pid,ppid,comm,rss,vsz,stat --sort=-rss | head -25
+   python3 - "$horizon_pid" <<'PY'
+   import pathlib, subprocess, sys
+
+   output = subprocess.check_output(['ps', '-e', '-o', 'pid=,ppid=,rss=,comm='], text=True)
+   rows = {int(pid): (int(parent), int(rss), name)
+           for pid, parent, rss, name in (line.split(None, 3) for line in output.splitlines())}
+   selected = {int(sys.argv[1])}
+   if not selected.issubset(rows):
+       raise SystemExit('Selected process is absent. Check its identity again.')
+   while True:
+       added = {pid for pid, row in rows.items() if row[0] in selected} - selected
+       if not added:
+           break
+       selected.update(added)
+   print('PID PPID RSS_KiB PSS_KiB COMMAND')
+   for pid in sorted(selected, key=lambda item: rows[item][1], reverse=True):
+       try:
+           lines = pathlib.Path(f'/proc/{pid}/smaps_rollup').read_text().splitlines()
+           pss = next(line.split()[1] for line in lines if line.startswith('Pss:'))
+       except (OSError, StopIteration):
+           pss = 'unavailable'
+       parent, rss, name = rows[pid]
+       print(pid, parent, rss, pss, name)
+   PY
    ```
 
    Result: RSS shows resident memory. PSS divides shared memory between the processes that use it.
@@ -518,6 +542,8 @@ Separate the main process, child processes, file cache, and temporary files befo
 
    Compare samples over time under the same workload.
    Always sample the main process, even if children have larger RSS values.
+   A process exit or change of parent can change this snapshot. Use cgroup membership to find processes outside the tree.
+   Report unavailable PSS values. Do not replace them with zero.
 
 3. Examine memory charges in the cgroup.
 
@@ -525,6 +551,7 @@ Separate the main process, child processes, file cache, and temporary files befo
    horizon_cgroup="$(awk -F: '$1 == "0" {print $3}' "/proc/$horizon_pid/cgroup")"
    if [ -n "$horizon_cgroup" ] && [ -f /sys/fs/cgroup/cgroup.controllers ]; then
      horizon_cgroup_root="/sys/fs/cgroup$horizon_cgroup"
+     cat "$horizon_cgroup_root/cgroup.procs"
      cat "$horizon_cgroup_root/memory.current"
      cat "$horizon_cgroup_root/memory.stat"
      cat "$horizon_cgroup_root/memory.events"
@@ -550,6 +577,7 @@ Separate the main process, child processes, file cache, and temporary files befo
    findmnt -T /tmp
    findmnt -T /var/tmp
    df -h /tmp /var/tmp
+   ps -eo pid,ppid,comm,rss,vsz,stat --sort=-rss | head -25
    free -h
    cat /proc/pressure/memory /proc/pressure/io
    ```
@@ -573,6 +601,7 @@ Separate the main process, child processes, file cache, and temporary files befo
    Result: The logs can distinguish memory pressure, a process fault, GPU errors, and disk stalls.
    A `systemd-oomd` stop affects a cgroup. Horizon can stop because a child caused pressure in the same group.
    A stop of the desktop session can also remove the Horizon display.
+   Missing user-bus settings can stall user tools after a desktop stop.
    `SIGKILL` does not produce a core dump.
 
    Disk stalls can delay file synchronization and cause short test deadlines to expire.
@@ -644,19 +673,43 @@ Separate the main process, child processes, file cache, and temporary files befo
 
    For a new authorized build, use an isolated cgroup. Adjust these example limits to the host and task.
    Make sure that `/var/tmp` is on disk and has enough free space before you start.
+   Run the build in a separate terminal. Copy the printed `.scope` unit name into the observer terminal.
 
    ```bash
    horizon_build_cache="$(mktemp -d /var/tmp/horizon-build.XXXXXX)"
    mkdir "$horizon_build_cache/tmp"
-   systemd-run --user --scope --collect \
-     -p MemoryHigh=8G -p MemoryMax=12G -p MemorySwapMax=2G -p CPUWeight=10 \
-     env CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR="$horizon_build_cache/target" \
-       TMPDIR="$horizon_build_cache/tmp" cargo test --workspace
+   horizon_user_runtime="/run/user/$(id -u)"
+   if [ -S "$horizon_user_runtime/bus" ]; then
+     XDG_RUNTIME_DIR="$horizon_user_runtime" \
+       DBUS_SESSION_BUS_ADDRESS="unix:path=$horizon_user_runtime/bus" \
+       systemd-run --user --scope --collect \
+         -p MemoryHigh=8G -p MemoryMax=12G -p MemorySwapMax=2G -p CPUWeight=10 \
+         env CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR="$horizon_build_cache/target" \
+           TMPDIR="$horizon_build_cache/tmp" cargo test --workspace
+   else
+     printf >&2 'No active user bus. Stop this step.\n'
+   fi
    ```
 
    Result: The new build has its own cgroup and two Cargo jobs.
    The limits also apply to file cache that this cgroup owns. They do not reserve RAM.
    Keep the cache until the task finishes. Do not move existing live processes to this scope.
+
+   Examine the build scope from the observer terminal while the build runs.
+   Replace the example scope name below with the printed unit name.
+
+   ```bash
+   horizon_build_scope=replace-with-printed-unit.scope
+   horizon_user_runtime="/run/user/$(id -u)"
+   XDG_RUNTIME_DIR="$horizon_user_runtime" \
+     DBUS_SESSION_BUS_ADDRESS="unix:path=$horizon_user_runtime/bus" \
+     systemctl --user show "$horizon_build_scope" \
+       -p ActiveState -p ControlGroup -p MemoryCurrent -p MemoryPeak -p MemoryHigh -p MemoryMax
+   ```
+
+   Result: The observer can see the live memory use, peak, cgroup path, and limits.
+   `--collect` removes the scope after completion. Save the measurements before the build ends.
+   Do not report a missing scope or unavailable counter as proof of protection.
 
    Result: The proposed fix addresses the process or resource that caused the failure.
    Do not disable `systemd-oomd` or remove memory limits as a substitute for the diagnosis.
