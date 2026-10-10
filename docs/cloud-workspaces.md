@@ -356,23 +356,25 @@ registry** publishes with its own credential instead.
 
 If the registry refuses the push or the pull of the image of the cloud, a retry
 gets the same refusal. Thus the failure on the card offers **Open Container
-registry** instead of **Retry deploy**. The header of the card keeps **Retry
-deploy** for later. A refusal during **Build locally** is about a base image that
-the recipe pulls, so that failure keeps **Retry deploy**. An image without a
-registry host, such as `owner/worker`, uses the login in the private Docker
-configuration directory, because **Container registry** cannot bind it. That
-failure also keeps **Retry deploy**.
+registry** instead of a retry. The header of the card keeps the retry of the
+operation that failed for later: **Retry deploy** after a deployment,
+**Reconnect** after a reconnect, or **Resume worker** after a resume. A refusal
+during **Build locally** is about a base image that the recipe pulls, so that
+failure keeps its retry. An image without a registry host, such as
+`owner/worker`, uses the login in the private Docker configuration directory,
+because **Container registry** cannot bind it. That failure also keeps its retry.
 
 **Open Container registry** opens **Cloud settings** for the image repository that
 the profile of the cloud names. If a binding covers that repository, the card
 scrolls to it: replace the credential that the registry refused. After a refused
 pull, that binding shows **Needs validation**, also if an earlier validation
-passed. If **Container
-registry** has no binding for that repository, the card shows the repository with
+passed. If **Container registry** has no binding for that repository, the card
+shows the repository with
 **Not set up**, who publishes to it, and that workers have no pull credential yet.
 Click **Add credentials**: the entry for the repository opens with its name filled
 in and **Expiry and publishing** open. Add a publishing credential and a read-only
-pull credential, save the settings, then click **Retry deploy** on the cloud card.
+pull credential, save the settings, then click the retry in the header of the
+cloud card.
 To add a different repository, click **Add another**. **Cloud settings…** in the
 Cloud menu does not fill in a repository.
 

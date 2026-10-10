@@ -101,11 +101,12 @@ moves or resizes a card; use the person's canvas for that.
 
 If the registry refuses the push or the pull of the cloud's image, a retry gets the
 same refusal. The failed step on the card then offers **Open Container registry**
-instead of **Retry deploy**. It opens **Cloud settings** on the image repository
+instead of a retry. It opens **Cloud settings** on the image repository
 from the cloud's `.horizon/cloud.yml`. Only the person can add or replace its
 credentials there; no MCP tool does it. Do not ask for a token. Tell the person
-to click **Open Container registry**, add the credential, and then click **Retry
-deploy** on the card.
+to click **Open Container registry**, add the credential, and then click the
+retry in the card header: **Retry deploy**, **Reconnect** or **Resume worker**,
+for the operation that failed.
 
 ## GitHub access
 
