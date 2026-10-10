@@ -48,9 +48,14 @@ impl AutomationDisclosureStatus {
     }
 }
 
-/// Status a session can publish after startup. Minimized local Firefox reports
-/// the native clear and the preload getter as different outcomes. Remote
-/// Firefox is classic `WebDriver`, so minimization is unsupported there.
+/// Status published by the classic `WebDriver` startup path.
+///
+/// Minimized local Firefox reports the native clear and the preload getter as
+/// different outcomes. Remote Firefox and remote Chromium reach this helper
+/// without local minimization: remote allocation forwards the target
+/// capabilities and never passes `--disable-blink-features=AutomationControlled`.
+/// Both therefore report [`AutomationDisclosureStatus::UnsupportedByBackend`].
+/// Local Chromium reports its blink-flag result from the CDP session, not here.
 #[must_use]
 pub(crate) fn established_disclosure_status(
     policy: AutomationDisclosurePolicy,
@@ -58,21 +63,23 @@ pub(crate) fn established_disclosure_status(
     firefox_bidi: bool,
     native_cleared: bool,
 ) -> AutomationDisclosureStatus {
-    if backend == crate::BackendKind::FirefoxBidi
-        && !firefox_bidi
-        && policy == AutomationDisclosurePolicy::MinimizeCommonSignals
-    {
-        return AutomationDisclosureStatus::UnsupportedByBackend;
+    if policy != AutomationDisclosurePolicy::MinimizeCommonSignals {
+        return policy.ready_status(backend);
     }
-    if firefox_bidi && policy == AutomationDisclosurePolicy::MinimizeCommonSignals {
-        if native_cleared {
+    if backend == crate::BackendKind::FirefoxBidi && firefox_bidi {
+        return if native_cleared {
             AutomationDisclosureStatus::CommonSignalsMinimized
         } else {
             AutomationDisclosureStatus::PreloadFallback
-        }
-    } else {
-        policy.ready_status(backend)
+        };
     }
+    if matches!(
+        backend,
+        crate::BackendKind::FirefoxBidi | crate::BackendKind::ChromiumCdp
+    ) {
+        return AutomationDisclosureStatus::UnsupportedByBackend;
+    }
+    policy.ready_status(backend)
 }
 
 impl AutomationDisclosurePolicy {
@@ -262,7 +269,11 @@ mod tests {
         );
         assert_eq!(
             established_disclosure_status(MinimizeCommonSignals, crate::BackendKind::ChromiumCdp, false, false),
-            CommonSignalsMinimized
+            UnsupportedByBackend
+        );
+        assert_eq!(
+            established_disclosure_status(BrowserDefault, crate::BackendKind::ChromiumCdp, false, false),
+            DefaultStatus
         );
         assert_eq!(PreloadFallback.as_str(), "preload_fallback");
         assert_eq!(AutomationDisclosureStatus::Unreported.as_str(), "unreported");

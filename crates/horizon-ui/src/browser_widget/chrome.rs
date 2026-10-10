@@ -190,17 +190,21 @@ fn backend_picker(
     let disclosure = browser
         .active_backend_capabilities()
         .map(|active| active.automation_disclosure.as_str());
-    let hint = match (disclosure, remote_hint) {
-        (Some(status), Some(remote)) => format!("{status}. {remote}"),
-        (Some(status), None) => status.to_string(),
-        (None, Some(remote)) => remote.to_string(),
-        (None, None) => String::new(),
-    };
-    if !hint.is_empty() {
-        // The configured target fixes the browser; the picker stays visible
-        // so the family is still readable, but never actionable. The
-        // disclosure name says whether Firefox kept the native getter.
-        picker.response.on_hover_text(hint);
+    // The configured target fixes the browser; the picker stays visible
+    // so the family is still readable, but never actionable. The
+    // disclosure name says whether Firefox kept the native getter.
+    // Borrow a single fragment. Allocate only when both must be combined.
+    match (disclosure, remote_hint) {
+        (Some(status), Some(remote)) => {
+            picker.response.on_hover_text(format!("{status}. {remote}"));
+        }
+        (Some(status), None) => {
+            picker.response.on_hover_text(status);
+        }
+        (None, Some(remote)) => {
+            picker.response.on_hover_text(remote);
+        }
+        (None, None) => {}
     }
     if selected == previous {
         return false;

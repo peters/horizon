@@ -35,10 +35,11 @@ pub(crate) struct BrowserPanel {
     pub(crate) panel_id: String,
     pub(crate) backend: String,
     /// Established disclosure. `common_signals_minimized` is a native Firefox
-    /// flag clear or Chromium's suppressed automation flag. `preload_fallback`
-    /// is the Firefox script getter. Sign-in pages can reject that getter.
-    /// Remote minimized Firefox is `unsupported_by_backend`. `unreported`
-    /// means an older manifest omitted the field.
+    /// flag clear or local Chromium's suppressed automation flag.
+    /// `preload_fallback` is the Firefox script getter. Sign-in pages can
+    /// reject that getter. Remote minimized Firefox and Chromium are
+    /// `unsupported_by_backend`. `unreported` means an older manifest omitted
+    /// the field.
     pub(crate) automation_disclosure: String,
     pub(crate) protocol: ProtocolKind,
     /// Configured remote target the panel runs at, when it is a remote

@@ -59,8 +59,10 @@ falls back to a narrow
 `navigator.webdriver` value shim installed with WebDriver BiDi
 `script.addPreloadScript` before the initial navigation. That session
 reports `AutomationDisclosureStatus::PreloadFallback`. A completed native
-clear reports `CommonSignalsMinimized`. A remote Firefox session uses classic
-WebDriver and reports `UnsupportedByBackend` for minimization. An older
+clear reports `CommonSignalsMinimized`. A remote Firefox or Chromium session
+uses classic WebDriver and reports `UnsupportedByBackend` for minimization.
+Remote Chromium does not receive the local automation launch flag. Local
+Chromium still reports `CommonSignalsMinimized` from its own startup. An older
 manifest that omits the field reports `Unreported`, not `BrowserDefault`.
 Startup fails when
 that fallback command is rejected, and also when the session cannot return

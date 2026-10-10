@@ -37,9 +37,10 @@ system access for any local client that can reach the driver port. Leave it
 false unless that privilege is acceptable. `preload_fallback` means Firefox
 installed a script getter that returns false. Sign-in pages can reject that
 getter. The default minimized Firefox session uses that fallback. Chromium
-does not install it. A remote Firefox session reports
-`unsupported_by_backend` for minimization. It does not clear the native flag
-or install the preload. `unreported` means an older manifest omitted the
+does not install it. A remote Firefox or Chromium session reports
+`unsupported_by_backend` for minimization. Remote Firefox does not clear the
+native flag or install the preload. Remote Chromium does not receive the
+local automation flag. `unreported` means an older manifest omitted the
 field. That is not an established result. To run at a configured remote target instead of a
 local browser, pass `target` with its name and omit `backend`; Horizon
 resolves the provider and credentials from its configuration, and a
