@@ -1,6 +1,8 @@
-use super::{Duration, Error, Event, Images, Result, Runner};
+mod container;
+use super::{Error, Event, Images, Result};
 use crate::cloud_runtime::{WorkerContract, git_auth, repository::launch::quick_start, siblings, worker_contract};
-use horizon_cloud::{Cancellation, Capabilities, CloudError, Profile};
+use container::Checks;
+use horizon_cloud::{CloudError, Profile};
 
 impl Images<'_> {
     pub(super) fn validate(&self, image: &str, operation_id: &str, profile: &Profile) -> Result<()> {
@@ -49,70 +51,14 @@ impl Images<'_> {
             return validated(report, profile, git_auth, sibling_grants);
         }
         super::require_docker()?;
-        let name = format!("horizon-contract-{operation_id}");
-        // The durable operation identity also recovers an interrupted previous check.
-        self.remove_contract(&name)?;
-        let result = self
-            .run_contract(image, &name, capabilities, git_auth)
-            .and_then(|output| validated(&output, profile, git_auth, sibling_grants));
-        // Killing a Docker client does not stop its daemon-owned container.
-        finish_cleanup(result, self.remove_contract(&name), self.runner.emit)
-    }
-
-    fn run_contract(&self, image: &str, name: &str, capabilities: &Capabilities, git_auth: bool) -> Result<String> {
-        let mut command = self.docker();
-        command.args([
-            "create",
-            "--name",
-            name,
-            "--network=none",
-            "--entrypoint",
-            "/usr/local/bin/horizon-worker-check",
-            "--env",
-            &worker_contract::environment(capabilities)?,
-            image,
-        ]);
-        if git_auth {
-            command.arg("--git-auth");
+        Checks {
+            docker: || self.docker(),
+            runner: self.runner,
+            operation_id,
         }
-        self.runner
-            .run("worker image contract creation", &mut command, Duration::from_secs(30))?;
-        self.runner.run(
-            "worker image contract",
-            self.docker().args(["start", "--attach", name]),
-            Duration::from_secs(60),
-        )
-    }
-
-    fn remove_contract(&self, name: &str) -> Result<()> {
-        let cancel = Cancellation::default();
-        let runner = Runner {
-            cancel: &cancel,
-            emit: &|_| {},
-            secrets: Vec::new(),
-        };
-        // A missing container is already clean. Verify absence independently of rm's exit code.
-        let _ = runner.run(
-            "worker contract cleanup",
-            self.docker().args(["container", "rm", "--force", "--volumes", name]),
-            Duration::from_secs(15),
-        );
-        let remaining = runner.run(
-            "worker contract cleanup verification",
-            self.docker().args([
-                "container",
-                "ls",
-                "--all",
-                "--quiet",
-                "--filter",
-                &format!("name=^/{name}$"),
-            ]),
-            Duration::from_secs(15),
-        )?;
-        if !remaining.trim().is_empty() {
-            return Err(Error::Invalid("Worker image contract container cleanup failed"));
-        }
-        Ok(())
+        .run(image, capabilities, git_auth, |output| {
+            validated(output, profile, git_auth, sibling_grants)
+        })
     }
 }
 
@@ -177,7 +123,8 @@ fn stopped_by_horizon(profile: &Profile) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cloud_runtime::Event;
+    use crate::cloud_runtime::{Event, command::Runner};
+    use horizon_cloud::Cancellation;
 
     #[test]
     fn contract_rejection_and_cleanup_failure_remain_distinct() {
@@ -247,11 +194,14 @@ mod tests {
         let config = tempfile::tempdir().unwrap();
         let cancel = Cancellation::default();
         let operation = crate::cloud_runtime::new_id();
+        // An earlier Horizon version gave every check of the operation this name.
         let name = format!("horizon-contract-{operation}");
         let volumes = std::sync::Mutex::new(Vec::new());
         let emit = |event| {
             if matches!(event, Event::Output(line) if line == "contract-running") {
-                volumes.lock().unwrap().extend(container_volumes(&host, &name));
+                for container in contract_containers(&host, &format!("label=horizon.contract.operation={operation}")) {
+                    volumes.lock().unwrap().extend(container_volumes(&host, &container));
+                }
                 cancel.cancel();
             }
         };
@@ -292,20 +242,12 @@ mod tests {
             .unwrap();
         assert!(images.validate(&image, &operation, &profile).is_err());
         assert!(cancel.is_cancelled());
-        let output = images
-            .docker()
-            .args([
-                "container",
-                "ls",
-                "--all",
-                "--quiet",
-                "--filter",
-                &format!("name=^/{name}$"),
-            ])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert!(output.stdout.is_empty());
+        for filter in [
+            format!("name=^/{name}$"),
+            format!("label=horizon.contract.operation={operation}"),
+        ] {
+            assert_eq!(contract_containers(&host, &filter), Vec::<String>::new());
+        }
         let volumes = volumes.lock().unwrap().clone();
         assert!(volumes.len() >= 2, "fixture image must declare an anonymous VOLUME");
         for volume in volumes {
@@ -319,6 +261,28 @@ mod tests {
                     .success()
             );
         }
+    }
+
+    fn contract_containers(host: &str, filter: &str) -> Vec<String> {
+        let output = std::process::Command::new("docker")
+            .args([
+                "--host",
+                host,
+                "container",
+                "ls",
+                "--all",
+                "--quiet",
+                "--filter",
+                filter,
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect()
     }
 
     fn container_volumes(host: &str, name: &str) -> Vec<String> {
