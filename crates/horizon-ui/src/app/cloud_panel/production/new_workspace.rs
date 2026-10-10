@@ -83,7 +83,9 @@ impl HorizonApp {
             .workspace
             .as_deref()
             .and_then(|local| self.board.workspace_id_by_local_id(local));
-        self.cloud_prototype.production.new_workspace = None;
+        // Held out of the close, which would take the still empty workspace away, until the
+        // terminal is there.
+        let made = self.cloud_prototype.production.new_workspace.take();
         self.close_cloud_creation();
         let Some(workspace) = workspace else {
             return;
@@ -97,7 +99,13 @@ impl HorizonApp {
         };
         match self.create_panel_with_options(options, workspace) {
             Ok(panel) => self.reveal_new_panel(ctx, workspace, panel),
-            Err(error) => tracing::error!(%error, "could not open the repository on This PC"),
+            Err(error) => {
+                tracing::error!(%error, "could not open the repository on This PC");
+                // A workspace New workspace made for it stays empty, so it goes.
+                if made.is_some_and(|intent| intent.workspace == workspace) {
+                    self.board.remove_empty_workspace(workspace);
+                }
+            }
         }
         self.mark_runtime_dirty();
     }

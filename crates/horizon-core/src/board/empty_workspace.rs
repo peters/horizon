@@ -3,7 +3,8 @@ use super::Board;
 use crate::{runtime_state::cloud_groups, workspace::WorkspaceId};
 
 impl Board {
-    /// Removes `id` when it has no panel and no cloud, and returns whether it did. Unlike
+    /// Removes `id` when it has no panel, no cloud and no remote workspace, and returns
+    /// whether it did. Unlike
     /// [`Board::remove_workspace`] it needs no other ordinary workspace to take its panels,
     /// so it also works on a board of clouds; the board still keeps one workspace.
     pub fn remove_empty_workspace(&mut self, id: WorkspaceId) -> bool {
@@ -11,7 +12,9 @@ impl Board {
             return false;
         };
         let workspace = &self.workspaces[index];
+        // A remote workspace's reference is state of its own, as the other cleanups keep it.
         if self.workspaces.len() <= 1
+            || workspace.remote_workspace.is_some()
             || !workspace.panels.is_empty()
             || self.panels.iter().any(|panel| panel.workspace_id == id)
             || cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id)
@@ -42,6 +45,16 @@ mod tests {
         assert!(board.workspace(empty).is_none());
         assert_eq!(board.active_workspace, Some(only));
         assert!(!board.remove_empty_workspace(empty), "already gone");
+        // A remote workspace without local panels keeps its reference.
+        let remote = board.create_workspace("remote");
+        board.workspace_mut(remote).unwrap().remote_workspace = Some(
+            crate::runtime_state::RemoteWorkspaceReference::new(
+                "11111111-1111-4111-8111-111111111111".into(),
+                "remote-environment".into(),
+            )
+            .unwrap(),
+        );
+        assert!(!board.remove_empty_workspace(remote));
     }
 
     #[cfg(feature = "cloud-workspaces")]
