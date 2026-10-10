@@ -16,7 +16,7 @@ pub mod services;
 pub mod sessions;
 pub mod view;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Runtime(#[from] horizon_app_runtime::Error),

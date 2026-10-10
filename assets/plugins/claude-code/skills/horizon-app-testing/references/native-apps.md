@@ -60,6 +60,24 @@ The original deadline and upload remain; reset does not extend the lifetime.
 A target uses `by: identifier|label|ref|coordinates` and its matching `value`. Observe the result after input;
 a driver acknowledgement does not prove application success.
 
+## iOS deep links
+
+`deep_link` uses `mobile: deepLink` with the declared bundle ID.
+The driver needs XCUITest 4.17 or later, Xcode 14.3 or later, and iOS 16.4 or later.
+After a successful command, the host starts alert checks for two seconds.
+These checks and any confirmation must finish within 15 seconds.
+The original lifetime can make this limit shorter. It accepts only an English **Open in**
+or **Open this page in** alert with exactly **Cancel** and **Open** buttons.
+It selects **Open** by name. It does not accept permission alerts.
+Other alert text or buttons return `app_deep_link_confirmation_blocked`.
+
+An unsupported driver returns `app_action_unsupported`. Other driver refusals
+return `app_driver_rejected`. Their bounded diagnostics retain the driver reason
+and remove command values, URLs, sensitive lines, and private session IDs.
+A failed command is not repeated. It can leave a confirmation on the device;
+inspect the device before another action. A command receipt does not prove
+that the app reached the requested screen. Follow it with a semantic assertion.
+
 ## Evidence and recovery
 
 `app_video` operations are `start`, `status`, `get`, and `stop`.
@@ -90,3 +108,7 @@ Do not replay a mutating tool, change ownership, remove a journal, or allocate a
 replacement to bypass admission refusal. Follow the runbook's recovery procedure.
 Close only the owned session and viewer. Examine exact provider closure separately
 from local cleanup. Report unresolved closure and held capacity explicitly.
+
+Horizon selects Appium 2.19.0 for iOS 15 or later. This version uses XCUITest 9.9.6.
+Older iOS versions keep the provider default and cannot qualify the deep-link test.
+See the [provider version table](https://www.browserstack.com/docs/app-automate/appium/set-up-tests/set-appium-version).

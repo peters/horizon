@@ -58,7 +58,7 @@ impl Runtime for Fake {
     }
     fn act(&self, session: Uuid, action: &Action) -> std::result::Result<Option<Uuid>, OperationFailure> {
         self.actions.fetch_add(1, Ordering::SeqCst);
-        if let Some(error) = self.fail_action {
+        if let Some(error) = self.fail_action.clone() {
             if self.close_on_failed_reset && matches!(action, Action::Reset {}) {
                 self.close(session).unwrap();
             }
@@ -1012,7 +1012,7 @@ fn exhausted_evidence_blocks_every_later_step_without_losing_the_live_driver() {
             &Control::new(Duration::from_secs(10)).unwrap(),
             |session, _, _| {
                 assert!(fake.sessions.lock().unwrap().contains_key(&session));
-                Err(failure)
+                Err(failure.clone())
             },
             |event| {
                 events.lock().unwrap().push(event);
@@ -1106,7 +1106,7 @@ fn every_failed_reset_blocks_later_actions_after_the_original_session_closes() {
         Error::LocalCleanupUncertain(Uuid::new_v4()),
     ] {
         let fake = Fake {
-            fail_action: Some(failure),
+            fail_action: Some(failure.clone()),
             close_on_failed_reset: true,
             ..Fake::default()
         };
@@ -1174,7 +1174,7 @@ fn invalid_screenshot_stops_actions_but_keeps_provider_diagnostics() {
             &fake,
             &Control::new(Duration::from_secs(10)).unwrap(),
             |session, kind, bytes| match kind {
-                CaptureKind::Screenshot => Err(failure),
+                CaptureKind::Screenshot => Err(failure.clone()),
                 CaptureKind::Provider(_) => capture(session, kind, bytes),
             },
             |_| Ok(()),
@@ -1204,7 +1204,7 @@ fn invalid_screenshot_stops_actions_but_keeps_provider_diagnostics() {
 fn forced_host_loss_blocks_later_recipes_and_retains_the_initial_cause() {
     let failure = Error::Native(horizon_app_testing::Error::SessionClosed);
     let fake = Fake {
-        fail_action: Some(failure),
+        fail_action: Some(failure.clone()),
         fail_close: true,
         ..Fake::default()
     };
