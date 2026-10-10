@@ -331,6 +331,10 @@ after one approval.
 G08 disconnected the first test app. This task connects a second test app, which
 this task and G11 use.
 
+> **CAUTION:** THE NEXT STEP GIVES THE SECOND TEST APP ACCESS TO `<repo-a>` AND
+> `<repo-b>`. Select only these two test repositories; agents in the test clouds
+> push to the repositories that the app is installed on.
+
 1. In Cloud settings, click **Connect GitHub** and do steps 2 to 5 of G01 again.
    Select `<repo-a>` and `<repo-b>`. Then do G02 again.
 
