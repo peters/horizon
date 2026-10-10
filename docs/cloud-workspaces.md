@@ -186,7 +186,7 @@ A new workspace runs in the cloud by default. **New** in the sidebar and the
   menu, the presets under **This PC** do this with a panel.
 
 When you cancel **New cloud** for a workspace that **Cloud** made, the empty
-workspace goes too. When cloud workspaces are not ready on this computer, only
+workspace goes too, unless it is the only workspace on the board. When cloud workspaces are not ready on this computer, only
 **This PC** can be chosen.
 
 A repository can ask for This PC with `placement: local` at the top level of

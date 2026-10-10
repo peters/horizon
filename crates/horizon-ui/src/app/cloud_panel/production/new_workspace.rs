@@ -35,7 +35,8 @@ impl HorizonApp {
     }
 
     /// Removes the workspace that New workspace made for the cloud when the dialog is
-    /// cancelled before a cloud is in it and nothing else went in.
+    /// cancelled before a cloud is in it and nothing else went in. The board keeps its last
+    /// workspace, so the only one stays.
     pub(super) fn discard_new_cloud_workspace(&mut self) {
         let Some(intent) = self.cloud_prototype.production.new_workspace.take() else {
             return;

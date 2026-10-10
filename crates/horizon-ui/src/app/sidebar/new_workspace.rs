@@ -44,7 +44,11 @@ impl NewWorkspace {
 /// The menu that `button` opens. Without cloud workspaces ready, only This PC can be chosen.
 pub(super) fn menu(button: &Response, cloud_ready: bool) -> Option<NewWorkspace> {
     let mut chosen = None;
-    Popup::menu(button).show(|ui| {
+    // The sidebar is drawn above the canvas, so the menu goes on the Tooltip order and
+    // above the sidebar's own layer, as the sidebar's other menus do.
+    let popup = Popup::menu(button).kind(egui::PopupKind::Tooltip);
+    let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
+    let shown = popup.show(|ui| {
         ui.set_min_width(230.0);
         for choice in NewWorkspace::ALL {
             let enabled = cloud_ready || !choice.is_cloud();
@@ -59,6 +63,11 @@ pub(super) fn menu(button: &Response, cloud_ready: bool) -> Option<NewWorkspace>
             }
         }
     });
+    if shown.is_some() {
+        button
+            .ctx
+            .memory_mut(|memory| memory.areas_mut().set_sublayer(button.layer_id, popup_layer));
+    }
     chosen
 }
 
