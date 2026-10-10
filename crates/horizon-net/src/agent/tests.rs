@@ -8,6 +8,9 @@ use crate::{Grant, Node, SecretKey, Service, controller::unix_now};
 #[cfg(windows)]
 mod platform;
 mod relay_policy;
+// Persistent confirmation exercises Unix directory publication and real relay traffic.
+#[cfg(unix)]
+mod reconfirmation;
 
 #[tokio::test]
 async fn untrusted_wire_requests_cannot_reach_undeclared_services() -> Result<()> {
@@ -177,6 +180,7 @@ async fn withdrawn_restart() -> Result<()> {
     let restarted = Agent::bind_with_store(config.clone(), directory.path().join("worker")).await?;
     restarted.online().await?;
     assert_eq!(restarted.controller().topology(), removed);
+    confirm_retained_withdrawal(&authority, &restarted, &removed).await?;
     assert!(
         !request_accepted(
             &authority,
@@ -228,6 +232,28 @@ async fn withdrawn_restart() -> Result<()> {
     );
     authority.close().await;
     relay.shutdown().await.map_err(transport)?;
+    Ok(())
+}
+
+async fn confirm_retained_withdrawal(authority: &Endpoint, restarted: &Agent, removed: &Topology) -> Result<()> {
+    assert_eq!(
+        restarted.controller().status().policy_state,
+        crate::PolicyState::AwaitingConfirmation
+    );
+    assert!(
+        request_accepted(
+            authority,
+            restarted.addr(),
+            Request::Update {
+                topology: removed.clone()
+            }
+        )
+        .await?
+    );
+    assert_eq!(
+        restarted.controller().status().policy_state,
+        crate::PolicyState::Confirmed
+    );
     Ok(())
 }
 

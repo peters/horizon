@@ -8,8 +8,8 @@ use iroh::{EndpointId, endpoint::Connection};
 use serde::Serialize;
 
 use crate::{
-    ApplyOutcome, AuthorizedService, Change, ChangeKind, Error, GrantStatus, NodeStatus, Plan, Result, Status,
-    Topology, model::parse_key, store::Store,
+    ApplyOutcome, AuthorizedService, Change, ChangeKind, Error, GrantStatus, NodeStatus, Plan, PolicyState, Result,
+    Status, Topology, model::parse_key, store::Store,
 };
 
 /// Clones share policy and retain the persistent state's exclusive writer lock.
@@ -21,6 +21,7 @@ pub struct Controller {
 
 struct State {
     topology: Topology,
+    awaiting_confirmation: bool,
     store: Option<Store>,
     sessions: BTreeMap<u64, Session>,
     next_session: u64,
@@ -50,6 +51,7 @@ impl Controller {
         Ok(Self {
             state: Arc::new(Mutex::new(State {
                 topology,
+                awaiting_confirmation: false,
                 store: None,
                 sessions: BTreeMap::new(),
                 next_session: 0,
@@ -65,7 +67,9 @@ impl Controller {
                 "controller already owns persistent state".into(),
             ));
         }
+        state.awaiting_confirmation = store.awaiting_confirmation();
         state.store = Some(store);
+        close_invalid(&mut state);
         Ok(())
     }
 
@@ -88,6 +92,10 @@ impl Controller {
             return Err(Error::StalePlan);
         }
         if state.topology == plan.proposed {
+            if state.awaiting_confirmation {
+                state.store.as_ref().ok_or(Error::Denied)?.persist(&plan.proposed)?;
+                state.awaiting_confirmation = false;
+            }
             return Ok(ApplyOutcome {
                 changed: false,
                 revision: state.topology.revision,
@@ -100,6 +108,7 @@ impl Controller {
         if let Some(store) = &state.store {
             store.persist(&plan.proposed)?;
         }
+        state.awaiting_confirmation = false;
         state.topology.clone_from(&plan.proposed);
         let closed_sessions = close_invalid(&mut state);
         Ok(ApplyOutcome {
@@ -135,7 +144,11 @@ impl Controller {
     /// # Errors
     /// Returns an error for unknown identities, services, or expired grants.
     pub fn authorize(&self, source_key: &str, service: &str) -> Result<AuthorizedService> {
-        authorize(&self.lock().topology, parse_key(source_key)?, service)
+        let state = self.lock();
+        if state.awaiting_confirmation {
+            return Err(Error::Denied);
+        }
+        authorize(&state.topology, parse_key(source_key)?, service)
     }
 
     #[must_use]
@@ -144,6 +157,11 @@ impl Controller {
         close_invalid(&mut state);
         let now = unix_now();
         Status {
+            policy_state: if state.awaiting_confirmation {
+                PolicyState::AwaitingConfirmation
+            } else {
+                PolicyState::Confirmed
+            },
             network: state.topology.network.clone(),
             revision: state.topology.revision,
             nodes: state
@@ -173,7 +191,7 @@ impl Controller {
                     from: grant.from.clone(),
                     to: grant.to.clone(),
                     expires_at: grant.expires_at,
-                    active: grant.expires_at > now,
+                    active: !state.awaiting_confirmation && grant.expires_at > now,
                 })
                 .collect(),
             sessions: state.sessions.len(),
@@ -189,6 +207,9 @@ impl Controller {
         connection: Connection,
     ) -> Result<u64> {
         let mut state = self.lock();
+        if state.awaiting_confirmation {
+            return Err(Error::Denied);
+        }
         let authorized = authorize(&state.topology, source, service)?;
         if authorized.port != expected_port || connection.close_reason().is_some() {
             return Err(Error::Denied);
@@ -339,15 +360,17 @@ fn authorize(topology: &Topology, source: EndpointId, service: &str) -> Result<A
 fn close_invalid(state: &mut State) -> usize {
     let before = state.sessions.len();
     state.sessions.retain(|_, session| {
-        let valid = authorize(&state.topology, session.source, &session.service).is_ok_and(|grant| {
-            grant.port == session.port
-                && state
-                    .topology
-                    .nodes
-                    .get(&grant.node)
-                    .and_then(|node| parse_key(&node.key).ok())
-                    == Some(session.destination)
-        }) && session.connection.close_reason().is_none();
+        let valid = !state.awaiting_confirmation
+            && authorize(&state.topology, session.source, &session.service).is_ok_and(|grant| {
+                grant.port == session.port
+                    && state
+                        .topology
+                        .nodes
+                        .get(&grant.node)
+                        .and_then(|node| parse_key(&node.key).ok())
+                        == Some(session.destination)
+            })
+            && session.connection.close_reason().is_none();
         if !valid {
             if let Some(socket) = &session.socket {
                 let _ = socket.shutdown(std::net::Shutdown::Both);

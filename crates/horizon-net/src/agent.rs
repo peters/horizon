@@ -36,6 +36,38 @@ pub struct AgentConfig {
     pub relay_only: bool,
 }
 
+struct AgentIdentity {
+    secret: iroh::SecretKey,
+    authority: iroh::EndpointId,
+}
+
+impl AgentConfig {
+    pub(crate) fn validate_enrollment(&self) -> Result<()> {
+        self.identity(None)?;
+        validate_relays(&self.relay_urls)?;
+        Ok(())
+    }
+
+    fn identity(&self, enrolled_key: Option<iroh::EndpointId>) -> Result<AgentIdentity> {
+        let secret: iroh::SecretKey = self
+            .secret_key
+            .parse()
+            .map_err(|_| Error::InvalidConfiguration("invalid secret key".into()))?;
+        let authority = parse_key(&self.authority_key)?;
+        match self.topology.nodes.get(&self.node) {
+            Some(node) if parse_key(&node.key)? == secret.public() => {}
+            Some(_) => {
+                return Err(Error::InvalidConfiguration(
+                    "local public key does not match identity".into(),
+                ));
+            }
+            None if enrolled_key == Some(secret.public()) => {}
+            None => return Err(Error::InvalidConfiguration("local node missing".into())),
+        }
+        Ok(AgentIdentity { secret, authority })
+    }
+}
+
 impl std::fmt::Debug for AgentConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -97,28 +129,12 @@ impl Agent {
                 "controller topology differs from config".into(),
             ));
         }
+        let AgentIdentity { secret, authority } =
+            config.identity(store.as_ref().map(Store::enrolled_key).transpose()?)?;
+        let relays = validate_relays(&config.relay_urls)?;
         if let Some(store) = &store {
             controller.bind_store(store.clone())?;
         }
-        let secret: iroh::SecretKey = config
-            .secret_key
-            .parse()
-            .map_err(|_| Error::InvalidConfiguration("invalid secret key".into()))?;
-        let authority = parse_key(&config.authority_key)?;
-        match config.topology.nodes.get(&config.node) {
-            Some(node) if parse_key(&node.key)? == secret.public() => {}
-            Some(_) => {
-                return Err(Error::InvalidConfiguration(
-                    "local public key does not match identity".into(),
-                ));
-            }
-            None if store.as_ref().map(Store::enrolled_key).transpose()? == Some(secret.public()) => {
-                // A persisted withdrawal must remain denied after restart, while
-                // the enrolled key can still receive a newer authority update.
-            }
-            None => return Err(Error::InvalidConfiguration("local node missing".into())),
-        }
-        let relays = validate_relays(&config.relay_urls)?;
         let configured_relays = Arc::new(relays.iter().cloned().collect());
         let mut builder = iroh::endpoint::Builder::empty()
             .preset(iroh::endpoint::presets::Minimal)

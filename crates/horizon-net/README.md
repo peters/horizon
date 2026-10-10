@@ -79,10 +79,16 @@ non-Unix platforms, `agent`, `Agent::bind_persistent` and
 locking state. `Agent::bind` and `Controller::new` remain available for trusted
 in-memory transport and policy; this form denies remote topology updates.
 
-The binary stores committed topology revisions in the sibling `config.state`
-directory. Keep that directory when an agent restarts. The newest committed
-revision overrides the original configuration topology. Corrupt or conflicting
-state blocks startup. One exclusive file lock prevents two agents from owning
+The binary stores immutable topology revisions in the sibling `config.state`
+directory. Keep that directory when an agent restarts. The newest valid
+published revision overrides the original configuration topology. A visible
+snapshot cannot prove that a previous durability barrier or acknowledgement
+succeeded. Every persistent restart therefore starts with service access denied.
+Status reports `policy_state: awaiting_confirmation` and inactive grants until
+the pinned authority sends the exact current topology or an accepted newer one.
+That update repeats the publication barriers before service access becomes active.
+The retained identity can still receive authority updates while access is denied.
+Corrupt or conflicting state blocks startup. One exclusive file lock prevents two agents from owning
 the same state. Snapshots bind the network, authority key and initial node key;
 changing one requires an explicit new enrollment, not an automatic reset.
 
@@ -98,9 +104,19 @@ controller for restart storage.
 The controller returned by a persistent agent writes every successful `apply`
 and `revoke` before changing live policy. Its clones share the state writer;
 drop all controller and agent owners before reopening that state directory.
-A failed write leaves policy and existing sessions unchanged. Once a committed
-snapshot exists, editing the enrollment file cannot override its topology,
-even with a higher revision.
+A failed write leaves live policy and existing sessions unchanged. Publication
+can be uncertain: an error does not prove that a new snapshot is absent. Restart
+keeps its topology for authority confirmation and denies service access. Once a
+valid snapshot exists, editing the enrollment file cannot override its topology,
+even with a higher revision. Invalid secret keys, authority keys, local identity
+bindings and relay configuration fail before the state directory is created.
+
+For a trusted embedded controller with persistent state, confirm the exact
+retained topology with `apply(controller.plan(controller.topology())?)` after
+restart. An identical plan still reports `changed: false`; when confirmation is
+pending it repeats durability barriers and enables policy only after success.
+A failed confirmation keeps service access denied. A new state directory may
+activate its validated enrollment only after its first publication succeeds.
 
 Only the configured authority key can call `Agent::push_topology`. The receiver
 commits state and closes invalid sockets before it acknowledges the update.

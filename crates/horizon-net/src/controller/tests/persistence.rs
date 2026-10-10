@@ -31,7 +31,7 @@ fn config(with_grant: bool) -> AgentConfig {
     }
     AgentConfig {
         node: "destination".into(),
-        secret_key: String::new(),
+        secret_key: "02".repeat(32),
         authority_key: topology.nodes["source"].key.clone(),
         topology,
         relay_urls: vec!["https://relay.example.com".into()],
@@ -62,6 +62,16 @@ fn public_apply_and_revoke_survive_restart_and_clones_retain_writer_ownership() 
     assert_eq!(enrollment.topology, proposed);
     let controller = Controller::new(enrollment.topology.clone())?;
     controller.bind_store(store)?;
+    assert_eq!(
+        controller.status().policy_state,
+        crate::PolicyState::AwaitingConfirmation
+    );
+    assert!(matches!(
+        controller.authorize(&SecretKey::from_bytes(&[1; 32]).public().to_string(), "ssh"),
+        Err(Error::Denied)
+    ));
+    assert!(!controller.apply(&controller.plan(controller.topology())?)?.changed);
+    assert_eq!(controller.status().policy_state, crate::PolicyState::Confirmed);
     assert!(controller.revoke("lease")?);
     assert!(!controller.revoke("lease")?);
     assert_eq!(controller.topology().revision, 2);

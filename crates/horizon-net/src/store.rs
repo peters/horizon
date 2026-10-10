@@ -18,6 +18,7 @@ pub(crate) struct Store {
     directory: PathBuf,
     authority_key: String,
     node_key: String,
+    awaiting_confirmation: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -29,11 +30,16 @@ struct Snapshot {
 }
 
 impl Store {
+    pub(crate) fn awaiting_confirmation(&self) -> bool {
+        self.awaiting_confirmation
+    }
+
     pub(crate) fn enrolled_key(&self) -> Result<iroh::EndpointId> {
         parse_key(&self.node_key)
     }
     pub(crate) fn open(directory: PathBuf, config: &mut AgentConfig) -> Result<Self> {
         require_directory_durability()?;
+        config.validate_enrollment()?;
         if let Ok(metadata) = fs::symlink_metadata(&directory) {
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 return Err(Error::InvalidConfiguration(
@@ -72,11 +78,12 @@ impl Store {
             .ok_or(Error::Denied)?
             .key
             .clone();
-        let store = Self {
+        let mut store = Self {
             _ownership: Arc::new(ownership),
             directory,
             authority_key: config.authority_key.clone(),
             node_key,
+            awaiting_confirmation: false,
         };
         let mut latest: Option<Topology> = None;
         for entry in fs::read_dir(&store.directory)? {
@@ -113,6 +120,8 @@ impl Store {
             }
         }
         if let Some(latest) = latest {
+            // Visibility cannot prove that a previous publication barrier or acknowledgement succeeded.
+            store.awaiting_confirmation = true;
             config.topology = latest;
         }
         store.persist(&config.topology)?;
@@ -243,7 +252,7 @@ mod tests {
         topology.nodes.insert("node".into(), Node { key: key.clone() });
         AgentConfig {
             node: "node".into(),
-            secret_key: String::new(),
+            secret_key: "01".repeat(32),
             authority_key: key,
             topology,
             relay_urls: vec!["https://relay.example.com".into()],
@@ -718,4 +727,5 @@ mod tests {
         drop(store);
         Ok(())
     }
+    mod recovery;
 }

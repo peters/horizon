@@ -22,7 +22,11 @@ for local, provider and cleanup evidence.
    `0600` for configuration and `0700` for the state directory.
 4. Run `horizon-net agent --config /absolute/path/config.json` for an already
    authorized enrollment. Keep its committed `config.state` directory when it
-   restarts. Do not remove state to bypass a withdrawal or key mismatch.
+   restarts. Each persistent restart denies service access until the pinned
+   authority confirms the exact retained topology or an accepted newer one.
+   Check `policy_state: awaiting_confirmation`; grants stay inactive in that state.
+   A visible snapshot does not prove a successful previous update.
+   Do not remove state to bypass a withdrawal, pending confirmation or key mismatch.
 5. Name each TCP service and its destination node. Give each grant an absolute
    finite expiry. A caller cannot choose a different backend address or port.
 6. Keep the embedding application's `Forwarder` alive for its listener lifetime.
@@ -33,7 +37,10 @@ for local, provider and cleanup evidence.
    and its controller clones before reopening the same state directory.
    `Controller::new` has no durable storage. An embedded host must save its
    policy before it calls `apply` or `revoke`. Use a persistent agent's
-   controller for remote policy changes and restart storage.
+   controller for remote policy changes and restart storage. A trusted host can
+   confirm the retained exact policy with an identical `apply` plan. The call
+   repeats durability barriers before it enables service access; `changed` stays
+   false. A failed retry keeps access denied.
 9. Treat reachability and remote acknowledgement as separate evidence. A saved
    topology does not prove that a remote endpoint accepted it.
 

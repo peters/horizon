@@ -122,8 +122,16 @@ pub struct ApplyOutcome {
     pub closed_sessions: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyState {
+    Confirmed,
+    AwaitingConfirmation,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
+    pub policy_state: PolicyState,
     pub network: String,
     pub revision: u64,
     pub nodes: Vec<NodeStatus>,

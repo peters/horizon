@@ -121,7 +121,22 @@ The persistent restart tests have explicit Windows durability ignores.
    Result: Invalid initial enrollment and direct writes cannot publish a snapshot.
    The last valid snapshot and current policy stay unchanged.
 
-9. Examine the generated relay configuration tests.
+9. Examine the initial identity and restart confirmation tests.
+
+   Result: Invalid secret keys, authority keys, local identity bindings and relay
+   configuration cannot create state. An acknowledged grant also starts denied
+   after restart. Status reports `awaiting_confirmation` and inactive grants.
+   A failed widening barrier can leave a visible snapshot. Restart preserves its
+   exact revision but denies access. A failed exact confirmation stays denied.
+   Only a successful barrier retry enables that exact policy.
+
+10. Examine `restarted_grant_requires_authenticated_confirmation_before_backend_traffic`.
+
+   Result: Registration and service requests fail before confirmation. The backend
+   receives no connection. An unknown authority cannot confirm the policy.
+   The pinned authority confirms the exact retained policy, then actual TCP bytes pass.
+
+11. Examine the generated relay configuration tests.
 
    Result: Parsed TOML contains only the explicit endpoint allowlist and required
    TLS settings. Escaped operator text cannot add configuration fields.
@@ -190,7 +205,10 @@ The persistent restart tests have explicit Windows durability ignores.
 
 9. Restart the receiver with its original configuration and retained state directory.
 
-   Result: The committed revision remains active and the revoked source remains denied.
+   Result: The retained revision remains unchanged. Status reports
+   `awaiting_confirmation`, and all service access stays denied. The pinned
+   authority confirms the exact retained topology through its update operation.
+   The revoked source stays denied after confirmation.
 
 10. Repeat the nonce, denial, expiry and revocation checks in the reverse direction.
 
