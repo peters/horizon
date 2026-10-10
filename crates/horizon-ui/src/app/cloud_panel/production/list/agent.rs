@@ -100,6 +100,8 @@ impl HorizonApp {
                 // operation, is not tracked.
                 if runtime.is_none_or(|runtime| {
                     runtime.needs_attach
+                        || !runtime.pending_session_attachments.is_empty()
+                        || !runtime.pending_member_attachments.is_empty()
                         || runtime.stage != Some(Stage::Ready)
                         || runtime.state.as_ref().is_none_or(|state| state.stage != Stage::Ready)
                 }) || !parking.is_some_and(super::super::park::Parking::attached)
