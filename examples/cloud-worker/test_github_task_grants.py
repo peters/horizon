@@ -1,8 +1,10 @@
 """Grants for one task: the person allows a repository for the agent session that asked, and
 the socket, the Git proxy and the API broker give it only to that session's processes. The
 pane processes are this test process and processes that it starts, read from the real /proc."""
+import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
@@ -76,6 +78,29 @@ class ModuleTests(unittest.TestCase):
     def test_the_holders_of_a_socket_are_found_by_its_inode(self):
         self.assertEqual(tasks.holders(7, self.proc.root), [12])
         self.assertEqual(tasks.holders(9, self.proc.root), [])
+
+    def test_root_reads_the_holders_as_the_agent_account(self):
+        calls = []
+
+        def run(command, **options):
+            calls.append((command, options))
+            return subprocess.CompletedProcess(command, 0, stdout='[12, "x", 0, 1]')
+        with mock.patch.object(tasks.os, 'geteuid', return_value=0):
+            self.assertEqual(tasks.holders(7, self.proc.root, run), [12])
+            command, options = calls[0]
+            self.assertEqual(command[-2:], ['holders', '7'])
+            self.assertEqual((options['user'], options['group'], options['extra_groups']), (10001, 10001, []))
+            self.assertEqual(tasks.holders(7, self.proc.root, lambda *a, **k: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired('x', 10))), [])
+
+    def test_the_holders_command_scans_as_its_own_account(self):
+        left, right = socket.socketpair()
+        self.addCleanup(left.close)
+        self.addCleanup(right.close)
+        inode = os.fstat(left.fileno()).st_ino
+        result = subprocess.run([sys.executable, '-I', str(Path(tasks.__file__)), 'holders', str(inode)],
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(result.stdout), [os.getpid()])
 
     def test_only_whole_grants_are_read_back(self):
         good = grant('example/extra', 'read', (10, 100))

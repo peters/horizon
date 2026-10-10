@@ -11,8 +11,10 @@ runs. A module that horizon-worker-github loads, not a command."""
 import contextlib
 import importlib.machinery
 import importlib.util
+import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 
@@ -31,6 +33,8 @@ common = load_common()
 auth = common.auth
 
 PROC = Path('/proc')
+# The account of every agent session (horizon-worker-tailnet isolate).
+AGENT_UID = 10001
 # Task grants live in the request book, whose file has a size limit when it is read back.
 MAX_TASK_GRANTS = 64
 FIELDS = {'repository', 'access', 'root', 'window', 'session', 'account', 'granted_at'}
@@ -108,8 +112,25 @@ def access(grants, repository, pids, account, proc=PROC):
     return widest(grants, repository, pane, account) if len(pane) == 1 else None
 
 
-def holders(inode, proc=PROC):
-    """The processes that hold the socket `inode` open."""
+def holders(inode, proc=PROC, run=subprocess.run):
+    """The agent processes that hold the socket `inode` open. Root without CAP_SYS_PTRACE,
+    which Docker does not give, cannot read the descriptors of another account's processes,
+    so root asks a short process of the agent account, which starts without capabilities."""
+    if os.geteuid() != 0:
+        return scan(inode, proc)
+    try:
+        found = json.loads(run([sys.executable, '-I', str(Path(__file__).resolve()), 'holders', str(inode)],
+                               user=AGENT_UID, group=AGENT_UID, extra_groups=[], env={'PATH': '/usr/bin:/bin'},
+                               cwd='/', stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
+                               check=True).stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    return [pid for pid in found if type(pid) is int and pid > 1] if isinstance(found, list) else []
+
+
+def scan(inode, proc=PROC):
+    """The processes that hold the socket `inode` open, of those whose descriptors this account
+    may read."""
     target = 'socket:[%d]' % inode
     found = []
     for entry in proc.iterdir():
@@ -130,4 +151,9 @@ def prune(grants, proc=PROC):
 
 
 if __name__ == '__main__':
-    raise SystemExit('horizon-worker-github-tasks is a module of horizon-worker-github, not a command.')
+    # Only for holders(): the GitHub service runs it as the agent account.
+    if len(sys.argv) == 3 and sys.argv[1] == 'holders' and sys.argv[2].isdigit():
+        print(json.dumps(scan(int(sys.argv[2]))))
+    else:
+        raise SystemExit('horizon-worker-github-tasks is a module of horizon-worker-github; it runs only '
+                         '`holders INODE` for the service.')

@@ -1110,7 +1110,10 @@ its start time, as the kernel reports them. The proxy and the broker give it to 
 caller only when the caller's own process tree goes up to that process: for the
 broker, the process that the kernel names for the socket (`SO_PEERCRED`); for
 the proxy, every process that holds the client's end of the connection, found by
-the socket's inode in `/proc`. When processes of more than one session hold it,
+the socket's inode in `/proc`. Docker gives root no `CAP_SYS_PTRACE`, so root
+cannot read the descriptors of the agent account's processes; it asks a short
+process of the agent account, which starts without capabilities, for the
+holders. When processes of more than one session hold it,
 no task grant applies. The process ID and the start time together never name a
 later process, so a grant cannot pass to a new session.
 

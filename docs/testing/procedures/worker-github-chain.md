@@ -639,9 +639,10 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> horizon-worker-github requests
    ```
 
-   Result: The JSON shows one request for `example/extra` with `"access":"push"`
-   and `"session":"agent-smoke"`, and no agent name: the session's agent marker
-   is not a verified identity. Write its `id` as `<id>`.
+   Result: The JSON shows one request for `example/extra` with `"access":"push"`,
+   `"session":"agent-smoke"` and `"task":true` (the session runs, so it could also
+   be allowed for the task), and no agent name: the session's agent marker is not
+   a verified identity. Write its `id` as `<id>`.
 
 5. Allow the request for the cloud:
 
@@ -657,7 +658,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> cat /workspace/home/mcp-out.jsonl /workspace/home/git.txt
    ```
 
-   Result: The tool output shows `Allowed for this cloud`. The Git output shows
+   Result: The tool output shows `Allowed for this cloud` and `every agent
+   session`. The Git output shows
    `exit=0` and no `remote: Horizon:` line.
 
 7. Read the repository from a process outside the session:

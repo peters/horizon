@@ -57,9 +57,11 @@ def call_tool(arguments, ask_service=auth.ask_service, sleep=time.sleep, clock=t
             return False, 'The worker lost the request; ask again.'
         reply = dict(status, id=reply['id'])
     if reply.get('status') == 'allowed':
-        scope = 'this task' if reply.get('scope') == 'task' else 'this cloud'
-        return True, ('Allowed for %s: Git and gh in this session now reach %s. Run the command again.'
-                      % (scope, repository))
+        if reply.get('scope') == 'task':
+            return True, ('Allowed for this task: Git and gh in this agent session now reach %s, until the '
+                          'session ends. Run the command again.' % repository)
+        return True, ('Allowed for this cloud: Git and gh in every agent session on this worker now reach %s. '
+                      'Run the command again.' % repository)
     if reply.get('status') == 'denied':
         return True, 'The person denied access to %s. Do not ask again; continue without it.' % repository
     if reply.get('status') == 'expired':
