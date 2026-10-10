@@ -177,6 +177,8 @@ fn mouse_reporting_hover_and_canvas_pan_reuse_unchanged_grid() {
     );
     assert_eq!(harness.text(), screen, "pointer reports must not change the screen");
 
+    // A permitted busy frame may already have rebuilt, so measure real output from here.
+    let before = harness.cache.rebuilds;
     harness.panel.terminal().expect("terminal").write_input(b"update\n");
     harness.wait_for_text("UPDATED-2");
     harness.frame(Pos2::new(110.0, 40.0), true);
