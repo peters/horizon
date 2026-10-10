@@ -26,15 +26,9 @@ pub(super) fn seed(app: &mut HorizonApp, ctx: &egui::Context) {
     }
 }
 
-/// A saved session would persist a synthetic cloud, and removal would then refuse
-/// it. A local card has no deployment yet. Any cloud already on the board is left alone.
-fn accepts_preview(app: &HorizonApp) -> bool {
-    app.active_session.as_ref().is_some_and(|session| !session.persistent) && app.cloud_prototype.groups.0.is_empty()
-}
-
 fn seed_lines(app: &mut HorizonApp, count: usize) -> bool {
     let count = count.clamp(1, horizon_core::PANEL_SCROLLBACK_LIMIT);
-    if !accepts_preview(app) {
+    if !super::preview::accepts(app) {
         return false;
     }
     let Some(launch) = preview_launch() else {
@@ -74,7 +68,7 @@ fn seed_lines(app: &mut HorizonApp, count: usize) -> bool {
 /// itself, as the watch of a real worker reports it. No provider is asked: the record
 /// binds no worker, so billing and worker operations have nothing to reach.
 fn seed_idle_stop(app: &mut HorizonApp, delay: Duration, ctx: &egui::Context) -> bool {
-    if !accepts_preview(app) {
+    if !super::preview::accepts(app) {
         return false;
     }
     let Some((launch, ready)) = idle_launch() else {

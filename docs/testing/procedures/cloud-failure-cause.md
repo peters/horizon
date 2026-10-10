@@ -106,11 +106,22 @@ some lines.
    **Check readiness**. The cause and the output stay inside the cloud. No text
    goes past the right edge of the cloud.
 
-2. Scroll down in the steps.
+2. Scroll down in the steps until **Check readiness** is at the top of the
+   steps.
 
    Result: Under **Check readiness**, the cause uses a maximum of three rows.
-   **Retry deploy**, **Copy error** and **Show more** show under the cause. The
-   scroll bar does not cover the step times.
+   The last row ends with "…". **Retry deploy**, **Copy error** and **Show
+   more** show under the cause. The scroll bar does not cover the step times.
+
+3. Click **Show more**.
+
+   Result: The full cause shows under **Check readiness**. The 64-character
+   container ID breaks across rows inside the steps. No text goes past the right
+   edge of the steps. The button changes to **Show less**.
+
+4. Click **Show less**.
+
+   Result: The cause uses three rows again.
 
 ### 6.3 F03: Failure cause in a wide cloud body
 

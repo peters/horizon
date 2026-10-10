@@ -24,6 +24,8 @@ mod tests;
 mod timeline;
 mod view;
 pub(super) mod wording;
+#[cfg(test)]
+pub(in crate::app::cloud_panel) use cause::{ROWS as CAUSE_ROWS, expand as expand_cause};
 pub(super) use drawer::Tab;
 pub(in crate::app::cloud_panel) use output::forget_log_heights;
 #[cfg(test)]

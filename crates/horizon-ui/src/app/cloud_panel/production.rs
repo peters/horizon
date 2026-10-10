@@ -24,6 +24,8 @@ mod offers;
 mod park;
 mod preparation;
 mod presentation;
+#[cfg(debug_assertions)]
+mod preview;
 mod prices;
 mod progress;
 mod readiness;
