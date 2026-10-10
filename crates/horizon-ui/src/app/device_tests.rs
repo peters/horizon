@@ -59,10 +59,17 @@ fn invalid_restored_device_displays_its_failure_transcript() {
     assert!(app.board.panel(panel).expect("placeholder").device().is_none());
     assert!(app.board.panel(panel).expect("placeholder").terminal().is_some());
     let mut text = String::new();
-    for _ in 0..2 {
+    // The failure is replayed through the terminal reader. A loaded Windows
+    // runner can finish two frames before that screen is painted.
+    for _ in 0..20 {
+        text.clear();
         for shape in render(&ctx, &mut app).shapes {
             append_text(&shape.shape, &mut text);
         }
+        if text.contains("Device panel requires") {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
     }
     assert!(
         text.contains("Device panel requires"),

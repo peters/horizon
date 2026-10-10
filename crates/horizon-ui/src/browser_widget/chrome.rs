@@ -134,22 +134,9 @@ fn remote_identity_header(
     });
 }
 
-/// Whether the backend picker may act, and the explanation shown when a
-/// remote target fixes the browser.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PickerState {
-    enabled: bool,
-    remote_hint: Option<&'static str>,
-}
-
-const REMOTE_PICKER_HINT: &str = "This panel runs at a remote device target, which fixes the browser";
-
-fn picker_state(browser: &BrowserPanelState, interactive: bool) -> PickerState {
-    let remote = browser.is_remote();
-    PickerState {
-        enabled: interactive && browser.teach().is_none() && !remote,
-        remote_hint: remote.then_some(REMOTE_PICKER_HINT),
-    }
+/// The picker acts only for an interactive local panel that is not teaching.
+fn picker_enabled(browser: &BrowserPanelState, interactive: bool) -> bool {
+    interactive && browser.teach().is_none() && !browser.is_remote()
 }
 
 fn backend_picker(
@@ -175,7 +162,7 @@ fn backend_picker(
             }
         },
     );
-    let PickerState { enabled, .. } = picker_state(browser, interactive);
+    let enabled = picker_enabled(browser, interactive);
     let picker = ui.add_enabled_ui(enabled, |ui| {
         egui::ComboBox::from_id_salt(("browser-backend", panel_id))
             .selected_text(selected_text)
@@ -516,7 +503,7 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
 mod tests {
     use horizon_core::browser::{BackendKind, BrowserPanelState, BrowserStatus};
 
-    use super::{PickerState, REMOTE_PICKER_HINT, backend_picker, nav_widget_info, picker_state, sync_url_buffer};
+    use super::{backend_picker, nav_widget_info, picker_enabled, sync_url_buffer};
     use crate::test_egui::DiscardTextures;
 
     #[test]
@@ -530,13 +517,7 @@ mod tests {
             "ios_phone".to_string(),
             None,
         );
-        assert_eq!(
-            picker_state(&remote, true),
-            PickerState {
-                enabled: false,
-                remote_hint: Some(REMOTE_PICKER_HINT),
-            }
-        );
+        assert!(!picker_enabled(&remote, true), "a remote target fixes the browser");
         assert_eq!(
             remote.backend(),
             BackendKind::SafariWebDriver,
@@ -555,17 +536,8 @@ mod tests {
         assert_eq!(remote.backend(), BackendKind::SafariWebDriver);
 
         let local = BrowserPanelState::inert();
-        assert_eq!(
-            picker_state(&local, true),
-            PickerState {
-                enabled: true,
-                remote_hint: None,
-            }
-        );
-        assert!(
-            !picker_state(&local, false).enabled,
-            "a non-interactive view never picks"
-        );
+        assert!(picker_enabled(&local, true));
+        assert!(!picker_enabled(&local, false), "a non-interactive view never picks");
     }
 
     #[test]
