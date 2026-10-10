@@ -1,12 +1,12 @@
 ---
 name: horizon-cloud
-description: Inspect Horizon cloud offers and companions, control explicitly authorized companion workers, use a worker Local Network Bridge, or ask for GitHub access from a cloud worker through public MCP tools.
+description: Inspect Horizon cloud offers and companions, read or act on the cloud list of your workspace, control explicitly authorized companion workers, use a worker Local Network Bridge, or ask for GitHub access from a cloud worker through public MCP tools.
 ---
 
 # Horizon cloud MCP
 
-Use this skill for cloud offers, companion workers, a worker's Local Network Bridge,
-and GitHub access on a cloud worker.
+Use this skill for cloud offers, the cloud list of your workspace, companion workers,
+a worker's Local Network Bridge, and GitHub access on a cloud worker.
 Read [the cloud reference](references/cloud.md) for the server and operation you need.
 Use tools from the connected server and their current schemas. Do not substitute
 private Horizon state for MCP results.

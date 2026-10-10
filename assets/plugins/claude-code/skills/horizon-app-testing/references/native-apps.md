@@ -60,6 +60,24 @@ The original deadline and upload remain; reset does not extend the lifetime.
 A target uses `by: identifier|label|ref|coordinates` and its matching `value`. Observe the result after input;
 a driver acknowledgement does not prove application success.
 
+## iOS deep links
+
+`deep_link` uses `mobile: deepLink` with the declared bundle ID.
+The driver needs XCUITest 4.17 or later, Xcode 14.3 or later, and iOS 16.4 or later.
+After a successful command, the host starts alert checks for two seconds.
+These checks and any confirmation must finish within 15 seconds.
+The original lifetime can make this limit shorter. It accepts only an English **Open in**
+or **Open this page in** alert with exactly **Cancel** and **Open** buttons.
+It selects **Open** by name. It does not accept permission alerts.
+Other alert text or buttons return `app_deep_link_confirmation_blocked`.
+
+An unsupported driver returns `app_action_unsupported`. Other driver refusals
+return `app_driver_rejected`. Their bounded diagnostics retain the driver reason
+and remove command values, URLs, sensitive lines, and private session IDs.
+A failed command is not repeated. It can leave a confirmation on the device;
+inspect the device before another action. A command receipt does not prove
+that the app reached the requested screen. Follow it with a semantic assertion.
+
 ## Evidence and recovery
 
 `app_video` operations are `start`, `status`, `get`, and `stop`.
@@ -85,8 +103,44 @@ the affected lane. The terminal report keeps its separate 8 MiB reserve.
 Record step results, artifact identity, actual concurrency, live presentation,
 and provider closure separately.
 
+Managed foreground commands use their owned task directory for `TMPDIR`, `TEMP`
+and `TMP`. A trusted host can set its own private temporary directory for the guardian.
+The native-process library can retain a finite host cause through a held log
+capability after process closure. Its adapter must capture this capability before
+cleanup. Child stdout, child stderr and diagnostics share a 4 MiB file limit,
+with 1 KiB reserved for the first host cause. A diagnostic write failure does not
+replace that cause. This capability does not recover or reopen foreign state.
+
 After uncertainty, keep the original owner, operation identity, and private state.
 Do not replay a mutating tool, change ownership, remove a journal, or allocate a
 replacement to bypass admission refusal. Follow the runbook's recovery procedure.
 Close only the owned session and viewer. Examine exact provider closure separately
 from local cleanup. Report unresolved closure and held capacity explicitly.
+
+Horizon selects Appium 2.19.0 for iOS 15 or later. This version uses XCUITest 9.9.6.
+Older iOS versions keep the provider default and cannot qualify the deep-link test.
+See the [provider version table](https://www.browserstack.com/docs/app-automate/appium/set-up-tests/set-appium-version).
+
+## Linux reboot recovery
+
+Use the original client, owner and private state after a host reboot.
+New guardian receipts contain a kernel boot ID. Exact reconciliation can release
+a local resource when this ID differs from the current Linux boot ID.
+It records the proof and preserves the original receipt. It does not signal PIDs.
+Missing boot IDs remain uncertain. macOS has no automatic reboot proof.
+
+Use `horizon --native-reconcile-status --client <private-client.json>` to inspect
+the current boot ID and the original owner's pending operations. The existing
+journal and original owner binding must be present. The command does not create
+files or directories or clean up resources. For legacy receipts, use the runbook's operator
+procedure only after independent proof of a real host reboot.
+The maintenance command is `horizon --native-reconcile --client <private-client.json>
+--confirm-host-reboot <current-boot-uuid> --local-operations <run-uuid,tunnel-uuid>`.
+Supply exactly all pending owned `run` and `tunnel` IDs, including records with no
+dispatched resource. Missing or extra IDs cause refusal before cleanup starts.
+The existing journal and original owner binding must be present. The command does
+not initialize a journal or create an owner. Each legacy guardian and child PID
+must be absent. Later receipt or provider checks can still refuse cleanup.
+A current boot receipt stays uncertain. A private record retains the confirmation.
+App contracts and MCP tool arguments cannot supply this operator confirmation.
+A process crash or PID absence alone does not prove a reboot.

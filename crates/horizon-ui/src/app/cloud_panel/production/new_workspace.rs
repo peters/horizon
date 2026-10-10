@@ -1,12 +1,13 @@
 //! New cloud for a workspace that New workspace made: the GPU profile that Cloud GPU asked
-//! for, a repository that runs on This PC, and the empty workspace that goes when the dialog
-//! is cancelled.
+//! for, a repository that runs on This PC, the choice the person keeps for a repository, and
+//! the empty workspace that goes when the dialog is cancelled.
 use super::{HorizonApp, Production};
 use crate::{app::util::primary_button, theme};
 use egui::{Context, RichText, Ui, vec2};
 use horizon_core::{
     PanelOptions, WorkspaceId,
     cloud_panel::{CloudConfig, WorkspacePlacement},
+    cloud_runtime::repository_choice::Choices,
 };
 use std::path::PathBuf;
 
@@ -21,12 +22,23 @@ pub(super) struct Intent {
     chosen_for: Option<String>,
     /// Cloud GPU found no GPU profile, so the dialog says the cloud runs on a CPU worker.
     no_gpu: bool,
+    /// The choice kept for each repository, and where they are saved.
+    choices: Choices,
+    root: Option<PathBuf>,
+    /// Keep what the person chooses now for the dialog's repository.
+    keep: bool,
+    /// Why the last keep or forget was not saved.
+    error: Option<String>,
+    /// The kept choice of the repository the field held when it was last looked up, so a
+    /// frame does not resolve the folder again.
+    looked_up: Option<(String, Option<WorkspacePlacement>)>,
 }
 
 impl HorizonApp {
     /// Opens New cloud for `workspace`, which New workspace just made; `gpu` for Cloud GPU.
     pub(in crate::app) fn open_cloud_for_new_workspace(&mut self, ctx: &Context, workspace: WorkspaceId, gpu: bool) {
         self.open_cloud_for_workspace(ctx, workspace);
+        let root = self.cloud_prototype.root.clone();
         let form = &mut self.cloud_prototype.production;
         if form.creating {
             form.new_workspace = Some(Intent {
@@ -34,6 +46,11 @@ impl HorizonApp {
                 gpu,
                 chosen_for: None,
                 no_gpu: false,
+                choices: root.as_deref().map(Choices::load).unwrap_or_default(),
+                root,
+                keep: false,
+                error: None,
+                looked_up: None,
             });
         }
     }
@@ -76,6 +93,9 @@ impl HorizonApp {
     /// Opens the dialog's repository on This PC: a terminal in it, in the dialog's workspace,
     /// and the dialog closes.
     pub(super) fn open_repository_on_this_pc(&mut self, ctx: &Context) {
+        if !self.keep_new_workspace_choice(WorkspacePlacement::Local) {
+            return;
+        }
         let form = &self.cloud_prototype.production;
         let repository = PathBuf::from(form.repository.trim());
         let workspace = form
@@ -133,13 +153,13 @@ pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option
 
 /// What the dialog says above its fields for a workspace from New workspace, and the This PC
 /// choice of a repository whose `cloud.yml` asks for it. True when the person chose This PC.
-pub(super) fn notes(ui: &mut Ui, form: &Production) -> bool {
-    // Only about the profiles read for what the field shows now, not while another
-    // repository is typed or read.
-    if form.profiles.is_none() || form.launch.loading() || form.source.editing() {
+pub(super) fn notes(ui: &mut Ui, form: &mut Production) -> bool {
+    // Only about the repository the field shows now, not while another one is typed or
+    // read. A kept choice needs no profile: it is about the repository.
+    if form.launch.loading() || form.source.editing() || form.repository.trim().is_empty() {
         return false;
     }
-    if form.new_workspace.as_ref().is_some_and(|intent| intent.no_gpu) {
+    if form.profiles.is_some() && form.new_workspace.as_ref().is_some_and(|intent| intent.no_gpu) {
         ui.label(
             RichText::new(
                 "This repository has no GPU profile, so the cloud runs on a CPU worker. For a GPU, add a profile \
@@ -149,14 +169,21 @@ pub(super) fn notes(ui: &mut Ui, form: &Production) -> bool {
             .color(theme::PALETTE_YELLOW()),
         );
     }
-    let local = form
+    let asked = form
         .profiles
         .as_ref()
         .is_some_and(|config| config.placement == WorkspacePlacement::Local);
-    if !local {
-        return false;
-    }
+    let repository = form.repository.clone();
     let mut chosen = false;
+    let kept = form
+        .new_workspace
+        .as_mut()
+        .and_then(|intent| choice::row(ui, intent, &repository, asked, &mut chosen));
+    // A kept choice wins over what the repository asks for.
+    let local = kept.map_or(asked, |kept| kept == WorkspacePlacement::Local);
+    if !local {
+        return chosen;
+    }
     egui::Frame::new()
         .fill(theme::PANEL_BG_ALT())
         .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE()))
@@ -170,17 +197,53 @@ pub(super) fn notes(ui: &mut Ui, form: &Production) -> bool {
                     .strong()
                     .color(theme::FG()),
             );
-            ui.label(
-                RichText::new("Its .horizon/cloud.yml sets placement: local. You can still start a cloud for it.")
-                    .size(12.5)
-                    .color(theme::FG_DIM()),
-            );
-            chosen = ui
+            let why = if kept.is_some() {
+                "You keep This PC for it. You can still start a cloud for it."
+            } else {
+                "Its .horizon/cloud.yml sets placement: local. You can still start a cloud for it."
+            };
+            ui.label(RichText::new(why).size(12.5).color(theme::FG_DIM()));
+            chosen |= ui
                 .add(primary_button("Open on This PC").min_size(vec2(150.0, 30.0)))
                 .clicked();
         });
     chosen
 }
 
+mod choice;
+pub(super) mod machine;
 #[cfg(test)]
 mod tests;
+
+impl HorizonApp {
+    /// Keeps `placement` for the dialog's repository when the person asked for it, before
+    /// the dialog acts on it. False when it could not be kept: the dialog then stays open
+    /// and says why.
+    pub(super) fn keep_new_workspace_choice(&mut self, placement: WorkspacePlacement) -> bool {
+        let form = &mut self.cloud_prototype.production;
+        let repository = form.repository.clone();
+        form.new_workspace
+            .as_mut()
+            .is_none_or(|intent| keep(intent, &repository, placement))
+    }
+}
+
+/// Keeps `placement` for `repository` when the person asked to keep the choice. False
+/// when it could not be saved; `intent` then holds why.
+pub(super) fn keep(intent: &mut Intent, repository: &str, placement: WorkspacePlacement) -> bool {
+    if !intent.keep {
+        return true;
+    }
+    let saved = match intent.root.clone() {
+        Some(root) => intent
+            .choices
+            .set(&root, repository, Some(placement))
+            .map_err(|error| error.to_string()),
+        None => Err("Horizon has no cloud settings".to_owned()),
+    };
+    intent.error = saved
+        .err()
+        .map(|error| format!("The choice for this repository was not kept: {error}"));
+    intent.looked_up = None;
+    intent.error.is_none()
+}

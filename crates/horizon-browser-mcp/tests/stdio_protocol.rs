@@ -350,6 +350,12 @@ fn assert_companion_tools_contract(tools: &Value) {
             .as_str()
             .is_some_and(|text| text.contains("without changing anything"))
     );
+    let list = &listed_tool(tools, "cloud_list")["inputSchema"]["properties"];
+    assert!(list.get("operation").is_some() && list.get("cloud").is_some());
+    assert!(
+        list.get("workspace").is_none(),
+        "the caller's workspace is the only scope"
+    );
     let listing = listed_tool(tools, "cloud_companions");
     assert!(
         listing["description"]
@@ -396,7 +402,7 @@ fn assert_resize_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(31));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(32));
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);

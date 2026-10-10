@@ -3,11 +3,12 @@
 pub mod backend;
 pub mod catalog;
 pub mod contract;
+pub mod diagnostic;
 pub mod driver;
 pub mod recipe;
 pub mod tree;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum Error {
     #[error("app_backend_ready_invalid: backend readiness must declare one nonzero loopback port")]
     BackendReadyInvalid,
@@ -35,6 +36,14 @@ pub enum Error {
     TargetAmbiguous,
     #[error("app_transport_failed: native driver communication failed")]
     TransportFailed,
+    #[error("app_driver_rejected: {0}")]
+    DriverRejected(Box<diagnostic::DriverDiagnostic>),
+    #[error("app_action_unsupported: {0}")]
+    ActionUnsupported(Box<diagnostic::DriverDiagnostic>),
+    #[error("app_deep_link_confirmation_blocked: an unexpected alert blocks the deep link")]
+    DeepLinkConfirmationBlocked,
+    #[error("app_alert_missing: no system alert is present")]
+    AlertMissing,
     #[error("app_allocation_uncertain: native allocation outcome requires reconciliation")]
     AllocationUncertain,
     #[error("app_driver_invalid: native driver returned an invalid response")]

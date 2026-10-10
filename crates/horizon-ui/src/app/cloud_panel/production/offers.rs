@@ -10,7 +10,7 @@ impl HorizonApp {
         request: &UsageRequest,
         ctx: &egui::Context,
     ) -> Option<Result<serde_json::Value, String>> {
-        use horizon_core::cloud_runtime::offers::{Requirements, offers};
+        use horizon_core::cloud_runtime::offers::Requirements;
         let requirements = serde_json::from_value::<Requirements>(request.cloud_offers.clone()?)
             .map_err(|error| error.to_string())
             .and_then(|requirements| requirements.validate().map(|()| requirements).map_err(str::to_owned));
@@ -18,14 +18,27 @@ impl HorizonApp {
             Ok(requirements) => requirements,
             Err(error) => return Some(Err(format!("cloud_offers_invalid_request: {error}"))),
         };
+        let deadline_in = request
+            .deadline_at_millis
+            .saturating_sub(horizon_core::browser::manifest::now_millis());
+        self.ranked_offers(&requirements, deadline_in, ctx)
+    }
+
+    /// Offers for `requirements` from every provider this machine can deploy to, with their
+    /// comparison, an error, or `None` while prices are being fetched and the answer may
+    /// wait `deadline_in` milliseconds more.
+    pub(in crate::app) fn ranked_offers(
+        &mut self,
+        requirements: &horizon_core::cloud_runtime::offers::Requirements,
+        deadline_in: i64,
+        ctx: &egui::Context,
+    ) -> Option<Result<serde_json::Value, String>> {
+        use horizon_core::cloud_runtime::offers::offers;
         let Some(root) = self.cloud_prototype.root.clone() else {
             return Some(Err("cloud_offers_unavailable: Horizon has no cloud settings".to_owned()));
         };
         let prices = &mut self.cloud_prototype.production.prices;
         prices.poll();
-        let deadline_in = request
-            .deadline_at_millis
-            .saturating_sub(horizon_core::browser::manifest::now_millis());
         if !requirements.gpu {
             prices.exchange.request_for_deadline(ctx, deadline_in);
         }
@@ -35,7 +48,7 @@ impl HorizonApp {
             // A key added since is found once the failed fetch's pause has passed.
             prices.recheck_runpod();
             prices.request_fresh_list(&root, ctx);
-            let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
+            let other_providers = prices.hetzner.sections(requirements, deadline_in)?;
             let answer = serde_json::json!({
                 "provider": "RunPod",
                 "unavailable": horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING,
@@ -50,7 +63,7 @@ impl HorizonApp {
                 return Some(Err(format!("cloud_offers_unavailable: {error}")));
             }
             prices.request_fresh_list(&root, ctx);
-            let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
+            let other_providers = prices.hetzner.sections(requirements, deadline_in)?;
             if !prices.hetzner.bound() && other_providers.is_empty() {
                 return Some(Err(format!("cloud_offers_unavailable: {error}")));
             }
@@ -61,7 +74,7 @@ impl HorizonApp {
         prices.request_fresh_list(&root, ctx);
         // Other providers are ranked on their own, in their own currency, and a failed
         // Hetzner fetch is reported there without taking RunPod's offers down.
-        let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
+        let other_providers = prices.hetzner.sections(requirements, deadline_in)?;
         let Some(fetched) = prices.fresh_list() else {
             if deadline_in > super::prices::ANSWER_MARGIN_MILLIS || other_providers.is_empty() {
                 return None;
@@ -83,7 +96,7 @@ impl HorizonApp {
             "provider": list.provider,
             "observed_at_millis": observed,
             "observed_seconds_ago": fetched.at.elapsed().as_secs(),
-            "offers": offers(list, preferences, &requirements),
+            "offers": offers(list, preferences, requirements),
             "other_providers": other_providers,
         });
         compared(answer, prices, deadline_in)

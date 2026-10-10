@@ -244,6 +244,9 @@ fn show_panel_body_contents(
             )
             .show(ui, body_context.browser_events, is_focused, interactive)
         }
+        _ if panel.parked_screen().is_some() => panel
+            .parked_screen()
+            .is_some_and(|screen| crate::terminal_widget::parked::show(ui, screen, interactive)),
         _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
             ui,
             is_focused,
@@ -326,7 +329,9 @@ impl HorizonApp {
             ),
             canvas_rect,
         )?;
-        let terminal_body_screen_rect = panel.terminal().and_then(|_| {
+        // A parked member has no terminal, but its last screen and status strip fill the body.
+        let has_body = panel.terminal().is_some() || panel.parked_screen().is_some();
+        let terminal_body_screen_rect = has_body.then_some(()).and_then(|()| {
             let panel_rect = Rect::from_min_size(canvas_position, canvas_size);
             let body_rect = PanelFrame::new(panel_rect).body;
             clip_screen_rect_to_canvas(

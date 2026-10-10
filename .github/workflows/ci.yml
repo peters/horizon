@@ -123,6 +123,7 @@ jobs:
       - name: Test browser script regressions
         run: node --test scripts/browser-smoke/*.test.cjs
       - name: Install video assembler
+        if: ${{ !env.LOCALCI }}
         run: bash scripts/install-ci-video-build-tools.sh
       - name: Test and lint standalone engine
         run: |
@@ -145,7 +146,8 @@ jobs:
         with:
           prefix-key: device
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: bash scripts/install-ci-ubuntu-dependencies.sh libxkbcommon-dev libwayland-dev pkg-config xvfb xauth bubblewrap
+      - if: ${{ !env.LOCALCI }}
+        run: bash scripts/install-ci-ubuntu-dependencies.sh libxkbcommon-dev libwayland-dev pkg-config xvfb xauth bubblewrap
       - name: Isolated desktop session bus
         run: python3 -B -m unittest discover -s scripts/device-smoke/tests -v
       - run: cargo test --locked -p horizon-device
@@ -218,8 +220,10 @@ jobs:
       # speech-cuda needs nvcc and speech-vulkan the Vulkan SDK, and their
       # Rust surface is identical to `speech` (they only toggle native
       # backends). cpal needs the ALSA headers on Linux.
-      - run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
+      - if: ${{ !env.LOCALCI }}
+        run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - name: Install video assembler
+        if: ${{ !env.LOCALCI }}
         run: bash scripts/install-ci-video-build-tools.sh
       - name: Blocking tier
         run: cargo clippy --locked --all-targets --features speech,trace-profiling -- -D warnings
@@ -297,10 +301,11 @@ jobs:
         if: startsWith(matrix.os, 'macos-')
         run: echo "RUSTFLAGS=${RUSTFLAGS} -C link-arg=-Wl,-rpath,/usr/lib/swift" >> "$GITHUB_ENV"
       - name: Install video assembler
+        if: ${{ !env.LOCALCI }}
         shell: bash
         run: bash scripts/install-ci-video-build-tools.sh
       # Speech links ALSA. The other shards do not build that feature.
-      - if: matrix.os == 'ubuntu-latest' && matrix.shard == 'speech'
+      - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' }}
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - name: Test shard
         shell: bash
@@ -324,6 +329,8 @@ jobs:
       # suite runs on the Linux libs shard only. That shard already built the
       # helper. A skipped test fails the step: the helper-gated contract tests
       # and the git-lfs hydration tests skip silently when a prerequisite is gone.
+      # A local localci run only warns, because some tests need root, which a
+      # runner has through passwordless sudo and a developer computer should not.
       - name: Cloud worker scripts
         if: matrix.os == 'ubuntu-latest' && matrix.shard == 'libs'
         shell: bash
@@ -332,8 +339,12 @@ jobs:
           HORIZON_TEST_CLOUD_WORKER="$PWD/target/debug/horizon-cloud-worker" \
             python3 -B -m unittest discover -s examples/cloud-worker -p 'test_*.py' 2>&1 | tee "$RUNNER_TEMP/cloud-worker-tests.log"
           if grep -q 'skipped=' "$RUNNER_TEMP/cloud-worker-tests.log"; then
-            echo "::error::Cloud worker tests were skipped; install their prerequisites instead."
-            exit 1
+            if [ -n "${LOCALCI:-}" ]; then
+              echo "::warning::Cloud worker tests were skipped on this computer; GitHub CI runs them."
+            else
+              echo "::error::Cloud worker tests were skipped; install their prerequisites instead."
+              exit 1
+            fi
           fi
 
   # Kept as its own job id so the rust-cache key stays `windows-smoke`.
@@ -374,6 +385,7 @@ jobs:
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Install video assembler
+        if: ${{ !env.LOCALCI }}
         shell: bash
         run: bash scripts/install-ci-video-build-tools.sh
       # WASAPI capture is advertised on Windows. The speech shard builds it
@@ -470,6 +482,7 @@ jobs:
       # The uploaded asset is the horizon binary. The other workspace bins are
       # outside its dependency graph, and each one repeated a thin-LTO link.
       - name: Install video assembler
+        if: ${{ !env.LOCALCI }}
         shell: bash
         run: bash scripts/install-ci-video-build-tools.sh
       - run: cargo build --locked --release -p horizon-ui

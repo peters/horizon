@@ -1,5 +1,44 @@
 use super::*;
 use std::os::unix::fs::{PermissionsExt, symlink};
+#[cfg(target_os = "linux")]
+use std::{collections::BTreeMap, os::unix::fs::MetadataExt, time::SystemTime};
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct StateEntry {
+    inode: u64,
+    mode: u32,
+    modified: SystemTime,
+    bytes: Vec<u8>,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn state_snapshot(root: &Path) -> BTreeMap<PathBuf, StateEntry> {
+    fn visit(root: &Path, path: &Path, entries: &mut BTreeMap<PathBuf, StateEntry>) {
+        let metadata = std::fs::metadata(path).unwrap();
+        entries.insert(
+            path.strip_prefix(root).unwrap().to_owned(),
+            StateEntry {
+                inode: metadata.ino(),
+                mode: metadata.mode(),
+                modified: metadata.modified().unwrap(),
+                bytes: if metadata.is_file() {
+                    std::fs::read(path).unwrap()
+                } else {
+                    Vec::new()
+                },
+            },
+        );
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                visit(root, &entry.unwrap().path(), entries);
+            }
+        }
+    }
+    let mut entries = BTreeMap::new();
+    visit(root, root, &mut entries);
+    entries
+}
 
 fn configuration(root: &Path) -> serde_json::Value {
     serde_json::json!({"version":1,"owner":Uuid::new_v4(),"project":root,"state":root,
@@ -143,4 +182,65 @@ fn undispatched_preparation_reconciles_but_nonempty_local_state_stays_held() {
     );
     assert_eq!(std::fs::read(directory.join("unexpected")).unwrap(), b"retained");
     assert_eq!(journal.status(owner, op.id).unwrap().phase, Phase::Preparing);
+}
+
+#[test]
+// Explicit reboot confirmations require the Linux kernel boot identity.
+#[cfg(target_os = "linux")]
+fn reboot_reconciliation_never_initializes_missing_state_or_owner_binding() {
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let account = crate::actor::tests::account();
+    let confirmation = crate::local::recovery::RebootConfirmation::new(
+        horizon_app_process::boot::current().unwrap(),
+        vec![Uuid::new_v4()],
+    )
+    .unwrap();
+    let mode = ReconciliationMode::for_confirmation(Some(&confirmation));
+    let mut client: Client = serde_json::from_value(configuration(&root)).unwrap();
+    client.state = root.join("missing-state");
+    let before = state_snapshot(&root);
+    assert!(mode.journal(&client.state, &account).is_err());
+    assert_eq!(state_snapshot(&root), before);
+
+    let journal = Arc::new(ReconciliationMode::Normal.journal(&client.state, &account).unwrap());
+    let before = state_snapshot(&root);
+    assert_eq!(
+        mode.workspace(journal, &client).err(),
+        Some(horizon_app_runtime::Error::OwnershipRefused)
+    );
+    assert_eq!(state_snapshot(&root), before);
+}
+
+#[test]
+// Explicit reboot confirmations require the Linux kernel boot identity.
+#[cfg(target_os = "linux")]
+fn normal_reconciliation_can_initialize_but_reboot_reuses_existing_state_without_writes() {
+    use horizon_app_runtime::journal::Kind;
+    use std::time::Duration;
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let account = crate::actor::tests::account();
+    let mut client: Client = serde_json::from_value(configuration(&root)).unwrap();
+    client.state = root.join("state");
+    let normal = ReconciliationMode::for_confirmation(None);
+    let journal = Arc::new(normal.journal(&client.state, &account).unwrap());
+    let workspace = normal.workspace(journal, &client).unwrap();
+    let operation = workspace.start(Kind::Run, Duration::from_secs(60)).unwrap();
+    drop(workspace);
+
+    let confirmation = crate::local::recovery::RebootConfirmation::new(
+        horizon_app_process::boot::current().unwrap(),
+        vec![operation.id],
+    )
+    .unwrap();
+    let mode = ReconciliationMode::for_confirmation(Some(&confirmation));
+    let before = state_snapshot(&root);
+    let journal = Arc::new(mode.journal(&client.state, &account).unwrap());
+    let workspace = mode.workspace(journal, &client).unwrap();
+    assert_eq!(workspace.journal().pending(client.owner).unwrap()[0].id, operation.id);
+    drop(workspace);
+    assert_eq!(state_snapshot(&root), before);
 }

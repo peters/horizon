@@ -32,6 +32,8 @@ pub(super) struct Parking {
     /// When the read that gave `statuses` started.
     statuses_since: Option<Instant>,
     next_read: Option<Instant>,
+    /// Park the terminals in the next frame when the cloud is still out of view.
+    park_requested: bool,
     error: Option<String>,
     policy: ParkPolicy,
 }
@@ -45,6 +47,16 @@ impl Parking {
     /// Whether the last status read of the parked terminals failed.
     pub(super) fn read_failed(&self) -> bool {
         self.error.is_some()
+    }
+
+    /// Whether the terminals of the cloud can park: the cloud is ready and attached.
+    pub(super) fn attached(&self) -> bool {
+        self.tracker.is_some_and(|tracker| !tracker.is_parked())
+    }
+
+    /// Parks the terminals in the next frame when the cloud is still out of view.
+    pub(super) fn request_park(&mut self) {
+        self.park_requested = true;
     }
 
     /// The last status of each parked terminal, by its panel's local id.
@@ -313,6 +325,12 @@ impl HorizonApp {
         let observed = self.observe_clouds();
         for (index, observed) in observed.into_iter().enumerate() {
             let Some(Observed { sight, live }) = observed else {
+                // A park request is for the cloud as the agent saw it; a cloud that is not
+                // tracked now, as in another operation, drops it.
+                let issue = self.cloud_prototype.groups.0[index].issue;
+                if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) {
+                    runtime.parking.park_requested = false;
+                }
                 continue;
             };
             let issue = self.cloud_prototype.groups.0[index].issue;
@@ -326,7 +344,11 @@ impl HorizonApp {
             if attached && tracker.is_parked() && sight != Sight::Hidden {
                 continue;
             }
-            let action = tracker.observe(sight, now, runtime.parking.policy);
+            let mut action = tracker.observe(sight, now, runtime.parking.policy);
+            // An agent asked to park the cloud now instead of after its grace period.
+            if std::mem::take(&mut runtime.parking.park_requested) && action.is_none() {
+                action = tracker.park_now(sight);
+            }
             // A terminal that started while its cloud was parked, such as a session restored
             // at Ready, parks with the others while the cloud stays out of view.
             let park_live = live && action.is_none() && tracker.is_parked() && sight == Sight::Hidden;

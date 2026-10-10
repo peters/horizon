@@ -68,7 +68,10 @@ pub(super) fn dispatch(driver: &mut NativeDriver, action: &Action) -> Result<()>
         Action::Terminate {} => driver.execute("mobile: terminateApp",&app_argument(driver)).map(|_| ()),
         Action::Reset {} => Err(Error::ResetRequiresReallocation),
         Action::DeepLink { url } => {
-            let mut args = if driver.platform == Platform::Ios { app_argument(driver) } else { json!({"package":driver.app_id}) }; args["url"] = json!(url);
+            if driver.platform == Platform::Ios {
+                return super::deep_link::open(driver, url);
+            }
+            let args = json!({"package":driver.app_id, "url":url});
             driver.execute("mobile: deepLink",&args).map(|_| ())
         }
         _ => Err(Error::RecipeInvalid),

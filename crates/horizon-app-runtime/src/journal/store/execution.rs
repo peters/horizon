@@ -1,4 +1,4 @@
-use super::{Store, open_file};
+use super::{Initialization, Store, open_file};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -56,13 +56,26 @@ fn bounded(mut file: &File) -> Result<Vec<u8>> {
 
 impl Store {
     pub(in crate::journal) fn claim(&self, owner: Uuid, root: &Path, root_file: &File) -> Result<File> {
-        let registry_lock = open_file(&self.registry, "journal.lock", true)?;
+        self.claim_mode(owner, root, root_file, Initialization::Allowed)
+    }
+
+    pub(in crate::journal) fn claim_existing(&self, owner: Uuid, root: &Path, root_file: &File) -> Result<File> {
+        self.claim_mode(owner, root, root_file, Initialization::Forbidden)
+    }
+
+    fn claim_mode(&self, owner: Uuid, root: &Path, root_file: &File, initialization: Initialization) -> Result<File> {
+        let registry_lock = open_file(
+            &self.registry,
+            "journal.lock",
+            initialization == Initialization::Allowed,
+        )?;
         registry_lock.lock().map_err(|_| Error::JournalUnavailable)?;
         let marker_name = format!("{}-owner-{owner}", self.namespace);
         let lock_name = format!("execution-{owner}.lock");
         let expected = match open_file(&self.registry, &marker_name, false) {
             Ok(marker) => Some(bounded(&marker)?),
-            Err(Error::JournalMissing) => None,
+            Err(Error::JournalMissing) if initialization == Initialization::Allowed => None,
+            Err(Error::JournalMissing) => return Err(Error::OwnershipRefused),
             Err(error) => return Err(error),
         };
         let lock = if let Some(expected) = expected {
