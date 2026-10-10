@@ -1087,20 +1087,42 @@ access token: `gh auth token` prints the placeholder, and `curl` or
 `git -c http.proxy=` past the proxy and the broker reach GitHub without a token.
 The static token file is the exception until it moves to root-only storage: an
 agent can read it, and its token can do what its own permissions allow. The
-grants are per cloud: every agent session of the cloud uses the same grants.
+connected repositories and the repositories allowed for the cloud reach every
+agent session of the cloud; a repository allowed for a task reaches only the
+session that asked (see below).
 
 **Asking for more access.** An agent that needs a repository without a grant
 asks you for it with the `github_access` MCP tool. You decide in Horizon:
 
+- **Allow for this task**: the worker stores a task grant for the agent session
+  that asked. Only that session's processes get it: Git through the proxy, `gh`
+  through the API broker, and the `gh-token` answer. It ends when the session
+  ends, and a container restart ends it too. Horizon offers it only while the
+  session that asked still runs.
 - **Allow for this cloud**: the worker stores a cloud grant with the chain, so it
   survives a restart and a new chain of the same GitHub App and account. A chain
-  of another account, or one whose account is unknown, drops it.
+  of another account, or one whose account is unknown, drops it. Every agent
+  session of the cloud gets it.
 - **Deny**: the agent is told not to ask again.
 
-Access is per cloud. Every agent session of the cloud gets the same token, so a
-repository you allow reaches all of them; the grants route credentials and are
-not a boundary between sessions. Enforcement per repository and per task is
-tracked in issue #1393.
+A task grant names the process of the session's tmux pane by its process ID and
+its start time, as the kernel reports them. The proxy and the broker give it to a
+caller only when the caller's own process tree goes up to that process: for the
+broker, the process that the kernel names for the socket (`SO_PEERCRED`); for
+the proxy, every process that holds the client's end of the connection, found by
+the socket's inode in `/proc`. Docker gives root no `CAP_SYS_PTRACE`, so root
+cannot read the descriptors of the agent account's processes; it asks a short
+process of the agent account, which starts without capabilities, for the
+holders. When processes of more than one session hold it,
+no task grant applies. The process ID and the start time together never name a
+later process, so a grant cannot pass to a new session.
+
+A task grant is least privilege, not a boundary between sessions. Every agent
+session runs as the same account (UID 10001) and uses the same tmux server, so a
+process of one session can type into another session's pane, or change files
+that another session runs, and act there with that session's grants. Use a
+separate cloud for work that must not share access. Issue #1453 tracks a
+boundary between sessions.
 
 `horizon-worker-configure` gives agents the tool whenever the image contains
 `horizon-worker-github`, also before you connect GitHub; until then the tool
@@ -1119,7 +1141,7 @@ answers that GitHub is not connected. The tool runs
   wait at the same time, and a request without a decision expires after 24
   hours.
 - `{"request": "request-status", "id": "..."}` answers `pending`, `allowed`
-  (with `scope` `cloud`), `denied` or `expired`. Only the session that
+  (with `scope` `task` or `cloud`), `denied` or `expired`. Only the session that
   asked can read its request.
 
 The service finds the asking session the same way the stop watcher does: it walks
@@ -1127,11 +1149,10 @@ from the caller's process, which the kernel names, up to an agent pane of
 `horizon-worker-session`. That mapping only keeps requests apart per session; it
 is not an identity. The session's agent marker is writable by every process of the
 cloud, so Horizon shows the session that asks, never a verified agent, and the
-host's list carries no agent name. Access is per cloud anyway: every session of
-the cloud gets the same token for an allowed repository. The tool
+host's list carries no agent name. The tool
 waits up to 10 minutes for your decision and then tells the agent to ask again
 later; that call returns the same request. Requests are kept in
-`/run/horizon-github/access-requests.json` (root only), so a container restart
+`/run/horizon-github/access-requests.json` (root only) with the task grants, so a container restart
 ends them. Each request belongs to the GitHub App and account of the chain it was
 made under; after an install for another app or account it counts as expired and
 is never decided for the new one.
@@ -1141,10 +1162,10 @@ Horizon lists and decides requests as root over SSH:
 ```bash
 horizon-worker-github requests
 # {"requests":[{"id":"9bf221fe23173feb","repository":"owner/extra","access":"push",
-#   "reason":"Push the fix","session":"<session>","created_at":1800000000}]}
-horizon-worker-github decide 9bf221fe23173feb allow-cloud   # or deny
-# {"ok":true,"id":"9bf221fe23173feb","decision":"allow-cloud","repository":"owner/extra",
-#   "access":"push","status":"allowed"}
+#   "reason":"Push the fix","session":"<session>","created_at":1800000000,"task":true}]}
+horizon-worker-github decide 9bf221fe23173feb allow-task   # or allow-cloud, or deny
+# {"ok":true,"id":"9bf221fe23173feb","decision":"allow-task","repository":"owner/extra",
+#   "access":"push","status":"allowed","scope":"task"}
 # {"ok":false,"id":"9bf221fe23173feb","error":"not_installed","message":"..."}
 ```
 
@@ -1155,8 +1176,11 @@ and the request stays pending: `not_installed` (GitHub answered 404),
 `no_push`, `token_invalid`, `forbidden`, `unreachable`, `token_expired` or
 `no_chain`. `too_many_grants` (a cloud takes at most 32 cloud grants, so the
 stored chain stays readable) and `chain_changed` (another chain was stored while
-GitHub was asked) also leave it pending. `unknown_request` and `not_pending` end
-the decision too. Both
+GitHub was asked) also leave it pending, as does `too_many_task_grants` (a
+worker holds at most 64 task grants of running sessions). `session_ended` (the
+session that asked has ended, or the request is from before task grants) expires
+the request for `allow-task`; `task` in the list is `false` for such a request.
+`unknown_request` and `not_pending` end the decision too. Both
 outcomes print JSON and exit with status 0. `read` and `push` keep the meaning
 described above: `permissions.push` reports your account's access, and the
 GitHub App's own permissions still limit what the token can do.

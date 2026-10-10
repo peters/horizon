@@ -12,8 +12,10 @@ from unittest import mock
 
 from test_horizon_worker_github import ACCESS, NOW, ServiceTestCase, agents, auth, chain, installation, service
 
-ALPHA = ('@1', 'agent-alpha', 'claude')
-BETA = ('@2', 'agent-beta', 'codex')
+mcp = service.mcp
+# (window, session, agent, root): the root names a pane process that is not running.
+ALPHA = ('@1', 'agent-alpha', 'claude', [101, 5001])
+BETA = ('@2', 'agent-beta', 'codex', [202, 6002])
 DAY = 24 * 3600
 
 
@@ -95,7 +97,7 @@ class AccessRequestTests(ServiceTestCase):
         report = service.agents.requests_report(self.book, self.store.load()[0], lambda: NOW + 5)
         self.assertEqual(report, {'requests': [{'id': identifier, 'repository': 'example/extra', 'access': 'push',
                                                 'reason': 'Open a PR for the fix', 'session': 'agent-alpha',
-                                                'created_at': NOW}]})
+                                                'created_at': NOW, 'task': False}]})
         self.assertNotIn(ACCESS, json.dumps(report))
         self.assertEqual(service.status(self.store, lambda: NOW)['pending_requests'], 1)
         self.assertEqual(self.book.runtime.joinpath(agents.BOOK).stat().st_mode & 0o777, 0o600)
@@ -122,11 +124,11 @@ class AccessRequestTests(ServiceTestCase):
         self.assertEqual(self.decide('0' * 16, 'deny')['error'], 'unknown_request')
         self.assertFalse(self.token(ALPHA)['ok'])
 
-    def test_access_is_per_cloud_and_there_is_no_task_decision(self):
+    def test_a_cloud_decision_reaches_every_session(self):
         identifier = self.ask(ALPHA, access='read')['id']
         github, check = self.api(repository(False))
         with self.assertRaises(ValueError):
-            self.decide(identifier, 'allow-task', check)
+            self.decide(identifier, 'allow-session', check)
         self.assertEqual(self.decide(identifier, 'allow-cloud', check)['status'], 'allowed')
         self.assertEqual(github.seen, [('/repos/example/extra', 'Bearer ' + ACCESS)])
         # Every session, and a process outside any session, gets the same token.
@@ -253,7 +255,7 @@ class AccessRequestTests(ServiceTestCase):
         self.decide(self.ask(ALPHA)['id'], 'allow-cloud')
         self.ask(BETA, repository='example/other')
         service.clear(self.store, retire=lambda: None)
-        self.assertEqual(self.book.read(), {'requests': []})
+        self.assertEqual(self.book.read(), {'requests': [], 'task_grants': []})
         self.assertEqual(service.status(self.store)['pending_requests'], 0)
 
 
@@ -262,7 +264,7 @@ class ToolTests(unittest.TestCase):
         replies = iter([{'ok': True, 'status': 'pending', 'id': 'abc'}, {'ok': True, 'status': 'pending'},
                         {'ok': True, 'status': 'allowed', 'scope': 'cloud'}])
         asked = []
-        success, text = agents.call_tool({'repository': 'example/extra', 'access': 'push', 'reason': 'PR'},
+        success, text = mcp.call_tool({'repository': 'example/extra', 'access': 'push', 'reason': 'PR'},
                                          lambda request: asked.append(request) or next(replies), sleep=lambda _: None)
         self.assertTrue(success)
         self.assertIn('this cloud', text)
@@ -273,16 +275,16 @@ class ToolTests(unittest.TestCase):
     def test_the_tool_reports_denial_waiting_and_no_connection(self):
         arguments = {'repository': 'example/extra', 'access': 'read', 'reason': 'Read the docs'}
         denied = iter([{'ok': True, 'status': 'pending', 'id': 'abc'}, {'ok': True, 'status': 'denied'}])
-        self.assertIn('denied', agents.call_tool(arguments, lambda _: next(denied), sleep=lambda _: None)[1])
+        self.assertIn('denied', mcp.call_tool(arguments, lambda _: next(denied), sleep=lambda _: None)[1])
         clock = iter(range(0, 10000, 300))
-        success, text = agents.call_tool(arguments, lambda _: {'ok': True, 'status': 'pending', 'id': 'abc'},
+        success, text = mcp.call_tool(arguments, lambda _: {'ok': True, 'status': 'pending', 'id': 'abc'},
                                          sleep=lambda _: None, clock=lambda: next(clock))
         self.assertTrue(success)
         self.assertIn('Still waiting for the person', text)
         self.assertIn('abc', text)
-        self.assertFalse(agents.call_tool(arguments, lambda _: None)[0])
+        self.assertFalse(mcp.call_tool(arguments, lambda _: None)[0])
         refused = {'ok': False, 'message': 'Only an agent session on this worker can ask for GitHub access.'}
-        self.assertEqual(agents.call_tool(arguments, lambda _: refused), (False, refused['message']))
+        self.assertEqual(mcp.call_tool(arguments, lambda _: refused), (False, refused['message']))
 
     def test_mcp_framing_matches_the_stop_tool(self):
         replies = []
@@ -294,7 +296,7 @@ class ToolTests(unittest.TestCase):
                      'name': 'github_access', 'arguments': {'repository': 'example/extra'}}}),
                  json.dumps({'jsonrpc': '2.0', 'id': 4, 'method': 'unknown'})]
         output = io.StringIO()
-        agents.serve_mcp(io.StringIO('\n'.join(lines) + '\n'), output, call=lambda arguments: (True, 'done'))
+        mcp.serve_mcp(io.StringIO('\n'.join(lines) + '\n'), output, call=lambda arguments: (True, 'done'))
         replies = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual([reply['id'] for reply in replies], [1, 2, 3, 4])
         self.assertEqual(replies[0]['result']['protocolVersion'], '2025-06-18')
@@ -306,7 +308,7 @@ class ToolTests(unittest.TestCase):
 
     def test_agents_may_run_only_the_tool_without_root(self):
         for argv, status in [(['requests'], 1), (['decide', 'abc', 'allow-cloud'], 1), (['decide', 'abc', 'maybe'], 2),
-                             (['decide', 'abc', 'allow-task'], 2), (['decide', 'abc'], 2)]:
+                             (['decide', 'abc', 'allow-task'], 1), (['decide', 'abc'], 2)]:
             with mock.patch.object(service.os, 'geteuid', return_value=1000), \
                     mock.patch('sys.stderr', io.StringIO()):
                 self.assertEqual(service.main(argv), status, argv)
@@ -345,7 +347,7 @@ class EndToEndTests(ServiceTestCase):
         with mock.patch.object(agents.time, 'time', return_value=NOW):
             with self.assertRaises(service.gitproxy.relay.Refusal):
                 plan(self.store, 'example/extra', 'push', NOW)
-            success, text = agents.call_tool({'repository': 'example/extra', 'access': 'push', 'reason': 'Push the fix'},
+            success, text = mcp.call_tool({'repository': 'example/extra', 'access': 'push', 'reason': 'Push the fix'},
                                              poll=.02)
             thread.join()
             self.assertTrue(success, text)

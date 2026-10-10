@@ -88,6 +88,8 @@ COPY horizon-worker-tailnet \
     horizon-worker-github-api-rest \
     horizon-worker-github-graphql \
     horizon-worker-github-graphql-policy \
+    horizon-worker-github-tasks \
+    horizon-worker-github-mcp \
     horizon-worker-browserstack /usr/local/bin/
 RUN chmod 755 /usr/local/bin/horizon-worker-* \
     && ln -s /usr/local/bin/horizon-worker-git-auth /usr/local/bin/gh \
