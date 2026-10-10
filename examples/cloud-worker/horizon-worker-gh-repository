@@ -1,9 +1,15 @@
 """Which GitHub repository a gh invocation targets, for the gh wrapper of
 horizon-worker-git-auth: from --repo/-R, GH_REPO, the working directory's origin or what the
-arguments imply; and which binding answers a Git credential request. A module that horizon-worker-git-auth loads, not a command."""
+arguments imply; which binding answers a Git credential request; and gh's route to the
+GitHub service's API broker. A module that horizon-worker-git-auth loads, not a command."""
 import re
 import subprocess
 import sys
+
+# The service's API broker. While the service runs, gh sends every request to this socket
+# (`http_unix_socket`) with a placeholder token; the broker adds the token that a grant covers.
+API_SOCKET = '/run/horizon-worker/github-api.sock'
+GH = '/usr/bin/gh'
 
 GITHUB_URL = re.compile(r'https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}?)(?:\.git)?/?')
 GITHUB_ARGUMENT = re.compile(r'(?:https?://)?(?:www\.)?github\.com/([^/?#\s]+/[^/?#\s]+?)(?:\.git)?(?:[/?#]|$)',
@@ -147,6 +153,22 @@ def credential_reply(entries, request):
         if same_repository(path, entry['repository']):
             return 'username=x-access-token\npassword=' + entry['token'] + '\n\n'
     return ''
+
+def gh_config(env, *args):
+    """gh's own configuration command, for the configuration under HOME that agents' gh reads."""
+    env = {key: value for key, value in env.items() if key not in ('GH_CONFIG_DIR', 'XDG_CONFIG_HOME')}
+    return subprocess.run([GH, 'config', *args], env=env, check=True, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=30).stdout.strip()
+
+
+def route_gh(env, broker):
+    """Sends gh's requests to the service's API broker, or stops doing so. Only the value this
+    helper writes is removed."""
+    current = gh_config(env, 'get', 'http_unix_socket')
+    if broker and current != API_SOCKET:
+        gh_config(env, 'set', 'http_unix_socket', API_SOCKET)
+    elif not broker and current == API_SOCKET:
+        gh_config(env, 'set', 'http_unix_socket', '')
 
 if __name__ == '__main__':
     sys.exit('horizon-worker-gh-repository is a module of horizon-worker-git-auth, not a command.')

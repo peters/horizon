@@ -248,6 +248,20 @@ class GitAuthenticationTests(unittest.TestCase):
                 self.assertRaises(ValueError):
             auth.read_grants()
 
+    def test_a_marker_the_agent_account_cannot_see_still_means_isolation(self):
+        hidden = self.path / 'tailnet'
+        hidden.mkdir()
+        (hidden / 'agent-isolation').touch()
+        hidden.chmod(0)
+        self.addCleanup(hidden.chmod, 0o700)
+        with mock.patch.object(auth, 'AGENT_ISOLATION', hidden / 'agent-isolation'):
+            self.assertTrue(auth.isolated())
+            # The agent's restore of the static binding no longer fails on it.
+            with mock.patch.object(auth.subprocess, 'run'):
+                auth.restore_static({'previous': []})
+        with mock.patch.object(auth, 'AGENT_ISOLATION', self.path / 'none'):
+            self.assertFalse(auth.isolated())
+
     def test_gh_injects_authentication_only_into_child_environment(self):
         with mock.patch.object(auth.subprocess, 'run'):
             auth.install(self.value)
