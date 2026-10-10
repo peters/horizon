@@ -60,11 +60,18 @@ Provisioned clouds keep their network. For a new eligible cloud, omit `tailnet`
 to preserve selection, use a returned saved ID to select one, or `none` for no network.
 A new cloud defaults to None. A selected tailnet requires a preauthorized,
 non-ephemeral auth key with only `tag:horizon-worker` and a worker image that
-reports tailnet contracts 1 and 3. These contracts also apply before reconnect
+reports tailnet contracts 1 and 4. These contracts also apply before reconnect
 and before a new session starts on a retained cloud. The tailnet policy must restrict this tag to
 the required services. Horizon does not change policy; worker enrollment refuses
 untagged nodes and nodes with extra tags. Never pass an auth key. Nested companions
 do not start automatically.
+
+The worker checks tags after enrollment. A changed tag clears the device inventory
+and causes logout. If logout fails, a private revocation record blocks new
+enrollment and agent starts. The supervisor stops only its owned daemon. It checks
+the saved identity without proxy listeners before it starts a new proxy generation.
+An unreadable status also stops the owned daemon. Do not treat an empty device
+inventory as proof that logout or administrative node deletion completed.
 
 On workers, read `cloud_companions_list`, then `cloud_companion_inspect` with
 one declared alias for a live SSH/worktree check. Snapshots older than 60 seconds

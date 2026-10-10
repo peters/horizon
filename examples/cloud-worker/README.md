@@ -200,9 +200,11 @@ declares it. Then the device name comes from the cloud ID and stays the same for
 the life of the cloud. It is not the random container host name. A UUID cloud ID
 gives `horizon-cloud-<cloud ID>`. An ID that needs a change or a shorter form
 gives a digest form; see the tailnet section of the cloud workspaces guide.
-`horizon-tailnet-contract=3` requires the tagged enrollment checks. The checker
+`horizon-tailnet-contract=4` requires the tagged enrollment checks and continued
+tag checks after enrollment. Contract 3 checks only the initial enrollment. It
+does not meet this requirement. The checker
 reports it only when `horizon-worker-tailnet --tagged-enrollment-contract` declares
-it. A selected tailnet needs contracts 1 and 3 before allocation, reconnect, and
+it. A selected tailnet needs contracts 1 and 4 before allocation, reconnect, and
 new session attachment. The actual worker must report these markers before the
 host sends enrollment data or starts a session. **None** remains compatible with
 older images.

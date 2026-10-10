@@ -11,7 +11,7 @@ const SELF_STOP_MARKER: &str = "horizon-self-stop-contract=1";
 const PINNED_SUBMODULES_MARKER: &str = "horizon-source-shallow-contract=1";
 const LFS_SELECTION_MARKER: &str = "horizon-source-lfs-selection-contract=1";
 const PREPARE_CHECKOUT_MARKER: &str = "horizon-prepare-checkout-contract=1";
-pub(super) const TAILNET_MARKERS: [&str; 2] = ["horizon-tailnet-contract=1", "horizon-tailnet-contract=3"];
+pub(super) const TAILNET_MARKERS: [&str; 2] = ["horizon-tailnet-contract=1", "horizon-tailnet-contract=4"];
 /// A reason longer than this was not written by `horizon-worker-stop`.
 const SELF_STOP_REASON_LIMIT: usize = 200;
 

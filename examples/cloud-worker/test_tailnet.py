@@ -115,7 +115,7 @@ class TailnetTests(unittest.TestCase):
                 self.resume(container=container)
                 self.assertEqual(self.configure('work', None), 'ready\n')
                 self.assertEqual(self.hostname, NAME)
-                self.assertEqual(self.calls, [('status', '--json')] * 3)
+                self.assertEqual(self.calls, [('status', '--json')] * 4)
 
     def test_resume_renames_a_cloud_enrolled_with_the_container_host_name(self):
         self.configure('work', None); self.configure('work', KEY)
@@ -216,7 +216,11 @@ class TailnetTests(unittest.TestCase):
             with self.subTest(backend=backend):
                 report = {'BackendState': backend, 'Self': {'HostName': 'Owner device'},
                           'Peer': {'peer': {'HostName': 'Private peer'}}}
-                with patch.object(worker, 'call', return_value=json.dumps(report).encode()):
+                def response(*args, **kwargs):
+                    if args[0] == 'logout':
+                        report['BackendState'] = 'NeedsLogin'
+                    return json.dumps(report).encode()
+                with patch.object(worker, 'call', side_effect=response):
                     worker.publish_devices()
                 self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text()), {'devices': []})
 
@@ -224,7 +228,7 @@ class TailnetTests(unittest.TestCase):
         with patch.object(worker.sys, 'argv', ['worker', '--tagged-enrollment-contract']), \
                 patch('sys.stdout', new_callable=io.StringIO) as output:
             worker.main()
-        self.assertEqual(output.getvalue(), 'horizon-tailnet-contract=3\n')
+        self.assertEqual(output.getvalue(), 'horizon-tailnet-contract=4\n')
         self.assertEqual(self.calls, [])
 
     def test_helper_declares_the_stable_name_contract(self):
@@ -276,11 +280,10 @@ class TailnetTests(unittest.TestCase):
             pending.append(source)
             barrier.wait(timeout=5)
             replace(source, destination)
-        report = json.dumps({'BackendState': 'Running',
-                             'Self': {'HostName': 'Synthetic device', 'Tags': [worker.WORKER_TAG]}}).encode()
-        with patch.object(worker, 'call', return_value=report), patch.object(worker.os, 'replace', side_effect=publish):
+        devices = [{'name': 'Synthetic device', 'addresses': [], 'online': True}]
+        with patch.object(worker.os, 'replace', side_effect=publish):
             with ThreadPoolExecutor(max_workers=2) as pool:
-                tasks = [pool.submit(worker.publish_devices) for _ in range(2)]
+                tasks = [pool.submit(worker.write_devices, devices) for _ in range(2)]
                 for task in tasks: task.result(timeout=10)
         self.assertEqual(len(set(pending)), 2)
         self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text())['devices'][0]['name'], 'Synthetic device')
@@ -300,9 +303,10 @@ class TailnetTests(unittest.TestCase):
         reports = [b'{"BackendState":"Starting"}',
                    json.dumps({'BackendState': 'Running', 'Self': {'Tags': [worker.WORKER_TAG]}}).encode()]
         reports.append(reports[-1])
+        reports.append(reports[-1])
         with patch.object(worker, 'call', side_effect=reports) as call, patch.object(worker.time, 'sleep'):
             self.assertEqual(self.configure('work', None), 'ready\n')
-        self.assertEqual([args.args for args in call.call_args_list], [('status', '--json')] * 3)
+        self.assertEqual([args.args for args in call.call_args_list], [('status', '--json')] * 4)
 
     def test_resume_timeout_and_admission_states_never_request_or_reuse_a_key(self):
         (self.state / 'selection').write_text('work')

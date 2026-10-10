@@ -273,8 +273,9 @@ class CapabilitiesTests(unittest.TestCase):
                 self.assertEqual(marker in output.splitlines(), expected)
 
     def test_tagged_enrollment_is_reported_only_when_the_helper_declares_it(self):
-        marker = 'horizon-tailnet-contract=3'
+        marker = 'horizon-tailnet-contract=4'
         for code, reply, expected in [(0, (marker + '\n').encode(), True), (0, b'', False),
+                                      (0, b'horizon-tailnet-contract=3\n', False),
                                       (0, (marker + ' extra\n').encode(), False), (1, b'', False)]:
             with self.subTest(code=code, reply=reply):
                 def run(command, **kwargs):

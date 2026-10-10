@@ -49,7 +49,7 @@ send TCP traffic to each other over the tailnet.
   access to an unrelated test device.
 - The PC is a device on the test tailnet. Tests T05, T06 and T07 need this.
 - A worker image that reports `horizon-tailnet-contract=1` and
-  `horizon-tailnet-contract=2` and `horizon-tailnet-contract=3`. Use
+  `horizon-tailnet-contract=2` and `horizon-tailnet-contract=4`. Use
   [`check-markers.py`](../../../../examples/cloud-worker/README.md#helpers-from-the-published-artifact)
   in B05 to examine the image.
 - A worker shell in each cloud of this area. Until the fix for
@@ -828,8 +828,41 @@ This task needs a root shell. Use the SSH route of E09 in
    Result: Enrollment fails. The worker logs out instead of returning Ready.
    Record and remove only the node that this test created.
 
+### 6.16 T16 — Remove or add a tag after enrollment
+
+Use only disposable workers and the dedicated test tailnet. Change only the node
+that the resource ledger identifies. Do not change a personal device or its policy.
+
+1. Start a disposable worker with the permitted worker tag, as in T03.
+
+   Result: The worker is Ready. The private ledger identifies its exact tailnet node.
+
+2. Open a TCP test stream through the worker proxy, as in T06.
+
+   Result: The permitted test stream passes bytes before the tag change.
+
+3. In the test tailnet, remove the worker tag from this node.
+
+   Result: The next supervisor check clears the device inventory and causes logout.
+   The test stream stops. The worker status is `none`.
+
+4. Examine the worker proxy and start a new agent session.
+
+   Result: The proxy cannot pass test bytes. A session cannot use the invalid
+   enrollment. Logout does not prove that the administrative node was deleted.
+
+5. Repeat steps 1 to 4 with a fresh worker and an additional test tag.
+
+   Result: A node with extra tags also loses access after enrollment.
+
+6. Run `test_tailnet_revocation.py` from the candidate worker helper suite.
+
+   Result: Failed logout, an unreadable status, and failed owned-daemon stops cannot
+   bypass revocation. These local cases do not replace the live tests above.
+
 ## 7. Pass criteria
 
+- T16 stops access when the worker tag changes after enrollment.
 - T15 selects **None** by default, accepts only the worker tag, and denies the
   unrelated test service. An untagged or extra-tag node cannot become Ready.
 - T01 and T02 keep the auth key only in the Secret Service. No settings file

@@ -25,6 +25,14 @@ policy for this tag that permits only the required test or workspace services.
 Horizon does not change the tailnet policy. An untagged key or a key with extra
 tags is refused. The worker cannot use the identity of the owner.
 
+The worker also examines its tags after enrollment. If the tags change, the
+worker clears its device inventory and logs out. A failed logout leaves a
+private record of the pending revocation. The supervisor stops only the daemon
+that it started. It starts the next daemon without SOCKS or HTTP proxy listeners
+until the logout state is clear. New enrollment and agent starts cannot bypass
+a pending revocation. Each supervisor start examines the saved identity before
+it starts proxy listeners. An unreadable status also stops the owned daemon.
+
 **None** is the default in each **New cloud** dialog. Choose a saved network
 only when the cloud needs it. A cloud
 retains that choice after allocation, including stop/resume. Removing a binding
@@ -47,9 +55,10 @@ workspace code, agents, browsers and desktop services run as UID 10001 without
 capabilities or privilege escalation. The cloud volume retains node identity
 across worker restarts. Provider volumes that cannot enforce ownership/modes are
 refused. Custom images must report `horizon-tailnet-contract=1` and
-`horizon-tailnet-contract=3` before Horizon can allocate a cloud with a selected
+`horizon-tailnet-contract=4` before Horizon can allocate a cloud with a selected
 network. Reconnect and new sessions also require these markers from the actual
-worker. **None** remains compatible with older images.
+worker. Contract 3 does not qualify because it checks only the initial enrollment.
+**None** remains compatible with older images.
 
 Each cloud has one device name in its tailnet for the life of the cloud. The
 worker makes the name from the cloud ID. The name stays the same after a stop

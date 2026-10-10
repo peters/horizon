@@ -272,11 +272,12 @@ fn stable_naming_does_not_imply_tagged_enrollment() {
 fn tailnet_images_must_enforce_tagged_enrollment() {
     for output in [
         "horizon-tailnet-contract=1\n",
-        "horizon-tailnet-contract=3\n",
-        "horizon-tailnet-contract=1\n horizon-tailnet-contract=3\n",
-        "horizon-tailnet-contract=1\nhorizon-tailnet-contract=3-suffix\n",
+        "horizon-tailnet-contract=4\n",
+        "horizon-tailnet-contract=1\nhorizon-tailnet-contract=3\n",
+        "horizon-tailnet-contract=1\n horizon-tailnet-contract=4\n",
+        "horizon-tailnet-contract=1\nhorizon-tailnet-contract=4-suffix\n",
     ] {
         assert!(!WorkerContract::reported(output).tailnet);
     }
-    assert!(WorkerContract::reported("horizon-tailnet-contract=1\nhorizon-tailnet-contract=3\n").tailnet);
+    assert!(WorkerContract::reported("horizon-tailnet-contract=1\nhorizon-tailnet-contract=4\n").tailnet);
 }

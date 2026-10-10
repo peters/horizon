@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Root control lane for persistent cloud networking. Never prints private input."""
 import fcntl
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -28,6 +29,10 @@ NAME_PREFIX = 'horizon-cloud-'
 WORKER_TAG = 'tag:horizon-worker'
 
 
+class RevocationPending(ValueError):
+    """An invalid enrollment must not expose a proxy or become ready."""
+
+
 def private_directory(path):
     if path.is_symlink():
         raise ValueError()
@@ -42,6 +47,19 @@ def call(*args, **kwargs):
     return subprocess.run([CLI, '--socket=' + str(RUNTIME / 'tailscaled.sock'), *args],
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                           timeout=35, check=True, **kwargs).stdout
+
+
+def read_status():
+    report = json.loads(call('status', '--json'))
+    if not isinstance(report, dict) or not isinstance(report.get('BackendState'), str):
+        raise ValueError()
+    if report.get('Self') is not None and not isinstance(report['Self'], dict):
+        raise ValueError()
+    peers = report.get('Peer')
+    if peers is not None and (not isinstance(peers, dict)
+                              or any(not isinstance(peer, dict) for peer in peers.values())):
+        raise ValueError()
+    return report
 
 
 def start():
@@ -65,40 +83,147 @@ def serve():
     private_directory(STATE)
     private_directory(RUNTIME)
     # Userspace is provider-independent and does not grant agents NET_ADMIN.
+    # Check persisted identity through a listener-free generation before exposing
+    # a proxy. This also protects restart after a failed marker write.
+    quarantine = True
+    ready = RUNTIME / 'proxy-ready'
     while True:
+        quarantined = quarantine or (STATE / 'revocation-pending').exists()
+        ready.unlink(missing_ok=True)
         child = subprocess.Popen([DAEMON, '--tun=userspace-networking',
                                   '--state=' + str(STATE / 'tailscaled.state'),
                                   '--socket=' + str(RUNTIME / 'tailscaled.sock'),
-                                  '--socks5-server=127.0.0.1:1055',
-                                  '--outbound-http-proxy-listen=127.0.0.1:1056'],
+                                  *([] if quarantined else ['--socks5-server=127.0.0.1:1055',
+                                  '--outbound-http-proxy-listen=127.0.0.1:1056'])],
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL, env={'PATH': '/usr/local/bin:/usr/bin:/bin'})
         def stop(_signal, _frame):
-            child.terminate()
-            child.wait(timeout=5)
-            sys.exit(0)
-        signal.signal(signal.SIGTERM, stop)
-        while child.poll() is None:
-            try:
-                publish_devices()
-            except (OSError, ValueError, subprocess.SubprocessError):
-                pass
-            time.sleep(5)
+            if quarantine_owned_daemon(child, ready):
+                sys.exit(0)
+        try:
+            signal.signal(signal.SIGTERM, stop)
+            while child.poll() is None:
+                try:
+                    valid = publish_devices()
+                    if quarantined and valid and not (STATE / 'revocation-pending').exists():
+                        if stop_owned_daemon(child):
+                            quarantine = False
+                    elif not quarantined and valid:
+                        ready.touch(mode=0o600)
+                    elif not valid:
+                        quarantine = True
+                        quarantine_owned_daemon(child, ready)
+                except RevocationPending:
+                    # Keep the exact Popen owner until its exit is confirmed. A failed
+                    # stop never permits another daemon or an enrollment retry.
+                    quarantine = True
+                    quarantine_owned_daemon(child, ready)
+                except Exception:
+                    # An unreadable status is not proof that an authenticated proxy
+                    # remains restricted. Reconcile without listeners after uncertainty.
+                    quarantine = True
+                    quarantine_owned_daemon(child, ready)
+                time.sleep(5)
+        finally:
+            # Never abandon an owned process on an unexpected supervisor exit.
+            # Keep its exact owner while shutdown remains uncertain.
+            while not quarantine_owned_daemon(child, ready):
+                time.sleep(2)
         time.sleep(2)
 
 
-def publish_devices():
-    report = json.loads(call('status', '--json'))
-    PUBLIC.mkdir(mode=0o755, exist_ok=True)
-    os.chmod(PUBLIC, 0o755)
+def quarantine_owned_daemon(child, ready):
+    try:
+        try:
+            ready.unlink(missing_ok=True)
+        finally:
+            write_devices([])
+    except (OSError, ValueError):
+        pass
+    finally:
+        stopped = stop_owned_daemon(child)
+    return stopped
+
+
+def stop_owned_daemon(child):
+    if child.poll() is not None:
+        return True
+    try:
+        child.terminate()
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return child.poll() is not None
+    return True
+
+
+def sync_state():
+    directory = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def revoke_enrollment(report, locked=False):
+    pending = STATE / 'revocation-pending'
+    with nullcontext() if locked else open(RUNTIME / 'control.lock', 'a') as lock:
+        if not locked:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            if not pending.exists():
+                with pending.open('x') as output:
+                    os.chmod(pending, 0o600)
+                    output.write('Logout must be confirmed before enrollment resumes.\n')
+                    output.flush()
+                    os.fsync(output.fileno())
+                sync_state()
+            elif pending.is_symlink() or stat.S_IMODE(pending.stat().st_mode) != 0o600:
+                raise ValueError()
+            write_devices([])
+            # A marker survives both a failed logout and a process restart.
+            # Reconcile through a daemon with no SOCKS or HTTP proxy listener.
+            if report.get('BackendState') != 'NeedsLogin':
+                call('logout')
+                report = read_status()
+            if report.get('BackendState') != 'NeedsLogin':
+                raise ValueError()
+            (STATE / 'selection').unlink(missing_ok=True)
+            pending.unlink()
+            sync_state()
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            try:
+                write_devices([])
+            finally:
+                raise RevocationPending('Worker enrollment revocation is pending') from error
+
+
+def publish_devices(locked=False):
+    if not locked:
+        with open(RUNTIME / 'control.lock', 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return publish_devices(locked=True)
+    report = read_status()
+    if (STATE / 'revocation-pending').exists() or (report.get('BackendState') == 'Running' and not tagged(report)):
+        revoke_enrollment(report, locked)
+        return True
     own = report.get('Self')
-    if report.get('BackendState') != 'Running' or not tagged(report):
+    if report.get('BackendState') != 'Running':
         own = None
         report['Peer'] = {}
     values = ([own] if own else []) + list((report.get('Peer') or {}).values())
-    devices = [{'name': value.get('DNSName') or value.get('HostName', ''),
-                'addresses': value.get('TailscaleIPs', []), 'online': bool(value.get('Online'))}
-               for value in values]
+    write_devices([{'name': value.get('DNSName') or value.get('HostName', ''),
+                   'addresses': value.get('TailscaleIPs', []), 'online': bool(value.get('Online'))}
+                  for value in values])
+    return report.get('BackendState') in {'Running', 'NeedsLogin'}
+
+
+def write_devices(devices):
+    PUBLIC.mkdir(mode=0o755, exist_ok=True)
+    os.chmod(PUBLIC, 0o755)
     fd, name = tempfile.mkstemp(dir=PUBLIC, prefix='devices-')
     pending = Path(name)
     try:
@@ -115,21 +240,26 @@ def tagged(report):
     return (report.get('Self') or {}).get('Tags') == [WORKER_TAG]
 
 
-def require_worker_tag():
-    report = json.loads(call('status', '--json'))
+def require_worker_tag(locked=False):
+    if not locked:
+        with open(RUNTIME / 'control.lock', 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return require_worker_tag(locked=True)
+    report = read_status()
+    if (STATE / 'revocation-pending').exists():
+        revoke_enrollment(report, locked)
+        raise RevocationPending('Confirm revocation before a new enrollment')
     if report.get('BackendState') != 'Running':
         raise ValueError()
     if not tagged(report):
-        call('logout')
-        (STATE / 'selection').unlink(missing_ok=True)
-        publish_devices()
+        revoke_enrollment(report, locked)
         raise ValueError('Use an auth key with only tag:horizon-worker')
 
 
 def status(wait=False):
     deadline = time.monotonic() + (5 if wait else 0)
     while True:
-        result = json.loads(call('status', '--json'))
+        result = read_status()
         state = result.get('BackendState')
         if state in {'Running', 'NeedsLogin'}:
             return state
@@ -178,57 +308,70 @@ def configure():
     private_directory(RUNTIME)
     with open(RUNTIME / 'control.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        selected = STATE / 'selection'
-        old = selected.read_text() if selected.exists() else ''
-        if identity is None:
-            if old:
-                start()
-                wait_socket()
-                call('logout')
-                selected.unlink()
-            print('ready')
-            return
-        prepare_agents()
-        start()
+        result = configure_selected(identity, key)
+    # The supervisor takes the same lock to check persisted identity before it
+    # starts proxy listeners. Never wait for that generation while holding it.
+    if result == 'ready' and (STATE / 'selection').exists():
         wait_socket()
-        if old and old != identity:
-            call('logout')
-        backend = status(wait=True)
-        name = recorded_name()
-        if old == identity and backend == 'Running':
-            require_worker_tag()
-            rename(name)
-            print('ready')
-            return
-        # A reconnect timeout is not proof that a persistent identity needs login.
-        if backend != 'NeedsLogin':
-            raise ValueError()
-        if key is None:
-            print('needs_key')
-            return
-        selected.write_text(identity)
-        os.chmod(selected, 0o600)
-        with open(selected, 'rb') as saved:
-            os.fsync(saved.fileno())
-        directory = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-        # An anonymous memory file avoids argv/environment/filesystem auth-key exposure.
-        fd = os.memfd_create('tailnet-enrollment', os.MFD_CLOEXEC)
-        try:
-            os.write(fd, key.encode())
-            call('up', '--auth-key=file:/proc/self/fd/' + str(fd), '--accept-dns=false',
-                 '--advertise-tags=' + WORKER_TAG,
-                 *(['--hostname=' + name] if name else []), '--timeout=30s', pass_fds=(fd,))
-        finally:
-            os.close(fd)
-        if status(wait=True) != 'Running':
-            raise ValueError()
         require_worker_tag()
-        publish_devices()
-        print('ready')
+    print(result)
+
+
+def configure_selected(identity, key):
+    selected = STATE / 'selection'
+    old = selected.read_text() if selected.exists() else ''
+    if (STATE / 'revocation-pending').exists():
+        start()
+        wait_socket(allow_quarantine=True)
+        revoke_enrollment(read_status(), locked=True)
+        if identity is not None:
+            raise RevocationPending('Confirm revocation before a new enrollment')
+        return 'ready'
+    if identity is None:
+        if old:
+            start()
+            wait_socket(allow_quarantine=True)
+            revoke_enrollment(read_status(), locked=True)
+        return 'ready'
+    prepare_agents()
+    start()
+    wait_socket(allow_quarantine=True)
+    if old and old != identity:
+        revoke_enrollment(read_status(), locked=True)
+    backend = status(wait=True)
+    name = recorded_name()
+    if old == identity and backend == 'Running':
+        require_worker_tag(locked=True)
+        rename(name)
+        return 'ready'
+    # A reconnect timeout is not proof that a persistent identity needs login.
+    if backend != 'NeedsLogin':
+        raise ValueError()
+    if key is None:
+        return 'needs_key'
+    selected.write_text(identity)
+    os.chmod(selected, 0o600)
+    with open(selected, 'rb') as saved:
+        os.fsync(saved.fileno())
+    directory = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    # An anonymous memory file avoids argv/environment/filesystem auth-key exposure.
+    fd = os.memfd_create('tailnet-enrollment', os.MFD_CLOEXEC)
+    try:
+        os.write(fd, key.encode())
+        call('up', '--auth-key=file:/proc/self/fd/' + str(fd), '--accept-dns=false',
+             '--advertise-tags=' + WORKER_TAG,
+             *(['--hostname=' + name] if name else []), '--timeout=30s', pass_fds=(fd,))
+    finally:
+        os.close(fd)
+    if status(wait=True) != 'Running':
+        raise ValueError()
+    require_worker_tag(locked=True)
+    publish_devices(locked=True)
+    return 'ready'
 
 
 def device_name(cloud):
@@ -285,16 +428,17 @@ def rename(name):
     if name is None:
         return
     try:
-        report = json.loads(call('status', '--json'))
+        report = read_status()
         if (report.get('Self') or {}).get('HostName') != name:
             call('set', '--hostname=' + name)
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
 
 
-def wait_socket():
-    deadline = time.monotonic() + 10
-    while not (RUNTIME / 'tailscaled.sock').exists():
+def wait_socket(allow_quarantine=False):
+    deadline = time.monotonic() + 20
+    while not ((RUNTIME / 'tailscaled.sock').exists()
+               and (allow_quarantine or (RUNTIME / 'proxy-ready').exists())):
         if time.monotonic() > deadline:
             raise ValueError()
         time.sleep(0.1)
@@ -457,7 +601,8 @@ def agent(arguments):
     for name in list(environment):
         if name.startswith(('TS_', 'TAILSCALE_')) or name == 'RUNPOD_API_KEY':
             environment.pop(name)
-    if (STATE / 'selection').exists():
+    if (STATE / 'selection').exists() or (STATE / 'revocation-pending').exists():
+        wait_socket(allow_quarantine=(STATE / 'revocation-pending').exists())
         require_worker_tag()
         environment.update(ALL_PROXY=PROXY, all_proxy=PROXY,
                            HTTP_PROXY='http://127.0.0.1:1056', HTTPS_PROXY='http://127.0.0.1:1056',
@@ -482,11 +627,11 @@ def main():
     elif sys.argv[1:] == ['resume']:
         private_directory(RUNTIME)
         record_name()
-        if (STATE / 'selection').exists():
+        if (STATE / 'selection').exists() or (STATE / 'revocation-pending').exists():
             (RUNTIME / 'agent-isolation').touch(mode=0o600)
             start()
     elif sys.argv[1:] == ['--tagged-enrollment-contract']:
-        print('horizon-tailnet-contract=3')
+        print('horizon-tailnet-contract=4')
     elif sys.argv[1:] == ['--stable-name-contract']:
         # Contract 2: the device name comes from the cloud ID, not the container host name.
         print('horizon-tailnet-contract=2')
@@ -494,8 +639,8 @@ def main():
         serve()
     elif sys.argv[1:] == ['status']:
         # No credential or daemon state is returned.
-        report = json.loads(call('status', '--json')) if (STATE / 'selection').exists() else {}
-        print('joined' if report.get('BackendState') == 'Running' and tagged(report) else 'none')
+        report = read_status() if (STATE / 'selection').exists() else {}
+        print('joined' if report.get('BackendState') == 'Running' and tagged(report) and not (STATE / 'revocation-pending').exists() else 'none')
     elif len(sys.argv) >= 3 and sys.argv[1] == 'agent':
         agent(sys.argv[2:])
     else:

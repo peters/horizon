@@ -452,9 +452,10 @@ mod tests {
         for markers in [
             "",
             "horizon-tailnet-contract=1\n",
-            "horizon-tailnet-contract=3\n",
-            "horizon-tailnet-contract=1\nhorizon-tailnet-contract=3-suffix\n",
-            "horizon-tailnet-contract=1\n horizon-tailnet-contract=3\n",
+            "horizon-tailnet-contract=4\n",
+            "horizon-tailnet-contract=1\nhorizon-tailnet-contract=3\n",
+            "horizon-tailnet-contract=1\nhorizon-tailnet-contract=4-suffix\n",
+            "horizon-tailnet-contract=1\n horizon-tailnet-contract=4\n",
         ] {
             let refused = run(&session, markers, "0", true);
             assert_eq!(refused.status.code(), Some(3));
@@ -463,7 +464,7 @@ mod tests {
                 "an old selected-tailnet worker must not launch a session"
             );
         }
-        let markers = "horizon-tailnet-contract=1\nhorizon-tailnet-contract=3\n";
+        let markers = "horizon-tailnet-contract=1\nhorizon-tailnet-contract=4\n";
         assert_eq!(run(&session, markers, "7", true).status.code(), Some(7));
         assert!(!log.exists());
         assert!(run(&session, markers, "0", true).status.success());
