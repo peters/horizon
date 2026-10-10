@@ -16,7 +16,7 @@ pub(super) enum Next {
 impl Next {
     pub(super) fn of(status: &Status) -> Option<Self> {
         let failure = status.failure.as_ref()?;
-        if failure.remedy() == Some(Remedy::RegistryLogin) && moves_the_image(status) {
+        if failure.remedy() == Some(Remedy::RegistryLogin) && status.binds_image && moves_the_image(status) {
             return Some(Self::ContainerRegistry);
         }
         status
@@ -68,6 +68,7 @@ mod tests {
         let mut runtime = Runtime {
             stage: Some(stage),
             error: Some(error.into()),
+            launched_binds: true,
             ..Runtime::default()
         };
         runtime.progress.stage(stage, Instant::now());
@@ -114,6 +115,26 @@ mod tests {
         assert!(
             !shown.iter().any(|text| text == "Retry deploy"),
             "one next action: {shown:?}"
+        );
+    }
+
+    #[test]
+    fn a_refused_push_of_an_implicit_docker_hub_image_is_retried() {
+        let mut runtime = failed(
+            Stage::Push,
+            &["denied: requested access to the resource is denied"],
+            "Uploading image failed; inspect deployment output",
+        );
+        runtime.launched_binds = false;
+        let status = of(&runtime, Occupancy::default(), SystemTime::now());
+        assert!(
+            status.failure.as_ref().unwrap().remedy().is_some(),
+            "a registry refusal"
+        );
+        assert_eq!(
+            Next::of(&status),
+            Some(Next::Retry(Primary::Retry)),
+            "Container registry cannot bind a repository without a registry host"
         );
     }
 

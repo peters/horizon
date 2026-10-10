@@ -358,7 +358,10 @@ If the registry refuses the push or the pull of the image of the cloud, a retry
 gets the same refusal. Thus the failure on the card offers **Open Container
 registry** instead of **Retry deploy**. The header of the card keeps **Retry
 deploy** for later. A refusal during **Build locally** is about a base image that
-the recipe pulls, so that failure keeps **Retry deploy**.
+the recipe pulls, so that failure keeps **Retry deploy**. An image without a
+registry host, such as `owner/worker`, uses the login in the private Docker
+configuration directory, because **Container registry** cannot bind it. That
+failure also keeps **Retry deploy**.
 
 **Open Container registry** opens **Cloud settings** for the image repository that
 the profile of the cloud names. If a binding covers that repository, the card

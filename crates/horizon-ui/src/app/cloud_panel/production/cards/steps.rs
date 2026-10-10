@@ -387,6 +387,7 @@ mod tests {
             failure: None,
             track,
             primary: None,
+            binds_image: false,
         };
         let marks: Vec<_> = (0..Stage::ALL.len()).map(|index| mark(&status, index)).collect();
         assert!(matches!(marks[0], Mark::Done));
