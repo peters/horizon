@@ -248,8 +248,29 @@ fn an_exact_worker_choice_survives_plain_policy_reload_without_fallback() {
     assert_eq!(placements.len(), 1);
     assert_eq!(placements[0].server_type, "cx33");
     assert!(fit(&offers[..1], &saved, &current.server_types, "hel1").is_err());
-    assert!(allowing(&["hel1"], &["cpx32"]).for_spec(&saved).is_err());
+    let changed_preferences = allowing(&["hel1"], &["cpx32"]).for_spec(&saved).unwrap();
+    assert_eq!(changed_preferences.server_types, ["cx33"]);
+    assert_eq!(changed_preferences.locations, ["hel1"]);
     assert!(allowing(&["nbg1"], &["cx33"]).for_spec(&saved).is_err());
+    for name in ["", "BadType", "cx53/other", "cx53;echo", "cx53\n"] {
+        let mut invalid = saved.clone();
+        invalid.cpu_flavors = vec![name.into()];
+        assert!(current.for_spec(&invalid).is_err(), "{name:?}");
+    }
+    for names in [Vec::new(), vec!["cx33".into(), "cpx32".into()]] {
+        let mut invalid = saved.clone();
+        invalid.cpu_flavors = names;
+        assert!(current.for_spec(&invalid).is_err());
+    }
+    for locations in [
+        Vec::new(),
+        vec!["hel1".into(), "nbg1".into()],
+        vec!["hel1/other".into()],
+    ] {
+        let mut invalid = saved.clone();
+        invalid.data_centers = locations;
+        assert!(current.for_spec(&invalid).is_err());
+    }
     // Old records retain their configured fallback semantics and wire shape.
     chosen.exact_placement = false;
     assert_eq!(current.for_spec(&chosen).unwrap(), current);
@@ -257,4 +278,34 @@ fn an_exact_worker_choice_survives_plain_policy_reload_without_fallback() {
     assert!(legacy.get("exact_placement").is_none());
     legacy.as_object_mut().unwrap().remove("exact_placement");
     assert!(!serde_json::from_value::<WorkerSpec>(legacy).unwrap().exact_placement);
+}
+
+#[test]
+fn an_exact_choice_reports_a_missing_or_incompatible_type_without_suggesting_fallback() {
+    let mut chosen = spec();
+    chosen.cpu_flavors = vec!["cx33".into()];
+    chosen.data_centers = vec!["hel1".into()];
+    chosen.exact_placement = true;
+    let policy = allowing(&["hel1"], &["cpx32"]);
+    let mut small_disk = offer("cx33", "hel1", 4, 8.0);
+    small_disk.disk_gb = 10;
+    for offers in [
+        Vec::new(),
+        vec![offer("cx33", "hel1", 2, 8.0)],
+        vec![offer("cx33", "hel1", 4, 4.0)],
+        vec![small_disk],
+        vec![offer("cx33", "nbg1", 4, 8.0)],
+    ] {
+        for error in [
+            fit(&offers, &chosen, &chosen.cpu_flavors, "hel1").unwrap_err(),
+            first_fit(&offers, &chosen, &policy).unwrap_err(),
+        ] {
+            assert!(matches!(
+                error,
+                CloudError::Invalid(
+                    "The chosen Hetzner server type is missing from the catalog or does not fit the profile at the chosen location"
+                )
+            ));
+        }
+    }
 }

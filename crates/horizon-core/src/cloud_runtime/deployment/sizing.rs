@@ -62,13 +62,19 @@ pub(super) fn bound_types(
     settings: &Settings,
     saved: Option<&horizon_cloud::WorkerSpec>,
 ) -> Result<Vec<String>> {
-    narrow(
-        profile,
-        cpu_flavors(profile, settings)?,
-        saved
-            .filter(|spec| spec.exact_placement)
-            .map(|spec| spec.cpu_flavors.as_slice()),
-    )
+    if profile.provider == horizon_cloud::provider::HETZNER.id
+        && let Some(spec) = saved.filter(|spec| spec.exact_placement)
+    {
+        if spec.cpu_flavors.len() != 1 {
+            return Err(Error::Invalid("An exact Hetzner placement needs one server type"));
+        }
+        let placement = crate::cloud_panel::Placement {
+            cpu_types: spec.cpu_flavors.clone(),
+            ..Default::default()
+        };
+        return hetzner(settings)?.types_for(Some(&placement));
+    }
+    cpu_flavors(profile, settings)
 }
 
 pub(super) fn bound_centers(
@@ -98,7 +104,7 @@ fn narrow(profile: &horizon_cloud::Profile, configured: Vec<String>, saved: Opti
         .cloned()
         .collect();
     if choices.is_empty() {
-        return Err(Error::Invalid("The saved worker type or location is no longer allowed"));
+        return Err(Error::Invalid("The saved worker location is no longer allowed"));
     }
     Ok(choices)
 }
@@ -140,6 +146,17 @@ mod tests {
         assert_eq!(bound_types(&profile, &settings, Some(&spec)).unwrap(), ["cx33"]);
         assert_eq!(bound_centers(&profile, &settings, Some(&spec)).unwrap(), ["hel1"]);
         settings.hetzner.as_mut().unwrap().server_types = vec!["cpx32".into()];
+        assert_eq!(bound_types(&profile, &settings, Some(&spec)).unwrap(), ["cx33"]);
+        settings.hetzner.as_mut().unwrap().locations = vec!["nbg1".into()];
+        assert!(matches!(
+            bound_centers(&profile, &settings, Some(&spec)),
+            Err(Error::Invalid("The saved worker location is no longer allowed"))
+        ));
+        spec.cpu_flavors = vec!["bad/type".into()];
+        assert!(bound_types(&profile, &settings, Some(&spec)).is_err());
+        spec.cpu_flavors.clear();
+        assert!(bound_types(&profile, &settings, Some(&spec)).is_err());
+        spec.cpu_flavors = vec!["cx33".into(), "cpx32".into()];
         assert!(bound_types(&profile, &settings, Some(&spec)).is_err());
         spec.exact_placement = false;
         assert_eq!(bound_types(&profile, &settings, Some(&spec)).unwrap(), ["cpx32"]);

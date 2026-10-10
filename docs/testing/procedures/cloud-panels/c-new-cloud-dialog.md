@@ -574,31 +574,36 @@ changes:
    Result: The row names the family with the least memory for each vCPU that
    holds the size. It does not name another family.
 
-### 6.15 C15 — Show only the configured Hetzner types and locations
+### 6.15 C15 — Show the complete Hetzner catalog in permitted locations
 
-1. Do task [C15](../new-cloud-picker.md#64-c15--hetzner-allowlist) of the New cloud picker procedure.
+1. Do task [C15](../new-cloud-picker.md#64-c15--complete-hetzner-catalog) of the New cloud picker procedure.
 
    Result: The list shows only Hetzner rows. Each row names a server type and a location.
 
 2. Read `server_types` and `locations` from the `hetzner` section of the settings file.
 
-   Result: You have the allowed types and locations.
+   Result: You have the fallback type preferences and the permitted locations.
 
 3. Calculate the expected rows from the Hetzner catalog of the setup.
 
-   Result: For each allowed type and location, the catalog has a price there and
-   the type meets the profile minimums. Each such pair is one expected row.
+   Result: Each expected pair has a current x86 type, a permitted location and a price there.
+   The type fits the worker image and meets the profile requirements.
+   Each pair is one expected row. `server_types` does not limit the pairs.
 
 4. Compare the rows of the dialog with the expected rows.
 
-   Result: Each expected pair shows one row. No other type or location shows.
+   Result: Each expected pair shows one row. No location outside `locations` shows.
 
-5. Read the note under the search field.
+5. If the catalog has a compatible type outside `server_types`, find its row.
 
-   Result: When the settings do not allow some server types or locations, the
-   note gives the count of server types, the count of locations, or both
-   counts. The list does not show those types or locations. When the settings
-   allow every catalog type and location, the dialog shows no exclusion note.
+   Result: The row shows the type and a permitted location. The fallback preferences do not hide the row.
+
+6. Read the note under the search field.
+
+   Result: When the settings exclude locations, the note gives their count.
+   The list does not show those locations. When the settings permit every
+   catalog location, the dialog shows no exclusion note.
+   The fallback type preferences do not add to the exclusion count.
 
 ### 6.16 C16 — Keep the unlisted Hetzner rows under In stock only
 

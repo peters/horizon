@@ -12,6 +12,9 @@ credential before it records or builds anything.
 
 ## How a deployment runs
 
+An explicit worker choice fixes the server type and location. Without an explicit
+choice, Horizon uses the configured fallback types and locations in this sequence.
+
 1. Horizon registers a throwaway SSH key for the cloud. Its private half is
    discarded; it only stops Hetzner from generating and emailing a root password.
 2. It picks the first allowed location, in order, where an allowed server type
@@ -78,8 +81,12 @@ Hetzner off requires a RunPod key again.
   Cloud API token with read and write access. The token covers the whole
   project, so it stays on this machine and never reaches a worker. Use a
   project dedicated to Horizon.
-- `server_types` and `locations` list what Horizon may request, in order of
-  preference. Only x86 types fit the worker image.
+- `server_types` lists fallback types in preference order. Horizon uses this list
+  when a cloud has no explicit worker choice. It does not restrict the offer catalog.
+- `locations` lists permitted locations in preference order. The offer catalog
+  contains all current x86 types in these locations that fit the worker image.
+- An explicit worker choice can select an x86 type outside `server_types`.
+  Horizon checks its resources in the current catalog before deployment.
 - A cloud's chosen data centers narrow `locations` to the ones it names. They
   cannot add a location the settings do not allow; a cloud placed only in
   locations the settings do not allow is refused rather than moved.
@@ -206,7 +213,8 @@ Billing stays in each provider's currency.
   calendar month (UTC) for compute, the workspace volume and the IPv4 address;
 - `stopped_monthly` is the kept volume only, since a stopped Hetzner cloud releases its
   server and address;
-- only configured `server_types` in allowed `locations` are listed, and
+- all current x86 server types in allowed `locations` are listed, independent of
+  the fallback `server_types` list, and
   `availability` is Hetzner's advisory flag (`listed` or `unlisted`), never a filter;
 - offers are `rentable`: Horizon creates Hetzner clouds.
 
@@ -226,8 +234,9 @@ provider buttons narrow it. In stock only starts checked; below-minimum workers
 start hidden and can be inspected but cannot be selected. Hetzner's availability
 flag is advisory. **In stock only** does not hide an unlisted type. Its row shows
 **Unlisted · advisory**, and the three picks can use it. When the settings exclude
-server types or locations from the Hetzner catalog, the dialog shows a note
-with those two counts. The list does not show the excluded types or locations.
+locations from the Hetzner catalog, the dialog shows a note with their count.
+The list does not show those locations. The fallback server types do not
+restrict the catalog or add to the exclusion count.
 
 The estimate uses USD for comparisons and retains euro prices for billing.
 Reference rates come from the [ECB](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html),
@@ -245,6 +254,8 @@ or incompatible choice blocks Start until another worker is selected. Saved
 worker specifications preserve explicit placement through stop, resume,
 reconnect and image rebuild, including CLI lifecycle calls with plain settings.
 Legacy records without an explicit choice retain their configured fallback policy.
+Changes to the fallback list do not replace an explicit worker choice. The chosen
+location must remain permitted. The selected type must remain compatible with the profile.
 
 To deploy a listed offer through the CLI, save the selected offer object as JSON
 and pass `--worker-choice OFFER_JSON_FILE` to `cloud_deploy deploy`. The CLI

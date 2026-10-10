@@ -1010,9 +1010,11 @@ starts a stopped one and never reopens a deleted cloud; those stay with `deploy`
 and `resume`. A Hetzner stop deletes the server, so the reconnect after its
 resume creates the new server on the same workspace volume, as the card's does;
 it does so only on a volume a server has held. The harness loads the machine
-settings without the placement the card records for a cloud, so a resumed
-Hetzner cloud's recorded server types and locations are refreshed from the
-settings file. The workspace volume still fixes the location.
+settings without the placement the card records for a cloud. For an exact
+Hetzner choice, resume keeps the recorded server type and location. The recorded
+location must still be allowed by the settings. For an older record without an
+exact choice, resume refreshes the fallback types and locations from the settings
+file. The workspace volume still fixes the location.
 
 The provider may assign a new public SSH port whenever the worker starts, for
 example after a resume or an image switch. `endpoint SETTINGS STATE_ROOT` checks
