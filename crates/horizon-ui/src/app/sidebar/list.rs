@@ -10,6 +10,7 @@ use horizon_core::{AgentStatus, WorkspaceId};
 use crate::theme;
 
 use super::super::HorizonApp;
+use super::WorkspaceSidebarEntry;
 
 const REFRESH: Duration = Duration::from_secs(1);
 
@@ -73,6 +74,13 @@ impl HorizonApp {
             .cloned()
             .unwrap_or_else(|| Row::of(&[], false, None))
     }
+}
+
+/// Whether a workspace of the group `dragged` drops on the row `target`: only on a
+/// row of its own group. The groups keep their order, so a row dropped into another
+/// group would not show where it was dropped.
+pub(super) fn accepts_drop(dragged: Group, target: &WorkspaceSidebarEntry) -> bool {
+    dragged == target.row.group && super::sidebar_workspace_drop_should_dock(target.detached)
 }
 
 const HEADER_TEXT_SIZE: f32 = 10.5;

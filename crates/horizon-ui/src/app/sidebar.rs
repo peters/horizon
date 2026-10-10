@@ -370,8 +370,8 @@ impl HorizonApp {
             drag_state.drop_requested = true;
         }
 
-        if sidebar_workspace_drop_should_dock(workspace.detached)
-            && let Some(dragged_workspace_id) = self.sidebar_drag_workspace.filter(|id| *id != workspace.id)
+        if let Some(dragged_workspace_id) = self.sidebar_drag_workspace.filter(|id| *id != workspace.id)
+            && list::accepts_drop(self.sidebar_row(dragged_workspace_id).group, workspace)
             && let Some(pointer_pos) = ui.ctx().pointer_interact_pos()
             && row_rect.expand2(Vec2::new(0.0, 4.0)).contains(pointer_pos)
         {

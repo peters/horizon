@@ -109,6 +109,14 @@ impl Terminal {
         bottom_row_texts(&term, usize::from(self.rows), max_rows)
     }
 
+    /// The rows of the screen, top to bottom with blank rows kept: the text of each
+    /// row and the number of columns that its text occupies.
+    #[must_use]
+    pub fn screen_rows(&self) -> Vec<(String, usize)> {
+        let term = self.term.lock();
+        screen_row_texts(&term, usize::from(self.rows), usize::from(self.rows))
+    }
+
     /// Extract all text from the terminal grid including scrollback history.
     ///
     /// Returns `(lines, grid_total)` where `grid_total` is the total number
@@ -324,40 +332,30 @@ fn nonempty_hyperlink(cell: &Cell) -> Option<Hyperlink> {
 /// screen, in top-to-bottom order.
 #[must_use]
 fn bottom_row_texts(term: &Term<TerminalEventProxy>, rows: usize, max_rows: usize) -> Vec<String> {
+    screen_row_texts(term, rows, max_rows)
+        .into_iter()
+        .map(|(text, _)| text)
+        .filter(|text| !text.is_empty())
+        .collect()
+}
+
+/// The bottom `max_rows` rows of the screen, top to bottom with blank rows kept:
+/// the text of each row and the number of columns that its text occupies.
+fn screen_row_texts(term: &Term<TerminalEventProxy>, rows: usize, max_rows: usize) -> Vec<(String, usize)> {
     let content = term.renderable_content();
     let start_row = rows.saturating_sub(max_rows);
-    let mut lines: Vec<String> = Vec::new();
-    let mut current_line = String::new();
-    let mut current_line_columns = 0;
-    let mut current_row: Option<usize> = None;
-
+    let mut texts = vec![(String::new(), 0); rows - start_row];
     for indexed in content.display_iter {
-        let Ok(row) = usize::try_from(indexed.point.line.0) else {
+        let Some((text, columns)) = usize::try_from(indexed.point.line.0)
+            .ok()
+            .and_then(|row| row.checked_sub(start_row))
+            .and_then(|row| texts.get_mut(row))
+        else {
             continue;
         };
-        if row < start_row || row >= rows {
-            continue;
-        }
-        if current_row != Some(row) {
-            if current_row.is_some() && !current_line.is_empty() {
-                lines.push(std::mem::take(&mut current_line));
-            }
-            current_row = Some(row);
-            current_line.clear();
-            current_line_columns = 0;
-        }
-        append_cell_text(
-            &mut current_line,
-            &mut current_line_columns,
-            indexed.point.column.0,
-            indexed.cell,
-        );
+        append_cell_text(text, columns, indexed.point.column.0, indexed.cell);
     }
-    if current_row.is_some() && !current_line.is_empty() {
-        lines.push(current_line);
-    }
-
-    lines
+    texts
 }
 
 fn append_cell_text(line: &mut String, occupied_columns: &mut usize, target_column: usize, cell: &Cell) {
@@ -396,6 +394,7 @@ mod tests {
 
     use super::{
         RowJoin, append_cell_text, bottom_row_texts, hyperlink_uri_at_viewport_point, logical_line_at_viewport_point,
+        screen_row_texts,
     };
     use crate::terminal::{TerminalDimensions, TerminalEventProxy, TerminalSshTrust, find_url_at_column};
 
@@ -520,6 +519,18 @@ mod tests {
 
         let all = bottom_row_texts(&term, 8, 16);
         assert_eq!(all, vec!["alpha", "\u{280b} Working..."]);
+    }
+
+    #[test]
+    fn screen_row_texts_keep_blank_rows_and_occupied_columns() {
+        let mut term = test_term(4, 6);
+        let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
+        parser.advance(&mut term, "ab\r\n\r\n\u{4e2d}\u{6587}x".as_bytes());
+
+        let rows = screen_row_texts(&term, 4, 4);
+
+        let expected = [("ab", 2), ("", 0), ("\u{4e2d}\u{6587}x", 5), ("", 0)];
+        assert_eq!(rows, expected.map(|(text, columns)| (text.to_owned(), columns)));
     }
 
     #[test]

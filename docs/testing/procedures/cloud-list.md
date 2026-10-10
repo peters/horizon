@@ -15,7 +15,8 @@ owner: peters
 This procedure makes sure that the sidebar groups the workspaces in **Needs you**,
 **Cloud**, **Parked** and **This PC**. It also makes sure that each row shows a
 status dot, the name and a status line, that each group header shows its count
-and summary on one line, and that a click on a parked row attaches its cloud.
+and summary on one line, that a click on a parked row attaches its cloud, and
+that a parked cloud whose session ends goes to **Needs you**.
 
 ## 2. Applicability
 
@@ -24,7 +25,8 @@ and summary on one line, and that a click on a parked row attaches its cloud.
 - This procedure does not test these functions:
   - The park and attach rules of a cloud. The
     [park and attach procedure](cloud-park-attach.md) tests them.
-  - The **Needs you** group. The unit tests of the cloud list cover it.
+  - A cloud whose agent asks for GitHub access. The unit tests of the cloud
+    list cover it.
 
 ## 3. Safety
 
@@ -108,11 +110,36 @@ and summary on one line, and that a click on a parked row attaches its cloud.
    Result: The canvas moves to the cloud workspace. In about 1 second, the cloud
    attaches. The row moves back to **CLOUD** and shows the status line again.
 
+### 6.4 NEEDS YOU: A parked session ends
+
+1. Click in the cloud shell. Push Ctrl+C. Then type this command and push Enter.
+
+   ```sh
+   sleep 240; exit 3
+   ```
+
+   Result: The loop stops. The shell does not show a prompt.
+
+2. Do step 1 of task 6.2. Wait 2 minutes and 15 seconds.
+
+   Result: The cloud workspace moves to the group **PARKED**.
+
+3. Wait 2 more minutes.
+
+   Result: The cloud workspace moves to the group **NEEDS YOU**. Its row shows a
+   yellow dot, the name and the line `Ended with status 3`.
+
+4. Hold the pointer on the yellow dot.
+
+   Result: A tooltip shows `Waiting for you`.
+
 ## 7. Pass criteria
 
 - 6.1 shows the rows, the counts and the summaries on one header line.
 - 6.2 moves the parked cloud to **PARKED** with a compact row.
 - 6.3 attaches the cloud from a click on its row.
+- 6.4 moves the parked cloud whose session ended to **NEEDS YOU** with the line
+  `Ended with status 3`.
 
 ## 8. Cleanup
 

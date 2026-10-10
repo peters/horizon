@@ -207,8 +207,17 @@ fn is_empty_prompt(line: &str) -> bool {
     }
 }
 
+/// The current window in the window list of tmux, such as `0:bash*`, also when a
+/// long session name runs into it, as in `[c8dfe3af-0:bash*`.
+fn is_tmux_current_window(word: &str) -> bool {
+    word.split_once(':').is_some_and(|(before, window)| {
+        before.ends_with(|character: char| character.is_ascii_digit()) && window.len() > 1 && window.ends_with('*')
+    })
+}
+
 /// The status bar that tmux draws at the bottom of a session by default, such as
-/// `[c8dfe3af-0:bash*  "host" 06:39 10-Oct-26`: it ends with the clock and the date.
+/// `[c8dfe3af-0:bash*  "host" 06:39 10-Oct-26`: it starts with the session, has
+/// the current window and ends with the clock and the date.
 fn is_tmux_status_bar(line: &str) -> bool {
     let mut words = line.split_whitespace().rev();
     let (Some(date), Some(clock)) = (words.next(), words.next()) else {
@@ -221,7 +230,7 @@ fn is_tmux_status_bar(line: &str) -> bool {
         .is_some_and(|(hours, minutes)| digits(hours, 2) && digits(minutes, 2));
     let date = matches!(date.as_slice(), [day, month, year]
         if digits(day, 2) && month.len() == 3 && month.bytes().all(|byte| byte.is_ascii_alphabetic()) && digits(year, 2));
-    line.trim_start().starts_with('[') && clock && date
+    line.trim_start().starts_with('[') && clock && date && line.split_whitespace().any(is_tmux_current_window)
 }
 
 /// The status line of a terminal: its last line, from `lines` oldest first, that has
@@ -229,34 +238,38 @@ fn is_tmux_status_bar(line: &str) -> bool {
 /// empty shell prompt and the status bar of tmux are not status lines.
 #[must_use]
 pub fn status_line<'a>(lines: impl IntoIterator<Item = &'a str>) -> Option<String> {
-    wrapped_status_line(lines, None)
+    wrapped_status_line(lines.into_iter().map(|line| (line, line.chars().count())), None)
 }
 
 /// Rows above the last one that a wrapped status line takes, at most.
 const MAX_WRAPPED_ROWS: usize = 3;
 
-/// As [`status_line`], for a screen `columns` wide: a line that fills the width of
-/// the screen continues on the next row, so the rows of a wrapped line are joined.
-/// A program in tmux wraps its own lines, so the terminal cannot mark them.
+/// As [`status_line`], for the rows of a screen `columns` wide, each with the number
+/// of columns that its text occupies, blank rows included: a line that fills the
+/// width of the screen continues on the next row, so the rows of a wrapped line are
+/// joined. A program in tmux wraps its own lines, so the terminal cannot mark them.
 #[must_use]
-pub fn wrapped_status_line<'a>(lines: impl IntoIterator<Item = &'a str>, columns: Option<usize>) -> Option<String> {
-    let lines: Vec<&str> = lines.into_iter().collect();
-    let full = |line: &str| columns.is_some_and(|columns| columns > 1 && line.chars().count() + 1 >= columns);
-    (0..lines.len()).rev().find_map(|last| {
-        let line = lines[last];
+pub fn wrapped_status_line<'a>(
+    rows: impl IntoIterator<Item = (&'a str, usize)>,
+    columns: Option<usize>,
+) -> Option<String> {
+    let rows: Vec<(&str, usize)> = rows.into_iter().collect();
+    let full = |width: usize| columns.is_some_and(|columns| columns > 1 && width + 1 >= columns);
+    (0..rows.len()).rev().find_map(|last| {
+        let line = rows[last].0;
         if is_empty_prompt(line) || is_tmux_status_bar(line) {
             return None;
         }
         let mut first = last;
-        while first > 0 && last - first < MAX_WRAPPED_ROWS && full(lines[first - 1]) {
+        while first > 0 && last - first < MAX_WRAPPED_ROWS && full(rows[first - 1].1) {
             first -= 1;
         }
         // A row one short of the width lost the space at its end when it was trimmed.
-        let joined = lines[first..=last]
+        let joined = rows[first..=last]
             .iter()
             .enumerate()
-            .map(|(row, line)| {
-                let space = row + first < last && columns.is_some_and(|columns| line.chars().count() + 1 == columns);
+            .map(|(row, (line, width))| {
+                let space = row + first < last && columns.is_some_and(|columns| width + 1 == columns);
                 if space { format!("{line} ") } else { (*line).to_owned() }
             })
             .collect::<String>();
@@ -289,8 +302,11 @@ pub fn primary_panel<'a>(
 pub fn panel_line(panel: &Panel) -> Option<String> {
     let terminal = panel.terminal()?;
     // The whole screen: output at the top of a tall screen leaves its bottom rows empty.
-    let lines = terminal.bottom_lines_text(usize::from(terminal.rows()));
-    wrapped_status_line(lines.iter().map(String::as_str), Some(usize::from(terminal.cols())))
+    let rows = terminal.screen_rows();
+    wrapped_status_line(
+        rows.iter().map(|(text, width)| (text.as_str(), *width)),
+        Some(usize::from(terminal.cols())),
+    )
 }
 
 #[cfg(test)]
@@ -393,15 +409,25 @@ mod tests {
             Some("synthetic output 12"),
             "the tmux status bar of a cloud session is not a status line"
         );
-        assert_eq!(
-            status_line(["[INFO] build done at 06:39 on 10-Oct-26"]).as_deref(),
-            Some("[INFO] build done at 06:39 on 10-Oct-26")
-        );
+        for log in [
+            "[INFO] build done at 06:39 on 10-Oct-26",
+            "[INFO] build done 06:39 10-Oct-26",
+        ] {
+            assert_eq!(
+                status_line([log]).as_deref(),
+                Some(log),
+                "a log line with a clock is a status line"
+            );
+        }
         assert_eq!(status_line(["% cargo test", "host%"]).as_deref(), Some("cargo test"));
         assert_eq!(
             status_line(["Downloading layers 50%"]).as_deref(),
             Some("Downloading layers 50%")
         );
+    }
+
+    fn wrapped(rows: &[&str], columns: usize) -> Option<String> {
+        wrapped_status_line(rows.iter().map(|row| (*row, row.chars().count())), Some(columns))
     }
 
     #[test]
@@ -413,18 +439,30 @@ mod tests {
         ];
         // The first row ended with a space at the edge of a screen 48 columns wide.
         assert_eq!(
-            wrapped_status_line(screen, Some(48)).as_deref(),
+            wrapped(&screen, 48).as_deref(),
             Some("Session process exited with status 0. Reconnect preserves this result.")
         );
         // A row that fills the whole width broke inside a word.
         assert_eq!(
-            wrapped_status_line(["Downloading the wor", "ker image"], Some(19)).as_deref(),
+            wrapped(&["Downloading the wor", "ker image"], 19).as_deref(),
             Some("Downloading the worker image")
         );
         // Short rows are separate lines.
         assert_eq!(
-            wrapped_status_line(["synthetic output 11", "synthetic output 12"], Some(80)).as_deref(),
+            wrapped(&["synthetic output 11", "synthetic output 12"], 80).as_deref(),
             Some("synthetic output 12")
+        );
+        // A blank row ends a line, also after a row that fills the width.
+        assert_eq!(
+            wrapped(&["Downloading the wor", "", "synthetic output 12"], 19).as_deref(),
+            Some("synthetic output 12")
+        );
+        // Wide glyphs fill a row in fewer characters than columns.
+        let wide = "\u{4e2d}".repeat(9);
+        let rows = [(wide.as_str(), 18), ("is the worker log", 17)];
+        assert_eq!(
+            wrapped_status_line(rows, Some(19)).as_deref(),
+            Some(format!("{wide} is the worker log").as_str())
         );
     }
 
