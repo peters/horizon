@@ -428,10 +428,11 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
     docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project && gh api user/repos'
     ```
 
-    Result: Both commands fail. The first shows `gh: Horizon: example/secret has
-    no GitHub grant on this worker. Ask for access with the github_access tool.
-    (HTTP 403)`. The second shows a line that starts with `gh: Horizon: this
-    worker does not let an agent reach /user/repos`.
+    Result: Both commands fail. Each shows the broker's JSON body, then a line
+    from `gh`. For the first command that line is `gh: Horizon: example/secret
+    has no GitHub grant on this worker. Ask for access with the github_access
+    tool. (HTTP 403)`. For the second it starts with `gh: Horizon: this worker
+    does not let an agent reach /user/repos`.
 
 13. Send the placeholder past the broker:
 
@@ -662,11 +663,12 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    ```bash
    docker exec <c> horizon-worker-tailnet agent git ls-remote https://github.com/example/extra.git; echo "exit=$?"
+   docker exec <c> horizon-worker-github status
    ```
 
-   Result: The command shows `exit=0`. Access is per cloud, so a process outside
-   the asking session gets through too. The status shows `example/extra` with
-   `"target":null`.
+   Result: The first command shows `exit=0`. Access is per cloud, so a process
+   outside the asking session gets through too. The status shows `example/extra`
+   with `"target":null`.
 
 ### 6.11 R3: Repository that GitHub does not show
 
@@ -831,7 +833,7 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
 
 1. Remove the token chain. Do step 1 of task C8.
 
-   Result: The JSON shows `"state":"absent"`.
+   Result: `clear` shows nothing. The status JSON shows `"state":"absent"`.
 
 > **CAUTION:** THE NEXT STEP DELETES A CONTAINER, A VOLUME AND AN IMAGE. Use only
 > the names that this run made.
@@ -844,7 +846,8 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
    docker rmi chain-smoke:<nonce>
    ```
 
-   Result: Docker shows each name.
+   Result: Docker shows the container and volume names, then `Untagged` and
+   `Deleted` lines for the image.
 
 > **CAUTION:** REVOKE ONLY THE AUTHORIZATION OF THE TEST GITHUB APP.
 
