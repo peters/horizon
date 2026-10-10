@@ -1,0 +1,114 @@
+---
+procedure: docker-host-probe
+feature: Existing Docker engine admission
+platforms: [linux, macos, windows]
+cost: none
+destructive: no
+secrets: none
+owner: peters
+---
+
+# Docker host probe test procedure
+
+## 1. Purpose
+
+This procedure tests the read-only core library probe for an existing Docker engine.
+It tests missing requirements, SSH trust, cancellation and storage admission.
+
+## 2. Applicability
+
+- Candidate: a source build with `cloud_runtime::docker_host`.
+- Platforms: Linux and macOS controllers. Windows returns a platform blocker.
+- This procedure does not test deployment, saved settings, UI or MCP operations.
+- Docker Desktop and forwarded Docker contexts do not pass admission.
+
+## 3. Equipment and preconditions
+
+- The repository build prerequisites from `AGENTS.md`.
+- OpenSSH on Linux and macOS.
+- For the optional live lane, an authorized Linux host with Tailscale SSH access.
+- For a successful engine probe, Docker Engine 28 or later and readable native Linux storage.
+
+## 4. Setup
+
+1. Select the exact candidate checkout.
+
+   Result: `git status` identifies the source under test.
+
+## 5. Tasks
+
+### 5.1 DHP-BASE — Baseline and missing requirements
+
+1. Run the focused tests.
+
+   ```sh
+   cargo test -p horizon-core cloud_runtime::docker_host
+   ```
+
+   Result: All focused tests pass. Missing credentials produce a blocker with a remedy.
+
+### 5.2 DHP-TRUST — Connection identity and compatibility
+
+1. Examine the focused test results for binding and SSH trust cases.
+
+   Result: Invalid hosts, users and credential paths fail validation. Key authentication remains the default for older JSON bindings.
+
+2. Examine the Tailscale trust test results.
+
+   Result: Unknown hosts, ambiguous names, expired keys and absent host keys block the probe before SSH.
+
+### 5.3 DHP-STORAGE — Admission and cancellation
+
+1. Examine the storage and cancellation test results.
+
+   Result: Docker Desktop, absent engine metadata and unmeasurable storage cannot pass admission. Cancellation returns an error.
+
+### 5.4 DHP-LIVE — Optional authorized Tailscale probe
+
+1. If live access is authorized, create a private JSON binding outside the repository.
+
+   ```json
+   {
+     "id": "test-host",
+     "name": "Test host",
+     "ssh": {
+       "host": "authorized-host",
+       "user": "authorized-user",
+       "port": 22,
+       "authentication": "tailscale"
+     }
+   }
+   ```
+
+   Result: The binding uses an authorized host and Linux account. It contains no private key or auth key.
+
+2. Set `HORIZON_DOCKER_READ_ONLY_HOST` to the private binding path.
+
+   Result: The test reads only that selected binding.
+
+3. Run the live probe.
+
+   ```sh
+   cargo test -p horizon-core --test docker_host_probe_live -- --ignored --nocapture
+   ```
+
+   Result: The test prints a report. Missing host requirements have remedies. The probe creates no container or volume.
+
+## 6. Pass criteria
+
+- All focused tests pass on the candidate.
+- Every missing requirement blocks admission or reports an unknown result.
+- SSH keeps pinned host keys unchanged and does not request a password.
+- The optional live lane reports current evidence without a software or access change.
+- No visual test applies because this change has no UI.
+
+## 7. Cleanup
+
+1. If you ran the live lane, unset `HORIZON_DOCKER_READ_ONLY_HOST`.
+
+   Result: Later test runs do not select that host.
+
+## 8. Record of results
+
+Record the candidate commit, platform, test counts and optional live result in the pull request.
+Keep host names, Linux usernames and private logs outside the repository.

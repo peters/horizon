@@ -229,3 +229,16 @@ GitHub and chooses its repositories; agents cannot set it up.
 The source example `cloud_deploy registry-mcp <registry-path>` exposes
 `cloud_registry`. It is not a shipped Horizon agent capability. Do not teach
 an agent to construct or change a private registry through it as a lifecycle fallback.
+
+## Existing Docker engine probe
+
+The core library provides a read-only Docker engine probe for local, SSH key
+and Tailscale SSH connections. It reports missing requirements and remedies.
+Key authentication needs a pinned host-key file. Tailscale SSH uses trust from
+the local network map and needs no private-key file.
+
+This foundation has no public MCP operation or deployment interface.
+It installs no software and changes no access. The controller runs on Linux
+or macOS. Docker must expose a local Linux engine with Docker 28 or later.
+Docker Desktop is not supported. The selected account must be able to read
+the engine's storage filesystem. An unknown storage result blocks admission.
