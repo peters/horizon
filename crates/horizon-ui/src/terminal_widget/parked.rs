@@ -7,10 +7,12 @@ use horizon_core::ParkedScreen;
 use super::grid_metrics;
 use crate::theme;
 
-/// Draws `screen` in the body of its panel. Returns whether the body was clicked.
-pub(crate) fn show(ui: &mut Ui, screen: &ParkedScreen) -> bool {
+/// Draws `screen` in the body of its panel. Returns whether the body was clicked; while
+/// the canvas does not take input (`interactive` is false), it never is.
+pub(crate) fn show(ui: &mut Ui, screen: &ParkedScreen, interactive: bool) -> bool {
     let metrics = grid_metrics(ui.ctx());
-    let response = ui.allocate_response(ui.available_size(), Sense::click());
+    let sense = if interactive { Sense::click() } else { Sense::hover() };
+    let response = ui.allocate_response(ui.available_size(), sense);
     let rect = response.rect;
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, theme::PANEL_BG());
@@ -53,7 +55,7 @@ mod tests {
         );
         let mut clicked = true;
         let output = egui::Context::default()
-            .run_ui(egui::RawInput::default(), |ui| clicked = show(ui, &screen))
+            .run_ui(egui::RawInput::default(), |ui| clicked = show(ui, &screen, true))
             .discard_textures();
         let texts: Vec<String> = output
             .shapes

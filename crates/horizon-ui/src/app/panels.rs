@@ -246,7 +246,7 @@ fn show_panel_body_contents(
         }
         _ if panel.parked_screen().is_some() => panel
             .parked_screen()
-            .is_some_and(|screen| crate::terminal_widget::parked::show(ui, screen)),
+            .is_some_and(|screen| crate::terminal_widget::parked::show(ui, screen, interactive)),
         _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
             ui,
             is_focused,
