@@ -425,11 +425,12 @@ fn usage(
 
 /// The cloud list belongs to a Horizon host; a worker answers that it has none. Returns
 /// whether `request` was such a request.
-fn refused_cloud_list(request: &manifest::provider_usage::UsageRequest) -> bool {
+fn refused_cloud_list(request: &horizon_browser_control::manifest::provider_usage::UsageRequest) -> bool {
+    use horizon_browser_control::manifest::provider_usage;
     if request.cloud_list.is_none() {
         return false;
     }
-    let _ = manifest::provider_usage::complete_provider_usage(&request.result(
+    let _ = provider_usage::complete_provider_usage(&request.result(
         Vec::new(),
         Some("cloud_list_unavailable: requires a Horizon agent panel".into()),
     ));
