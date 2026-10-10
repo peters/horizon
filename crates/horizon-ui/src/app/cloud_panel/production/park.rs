@@ -325,6 +325,12 @@ impl HorizonApp {
         let observed = self.observe_clouds();
         for (index, observed) in observed.into_iter().enumerate() {
             let Some(Observed { sight, live }) = observed else {
+                // A park request is for the cloud as the agent saw it; a cloud that is not
+                // tracked now, as in another operation, drops it.
+                let issue = self.cloud_prototype.groups.0[index].issue;
+                if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) {
+                    runtime.parking.park_requested = false;
+                }
                 continue;
             };
             let issue = self.cloud_prototype.groups.0[index].issue;

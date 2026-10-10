@@ -1,4 +1,6 @@
-//! Bounded host-scoped, read-only requests for shared provider usage.
+//! Bounded host-scoped requests for the live host: shared provider usage, catalogs and
+//! cloud offers only read; companion requests and the `attach`, `park` and `stop` of a
+//! cloud list request change clouds, and the host authorizes each one.
 pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
 pub use super::cloud_list::{CloudListOperation, CloudListRequest};
 use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};

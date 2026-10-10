@@ -128,6 +128,17 @@ fn park_parks_an_attached_cloud_only_while_it_is_out_of_view() {
     assert!(error.starts_with("cloud_list_in_view"), "{error}");
 
     app.board.focused = None;
+    // A request that meets another operation first is dropped, not kept for later.
+    assert_eq!(app.answer_cloud_list(&park, &ctx).unwrap()["park"], "parking");
+    runtime(&mut app).stage = Some(Stage::Stopping);
+    app.sync_cloud_parking();
+    runtime(&mut app).stage = Some(Stage::Ready);
+    app.sync_cloud_parking();
+    assert!(
+        !runtime(&mut app).parking.is_parked(),
+        "the old request does not park it"
+    );
+
     assert_eq!(app.answer_cloud_list(&park, &ctx).unwrap()["park"], "parking");
     app.sync_cloud_parking();
     assert!(runtime(&mut app).parking.is_parked());
