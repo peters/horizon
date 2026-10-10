@@ -89,6 +89,17 @@ fn a_linked_owner_folder_never_takes_a_clone_elsewhere() {
     assert_eq!(destination(&parent, &parse("acme/web").unwrap()), parent.join("web"));
 }
 
+#[cfg(unix)]
+#[test]
+fn an_earlier_flat_checkout_is_found_by_its_name_as_it_was() {
+    let temp = tempfile::tempdir().unwrap();
+    let remote = parse("https://git.example.org/acme/CON").unwrap();
+    // An earlier Horizon cloned it straight under the parent, by the name as it was.
+    assert!(earlier(temp.path(), &remote).any(|path| path == temp.path().join("CON")));
+    // A new clone gets a folder every platform can make.
+    assert_eq!(destination(temp.path(), &remote), temp.path().join("acme/CON_"));
+}
+
 #[test]
 fn an_owner_or_name_that_windows_reserves_gets_a_folder_it_can_make() {
     let temp = Path::new("/synthetic");
