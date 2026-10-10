@@ -44,6 +44,8 @@ class Request:
         self.stream = stream
         self.chunked = False
         self.length = 0
+        # Set once reading the body began; a drain then cannot read it again.
+        self.consumed = False
 
     def values(self, name):
         return [value for field, value in self.fields if field == name]
@@ -103,6 +105,7 @@ def framing(request):
 
 def body(request, limit=None):
     """The request body in pieces as they arrive. Raises Refusal beyond `limit` bytes."""
+    request.consumed = True
     seen = 0
     if not request.chunked:
         remaining = request.length
@@ -149,7 +152,7 @@ def read_body(request, limit):
 def drain(request, limit=1 << 20):
     """Reads and drops a small body the relay refused, so the client reads the refusal
     instead of a reset connection. A larger or broken body is left; the connection ends."""
-    if request.chunked or request.length:
+    if not request.consumed and (request.chunked or request.length):
         with contextlib.suppress(Refusal, ClientGone, OSError, ValueError):
             for _ in body(request, limit):
                 pass

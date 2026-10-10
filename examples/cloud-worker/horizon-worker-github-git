@@ -11,7 +11,6 @@ import contextlib
 import http.client
 import importlib.machinery
 import importlib.util
-import io
 import json
 import os
 from pathlib import Path
@@ -260,8 +259,8 @@ def owner_allowed(connection, allowed, tables=TABLES):
 
 
 def read_tunnel(connection):
-    """The CONNECT request, read one byte at a time, so that no byte of the TLS handshake
-    after it leaves the socket."""
+    """The target of the CONNECT request, read one byte at a time, so that no byte of the TLS
+    handshake after it leaves the socket. Raises Refusal for any other request."""
     data = b''
     while not data.endswith(b'\r\n\r\n'):
         byte = connection.recv(1)
@@ -270,7 +269,12 @@ def read_tunnel(connection):
         data += byte
         if len(data) > relay.MAX_HEAD:
             raise relay.Refusal(431, 'The request head is too long.')
-    return relay.read_request(io.BytesIO(data))
+    line, *fields = data[:-4].split(b'\r\n')
+    parts = line.split(b' ')
+    if (len(parts) != 3 or parts[0] != b'CONNECT' or parts[2] not in (b'HTTP/1.1', b'HTTP/1.0')
+            or not all(relay.FIELD_VALUE.fullmatch(field) for field in fields)):
+        raise relay.Refusal(400, 'Malformed tunnel request.')
+    return parts[1].decode('ascii', 'replace').lower()
 
 
 class Exchange:
@@ -361,6 +365,15 @@ class Proxy:
 
     def __init__(self, server, context):
         self.server, self.context = server, context
+        self.stopped = threading.Event()
+
+    def close(self):
+        """Ends accept_forever. A thread blocked in accept() does not notice a plain close, and
+        could later accept on a new socket that reuses the descriptor."""
+        self.stopped.set()
+        with contextlib.suppress(OSError):
+            self.server.shutdown(socket.SHUT_RDWR)
+        self.server.close()
 
 
 def refuse_tunnel(connection, status):
@@ -414,7 +427,7 @@ def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, t
             tunnel = read_tunnel(connection)
         except relay.Refusal as refused:
             return refuse_tunnel(connection, refused.status)
-        if tunnel.method != 'CONNECT' or tunnel.target.lower() != TUNNEL:
+        if tunnel != TUNNEL:
             return refuse_tunnel(connection, 403)
         connection.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
         current[0] = context.wrap_socket(connection, server_side=True)
@@ -460,7 +473,7 @@ def accept_forever(proxy, store, allowed=AGENT_UIDS, environ=os.environ):
         try:
             connection, _ = proxy.server.accept()
         except OSError as error:
-            if proxy.server.fileno() < 0:
+            if proxy.stopped.is_set() or proxy.server.fileno() < 0:
                 return
             print('GitHub Git proxy accept failed: ' + type(error).__name__, flush=True)
             time.sleep(1)
