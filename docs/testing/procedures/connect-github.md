@@ -68,7 +68,9 @@ after one approval.
 
 2. Click **Create GitHub App** in the browser.
 
-   Result: GitHub shows the installation page of the new app.
+   Result: GitHub shows the installation page of the new app. If a private app has
+   the same name, GitHub's form says that the name is taken. Then change the name in
+   the form, record it, and click **Create GitHub App** again.
 
 3. Select **Only select repositories**.
 
@@ -87,7 +89,8 @@ after one approval.
    Result: The card shows **Connected** and **App: horizon-for-<login>** when this
    computer kept an earlier GitHub sign-in and no public app has that name. Otherwise,
    also when GitHub did not answer the name check, it shows **App: horizon-<suffix>**.
-   The app's page on GitHub shows its description.
+   If you changed the name in step 2, it shows the slug of the name that you
+   recorded. The app's page on GitHub shows its description.
 
 7. Run `stat -c '%a' ~/.horizon/cloud/credentials/github-app-*`.
 

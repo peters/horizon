@@ -297,8 +297,10 @@ with no token to create or copy.
    secret in `credentials/github-app-<app>` (0600) and never keeps its private key.
    The app is named **Horizon for <login>** when Horizon already knows your GitHub
    login from an earlier sign-in on this computer and no public app has that name;
-   otherwise it is **Horizon** and a short random suffix. GitHub's form lets you
-   change the name before you create the app.
+   otherwise it is **Horizon** and a short random suffix. Horizon cannot see a
+   private app, so a private app with the same name is not detected. Then GitHub's
+   form says that the name is taken: change the name there and click **Create GitHub
+   App** again. GitHub's form also lets you change the name in other cases.
 2. GitHub shows the installation page. You choose the repositories that clouds
    may reach. **Choose repositories** on the card opens this page again. To give
    clouds the repositories of an organization, install the app on that
