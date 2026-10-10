@@ -147,7 +147,7 @@ impl ClaimedRequests {
         Self {
             creates: claim_queue(
                 "create",
-                manifest::list_create_requests(),
+                manifest::list_create_requests,
                 |request| ours(request.host_instance.as_deref(), &request.actor),
                 |request| {
                     let claimed = manifest::claim_create_request(&request.request_id, &request.actor, host, pid);
@@ -156,7 +156,7 @@ impl ClaimedRequests {
             ),
             visibility: claim_queue(
                 "visibility",
-                manifest::list_visibility_requests(),
+                manifest::list_visibility_requests,
                 |request| ours(request.host_instance.as_deref(), &request.actor),
                 |request| {
                     let claimed = manifest::claim_visibility_request(&request.request_id, &request.actor, host, pid);
@@ -165,7 +165,7 @@ impl ClaimedRequests {
             ),
             closes: claim_queue(
                 "close",
-                manifest::list_close_requests(),
+                manifest::list_close_requests,
                 |request| ours(request.host_instance.as_deref(), &request.actor),
                 |request| {
                     let claimed = manifest::claim_close_request(&request.request_id, &request.actor, host, pid);
@@ -178,17 +178,25 @@ impl ClaimedRequests {
 
 /// The requests of one queue that are `ours` and that this host claimed. A
 /// claim that panics ends only its own request, which is refused, so every
-/// request claimed before or after it is still answered.
+/// request claimed before or after it is still answered; a listing that
+/// panics claims nothing from its queue and leaves the other queues alone.
 fn claim_queue<R: Clone>(
     kind: &str,
-    listed: std::io::Result<Vec<R>>,
+    list: impl FnOnce() -> std::io::Result<Vec<R>>,
     ours: impl Fn(&R) -> bool,
     claim: impl Fn(&R) -> (std::io::Result<Option<R>>, &String),
 ) -> Claimed<R> {
-    let listed = listed.unwrap_or_else(|error| {
-        tracing::warn!(%error, "could not poll browser {kind} requests");
-        Vec::new()
-    });
+    let listed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(list)) {
+        Ok(Ok(listed)) => listed,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "could not poll browser {kind} requests");
+            Vec::new()
+        }
+        Err(_) => {
+            tracing::error!("listing browser {kind} requests panicked");
+            Vec::new()
+        }
+    };
     let mut queue = Claimed {
         claimed: Vec::new(),
         broken: Vec::new(),
@@ -217,7 +225,7 @@ mod tests {
         let ids: Vec<String> = ["first", "broken", "last"].map(String::from).to_vec();
         let queue = claim_queue(
             "fixture",
-            Ok(ids),
+            || Ok(ids),
             |_| true,
             |request| {
                 assert_ne!(request, "broken", "a fixture claim fails");
@@ -226,5 +234,16 @@ mod tests {
         );
         assert_eq!(queue.claimed, ["first", "last"]);
         assert_eq!(queue.broken, ["broken"]);
+    }
+
+    #[test]
+    fn a_listing_that_panics_claims_nothing_from_its_queue() {
+        let queue = claim_queue(
+            "fixture",
+            || -> std::io::Result<Vec<String>> { panic!("a fixture listing fails") },
+            |_| true,
+            |request| (Ok(Some(request.clone())), request),
+        );
+        assert!(queue.claimed.is_empty() && queue.broken.is_empty());
     }
 }

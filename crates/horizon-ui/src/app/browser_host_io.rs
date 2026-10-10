@@ -179,6 +179,7 @@ impl HorizonApp {
         self.apply_browser_host_io();
         let io = &mut self.browser_create_host.io;
         if !io.busy() {
+            io.exit_deadline = None;
             return false;
         }
         let deadline = *io.exit_deadline.get_or_insert_with(|| Instant::now() + EXIT_FLUSH);

@@ -264,18 +264,19 @@ impl HorizonApp {
     /// Until the stamp lands, a moved panel's remote allocation already
     /// expects its new workspace, which refuses recovery through the old one.
     fn stamp_current_placement(&mut self) -> bool {
+        // A queued placement already set what its allocations expect.
+        let placement = placement_fingerprint(&self.board);
+        if self.browser_create_host.queued_placement == Some(placement) {
+            return false;
+        }
         // The authoritative placement is set before any file is touched, also
         // while an earlier stamp still runs.
-        let placement = placement_fingerprint(&self.board);
         let mut placements = browser_placements(&self.board);
         let allocations: Vec<_> = placements
             .iter()
             .filter_map(|placement| self.stamped_allocation(&placement.local_id, &placement.workspace.local_id))
             .collect();
         let host = &self.browser_create_host;
-        if host.queued_placement == Some(placement) {
-            return false;
-        }
         let before = placements.len();
         placements.retain(|placement| {
             !host
