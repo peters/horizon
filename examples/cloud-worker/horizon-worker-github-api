@@ -206,6 +206,10 @@ def choose(broker, route):
             names = [name]
         if all(candidate.allowed(name, route.access) for name in names):
             return candidate, names[0]
+        # The chain's grant comes first, as for Git: a repository that the chain grants for
+        # reading only is not pushed to with the static binding's token.
+        if candidate.source == 'chain' and all(candidate.allowed(name, 'read') for name in names):
+            break
     if route.repository_id is not None:
         raise refusal(403, 'the repository with ID %s has no GitHub grant on this worker. Ask for access with '
                            'the github_access tool.' % route.repository_id)

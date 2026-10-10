@@ -966,8 +966,12 @@ opens its own socket, the Git helper sets `http_unix_socket` to that path in the
 agent's gh configuration (`/workspace/home/.config/gh/config.yml`), as the agent
 user. `gh` then sends each request, also each redirect, as plain HTTP to the
 socket. The `gh` wrapper gives `gh` the placeholder token `horizon-api-broker`,
-which the broker drops. The route is removed with the Git route; the helper
-removes the value only when it is its own.
+which the broker drops. The wrapper also sets `GH_CONFIG_DIR` to that
+configuration, so a `HOME`, `XDG_CONFIG_HOME` or `GH_CONFIG_DIR` of the caller
+does not move `gh` off the broker; a `gh` that runs past the wrapper, such as
+`/usr/bin/gh` with another configuration, reaches GitHub without a token. The
+route is removed with the Git route; the helper removes the value only when it
+is its own.
 
 The broker does these steps for each connection:
 

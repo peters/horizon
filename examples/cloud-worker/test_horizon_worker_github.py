@@ -519,6 +519,11 @@ class SocketTests(ServiceTestCase):
         self.assertNotIn('GH_TOKEN', nested)
         self.assertNotIn(auth.INJECTED, nested)
         self.assertEqual(own['GH_TOKEN'], 'own-token')
+        # gh reads the routed configuration, whatever configuration the caller names.
+        moved = auth.service_environment({'GH_REPO': 'example/library', 'GH_CONFIG_DIR': '/tmp/elsewhere',
+                                          'XDG_CONFIG_HOME': '/tmp/xdg', 'HOME': '/tmp/home'}, ['pr', 'list'])
+        for value in (env, nested, own, moved):
+            self.assertEqual(value['GH_CONFIG_DIR'], '/workspace/home/.config/gh')
 
 
 class SupervisionContractTests(unittest.TestCase):

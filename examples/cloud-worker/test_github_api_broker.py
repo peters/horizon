@@ -241,6 +241,13 @@ class RestTests(BrokerTestCase):
         self.assertEqual(self.api.seen[-1][3], 'token ' + STATIC)
         self.send('GET', '/repos/example/project')
         self.assertEqual(self.api.seen[-1][3], 'token ' + ACCESS)
+        # A repository that the chain grants for reading only is not changed with the binding.
+        bind_static(self.credential, 'example/library')
+        seen = len(self.api.seen)
+        status, _, payload = self.send('POST', '/repos/example/library/issues', body={'title': 't'})
+        self.assertEqual(status, 403)
+        self.assertIn(b'reading only', payload)
+        self.assertEqual(len(self.api.seen), seen)
 
     def test_other_accounts_and_a_missing_sign_in_are_refused(self):
         self.allowed[:] = [os.getuid() + 1]

@@ -516,7 +516,9 @@ def service_environment(env, argv, ask=ask_service):
     reply = ask({'request': 'gh-token', 'repository': gh_repository(env, list(argv)) or ''})
     if reply is None:
         return None
-    env = dict(env)
+    # gh reads the configuration that routes it to the API broker, whatever HOME,
+    # XDG_CONFIG_HOME or GH_CONFIG_DIR the caller set.
+    env = dict(env, GH_CONFIG_DIR=str(Path(HOME) / '.config/gh'))
     if (reply.get('ok') is True and valid_token(reply.get('token'))
             and valid_repository(reply.get('repository'))):
         env.update({'GH_TOKEN': reply['token'], 'GH_REPO': reply['repository'], 'GH_HOST': 'github.com',
