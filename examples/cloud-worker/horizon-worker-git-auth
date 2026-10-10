@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Private worker Git/gh binding. Token permissions remain the GitHub boundary."""
+import contextlib
 import importlib.machinery
 import importlib.util
 import json
@@ -38,6 +39,8 @@ CREDENTIAL = Path('/run/horizon-credentials/github.json')
 # holds only the binding's identities, without a token (identity_path).
 ROOT_CREDENTIAL = Path('/run/horizon-github/static-binding.json')
 AGENT_ISOLATION = Path('/run/horizon-tailnet/agent-isolation')
+# The account of every agent session (horizon-worker-tailnet isolate).
+AGENT_UID = 10001
 AGENT_RUNNER = ('/usr/local/bin/horizon-worker-tailnet', 'agent', '/usr/local/bin/horizon-worker-git-auth')
 # Run as root under agent isolation; every other operation runs as the agent.
 ROOT_OPERATIONS = ('install', 'clear')
@@ -172,8 +175,9 @@ def identity_path():
     return CREDENTIAL.with_name('github-identity.json')
 
 
-def read_private(path):
-    """The JSON of a private regular file that this account owns, or None without one."""
+def read_private(path, owner=None):
+    """The JSON of a private regular file that `owner` (this account by default) owns, or None
+    without one."""
     try:
         # Nonblocking: the Git proxy reads it as root, and a FIFO must not stop it.
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
@@ -182,7 +186,7 @@ def read_private(path):
     with os.fdopen(fd, 'rb') as source:
         status = os.fstat(source.fileno())
         if not stat.S_ISREG(status.st_mode) or status.st_mode & 0o077 or status.st_size > MAX_BYTES \
-                or status.st_uid != os.geteuid():
+                or status.st_uid != (os.geteuid() if owner is None else owner):
             raise ValueError('Git credential file must be private')
         data = source.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
@@ -239,13 +243,14 @@ def git_output(env, *args):
 
 
 def previous_grants():
-    """The identities of the binding in place, from the agents' identity file, or from a token
-    file that this account may read (an install before the identity file)."""
+    """The identities of the binding in place, from the agents' identity file. Without agent
+    isolation, a token file from an install before the identity file counts too; under it,
+    root hands the agent those identities (install_as_root), so no agent reads a token."""
     try:
         value = read_private(identity_path())
         if value is not None:
             return identity_grants(value)
-        return read_grants()
+        return None if AGENT_ISOLATION.exists() else read_grants()
     except ValueError:
         return None
 
@@ -275,21 +280,27 @@ def install(value):
     write_private(value, token_path())
 
 
-def install_identities(value):
-    """Git's configuration for a binding without tokens, which the identity file keeps."""
+def install_identities(value, previous=None):
+    """Git's configuration for a binding without tokens, which the identity file keeps, after
+    the identities of the binding in place and of `previous` are removed."""
     version, entries = identity_grants(value)
-    configure(version, entries, [previous_grants()])
+    configure(version, entries, [previous_grants(), identity_grants(previous) if previous else None])
     write_private(value, identity_path())
 
 
 def install_as_root(value, agent=None):
     """Under agent isolation: the agent configures Git and keeps the identities, and root
-    keeps the token where no agent reaches it."""
+    keeps the token where no agent reaches it. An earlier image kept the token in the agents'
+    directory; root reads its identities, removes it, and hands the agent only those."""
     grants(value)
-    (agent or as_agent)('install-identity', stripped(value))
-    write_private(value, ROOT_CREDENTIAL)
-    # An earlier image kept the token in the agents' directory.
+    try:
+        legacy = read_private(CREDENTIAL, owner=AGENT_UID)
+        legacy = stripped(legacy) if legacy is not None else None
+    except (ValueError, OSError, RecursionError, UnicodeDecodeError):
+        legacy = None
     CREDENTIAL.unlink(missing_ok=True)
+    (agent or as_agent)('install-identity', {'binding': stripped(value), 'previous': legacy})
+    write_private(value, ROOT_CREDENTIAL)
 
 
 def as_agent(operation, value):
@@ -299,11 +310,13 @@ def as_agent(operation, value):
 
 def clear():
     """Removes the static binding: its token wherever it is, and its identities."""
-    paths = [CREDENTIAL, identity_path()]
+    # The root-only token first: an agent's path, such as a directory in place of a file,
+    # cannot keep it from going.
     if root_holds_token():
-        paths.append(ROOT_CREDENTIAL)
-    for path in paths:
-        path.unlink(missing_ok=True)
+        ROOT_CREDENTIAL.unlink(missing_ok=True)
+    for path in (CREDENTIAL, identity_path()):
+        with contextlib.suppress(IsADirectoryError, PermissionError):
+            path.unlink(missing_ok=True)
 
 
 def configure(version, entries, previous):
@@ -547,7 +560,10 @@ def main():
     if operation == 'install':
         (install_as_root if root_holds_token() else install)(parse(read_input()))
     elif operation == 'install-identity':
-        install_identities(parse(read_input()))
+        value = parse(read_input())
+        if not isinstance(value, dict) or set(value) != {'binding', 'previous'}:
+            raise ValueError('Invalid Git configuration')
+        install_identities(value['binding'], value['previous'])
     elif operation == 'configure':
         configure_chain(parse(read_input()))
     elif operation == 'restore':

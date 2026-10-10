@@ -64,15 +64,22 @@ class GitAuthenticationTests(unittest.TestCase):
 
         def agent(operation, value):
             steps.append((operation, value))
+            # The agent never finds a token file, also not the earlier image's.
+            self.assertFalse(auth.CREDENTIAL.exists())
             with mock.patch.object(auth, 'root_holds_token', return_value=False), \
-                    mock.patch.object(auth.subprocess, 'run'):
-                auth.install_identities(value)
+                    mock.patch.object(auth.subprocess, 'run'), \
+                    mock.patch.object(auth, 'AGENT_ISOLATION', self.path / 'isolated'):
+                (self.path / 'isolated').touch()
+                auth.install_identities(value['binding'], value['previous'])
         # A token file that an earlier image left in the agents' directory.
         auth.write_private(self.value, auth.CREDENTIAL)
         with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
-                mock.patch.object(auth, 'root_holds_token', return_value=True):
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()):
             auth.install_as_root(self.value, agent)
         self.assertFalse(auth.CREDENTIAL.exists())
+        self.assertEqual(steps[0][1]['previous'], {key: self.value[key] for key in auth.IDENTITY_FIELDS},
+                         'root hands the agent the earlier identities without the token')
         with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
                 mock.patch.object(auth, 'root_holds_token', return_value=True):
             self.assertEqual(auth.read_grants()[1][0]['token'], self.value['token'], 'root reads the token')
@@ -88,6 +95,13 @@ class GitAuthenticationTests(unittest.TestCase):
             auth.clear()
         self.assertFalse(root_file.exists())
         self.assertFalse(identity.exists())
+        # An agent's directory in place of a file does not keep the root token from going.
+        auth.write_private(self.value, root_file)
+        identity.mkdir()
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True):
+            auth.clear()
+        self.assertFalse(root_file.exists())
 
     def test_a_token_file_of_another_account_is_refused(self):
         with mock.patch.object(auth.subprocess, 'run'):
