@@ -109,12 +109,29 @@ impl RuntimeState {
         }
 
         let content = std::fs::read_to_string(path)?;
-        let mut state = serde_yaml::from_str::<Self>(&content).map_err(|error| Error::State(error.to_string()))?;
-        state.validate_remote_references()?;
-        state.ensure_local_ids();
-        state.migrate_canvas_view();
-        state.version = RUNTIME_STATE_VERSION;
-        Ok(Some(state))
+        Self::from_yaml(&content).map(Some)
+    }
+
+    /// Parse a runtime state snapshot from YAML and bring it to the current version.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot cannot be parsed or validated, or its
+    /// version is newer than this binary supports.
+    pub fn from_yaml(content: &str) -> Result<Self> {
+        serde_yaml::from_str::<Self>(content)
+            .map_err(|error| Error::State(error.to_string()))?
+            .into_current()
+    }
+
+    /// Validate a decoded snapshot and bring it to the current version, the
+    /// same way for every store that it was read from.
+    pub(crate) fn into_current(mut self) -> Result<Self> {
+        self.validate_remote_references()?;
+        self.ensure_local_ids();
+        self.migrate_canvas_view();
+        self.version = RUNTIME_STATE_VERSION;
+        Ok(self)
     }
 
     /// Serialize this runtime state to YAML.

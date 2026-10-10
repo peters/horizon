@@ -5,7 +5,7 @@
 //! parked panels show in a strip and as their agent status.
 use super::{HorizonApp, PanelKind, Settings, Stage, Store, cloud_runtime};
 use horizon_core::{
-    AgentStatus, CloudWait, PanelId,
+    AgentStatus, CloudWait, PanelId, ParkedPanel,
     cloud_panel::park::{ParkAction, ParkPolicy, ParkTracker, Sight},
     cloud_runtime::session_status::{self, SessionActivity, SessionStatus},
 };
@@ -255,6 +255,7 @@ impl HorizonApp {
             runtime.parking.tracker = Some(tracker);
         }
         if !tracker.is_parked() {
+            self.record_cloud_parking(index);
             return;
         }
         for (local, id) in self.parkable_members(index) {
@@ -263,6 +264,41 @@ impl HorizonApp {
             if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) {
                 runtime.pending_member_attachments.remove(&local);
             }
+        }
+        self.record_cloud_parking(index);
+    }
+
+    /// Records in the runtime index of a saved session whether the terminals of cloud
+    /// `index` are parked, and the status that the last read returned for each. A
+    /// failure is logged: the board itself does not depend on this record.
+    fn record_cloud_parking(&self, index: usize) {
+        let Some(session) = self.active_session.as_ref().filter(|session| session.persistent) else {
+            return;
+        };
+        let Some(parking) = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&self.cloud_prototype.groups.0[index].issue)
+            .map(|runtime| &runtime.parking)
+        else {
+            return;
+        };
+        let parked = parking.tracker.is_some_and(|tracker| tracker.is_parked());
+        let members = self.parkable_members(index);
+        let panels: Vec<ParkedPanel<'_>> = members
+            .iter()
+            .map(|(local, _)| ParkedPanel {
+                local_id: local,
+                parked,
+                status: parking.statuses.get(local),
+            })
+            .collect();
+        if panels.is_empty() {
+            return;
+        }
+        if let Err(error) = self.session_store.record_cloud_panels(&session.session_id, &panels) {
+            tracing::warn!("could not record the park state of a cloud: {error}");
         }
     }
 
@@ -337,6 +373,7 @@ impl HorizonApp {
                     if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) {
                         runtime.parking.next_read = Some(now);
                     }
+                    self.record_cloud_parking(index);
                 }
                 Some(ParkAction::Attach) => {
                     attached = true;
@@ -359,6 +396,7 @@ impl HorizonApp {
                             context.request_repaint();
                         }
                     }
+                    self.record_cloud_parking(index);
                     continue;
                 }
                 None if park_live => {
@@ -412,7 +450,7 @@ impl HorizonApp {
             return;
         };
         if let Some(reader) = &runtime.parking.reader {
-            match reader.try_recv() {
+            let finished = match reader.try_recv() {
                 Ok(result) => {
                     runtime.parking.reader = None;
                     runtime.parking.next_read = Some(now + STATUS_INTERVAL);
@@ -436,9 +474,16 @@ impl HorizonApp {
                             panel.set_parked_agent_status(status);
                         }
                     }
+                    true
                 }
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => runtime.parking.reader = None,
+                Err(TryRecvError::Empty) => false,
+                Err(TryRecvError::Disconnected) => {
+                    runtime.parking.reader = None;
+                    false
+                }
+            };
+            if finished {
+                self.record_cloud_parking(index);
             }
             return;
         }

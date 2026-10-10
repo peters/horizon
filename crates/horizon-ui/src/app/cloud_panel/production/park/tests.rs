@@ -110,12 +110,16 @@ fn runtime(app: &HorizonApp) -> &Runtime {
 
 #[test]
 fn a_cloud_out_of_view_at_ready_parks_without_opening_a_connection() {
-    let (_temp, mut app) = ready_cloud();
+    let (temp, mut app) = ready_cloud();
     app.board.focused = None;
     app.sync_cloud_presentations();
     for local in MEMBERS {
         assert_eq!(wait_of(&app, local), Some(CloudWait::Parked), "{local}");
     }
+    assert!(
+        !temp.path().join(".horizon").join("sessions").exists(),
+        "an ephemeral session records no park state"
+    );
     assert!(runtime(&app).pending_member_attachments.is_empty());
     assert!(runtime(&app).parking.tracker.is_some_and(|tracker| tracker.is_parked()));
     // A later reconnecting message does not hide why the member waits.
@@ -560,3 +564,5 @@ fn collect_text(shape: &egui::Shape, text: &mut String) {
         _ => {}
     }
 }
+
+mod index;
