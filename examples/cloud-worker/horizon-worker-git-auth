@@ -298,22 +298,23 @@ def install_as_root(value, agent=None):
     agent = agent or (lambda operation, data: subprocess.run(
         [*AGENT_RUNNER, operation], input=json.dumps(data).encode(), check=True, cwd='/workspace',
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120))
-    kept, configured = None, False
+    kept = None
     with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
         kept = read_private(ROOT_CREDENTIAL) or earlier
     try:
         agent('install-identity', {'binding': stripped(value), 'previous': previous})
-        configured = True
         write_private(value, ROOT_CREDENTIAL)
     except BaseException:
-        # Identities and token go back to one binding: the root-only one, else the earlier one.
-        try:
-            if configured and kept is not None:
-                agent('install-identity', {'binding': stripped(kept), 'previous': stripped(value)})
-            if kept is earlier and earlier is not None and not ROOT_CREDENTIAL.exists():
+        # Identities and token go back to one binding: the root-only one, else the earlier one,
+        # also when the agent step failed part way.
+        if kept is not None and kept is earlier and not ROOT_CREDENTIAL.exists():
+            with contextlib.suppress(ValueError, OSError):
                 write_private(earlier, ROOT_CREDENTIAL)
+        try:
+            if kept is not None:
+                agent('install-identity', {'binding': stripped(kept), 'previous': stripped(value)})
         except (ValueError, OSError, subprocess.SubprocessError):
-            print('horizon: the earlier static binding could not be restored', file=sys.stderr)
+            print('horizon: the identities of the earlier static binding could not be restored', file=sys.stderr)
         raise
 
 

@@ -164,6 +164,21 @@ class GitAuthenticationTests(unittest.TestCase):
         self.assertEqual(steps, ['Newer Author', 'Older Author'], 'the agent configures Git for the older binding again')
         self.assertEqual(json.loads(root_file.read_text())['author_name'], 'Older Author')
 
+    def test_an_agent_step_that_fails_part_way_is_rolled_back_to_the_binding_in_place(self):
+        root_file = self.path / 'root/static-binding.json'
+        auth.write_private(dict(self.value, author_name='Older Author'), root_file)
+        steps = []
+
+        def agent(operation, value):
+            steps.append(value['binding']['author_name'])
+            if len(steps) == 1:
+                raise subprocess.CalledProcessError(1, 'install-identity')
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                self.assertRaises(subprocess.CalledProcessError):
+            auth.install_as_root(dict(self.value, author_name='Newer Author'), agent)
+        self.assertEqual(steps, ['Newer Author', 'Older Author'])
+
     def test_a_failed_install_keeps_the_earlier_binding_where_only_root_reads_it(self):
         auth.write_private(self.value, auth.CREDENTIAL)
         root_file = self.path / 'root/static-binding.json'
