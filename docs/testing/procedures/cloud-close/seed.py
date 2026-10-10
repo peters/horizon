@@ -1,4 +1,4 @@
-"""Seeds the private home of the fixture with two synthetic clouds and no provider settings."""
+"""Seeds the private home of the fixture with three synthetic clouds and no provider settings."""
 import json, os, sys, time, uuid
 from pathlib import Path
 
@@ -23,7 +23,7 @@ now = int(time.time() * 1000)
 (sessions / session / 'runtime.yaml').write_text((tools / 'runtime.yaml').read_text())
 (sessions / session / 'meta.yaml').write_text(json.dumps({
     'version': 1, 'session_id': session, 'profile_id': profile, 'config_path': str(config),
-    'label': 'demo-api', 'workspace_count': 2, 'panel_count': 2, 'started_at': now, 'last_active_at': now}))
+    'label': 'demo-api', 'workspace_count': 3, 'panel_count': 3, 'started_at': now, 'last_active_at': now}))
 (sessions / 'index.yaml').write_text(json.dumps({'version': 1, 'profiles': [
     {'profile_id': profile, 'last_session_id': session, 'recent_session_ids': [session]}]}))
 Path('/tmp/demo-repo').mkdir(exist_ok=True)
@@ -37,3 +37,10 @@ cloud.mkdir(parents=True)
     'spec': {'operation_id': 'fixture', 'image_digest': 'sha256:' + '0' * 64, 'profile': profile_spec,
              'public_key': 'ssh-ed25519 fixture', 'registry_auth_id': None,
              'gpu_types': [], 'cpu_flavors': [], 'data_centers': []}}))
+# A cloud whose image push failed before a worker was requested, with storage on record.
+pushed = home / 'cloud' / 'image-push'
+pushed.mkdir(parents=True)
+(pushed / 'deployment.json').write_text(json.dumps({
+    'version': 1, 'cloud_id': 'image-push', 'repository': '/tmp/demo-repo', 'revision': 'a' * 40,
+    'profile': profile_spec, 'stage': 'Push', 'operation': {'state': 'prepared'}, 'sessions': []}))
+(pushed / 'workspace-volume.required').write_text('')

@@ -72,6 +72,36 @@ workspaces:
     - 340.0
     session_binding: null
     template: null
+- local_id: 5b1e9d40-2c7a-4f0e-9a51-8d3e6f2a7c14
+  name: image-push
+  cwd: null
+  position:
+  - 3440.0
+  - 40.0
+  template: null
+  layout: Grid
+  panels:
+  - local_id: 9e2d7a61-4b3c-4d8e-b0f5-1a6c3e8d2f47
+    name: notes
+    name_is_custom: true
+    kind: editor
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    resume: fresh
+    work_resume:
+      enabled: false
+      max_downtime_seconds: 10800
+    position:
+    - 3454.0
+    - 868.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null
 cloud_groups:
 - remote:
     deployment_started: true
@@ -172,6 +202,56 @@ cloud_groups:
   layout: Grid
   panels:
   - cff5c496-bf6f-454c-9ffc-0b87bb2c4c39
+  hidden: []
+- remote:
+    deployment_started: true
+    id: image-push
+    revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    profile_name: dev
+    profile:
+      provider: runpod
+      image: registry.example/worker
+      cpu: 4
+      memory_gb: 8
+      gpu: false
+      build: null
+      storage:
+        container_gb: 20
+        volume_gb: 20
+      bootstrap:
+        readiness_seconds: 600
+        contract_version: 1
+      capabilities:
+        agents:
+        - codex
+        - claude
+        - grok
+        browsers:
+        - chromium
+        desktop: true
+  issue: 103
+  title: image-push
+  workspace: 5b1e9d40-2c7a-4f0e-9a51-8d3e6f2a7c14
+  environment:
+    id: issue-103
+    image: development-image (mock)
+    connection: LocalPrototype
+    profile: null
+    provider: null
+  cwd: /tmp/demo-repo
+  position:
+  - 3440.0
+  - 740.0
+  workspace_position:
+  - 3440.0
+  - 40.0
+  size:
+  - 548.0
+  - 482.0
+  collapsed: false
+  layout: Grid
+  panels:
+  - 9e2d7a61-4b3c-4d8e-b0f5-1a6c3e8d2f47
   hidden: []
 browser:
   backend: chromium

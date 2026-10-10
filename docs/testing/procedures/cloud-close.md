@@ -42,10 +42,12 @@ closes with **Remove cloud**.
 - A tools root, `<tools>`, that contains `usr/bin/x11vnc` if the host does not
   have `x11vnc`. It must be outside the home directory.
 - The files in [`cloud-close/`](cloud-close/): `horizon-seeded`, `seed.py` and
-  `runtime.yaml`. `seed.py` writes a session with two clouds into the private
+  `runtime.yaml`. `seed.py` writes a session with three clouds into the private
   home of the fixture:
   - `demo-api`: a deployed cloud with a RunPod worker `pod-7f3a2c`.
   - `scratch-notes`: a cloud that was not deployed.
+  - `image-push`: a cloud whose image push stopped before a worker was
+    requested. Its record has a workspace storage marker.
 - A private evidence directory, `<evidence>`, outside the fixture state.
 
 ## 5. Setup
@@ -81,7 +83,8 @@ closes with **Remove cloud**.
 
 5. Examine the board of the candidate.
 
-   Result: The board shows the clouds `demo-api` and `scratch-notes`. The card
+   Result: The board shows the clouds `demo-api`, `scratch-notes` and
+   `image-push`. The card
    of `demo-api` shows a failure, because the fixture has no provider settings.
 
 ## 6. Tasks
@@ -135,6 +138,26 @@ Give each task an ID. A report uses the ID to give a result.
    Result: The dialog closes. The cloud `scratch-notes` and its panel go off
    the board.
 
+### 6.4 C04 — Close a cloud that has storage but no worker request
+
+1. In the sidebar, click `image-push`. On its card, click **×**.
+
+   Result: The dialog **Close image-push?** shows **Delete cloud resources**
+   and **Cancel**. It does not tell that the cloud has no worker or storage at
+   its provider. It does not show **Remove from Horizon anyway**.
+
+2. Click **Delete cloud resources**.
+
+   Result: The dialog stays open. It shows the reason in red, after
+   "Could not delete the cloud resources". It tells that a worker and its
+   workspace storage can stay at RunPod and cost money. It shows
+   **Remove from Horizon anyway** and **Cancel**.
+
+3. Click **Remove from Horizon anyway**.
+
+   Result: The dialog closes. The cloud `image-push` and its panel go off the
+   board.
+
 ## 7. Pass criteria
 
 - The first dialog for a deployed cloud never shows **Remove from Horizon
@@ -142,6 +165,8 @@ Give each task an ID. A report uses the ID to give a result.
 - **Remove from Horizon anyway** shows only after a deletion fails or cannot
   start, and the dialog names what can stay at the provider.
 - A cloud without resources closes with **Remove cloud**.
+- A cloud whose record has storage offers **Delete cloud resources** first,
+  even without a worker request.
 - **Cancel** and the Escape key keep the cloud.
 
 ## 8. Cleanup
