@@ -176,9 +176,12 @@ impl HorizonApp {
     /// is applied first, so a claimed request is answered, and a refusal or
     /// result it queues is written, before Horizon exits.
     pub(super) fn browser_host_io_holds_exit(&mut self) -> bool {
+        // Read before applying: a job that ends in between has queued its
+        // outcome, which the next call applies.
+        let busy = self.browser_create_host.io.busy();
         self.apply_browser_host_io();
         let io = &mut self.browser_create_host.io;
-        if !io.busy() {
+        if !busy && !io.busy() {
             io.exit_deadline = None;
             return false;
         }
