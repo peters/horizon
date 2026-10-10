@@ -1,10 +1,13 @@
 //! The image repository a cloud's `.horizon/cloud.yml` names, shown in Container registry
 //! when Cloud settings open from that cloud and no binding covers the repository yet.
 use super::HorizonApp;
-use super::dashboard::{Readiness, Tone, caption, chip, label};
+use super::dashboard::{Readiness, Tone, Verified, caption, chip, label};
 use crate::{app::util::primary_button, theme};
 use egui::{Align, Layout, RichText, Ui, vec2};
-use horizon_core::cloud_runtime::registry::{self, Publishing, draft::Draft};
+use horizon_core::cloud_runtime::{
+    registry::{self, Publishing, draft::Draft},
+    settings::Settings,
+};
 
 /// The cloud's repository, its state when no binding covers it, and whether the card
 /// still has to bring it into view.
@@ -52,8 +55,9 @@ impl Needed {
 
 impl HorizonApp {
     /// Cloud settings for the image repository of cloud `id`: the one its record names,
-    /// else the one it was created with.
-    pub(in crate::app::cloud_panel) fn open_cloud_registry(&mut self, ctx: &egui::Context, id: u32) {
+    /// else the one it was created with. After a refused pull, a saved pull validation of
+    /// that repository no longer shows as verified.
+    pub(in crate::app::cloud_panel) fn open_cloud_registry(&mut self, ctx: &egui::Context, id: u32, pull: bool) {
         let production = &self.cloud_prototype.production;
         let image = production
             .runtimes
@@ -69,7 +73,7 @@ impl HorizonApp {
                     .and_then(|group| group.remote.as_ref())
                     .map(|launch| launch.profile.image.clone())
             });
-        self.open_cloud_settings(ctx, false, image);
+        self.open_cloud_settings(ctx, false, image.map(|image| (image, pull)));
     }
 }
 
@@ -88,6 +92,23 @@ impl Readiness {
             _ => self,
         }
     }
+}
+
+/// The repository of a cloud's `image` and its state when no binding covers it. After a
+/// refused pull (`pull`), a saved pull validation of the repository no longer holds, so it
+/// leaves `verified`; a refused push keeps it.
+pub(super) fn of_cloud(
+    settings: &Settings,
+    image: &str,
+    pull: bool,
+    verified: &mut Verified,
+) -> Option<(String, Option<registry::Needed>)> {
+    let repository = registry::repository_of(image)?.to_owned();
+    if pull {
+        verified.remove(&repository);
+    }
+    let needed = registry::needed(settings, image);
+    Some((repository, needed))
 }
 
 /// The repository before it is bound: its state and one action, which adds an entry
@@ -168,7 +189,7 @@ mod tests {
             placement: horizon_core::cloud_panel::Placement::default(),
         });
         app.cloud_prototype.groups.0.push(group);
-        app.open_cloud_registry(&ctx, 7);
+        app.open_cloud_registry(&ctx, 7, false);
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.cloud_prototype.production.setup.receiver.is_some() {
             assert!(Instant::now() < deadline, "the settings did not load");
@@ -266,6 +287,34 @@ mod tests {
             !Needed::default().reveal(&bound),
             "settings from the menu reveal nothing"
         );
+    }
+
+    #[test]
+    fn a_refused_pull_drops_the_saved_pull_validation_and_a_refused_push_keeps_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = horizon_core::cloud_runtime::setup::Draft::load(temp.path())
+            .unwrap()
+            .settings;
+        let saved = || {
+            Verified::from([(
+                "registry.example/team/app".to_owned(),
+                registry::Validation {
+                    image: "registry.example/team/app@sha256:0".into(),
+                    scope: "read-only".into(),
+                    expires_at: None,
+                    checked_at: 0,
+                },
+            )])
+        };
+        let image = "registry.example/team/app:9f3c2a1";
+        let mut pushed = saved();
+        let (repository, _) = of_cloud(&settings, image, false, &mut pushed).unwrap();
+        assert_eq!(repository, "registry.example/team/app");
+        assert!(pushed.contains_key(&repository), "a refused push keeps the pull state");
+        let mut pulled = saved();
+        of_cloud(&settings, image, true, &mut pulled).unwrap();
+        assert!(pulled.is_empty(), "a refused pull is not shown as verified");
+        assert!(of_cloud(&settings, "acme/worker:1", true, &mut saved()).is_none());
     }
 
     #[test]

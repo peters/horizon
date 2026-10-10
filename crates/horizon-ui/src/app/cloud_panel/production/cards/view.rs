@@ -278,7 +278,7 @@ impl HorizonApp {
             Action::Remove => self.remove_deleted_cloud(id, ctx),
             Action::ShareLocalNetwork => self.share_local_network(id, true),
             Action::StopSharingLocalNetwork => self.share_local_network(id, false),
-            Action::ContainerRegistry => self.open_cloud_registry(ctx, id),
+            Action::ContainerRegistry { pull } => self.open_cloud_registry(ctx, id, pull),
             _ => self.change_production_worker(id, action, ctx),
         }
     }

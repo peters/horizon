@@ -233,9 +233,10 @@ impl HorizonApp {
         self.open_cloud_settings(ctx, continue_creation, None);
     }
 
-    /// Opens the settings; with `image`, Container registry shows its repository when no
-    /// binding covers it yet.
-    fn open_cloud_settings(&mut self, ctx: &Context, continue_creation: bool, image: Option<String>) {
+    /// Opens the settings; with a cloud's image, Container registry shows its repository
+    /// when no binding covers it yet. When the registry refused that cloud's pull, the
+    /// repository's saved pull validation is not shown as verified.
+    fn open_cloud_settings(&mut self, ctx: &Context, continue_creation: bool, cloud: Option<(String, bool)>) {
         let root = self
             .cloud_prototype
             .root
@@ -270,12 +271,9 @@ impl HorizonApp {
                     }
                     let ssh_ready = cloud_runtime_ssh_valid(&draft.settings.ssh_identity_file);
                     let configured = draft.validate().is_ok() && ssh_ready;
-                    let verified = saved_validations(&draft);
-                    let needed = image.and_then(|image| {
-                        use horizon_core::cloud_runtime::registry;
-                        let repository = registry::repository_of(&image)?.to_owned();
-                        Some((repository, registry::needed(&draft.settings, &image)))
-                    });
+                    let mut verified = saved_validations(&draft);
+                    let needed =
+                        cloud.and_then(|(image, pull)| needed::of_cloud(&draft.settings, &image, pull, &mut verified));
                     Completion::Loaded(Box::new(Loaded {
                         draft,
                         configured,

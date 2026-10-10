@@ -365,7 +365,9 @@ failure also keeps **Retry deploy**.
 
 **Open Container registry** opens **Cloud settings** for the image repository that
 the profile of the cloud names. If a binding covers that repository, the card
-scrolls to it: replace the credential that the registry refused. If **Container
+scrolls to it: replace the credential that the registry refused. After a refused
+pull, that binding shows **Needs validation**, also if an earlier validation
+passed. If **Container
 registry** has no binding for that repository, the card shows the repository with
 **Not set up**, who publishes to it, and that workers have no pull credential yet.
 Click **Add credentials**: the entry for the repository opens with its name filled

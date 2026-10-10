@@ -9,15 +9,21 @@ pub(super) enum Next {
     /// Retries as the header's own button does.
     Retry(Primary),
     /// Opens Cloud settings on the cloud's image repository, where a login fixes a
-    /// registry refusal that a retry would only repeat.
-    ContainerRegistry,
+    /// registry refusal that a retry would only repeat. `pull` tells that the refused step
+    /// pulls the image rather than pushes it.
+    ContainerRegistry { pull: bool },
 }
 
 impl Next {
     pub(super) fn of(status: &Status) -> Option<Self> {
         let failure = status.failure.as_ref()?;
-        if failure.remedy() == Some(Remedy::RegistryLogin) && status.binds_image && moves_the_image(status) {
-            return Some(Self::ContainerRegistry);
+        if failure.remedy() == Some(Remedy::RegistryLogin)
+            && status.binds_image
+            && let Some(stage) = moving_the_image(status)
+        {
+            return Some(Self::ContainerRegistry {
+                pull: stage != Stage::Push,
+            });
         }
         status
             .primary
@@ -28,27 +34,28 @@ impl Next {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Retry(primary) => primary.label(),
-            Self::ContainerRegistry => "Open Container registry",
+            Self::ContainerRegistry { .. } => "Open Container registry",
         }
     }
 
     pub(super) fn action(self) -> Option<Action> {
         match self {
             Self::Retry(primary) => primary.retries(),
-            Self::ContainerRegistry => Some(Action::ContainerRegistry),
+            Self::ContainerRegistry { pull } => Some(Action::ContainerRegistry { pull }),
         }
     }
 }
 
-/// Whether the failed step moves the cloud's own image, whose repository Container registry
+/// The failed step when it moves the cloud's own image, whose repository Container registry
 /// binds. A refusal while the image builds is about a base image the recipe pulls.
-fn moves_the_image(status: &Status) -> bool {
+fn moving_the_image(status: &Status) -> Option<Stage> {
     let track = &status.track;
     track
         .current
         .filter(|_| track.failed)
         .and_then(|index| track.stages.get(index))
-        .is_some_and(|stage| {
+        .copied()
+        .filter(|stage| {
             matches!(
                 stage,
                 Stage::Validate | Stage::Push | Stage::Replace | Stage::Provision | Stage::Readiness
@@ -107,14 +114,28 @@ mod tests {
         );
         let status = of(&runtime, Occupancy::default(), SystemTime::now());
         let next = Next::of(&status).unwrap();
-        assert_eq!(next, Next::ContainerRegistry);
-        assert_eq!(next.action(), Some(Action::ContainerRegistry));
+        assert_eq!(next, Next::ContainerRegistry { pull: false });
+        assert_eq!(next.action(), Some(Action::ContainerRegistry { pull: false }));
         assert_eq!(status.primary, Some(Primary::Retry), "the header still retries");
         let shown = texts(&runtime);
         assert!(shown.iter().any(|text| text == "Open Container registry"), "{shown:?}");
         assert!(
             !shown.iter().any(|text| text == "Retry deploy"),
             "one next action: {shown:?}"
+        );
+    }
+
+    #[test]
+    fn a_refused_pull_tells_container_registry_that_the_pull_failed() {
+        let runtime = failed(
+            Stage::Provision,
+            &["error from registry: unauthenticated: User cannot be authenticated with the token provided."],
+            "Starting worker failed; inspect deployment output",
+        );
+        let status = of(&runtime, Occupancy::default(), SystemTime::now());
+        assert_eq!(
+            Next::of(&status).and_then(Next::action),
+            Some(Action::ContainerRegistry { pull: true })
         );
     }
 
