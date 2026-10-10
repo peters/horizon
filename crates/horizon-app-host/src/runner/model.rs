@@ -22,6 +22,7 @@ pub struct Step {
     pub recipe: String,
     pub step: String,
     pub passed: bool,
+    pub blocked: bool,
     pub duration_millis: u64,
     pub error: Option<String>,
     pub screenshot: Option<Evidence>,
@@ -46,6 +47,7 @@ pub struct DeviceResult {
     pub allocations: Vec<Uuid>,
     pub error: Option<String>,
     pub cleanup_confirmed: bool,
+    pub blocked: bool,
     pub steps: Vec<Step>,
     pub media: Vec<Media>,
     pub provider_session_link: Option<String>,
@@ -75,4 +77,6 @@ pub struct Progress {
     pub step: Option<String>,
     pub session: Option<Uuid>,
     pub view: Option<crate::view::Handle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }

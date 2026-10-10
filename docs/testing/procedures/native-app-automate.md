@@ -305,7 +305,14 @@ It also tests live views, evidence and cleanup after cancellation or a native ho
 3. Run a recipe with more than one step.
 
    Result: The caption follows the current recipe and step within about one second.
-   Each completed recipe has a **PASS** or **FAIL** result.
+   Each completed recipe has a **PASS**, **FAIL** or **BLOCKED** result.
+
+   Use a synthetic provider fixture to close the driver session during a recipe.
+   Then run one more recipe.
+
+   Result: The failed step keeps its session error. Later steps are blocked without
+   native input. The caption and **Connection details** show **BLOCKED** for each
+   affected recipe. Provider diagnostics are fetched if the archive is usable.
 
 4. Run a failing recipe and a recipe with a reset step.
 
