@@ -144,6 +144,26 @@ class GitAuthenticationTests(unittest.TestCase):
             auth.main()
         self.assertEqual(execute.call_args.args[2]['GH_CONFIG_DIR'], '/workspace/home/.config/gh')
 
+    def test_a_failed_root_write_puts_the_identities_of_the_binding_in_place_back(self):
+        root_file = self.path / 'root/static-binding.json'
+        older = dict(self.value, author_name='Older Author')
+        auth.write_private(older, root_file)
+        steps = []
+        write = auth.write_private
+
+        def failing(value, path):
+            if path == root_file:
+                raise ValueError('no storage')
+            return write(value, path)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'write_private', failing), \
+                self.assertRaises(ValueError):
+            auth.install_as_root(dict(self.value, author_name='Newer Author'),
+                                 lambda operation, value: steps.append(value['binding']['author_name']))
+        self.assertEqual(steps, ['Newer Author', 'Older Author'], 'the agent configures Git for the older binding again')
+        self.assertEqual(json.loads(root_file.read_text())['author_name'], 'Older Author')
+
     def test_a_failed_install_keeps_the_earlier_binding_where_only_root_reads_it(self):
         auth.write_private(self.value, auth.CREDENTIAL)
         root_file = self.path / 'root/static-binding.json'

@@ -36,9 +36,8 @@ credential_reply = targets.credential_reply
 
 
 CREDENTIAL = Path('/run/horizon-credentials/github.json')
-# Under agent isolation root keeps the static binding's token in the GitHub service's root-only
-# directory, where only the Git proxy and the API broker read it, and the agents' directory
-# holds only the binding's identities, without a token (identity_path).
+# Under agent isolation root keeps the static token where only the Git proxy and the API broker
+# read it; the agents' directory keeps only the binding's identities (identity_path).
 ROOT_CREDENTIAL = Path('/run/horizon-github/static-binding.json')
 AGENT_ISOLATION = Path('/run/horizon-tailnet/agent-isolation')
 # The account of every agent session (horizon-worker-tailnet isolate).
@@ -56,8 +55,7 @@ SERVICE_TIMEOUT = 10
 PROXY_PORT = 47281
 PROXY_AUTHORITY = '/run/horizon-worker/github-ca.pem'
 # The service's API broker. While the service runs, gh sends every request to this socket
-# (`http_unix_socket`) and holds only a placeholder token; the broker adds the token to the
-# requests that a grant covers.
+# (`http_unix_socket`) with a placeholder token; the broker adds the token that a grant covers.
 API_SOCKET = '/run/horizon-worker/github-api.sock'
 GH = '/usr/bin/gh'
 GITHUB = 'https://github.com/'
@@ -240,8 +238,7 @@ def git_output(env, *args):
 
 
 def previous_grants():
-    """The identities of the binding in place. Without agent isolation, a token file from an
-    earlier install counts too; under it, root hands the agent those (install_as_root)."""
+    """The identities of the binding in place; under agent isolation never from a token file."""
     try:
         value = read_private(identity_path())
         if value is not None:
@@ -277,17 +274,15 @@ def install(value):
 
 
 def install_identities(value, previous=None):
-    """Git's configuration for a binding without tokens, kept in the identity file, after the
-    identities of the binding in place and of `previous` go."""
+    """Git's configuration for a binding without tokens, replacing the earlier identities."""
     version, entries = identity_grants(value)
     configure(version, entries, [previous_grants(), identity_grants(previous) if previous else None])
     write_private(value, identity_path())
 
 
 def install_as_root(value, agent=None):
-    """Under agent isolation the agent configures Git and keeps the identities; root keeps the
-    token. An earlier image's token file is emptied in place (with its hard links) and removed
-    first; if this install fails, the root-only file keeps that earlier binding instead."""
+    """Under agent isolation the agent keeps the identities and root the token. An earlier
+    image's token file is emptied in place (with its hard links) and removed first."""
     grants(value)
     earlier = previous = None
     with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
@@ -300,18 +295,25 @@ def install_as_root(value, agent=None):
             legacy.truncate(0)
     with contextlib.suppress(IsADirectoryError, PermissionError):
         CREDENTIAL.unlink(missing_ok=True)
+    agent = agent or (lambda operation, data: subprocess.run(
+        [*AGENT_RUNNER, operation], input=json.dumps(data).encode(), check=True, cwd='/workspace',
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120))
+    kept, configured = None, False
+    with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
+        kept = read_private(ROOT_CREDENTIAL) or earlier
     try:
-        payload = {'binding': stripped(value), 'previous': previous}
-        (agent or (lambda operation, data: subprocess.run(
-            [*AGENT_RUNNER, operation], input=json.dumps(data).encode(), check=True, cwd='/workspace',
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)))('install-identity', payload)
+        agent('install-identity', {'binding': stripped(value), 'previous': previous})
+        configured = True
         write_private(value, ROOT_CREDENTIAL)
     except BaseException:
-        if earlier is not None and not ROOT_CREDENTIAL.exists():
-            try:
+        # Identities and token go back to one binding: the root-only one, else the earlier one.
+        try:
+            if configured and kept is not None:
+                agent('install-identity', {'binding': stripped(kept), 'previous': stripped(value)})
+            if kept is earlier and earlier is not None and not ROOT_CREDENTIAL.exists():
                 write_private(earlier, ROOT_CREDENTIAL)
-            except (ValueError, OSError):
-                print('horizon: the earlier static binding was lost', file=sys.stderr)
+        except (ValueError, OSError, subprocess.SubprocessError):
+            print('horizon: the earlier static binding could not be restored', file=sys.stderr)
         raise
 
 
@@ -406,13 +408,11 @@ def configure_chain(value):
     entries = checked_grants(value['grants'], IDENTITY_FIELDS)
     previous = checked_grants(value['previous'], IDENTITY_FIELDS, minimum=0)
     configure(2, entries, [previous_grants(), (2, previous)])
-    # The static binding stays until the service has stored its chain and configured every
-    # repository; horizon-worker-github then removes it with `clear`.
+    # The static binding stays until horizon-worker-github removes it with `clear`.
 
 
 def restore_static(value):
-    """After a failed first chain install: the static binding's configuration again, without
-    the identities that the failed chain's configuration wrote."""
+    """After a failed first chain install: the static binding's configuration again."""
     if not isinstance(value, dict) or set(value) != {'previous'}:
         raise ValueError('Invalid Git configuration')
     failed = (2, checked_grants(value['previous'], IDENTITY_FIELDS, minimum=0))
@@ -510,8 +510,7 @@ def service_environment(env, argv, ask=call_service):
     reply = ask({'request': 'gh-token', 'repository': gh_repository(env, list(argv)) or ''})
     if reply is None:
         return None
-    # gh reads the configuration that routes it to the API broker, whatever HOME,
-    # XDG_CONFIG_HOME or GH_CONFIG_DIR the caller set.
+    # gh reads the routed configuration, whatever HOME, XDG_CONFIG_HOME or GH_CONFIG_DIR says.
     env = dict(env, GH_CONFIG_DIR=str(Path(HOME) / '.config/gh'))
     if (reply.get('ok') is True and valid_token(reply.get('token'))
             and valid_repository(reply.get('repository'))):
