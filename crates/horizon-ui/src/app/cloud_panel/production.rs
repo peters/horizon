@@ -12,6 +12,7 @@ mod github_requests;
 mod idle;
 mod launch;
 mod lifecycle;
+mod list;
 mod local_network;
 #[cfg(debug_assertions)]
 mod log_preview;

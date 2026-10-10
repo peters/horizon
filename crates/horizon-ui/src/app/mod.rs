@@ -278,6 +278,8 @@ pub struct HorizonApp {
     held_navigation_keys: Vec<horizon_core::ShortcutBinding>,
     sidebar_visible: bool,
     sidebar_drag_workspace: Option<WorkspaceId>,
+    /// The rows of the sidebar's cloud list, read at most once a second.
+    sidebar_list: sidebar::ListCache,
     minimap_visible: bool,
     hud_visible: bool,
     renaming_workspace: Option<WorkspaceId>,

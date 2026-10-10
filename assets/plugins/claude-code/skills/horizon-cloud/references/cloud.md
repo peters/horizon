@@ -128,6 +128,23 @@ to click **Open Container registry**, add the credential, and then click the
 retry in the card header: **Retry deploy**, **Reconnect** or **Resume worker**,
 for the operation that failed.
 
+## Cloud list in the sidebar
+
+The sidebar groups the person's workspaces in **Needs you**, **Cloud**, **Parked**
+and **This PC**. **Needs you** holds a cloud that failed or waits for a decision,
+whose parked session ended or is not found, or whose agent waits for GitHub
+access. **Cloud** holds a cloud that is attached, disconnected, not deployed yet,
+or busy with an operation. A disconnected cloud shows **Disconnected**: its
+sessions continue on the worker. **Parked** holds a cloud
+with parked terminals or a stopped worker. **This PC** holds workspaces without a
+cloud. Each row shows a status dot and one status line, for example the last line
+of a parked agent. A **Parked** row is compact: its status line is the hover and
+accessibility text of its dot. A group header shows the hourly cost of its running
+workers.
+A click on a row goes to its workspace, and a parked cloud then attaches. No MCP
+tool reads or changes this list. To find a cloud for the person, name its
+workspace and its group.
+
 ## GitHub access
 
 With Connect GitHub (Horizon **Cloud settings › GitHub**), each cloud's worker holds

@@ -4,6 +4,7 @@ pub mod agent_work;
 mod agents;
 mod board;
 pub mod browser;
+pub mod cloud_list;
 #[cfg(feature = "cloud-workspaces")]
 pub mod cloud_panel;
 #[cfg(feature = "cloud-workspaces")]

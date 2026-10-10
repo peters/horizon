@@ -1,9 +1,22 @@
-//! The workspace and panel rows of the sidebar.
+//! The rows of the sidebar's cloud list: a status dot, the workspace name and one
+//! status line, or only the dot and the name for a compact parked row.
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Sense, Stroke, Vec2};
+use horizon_core::cloud_list::{Dot, Group};
 
 use crate::theme;
 
 use super::{SidebarWorkspaceInsert, SidebarWorkspaceRowInteraction, WorkspaceSidebarEntry};
+
+/// The height of a row with a status line.
+pub(super) const ROW_HEIGHT: f32 = 40.0;
+/// The height of a compact parked row.
+pub(super) const COMPACT_ROW_HEIGHT: f32 = 26.0;
+const DOT_RADIUS: f32 = 4.0;
+
+/// Whether the row of `workspace` is compact: a parked row shows no status line.
+pub(super) fn is_compact(workspace: &WorkspaceSidebarEntry) -> bool {
+    workspace.row.group == Group::Parked
+}
 
 /// Width left for the workspace name after the badges that follow it: the
 /// panel count (accordion rows only) and the `NEW WINDOW` badge (detached
@@ -16,6 +29,41 @@ pub(super) fn sidebar_workspace_name_width(available_width: f32, detached: bool,
     (available_width - count_reserve - detached_reserve - 10.0).max(0.0)
 }
 
+/// What the status dot says, for its hover text.
+pub(super) fn dot_meaning(dot: Dot) -> &'static str {
+    match dot {
+        Dot::Working => "An agent is working",
+        Dot::Idle => "Idle",
+        Dot::Busy => "Horizon is working on this cloud",
+        Dot::Attention => "Waiting for you",
+        Dot::Failed => "Failed",
+        Dot::Parked { working: true } => "Parked · an agent is working on the worker",
+        Dot::Parked { working: false } => "Parked · no local terminal",
+        Dot::Stopped => "Worker stopped",
+    }
+}
+
+pub(super) fn paint_dot(painter: &egui::Painter, center: Pos2, dot: Dot) {
+    let filled = |color: Color32| {
+        painter.circle_filled(center, DOT_RADIUS, color);
+    };
+    let ring = |color: Color32| {
+        painter.circle_stroke(center, DOT_RADIUS - 0.5, Stroke::new(1.5_f32, color));
+    };
+    match dot {
+        Dot::Working => filled(theme::PALETTE_GREEN()),
+        Dot::Idle => filled(theme::FG_DIM()),
+        Dot::Busy => filled(theme::ACCENT()),
+        Dot::Attention => filled(theme::PALETTE_YELLOW()),
+        Dot::Failed => filled(theme::PALETTE_RED()),
+        Dot::Parked { working: true } => ring(theme::PALETTE_GREEN()),
+        Dot::Parked { working: false } => ring(theme::FG_DIM()),
+        Dot::Stopped => ring(theme::BORDER_STRONG()),
+    }
+}
+
+/// Draws the dot, the name with its badges and, unless the row is compact, the
+/// status line.
 pub(super) fn render_sidebar_workspace_row_contents(
     ui: &mut egui::Ui,
     workspace: &WorkspaceSidebarEntry,
@@ -23,13 +71,25 @@ pub(super) fn render_sidebar_workspace_row_contents(
 ) -> SidebarWorkspaceRowInteraction {
     let mut hovered = false;
     let mut clicked = false;
+    let mut track = |response: &egui::Response| {
+        hovered |= response.hovered();
+        clicked |= response.clicked();
+    };
 
-    ui.add_space(14.0);
-
-    let bar_color = theme::alpha(workspace.color, if workspace.is_active { 240 } else { 110 });
-    let bar_rect = ui.allocate_space(Vec2::new(3.0, 22.0)).1;
-    ui.painter().rect_filled(bar_rect, CornerRadius::same(2), bar_color);
-
+    let compact = is_compact(workspace);
+    ui.add_space(16.0);
+    let (dot_rect, dot_response) = ui.allocate_exact_size(Vec2::splat(DOT_RADIUS * 2.0 + 2.0), Sense::click());
+    paint_dot(ui.painter(), dot_rect.center(), workspace.row.dot);
+    // A compact row has no status line, so its dot tells it.
+    let meaning = dot_meaning(workspace.row.dot);
+    let spoken = if compact && !workspace.row.line.is_empty() {
+        format!("{meaning}\n{}", workspace.row.line)
+    } else {
+        meaning.to_owned()
+    };
+    dot_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &spoken));
+    let dot_response = dot_response.on_hover_text(spoken);
+    track(&dot_response);
     ui.add_space(8.0);
 
     let name = egui::RichText::new(&workspace.name)
@@ -38,21 +98,28 @@ pub(super) fn render_sidebar_workspace_row_contents(
         } else {
             theme::FG_SOFT()
         })
-        .size(13.0)
+        .size(if compact { 12.5 } else { 13.0 })
         .strong();
-    // A sized, left-to-right scope (rather than `add_sized`, which centers)
-    // keeps the name flush left while letting long names truncate.
     let name_width = sidebar_workspace_name_width(ui.available_width(), workspace.detached, accordion);
-    let name_response = ui
-        .allocate_ui_with_layout(
-            Vec2::new(name_width, 18.0),
-            Layout::left_to_right(Align::Center),
-            |ui| ui.add(egui::Label::new(name).truncate().sense(Sense::click())),
-        )
-        .inner;
-    hovered |= name_response.hovered();
-    clicked |= name_response.clicked();
-
+    let text_height = if compact { 18.0 } else { 32.0 };
+    let line = (!compact && !workspace.row.line.is_empty()).then_some(workspace.row.line.as_str());
+    // A sized, top-down scope keeps the name and its line flush left while
+    // letting both truncate.
+    ui.allocate_ui_with_layout(Vec2::new(name_width, text_height), Layout::top_down(Align::Min), |ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
+        let response = ui.add(egui::Label::new(name).truncate().sense(Sense::click()));
+        track(&response);
+        if let Some(line) = line {
+            let response = ui
+                .add(
+                    egui::Label::new(egui::RichText::new(line).color(theme::FG_DIM()).size(11.0))
+                        .truncate()
+                        .sense(Sense::click()),
+                )
+                .on_hover_text(line);
+            track(&response);
+        }
+    });
     if workspace.detached {
         ui.add_space(4.0);
         let detached_response = ui.add(
@@ -64,8 +131,7 @@ pub(super) fn render_sidebar_workspace_row_contents(
             )
             .sense(Sense::click()),
         );
-        hovered |= detached_response.hovered();
-        clicked |= detached_response.clicked();
+        track(&detached_response);
     }
 
     if accordion {
@@ -77,8 +143,7 @@ pub(super) fn render_sidebar_workspace_row_contents(
             )
             .sense(Sense::click()),
         );
-        hovered |= count_response.hovered();
-        clicked |= count_response.clicked();
+        track(&count_response);
     }
 
     SidebarWorkspaceRowInteraction { hovered, clicked }

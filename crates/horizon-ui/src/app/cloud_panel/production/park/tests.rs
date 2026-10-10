@@ -9,12 +9,16 @@ use horizon_core::{
 const MEMBERS: [&str; 2] = ["one", "two"];
 
 /// A ready cloud with two shell members that wait to attach, as after a restart.
-fn ready_cloud() -> (tempfile::TempDir, HorizonApp) {
+pub(in crate::app::cloud_panel::production) fn ready_cloud() -> (tempfile::TempDir, HorizonApp) {
     let (temp, app) = test_app();
     ready_cloud_in(temp, app, [0.0, 0.0])
 }
 
-fn ready_cloud_in(temp: tempfile::TempDir, mut app: HorizonApp, origin: [f32; 2]) -> (tempfile::TempDir, HorizonApp) {
+pub(in crate::app::cloud_panel::production) fn ready_cloud_in(
+    temp: tempfile::TempDir,
+    mut app: HorizonApp,
+    origin: [f32; 2],
+) -> (tempfile::TempDir, HorizonApp) {
     let profile = CloudConfig::parse(
         "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker\n    cpu: 4\n    memory_gb: 8\n",
     )
@@ -84,7 +88,7 @@ fn ready_cloud_in(temp: tempfile::TempDir, mut app: HorizonApp, origin: [f32; 2]
     (temp, app)
 }
 
-fn member(app: &HorizonApp, local: &str) -> PanelId {
+pub(in crate::app::cloud_panel::production) fn member(app: &HorizonApp, local: &str) -> PanelId {
     app.board.panel_id_by_local_id(local).unwrap()
 }
 
@@ -562,6 +566,14 @@ fn collect_text(shape: &egui::Shape, text: &mut String) {
         egui::Shape::Text(shape) => text.push_str(&shape.galley.job.text),
         egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_text(shape, text)),
         _ => {}
+    }
+}
+
+impl Parking {
+    /// Parks the cloud, with the statuses that its sessions last showed.
+    pub(in crate::app::cloud_panel::production) fn park_with(&mut self, statuses: Vec<SessionStatus>) {
+        self.tracker = Some(ParkTracker::parked());
+        self.statuses = statuses.into_iter().map(|status| (status.id.clone(), status)).collect();
     }
 }
 

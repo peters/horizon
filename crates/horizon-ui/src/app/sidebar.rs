@@ -1,13 +1,11 @@
+mod list;
 mod menus;
 mod new_workspace;
 mod rows;
 mod toolbar;
 
+pub(in crate::app) use list::ListCache;
 pub(in crate::app) use new_workspace::{NewWorkspace, menu as new_workspace_menu};
-
-use rows::{
-    paint_panel_row_bg, paint_workspace_drop_indicator, paint_workspace_row_bg, render_sidebar_workspace_row_contents,
-};
 
 use std::collections::HashMap;
 
@@ -15,6 +13,7 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder,
     Vec2,
 };
+use horizon_core::cloud_list::{self, Group, Row};
 use horizon_core::{PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
@@ -33,6 +32,8 @@ struct WorkspaceSidebarEntry {
     detached: bool,
     capabilities: WorkspaceLayoutCapabilities,
     panels: Vec<SidebarPanelEntry>,
+    /// The workspace's group, status dot and status line in the cloud list.
+    row: Row,
 }
 
 #[derive(Clone)]
@@ -93,7 +94,7 @@ impl HorizonApp {
             .any(|workspace| !self.workspace_is_detached(workspace.id))
     }
 
-    pub(super) fn render_sidebar(&mut self, ctx: &Context) {
+    pub(in crate::app) fn render_sidebar(&mut self, ctx: &Context) {
         if !self.sidebar_visible {
             return;
         }
@@ -102,6 +103,7 @@ impl HorizonApp {
         let sidebar_origin = Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT);
         let sidebar_width = effective_sidebar_width(viewport.width());
         let sidebar_size = Vec2::new(sidebar_width, viewport.height() - TOOLBAR_HEIGHT);
+        self.refresh_sidebar_rows(std::time::Instant::now());
         let workspace_data = self.sidebar_workspace_data();
         let mut actions = SidebarActions::default();
 
@@ -153,6 +155,7 @@ impl HorizonApp {
                     detached: self.workspace_is_detached(workspace.id),
                     capabilities: self.workspace_layout_capabilities(workspace.id),
                     panels,
+                    row: self.sidebar_row(workspace.id),
                 }
             })
             .collect()
@@ -192,8 +195,17 @@ impl HorizonApp {
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
 
-                for workspace in workspace_data {
-                    self.render_sidebar_workspace(ui, workspace, actions, &mut drag_state);
+                for group in Group::ALL {
+                    let rows = workspace_data.iter().filter(|entry| entry.row.group == group);
+                    let count = rows.clone().count();
+                    if count == 0 {
+                        continue;
+                    }
+                    let summary = cloud_list::group_summary(group, rows.map(|entry| &entry.row));
+                    list::render_group_header(ui, group, count, &summary);
+                    for workspace in workspace_data.iter().filter(|entry| entry.row.group == group) {
+                        self.render_sidebar_workspace(ui, workspace, actions, &mut drag_state);
+                    }
                 }
             });
 
@@ -252,12 +264,18 @@ impl HorizonApp {
         drag_state: &mut SidebarWorkspaceDragState,
     ) {
         let accordion = self.template_config.features.sidebar_accordion;
-        ui.add_space(4.0);
+        let compact = rows::is_compact(workspace);
+        ui.add_space(if compact { 1.0 } else { 2.0 });
 
-        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), 32.0)).1;
+        let height = if compact {
+            rows::COMPACT_ROW_HEIGHT
+        } else {
+            rows::ROW_HEIGHT
+        };
+        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), height)).1;
         let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
         let mut row_clicked = false;
-        paint_workspace_row_bg(
+        rows::paint_workspace_row_bg(
             ui,
             row_rect,
             workspace.color,
@@ -270,7 +288,7 @@ impl HorizonApp {
                 .max_rect(row_rect)
                 .layout(Layout::left_to_right(Align::Center)),
             |ui| {
-                let interaction = render_sidebar_workspace_row_contents(ui, workspace, accordion);
+                let interaction = rows::render_sidebar_workspace_row_contents(ui, workspace, accordion);
                 click_target_hovered |= interaction.hovered;
                 row_clicked |= interaction.clicked;
             },
@@ -306,7 +324,7 @@ impl HorizonApp {
                 self.render_sidebar_panel(ui, workspace, panel, actions);
             }
         }
-        ui.add_space(8.0);
+        ui.add_space(if compact { 1.0 } else { 4.0 });
     }
 
     /// The panel a workspace-row click reveals. Accordion rows (where panel
@@ -352,8 +370,8 @@ impl HorizonApp {
             drag_state.drop_requested = true;
         }
 
-        if sidebar_workspace_drop_should_dock(workspace.detached)
-            && let Some(dragged_workspace_id) = self.sidebar_drag_workspace.filter(|id| *id != workspace.id)
+        if let Some(dragged_workspace_id) = self.sidebar_drag_workspace.filter(|id| *id != workspace.id)
+            && list::accepts_drop(self.sidebar_row(dragged_workspace_id).group, workspace)
             && let Some(pointer_pos) = ui.ctx().pointer_interact_pos()
             && row_rect.expand2(Vec2::new(0.0, 4.0)).contains(pointer_pos)
         {
@@ -367,7 +385,7 @@ impl HorizonApp {
                 target_workspace_id: workspace.id,
                 insert,
             });
-            paint_workspace_drop_indicator(ui, row_rect, insert, workspace.color);
+            rows::paint_workspace_drop_indicator(ui, row_rect, insert, workspace.color);
         }
 
         if self.sidebar_drag_workspace == Some(workspace.id) && row_response.dragged() {
@@ -387,7 +405,7 @@ impl HorizonApp {
         let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), 30.0)).1;
         let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
         let mut row_clicked = false;
-        paint_panel_row_bg(ui, row_rect, workspace.color, panel.is_focused, click_target_hovered);
+        rows::paint_panel_row_bg(ui, row_rect, workspace.color, panel.is_focused, click_target_hovered);
 
         let mut close_clicked = false;
         ui.scope_builder(
