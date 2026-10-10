@@ -190,6 +190,20 @@ Do not combine `--only` with `--force-local`; this combination removes the tunne
 ## 5. Managed backend protocol
 
 The foreground command receives a private `HORIZON_APP_BACKEND_DIR`.
+Its `TMPDIR`, `TEMP` and `TMP` variables use the same owned task directory.
+The trusted guardian uses the caller's existing temporary directory if the caller sets one.
+Project inputs cannot change the guardian's temporary directory.
+
+The native-process library has a `start_with_diagnostics` operation for host adapters.
+Its callback receives a held log capability before the declared command starts.
+This capability can retain one finite host cause in the backend's private `output.log` after normal process closure.
+It does not recover a process, change its owner or reopen an arbitrary path.
+Child stdout, child stderr and diagnostics share a 4 MiB file limit.
+The limit reserves 1 KiB for the first host cause.
+A private marker verifies the exact retained record; child output cannot claim diagnostic retention.
+A failed diagnostic write does not replace the original host cause.
+Guardian termination records use the ordinary log budget and do not claim the host's first cause.
+Host adapters must retain the capability before process expiry or cleanup.
 It emits one bounded stdout record after the app backend is ready.
 
 ```json

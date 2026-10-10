@@ -85,6 +85,14 @@ the affected lane. The terminal report keeps its separate 8 MiB reserve.
 Record step results, artifact identity, actual concurrency, live presentation,
 and provider closure separately.
 
+Managed foreground commands use their owned task directory for `TMPDIR`, `TEMP`
+and `TMP`. A trusted host can set its own private temporary directory for the guardian.
+The native-process library can retain a finite host cause through a held log
+capability after process closure. Its adapter must capture this capability before
+cleanup. Child stdout, child stderr and diagnostics share a 4 MiB file limit,
+with 1 KiB reserved for the first host cause. A diagnostic write failure does not
+replace that cause. This capability does not recover or reopen foreign state.
+
 After uncertainty, keep the original owner, operation identity, and private state.
 Do not replay a mutating tool, change ownership, remove a journal, or allocate a
 replacement to bypass admission refusal. Follow the runbook's recovery procedure.
