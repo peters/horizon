@@ -212,18 +212,16 @@ fn opened(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) -> Option<StepA
         }
         ui.add_space(4.0);
         let mut action = None;
-        ui.horizontal(|ui| {
+        // A long next action moves Copy error to the next row rather than wrapping a label.
+        let button =
+            |label| crate::app::cloud_panel::runtime::action_button(label).wrap_mode(egui::TextWrapMode::Extend);
+        ui.horizontal_wrapped(|ui| {
             if let Some(next) = super::next::Next::of(status)
-                && ui
-                    .add(crate::app::cloud_panel::runtime::action_button(next.label()))
-                    .clicked()
+                && ui.add(button(next.label())).clicked()
             {
                 action = Some(StepAction::Next);
             }
-            if ui
-                .add(crate::app::cloud_panel::runtime::action_button("Copy error"))
-                .clicked()
-            {
+            if ui.add(button("Copy error")).clicked() {
                 action = Some(StepAction::CopyError);
             }
         });
