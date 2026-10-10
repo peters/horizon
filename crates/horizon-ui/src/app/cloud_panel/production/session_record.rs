@@ -68,13 +68,7 @@ impl Sessions {
             .load()?
             .ok_or(cloud_runtime::Error::Invalid("Missing cloud deployment"))?;
         // Panels that run keep the sessions a failed save could not record.
-        let mut restored = false;
-        for session in unsaved {
-            if !record.sessions.iter().any(|saved| saved.panel_id == session.panel_id) {
-                record.sessions.push(session);
-                restored = true;
-            }
-        }
+        let restored = restore(&mut record, unsaved);
         let (value, changed) = change(&mut record);
         let changed = changed || restored;
         if changed {
@@ -172,7 +166,49 @@ impl Fence {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
+
+    /// Waits for that save, and when it failed records the sessions it held in the
+    /// record in `directory`, so the record holds every running panel before anything
+    /// is allocated for it. Runs on a worker thread: it locks and saves the record.
+    pub(super) fn wait_recorded(&self, directory: &Path) -> Result<(), String> {
+        let Some(flight) = &self.0 else { return Ok(()) };
+        self.wait();
+        let unsaved = {
+            let flight = flight.lock().unwrap_or_else(PoisonError::into_inner);
+            if !flight.failed {
+                return Ok(());
+            }
+            flight.record.sessions.clone()
+        };
+        let recorded = (|| {
+            let store = Store::lock(directory)?;
+            let mut record = store
+                .load()?
+                .ok_or(cloud_runtime::Error::Invalid("Missing cloud deployment"))?;
+            if restore(&mut record, unsaved) {
+                store.save(&record)?;
+            }
+            cloud_runtime::Result::Ok(())
+        })();
+        recorded.map_err(|error| format!("{UNSAVED}: {error}"))?;
+        flight.lock().unwrap_or_else(PoisonError::into_inner).failed = false;
+        Ok(())
+    }
 }
+
+/// Adds to `record` each of `sessions` it lacks, and says whether it lacked any.
+fn restore(record: &mut Deployment, sessions: Vec<cloud_runtime::state::Session>) -> bool {
+    let mut restored = false;
+    for session in sessions {
+        if !record.sessions.iter().any(|saved| saved.panel_id == session.panel_id) {
+            record.sessions.push(session);
+            restored = true;
+        }
+    }
+    restored
+}
+
+const UNSAVED: &str = "Could not record the session of a new cloud panel";
 
 /// Saves the record until a save holds every change, then releases its lock. The lock is
 /// released before the flight says it is done, so a reader that sees it done can lock.
@@ -190,7 +226,7 @@ fn save(store: Store, flight: &Mutex<Flight>, failed: &Sender<String>, repaint: 
             flight.failed = saved.is_err();
             drop(flight);
             if let Err(error) = saved {
-                let _ = failed.send(format!("Could not record the session of a new cloud panel: {error}"));
+                let _ = failed.send(format!("{UNSAVED}: {error}"));
             }
             // The cloud is no longer busy, or its failure shows.
             if let Some(ctx) = repaint {
@@ -216,8 +252,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_failed_save_keeps_its_sessions_for_the_next_change() {
+    /// A saved record, and sessions whose save of a new panel `first` failed because the
+    /// record's folder took no new file.
+    fn failed_save() -> (tempfile::TempDir, std::path::PathBuf, Sessions) {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().join("fixture");
         let record: Deployment = serde_json::from_value(serde_json::json!({
@@ -228,8 +265,7 @@ mod tests {
         .unwrap();
         Store::lock(&directory).unwrap().save(&record).unwrap();
         let sessions = Sessions::default();
-        // The record's folder takes no new file, so the save fails.
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o500)).unwrap();
+        set_writable(&directory, false);
         sessions
             .with_record(&directory, None, |record| {
                 record.sessions.push(session("first"));
@@ -237,15 +273,46 @@ mod tests {
             })
             .unwrap();
         sessions.wait();
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(sessions.failure().is_some(), "the failure shows");
+        (temp, directory, sessions)
+    }
+
+    fn set_writable(directory: &Path, writable: bool) {
+        let mode = if writable { 0o700 } else { 0o500 };
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn recorded(directory: &Path) -> Vec<String> {
+        let saved = Store::lock(directory).unwrap().load().unwrap().unwrap();
+        saved.sessions.into_iter().map(|session| session.panel_id).collect()
+    }
+
+    #[test]
+    fn a_preparation_records_the_sessions_of_a_failed_save_before_it_reads() {
+        let (_temp, directory, sessions) = failed_save();
+        let fence = sessions.fence();
+        let error = fence.wait_recorded(&directory).unwrap_err();
+        assert!(
+            error.contains(UNSAVED),
+            "a save that fails again refuses the preparation: {error}"
+        );
+
+        set_writable(&directory, true);
+        fence.wait_recorded(&directory).unwrap();
+        assert_eq!(recorded(&directory), ["first"], "the record holds the running panel");
+        sessions.with_record(&directory, None, |_| ((), false)).unwrap();
+        assert!(!sessions.saving(), "a recorded session is not saved again");
+    }
+
+    #[test]
+    fn a_failed_save_keeps_its_sessions_for_the_next_change() {
+        let (_temp, directory, sessions) = failed_save();
+        set_writable(&directory, true);
 
         sessions.with_record(&directory, None, |_| ((), false)).unwrap();
         sessions.wait();
-        let saved = Store::lock(&directory).unwrap().load().unwrap().unwrap();
-        let recorded: Vec<_> = saved.sessions.iter().map(|session| session.panel_id.as_str()).collect();
         assert_eq!(
-            recorded,
+            recorded(&directory),
             ["first"],
             "the next change records the session the failed save held"
         );
