@@ -50,7 +50,8 @@ impl HorizonApp {
         };
         let (mut condition, mut line, stoppable) = cards::list::condition(group, runtime, &self.board, now);
         let mut working = attached_working;
-        let mut known = true;
+        // A session or terminal that still attaches does not show yet whether an agent works.
+        let mut known = runtime.pending_session_attachments.is_empty() && runtime.pending_member_attachments.is_empty();
         // A parked cloud stays parked while its connection is down: its terminals keep
         // their snapshots, and the worker's last status is still the best line.
         if matches!(condition, Condition::Ready | Condition::Idle) && runtime.parking.is_parked() {
@@ -62,7 +63,8 @@ impl HorizonApp {
                     .any(|status| status.activity == SessionActivity::Working);
             // Right after the park, after a failed read, or for a terminal that parked
             // since the last read, nothing shows that no agent works.
-            known = !runtime.parking.read_failed()
+            known = known
+                && !runtime.parking.read_failed()
                 && members
                     .iter()
                     .filter(|panel| panel.cloud_wait() == Some(CloudWait::Parked))

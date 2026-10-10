@@ -218,3 +218,18 @@ fn a_parked_cloud_is_not_offered_while_a_terminal_reports_work_for_itself() {
     app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(2));
     assert!(app.sidebar_idle_clouds(Group::Parked).is_empty());
 }
+
+#[test]
+fn a_cloud_whose_sessions_still_attach_is_not_offered() {
+    let (_temp, mut app) = connected(Some(0.5));
+    runtime(&mut app).pending_session_attachments.insert("one".to_owned());
+    app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(2));
+    assert!(app.sidebar_idle_clouds(Group::Cloud).is_empty());
+    runtime(&mut app).pending_session_attachments.clear();
+    runtime(&mut app).pending_member_attachments.insert("one".to_owned());
+    app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(4));
+    assert!(app.sidebar_idle_clouds(Group::Cloud).is_empty());
+    runtime(&mut app).pending_member_attachments.clear();
+    app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(6));
+    assert_eq!(app.sidebar_idle_clouds(Group::Cloud).len(), 1);
+}
