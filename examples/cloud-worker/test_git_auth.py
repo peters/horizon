@@ -64,6 +64,8 @@ class GitAuthenticationTests(unittest.TestCase):
 
         def agent(operation, value):
             steps.append((operation, value))
+            # The earlier image's token file is out of the agents' reach while the agent works.
+            self.assertFalse(auth.CREDENTIAL.exists())
             with mock.patch.object(auth, 'root_holds_token', return_value=False), \
                     mock.patch.object(auth.subprocess, 'run'), \
                     mock.patch.object(auth, 'AGENT_ISOLATION', self.path / 'isolated'):
@@ -115,7 +117,7 @@ class GitAuthenticationTests(unittest.TestCase):
                 mock.patch.object(auth, 'write_private', side_effect=ValueError('no storage')), \
                 self.assertRaises(ValueError):
             auth.install_as_root(self.value, lambda operation, value: None)
-        self.assertTrue(auth.CREDENTIAL.exists())
+        self.assertEqual(auth.read_grants()[1][0]['token'], self.value['token'], 'the earlier binding is back')
 
     def test_a_token_file_of_another_account_is_refused(self):
         with mock.patch.object(auth.subprocess, 'run'):
