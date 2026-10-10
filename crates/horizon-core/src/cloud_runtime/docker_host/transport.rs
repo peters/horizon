@@ -17,6 +17,7 @@ impl Transport<'_> {
             let mut command = Command::new("tailscale");
             // The wrapper resolves MagicDNS and pins keys from the tailnet control plane.
             // Disable local SSH configuration, identities and connection reuse.
+            // The wrapper consumes the destination first; OpenSSH parses the following options.
             command.args(["ssh", &format!("{}@{}", ssh.user, ssh.host)]);
             command.args([
                 "-F",

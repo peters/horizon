@@ -63,7 +63,13 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
 
    Result: Docker Desktop, absent engine metadata and unmeasurable storage cannot pass admission. Cancellation returns an error.
 
-### 5.4 DHP-LIVE — Optional authorized Tailscale probe
+### 5.4 DHP-IMAGE — Built worker image
+
+1. Examine the built-image regression test result.
+
+   Result: The unchanged pinned image passes its contract check. A build recipe retains the warning for deployment validation.
+
+### 5.5 DHP-LIVE — Optional authorized Tailscale probe
 
 1. If live access is authorized, create a private JSON binding outside the repository.
 

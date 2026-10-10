@@ -161,13 +161,14 @@ pub fn probe(host: &Binding, profile: Option<&Profile>, cancel: &Cancellation) -
 
 fn profile_checks(result: &mut Probe, profile: Option<&Profile>) {
     if let Some(profile) = profile {
-        let known = crate::cloud_runtime::repository::launch::quick_start::trusted_contract(
-            &profile.image,
-            &profile.capabilities,
-        )
-        .is_some();
+        let known = profile.build.is_none()
+            && crate::cloud_runtime::repository::launch::quick_start::trusted_contract(
+                &profile.image,
+                &profile.capabilities,
+            )
+            .is_some();
         result.check("Worker image", if known { CheckState::Ready } else { CheckState::Warning },
-            if known { "Pinned worker image has a published contract" } else { "Custom worker image needs registry and worker-contract validation before allocation" },
+            if known { "Pinned worker image has a published contract" } else { "Worker image needs registry and worker-contract validation before allocation" },
             (!known).then_some("Configure image pull access and a local Docker builder for contract validation. Arbitrary images need Horizon's worker services."));
     }
     if profile.is_some_and(|profile| {
@@ -386,6 +387,37 @@ mod tests {
         assert_eq!(filesystem_state(&info), CheckState::Blocked);
         info.operating_system.clear();
         assert_eq!(filesystem_state(&info), CheckState::Unknown);
+    }
+
+    #[test]
+    fn a_build_from_the_trusted_base_still_needs_worker_validation() {
+        let mut profile = crate::cloud_runtime::repository::launch::quick_start::builtin()
+            .unwrap()
+            .profiles
+            .into_values()
+            .next()
+            .unwrap();
+        let mut report = Probe {
+            host_id: "fixture".into(),
+            observed_at: 0,
+            checks: Vec::new(),
+            cpu: None,
+            memory_bytes: None,
+            architecture: None,
+            free_bytes: None,
+        };
+        profile_checks(&mut report, Some(&profile));
+        assert_eq!(report.checks[0].state, CheckState::Ready);
+        report.checks.clear();
+        profile.build = Some(
+            serde_json::from_value(serde_json::json!({
+                "context":".", "dockerfile":"Dockerfile"
+            }))
+            .unwrap(),
+        );
+        profile_checks(&mut report, Some(&profile));
+        assert_eq!(report.checks[0].name, "Worker image");
+        assert_eq!(report.checks[0].state, CheckState::Warning);
     }
 
     // Native engine admission measures storage with the Unix df tool.
