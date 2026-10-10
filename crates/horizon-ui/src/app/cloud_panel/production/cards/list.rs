@@ -15,6 +15,8 @@ pub(in crate::app::cloud_panel::production) fn condition(
 ) -> (Condition, String) {
     let status = status::of(runtime, view::occupancy(group, board), now);
     let condition = match status.tone {
+        // A failed resume offers Resume too, but the resume that the user asked for
+        // did not happen, so it needs the user.
         Tone::Failed => Condition::Failed,
         // A stopped worker offers Resume; it waits for nobody.
         Tone::Attention if status.primary == Some(Primary::Resume) => Condition::Stopped,

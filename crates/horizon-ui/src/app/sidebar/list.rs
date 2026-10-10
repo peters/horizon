@@ -18,7 +18,9 @@ const REFRESH: Duration = Duration::from_secs(1);
 #[derive(Default)]
 pub(in crate::app) struct ListCache {
     refreshed: Option<Instant>,
-    workspaces: Vec<WorkspaceId>,
+    /// The id and persistent local id of each workspace: ids restart at 1 in a
+    /// replaced session, so the id alone does not tell the workspaces apart.
+    workspaces: Vec<(WorkspaceId, String)>,
     rows: HashMap<WorkspaceId, Row>,
 }
 
@@ -26,17 +28,22 @@ impl HorizonApp {
     /// Reads the rows again when they are a second old or the workspaces changed.
     pub(super) fn refresh_sidebar_rows(&mut self, now: Instant) {
         let cache = &self.sidebar_list;
-        let unchanged = cache
+        let unchanged = cache.workspaces.iter().map(|(id, local)| (*id, local.as_str())).eq(self
+            .board
             .workspaces
             .iter()
-            .copied()
-            .eq(self.board.workspaces.iter().map(|workspace| workspace.id));
+            .map(|workspace| (workspace.id, workspace.local_id.as_str())));
         if unchanged && cache.refreshed.is_some_and(|at| now.duration_since(at) < REFRESH) {
             return;
         }
         self.sidebar_list = ListCache {
             refreshed: Some(now),
-            workspaces: self.board.workspaces.iter().map(|workspace| workspace.id).collect(),
+            workspaces: self
+                .board
+                .workspaces
+                .iter()
+                .map(|workspace| (workspace.id, workspace.local_id.clone()))
+                .collect(),
             rows: self.read_sidebar_rows(),
         };
     }
@@ -156,6 +163,28 @@ mod tests {
         assert_eq!(fitted_summary(&summary, 10.0, measure).as_deref(), Some("$0.254/h"));
         assert_eq!(fitted_summary(&summary, 2.0, measure).as_deref(), Some("$0.254/h"));
         assert_eq!(fitted_summary(&[], 100.0, measure), None);
+    }
+
+    #[test]
+    fn a_replaced_session_with_the_same_workspace_ids_reads_the_rows_again() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let _workspace = app.board.create_workspace("a");
+        let start = std::time::Instant::now();
+        app.refresh_sidebar_rows(start);
+        let soon = start + std::time::Duration::from_millis(100);
+        app.refresh_sidebar_rows(soon);
+        assert_eq!(
+            app.sidebar_list.refreshed,
+            Some(start),
+            "same workspaces: the cache stays"
+        );
+
+        // The workspaces of a replaced session get the same ids from 1.
+        for workspace in &mut app.board.workspaces {
+            workspace.local_id = format!("{}-other-session", workspace.local_id);
+        }
+        app.refresh_sidebar_rows(soon);
+        assert_eq!(app.sidebar_list.refreshed, Some(soon));
     }
 
     #[test]
