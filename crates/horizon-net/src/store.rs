@@ -57,17 +57,24 @@ impl Store {
         validate_private(&directory, true)?;
         let directory = fs::canonicalize(directory)?;
         let lock_path = directory.join("agent.lock");
-        if lock_path.exists() {
-            validate_private(&lock_path, false)?;
-        }
         let mut options = OpenOptions::new();
-        options.create(true).read(true).write(true);
+        options.read(true).write(true);
+        match fs::symlink_metadata(&lock_path) {
+            Ok(_) => validate_private(&lock_path, false)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                options.create_new(true);
+            }
+            Err(error) => return Err(error.into()),
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+            options
+                .mode(0o600)
+                .custom_flags(i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits()).map_err(std::io::Error::other)?);
         }
         let ownership = options.open(&lock_path)?;
+        validate_private_metadata(&ownership.metadata()?, false)?;
         ownership
             .try_lock()
             .map_err(|_| Error::InvalidConfiguration("another agent owns the state directory".into()))?;
@@ -199,7 +206,10 @@ pub(crate) fn read_private(path: &Path) -> Result<Vec<u8>> {
 }
 
 fn validate_private(path: &Path, directory: bool) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
+    validate_private_metadata(&fs::symlink_metadata(path)?, directory)
+}
+
+fn validate_private_metadata(metadata: &fs::Metadata, directory: bool) -> Result<()> {
     if metadata.file_type().is_symlink()
         || if directory {
             !metadata.is_dir()
@@ -258,6 +268,57 @@ mod tests {
             relay_urls: vec!["https://relay.example.com".into()],
             relay_only: true,
         }
+    }
+
+    // This fixture requires Unix symlink and private-file permission semantics.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_ownership_lock_cannot_create_or_change_external_state() -> Result<()> {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+
+        for existing in [false, true] {
+            let temporary = tempfile::tempdir()?;
+            let directory = temporary.path().join("state");
+            fs::create_dir(&directory)?;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+            let external = temporary.path().join("external-target");
+            if existing {
+                write_private(&external, b"external fixture remains unchanged")?;
+            }
+            let lock_path = directory.join("agent.lock");
+            symlink(&external, &lock_path)?;
+            let mut initial = config();
+            let original = serde_json::to_value(&initial)?;
+
+            assert!(matches!(
+                Store::open(directory.clone(), &mut initial),
+                Err(Error::InvalidConfiguration(_))
+            ));
+            assert_eq!(serde_json::to_value(&initial)?, original);
+            assert_eq!(fs::read_link(&lock_path)?, external);
+            assert_eq!(fs::read_dir(&directory)?.count(), 1, "only the original symlink");
+            if existing {
+                assert_eq!(fs::read(&external)?, b"external fixture remains unchanged");
+            } else {
+                assert!(matches!(
+                    fs::symlink_metadata(&external),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound
+                ));
+            }
+
+            fs::remove_file(&lock_path)?;
+            let store = Store::open(directory.clone(), &mut initial)?;
+            let metadata = fs::symlink_metadata(&lock_path)?;
+            assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+            assert_eq!(metadata.mode() & 0o7777, 0o600);
+            assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
+            assert!(Store::open(directory.clone(), &mut config()).is_err());
+            drop(store);
+            let _restored = Store::open(directory, &mut initial)?;
+            let restored = fs::symlink_metadata(&lock_path)?;
+            assert_eq!((restored.dev(), restored.ino()), (metadata.dev(), metadata.ino()));
+        }
+        Ok(())
     }
 
     #[test]
