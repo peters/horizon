@@ -104,7 +104,7 @@ impl Sessions {
     }
 
     /// Waits until no save runs. Tests use it before they read the record themselves.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn wait(&self) {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while self.saving() {
@@ -114,7 +114,7 @@ impl Sessions {
     }
 
     /// A running save that holds `record`, as the save of a new panel's session does.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn saving_for_test(record: Deployment) -> Self {
         let sessions = Self::default();
         *sessions.flight.borrow_mut() = Some(Arc::new(Mutex::new(Flight {
@@ -126,7 +126,7 @@ impl Sessions {
     }
 
     /// The record a running save holds.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn saving_record(&self) -> Option<Deployment> {
         let flight = self.flight.borrow();
         let flight = flight.as_ref()?.lock().unwrap_or_else(PoisonError::into_inner);
