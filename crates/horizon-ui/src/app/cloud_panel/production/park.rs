@@ -42,6 +42,11 @@ impl Parking {
         self.tracker.is_some_and(|tracker| tracker.is_parked())
     }
 
+    /// Whether the last status read of the parked terminals failed.
+    pub(super) fn read_failed(&self) -> bool {
+        self.error.is_some()
+    }
+
     /// The last status of each parked terminal, by its panel's local id.
     pub(super) fn statuses(&self) -> &HashMap<String, SessionStatus> {
         &self.statuses

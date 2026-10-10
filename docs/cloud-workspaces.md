@@ -946,7 +946,8 @@ Click a row to go to its workspace. A parked cloud then attaches, as described i
 
 When a group has idle clouds, its header shows **Stop idle…**. An idle cloud is
 ready, its card offers **Stop**, no agent works on it, and it does not wait for
-you. Click **Stop idle…** to open a list of the idle clouds of the group. Each
+you. A parked cloud is idle only after a status read shows each of its parked
+terminals: right after the park or after a failed read, it is not offered. Click **Stop idle…** to open a list of the idle clouds of the group. Each
 cloud has a check box, its workspace and its hourly rate. All clouds are selected
 at first. Clear the clouds that must continue to run. Before you confirm, the
 dialog shows what the stop saves each hour, for example `Saves $0.024/h`. When a

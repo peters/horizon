@@ -121,14 +121,18 @@ pub struct CloudFacts {
     pub hourly_rate: Option<f64>,
     /// A stop of the worker can start now: its card offers Stop.
     pub stoppable: bool,
+    /// `working` is known: for a parked cloud, a status read without error covers
+    /// each parked terminal.
+    pub known: bool,
 }
 
 impl CloudFacts {
-    /// An idle cloud that a bulk stop offers: its worker runs and can stop now, no
-    /// agent works on it, and it does not wait for the user.
+    /// An idle cloud that a bulk stop offers: its worker runs and can stop now, it is
+    /// known that no agent works on it, and it does not wait for the user.
     #[must_use]
     pub fn idle(&self) -> bool {
         self.stoppable
+            && self.known
             && !self.working
             && matches!(self.condition, Condition::Ready | Condition::Idle | Condition::Parked)
     }
@@ -379,6 +383,7 @@ mod tests {
             line: format!("{condition:?}"),
             hourly_rate: rate,
             stoppable: true,
+            known: true,
         }
     }
 
@@ -403,6 +408,9 @@ mod tests {
         let mut blocked = cloud(Condition::Ready, false, None);
         blocked.stoppable = false;
         assert!(!blocked.idle(), "its card does not offer Stop");
+        let mut unread = cloud(Condition::Parked, false, None);
+        unread.known = false;
+        assert!(!unread.idle(), "no read covers each parked terminal");
     }
 
     #[test]

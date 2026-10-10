@@ -175,3 +175,27 @@ fn a_parked_cloud_stops_only_when_a_read_after_the_confirmation_shows_it_idle() 
     assert_eq!(runtime(&mut app).operation, None);
     assert!(app.cloud_prototype.production.bulk_stop.waiting.is_empty());
 }
+
+#[test]
+fn a_parked_cloud_is_offered_only_when_a_read_covers_each_parked_terminal() {
+    let (_temp, mut app) = connected(Some(0.5));
+    for local in ["one", "two"] {
+        let id = app.board.panel_id_by_local_id(local).unwrap();
+        app.board.panel_mut(id).unwrap().park_cloud().unwrap();
+    }
+    let idle = |id: &str| SessionStatus {
+        id: id.to_owned(),
+        activity: SessionActivity::Idle,
+        quiet_for: None,
+        lines: Vec::new(),
+    };
+    runtime(&mut app).parking.park_with(vec![idle("one")]);
+    app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(2));
+    assert!(
+        app.sidebar_idle_clouds(Group::Parked).is_empty(),
+        "nothing shows yet that no agent works in two"
+    );
+    runtime(&mut app).parking.park_with(vec![idle("one"), idle("two")]);
+    app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(4));
+    assert_eq!(app.sidebar_idle_clouds(Group::Parked).len(), 1);
+}
