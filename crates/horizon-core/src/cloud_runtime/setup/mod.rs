@@ -15,10 +15,13 @@ pub use horizon_cloud::Agent;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Authentication {
     ApiKey,
     Subscription,
+    /// Sign in with `ChatGPT`: this machine's saved connection authorizes Codex through
+    /// the user's `ChatGPT` plan. Only Codex supports it.
+    ChatGpt,
 }
 
 /// Editable credentials are deliberately neither serializable nor debug-printable.
@@ -34,6 +37,8 @@ pub struct Draft {
     pub anthropic_key: Zeroizing<String>,
     pub openai_auth: Authentication,
     pub anthropic_auth: Authentication,
+    /// This machine's active `ChatGPT` sign-in, if any, without its tokens.
+    pub chatgpt: Option<super::chatgpt::Connection>,
     pub registries: Vec<super::registry::draft::Draft>,
     /// Optional: Hetzner as a second provider for CPU clouds.
     pub hetzner: HetznerDraft,
@@ -69,8 +74,17 @@ impl Draft {
             root: root.into(),
             original,
             profile_agents: None,
-            openai_auth: authentication(settings.openai_api_key_file.as_ref()),
+            openai_auth: settings
+                .openai_auth
+                .unwrap_or_else(|| authentication(settings.openai_api_key_file.as_ref())),
             anthropic_auth: authentication(settings.anthropic_api_key_file.as_ref()),
+            chatgpt: match super::chatgpt::status(root) {
+                Ok(connection) => connection,
+                Err(error) => {
+                    tracing::warn!(%error, "could not read the saved ChatGPT sign-in");
+                    None
+                }
+            },
             registries: settings.registries.as_ref().map_or_else(Vec::new, |config| {
                 config
                     .bindings
@@ -138,6 +152,15 @@ impl Draft {
                 self.settings.anthropic_api_key_file.as_ref(),
             ),
         ] {
+            if mode == Authentication::ChatGpt {
+                // Only Codex offers the mode; a selected Codex needs a usable saved sign-in.
+                if self.selected_agents().contains(&agent)
+                    && !self.chatgpt.as_ref().is_some_and(|connection| connection.signed_in)
+                {
+                    return Err(Error::Invalid("Sign in with ChatGPT before saving these settings"));
+                }
+                continue;
+            }
             if !value.is_empty() || (self.selected_agents().contains(&agent) && mode == Authentication::ApiKey) {
                 validate_input(value, saved)?;
             }
@@ -169,12 +192,13 @@ impl Draft {
                 "anthropic",
             ),
         ] {
-            if mode == Authentication::Subscription {
+            if matches!(mode, Authentication::Subscription | Authentication::ChatGpt) {
                 *binding = None;
             } else if !value.trim().is_empty() {
                 *binding = Some(write.secret(name, value)?);
             }
         }
+        self.settings.openai_auth = Some(self.openai_auth);
         self.settings.hetzner = self.hetzner.save(self.settings.hetzner.as_ref(), &mut write)?;
         if !self.settings.ssh_identity_file.exists() && self.settings.ssh_identity_file == default_identity(&self.root)
         {
@@ -275,6 +299,12 @@ pub fn save_github(
 }
 
 impl Draft {
+    /// Takes the `ChatGPT` sign-in that finished while the form was open, so its card and
+    /// the Save validation see the stored connection without reopening the files.
+    pub fn adopt_chatgpt(&mut self, connection: Option<super::chatgpt::Connection>) {
+        self.chatgpt = connection;
+    }
+
     /// Takes the GitHub App that [`save_github`] saved. When the form was opened from the
     /// file that the save replaced, the form now counts the saved file as its starting
     /// point, so its own Save does not see the save as a change made elsewhere.
@@ -325,6 +355,7 @@ fn defaults(root: &Path) -> Settings {
         data_centers: Vec::new(),
         anthropic_api_key_file: None,
         openai_api_key_file: None,
+        openai_auth: None,
         anthropic_workspace_id: None,
         git_credentials: Vec::new(),
         browserstack_credentials: Vec::new(),

@@ -133,7 +133,13 @@ fn keep_saved(ui: &mut Ui) -> bool {
     clicked
 }
 
-pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits, fixed_agents: bool) {
+pub(super) fn agents(
+    ui: &mut Ui,
+    draft: &mut Draft,
+    edits: &mut Edits,
+    fixed_agents: bool,
+    chatgpt: &mut super::chatgpt::Card,
+) {
     let status = dashboard::agents_status(draft, fixed_agents);
     surface(ui, |ui| {
         header(
@@ -143,6 +149,7 @@ pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits, fixed_ag
             Some(status),
         );
         let selected_agents = draft.selected_agents().to_vec();
+        let root = draft.root().to_owned();
         let [codex, claude] = &mut edits.agents;
         for (agent, name, mode, value, saved, replacing) in [
             (
@@ -190,7 +197,19 @@ pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits, fixed_ag
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(mode, Authentication::ApiKey, "API key");
                     ui.selectable_value(mode, Authentication::Subscription, "Subscription login");
+                    // Only Codex signs in through a ChatGPT account.
+                    if agent == Agent::Codex {
+                        ui.selectable_value(mode, Authentication::ChatGpt, "ChatGPT plan");
+                    }
                 });
+                if *mode == Authentication::ChatGpt {
+                    if agent == Agent::Codex {
+                        super::chatgpt::row(ui, &mut draft.chatgpt, &root, chatgpt);
+                    } else {
+                        caption(ui, "Claude does not support ChatGPT sign-in. Choose another option.");
+                    }
+                    return;
+                }
                 if *mode == Authentication::ApiKey {
                     if saved && value.is_empty() && !*replacing {
                         *replacing = saved_key(ui);

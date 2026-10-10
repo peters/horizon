@@ -85,6 +85,10 @@ pub(super) fn agent_key(draft: &Draft, agent: Agent) -> Option<Key> {
         ),
         Agent::Grok => return None,
     };
+    if mode == Authentication::ChatGpt {
+        let signed_in = draft.chatgpt.as_ref().is_some_and(|connection| connection.signed_in);
+        return Some(if signed_in { Key::Saved } else { Key::Missing });
+    }
     (mode == Authentication::ApiKey).then(|| {
         if typed {
             Key::Unsaved
@@ -102,6 +106,11 @@ pub(super) fn agent_name(agent: Agent) -> &'static str {
         Agent::Claude => "Claude",
         Agent::Grok => "Grok",
     }
+}
+
+/// Whether Codex is selected in `ChatGPT` mode: its readiness wording differs from a key.
+fn codex_chatgpt(draft: &Draft) -> bool {
+    draft.selected_agents().contains(&Agent::Codex) && draft.openai_auth == Authentication::ChatGpt
 }
 
 /// The selected agents' keys, in order, for the agents that use one.
@@ -123,6 +132,8 @@ pub(super) fn agents_status(draft: &Draft, fixed_agents: bool) -> (Tone, &'stati
         } else {
             (Tone::Attention, "Choose one")
         }
+    } else if codex_chatgpt(draft) && agent_key(draft, Agent::Codex) == Some(Key::Missing) {
+        (Tone::Attention, "Needs sign-in")
     } else if keys.iter().any(|(_, key)| *key == Key::Missing) {
         (Tone::Attention, "Needs a key")
     } else if keys.iter().any(|(_, key)| *key == Key::Unsaved) {
@@ -160,10 +171,14 @@ impl Readiness {
         }
         let agents = agent_keys(draft);
         if let Some((agent, _)) = agents.iter().find(|(_, key)| *key == Key::Missing) {
-            return attention(format!(
-                "Paste the {} API key, or choose subscription login.",
-                agent_name(*agent)
-            ));
+            return attention(if codex_chatgpt(draft) && *agent == Agent::Codex {
+                "Sign in with ChatGPT for Codex, or choose another Codex option.".into()
+            } else {
+                format!(
+                    "Paste the {} API key, or choose subscription login.",
+                    agent_name(*agent)
+                )
+            });
         }
         if runpod == Key::Unsaved || hetzner == Key::Unsaved || agents.iter().any(|(_, key)| *key == Key::Unsaved) {
             return attention("Save settings to keep the new key on this computer.".into());
@@ -347,6 +362,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
         ssh_ready,
         required_agents,
         github,
+        chatgpt,
         ..
     } = state;
     let draft = draft.as_deref_mut()?;
@@ -356,7 +372,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
     ui.spacing_mut().item_spacing = vec2(GAP, GAP);
     if ui.available_width() < STACKED_BELOW {
         fields::providers(ui, draft, edits);
-        fields::agents(ui, draft, edits, fixed_agents);
+        fields::agents(ui, draft, edits, fixed_agents, chatgpt);
         super::github::card(ui, draft, github);
         action = registry::card(ui, draft, verified);
         fields::workspace(ui, draft, *ssh_ready, &readiness);
@@ -365,7 +381,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
             columns[0].spacing_mut().item_spacing.y = GAP;
             columns[1].spacing_mut().item_spacing.y = GAP;
             fields::providers(&mut columns[0], draft, edits);
-            fields::agents(&mut columns[0], draft, edits, fixed_agents);
+            fields::agents(&mut columns[0], draft, edits, fixed_agents, chatgpt);
             super::github::card(&mut columns[1], draft, github);
             action = registry::card(&mut columns[1], draft, verified);
             fields::workspace(&mut columns[1], draft, *ssh_ready, &readiness);

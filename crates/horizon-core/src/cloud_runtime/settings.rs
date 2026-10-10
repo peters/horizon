@@ -27,6 +27,10 @@ pub struct Settings {
     pub anthropic_api_key_file: Option<PathBuf>,
     #[serde(default)]
     pub openai_api_key_file: Option<PathBuf>,
+    /// Codex's explicit mode; when omitted it is inferred from `openai_api_key_file`, so
+    /// settings written before sign-in with `ChatGPT` existed keep their meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_auth: Option<super::setup::Authentication>,
     #[serde(default)]
     pub anthropic_workspace_id: Option<String>,
     /// Explicit opt-in per local repository; never loaded from repository YAML.
