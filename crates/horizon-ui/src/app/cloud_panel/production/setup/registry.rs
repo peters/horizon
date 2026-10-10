@@ -49,7 +49,7 @@ pub(super) fn card(
         needed::block(ui, needed, &mut accounts.registries);
         let credentials = &accounts.saved_credentials;
         for (index, draft) in accounts.registries.iter_mut().enumerate() {
-            ui.push_id(index, |ui| {
+            let entry = ui.push_id(index, |ui| {
                 ui.separator();
                 let saved_publish = draft
                     .original
@@ -70,6 +70,9 @@ pub(super) fn card(
                     &mut action,
                 );
             });
+            if needed.reveal(draft) {
+                entry.response.scroll_to_me(Some(Align::Center));
+            }
         }
         // A shown repository keeps the empty form of another one behind this button.
         let add = if accounts.registries.is_empty() && needed.pending(&accounts.registries).is_none() {

@@ -23,15 +23,21 @@ pub enum Publishing {
     Credential,
 }
 
-/// The repository of `image` when Container registry has no binding for it, or `None`
-/// when there is nothing to bind: the public base image, an image without an explicit
-/// registry host, or a repository that is already bound.
+/// The repository Container registry binds for `image`, or `None` when there is nothing
+/// to bind: the public base image or an image without an explicit registry host.
 #[must_use]
-pub fn needed(settings: &Settings, image: &str) -> Option<Needed> {
+pub fn repository_of(image: &str) -> Option<&str> {
     if quick_start::is_public_base(image) {
         return None;
     }
-    let repository = super::repository(image).ok()?;
+    super::repository(image).ok()
+}
+
+/// The repository of `image` when Container registry has no binding for it, or `None`
+/// when there is nothing to bind ([`repository_of`]) or the repository is already bound.
+#[must_use]
+pub fn needed(settings: &Settings, image: &str) -> Option<Needed> {
+    let repository = repository_of(image)?;
     let bound = settings
         .registries
         .as_ref()
@@ -78,5 +84,11 @@ mod tests {
         ] {
             assert_eq!(needed(&settings, image), None, "{image}");
         }
+        assert_eq!(
+            repository_of("registry.example/team/worker:latest"),
+            Some("registry.example/team/worker"),
+            "a bound repository is still the one to show"
+        );
+        assert_eq!(repository_of(quick_start::IMAGE), None);
     }
 }

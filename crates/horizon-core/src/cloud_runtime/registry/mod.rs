@@ -5,7 +5,7 @@ mod management;
 mod needed;
 mod preflight;
 pub use management::{Action, Status, Validation, manage};
-pub use needed::{Needed, Publishing, needed};
+pub use needed::{Needed, Publishing, needed, repository_of};
 pub mod draft;
 mod store;
 #[cfg(test)]

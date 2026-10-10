@@ -56,8 +56,9 @@ struct Loaded {
     ssh_ready: bool,
     /// Saved validation results, read from each binding's journal without asking a provider.
     verified: dashboard::Verified,
-    /// The unbound image repository of the cloud these settings were opened for.
-    needed: Option<horizon_core::cloud_runtime::registry::Needed>,
+    /// The image repository of the cloud these settings were opened for, and its state
+    /// when no binding covers it.
+    needed: Option<(String, Option<horizon_core::cloud_runtime::registry::Needed>)>,
 }
 
 /// What a registry action found, reduced to what the form shows.
@@ -270,8 +271,11 @@ impl HorizonApp {
                     let ssh_ready = cloud_runtime_ssh_valid(&draft.settings.ssh_identity_file);
                     let configured = draft.validate().is_ok() && ssh_ready;
                     let verified = saved_validations(&draft);
-                    let needed =
-                        image.and_then(|image| horizon_core::cloud_runtime::registry::needed(&draft.settings, &image));
+                    let needed = image.and_then(|image| {
+                        use horizon_core::cloud_runtime::registry;
+                        let repository = registry::repository_of(&image)?.to_owned();
+                        Some((repository, registry::needed(&draft.settings, &image)))
+                    });
                     Completion::Loaded(Box::new(Loaded {
                         draft,
                         configured,

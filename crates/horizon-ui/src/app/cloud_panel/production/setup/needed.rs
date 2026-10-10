@@ -6,19 +6,31 @@ use crate::{app::util::primary_button, theme};
 use egui::{Align, Layout, RichText, Ui, vec2};
 use horizon_core::cloud_runtime::registry::{self, Publishing, draft::Draft};
 
-/// The repository, and whether the card still has to bring it into view.
+/// The cloud's repository, its state when no binding covers it, and whether the card
+/// still has to bring it into view.
 #[derive(Default)]
 pub(super) struct Needed {
+    target: Option<String>,
     repository: Option<registry::Needed>,
     reveal: bool,
 }
 
 impl Needed {
-    pub(super) fn new(repository: Option<registry::Needed>) -> Self {
+    pub(super) fn new(needed: Option<(String, Option<registry::Needed>)>) -> Self {
+        let (target, repository) = needed.map_or((None, None), |(target, repository)| (Some(target), repository));
         Self {
-            reveal: repository.is_some(),
+            reveal: target.is_some(),
+            target,
             repository,
         }
+    }
+
+    /// Whether the entry `draft` is the cloud's repository and still has to come into
+    /// view, as a binding whose credential the registry refused does. Asking ends it.
+    pub(super) fn reveal(&mut self, draft: &Draft) -> bool {
+        let reveal = self.reveal && self.target.as_deref() == Some(draft.repository.as_str());
+        self.reveal &= !reveal;
+        reveal
     }
 
     /// The repository while no binding or new entry in `drafts` covers it.
@@ -230,6 +242,30 @@ mod tests {
             "the entry replaces the block"
         );
         assert!(shown.iter().any(|text| text == "Publishing credential"), "{shown:?}");
+    }
+
+    #[test]
+    fn a_bound_repository_comes_into_view_once_instead_of_a_placeholder() {
+        let bound = Draft {
+            repository: "registry.example/team/app".into(),
+            ..Draft::default()
+        };
+        let other = Draft {
+            repository: "registry.example/team/other".into(),
+            ..Draft::default()
+        };
+        let mut needed = Needed::new(Some(("registry.example/team/app".into(), None)));
+        assert!(needed.pending(&[]).is_none(), "a bound repository needs no placeholder");
+        assert!(!needed.reveal(&other));
+        assert!(
+            needed.reveal(&bound),
+            "the binding of the cloud's repository comes into view"
+        );
+        assert!(!needed.reveal(&bound), "only once, so the person can scroll away");
+        assert!(
+            !Needed::default().reveal(&bound),
+            "settings from the menu reveal nothing"
+        );
     }
 
     #[test]

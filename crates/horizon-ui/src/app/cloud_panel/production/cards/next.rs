@@ -1,6 +1,6 @@
 //! The one next action a failure offers: the fix Horizon knows for its cause, else the
 //! retry that the header offers too.
-use super::super::lifecycle::Action;
+use super::super::{Stage, lifecycle::Action};
 use super::status::{Primary, Status};
 use horizon_core::cloud_runtime::diagnosis::Remedy;
 
@@ -16,7 +16,7 @@ pub(super) enum Next {
 impl Next {
     pub(super) fn of(status: &Status) -> Option<Self> {
         let failure = status.failure.as_ref()?;
-        if failure.remedy() == Some(Remedy::RegistryLogin) {
+        if failure.remedy() == Some(Remedy::RegistryLogin) && moves_the_image(status) {
             return Some(Self::ContainerRegistry);
         }
         status
@@ -40,9 +40,25 @@ impl Next {
     }
 }
 
+/// Whether the failed step moves the cloud's own image, whose repository Container registry
+/// binds. A refusal while the image builds is about a base image the recipe pulls.
+fn moves_the_image(status: &Status) -> bool {
+    let track = &status.track;
+    track
+        .current
+        .filter(|_| track.failed)
+        .and_then(|index| track.stages.get(index))
+        .is_some_and(|stage| {
+            matches!(
+                stage,
+                Stage::Validate | Stage::Push | Stage::Replace | Stage::Provision | Stage::Readiness
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::super::{LogLine, Runtime, Stage};
+    use super::super::super::{LogLine, Runtime};
     use super::super::status::{Occupancy, of};
     use super::*;
     use crate::test_egui::DiscardTextures;
@@ -99,6 +115,21 @@ mod tests {
             !shown.iter().any(|text| text == "Retry deploy"),
             "one next action: {shown:?}"
         );
+    }
+
+    #[test]
+    fn a_refused_base_image_while_building_is_retried_not_sent_to_the_cloud_repository() {
+        let runtime = failed(
+            Stage::Build,
+            &["ERROR: failed to solve: registry.example/private/base:1: error from registry: denied"],
+            "Building image failed; inspect deployment output",
+        );
+        let status = of(&runtime, Occupancy::default(), SystemTime::now());
+        assert!(
+            status.failure.as_ref().unwrap().remedy().is_some(),
+            "a registry refusal"
+        );
+        assert_eq!(Next::of(&status), Some(Next::Retry(Primary::Retry)));
     }
 
     #[test]

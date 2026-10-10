@@ -354,19 +354,22 @@ registry** publishes with its own credential instead.
 
 ### A refused image push
 
-If the registry refuses the push or the pull of the image, a retry gets the same
-refusal. Thus the failure on the card offers **Open Container registry** instead of
-**Retry deploy**. The header of the card keeps **Retry deploy** for later.
+If the registry refuses the push or the pull of the image of the cloud, a retry
+gets the same refusal. Thus the failure on the card offers **Open Container
+registry** instead of **Retry deploy**. The header of the card keeps **Retry
+deploy** for later. A refusal during **Build locally** is about a base image that
+the recipe pulls, so that failure keeps **Retry deploy**.
 
 **Open Container registry** opens **Cloud settings** for the image repository that
-the profile of the cloud names. If **Container registry** has no binding for that
-repository, the card shows the repository with **Not set up**, who publishes to it,
-and that workers have no pull credential yet. Click **Add credentials**: the entry
-for the repository opens with its name filled in and **Expiry and publishing**
-open. Add a publishing credential and a read-only pull credential, save the
-settings, then click **Retry deploy** on the cloud card. To add a different
-repository, click **Add another**. **Cloud settings…** in the Cloud menu does not
-fill in a repository.
+the profile of the cloud names. If a binding covers that repository, the card
+scrolls to it: replace the credential that the registry refused. If **Container
+registry** has no binding for that repository, the card shows the repository with
+**Not set up**, who publishes to it, and that workers have no pull credential yet.
+Click **Add credentials**: the entry for the repository opens with its name filled
+in and **Expiry and publishing** open. Add a publishing credential and a read-only
+pull credential, save the settings, then click **Retry deploy** on the cloud card.
+To add a different repository, click **Add another**. **Cloud settings…** in the
+Cloud menu does not fill in a repository.
 
 ## Provider API and storage requirements
 
