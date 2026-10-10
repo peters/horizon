@@ -52,9 +52,14 @@ fn firefox_minimization_keeps_a_native_webdriver_getter_false() {
     })
     .expect("start");
 
-    let title = wait_for_title(&session);
+    let (title, disclosure) = wait_for_title_and_disclosure(&session);
     assert!(session.send(BrowserCommand::Stop));
     assert_eq!(title, "false native", "page title reported {title}");
+    assert_eq!(
+        disclosure,
+        Some(horizon_browser::AutomationDisclosureStatus::CommonSignalsMinimized),
+        "native clear must publish common_signals_minimized"
+    );
 }
 
 fn serve_fixture(listener: &TcpListener) {
@@ -72,19 +77,30 @@ fn serve_fixture(listener: &TcpListener) {
     }
 }
 
-fn wait_for_title(session: &BrowserSession) -> String {
+fn wait_for_title_and_disclosure(
+    session: &BrowserSession,
+) -> (String, Option<horizon_browser::AutomationDisclosureStatus>) {
     let deadline = Instant::now() + Duration::from_secs(40);
-    let mut latest = String::new();
+    let mut title = None;
+    let mut disclosure = None;
     while Instant::now() < deadline {
         while let Ok(event) = session.event_rx.try_recv() {
-            if let BrowserEvent::Title(title) = &event {
-                latest.clone_from(title);
-                if title == "false native" || title.ends_with("patched") || title.starts_with("true") {
-                    return title.clone();
+            match event {
+                BrowserEvent::BackendReady(capabilities) => {
+                    disclosure = Some(capabilities.automation_disclosure);
                 }
+                BrowserEvent::Title(value)
+                    if value == "false native" || value.ends_with("patched") || value.starts_with("true") =>
+                {
+                    title = Some(value);
+                }
+                _ => {}
             }
+        }
+        if title.is_some() && disclosure.is_some() {
+            break;
         }
         thread::sleep(Duration::from_millis(50));
     }
-    latest
+    (title.unwrap_or_default(), disclosure)
 }

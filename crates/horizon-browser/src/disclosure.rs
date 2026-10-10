@@ -20,7 +20,6 @@ pub enum AutomationDisclosurePolicy {
 #[serde(rename_all = "snake_case")]
 pub enum AutomationDisclosureStatus {
     /// The caller selected [`AutomationDisclosurePolicy::BrowserDefault`].
-    #[default]
     BrowserDefault,
     /// Native minimization is active. Firefox cleared its automation flags, or
     /// Chromium started with the standard automation flag suppressed.
@@ -30,6 +29,9 @@ pub enum AutomationDisclosureStatus {
     PreloadFallback,
     /// The selected backend cannot establish pre-document minimization.
     UnsupportedByBackend,
+    /// An older manifest omitted this field. This is not an established result.
+    #[default]
+    Unreported,
 }
 
 impl AutomationDisclosureStatus {
@@ -41,6 +43,7 @@ impl AutomationDisclosureStatus {
             Self::CommonSignalsMinimized => "common_signals_minimized",
             Self::PreloadFallback => "preload_fallback",
             Self::UnsupportedByBackend => "unsupported_by_backend",
+            Self::Unreported => "unreported",
         }
     }
 }
@@ -262,6 +265,7 @@ mod tests {
             CommonSignalsMinimized
         );
         assert_eq!(PreloadFallback.as_str(), "preload_fallback");
+        assert_eq!(AutomationDisclosureStatus::Unreported.as_str(), "unreported");
         assert_eq!(
             serde_json::to_string(&PreloadFallback).ok().as_deref(),
             Some("\"preload_fallback\"")

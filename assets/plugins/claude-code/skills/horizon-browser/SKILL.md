@@ -39,7 +39,8 @@ installed a script getter that returns false. Sign-in pages can reject that
 getter. The default minimized Firefox session uses that fallback. Chromium
 does not install it. A remote Firefox session reports
 `unsupported_by_backend` for minimization. It does not clear the native flag
-or install the preload. To run at a configured remote target instead of a
+or install the preload. `unreported` means an older manifest omitted the
+field. That is not an established result. To run at a configured remote target instead of a
 local browser, pass `target` with its name and omit `backend`; Horizon
 resolves the provider and credentials from its configuration, and a
 refusal carries a typed code and at most the target, provider or credential

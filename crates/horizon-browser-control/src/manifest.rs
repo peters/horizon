@@ -124,7 +124,8 @@ pub struct BrowserManifest {
     /// Disclosure this session established. `preload_fallback` means Firefox
     /// installed a script getter. `common_signals_minimized` means the native
     /// Firefox flag clear or Chromium's suppressed automation flag. Remote
-    /// minimized Firefox is `unsupported_by_backend`.
+    /// minimized Firefox is `unsupported_by_backend`. `unreported` means an
+    /// older manifest omitted the field and no result was established.
     #[serde(default)]
     pub automation_disclosure: horizon_browser::AutomationDisclosureStatus,
     /// Configured remote target name when the session runs at a remote grid.
@@ -950,6 +951,41 @@ mod tests {
             .prefix(&format!("horizon-browser-mani-t{n}-"))
             .tempdir()
             .expect("create temp root")
+    }
+
+    #[test]
+    fn absent_disclosure_field_does_not_claim_browser_default() {
+        let legacy = r#"{
+            "panel_local_id": "old",
+            "browser_ws": "ws://127.0.0.1:1",
+            "target_id": "T1",
+            "url": "https://example.com",
+            "title": "Example",
+            "user_active": false,
+            "user_active_at": 0,
+            "updated_at": 0
+        }"#;
+        let manifest: BrowserManifest = serde_json::from_str(legacy).expect("legacy manifest");
+        assert_eq!(
+            manifest.automation_disclosure,
+            horizon_browser::AutomationDisclosureStatus::Unreported
+        );
+        let explicit = r#"{
+            "panel_local_id": "new",
+            "automation_disclosure": "browser_default",
+            "browser_ws": "ws://127.0.0.1:1",
+            "target_id": "T1",
+            "url": "https://example.com",
+            "title": "Example",
+            "user_active": false,
+            "user_active_at": 0,
+            "updated_at": 0
+        }"#;
+        let established: BrowserManifest = serde_json::from_str(explicit).expect("explicit status");
+        assert_eq!(
+            established.automation_disclosure,
+            horizon_browser::AutomationDisclosureStatus::BrowserDefault
+        );
     }
 
     fn sample(id: &str) -> BrowserManifest {

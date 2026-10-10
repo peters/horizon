@@ -68,6 +68,7 @@ It also tests the preload fallback and one synthetic sign-in check.
    The live test sets `firefox_system_access` to true.
    That title requires geckodriver 0.37 or newer.
    The panel reports `automation_disclosure` as `common_signals_minimized`.
+   `BackendReady` carries that same status.
 
 ### 6.2 LAUNCH-POLICY — Both disclosure policies
 
