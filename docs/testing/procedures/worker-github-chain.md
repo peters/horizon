@@ -745,7 +745,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    ```
 
    Result: The tool output shows `Allowed for this task`. The Git output and the
-   `gh` output show `exit=0` and no `Horizon:` line.
+   `gh` output show `exit=0` and no `Horizon:` line. `gh` writes no line end, so
+   its file shows the JSON and `exit=0` on one line.
 
 6. Read the repository from a process outside the session:
 
@@ -754,8 +755,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> horizon-worker-github status
    ```
 
-   Result: Git shows `remote: Horizon: example/secret has no GitHub grant on this
-   worker` and a nonzero exit. The status does not show `example/secret`.
+   Result: Git shows a line that starts with `remote: Horizon: example/secret has
+   no GitHub grant on this worker` and a nonzero exit. The status does not show `example/secret`.
 
 7. End the session, and then read the repository again from a new window of the
    session `agent-smoke`:
@@ -767,8 +768,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> sh -c 'sleep 5; cat /workspace/home/after.txt'
    ```
 
-   Result: The output shows `remote: Horizon: example/secret has no GitHub grant
-   on this worker` and a nonzero exit. The task grant ended with its session.
+   Result: The output shows a line that starts with `remote: Horizon:
+   example/secret has no GitHub grant on this worker` and a nonzero exit. The task grant ended with its session.
 
 ### 6.13 C8: Clear
 
