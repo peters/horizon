@@ -87,6 +87,8 @@ jobs:
         run: python3 scripts/check-browser-client-dependencies.py
       - name: Verify CI change detection
         run: python3 -B scripts/test_detect_ci_build_inputs.py -v
+      - name: Verify the PR readiness check
+        run: python3 -B scripts/test_check_pr_readiness.py -v
       - name: Verify platform test shards
         run: python3 -B scripts/test_ci_cargo_test_shard.py -v
       # One diff answers both gated lanes: Snap packaging and the release
