@@ -1118,7 +1118,8 @@ A task grant is least privilege, not a boundary between sessions. Every agent
 session runs as the same account (UID 10001) and uses the same tmux server, so a
 process of one session can type into another session's pane, or change files
 that another session runs, and act there with that session's grants. Use a
-separate cloud for work that must not share access.
+separate cloud for work that must not share access. Issue #1453 tracks a
+boundary between sessions.
 
 `horizon-worker-configure` gives agents the tool whenever the image contains
 `horizon-worker-github`, also before you connect GitHub; until then the tool
