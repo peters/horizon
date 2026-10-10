@@ -151,7 +151,8 @@ class RouteTests(unittest.TestCase):
         for method, target in [('POST', '/repos/o/r/pulls'), ('PATCH', '/repos/o/r/issues/1'),
                                ('DELETE', '/repos/o/r/git/refs/heads/topic'), ('PUT', '/repos/o/r/contents/a%20b.md'),
                                ('POST', '/repos/o/r/actions/workflows/ci.yml/dispatches'),
-                               ('POST', '/repos/o/r/actions/runs/1/rerun'), ('GET', '/repos/o/r/actions/secrets')]:
+                               ('POST', '/repos/o/r/actions/runs/1/rerun'), ('GET', '/repos/o/r/actions/runs'),
+                               ('GET', '/repos/o/r/contents/docs/protection/keys')]:
             route = rest.route(method, 'api.github.com', target)
             self.assertEqual((route.repository, route.access), ('o/r', 'read' if method == 'GET' else 'push'))
         route = rest.route('GET', 'objects.githubusercontent.com', '/github-production-release-asset/1?sig=x')
@@ -191,6 +192,13 @@ class RestTests(BrokerTestCase):
                 ('PATCH', '/repos/example/project', 403, 'only pull requests'),
                 ('POST', '/repos/example/project/hooks', 403, 'only pull requests'),
                 ('PUT', '/repos/example/project/actions/secrets/X', 403, 'only pull requests'),
+                ('GET', '/repos/example/project/actions/variables', 403, 'stay with the person'),
+                ('GET', '/repos/example/project/actions/secrets', 403, 'stay with the person'),
+                ('GET', '/repos/example/project/hooks', 403, 'stay with the person'),
+                ('GET', '/repos/example/project/keys', 403, 'stay with the person'),
+                ('GET', '/repos/example/project/environments/prod/variables', 403, 'stay with the person'),
+                ('GET', '/repos/example/project/branches/main/protection', 403, 'stay with the person'),
+                ('GET', '/repositories/111/collaborators', 403, 'stay with the person'),
                 ('POST', '/repos/example/project/actions/workflows/ci.yml/disable', 403, 'only pull requests'),
                 ('GET', '/user/repos', 403, 'only a granted repository'),
                 ('GET', '/orgs/example/repos', 403, 'only a granted repository'),

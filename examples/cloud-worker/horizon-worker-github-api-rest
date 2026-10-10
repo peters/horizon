@@ -62,6 +62,12 @@ CHANGES = {'pulls', 'issues', 'labels', 'milestones', 'releases', 'git', 'conten
            'merge-upstream'}
 ACTIONS = {'runs', 'jobs', 'workflows', 'caches', 'artifacts'}
 WORKFLOW_CHANGES = re.compile(r'/actions/workflows/[^/]{1,256}/dispatches')
+# Parts of a repository that a grant does not read either: its access, hooks, keys, secrets,
+# variables (whose values a read returns), environments, runners and branch protection.
+PRIVATE_READS = {'hooks', 'keys', 'collaborators', 'invitations', 'environments', 'dependabot', 'codespaces',
+                 'secret-scanning', 'autolinks', 'interaction-limits', 'teams'}
+PRIVATE_ACTIONS = {'secrets', 'variables', 'runners', 'permissions', 'oidc', 'organization-secrets',
+                   'organization-variables'}
 
 
 class Refused(Exception):
@@ -97,6 +103,16 @@ def split(target):
     return path, query
 
 
+def read_allowed(rest):
+    """Whether a read grant may read the repository path after OWNER/NAME."""
+    parts = rest.split('/')[1:]
+    if not parts:
+        return True
+    if parts[0] in PRIVATE_READS or parts[0] == 'branches' and 'protection' in parts[2:]:
+        return False
+    return not (parts[0] == 'actions' and len(parts) > 1 and parts[1] in PRIVATE_ACTIONS)
+
+
 def change_allowed(rest, method):
     """Whether a push grant may send `method` to the repository path after OWNER/NAME."""
     if method in READS:
@@ -116,6 +132,10 @@ def repository_route(host, method, owner, name, rest):
     if not change_allowed(rest, method):
         raise Refused(403, 'this worker does not let an agent change %s %s on %s/%s: only pull requests, '
                            'issues, releases, commits, checks and workflow runs.' % (method, rest or '/', owner, name))
+    if not read_allowed(rest):
+        raise Refused(403, 'this worker does not let an agent reach %s on %s/%s: the repository\'s access, '
+                           'hooks, keys, secrets, variables, environments and runners stay with the person.'
+                      % (rest, owner, name))
     return Route(host, 'repository', 'read' if method in READS else 'push', repository=owner + '/' + name)
 
 
@@ -131,6 +151,10 @@ def route(method, host, target):
                 raise Refused(403, 'this worker does not let an agent change %s %s on a repository: only pull '
                                    'requests, issues, releases, commits, checks and workflow runs.'
                               % (method, match['rest'] or '/'))
+            if not read_allowed(match['rest']):
+                raise Refused(403, 'this worker does not let an agent reach %s on a repository: its access, '
+                                   'hooks, keys, secrets, variables, environments and runners stay with the person.'
+                              % match['rest'])
             return Route(host, 'repository', 'read' if method in READS else 'push',
                          repository_id=match['id'])
         if (match := SEARCH.fullmatch(path)):
