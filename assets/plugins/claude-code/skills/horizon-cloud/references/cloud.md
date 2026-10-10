@@ -178,6 +178,8 @@ Empty access and refresh tokens are rejected before storage.
 A private journal lets Horizon recover an interrupted sign-in publication.
 Credential readers hold the session lock until all records and the active account
 selection are read. A concurrent sign-in cannot change part of that snapshot.
+The loopback callback has a ten-minute deadline. Local connections cannot extend
+that deadline. Incomplete HTTP requests are refused.
 It restores the previous account selection if the credential write did not finish.
 Refresh waits for the provider's earliest time. A refused or malformed response
 does not change the saved token pair.

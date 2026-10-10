@@ -171,6 +171,8 @@ Settings save requires a provider. Do not create or deploy a cloud.
 - The snapshot test must prevent a concurrent writer between the record read and
   the active account read. Concurrent readers must fail closed while the writer
   holds the session lock.
+- The callback tests must enforce the deadline when connections are queued or a
+  client sends an incomplete request. A partial HTTP callback must be refused.
 - The refresh tests must prevent an early provider request. They must replace both
   tokens on success and preserve the record on a refused or malformed response.
 - The Unix lock test must permit a new operation while a copied descriptor stays

@@ -28,6 +28,7 @@ const AGENT_NAME: &str = "Horizon";
 const DYNAMIC_CLIENT: &str = "dynamic_agent_client";
 /// How long Horizon waits for the person to sign in.
 const TIMEOUT: Duration = Duration::from_secs(600);
+const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 /// The redirect path `OpenAI` sends the code to; only the port may vary between sign-ins.
 const CALLBACK_PATH: &str = "/auth/callback";
 
@@ -172,24 +173,37 @@ fn urlencode(value: &str) -> String {
 
 /// Waits for the browser's redirect, then exchanges the code and stores the result.
 fn serve(listener: &TcpListener, attempt: &Attempt, root: &Path, cancel: &Cancellation) -> Result<super::Connection> {
+    let callback = wait_for_callback(listener, attempt, cancel, Instant::now() + TIMEOUT)?;
+    cancel.check().map_err(|_| Error::Declined)?;
+    finish(root, attempt, callback, cancel)
+}
+
+fn remaining(deadline: Instant) -> Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|duration| !duration.is_zero())
+        .ok_or_else(|| Error::Provider("ChatGPT did not finish sign-in in time. Try again.".into()))
+}
+
+fn wait_for_callback(
+    listener: &TcpListener,
+    attempt: &Attempt,
+    cancel: &Cancellation,
+    deadline: Instant,
+) -> Result<Callback> {
     listener.set_nonblocking(true)?;
-    let deadline = Instant::now() + TIMEOUT;
     loop {
         cancel.check().map_err(|_| Error::Declined)?;
+        let budget = remaining(deadline)?;
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Some(callback) = answer(stream, attempt) {
-                    cancel.check().map_err(|_| Error::Declined)?;
-                    return finish(root, attempt, callback, cancel);
+                if let Some(callback) = answer(stream, attempt, deadline) {
+                    remaining(deadline)?;
+                    return Ok(callback);
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    return Err(Error::Provider(
-                        "ChatGPT did not finish sign-in in time. Try again.".into(),
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(200));
+                std::thread::sleep(budget.min(Duration::from_millis(200)));
             }
             Err(error) => return Err(error.into()),
         }
@@ -198,16 +212,23 @@ fn serve(listener: &TcpListener, attempt: &Attempt, root: &Path, cancel: &Cancel
 
 /// Answers one request. Returns the callback values when the browser delivered the
 /// redirect to the configured path.
-fn answer(mut stream: TcpStream, attempt: &Attempt) -> Option<Callback> {
-    let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+fn answer(mut stream: TcpStream, attempt: &Attempt, deadline: Instant) -> Option<Callback> {
+    let deadline = deadline.min(Instant::now() + SOCKET_TIMEOUT);
+    stream.set_nonblocking(false).ok()?;
     let mut buffer = zeroize::Zeroizing::new(vec![0; 8192]);
     let mut read = 0;
     while read < buffer.len() && !buffer[..read].windows(4).any(|window| window == b"\r\n\r\n") {
+        stream
+            .set_read_timeout(Some(remaining(deadline).ok()?.min(SOCKET_TIMEOUT)))
+            .ok()?;
         match stream.read(&mut buffer[read..]) {
             Ok(0) | Err(_) => break,
             Ok(count) => read += count,
         }
+    }
+    remaining(deadline).ok()?;
+    if !buffer[..read].windows(4).any(|window| window == b"\r\n\r\n") {
+        return None;
     }
     let request = std::str::from_utf8(&buffer[..read]).unwrap_or_default();
     let target = request
@@ -254,9 +275,16 @@ fn answer(mut stream: TcpStream, attempt: &Attempt) -> Option<Callback> {
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    let _ = stream.write_all(head.as_bytes());
-    let _ = stream.write_all(body.as_bytes());
+    for bytes in [head.as_bytes(), body.as_bytes()] {
+        stream
+            .set_write_timeout(Some(remaining(deadline).ok()?.min(SOCKET_TIMEOUT)))
+            .ok()?;
+        if stream.write_all(bytes).is_err() {
+            break;
+        }
+    }
     let _ = stream.flush();
+    remaining(deadline).ok()?;
     callback
 }
 
@@ -512,6 +540,10 @@ struct Discovery {
 }
 
 #[cfg(test)]
+#[path = "flow/deadline_tests.rs"]
+mod deadline_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -631,7 +663,10 @@ mod tests {
             "GET {CALLBACK_PATH}?code=the-code&state={state}&client_id=oaiapp_issued HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
         );
         client.write_all(request.as_bytes()).unwrap();
-        assert!(answer(stream, &attempt).is_none(), "a wrong state is rejected");
+        assert!(
+            answer(stream, &attempt, Instant::now() + TIMEOUT).is_none(),
+            "a wrong state is rejected"
+        );
     }
 
     #[test]
@@ -646,7 +681,7 @@ mod tests {
             attempt.state
         );
         client.write_all(request.as_bytes()).unwrap();
-        match answer(stream, &attempt) {
+        match answer(stream, &attempt, Instant::now() + TIMEOUT) {
             Some(Callback::Code { code, client_id }) => {
                 assert_eq!(code.as_str(), "the-code");
                 assert_eq!(client_id.as_deref(), Some("oaiapp_issued"));
@@ -717,7 +752,7 @@ mod tests {
             attempt.state
         );
         client.write_all(request.as_bytes()).unwrap();
-        let callback = answer(stream, &attempt).unwrap();
+        let callback = answer(stream, &attempt, Instant::now() + TIMEOUT).unwrap();
         assert!(matches!(
             finish(root.path(), &attempt, callback, &Cancellation::default()),
             Err(Error::Provider(_))
