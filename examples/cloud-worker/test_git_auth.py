@@ -57,6 +57,40 @@ class GitAuthenticationTests(unittest.TestCase):
             auth.main()
         self.assertIsNone(auth.read_grants())
 
+    def test_under_agent_isolation_root_keeps_the_token_and_agents_keep_only_identities(self):
+        root_file = self.path / 'root/static-binding.json'
+        identity = auth.identity_path()
+        steps = []
+
+        def agent(operation, value):
+            steps.append((operation, value))
+            with mock.patch.object(auth, 'root_holds_token', return_value=False), \
+                    mock.patch.object(auth.subprocess, 'run'):
+                auth.install_identities(value)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True):
+            auth.install_as_root(self.value, agent)
+            self.assertEqual(auth.read_grants()[1][0]['token'], self.value['token'], 'root reads the token')
+        self.assertEqual([operation for operation, _ in steps], ['install-identity'])
+        self.assertNotIn(self.value['token'], json.dumps(steps))
+        self.assertEqual(root_file.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(self.value['token'], identity.read_text())
+        # The agent's view: no token, but the identities that the next install forgets.
+        self.assertIsNone(auth.read_grants())
+        self.assertEqual(auth.previous_grants()[1][0]['author_name'], 'Test User')
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True):
+            auth.clear()
+        self.assertFalse(root_file.exists())
+        self.assertFalse(identity.exists())
+
+    def test_a_token_file_of_another_account_is_refused(self):
+        with mock.patch.object(auth.subprocess, 'run'):
+            auth.install(self.value)
+        with mock.patch.object(auth.os, 'geteuid', return_value=os.geteuid() + 1), \
+                self.assertRaises(ValueError):
+            auth.read_grants()
+
     def test_gh_injects_authentication_only_into_child_environment(self):
         with mock.patch.object(auth.subprocess, 'run'):
             auth.install(self.value)
@@ -516,7 +550,7 @@ class GitGrantTests(unittest.TestCase):
         self.assertEqual(auth.read_grants(), (2, grants))
 
     def test_symlinked_or_shared_credential_files_are_refused(self):
-        auth.write_private(self.value)
+        auth.write_private(self.value, auth.CREDENTIAL)
         link = self.path / 'link.json'
         link.symlink_to(auth.CREDENTIAL)
         with mock.patch.object(auth, 'CREDENTIAL', link), self.assertRaises(OSError):

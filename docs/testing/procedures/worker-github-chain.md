@@ -27,7 +27,8 @@ the decision.
   `horizon-worker-github-git`, `horizon-worker-github-http`,
   `horizon-worker-github-api`, `horizon-worker-github-api-rest`,
   `horizon-worker-github-graphql`, `horizon-worker-github-graphql-policy`,
-  `horizon-worker-github-tasks` and `horizon-worker-github-mcp`,
+  `horizon-worker-github-tasks`, `horizon-worker-github-mcp` and
+  `horizon-worker-gh-repository`,
   `horizon-worker-git-auth`, `horizon-worker-supervise` or the token chain part
   of `horizon-worker-check`.
 - Platforms: Linux with Docker.
@@ -578,13 +579,27 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: The command shows nothing. Git gets no token from the binding either.
 
-9. Remove the binding:
+9. Look for the binding's token as the agent and as root:
 
    ```bash
-   docker exec <c> horizon-worker-git-auth clear
+   docker exec <c> horizon-worker-tailnet agent cat /run/horizon-github/static-binding.json; echo "exit=$?"
+   docker exec <c> horizon-worker-tailnet agent sh -c 'grep -rc ghp_synthetic-static /run/horizon-credentials; true'
+   docker exec <c> stat -c '%U %a' /run/horizon-github/static-binding.json
    ```
 
-   Result: The command exits with status 0.
+   Result: The first command shows `Permission denied` and a nonzero exit. The
+   second command shows `0` for each file, also for `github-identity.json`. The
+   third command shows `root 600`. No agent process can read the binding's token.
+
+10. Remove the binding:
+
+    ```bash
+    docker exec <c> horizon-worker-git-auth clear
+    docker exec <c> ls /run/horizon-github/static-binding.json /run/horizon-credentials/github-identity.json
+    ```
+
+    Result: The first command exits with status 0. The second command shows
+    `No such file or directory` for both files.
 
 ### 6.9 R1: Request outside an agent session
 
@@ -894,7 +909,8 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
   token. A repository without a grant and a path outside a repository get a
   `Horizon:` refusal, and those requests do not reach GitHub. In lane G, the
   GraphQL policy refuses a repository without a grant.
-- A static binding also goes through the Git proxy. Git gets no token from it.
+- A static binding also goes through the Git proxy. Git gets no token from it, and
+  no agent process can read its token.
 - The agent user cannot read the token chain. No reply and no log line contains
   a token.
 - The token chain survives a recreated container.
