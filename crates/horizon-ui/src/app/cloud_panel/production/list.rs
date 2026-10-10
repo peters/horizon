@@ -38,13 +38,16 @@ impl HorizonApp {
         let attached_working = members.iter().any(|panel| panel.agent_status() == AgentStatus::Working);
         let Some(runtime) = self.cloud_prototype.production.runtimes.get(&group.issue) else {
             return CloudFacts {
+                id: group.issue,
+                name: group.title.clone(),
                 condition: Condition::Idle,
                 working: attached_working,
                 line: "Not deployed".to_owned(),
                 hourly_rate: None,
+                stoppable: false,
             };
         };
-        let (mut condition, mut line) = cards::list::condition(group, runtime, &self.board, now);
+        let (mut condition, mut line, stoppable) = cards::list::condition(group, runtime, &self.board, now);
         let mut working = attached_working;
         // A parked cloud stays parked while its connection is down: its terminals keep
         // their snapshots, and the worker's last status is still the best line.
@@ -80,10 +83,13 @@ impl HorizonApp {
             line = format!("GitHub {} access requested for {}", request.access, request.repository);
         }
         CloudFacts {
+            id: group.issue,
+            name: group.title.clone(),
             condition,
             working,
             line,
             hourly_rate: cards::list::hourly_rate(runtime),
+            stoppable,
         }
     }
 }
