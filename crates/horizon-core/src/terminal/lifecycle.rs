@@ -11,10 +11,24 @@ impl Terminal {
     ///
     /// Returns an error if the PTY or event loop cannot be created.
     pub fn spawn(options: TerminalSpawnOptions) -> Result<Self> {
-        Self::spawn_guarded(options, TerminalSshTrust::default())
+        Self::spawn_guarded(options, TerminalSshTrust::default(), PtyOutput::Shown)
     }
 
-    fn spawn_guarded(options: TerminalSpawnOptions, trust: TerminalSshTrust) -> Result<Self> {
+    /// Spawn a terminal that shows `options.replay_bytes` and none of its process's output.
+    ///
+    /// A snapshot runs a process that exits at once only because a terminal needs a PTY.
+    /// That output must not reach the snapshot: Windows `ConPTY` clears the screen on its
+    /// first paint, which would push the replayed text into scrollback and leave the
+    /// panel blank, and it names the console in the title.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the PTY or event loop cannot be created.
+    pub(crate) fn spawn_snapshot(options: TerminalSpawnOptions) -> Result<Self> {
+        Self::spawn_guarded(options, TerminalSshTrust::default(), PtyOutput::Discarded)
+    }
+
+    fn spawn_guarded(options: TerminalSpawnOptions, trust: TerminalSshTrust, output: PtyOutput) -> Result<Self> {
         let rows = options.rows.max(1);
         let cols = options.cols.max(2);
         let scrollback_limit = options.scrollback_limit.max(1);
@@ -63,7 +77,18 @@ impl Terminal {
         let child_pid = None;
         #[cfg(target_os = "linux")]
         let child_start_time = child_pid.and_then(process_start_time);
-        let event_loop = EventLoop::new(term.clone(), event_loop_proxy, pty, true, false)
+        let pty_term = match output {
+            PtyOutput::Shown => term.clone(),
+            PtyOutput::Discarded => Arc::new(FairMutex::new(Term::new(
+                term::Config {
+                    scrolling_history: 0,
+                    ..term::Config::default()
+                },
+                &dimensions,
+                TerminalEventProxy::exit_only(event_loop_proxy.event_tx.clone()),
+            ))),
+        };
+        let event_loop = EventLoop::new(pty_term, event_loop_proxy, pty, true, false)
             .map_err(|error| Error::Pty(format!("failed to initialize terminal event loop: {error}")))?;
         let event_sender = event_loop.channel();
         let event_loop_handle = Some(event_loop.spawn());
@@ -247,7 +272,7 @@ impl Terminal {
     }
 
     /// Whether the event loop has ended and its PTY is closed.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(crate) fn pty_released(&self) -> bool {
         self.event_loop_handle.is_none() && self.shutdown_complete.load(Ordering::Acquire)
     }
@@ -269,6 +294,15 @@ impl Terminal {
         });
         true
     }
+}
+
+/// Where the PTY output of a terminal goes.
+#[derive(Clone, Copy)]
+enum PtyOutput {
+    /// Into the grid the panel shows.
+    Shown,
+    /// Into a scratch grid nobody sees; only the process's exit is reported.
+    Discarded,
 }
 
 impl Drop for Terminal {
@@ -296,3 +330,6 @@ fn process_start_time(pid: u32) -> Option<u64> {
 // The regression uses a Unix shell and PTY child that ignores SIGHUP.
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(test)]
+mod snapshot_tests;
