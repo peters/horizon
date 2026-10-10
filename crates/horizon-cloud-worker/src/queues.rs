@@ -185,9 +185,9 @@ fn publication_failure(
     error: &std::io::Error,
     complete: impl FnOnce(&BrowserCreateResult) -> std::io::Result<()>,
 ) -> bool {
-    if !matches!(
+    if matches!(
         error.kind(),
-        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidInput | std::io::ErrorKind::InvalidData
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted | std::io::ErrorKind::TimedOut
     ) {
         return true;
     }
@@ -528,7 +528,11 @@ mod tests {
             failure: None,
         };
         let mut cleanup = std::collections::BTreeSet::new();
-        for kind in [std::io::ErrorKind::WouldBlock, std::io::ErrorKind::Interrupted] {
+        for kind in [
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::TimedOut,
+        ] {
             assert!(publication_failure(
                 &mut pending,
                 &mut cleanup,
@@ -539,21 +543,29 @@ mod tests {
             assert!(pending.failure.is_none());
             assert!(cleanup.is_empty());
         }
-        let error = std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid manifest");
-        assert!(!publication_failure(
-            &mut pending,
-            &mut cleanup,
-            "browser".into(),
-            &error,
-            |result| {
-                assert!(matches!(
-                    &result.outcome,
-                    manifest::BrowserCreateOutcome::Failed { code, .. } if code == "browser_publish_failed"
-                ));
-                Ok(())
-            }
-        ));
-        assert!(cleanup.contains("browser"));
+        for kind in [
+            std::io::ErrorKind::InvalidData,
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::StorageFull,
+        ] {
+            pending.failure = None;
+            cleanup.clear();
+            let error = std::io::Error::new(kind, "manifest unavailable");
+            assert!(!publication_failure(
+                &mut pending,
+                &mut cleanup,
+                "browser".into(),
+                &error,
+                |result| {
+                    assert!(matches!(
+                        &result.outcome,
+                        manifest::BrowserCreateOutcome::Failed { code, .. } if code == "browser_publish_failed"
+                    ));
+                    Ok(())
+                }
+            ));
+            assert!(cleanup.contains("browser"));
+        }
     }
 
     #[test]
