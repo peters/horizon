@@ -71,19 +71,13 @@ fn invalid_restored_device_displays_its_failure_transcript() {
     let (_temp, ctx, mut app, panel) = device_app(None);
     assert!(app.board.panel(panel).expect("placeholder").device().is_none());
     assert!(app.board.panel(panel).expect("placeholder").terminal().is_some());
-    // Replay is asynchronous. A short frame count misses it under load, and a
-    // deadline checked after the first render expires when that render is slow.
+    // The placeholder holds its transcript from the moment it spawns, and its exiting
+    // shell cannot paint over it. Rendering repeats only until the panel is on screen.
     let deadline = Instant::now() + Duration::from_secs(15);
-    let text = loop {
-        if Instant::now() >= deadline {
-            break String::new();
-        }
-        let text = painted_text(&render(&ctx, &mut app));
-        if text.contains("Device panel requires") {
-            break text;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    let mut text = String::new();
+    while !text.contains("Device panel requires") && Instant::now() < deadline {
+        text = painted_text(&render(&ctx, &mut app));
+    }
     assert!(
         text.contains("Device panel requires"),
         "restore failure was not painted: {text}"

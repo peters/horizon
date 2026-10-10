@@ -277,7 +277,7 @@ fn spawn_remote_snapshot_terminal(id: PanelId, rows: u16, cols: u16, replay_byte
     } else {
         ("/bin/sh", vec!["-c".into(), "exit".into()])
     };
-    Terminal::spawn(TerminalSpawnOptions {
+    Terminal::spawn_snapshot(TerminalSpawnOptions {
         program: program.into(),
         args,
         cwd: None,
@@ -301,7 +301,7 @@ fn spawn_restore_failure_snapshot_terminal(
     replay_bytes: Vec<u8>,
 ) -> Result<Terminal> {
     let (program, args) = disconnected_snapshot_launch_command();
-    let mut terminal = Terminal::spawn(TerminalSpawnOptions {
+    let mut terminal = Terminal::spawn_snapshot(TerminalSpawnOptions {
         program,
         args,
         cwd: None,
@@ -391,7 +391,7 @@ fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8
 
 fn spawn_disconnected_snapshot_terminal(id: PanelId, rows: u16, cols: u16, replay_bytes: Vec<u8>) -> Result<Terminal> {
     let (program, args) = disconnected_snapshot_launch_command();
-    Terminal::spawn(TerminalSpawnOptions {
+    Terminal::spawn_snapshot(TerminalSpawnOptions {
         program,
         args,
         cwd: None,
