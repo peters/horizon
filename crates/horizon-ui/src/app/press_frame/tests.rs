@@ -97,6 +97,8 @@ struct Fixture {
     ctx: Context,
     app: HorizonApp,
     time: f64,
+    /// False gives the app each batch as it came, to show what the split prevents.
+    split: bool,
 }
 
 impl Fixture {
@@ -126,6 +128,7 @@ impl Fixture {
             ctx,
             app,
             time: 0.0,
+            split: true,
         };
         for _ in 0..3 {
             fixture.frame(Vec::new());
@@ -141,6 +144,10 @@ impl Fixture {
         input.time = Some(self.time);
         input.events = events;
         self.app.raw_input_hook(&self.ctx, &mut input);
+        if !self.split {
+            // Only pointer input was held back, so appending it restores the batch order.
+            input.events.append(&mut self.app.press_frame.deferred);
+        }
         let _ = run_app_frame_with_input(&self.ctx, &mut self.app, input);
     }
 
@@ -159,15 +166,48 @@ impl Fixture {
             .expect("panel on screen")
     }
 
-    /// A quick drag from `start`: the press and every motion step arrive in one batch,
-    /// as when a window system delivers them before a slow frame.
-    fn quick_drag(&mut self, start: Pos2, movement: Vec2) {
-        let mut batch = vec![Event::PointerMoved(start), button(start, true)];
-        batch.extend((1..=20u8).map(|step| Event::PointerMoved(start + movement * (f32::from(step) / 20.0))));
-        self.frame(batch);
+    /// A drag from `start` in 20 motion steps. With `Delivery::OneBatch` the press and every
+    /// step arrive in one batch, as when a window system delivers them before a slow frame.
+    /// With `Delivery::FramePerEvent` the press and each step get their own frame.
+    fn drag(&mut self, start: Pos2, movement: Vec2, delivery: Delivery) {
+        let steps = (1..=20u8).map(|step| Event::PointerMoved(start + movement * (f32::from(step) / 20.0)));
+        match delivery {
+            Delivery::OneBatch => {
+                let mut batch = vec![Event::PointerMoved(start), button(start, true)];
+                batch.extend(steps);
+                self.frame(batch);
+            }
+            Delivery::FramePerEvent => {
+                self.frame(vec![Event::PointerMoved(start)]);
+                self.frame(vec![button(start, true)]);
+                for step in steps {
+                    self.frame(vec![step]);
+                }
+            }
+        }
         self.frame(Vec::new());
         self.frame(vec![button(start + movement, false)]);
         self.frame(Vec::new());
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Delivery {
+    OneBatch,
+    FramePerEvent,
+}
+
+const DELIVERIES: [Delivery; 2] = [Delivery::OneBatch, Delivery::FramePerEvent];
+
+impl Delivery {
+    /// How far the panel may stop short of the drag. egui starts a drag only when the pointer
+    /// has moved past its click distance, so with a frame per event the first of the 20 steps
+    /// does not move the panel. In one batch that step is in the frame where the drag starts.
+    fn allowed_shortfall(self, movement: Vec2) -> f32 {
+        match self {
+            Self::OneBatch => 1.0,
+            Self::FramePerEvent => movement.length() / 20.0 + 1.0,
+        }
     }
 }
 
@@ -184,7 +224,16 @@ fn titlebar_point(rect: Rect, zoom: f32, along: f32) -> Pos2 {
 }
 
 #[test]
-fn a_quick_titlebar_drag_moves_the_panel_in_every_direction_region_and_zoom() {
+fn a_titlebar_drag_in_one_batch_moves_the_panel_in_every_direction_region_and_zoom() {
+    titlebar_drags_move_the_panel(Delivery::OneBatch);
+}
+
+#[test]
+fn a_titlebar_drag_with_a_frame_per_event_moves_the_panel_in_every_direction_region_and_zoom() {
+    titlebar_drags_move_the_panel(Delivery::FramePerEvent);
+}
+
+fn titlebar_drags_move_the_panel(delivery: Delivery) {
     // The title text starts at the left; the right part of the titlebar is blank.
     for (region, along) in [("title", 0.2), ("blank", 0.6)] {
         for zoom in [0.5, 1.0, 1.5] {
@@ -194,11 +243,11 @@ fn a_quick_titlebar_drag_moves_the_panel_in_every_direction_region_and_zoom() {
                     let (id, before) = fixture.panels()[0];
                     fixture.app.board.focused = focused.then_some(id);
                     fixture.frame(Vec::new());
-                    fixture.quick_drag(titlebar_point(before, zoom, along), movement);
+                    fixture.drag(titlebar_point(before, zoom, along), movement, delivery);
                     let moved = fixture.screen_rect(id).min - before.min;
                     assert!(
-                        (moved - movement).length() < 1.0,
-                        "{region} drag at zoom {zoom}, focused {focused}, by {movement:?} moved {moved:?}"
+                        (moved - movement).length() < delivery.allowed_shortfall(movement),
+                        "{delivery:?} {region} drag at zoom {zoom}, focused {focused}, by {movement:?} moved {moved:?}"
                     );
                 }
             }
@@ -207,17 +256,51 @@ fn a_quick_titlebar_drag_moves_the_panel_in_every_direction_region_and_zoom() {
 }
 
 #[test]
-fn a_quick_vertical_titlebar_drag_swaps_arranged_rows() {
+fn a_vertical_titlebar_drag_swaps_arranged_rows_in_one_batch_or_a_frame_per_event() {
+    for delivery in DELIVERIES {
+        for zoom in [0.5, 1.0] {
+            let mut fixture = Fixture::new(vec![panel("upper"), panel("lower")], Some(WorkspaceLayout::Rows), zoom);
+            let mut rows = fixture.panels();
+            rows.sort_by(|a, b| a.1.min.y.total_cmp(&b.1.min.y));
+            let [(upper, upper_rect), (lower, lower_rect)] = rows[..] else {
+                panic!("two arranged rows: {rows:?}");
+            };
+            fixture.drag(
+                titlebar_point(upper_rect, zoom, 0.6),
+                lower_rect.min - upper_rect.min,
+                delivery,
+            );
+            let workspace = &fixture.app.board.workspaces[0];
+            assert_eq!(
+                workspace.layout,
+                Some(WorkspaceLayout::Rows),
+                "{delivery:?} zoom {zoom}"
+            );
+            assert_eq!(
+                workspace.panels,
+                [lower, upper],
+                "{delivery:?}: rows did not swap at zoom {zoom}"
+            );
+        }
+    }
+}
+
+#[test]
+fn without_the_split_a_one_batch_vertical_drag_is_lost_and_a_frame_per_event_is_not() {
+    // The control for the tests above: the one-batch delivery reproduces the lost drag.
     for zoom in [0.5, 1.0] {
-        let mut fixture = Fixture::new(vec![panel("upper"), panel("lower")], Some(WorkspaceLayout::Rows), zoom);
-        let mut rows = fixture.panels();
-        rows.sort_by(|a, b| a.1.min.y.total_cmp(&b.1.min.y));
-        let [(upper, upper_rect), (lower, lower_rect)] = rows[..] else {
-            panic!("two arranged rows: {rows:?}");
-        };
-        fixture.quick_drag(titlebar_point(upper_rect, zoom, 0.6), lower_rect.min - upper_rect.min);
-        let workspace = &fixture.app.board.workspaces[0];
-        assert_eq!(workspace.layout, Some(WorkspaceLayout::Rows), "zoom {zoom}");
-        assert_eq!(workspace.panels, [lower, upper], "rows did not swap at zoom {zoom}");
+        for (delivery, moves) in [(Delivery::OneBatch, false), (Delivery::FramePerEvent, true)] {
+            let mut fixture = Fixture::new(vec![panel("only")], None, zoom);
+            fixture.split = false;
+            let (id, before) = fixture.panels()[0];
+            let movement = Vec2::new(0.0, 90.0);
+            fixture.drag(titlebar_point(before, zoom, 0.6), movement, delivery);
+            let moved = fixture.screen_rect(id).min - before.min;
+            assert_eq!(
+                (moved - movement).length() < delivery.allowed_shortfall(movement),
+                moves,
+                "{delivery:?} drag at zoom {zoom} without the split moved {moved:?}"
+            );
+        }
     }
 }
