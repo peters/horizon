@@ -89,6 +89,18 @@ exit 0
         self.panel.terminal().expect("terminal").last_lines_text(20)
     }
 
+    /// Polls until a poll finds no output, so the next frame has no pending wakeup.
+    fn drain_output(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            self.panel.process_output();
+            if !self.panel.had_recent_output() {
+                return;
+            }
+            assert!(Instant::now() < deadline, "terminal kept reporting output");
+        }
+    }
+
     fn wait_for_mouse_mode(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -151,34 +163,21 @@ fn mouse_reporting_hover_and_canvas_pan_reuse_unchanged_grid() {
     assert!(before > 0);
     let screen = harness.text();
     // alacritty_terminal can send a Wakeup with no output: when its loop takes an input message
-    // before the sender wakes the poller, that wakeup finds nothing to do and is sent as one. A
-    // frame after it may rebuild. A frame after no reported output must reuse the grid.
-    let mut quiet_frames = 0;
+    // before the sender wakes the poller, that wakeup finds nothing to do and is sent as one.
+    // Each frame starts after a poll with no output, so such a wakeup cannot rebuild the grid.
     for interactive in [true, false] {
         for x in [50.0, 80.0, 110.0] {
-            harness.panel.process_output();
-            let quiet = !harness.panel.had_recent_output();
+            harness.drain_output();
             let rebuilds = harness.cache.rebuilds;
             harness.frame(Pos2::new(x, 40.0), interactive);
-            if quiet {
-                quiet_frames += 1;
-                assert_eq!(
-                    harness.cache.rebuilds, rebuilds,
-                    "pointer motion must not rebuild unchanged terminal text (x {x}, interactive {interactive})"
-                );
-            }
+            assert_eq!(
+                harness.cache.rebuilds, rebuilds,
+                "pointer motion must not rebuild unchanged terminal text (x {x}, interactive {interactive})"
+            );
         }
     }
-    // Such a wakeup needs a race, so most frames are quiet. Pointer reports that made output
-    // would make every frame busy.
-    assert!(
-        quiet_frames >= 3,
-        "only {quiet_frames} of 6 pointer frames had no output"
-    );
     assert_eq!(harness.text(), screen, "pointer reports must not change the screen");
 
-    // A permitted busy frame may already have rebuilt, so measure real output from here.
-    let before = harness.cache.rebuilds;
     harness.panel.terminal().expect("terminal").write_input(b"update\n");
     harness.wait_for_text("UPDATED-2");
     harness.frame(Pos2::new(110.0, 40.0), true);
