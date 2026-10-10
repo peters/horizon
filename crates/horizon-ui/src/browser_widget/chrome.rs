@@ -30,7 +30,10 @@ pub fn show(
     interactive: bool,
 ) -> (bool, bool) {
     if let Some(identity) = browser.remote_identity_display() {
-        remote_identity_header(ui, identity);
+        let disclosure = browser
+            .active_backend_capabilities()
+            .map(|active| active.automation_disclosure.as_str());
+        remote_identity_header(ui, identity, disclosure);
     }
     let chrome_row = ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -108,8 +111,14 @@ pub fn show(
     (url_focused, clicked)
 }
 
-fn remote_identity_header(ui: &mut Ui, identity: &horizon_core::browser::RemoteIdentityDisplay) {
+fn remote_identity_header(
+    ui: &mut Ui,
+    identity: &horizon_core::browser::RemoteIdentityDisplay,
+    disclosure: Option<&str>,
+) {
     // A dedicated row keeps the hover target usable at the minimum panel width.
+    // Disclosure is read here because the cached identity text is built before
+    // the session publishes its status. The tooltip closure runs only while open.
     ui.add_sized(
         vec2(ui.available_width(), CHROME_HEIGHT),
         egui::Label::new(identity.label())
@@ -119,6 +128,9 @@ fn remote_identity_header(ui: &mut Ui, identity: &horizon_core::browser::RemoteI
     .on_hover_ui(|ui| {
         ui.set_max_width(crate::text::stable_tooltip_max_width(ui));
         ui.add(egui::Label::new(identity.tooltip()).wrap());
+        if let Some(status) = disclosure {
+            ui.label(status);
+        }
     });
 }
 
@@ -146,6 +158,8 @@ fn backend_picker(
     browser: &mut BrowserPanelState,
     interactive: bool,
 ) -> bool {
+    // Remote panels show the family and disclosure on the identity header.
+    // A picker on that row would be a second fixed control.
     if browser.is_remote() {
         return false;
     }
@@ -161,7 +175,7 @@ fn backend_picker(
             }
         },
     );
-    let PickerState { enabled, remote_hint } = picker_state(browser, interactive);
+    let PickerState { enabled, .. } = picker_state(browser, interactive);
     let picker = ui.add_enabled_ui(enabled, |ui| {
         egui::ComboBox::from_id_salt(("browser-backend", panel_id))
             .selected_text(selected_text)
@@ -187,24 +201,11 @@ fn backend_picker(
                 }
             });
     });
-    let disclosure = browser
+    if let Some(status) = browser
         .active_backend_capabilities()
-        .map(|active| active.automation_disclosure.as_str());
-    // The configured target fixes the browser; the picker stays visible
-    // so the family is still readable, but never actionable. The
-    // disclosure name says whether Firefox kept the native getter.
-    // Borrow a single fragment. Allocate only when both must be combined.
-    match (disclosure, remote_hint) {
-        (Some(status), Some(remote)) => {
-            picker.response.on_hover_text(format!("{status}. {remote}"));
-        }
-        (Some(status), None) => {
-            picker.response.on_hover_text(status);
-        }
-        (None, Some(remote)) => {
-            picker.response.on_hover_text(remote);
-        }
-        (None, None) => {}
+        .map(|active| active.automation_disclosure.as_str())
+    {
+        picker.response.on_hover_text(status);
     }
     if selected == previous {
         return false;
@@ -565,6 +566,45 @@ mod tests {
             !picker_state(&local, false).enabled,
             "a non-interactive view never picks"
         );
+    }
+
+    #[test]
+    fn remote_identity_hover_shows_the_disclosure_status() {
+        let mut remote = BrowserPanelState::inert_remote("ios_phone", "browserstack");
+        remote
+            .frame_slot
+            .publish_backend_capabilities_for_tests(horizon_browser::ActiveBackendCapabilities {
+                backend: BackendKind::ChromiumCdp,
+                capabilities: horizon_browser::BackendCapabilities::remote_session(),
+                bidi: false,
+                automation_disclosure: horizon_browser::AutomationDisclosureStatus::UnsupportedByBackend,
+            });
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+        let pointer = egui::pos2(24.0, 12.0);
+        let mut pass = |time: f64| {
+            ctx.run_ui(hover_input(pointer, time), |ui| {
+                let mut state = crate::browser_widget::BrowserUiState::default();
+                super::show(ui, horizon_core::PanelId(2), &mut remote, &mut state, true);
+            })
+            .discard_textures()
+        };
+        let _ = pass(0.0);
+        let output = pass(1.0);
+        let shown = output.shapes.iter().any(|shape| match &shape.shape {
+            egui::Shape::Text(text) => text.galley.job.text.contains("unsupported_by_backend"),
+            _ => false,
+        });
+        assert!(shown, "remote identity hover must show the disclosure status");
+    }
+
+    fn hover_input(pointer: egui::Pos2, time: f64) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(720.0, 200.0))),
+            time: Some(time),
+            events: vec![egui::Event::PointerMoved(pointer)],
+            ..egui::RawInput::default()
+        }
     }
 
     #[test]

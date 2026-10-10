@@ -549,6 +549,12 @@ impl FrameSlot {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(capabilities);
     }
 
+    /// Publish negotiated capabilities so a UI test can render disclosure status.
+    #[doc(hidden)]
+    pub fn publish_backend_capabilities_for_tests(&self, capabilities: crate::ActiveBackendCapabilities) {
+        self.publish_backend_capabilities(capabilities);
+    }
+
     /// Explicit content viewport accepted by the backend, independent of host
     /// layout. A renderer must wait for a matching frame before mapping input.
     #[must_use]
