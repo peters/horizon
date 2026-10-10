@@ -38,6 +38,18 @@ this value. The GPU profile keeps its own resource and build-job defaults.
 Allocation minimums do not establish a successful full validation run. Report
 measured validation and memory results separately from the configured minimums.
 
+## Source transfer errors
+
+Use relative source paths without redundant separators or `.` components in a
+transfer manifest. Each module, transferred asset, and skipped asset must have a
+unique path. Nested submodules and assets inside modules remain supported.
+
+`horizon-worker-source` returns exit status 1 for an invalid request or source path, a failed
+Git command, or an expected source transfer error. The error appears on stderr with the
+`horizon-worker-source:` prefix. These failures do not start a desktop crash
+report. Read the error before you retry. A nonzero exit status does not mean
+that the source import or checkout completed.
+
 ## Host companion lifecycle
 
 1. Read `cloud_companions` for selected aliases, cloud identity, and saved tailnets.
