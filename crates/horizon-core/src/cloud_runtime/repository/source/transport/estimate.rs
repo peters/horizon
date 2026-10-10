@@ -133,6 +133,12 @@ pub(super) fn received_before(folder: &Path) -> u64 {
         entries
             .flatten()
             .filter_map(|entry| Some((entry.path(), entry.file_type().ok()?)))
+            // A fetch's unfinished pack is no part of what was received.
+            .filter(|(path, _)| {
+                !path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("tmp_"))
+            })
             .map(|(path, kind)| {
                 if kind.is_file() {
                     std::fs::metadata(&path).map_or(0, |meta| meta.len())

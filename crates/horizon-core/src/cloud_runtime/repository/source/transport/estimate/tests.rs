@@ -41,7 +41,8 @@ fn an_earlier_try_counts_what_its_objects_hold() {
     std::fs::create_dir_all(objects.join("ab")).unwrap();
     std::fs::write(objects.join("pack/pack-1.pack"), vec![0; 1000]).unwrap();
     std::fs::write(objects.join("ab/cdef"), vec![0; 24]).unwrap();
-    assert_eq!(received_before(temp.path()), 1024);
+    std::fs::write(objects.join("pack/tmp_pack_x1"), vec![0; 5000]).unwrap();
+    assert_eq!(received_before(temp.path()), 1024, "an unfinished pack is not counted");
     assert_eq!(received_before(&temp.path().join("missing")), 0);
 }
 

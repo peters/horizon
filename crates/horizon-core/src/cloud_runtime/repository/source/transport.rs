@@ -625,14 +625,13 @@ fn claimed_steps(
         return Ok(());
     }
     announce(progress, 1, earlier.is_some());
-    if earlier.is_some() {
-        let before = estimate::received_before(destination);
-        update(progress, |snapshot| snapshot.received = before);
-    }
     estimate::look_up(remote, token, progress);
     let marker = if let Some(marker) = earlier {
         // The try before may have been ended by a crash or a kill, mid-write.
         clear_leftovers(destination);
+        // Counted once what it left is cleared, so a fetch it broke off is counted once.
+        let before = estimate::received_before(destination);
+        update(progress, |snapshot| snapshot.received = before);
         marker
     } else {
         let branch = default_branch(remote, token, cancel)?;
