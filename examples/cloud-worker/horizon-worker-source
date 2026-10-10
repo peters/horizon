@@ -283,19 +283,19 @@ def checkout(worktree, alias=None):
         register(worktree, modules, index, origin)
 
 
-if __name__ == '__main__':
-    if sys.argv[1:] == ['--shallow-contract']:
+def main(arguments):
+    if arguments == ['--shallow-contract']:
         # Imports record pinned-only submodule packs as shallow (see record_shallow).
         print('horizon-source-shallow-contract=1')
-        sys.exit(0)
-    if sys.argv[1:] == ['--lfs-selection-contract']:
+        return 0
+    if arguments == ['--lfs-selection-contract']:
         # Imports honor a manifest's LFS selection (see select_lfs).
         print('horizon-source-lfs-selection-contract=1')
-        sys.exit(0)
+        return 0
     os.umask(0o077)
     with open('/workspace/source.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        command, sibling = sys.argv[1:], None
+        command, sibling = arguments, None
         if len(command) in (3, 4) and command[-2] == '--sibling':
             command, sibling = command[:-2], command[-1]
         if command == ['import']:
@@ -304,3 +304,16 @@ if __name__ == '__main__':
             checkout(command[1], sibling)
         else:
             raise ValueError('Usage: horizon-worker-source import|checkout WORKTREE [--sibling ALIAS]')
+
+
+def entry(arguments):
+    try:
+        return main(arguments)
+    except (ValueError, OSError, subprocess.SubprocessError, tarfile.TarError) as error:
+        # Expected request and transfer failures must not reach the desktop crash hook.
+        print(f'horizon-worker-source: {error}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(entry(sys.argv[1:]))
