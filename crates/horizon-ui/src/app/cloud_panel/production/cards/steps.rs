@@ -212,7 +212,7 @@ fn opened_beside_marks(ui: &mut egui::Ui, id: u32, runtime: &Runtime, status: &S
 
 fn opened(ui: &mut egui::Ui, id: u32, runtime: &Runtime, status: &Status) -> Option<StepAction> {
     if let Some(failure) = &status.failure {
-        let cause = super::cause::show(ui, ("steps", id), failure.headline());
+        let cause = super::cause::show(ui, ("steps", id), runtime.progress.attempt(), failure.headline());
         if let Some(meaning) = failure.meaning {
             ui.label(RichText::new(meaning).size(12.0).color(theme::FG_SOFT()));
         } else if failure.cause.is_some() {

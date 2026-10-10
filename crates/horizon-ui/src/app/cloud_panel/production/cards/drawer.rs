@@ -331,7 +331,7 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
                     .size(13.0)
                     .color(theme::FG_DIM()),
                 );
-                let cause = super::cause::show(ui, ("drawer", id), failure.headline());
+                let cause = super::cause::show(ui, ("drawer", id), runtime.progress.attempt(), failure.headline());
                 if let Some(meaning) = failure.meaning {
                     ui.label(RichText::new(meaning).size(14.0).color(theme::FG()));
                 }

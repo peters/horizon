@@ -30,16 +30,18 @@ fn layout(ui: &egui::Ui, text: &str, width: f32, rows: usize) -> Arc<Galley> {
 /// What a drawn cause offers: Show more when it was cut, Show less once expanded.
 pub(super) struct Shown {
     id: egui::Id,
-    /// Which cause was expanded, so a new cause starts cut again.
+    /// Which cause of which attempt was expanded, so a new cause, or the same cause
+    /// after a retry, starts cut again.
     key: egui::Id,
     expanded: bool,
     elided: bool,
 }
 
-/// Draws `text` in the width left. `salt` keeps one place's expansion apart from another's.
-pub(super) fn show(ui: &mut egui::Ui, salt: impl std::hash::Hash + std::fmt::Debug, text: &str) -> Shown {
+/// Draws `text` in the width left. `salt` keeps one place's expansion apart from another's,
+/// and `attempt` one operation's from the next.
+pub(super) fn show(ui: &mut egui::Ui, salt: impl std::hash::Hash + std::fmt::Debug, attempt: u64, text: &str) -> Shown {
     let id = egui::Id::new(("cloud-failure-cause", salt));
-    let key = egui::Id::new(text);
+    let key = egui::Id::new((attempt, text));
     let expanded = ui.data(|data| data.get_temp::<egui::Id>(id)) == Some(key);
     let galley = layout(ui, text, ui.available_width(), if expanded { usize::MAX } else { ROWS });
     let elided = galley.elided;
@@ -132,13 +134,13 @@ mod tests {
         galley.rows.iter().map(|row| row.text()).collect()
     }
 
-    /// Texts and the Show more or Show less label one frame draws for `CONFLICT`.
-    fn frame(ctx: &egui::Context, text: &str) -> (Vec<String>, bool, bool) {
+    /// Texts one frame draws for `text` in `attempt`, and whether it was cut or expanded.
+    fn frame(ctx: &egui::Context, attempt: u64, text: &str) -> (Vec<String>, bool, bool) {
         let mut flags = (false, false);
         let output = ctx
             .run_ui(egui::RawInput::default(), |ui| {
                 ui.set_width(360.0);
-                let shown = show(ui, "test", text);
+                let shown = show(ui, "test", attempt, text);
                 flags = (shown.elided, shown.expanded);
             })
             .discard_textures();
@@ -156,16 +158,27 @@ mod tests {
     #[test]
     fn show_more_expands_only_the_cause_it_was_chosen_for() {
         let ctx = egui::Context::default();
-        let (texts, elided, expanded) = frame(&ctx, CONFLICT);
+        let (texts, elided, expanded) = frame(&ctx, 1, CONFLICT);
         assert!(elided && !expanded);
         assert!(!texts.iter().any(|text| text == CONFLICT), "{texts:?}");
         let id = egui::Id::new(("cloud-failure-cause", "test"));
-        ctx.data_mut(|data| data.insert_temp(id, egui::Id::new(CONFLICT)));
-        let (texts, elided, expanded) = frame(&ctx, CONFLICT);
+        ctx.data_mut(|data| data.insert_temp(id, egui::Id::new((1_u64, CONFLICT))));
+        let (texts, elided, expanded) = frame(&ctx, 1, CONFLICT);
         assert!(expanded && !elided);
         assert!(texts.iter().any(|text| text == CONFLICT), "{texts:?}");
         let other = CONFLICT.replace("0123", "4567");
-        let (_, elided, expanded) = frame(&ctx, &other);
+        let (_, elided, expanded) = frame(&ctx, 1, &other);
         assert!(elided && !expanded, "a new cause starts cut again");
+    }
+
+    #[test]
+    fn a_retry_that_fails_with_the_same_cause_starts_cut_again() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new(("cloud-failure-cause", "test"));
+        ctx.data_mut(|data| data.insert_temp(id, egui::Id::new((1_u64, CONFLICT))));
+        let (_, _, expanded) = frame(&ctx, 1, CONFLICT);
+        assert!(expanded);
+        let (_, elided, expanded) = frame(&ctx, 2, CONFLICT);
+        assert!(elided && !expanded, "the retry's failure is cut again");
     }
 }
