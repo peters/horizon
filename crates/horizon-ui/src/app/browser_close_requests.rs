@@ -9,7 +9,8 @@ use horizon_core::browser::manifest::{self, BrowserCloseAuditStatus, BrowserClos
 use horizon_core::{PanelId, PanelKind};
 
 use super::HorizonApp;
-use super::browser_requests::{ActorPanel, actor_panel, launched_by_this_host};
+use super::browser_request_claims::AGENT_GONE;
+use super::browser_requests::{ActorPanel, actor_panel};
 
 /// Why a claimed close request is refused, as the typed result code and its
 /// message. Every path leaves the panel untouched.
@@ -100,38 +101,11 @@ pub(super) fn close_outcome(
 }
 
 impl HorizonApp {
+    /// Publishes the closes whose teardown settled; the coordination worker
+    /// claims new requests.
     pub(super) fn poll_browser_close_requests(&mut self) -> bool {
-        let mut changed = self.finish_pending_browser_closes();
+        let changed = self.finish_pending_browser_closes();
         super::browser_remote_create::trim_remote_slot_leases(self);
-        let requests = match manifest::list_close_requests() {
-            Ok(requests) => requests,
-            Err(error) => {
-                tracing::warn!(error = %error, "could not poll browser close requests");
-                return changed;
-            }
-        };
-        for request in requests {
-            if !launched_by_this_host(request.host_instance.as_deref()) {
-                continue;
-            }
-            let Some(actor_panel) = actor_panel(&self.board, &request.actor) else {
-                continue;
-            };
-            let request = match manifest::claim_close_request(
-                &request.request_id,
-                &request.actor,
-                manifest::host_instance(),
-                std::process::id(),
-            ) {
-                Ok(Some(request)) => request,
-                Ok(None) => continue,
-                Err(error) => {
-                    tracing::warn!(request_id = %request.request_id, error = %error, "could not claim browser close request");
-                    continue;
-                }
-            };
-            changed |= self.apply_browser_close_request(&request, actor_panel);
-        }
         changed
     }
 
@@ -177,36 +151,64 @@ impl HorizonApp {
         Ok(panel_id)
     }
 
-    fn apply_browser_close_request(&mut self, request: &BrowserCloseRequest, actor_panel: ActorPanel) -> bool {
-        let owned_by_actor = manifest::read(&request.panel_local_id)
-            .and_then(|manifest| {
-                manifest
-                    .live_owner(manifest::now_millis())
-                    .map(|owner| owner.name.clone())
-            })
-            .as_deref()
-            == Some(request.actor.as_str());
-        let panel_id = match self.close_target(request, actor_panel, owned_by_actor, manifest::now_millis()) {
-            Ok(panel_id) => panel_id,
+    /// Closes the panel once the coordination worker audited the dispatch: a
+    /// journal that cannot be written refuses the close instead of leaving a
+    /// closed panel with no dispatch record.
+    pub(super) fn apply_browser_close_request(&mut self, request: &BrowserCloseRequest, actor_panel: ActorPanel) {
+        if let Err(refused) = self.close_target(request, actor_panel, owned_by_actor(request), manifest::now_millis()) {
+            self.fail_close(request, refused.code, refused.message);
+            return;
+        }
+        let audited = request.clone();
+        let request = request.clone();
+        self.browser_create_host.io.then(
+            move || {
+                let dispatched = manifest::record_close_status(&audited, BrowserCloseAuditStatus::Dispatched);
+                if let Err(error) = &dispatched {
+                    tracing::warn!(request_id = %audited.request_id, %error, "could not audit browser close dispatch");
+                    complete_close_failure(&audited, "audit_failed", "Horizon refused an unaudited close");
+                }
+                dispatched.is_ok()
+            },
+            move |app, dispatched| {
+                if dispatched {
+                    app.close_dispatched_browser_panel(request);
+                }
+            },
+        );
+    }
+
+    /// Closes the panel of an audited close, decided again on the board as it
+    /// is now.
+    fn close_dispatched_browser_panel(&mut self, request: BrowserCloseRequest) {
+        let target = actor_panel(&self.board, &request.actor)
+            .ok_or(refusal("workspace_unavailable", AGENT_GONE))
+            .and_then(|actor_panel| {
+                let panel_id =
+                    self.close_target(&request, actor_panel, owned_by_actor(&request), manifest::now_millis())?;
+                Ok((panel_id, actor_panel))
+            });
+        let (panel_id, actor_panel) = match target {
+            Ok(target) => target,
             Err(refused) => {
-                complete_close_failure(request, refused.code, refused.message);
-                return false;
+                self.fail_close(&request, refused.code, refused.message);
+                return;
             }
         };
-        // A journal that cannot be written refuses the close instead of
-        // leaving a closed panel with no dispatch record.
-        if let Err(error) = manifest::record_close_status(request, BrowserCloseAuditStatus::Dispatched) {
-            tracing::warn!(request_id = %request.request_id, %error, "could not audit browser close dispatch");
-            complete_close_failure(request, "audit_failed", "Horizon refused an unaudited close");
-            return false;
-        }
         let teardown = self.close_browser_panel_for_agent(panel_id, actor_panel);
-        self.browser_create_host.pending_closes.push(PendingBrowserClose {
-            request: request.clone(),
-            teardown,
-        });
+        self.browser_create_host
+            .pending_closes
+            .push(PendingBrowserClose { request, teardown });
         self.mark_runtime_dirty();
-        true
+    }
+
+    /// Publishes a refused or failed close on the coordination worker.
+    pub(super) fn fail_close(&mut self, request: &BrowserCloseRequest, code: &str, message: &str) {
+        let request = request.clone();
+        let (code, message) = (code.to_string(), message.to_string());
+        self.browser_create_host
+            .io
+            .write(move || complete_close_failure(&request, &code, &message));
     }
 
     /// The close itself, shared with the tests: the app's own close path
@@ -236,7 +238,7 @@ impl HorizonApp {
     pub(super) fn retire_pending_browser_closes_for_shutdown(&mut self) {
         self.refresh_remote_recovery_scope();
         for pending in std::mem::take(&mut self.browser_create_host.pending_closes) {
-            complete_close_failure(
+            self.fail_close(
                 &pending.request,
                 "host_shutdown",
                 "Horizon is shutting down; the panel is closed and its session teardown continues with the exit",
@@ -272,7 +274,7 @@ impl HorizonApp {
                         .as_ref()
                         .is_some_and(BrowserShutdownSignal::holds_remote_allocation);
                     if let Err((code, message)) = close_outcome(holds, release.as_ref()) {
-                        complete_close_failure(&pending.request, code, &message);
+                        self.fail_close(&pending.request, code, &message);
                         // The provider may still hold the session: the board
                         // keeps counting it against the provider's limit.
                         if let Some(signal) = pending.teardown {
@@ -280,21 +282,24 @@ impl HorizonApp {
                         }
                         continue;
                     }
-                    match manifest::record_close_status(&pending.request, BrowserCloseAuditStatus::Completed) {
-                        Ok(()) => complete_close_result(&BrowserCloseResult::closed(&pending.request)),
-                        Err(error) => {
-                            tracing::warn!(request_id = %pending.request.request_id, %error, "could not audit browser close completion");
-                            complete_close_failure(
-                                &pending.request,
-                                "audit_failed",
-                                "browser panel closed but its completion could not be audited",
-                            );
+                    let request = pending.request;
+                    self.browser_create_host.io.write(move || {
+                        match manifest::record_close_status(&request, BrowserCloseAuditStatus::Completed) {
+                            Ok(()) => complete_close_result(&BrowserCloseResult::closed(&request)),
+                            Err(error) => {
+                                tracing::warn!(request_id = %request.request_id, %error, "could not audit browser close completion");
+                                complete_close_failure(
+                                    &request,
+                                    "audit_failed",
+                                    "browser panel closed but its completion could not be audited",
+                                );
+                            }
                         }
-                    }
+                    });
                 }
                 PendingCloseState::TimedOut => {
                     changed = true;
-                    complete_close_failure(
+                    self.fail_close(
                         &pending.request,
                         "teardown_timeout",
                         "browser panel closed but its session teardown has not completed; call browser_list to confirm it is gone and check the provider before allocating again",
@@ -308,6 +313,19 @@ impl HorizonApp {
         self.browser_create_host.pending_closes = waiting;
         changed
     }
+}
+
+/// Whether the request's actor owns the panel now, by the live owner its
+/// manifest names.
+fn owned_by_actor(request: &BrowserCloseRequest) -> bool {
+    manifest::read(&request.panel_local_id)
+        .and_then(|manifest| {
+            manifest
+                .live_owner(manifest::now_millis())
+                .map(|owner| owner.name.clone())
+        })
+        .as_deref()
+        == Some(request.actor.as_str())
 }
 
 fn complete_close_failure(request: &BrowserCloseRequest, code: &str, message: &str) {

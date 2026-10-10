@@ -218,6 +218,7 @@ fn moving_then_bulk_closing_refreshes_the_remote_allocation_scope() {
         .panels
         .push(panel_id);
     app.refresh_remote_recovery_scope();
+    app.settle_browser_host_io();
     assert_eq!(
         manifest::read_at(&path)
             .expect("manifest")
@@ -226,26 +227,42 @@ fn moving_then_bulk_closing_refreshes_the_remote_allocation_scope() {
             .local_id,
         original_local
     );
+    let retain = |snapshot: manifest::BrowserManifest| {
+        allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+            admission_fallback: false,
+            host: snapshot.host.expect("host"),
+            workspace: snapshot.workspace.map(|workspace| workspace.local_id),
+            owner: snapshot.owner.map(|owner| owner.name),
+        });
+    };
+    let recoverable_through = |workspace: &str| {
+        allocation
+            .status_for(manifest::host_instance(), "owner", workspace, true)
+            .is_some()
+    };
 
     app.board.assign_panel_to_workspace(panel_id, destination);
+    // Hold the coordination worker, as a disk that does not answer would: the
+    // close never waits for the stamp of the move.
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    app.browser_create_host.io.write(move || {
+        let _ = released.recv();
+    });
     app.close_workspace_panels(destination);
     assert!(app.board.panel(panel_id).is_none());
+    let stale = manifest::read_at(&path).expect("a retirement snapshot before the stamp lands");
+    assert_eq!(stale.workspace.as_ref().expect("scope").local_id, original_local);
+    retain(stale);
+    assert!(
+        !recoverable_through(&original_local) && !recoverable_through(&destination_local),
+        "a snapshot taken before the stamp landed authorizes no workspace"
+    );
+
+    release.send(()).expect("the worker waits");
+    app.settle_browser_host_io();
     let retired = manifest::read_at(&path).expect("driver retirement snapshot");
     assert_eq!(retired.workspace.as_ref().expect("scope").local_id, destination_local);
-    allocation.retain_scope(horizon_browser::RemoteAllocationScope {
-        admission_fallback: false,
-        host: retired.host.expect("host"),
-        workspace: retired.workspace.map(|workspace| workspace.local_id),
-        owner: retired.owner.map(|owner| owner.name),
-    });
-    assert!(
-        allocation
-            .status_for(manifest::host_instance(), "owner", &original_local, true)
-            .is_none()
-    );
-    assert!(
-        allocation
-            .status_for(manifest::host_instance(), "owner", &destination_local, true)
-            .is_some()
-    );
+    retain(retired);
+    assert!(!recoverable_through(&original_local));
+    assert!(recoverable_through(&destination_local));
 }
