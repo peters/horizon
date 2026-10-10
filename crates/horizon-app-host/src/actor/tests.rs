@@ -17,6 +17,7 @@ pub(crate) struct Transport {
     pub(crate) deletes: AtomicUsize,
     allocation_timeouts: Mutex<Vec<(Duration, Instant)>>,
     pub(crate) after_create: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    after_delete: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     mutations: AtomicUsize,
     pub(crate) lost_create: AtomicBool,
     pub(crate) lost_delete: AtomicBool,
@@ -72,6 +73,9 @@ impl ClassicTransport for Transport {
                 return Err(WebDriverHttpError::Transport("synthetic lost reply".into()));
             }
             self.active.lock().unwrap().remove(path.trim_start_matches("/session/"));
+            if let Some(hook) = self.after_delete.lock().unwrap().take() {
+                hook();
+            }
         }
         if path.ends_with("/source") {
             return Ok(
@@ -114,6 +118,7 @@ pub(crate) struct Fake {
     lost_upload: AtomicBool,
     after_upload: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     before_capacity: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    fail_capacity: AtomicBool,
     panic_delete: AtomicBool,
     lost_upload_delete_once: AtomicBool,
 }
@@ -131,6 +136,9 @@ impl Backend for Fake {
         let hook = self.before_capacity.lock().unwrap().take();
         if let Some(hook) = hook {
             hook();
+        }
+        if self.fail_capacity.load(Ordering::SeqCst) {
+            return Err(horizon_app_runtime::Error::CapacityUnavailable.into());
         }
         if self.delay_capacity.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(80).min(timeout));
@@ -278,6 +286,7 @@ fn fixture() -> Fixture {
         lost_upload: AtomicBool::new(false),
         after_upload: Mutex::new(None),
         before_capacity: Mutex::new(None),
+        fail_capacity: AtomicBool::new(false),
         panic_delete: AtomicBool::new(false),
         lost_upload_delete_once: AtomicBool::new(false),
     });
@@ -1084,12 +1093,10 @@ fn reset_replacement_failures_return_exact_cleanup_outcomes() {
         }));
         let (result, cleanup_confirmed) = actor.reset_for_run_outcome(old.id);
         assert_eq!(cleanup_confirmed, confirmed);
-        let expected = if confirmed {
+        assert_eq!(
+            result.unwrap_err(),
             horizon_app_provider::Error::DeviceUnverified.into()
-        } else {
-            Error::CleanupUncertain
-        };
-        assert_eq!(result.unwrap_err(), expected);
+        );
         assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 2);
         actor.close(old.id).unwrap();
         let pending = fixture.workspace.journal().pending(fixture.workspace.owner()).unwrap();
@@ -1114,6 +1121,71 @@ fn reset_replacement_failures_return_exact_cleanup_outcomes() {
 }
 
 #[test]
+fn public_create_and_reset_keep_the_first_cause_and_report_pending_cleanup() {
+    for reset in [false, true] {
+        for confirmed in [false, true] {
+            let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+            let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
+            let previous = reset.then(|| actor.create(0, app.id, Duration::from_secs(20)).unwrap());
+            fixture.fake.reject_verification.store(true, Ordering::SeqCst);
+            let transport = Arc::clone(&fixture.fake.transport);
+            *transport.after_create.lock().unwrap() = Some(Box::new({
+                let transport = Arc::clone(&transport);
+                move || transport.lost_delete.store(!confirmed, Ordering::SeqCst)
+            }));
+            let error = previous
+                .map_or_else(
+                    || actor.create(0, app.id, Duration::from_secs(20)),
+                    |session| actor.reset(session.id),
+                )
+                .unwrap_err();
+            let cause = Error::from(horizon_app_provider::Error::DeviceUnverified);
+            assert_eq!(
+                error,
+                if confirmed {
+                    cause.clone()
+                } else {
+                    Error::CleanupUnconfirmed {
+                        cause: Box::new(cause.clone()),
+                    }
+                }
+            );
+            assert!(error.to_string().starts_with(&cause.to_string()));
+            assert_eq!(error.to_string().contains("app_resource_cleanup_uncertain"), !confirmed);
+            let audit = actor.audit(0, 256).unwrap();
+            assert_eq!(
+                audit.entries.last().unwrap().error_code.as_deref(),
+                Some("app_device_unverified")
+            );
+            assert_eq!(
+                fixture.fake.transport.creates.load(Ordering::SeqCst),
+                1 + usize::from(reset)
+            );
+            assert_eq!(
+                fixture.fake.transport.active.lock().unwrap().len(),
+                usize::from(!confirmed)
+            );
+            let pending = fixture.workspace.journal().pending(fixture.workspace.owner()).unwrap();
+            assert_eq!(
+                pending.iter().filter(|entry| entry.kind == Kind::Session).count(),
+                usize::from(!confirmed)
+            );
+            fixture.fake.transport.lost_delete.store(false, Ordering::SeqCst);
+            actor.shutdown().unwrap();
+            assert!(fixture.fake.transport.active.lock().unwrap().is_empty());
+            assert!(
+                fixture
+                    .workspace
+                    .journal()
+                    .pending(fixture.workspace.owner())
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[test]
 fn reset_cannot_confirm_cleanup_when_allocated_replacement_handle_is_not_returned() {
     let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
     let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
@@ -1133,7 +1205,7 @@ fn reset_cannot_confirm_cleanup_when_allocated_replacement_handle_is_not_returne
         }
     }));
     let (result, confirmed) = actor.reset_for_run_outcome(old.id);
-    assert_eq!(result.unwrap_err(), Error::Unavailable);
+    assert_eq!(result.unwrap_err(), Error::host_lock(crate::lifecycle::Lock::Upload));
     assert!(!confirmed);
     assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 2);
     assert_eq!(fixture.fake.transport.active.lock().unwrap().len(), 1);
@@ -1243,4 +1315,159 @@ fn shutdown_waits_for_the_matrix_lease_before_clearing_upload_handles() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn failed_replacement_keeps_first_cause_when_upload_cleanup_lock_is_poisoned() {
+    let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+    let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
+    let old = actor.create(0, app.id, Duration::from_secs(20)).unwrap();
+    let upload = actor.uploaded(app.id).unwrap();
+    fixture.fake.reject_verification.store(true, Ordering::SeqCst);
+    let transport = Arc::clone(&fixture.fake.transport);
+    *transport.after_create.lock().unwrap() = Some(Box::new({
+        let transport = Arc::clone(&transport);
+        let upload = Arc::clone(&upload);
+        move || {
+            *transport.after_delete.lock().unwrap() = Some(Box::new(move || {
+                assert!(
+                    std::thread::spawn(move || {
+                        let _held = upload.lock().unwrap();
+                        panic!("injected owned upload cleanup lock failure");
+                    })
+                    .join()
+                    .is_err()
+                );
+            }));
+        }
+    }));
+    let (result, cleanup_confirmed) = actor.reset_for_run_outcome(old.id);
+    assert_eq!(
+        result.unwrap_err(),
+        horizon_app_provider::Error::DeviceUnverified.into()
+    );
+    assert!(!cleanup_confirmed);
+    assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 2);
+    assert!(fixture.fake.transport.active.lock().unwrap().is_empty());
+    let pending = fixture.workspace.journal().pending(fixture.workspace.owner()).unwrap();
+    assert!(
+        pending
+            .iter()
+            .any(|entry| entry.kind == horizon_app_runtime::journal::Kind::Upload)
+    );
+    // Restore only this poisoned test lock; shutdown must preserve the ambiguous upload.
+    upload.clear_poison();
+    actor.shutdown().unwrap();
+    let pending = fixture.workspace.journal().pending(fixture.workspace.owner()).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].kind, horizon_app_runtime::journal::Kind::Upload);
+}
+
+#[test]
+fn reset_old_lane_cleanup_failure_remains_unconfirmed_without_creating_replacement() {
+    let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+    let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
+    let old = actor.create(0, app.id, Duration::from_secs(20)).unwrap();
+    fixture.fake.transport.lost_delete.store(true, Ordering::SeqCst);
+    let (result, cleanup_confirmed) = actor.reset_for_run_outcome(old.id);
+    assert_eq!(result.unwrap_err(), Error::CleanupUncertain);
+    assert!(!cleanup_confirmed);
+    assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.fake.transport.active.lock().unwrap().len(), 1);
+    fixture.fake.transport.lost_delete.store(false, Ordering::SeqCst);
+    actor.shutdown().unwrap();
+    assert!(fixture.fake.transport.active.lock().unwrap().is_empty());
+    assert!(
+        fixture
+            .workspace
+            .journal()
+            .pending(fixture.workspace.owner())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn failed_reservation_keeps_first_cause_and_reports_each_unconfirmed_cleanup() {
+    for (poison_upload, lose_journal) in [(false, false), (true, false), (true, true)] {
+        let (fixture, actor) = actor("http://localhost:{tunnel.port.backend}");
+        let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
+        let upload = actor.uploaded(app.id).unwrap();
+        let upload_operation = upload.lock().unwrap().id;
+        let ledger = std::fs::read_dir(fixture.root.path().join("private"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.join("journal.json").is_file())
+            .unwrap()
+            .join("journal.json");
+        let backup = ledger.with_extension("saved");
+        fixture.fake.fail_capacity.store(true, Ordering::SeqCst);
+        *fixture.fake.before_capacity.lock().unwrap() = Some(Box::new({
+            let upload = Arc::clone(&upload);
+            let ledger = ledger.clone();
+            let backup = backup.clone();
+            move || {
+                if poison_upload {
+                    assert!(
+                        std::thread::spawn(move || {
+                            let _held = upload.lock().unwrap();
+                            panic!("injected reservation cleanup lock failure");
+                        })
+                        .join()
+                        .is_err()
+                    );
+                }
+                if lose_journal {
+                    std::fs::rename(ledger, backup).unwrap();
+                }
+            }
+        }));
+        let (result, cleanup_confirmed) =
+            actor.create_until_outcome(0, app.id, Instant::now() + Duration::from_secs(20));
+        assert_eq!(
+            result.unwrap_err(),
+            if lose_journal {
+                horizon_app_runtime::Error::JournalInvalid.into()
+            } else {
+                Error::AdmissionDeferred
+            }
+        );
+        assert_eq!(cleanup_confirmed, !poison_upload && !lose_journal);
+        assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.fake.upload_deletes.load(Ordering::SeqCst), 0);
+        if lose_journal {
+            std::fs::rename(backup, ledger).unwrap();
+        }
+        if poison_upload {
+            upload.clear_poison();
+        }
+        let users = upload.lock().unwrap().users.clone();
+        assert_eq!(users.len(), usize::from(poison_upload));
+        let pending = fixture.workspace.journal().pending(fixture.workspace.owner()).unwrap();
+        assert_eq!(
+            pending.iter().filter(|record| record.kind == Kind::Session).count(),
+            usize::from(lose_journal)
+        );
+        assert!(pending.iter().any(|record| record.id == upload_operation));
+        // Repair only the injected fixture failures. No provider session was allocated.
+        for id in users {
+            fixture
+                .workspace
+                .journal()
+                .confirm_released(fixture.workspace.owner(), id)
+                .unwrap();
+            upload.lock().unwrap().users.remove(&id);
+        }
+        actor.release_upload(app.id).unwrap();
+        actor.shutdown().unwrap();
+        assert_eq!(
+            fixture
+                .workspace
+                .journal()
+                .pending(fixture.workspace.owner())
+                .unwrap()
+                .len(),
+            0
+        );
+    }
 }

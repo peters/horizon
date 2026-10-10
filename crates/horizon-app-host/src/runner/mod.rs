@@ -1,4 +1,5 @@
 //! One bounded matrix run over the same owned actor used by interactive MCP tools.
+use crate::lifecycle::{Lock as HostLock, Operation as HostOperation, Reason as HostReason};
 mod model;
 use crate::{Error, Result, actor::Actor};
 use horizon_app_testing::{
@@ -76,7 +77,7 @@ impl Runtime for Actor {
             .contract()
             .apps
             .get(&platform)
-            .ok_or(Error::Unavailable)?
+            .ok_or(Error::host(HostOperation::Run, HostReason::MissingDeclaration))?
             .build
             .clone();
         command(self, argv, control)
@@ -167,8 +168,8 @@ fn command(actor: &Actor, argv: Vec<String>, control: &Control) -> Result<()> {
             _ => (),
         }
     })();
-    operation.close()?;
-    outcome
+    let closed = operation.close();
+    outcome.and(closed)
 }
 
 /// # Errors
@@ -187,15 +188,17 @@ pub fn run(
         .iter()
         .map(|path| {
             let text = actor.project_text(path)?;
-            bytes = bytes.checked_add(text.len()).ok_or(Error::Unavailable)?;
+            bytes = bytes
+                .checked_add(text.len())
+                .ok_or(Error::host(HostOperation::Run, HostReason::LimitExceeded))?;
             if bytes > 8 * 1024 * 1024 {
-                return Err(Error::Unavailable);
+                return Err(Error::host(HostOperation::Run, HostReason::LimitExceeded));
             }
             Ok(Recipe::from_markdown(&text)?)
         })
         .collect::<Result<Vec<_>>>()?;
     if recipes.iter().map(|recipe| recipe.steps.len()).sum::<usize>() > 1024 {
-        return Err(Error::Unavailable);
+        return Err(Error::host(HostOperation::Run, HostReason::LimitExceeded));
     }
     if recipes
         .iter()
@@ -204,7 +207,7 @@ pub fn run(
         .saturating_mul(contract.matrix.len())
         > 1024
     {
-        return Err(Error::Unavailable);
+        return Err(Error::host(HostOperation::Run, HostReason::LimitExceeded));
     }
     validate_evidence(&recipes, &contract.matrix, &contract.evidence)?;
     let parallel = actor
@@ -353,13 +356,19 @@ impl Plan<'_> {
                                 progress: &progress,
                             },
                         );
-                        output.lock().map_err(|_| Error::Unavailable)?.push(result);
+                        output
+                            .lock()
+                            .map_err(|_| Error::host_lock(HostLock::RunOutput))?
+                            .push(result);
                     }
                 }));
             }
             let mut outcome = Ok(());
             for worker in workers {
-                if let Err(error) = worker.join().unwrap_or(Err(Error::Unavailable)) {
+                if let Err(error) = worker
+                    .join()
+                    .unwrap_or(Err(Error::host(HostOperation::Run, HostReason::TaskPanicked)))
+                {
                     outcome = Err(error);
                 }
             }
@@ -371,7 +380,7 @@ impl Plan<'_> {
             .filter_map(|app| runtime.release(*app).err().map(|error| error.to_string()))
             .collect();
         assets.apps.clear();
-        let mut devices = output.into_inner().map_err(|_| Error::Unavailable)?;
+        let mut devices = output.into_inner().map_err(|_| Error::host_lock(HostLock::RunOutput))?;
         devices.sort_by_key(|device| device.matrix_index);
         Ok(Report {
             id,
@@ -680,6 +689,7 @@ fn lane_unavailable(error: &Error) -> bool {
     matches!(
         error,
         Error::Unavailable
+            | Error::LifecycleUnavailable(_)
             | Error::Process(horizon_app_process::Error::StateUnavailable)
             | Error::HostUnavailable(_)
             | Error::SessionUnknown

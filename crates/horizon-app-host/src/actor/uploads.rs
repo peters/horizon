@@ -3,6 +3,7 @@ use super::{
     Actor, Arc, Artifact, ArtifactHandle, BTreeSet, Backend, Cleanup, Duration, Error, Instant, Kind, Mutex, Platform,
     Result, Upload, Uuid, Workspace, deadline, remaining,
 };
+use crate::lifecycle::{Lock as HostLock, Operation as HostOperation, Reason as HostReason};
 
 impl Actor {
     pub(super) fn upload_handle(upload: &mut Upload) -> ArtifactHandle {
@@ -24,7 +25,10 @@ impl Actor {
     }
     pub(crate) fn upload_until(&self, platform: Platform, until: Instant) -> Result<ArtifactHandle> {
         self.audit.execute(None, "upload", || {
-            let _serial = self.upload_admission.lock().map_err(|_| Error::Unavailable)?;
+            let _serial = self
+                .upload_admission
+                .lock()
+                .map_err(|_| Error::host_lock(HostLock::UploadAdmission))?;
             if self.stopping.load(std::sync::atomic::Ordering::Acquire) {
                 return Err(Error::Cancelled);
             }
@@ -33,10 +37,10 @@ impl Actor {
                 Artifact::capture_directory(&self.workspace.root_directory()?, &self.contract, platform)?;
             self.expire()?;
             self.prune_completed_provider()?;
-            let mut uploads = self.uploads.lock().map_err(|_| Error::Unavailable)?;
+            let mut uploads = self.uploads.lock().map_err(|_| Error::host_lock(HostLock::Uploads))?;
             uploads.retain(|_, upload| upload.lock().map_or(true, |upload| upload.cleanup != Cleanup::Complete));
             for upload in uploads.values() {
-                let mut upload = upload.lock().map_err(|_| Error::Unavailable)?;
+                let mut upload = upload.lock().map_err(|_| Error::host_lock(HostLock::Upload))?;
                 if upload.platform == platform
                     && upload.sha256 == artifact.sha256()
                     && upload.cleanup != Cleanup::Active
@@ -56,7 +60,7 @@ impl Actor {
                 }
             }
             if uploads.len() >= 64 {
-                return Err(Error::Unavailable);
+                return Err(Error::host(HostOperation::Upload, HostReason::LimitExceeded));
             }
             let operation = self.workspace.start(Kind::Upload, remaining(until)?)?;
             self.workspace
@@ -87,7 +91,7 @@ impl Actor {
             let upload = Arc::new(Mutex::new(upload));
             uploads.insert(operation.id, Arc::clone(&upload));
             drop(uploads);
-            let mut upload = upload.lock().map_err(|_| Error::Unavailable)?;
+            let mut upload = upload.lock().map_err(|_| Error::host_lock(HostLock::Upload))?;
             match self.backend.upload(&mut artifact, operation.id, budget) {
                 Ok(app) => upload.app = Some(Arc::new(app)),
                 Err(error) => {
@@ -118,9 +122,14 @@ impl Actor {
         })
     }
     pub(super) fn uploaded(&self, handle: Uuid) -> Result<Arc<Mutex<Upload>>> {
-        let uploads = self.uploads.lock().map_err(|_| Error::Unavailable)?;
+        let uploads = self.uploads.lock().map_err(|_| Error::host_lock(HostLock::Uploads))?;
         for upload in uploads.values() {
-            if upload.lock().map_err(|_| Error::Unavailable)?.handles.contains(&handle) {
+            if upload
+                .lock()
+                .map_err(|_| Error::host_lock(HostLock::Upload))?
+                .handles
+                .contains(&handle)
+            {
                 return Ok(Arc::clone(upload));
             }
         }
@@ -156,7 +165,7 @@ impl Actor {
     /// Release the interactive handle; active lanes keep their original upload alive.
     pub fn release_upload(&self, id: Uuid) -> Result<()> {
         let upload = self.uploaded(id)?;
-        let mut upload = upload.lock().map_err(|_| Error::Unavailable)?;
+        let mut upload = upload.lock().map_err(|_| Error::host_lock(HostLock::Upload))?;
         upload.handles.remove(&id);
         let result = self.close_upload(&mut upload);
         if result.is_err() {

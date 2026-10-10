@@ -1,4 +1,5 @@
 //! Machine-local actor selection for standalone native MCP hosts.
+use crate::lifecycle::{Operation as HostOperation, Reason as HostReason};
 use crate::{Error, Result, actor::Actor};
 #[cfg(unix)]
 use serde::Deserialize;
@@ -33,24 +34,28 @@ pub struct Host {
 fn client(path: &Path) -> Result<Client> {
     use std::{fs::File, io::Read, os::unix::fs::MetadataExt};
     if !path.is_absolute() {
-        return Err(Error::Unavailable);
+        return Err(Error::host(HostOperation::Client, HostReason::InvalidConfiguration));
     }
     let file = crate::project::open(
-        &File::open("/").map_err(|_| Error::Unavailable)?,
-        path.strip_prefix("/").map_err(|_| Error::Unavailable)?,
+        &File::open("/").map_err(|error| Error::host_io(HostOperation::Client, &error))?,
+        path.strip_prefix("/")
+            .map_err(|_| Error::host(HostOperation::Client, HostReason::InvalidInput))?,
     )?;
-    let metadata = file.metadata().map_err(|_| Error::Unavailable)?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| Error::host_io(HostOperation::Client, &error))?;
     if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o077 != 0 {
-        return Err(Error::Unavailable);
+        return Err(Error::host(HostOperation::Client, HostReason::ClientPermissions));
     }
     let mut bytes = Vec::new();
     file.take(65537)
         .read_to_end(&mut bytes)
-        .map_err(|_| Error::Unavailable)?;
+        .map_err(|error| Error::host_io(HostOperation::Client, &error))?;
     if bytes.len() > 65536 {
-        return Err(Error::Unavailable);
+        return Err(Error::host(HostOperation::Client, HostReason::LimitExceeded));
     }
-    let client: Client = serde_json::from_slice(&bytes).map_err(|_| Error::Unavailable)?;
+    let client: Client =
+        serde_json::from_slice(&bytes).map_err(|_| Error::host(HostOperation::Client, HostReason::InvalidSchema))?;
     if client.version != 1
         || client.owner.is_nil()
         || client.provider.is_empty()
@@ -58,9 +63,13 @@ fn client(path: &Path) -> Result<Client> {
         || !client.project.is_absolute()
         || !client.state.is_absolute()
         || !client.tunnel_binary.is_absolute()
-        || client.project.canonicalize().map_err(|_| Error::Unavailable)? != client.project
+        || client
+            .project
+            .canonicalize()
+            .map_err(|error| Error::host_io(HostOperation::Client, &error))?
+            != client.project
     {
-        return Err(Error::Unavailable);
+        return Err(Error::host(HostOperation::Client, HostReason::InvalidConfiguration));
     }
     Ok(client)
 }
@@ -132,15 +141,18 @@ fn selected_with(
     let client = client(path)?;
     horizon_app_process::storage::Directory::open(&client.state)?;
     horizon_app_provider::tunnel::VerifiedBinary::capture(&client.tunnel_binary, &client.tunnel_sha256)?;
-    let config_path = Config::resolve_path(None).ok_or(Error::Unavailable)?;
-    let text = std::fs::read_to_string(config_path).map_err(|_| Error::Unavailable)?;
-    let config = Config::from_yaml(&text).map_err(|_| Error::Unavailable)?;
+    let config_path =
+        Config::resolve_path(None).ok_or(Error::host(HostOperation::Configuration, HostReason::MissingState))?;
+    let text =
+        std::fs::read_to_string(config_path).map_err(|error| Error::host_io(HostOperation::Configuration, &error))?;
+    let config = Config::from_yaml(&text)
+        .map_err(|_| Error::host(HostOperation::Configuration, HostReason::InvalidConfiguration))?;
     let profile = config
         .browser
         .remote
         .providers
         .get(&client.provider)
-        .ok_or(Error::Unavailable)?;
+        .ok_or(Error::host(HostOperation::Configuration, HostReason::MissingState))?;
     let session = SessionCredentialStore::new();
     let keyring = KeyringCredentialStore::open().map_err(|_| horizon_app_runtime::Error::CredentialsUnavailable)?;
     let account = Account::capture(
@@ -177,7 +189,7 @@ pub fn open(path: &Path) -> Result<Host> {
     child(&owner_state, reports_name)?;
     let agents = crate::project::read(&workspace.root_directory()?, Path::new("AGENTS.md"))?;
     let contract = Contract::from_agents(&agents)?;
-    let worker = std::env::current_exe().map_err(|_| Error::Unavailable)?;
+    let worker = std::env::current_exe().map_err(|error| Error::host_io(HostOperation::Runtime, &error))?;
     let local = Arc::new(Local::new(
         Arc::clone(&workspace),
         &account,
@@ -393,12 +405,12 @@ fn close_undispatched(
 
 #[cfg(not(unix))]
 pub fn open(_path: &Path) -> Result<Host> {
-    Err(Error::Unavailable)
+    Err(Error::host(HostOperation::Client, HostReason::UnsupportedPlatform))
 }
 
 #[cfg(not(unix))]
 pub fn reconcile(_path: &Path) -> Result<Vec<horizon_app_runtime::journal::Operation>> {
-    Err(Error::Unavailable)
+    Err(Error::host(HostOperation::Client, HostReason::UnsupportedPlatform))
 }
 
 #[cfg(not(unix))]

@@ -1,5 +1,8 @@
 #![cfg(unix)]
-use horizon_app_host::local::{Configuration, Lease, Local};
+use horizon_app_host::{
+    lifecycle::{Fault, Operation},
+    local::{Configuration, Lease, Local},
+};
 use horizon_app_process::{Event, Kind};
 use horizon_app_runtime::{
     account::Account,
@@ -30,7 +33,14 @@ fn cli_setup_failure_reports_a_typed_progress_error_without_private_paths() {
     assert!(result.stdout.is_empty());
     let event: serde_json::Value = serde_json::from_slice(&result.stderr).unwrap();
     assert_eq!(event["phase"], "error");
-    assert_eq!(event["message"], horizon_app_host::Error::Unavailable.to_string());
+    assert_eq!(
+        event["message"],
+        horizon_app_host::Error::LifecycleUnavailable(Fault::Io {
+            operation: Operation::Project,
+            kind: std::io::ErrorKind::NotFound,
+        })
+        .to_string()
+    );
     assert!(
         !String::from_utf8(result.stderr)
             .unwrap()

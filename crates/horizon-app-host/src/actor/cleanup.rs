@@ -3,6 +3,7 @@ use super::{
     Actor, BTreeMap, BTreeSet, Backend, Cleanup, Error, Instant, Kind, Lane, Local, Mutex, Phase, Result, Uuid,
     Workspace,
 };
+use crate::lifecycle::Lock as HostLock;
 
 impl Actor {
     /// # Errors
@@ -46,9 +47,12 @@ impl Actor {
         if failed { Err(Error::CleanupUncertain) } else { Ok(()) }
     }
     pub(super) fn prune_completed_provider(&self) -> Result<()> {
-        let _admission = self.admission.lock().map_err(|_| Error::Unavailable)?;
-        let mut uploads = self.uploads.lock().map_err(|_| Error::Unavailable)?;
-        let mut lanes = self.lanes.lock().map_err(|_| Error::Unavailable)?;
+        let _admission = self
+            .admission
+            .lock()
+            .map_err(|_| Error::host_lock(HostLock::Admission))?;
+        let mut uploads = self.uploads.lock().map_err(|_| Error::host_lock(HostLock::Uploads))?;
+        let mut lanes = self.lanes.lock().map_err(|_| Error::host_lock(HostLock::Lanes))?;
         uploads.retain(|_, value| {
             value
                 .try_lock()
@@ -114,9 +118,9 @@ impl Actor {
         }
         claims
             .lock()
-            .map_err(|_| Error::Unavailable)?
+            .map_err(|_| Error::host_lock(HostLock::PortClaims))?
             .retain(|_, owner| *owner != lane.id);
-        let mut upload = lane.app.lock().map_err(|_| Error::Unavailable)?;
+        let mut upload = lane.app.lock().map_err(|_| Error::host_lock(HostLock::Upload))?;
         upload.users.remove(&lane.id);
         lane.driver.take();
         lane.cleanup = Cleanup::Complete;
@@ -130,7 +134,7 @@ impl Actor {
     pub fn close(&self, id: Uuid) -> Result<()> {
         self.audit.execute(Some(id), "session_close", || {
             if let Ok(lane) = self.lane(id) {
-                let mut lane = lane.lock().map_err(|_| Error::Unavailable)?;
+                let mut lane = lane.lock().map_err(|_| Error::host_lock(HostLock::Lane))?;
                 return self.close_lane(&mut lane);
             }
             let record = self.workspace.journal().status(self.workspace.owner(), id)?;

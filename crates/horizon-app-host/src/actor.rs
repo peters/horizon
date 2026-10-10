@@ -1,4 +1,5 @@
 //! One controller owns uploads and device lanes for MCP, CLI, recipes and live views.
+use crate::lifecycle::{Operation as HostOperation, Reason as HostReason};
 use crate::{Error, Result, local::Local};
 use horizon_app_provider::{api::UploadedApp, artifact::Artifact};
 use horizon_app_runtime::{
@@ -150,7 +151,8 @@ impl Actor {
         crate::project::read(&self.workspace.root_directory()?, path)
     }
     pub(crate) fn available_parallel(&self, timeout: Duration) -> Result<usize> {
-        usize::try_from(self.backend.capacity(timeout)?.quota.available()).map_err(|_| Error::Unavailable)
+        usize::try_from(self.backend.capacity(timeout)?.quota.available())
+            .map_err(|_| Error::host(HostOperation::Capacity, HostReason::LimitExceeded))
     }
     pub(crate) fn begin_run(&self) -> Result<std::sync::RwLockWriteGuard<'_, ()>> {
         let run = self.run.try_write().map_err(|_| Error::RunBusy)?;

@@ -85,8 +85,8 @@ impl Audit {
             .as_ref()
             .err()
             .map(|error| error.to_string().split(':').next().unwrap_or("app_failed").to_owned());
-        self.record(entry)?;
-        result
+        let recorded = self.record(entry);
+        result.and_then(|value| recorded.map(|()| value))
     }
     /// # Errors
     /// Page size is 1..256. Compare the returned stream UUID before resuming a saved cursor.
@@ -144,5 +144,30 @@ mod tests {
         assert!(!encoded.contains("target"));
         assert!(!encoded.contains("text"));
         assert!(audit.page(323, 1).is_err());
+    }
+    #[test]
+    fn failed_call_keeps_its_cause_when_completion_receipt_cannot_be_recorded() {
+        let audit = Audit::default();
+        let failure = Error::host(
+            crate::lifecycle::Operation::Session,
+            crate::lifecycle::Reason::MissingState,
+        );
+        let result = audit.execute::<()>(None, "session_create", || {
+            audit.state.lock().unwrap().sequence = u64::MAX;
+            Err(failure.clone())
+        });
+        assert_eq!(result.unwrap_err(), failure);
+        assert_eq!(audit.state.lock().unwrap().entries.len(), 1);
+    }
+
+    #[test]
+    fn successful_call_still_refuses_failed_completion_receipt() {
+        let audit = Audit::default();
+        let result = audit.execute(None, "session_create", || {
+            audit.state.lock().unwrap().sequence = u64::MAX;
+            Ok(())
+        });
+        assert_eq!(result, Err(Error::AuditUnavailable));
+        assert_eq!(audit.state.lock().unwrap().entries.len(), 1);
     }
 }

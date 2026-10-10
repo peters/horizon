@@ -3,6 +3,7 @@ use super::{
     Action, Actor, Arc, Cleanup, Duration, Error, Instant, Kind, Lane, Launch, Mutex, NativeDriver, Platform, Result,
     SessionHandle, Snapshot, State, Target, Upload, Uuid, deadline, remaining,
 };
+use crate::lifecycle::{Lock as HostLock, Operation as HostOperation, Reason as HostReason};
 
 impl Actor {
     /// # Errors
@@ -12,7 +13,8 @@ impl Actor {
         self.create_until(index, artifact, deadline(lifetime)?)
     }
     pub(crate) fn create_until(&self, index: usize, artifact: Uuid, until: Instant) -> Result<SessionHandle> {
-        self.create_until_outcome(index, artifact, until).0
+        let (result, cleanup_confirmed) = self.create_until_outcome(index, artifact, until);
+        public_result(result, cleanup_confirmed)
     }
     pub(crate) fn create_until_outcome(
         &self,
@@ -43,9 +45,13 @@ impl Actor {
             .ok_or(horizon_app_testing::Error::MatrixUnavailable)?
             .device
             .clone();
-        let declaration = self.contract.apps.get(&target.platform).ok_or(Error::Unavailable)?;
+        let declaration = self
+            .contract
+            .apps
+            .get(&target.platform)
+            .ok_or(Error::host(HostOperation::Session, HostReason::MissingDeclaration))?;
         let lane = self.reserve_lane(index, target.platform, app, until, retained, cleanup_confirmed)?;
-        let mut lane = lane.lock().map_err(|_| Error::Unavailable)?;
+        let mut lane = lane.lock().map_err(|_| Error::host_lock(HostLock::Lane))?;
         let result = (|| {
             if self.stopping.load(std::sync::atomic::Ordering::Acquire) || lane.cleanup != Cleanup::Active {
                 return Err(Error::Cancelled);
@@ -62,7 +68,7 @@ impl Actor {
             let launch = lane
                 .app
                 .lock()
-                .map_err(|_| Error::Unavailable)?
+                .map_err(|_| Error::host_lock(HostLock::Upload))?
                 .app
                 .as_ref()
                 .ok_or(Error::ArtifactUnknown)?
@@ -93,8 +99,11 @@ impl Actor {
                     .allocated(self.workspace.owner(), lane.id, reference);
             });
             recorded?;
-            let mut verified = Err(Error::Unavailable);
-            let upload = lane.app.lock().map_err(|_| Error::Unavailable)?;
+            let mut verified = Err(Error::host(
+                HostOperation::Session,
+                HostReason::MissingAllocationReceipt,
+            ));
+            let upload = lane.app.lock().map_err(|_| Error::host_lock(HostLock::Upload))?;
             let app = Arc::clone(upload.app.as_ref().ok_or(Error::ArtifactUnknown)?);
             drop(upload);
             let budget = remaining(lane.deadline)?;
@@ -102,13 +111,16 @@ impl Actor {
                 verified = self.backend.verify(reference, &target, &app, lane.id, budget);
             });
             verified?;
-            let mut observed = Err(Error::Unavailable);
+            let mut observed = Err(Error::host(
+                HostOperation::Session,
+                HostReason::MissingAllocationReceipt,
+            ));
             driver.record_allocation(|reference| {
                 observed = (|| {
                     let protected = self
                         .lanes
                         .lock()
-                        .map_err(|_| Error::Unavailable)?
+                        .map_err(|_| Error::host_lock(HostLock::Lanes))?
                         .keys()
                         .copied()
                         .collect();
@@ -123,19 +135,23 @@ impl Actor {
                 remaining_seconds: lane.deadline.saturating_duration_since(Instant::now()).as_secs(),
             })
         })();
-        if let Err(error) = &result {
-            if let Error::LocalCleanupUncertain(operation) = error {
-                lane.held_local = Some(*operation);
-            }
-            if lane.attempted && lane.driver.is_none() {
-                self.workspace.journal().uncertain(self.workspace.owner(), lane.id)?;
-            }
-            if self.close_lane(&mut lane).is_err() {
-                return Err(Error::CleanupUncertain);
-            }
-            *cleanup_confirmed = true;
+        result.inspect_err(|error| {
+            *cleanup_confirmed = self.close_failed_creation(&mut lane, error);
+        })
+    }
+    fn close_failed_creation(&self, lane: &mut Lane, error: &Error) -> bool {
+        if let Error::LocalCleanupUncertain(operation) = error {
+            lane.held_local = Some(*operation);
         }
-        result
+        let recorded = !lane.attempted
+            || lane.driver.is_some()
+            || self
+                .workspace
+                .journal()
+                .uncertain(self.workspace.owner(), lane.id)
+                .is_ok();
+        let closed = self.close_lane(lane).is_ok();
+        recorded && closed
     }
     pub(super) fn reserve_lane(
         &self,
@@ -146,17 +162,20 @@ impl Actor {
         retained: bool,
         cleanup_confirmed: &mut bool,
     ) -> Result<Arc<Mutex<Lane>>> {
-        let _admission = self.admission.lock().map_err(|_| Error::Unavailable)?;
+        let _admission = self
+            .admission
+            .lock()
+            .map_err(|_| Error::host_lock(HostLock::Admission))?;
         if self.stopping.load(std::sync::atomic::Ordering::Acquire) {
             return Err(Error::Cancelled);
         }
-        let mut lanes = self.lanes.lock().map_err(|_| Error::Unavailable)?;
+        let mut lanes = self.lanes.lock().map_err(|_| Error::host_lock(HostLock::Lanes))?;
         lanes.retain(|_, lane| lane.try_lock().map_or(true, |lane| lane.cleanup != Cleanup::Complete));
         if lanes.len() >= self.contract.max_parallel.min(2) {
             return Err(Error::AdmissionDeferred);
         }
         drop(lanes);
-        let mut upload = app.lock().map_err(|_| Error::Unavailable)?;
+        let mut upload = app.lock().map_err(|_| Error::host_lock(HostLock::Upload))?;
         let until = until.min(upload.deadline);
         if upload.platform != platform
             || upload.cleanup != Cleanup::Active
@@ -186,11 +205,14 @@ impl Actor {
                 observation
             });
         if let Err(error) = reserve {
-            app.lock().map_err(|_| Error::Unavailable)?.users.remove(&operation.id);
-            self.workspace
+            let detached = app.lock().map(|mut upload| {
+                upload.users.remove(&operation.id);
+            });
+            let released = self
+                .workspace
                 .journal()
-                .confirm_released(self.workspace.owner(), operation.id)?;
-            *cleanup_confirmed = true;
+                .confirm_released(self.workspace.owner(), operation.id);
+            *cleanup_confirmed = detached.is_ok() && released.is_ok();
             return Err(if error == horizon_app_runtime::Error::CapacityUnavailable {
                 Error::AdmissionDeferred
             } else {
@@ -213,14 +235,14 @@ impl Actor {
         }));
         self.lanes
             .lock()
-            .map_err(|_| Error::Unavailable)?
+            .map_err(|_| Error::host_lock(HostLock::Lanes))?
             .insert(operation.id, Arc::clone(&lane));
         Ok(lane)
     }
     pub(super) fn lane(&self, id: Uuid) -> Result<Arc<Mutex<Lane>>> {
         self.lanes
             .lock()
-            .map_err(|_| Error::Unavailable)?
+            .map_err(|_| Error::host_lock(HostLock::Lanes))?
             .get(&id)
             .cloned()
             .ok_or(Error::SessionUnknown)
@@ -228,7 +250,7 @@ impl Actor {
     // A read-only viewer keeps this closure signal even after completed lanes are pruned.
     pub(crate) fn view_lifetime(&self, id: Uuid) -> Result<Arc<std::sync::atomic::AtomicBool>> {
         let lane = self.lane(id)?;
-        let lane = lane.lock().map_err(|_| Error::Unavailable)?;
+        let lane = lane.lock().map_err(|_| Error::host_lock(HostLock::Lane))?;
         if lane.cleanup != Cleanup::Active || lane.view_closed.load(std::sync::atomic::Ordering::Acquire) {
             return Err(Error::SessionUnknown);
         }
@@ -242,18 +264,18 @@ impl Actor {
         use horizon_app_testing::contract::Form;
         use horizon_core::browser::manifest::device::NativeSessionMetadata;
         let lane = self.lane(id)?;
-        let lane = lane.lock().map_err(|_| Error::Unavailable)?;
+        let lane = lane.lock().map_err(|_| Error::host_lock(HostLock::Lane))?;
         let target = self
             .matrix
             .iter()
             .find(|row| row.matrix_index == lane.matrix_index)
-            .ok_or(Error::Unavailable)?;
+            .ok_or(Error::host(HostOperation::Session, HostReason::MissingTarget))?;
         let app = self
             .contract
             .apps
             .get(&target.device.platform)
-            .ok_or(Error::Unavailable)?;
-        let upload = lane.app.lock().map_err(|_| Error::Unavailable)?;
+            .ok_or(Error::host(HostOperation::Session, HostReason::MissingDeclaration))?;
+        let upload = lane.app.lock().map_err(|_| Error::host_lock(HostLock::Upload))?;
         Ok(NativeSessionMetadata {
             session_id: id.to_string(),
             run_id: None,
@@ -278,7 +300,7 @@ impl Actor {
                 .bundle_id
                 .as_ref()
                 .or(app.package.as_ref())
-                .ok_or(Error::Unavailable)?
+                .ok_or(Error::host(HostOperation::Session, HostReason::MissingAppIdentifier))?
                 .clone(),
             build_sha256: upload.sha256.clone(),
             recipe: None,
@@ -311,7 +333,7 @@ impl Actor {
     pub fn snapshot(&self, id: Uuid) -> Result<Snapshot> {
         self.audit.execute(Some(id), "snapshot", || {
             let lane = self.lane(id)?;
-            let mut lane = lane.lock().map_err(|_| Error::Unavailable)?;
+            let mut lane = lane.lock().map_err(|_| Error::host_lock(HostLock::Lane))?;
             self.active(&mut lane)?.snapshot().map_err(Error::from)
         })
     }
@@ -320,7 +342,7 @@ impl Actor {
     pub fn act(&self, id: Uuid, action: &Action) -> Result<()> {
         self.audit.execute(Some(id), action.audit_name(), || {
             let lane = self.lane(id)?;
-            let mut lane = lane.lock().map_err(|_| Error::Unavailable)?;
+            let mut lane = lane.lock().map_err(|_| Error::host_lock(HostLock::Lane))?;
             self.active(&mut lane)?.act(action).map_err(Error::from)
         })
     }
@@ -329,7 +351,7 @@ impl Actor {
     pub fn wait(&self, id: Uuid, target: &Target, state: State, timeout: Duration) -> Result<()> {
         self.audit.execute(Some(id), "wait", || {
             let lane = self.lane(id)?;
-            let mut lane = lane.lock().map_err(|_| Error::Unavailable)?;
+            let mut lane = lane.lock().map_err(|_| Error::host_lock(HostLock::Lane))?;
             self.active(&mut lane)?
                 .wait(target, state, timeout)
                 .map_err(Error::from)
@@ -339,14 +361,14 @@ impl Actor {
     /// Return bounded screenshot bytes only to trusted evidence/view adapters.
     pub fn screenshot(&self, id: Uuid) -> Result<Vec<u8>> {
         let lane = self.lane(id)?;
-        let mut lane = lane.lock().map_err(|_| Error::Unavailable)?;
+        let mut lane = lane.lock().map_err(|_| Error::host_lock(HostLock::Lane))?;
         self.active(&mut lane)?.screenshot().map_err(Error::from)
     }
     /// # Errors
     /// Return the owned tunnel's redacted status.
     pub fn tunnel_status(&self, id: Uuid) -> Result<horizon_app_provider::tunnel::Status> {
         let lane = self.lane(id)?;
-        let lane = lane.lock().map_err(|_| Error::Unavailable)?;
+        let lane = lane.lock().map_err(|_| Error::host_lock(HostLock::Lane))?;
         if lane.cleanup != Cleanup::Active {
             return Err(Error::SessionUnknown);
         }
@@ -362,34 +384,57 @@ impl Actor {
     /// Reset replaces an exact closed allocation using the same upload and original deadline.
     pub fn reset(&self, id: Uuid) -> Result<SessionHandle> {
         let _run = self.run.try_read().map_err(|_| Error::RunBusy)?;
-        self.reset_for_run_outcome(id).0
+        let (result, cleanup_confirmed) = self.reset_for_run_outcome(id);
+        public_result(result, cleanup_confirmed)
     }
     pub(crate) fn reset_for_run_outcome(&self, id: Uuid) -> (Result<SessionHandle>, bool) {
         let mut cleanup_confirmed = true;
         let result = self.audit.execute(Some(id), "reset", || {
             self.prune_completed_provider()?;
             let lane = self.lane(id)?;
-            let mut lane = lane.lock().map_err(|_| Error::Unavailable)?;
+            let mut lane = lane.lock().map_err(|_| Error::host_lock(HostLock::Lane))?;
             self.active(&mut lane)?;
             let app = Arc::clone(&lane.app);
             // Temporarily retain the upload across exact native/service cleanup.
             let reset = Uuid::new_v4();
-            app.lock().map_err(|_| Error::Unavailable)?.users.insert(reset);
+            app.lock()
+                .map_err(|_| Error::host_lock(HostLock::Upload))?
+                .users
+                .insert(reset);
             let index = lane.matrix_index;
             let until = lane.deadline;
             if let Err(error) = self.close_lane(&mut lane) {
-                app.lock().map_err(|_| Error::Unavailable)?.users.remove(&reset);
+                cleanup_confirmed = false;
+                if let Ok(mut upload) = app.lock() {
+                    upload.users.remove(&reset);
+                }
                 return Err(error);
             }
             drop(lane);
             let result = self.create_app(index, Arc::clone(&app), until, true, &mut cleanup_confirmed);
-            let mut upload = app.lock().map_err(|_| Error::Unavailable)?;
-            upload.users.remove(&reset);
-            if upload.handles.is_empty() {
-                self.close_upload(&mut upload)?;
+            let cleanup = (|| {
+                let mut upload = app.lock().map_err(|_| Error::host_lock(HostLock::Upload))?;
+                upload.users.remove(&reset);
+                if upload.handles.is_empty() {
+                    self.close_upload(&mut upload)?;
+                }
+                Ok(())
+            })();
+            if cleanup.is_err() {
+                cleanup_confirmed = false;
             }
-            result
+            result.and_then(|replacement| cleanup.map(|()| replacement))
         });
         (result, cleanup_confirmed)
     }
+}
+
+fn public_result(result: Result<SessionHandle>, cleanup_confirmed: bool) -> Result<SessionHandle> {
+    result.map_err(|cause| {
+        if cleanup_confirmed {
+            cause
+        } else {
+            cause.with_unconfirmed_cleanup()
+        }
+    })
 }

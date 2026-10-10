@@ -1,4 +1,5 @@
 //! Public native MCP adapter over the shared owned host actor; no provider secrets enter tool inputs.
+use crate::lifecycle::{Operation as HostOperation, Reason as HostReason};
 mod evidence;
 mod media;
 mod model;
@@ -56,10 +57,10 @@ impl NativeMcp {
         let actor = Arc::clone(&self.actor);
         tokio::task::spawn_blocking(move || {
             let result = operation(&actor)?;
-            serde_json::to_value(result).map_err(|_| Error::Unavailable)
+            serde_json::to_value(result).map_err(|_| Error::host(HostOperation::Mcp, HostReason::SerializationFailed))
         })
         .await
-        .map_err(|_| Error::Unavailable.to_string())?
+        .map_err(|error| Error::host_task(HostOperation::Mcp, &error).to_string())?
         .map(Json)
         .map_err(|error| error.to_string())
     }
@@ -89,12 +90,12 @@ impl NativeMcp {
     ) -> std::result::Result<Json<Value>, String> {
         let views = Arc::clone(&self.views);
         tokio::task::spawn_blocking(move || {
-            views
-                .open(handle(&input.session)?)
-                .and_then(|view| serde_json::to_value(view).map_err(|_| Error::Unavailable))
+            views.open(handle(&input.session)?).and_then(|view| {
+                serde_json::to_value(view).map_err(|_| Error::host(HostOperation::Mcp, HostReason::SerializationFailed))
+            })
         })
         .await
-        .map_err(|_| Error::Unavailable.to_string())?
+        .map_err(|error| Error::host_task(HostOperation::Mcp, &error).to_string())?
         .map(Json)
         .map_err(|error| error.to_string())
     }
@@ -225,14 +226,15 @@ impl NativeMcp {
             let session = handle(&input.session)?;
             let png = actor.screenshot(session)?;
             let capture = evidence.screenshot(session, &png)?;
-            let metadata = serde_json::to_string(&capture).map_err(|_| Error::Unavailable)?;
+            let metadata = serde_json::to_string(&capture)
+                .map_err(|_| Error::host(HostOperation::Mcp, HostReason::SerializationFailed))?;
             Ok(CallToolResult::success(vec![
                 ContentBlock::text(metadata),
                 ContentBlock::image(base64::engine::general_purpose::STANDARD.encode(png), "image/png"),
             ]))
         })
         .await
-        .map_err(|_| Error::Unavailable.to_string())?
+        .map_err(|error| Error::host_task(HostOperation::Mcp, &error).to_string())?
         .map_err(|error: Error| error.to_string())
     }
     #[tool(
@@ -297,18 +299,147 @@ pub async fn serve_stdio(actor: Arc<Actor>, evidence: &Path, reports: &Path) -> 
         NativeMcp::new(Arc::clone(&actor), evidence, reports)?
             .serve(rmcp::transport::stdio())
             .await
-            .map_err(|_| Error::Unavailable)?
+            .map_err(|error| Error::host_mcp(&error))?
             .waiting()
             .await
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|error| Error::host_task(HostOperation::Mcp, &error))?;
         Ok(())
     }
     .await;
-    tokio::task::spawn_blocking(move || actor.shutdown())
+    finish_stdio(result, move || actor.shutdown()).await
+}
+
+async fn finish_stdio(result: Result<()>, shutdown: impl FnOnce() -> Result<()> + Send + 'static) -> Result<()> {
+    let shutdown = tokio::task::spawn_blocking(shutdown)
         .await
-        .map_err(|_| Error::CleanupUncertain)??;
-    result
+        .map_err(|error| Error::host_task(HostOperation::Mcp, &error))
+        .and_then(std::convert::identity);
+    match (result, shutdown) {
+        (Err(primary), Err(_)) => Err(primary.with_unconfirmed_cleanup()),
+        (Err(primary), Ok(())) => Err(primary),
+        (Ok(()), shutdown) => shutdown,
+    }
 }
 
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn stdio_primary_cause_survives_shutdown_failure_and_success() {
+        let primary = Error::host(HostOperation::Mcp, HostReason::ChannelClosed);
+        for cleanup in [Ok(()), Err(Error::CleanupUncertain)] {
+            let confirmed = cleanup.is_ok();
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let observed = Arc::clone(&attempts);
+            let result = finish_stdio(Err(primary.clone()), move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+                cleanup
+            })
+            .await;
+            let expected = if confirmed {
+                primary.clone()
+            } else {
+                primary.clone().with_unconfirmed_cleanup()
+            };
+            assert_eq!(result, Err(expected));
+            assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        }
+        let result = finish_stdio(Err(primary.clone()), || panic!("synthetic private panic payload")).await;
+        assert_eq!(result, Err(primary.clone().with_unconfirmed_cleanup()));
+        let pending = primary.with_unconfirmed_cleanup();
+        let result = finish_stdio(Err(pending.clone()), || Err(Error::CleanupUncertain))
+            .await
+            .unwrap_err();
+        assert_eq!(result, pending);
+        assert_eq!(result.to_string().matches("app_resource_cleanup_uncertain").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn successful_stdio_exposes_shutdown_failure_without_panic_payload() {
+        assert_eq!(finish_stdio(Ok(()), || Ok(())).await, Ok(()));
+        assert_eq!(
+            finish_stdio(Ok(()), || Err(Error::CleanupUncertain)).await,
+            Err(Error::CleanupUncertain)
+        );
+        let failure = finish_stdio(Ok(()), || panic!("synthetic private panic payload"))
+            .await
+            .unwrap_err();
+        assert_eq!(failure, Error::host(HostOperation::Mcp, HostReason::TaskPanicked));
+        assert!(!failure.to_string().contains("synthetic private panic payload"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod cleanup_tests {
+    use super::*;
+    use std::{os::unix::fs::PermissionsExt as _, sync::atomic::Ordering};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn public_create_and_reset_preserve_cause_and_cleanup_uncertainty() {
+        for reset in [false, true] {
+            for confirmed in [false, true] {
+                let (fixture, actor) = crate::actor::tests::actor("http://localhost:{tunnel.port.backend}");
+                let app = actor
+                    .upload(horizon_app_testing::contract::Platform::Ios, Duration::from_secs(30))
+                    .unwrap();
+                let previous = reset.then(|| actor.create(0, app.id, Duration::from_secs(20)).unwrap());
+                fixture.fake.reject_verification.store(true, Ordering::SeqCst);
+                let transport = Arc::clone(&fixture.fake.transport);
+                *transport.after_create.lock().unwrap() = Some(Box::new({
+                    let transport = Arc::clone(&transport);
+                    move || transport.lost_delete.store(!confirmed, Ordering::SeqCst)
+                }));
+                let actor = Arc::new(actor);
+                let evidence = tempfile::Builder::new()
+                    .permissions(std::fs::Permissions::from_mode(0o700))
+                    .tempdir()
+                    .unwrap();
+                let root = evidence.path().canonicalize().unwrap();
+                let server = NativeMcp::new(Arc::clone(&actor), &root, &root).unwrap();
+                let result = if let Some(previous) = previous {
+                    server
+                        .app_act(Parameters(model::Act {
+                            session: previous.id.to_string(),
+                            action: horizon_app_testing::recipe::Action::Reset {},
+                        }))
+                        .await
+                } else {
+                    server
+                        .app_session_create(Parameters(model::Create {
+                            artifact: app.id.to_string(),
+                            matrix_index: 0,
+                            lifetime_seconds: 20,
+                        }))
+                        .await
+                };
+                let error = result.err().unwrap();
+                assert!(error.starts_with(&horizon_app_provider::Error::DeviceUnverified.to_string()));
+                assert_eq!(error.contains("app_resource_cleanup_uncertain"), !confirmed);
+                assert_eq!(
+                    fixture.fake.transport.creates.load(Ordering::SeqCst),
+                    1 + usize::from(reset)
+                );
+                assert_eq!(
+                    fixture.fake.transport.active.lock().unwrap().len(),
+                    usize::from(!confirmed)
+                );
+                fixture.fake.transport.lost_delete.store(false, Ordering::SeqCst);
+                actor.shutdown().unwrap();
+                assert!(fixture.fake.transport.active.lock().unwrap().is_empty());
+                assert!(
+                    fixture
+                        .workspace
+                        .journal()
+                        .pending(fixture.workspace.owner())
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+        }
+    }
+}

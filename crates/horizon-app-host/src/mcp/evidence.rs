@@ -1,4 +1,5 @@
 //! Private bounded screenshot retention. Tool inputs never supply file paths.
+use crate::lifecycle::{Lock as HostLock, Operation as HostOperation, Reason as HostReason};
 use crate::{Error, Result};
 use horizon_app_process::storage::Directory;
 use serde::Serialize;
@@ -43,12 +44,17 @@ impl Evidence {
         create: impl FnOnce(&Directory, &str, &mut VecDeque<String>) -> Result<()>,
     ) -> Result<Capture> {
         if png.is_empty() || png.len() > 8 * 1024 * 1024 {
-            return Err(Error::Unavailable);
+            return Err(Error::host(HostOperation::Evidence, HostReason::InvalidCapture));
         }
-        let mut retained = self.retained.lock().map_err(|_| Error::Unavailable)?;
+        let mut retained = self
+            .retained
+            .lock()
+            .map_err(|_| Error::host_lock(HostLock::EvidenceRetention))?;
         self.directory.matches_path(&self.root)?;
         while retained.len() >= 32 {
-            let name = retained.front().ok_or(Error::Unavailable)?;
+            let name = retained
+                .front()
+                .ok_or(Error::host(HostOperation::Evidence, HostReason::MissingState))?;
             self.directory.retire_child(name)?;
             retained.pop_front();
         }
@@ -61,7 +67,7 @@ impl Evidence {
         let mut file = directory.new_file("frame.png")?;
         file.write_all(png)
             .and_then(|()| file.sync_all())
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|error| Error::host_io(HostOperation::Evidence, &error))?;
         self.directory.matches_path(&self.root)?;
         directory.matches_path(&path)?;
         Ok(Capture {

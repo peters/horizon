@@ -1,4 +1,5 @@
 //! Bounded read-only evidence references never own resources or renew a native lease.
+use crate::lifecycle::{Lock as HostLock, Operation as HostOperation, Reason as HostReason};
 use crate::{Error, Result};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -34,7 +35,7 @@ impl History {
             .filter(|(id, reference)| !reference.pinned && !self.protected.contains(id))
             .min_by_key(|(_, reference)| reference.expiry)
             .map(|(id, _)| *id)
-            .ok_or(Error::Unavailable)?;
+            .ok_or(Error::host(HostOperation::Observation, HostReason::LimitExceeded))?;
         self.references.remove(&oldest);
         Ok(())
     }
@@ -58,9 +59,9 @@ impl Drop for Run<'_> {
 }
 impl Observations {
     pub(crate) fn begin_run(&self) -> Result<Run<'_>> {
-        let mut history = self.0.lock().map_err(|_| Error::Unavailable)?;
+        let mut history = self.0.lock().map_err(|_| Error::host_lock(HostLock::Observations))?;
         if history.running {
-            return Err(Error::Unavailable);
+            return Err(Error::host(HostOperation::Observation, HostReason::AlreadyRunning));
         }
         history.running = true;
         Ok(Run(self))
@@ -72,7 +73,7 @@ impl Observations {
         deadline: Instant,
         protected: &BTreeSet<Uuid>,
     ) -> Result<()> {
-        let mut history = self.0.lock().map_err(|_| Error::Unavailable)?;
+        let mut history = self.0.lock().map_err(|_| Error::host_lock(HostLock::Observations))?;
         history.protected.clone_from(protected);
         history.prune();
         let limit = if history.running { RUN_LIMIT } else { HISTORY_LIMIT };
@@ -91,7 +92,7 @@ impl Observations {
         Ok(())
     }
     pub(crate) fn reference(&self, id: Uuid) -> Result<String> {
-        let mut history = self.0.lock().map_err(|_| Error::Unavailable)?;
+        let mut history = self.0.lock().map_err(|_| Error::host_lock(HostLock::Observations))?;
         history.prune();
         history
             .references
@@ -149,7 +150,7 @@ mod tests {
             // No unpinned completed history is available to make room.
             assert_eq!(
                 history.retain(Uuid::new_v4(), "overflow", Instant::now(), &protected),
-                Err(Error::Unavailable)
+                Err(Error::host(HostOperation::Observation, HostReason::LimitExceeded))
             );
             panic!("synthetic run failure");
         });

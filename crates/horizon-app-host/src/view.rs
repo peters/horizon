@@ -1,4 +1,5 @@
 //! Read-only loopback RFB adapter; the controller remains the sole owner of every native session.
+use crate::lifecycle::{Lock as HostLock, Operation as HostOperation, Reason as HostReason};
 use crate::{Error, Result, actor::Actor};
 use horizon_core::browser::manifest::device::{NativeRecipeResult, NativeSessionMetadata};
 use serde::Serialize;
@@ -40,7 +41,7 @@ pub(crate) struct Observer<'a> {
 }
 impl Observer<'_> {
     pub(crate) fn observe(&self, progress: &mut crate::runner::Progress) -> Result<()> {
-        *self.run.lock().map_err(|_| Error::Unavailable)? = Some(progress.run);
+        *self.run.lock().map_err(|_| Error::host_lock(HostLock::ViewerRun))? = Some(progress.run);
         self.registry.observe(progress)
     }
 }
@@ -96,7 +97,10 @@ impl Registry {
         };
         let run_id = progress.run.to_string();
         let recipes = if let Some(index) = progress.matrix_index {
-            let mut history = self.history.lock().map_err(|_| Error::Unavailable)?;
+            let mut history = self
+                .history
+                .lock()
+                .map_err(|_| Error::host_lock(HostLock::ViewerHistory))?;
             // Runs have a maximum lifetime of 30 minutes; history outlives closed viewers.
             history.retain(|_, previous| previous.updated.elapsed() <= Duration::from_mins(30));
             let previous = history.entry((progress.run, index)).or_insert_with(|| RecipeHistory {
@@ -120,11 +124,14 @@ impl Registry {
         if progress.phase == "session_created" {
             progress.view = Some(self.open(session)?);
         }
-        let views = self.views.lock().map_err(|_| Error::Unavailable)?;
+        let views = self.views.lock().map_err(|_| Error::host_lock(HostLock::Viewers))?;
         let Some(view) = views.get(&session) else {
             return Ok(());
         };
-        let mut metadata = view.metadata.lock().map_err(|_| Error::Unavailable)?;
+        let mut metadata = view
+            .metadata
+            .lock()
+            .map_err(|_| Error::host_lock(HostLock::ViewerMetadata))?;
         if let Some(recipes) = recipes {
             metadata.recipes = recipes;
         }
@@ -144,7 +151,10 @@ impl Registry {
             drop(metadata);
             // Only retire the predecessor after the replacement has its identity and results.
             for (_, previous) in views.iter().filter(|(id, _)| **id != session) {
-                let previous_metadata = previous.metadata.lock().map_err(|_| Error::Unavailable)?;
+                let previous_metadata = previous
+                    .metadata
+                    .lock()
+                    .map_err(|_| Error::host_lock(HostLock::ViewerMetadata))?;
                 if previous_metadata.run_id.as_deref() == Some(run_id.as_str()) && previous_metadata.lane == lane {
                     previous.pending.store(false, Ordering::Release);
                 }
@@ -160,7 +170,7 @@ impl Registry {
     /// Reuse the exact session's viewer; at most two active native sessions have viewers.
     /// Closed run viewers stay available until their final results arrive.
     pub fn open(&self, session: Uuid) -> Result<Handle> {
-        let mut views = self.views.lock().map_err(|_| Error::Unavailable)?;
+        let mut views = self.views.lock().map_err(|_| Error::host_lock(HostLock::Viewers))?;
         // A closed viewer remains discoverable until its transport has sent the final result.
         views.retain(|_, view| !view.finished.load(Ordering::Acquire));
         if let Some(view) = views.get(&session) {
@@ -172,13 +182,13 @@ impl Registry {
             .count()
             >= 2
         {
-            return Err(Error::Unavailable);
+            return Err(Error::host(HostOperation::Viewer, HostReason::LimitExceeded));
         }
         drop(views);
         let actor = self.actor.upgrade().ok_or(Error::SessionUnknown)?;
         let closed = actor.view_lifetime(session)?;
         let first = actor.screenshot(session)?;
-        let mut views = self.views.lock().map_err(|_| Error::Unavailable)?;
+        let mut views = self.views.lock().map_err(|_| Error::host_lock(HostLock::Viewers))?;
         // A closed viewer remains discoverable until its transport has sent the final result.
         views.retain(|_, view| !view.finished.load(Ordering::Acquire));
         if let Some(view) = views.get(&session) {
@@ -190,7 +200,7 @@ impl Registry {
             .count()
             >= 2
         {
-            return Err(Error::Unavailable);
+            return Err(Error::host(HostOperation::Viewer, HostReason::LimitExceeded));
         }
         if closed.load(Ordering::Acquire) {
             return Err(Error::SessionUnknown);
@@ -227,9 +237,15 @@ impl View {
         metadata: NativeSessionMetadata,
     ) -> Result<Self> {
         let frame = Arc::new(Mutex::new(pixels(first)?));
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|_| Error::Unavailable)?;
-        listener.set_nonblocking(true).map_err(|_| Error::Unavailable)?;
-        let endpoint = listener.local_addr().map_err(|_| Error::Unavailable)?.to_string();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .map_err(|error| Error::host_io(HostOperation::Viewer, &error))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| Error::host_io(HostOperation::Viewer, &error))?;
+        let endpoint = listener
+            .local_addr()
+            .map_err(|error| Error::host_io(HostOperation::Viewer, &error))?
+            .to_string();
         let view = Self {
             endpoint,
             stop: Arc::new(AtomicBool::new(false)),
@@ -295,7 +311,7 @@ impl View {
                     }
                 }
             })
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|error| Error::host_io(HostOperation::Viewer, &error))?;
         view.spawn_capture(actor, session, frame)?;
         Ok(view)
     }
@@ -341,7 +357,7 @@ impl View {
                 }
             })
             .map(|_| ())
-            .map_err(|_| Error::Unavailable)
+            .map_err(|error| Error::host_io(HostOperation::Viewer, &error))
     }
     fn handle(&self) -> Handle {
         Handle {
@@ -392,6 +408,13 @@ fn close_after_flush(stop: &AtomicBool, client: &Mutex<Option<TcpStream>>, pendi
     stop_view(stop, client);
 }
 
+fn capture_error(error: &png::DecodingError) -> Error {
+    match error {
+        png::DecodingError::IoError(error) => Error::host_io(HostOperation::ViewerCapture, error),
+        _ => Error::host(HostOperation::ViewerCapture, HostReason::InvalidCapture),
+    }
+}
+
 fn pixels(bytes: &[u8]) -> Result<Vec<u8>> {
     let mut decoder = png::Decoder::new_with_limits(
         std::io::Cursor::new(bytes),
@@ -400,19 +423,21 @@ fn pixels(bytes: &[u8]) -> Result<Vec<u8>> {
         },
     );
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = decoder.read_info().map_err(|_| Error::Unavailable)?;
+    let mut reader = decoder.read_info().map_err(|error| capture_error(&error))?;
     let size = reader
         .output_buffer_size()
         .filter(|size| *size <= 64 * 1024 * 1024)
-        .ok_or(Error::Unavailable)?;
+        .ok_or(Error::host(HostOperation::ViewerCapture, HostReason::InvalidCapture))?;
     let mut samples = vec![0; size];
-    let info = reader.next_frame(&mut samples).map_err(|_| Error::Unavailable)?;
+    let info = reader.next_frame(&mut samples).map_err(|error| capture_error(&error))?;
     if info.width == 0 || info.height == 0 || u64::from(info.width) * u64::from(info.height) > 16_000_000 {
-        return Err(Error::Unavailable);
+        return Err(Error::host(HostOperation::ViewerCapture, HostReason::InvalidCapture));
     }
-    reader.finish().map_err(|_| Error::Unavailable)?;
-    let source_width = usize::try_from(info.width).map_err(|_| Error::Unavailable)?;
-    let source_height = usize::try_from(info.height).map_err(|_| Error::Unavailable)?;
+    reader.finish().map_err(|error| capture_error(&error))?;
+    let source_width = usize::try_from(info.width)
+        .map_err(|_| Error::host(HostOperation::ViewerCapture, HostReason::InvalidCapture))?;
+    let source_height = usize::try_from(info.height)
+        .map_err(|_| Error::host(HostOperation::ViewerCapture, HostReason::InvalidCapture))?;
     let (width, height) = if source_width * usize::from(HEIGHT) > source_height * usize::from(WIDTH) {
         (
             usize::from(WIDTH),
@@ -436,7 +461,9 @@ fn pixels(bytes: &[u8]) -> Result<Vec<u8>> {
                     [samples[source], samples[source + 1], samples[source + 2]]
                 }
                 png::ColorType::Grayscale | png::ColorType::GrayscaleAlpha => [samples[source]; 3],
-                png::ColorType::Indexed => return Err(Error::Unavailable),
+                png::ColorType::Indexed => {
+                    return Err(Error::host(HostOperation::ViewerCapture, HostReason::InvalidCapture));
+                }
             };
             let alpha = match info.color_type {
                 png::ColorType::Rgba => samples[source + 3],

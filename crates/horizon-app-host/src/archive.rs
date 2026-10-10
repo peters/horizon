@@ -44,7 +44,10 @@ impl Store {
     /// # Errors
     /// A replaced root cannot redirect a later run.
     pub fn create(&self) -> Result<Archive> {
-        let _admission = self.admission.lock().map_err(|_| Error::Unavailable)?;
+        let _admission = self
+            .admission
+            .lock()
+            .map_err(|_| Error::host_lock(crate::lifecycle::Lock::ArchiveAdmission))?;
         self.directory.matches_path(&self.path)?;
         if self.directory.count_children(8)? >= 8 {
             return Err(Error::EvidenceFull);
@@ -271,5 +274,28 @@ mod tests {
         std::fs::set_permissions(&archive.path, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(archive.screenshot(Uuid::new_v4(), b"validated-fixture").is_err());
         assert_eq!(std::fs::read_dir(&archive.path).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn poisoned_archive_admission_retains_its_typed_lifecycle_cause() {
+        let temp_root = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let store = Store::new(&temp_root.path().canonicalize().unwrap()).unwrap();
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _guard = store.admission.lock().unwrap();
+                panic!("synthetic admission poison");
+            })
+            .is_err()
+        );
+        assert!(matches!(
+            store.create(),
+            Err(Error::LifecycleUnavailable(crate::lifecycle::Fault::LockPoisoned {
+                resource: crate::lifecycle::Lock::ArchiveAdmission
+            }))
+        ));
+        assert_eq!(std::fs::read_dir(temp_root.path()).unwrap().count(), 0);
     }
 }

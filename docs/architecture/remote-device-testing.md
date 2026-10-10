@@ -557,3 +557,19 @@ their live views, so later matrix lanes do not wait for the capture polling inte
 to reclaim the two-stream capacity.
 
 Normal host shutdown first stops new admission, then waits for the active matrix run lease before closing remaining resources. The run retains its upload handles through its own final report cleanup, so transport EOF cannot clear those handles underneath the runner.
+
+### Host lifecycle causes
+
+A host lifecycle error retains its operation and typed cause. I/O errors retain
+their error kind. Lock errors identify the affected lock. Task errors distinguish
+a panic from cancellation. Input and schema errors retain a fixed category.
+The host does not include private paths, configuration values or panic text.
+CLI and MCP output use the same cause. Lifecycle faults are separate from archive
+faults, so a lifecycle fault does not suppress available provider diagnostics.
+Direct creation and reset append `app_resource_cleanup_uncertain` when cleanup
+cannot be confirmed. The typed first cause remains in the error and audit entry.
+When stdio fails, a later shutdown failure appends the same code once.
+The original owner and pending records remain available for exact reconciliation.
+
+Use the [lifecycle cause procedure](../testing/procedures/native-lifecycle-causes.md)
+for local cause, lane stop, and first-error cleanup tests.

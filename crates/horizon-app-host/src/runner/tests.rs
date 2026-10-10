@@ -334,7 +334,10 @@ fn callback_panic_closes_every_known_session_before_releasing_uploads() {
         |_, _, _| panic!("synthetic capture failure"),
         |_| Ok(()),
     );
-    assert!(matches!(result, Err(Error::Unavailable)));
+    assert_eq!(
+        result.err().unwrap(),
+        Error::host(HostOperation::Run, HostReason::TaskPanicked)
+    );
     assert!(runtime.sessions.lock().unwrap().is_empty());
     assert_eq!(runtime.active.load(Ordering::SeqCst), 0);
     assert_eq!(runtime.released.load(Ordering::SeqCst), 2);
@@ -819,11 +822,13 @@ fn reset_report_uses_actual_replacement_cleanup_acknowledgements() {
         assert_eq!(device.allocations.len(), 1);
         assert_eq!(device.steps.len(), 1);
         assert!(!device.steps[0].passed);
-        assert!(device.steps[0].error.as_deref().unwrap().contains(if confirmed {
-            "app_device_unverified"
-        } else {
-            "app_resource_cleanup_uncertain"
-        }));
+        assert!(
+            device.steps[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("app_device_unverified")
+        );
         assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 2);
         fixture.fake.transport.lost_delete.store(false, Ordering::SeqCst);
         actor.shutdown().unwrap();
@@ -1263,4 +1268,128 @@ fn failed_progress_sink_does_not_omit_blocked_recipes_from_the_terminal_report()
     assert!(!report.devices[0].steps[0].blocked);
     assert!(report.devices[0].steps[1..].iter().all(|step| step.blocked));
     assert!(report.devices[0].cleanup_confirmed);
+}
+
+#[test]
+fn lifecycle_failure_stops_actions_but_keeps_provider_diagnostics() {
+    let failure = Error::host_io(
+        crate::lifecycle::Operation::Session,
+        &std::io::Error::from(std::io::ErrorKind::ConnectionReset),
+    );
+    let fake = Fake {
+        fail_action: Some(failure.clone()),
+        ..Fake::default()
+    };
+    let mut first = recipe();
+    first.steps[0].action = Action::Home {};
+    let recipes = [first, recipe()];
+    let plan = Plan {
+        targets: targets().into_iter().skip(1).take(1).collect(),
+        recipes: &recipes,
+        parallel: 1,
+        screenshots: true,
+        video: true,
+        logs_on_failure: true,
+    };
+    let events = Mutex::new(Vec::new());
+    let report = plan
+        .execute(
+            &fake,
+            &Control::new(Duration::from_secs(10)).unwrap(),
+            capture,
+            |event| {
+                events.lock().unwrap().push(event);
+                Ok(())
+            },
+        )
+        .unwrap();
+    let device = &report.devices[0];
+    let cause = failure.to_string();
+    assert_eq!(fake.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.screenshots.load(Ordering::SeqCst), 0);
+    assert_eq!(device.error.as_deref(), Some(cause.as_str()));
+    assert_eq!(device.steps[0].error.as_deref(), Some(cause.as_str()));
+    assert!(device.blocked && device.cleanup_confirmed && device.steps[1].blocked);
+    assert!(
+        device.steps[1..]
+            .iter()
+            .all(|step| step.blocked && step.screenshot.is_none())
+    );
+    assert_eq!(fake.media_calls.lock().unwrap().len(), 5);
+    assert_eq!(device.media.len(), 5);
+    assert!(
+        device.media[..4]
+            .iter()
+            .all(|media| media.evidence.is_some() && media.error.is_none())
+    );
+    assert!(
+        device.media[4]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("app_media_unavailable:"))
+    );
+    let events = events.into_inner().unwrap();
+    let blocked: Vec<_> = events.iter().filter(|event| event.phase == "lane_blocked").collect();
+    assert_eq!(blocked.len(), 1);
+    assert_eq!(blocked[0].error.as_deref(), Some(cause.as_str()));
+    assert_eq!(events.iter().filter(|event| event.phase == "recipe_blocked").count(), 1);
+}
+
+#[test]
+fn lifecycle_first_cause_survives_final_cleanup_failure_without_resuming_actions() {
+    let failure = Error::host(
+        crate::lifecycle::Operation::Session,
+        crate::lifecycle::Reason::MissingState,
+    );
+    let fake = Fake {
+        fail_action: Some(failure.clone()),
+        fail_close: true,
+        ..Fake::default()
+    };
+    let mut recipe = recipe();
+    recipe.steps.push(horizon_app_testing::recipe::Step {
+        id: "blocked-after-failure".into(),
+        action: Action::Home {},
+    });
+    let recipes = [recipe];
+    let events = Mutex::new(Vec::new());
+    let report = Plan {
+        targets: targets().into_iter().skip(1).take(1).collect(),
+        recipes: &recipes,
+        parallel: 1,
+        screenshots: true,
+        video: true,
+        logs_on_failure: true,
+    }
+    .execute(
+        &fake,
+        &Control::new(Duration::from_secs(10)).unwrap(),
+        capture,
+        |event| {
+            events.lock().unwrap().push(event);
+            Ok(())
+        },
+    )
+    .unwrap();
+    let device = &report.devices[0];
+    let expected = failure.to_string();
+    assert_eq!(device.error.as_deref(), Some(expected.as_str()));
+    assert_eq!(device.steps[0].error.as_deref(), Some(expected.as_str()));
+    assert!(device.blocked && !device.cleanup_confirmed);
+    assert_eq!(fake.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.screenshots.load(Ordering::SeqCst), 0);
+    assert!(
+        device.steps[1..]
+            .iter()
+            .all(|step| step.blocked && !step.passed && step.screenshot.is_none())
+    );
+    let events = events.lock().unwrap();
+    let blocked = events
+        .iter()
+        .filter(|event| event.phase == "lane_blocked")
+        .collect::<Vec<_>>();
+    assert_eq!(blocked.len(), 1);
+    assert_eq!(blocked[0].error.as_deref(), Some(expected.as_str()));
+    assert!(!device.media.is_empty());
+    assert!(fake.sessions.lock().unwrap().is_empty());
 }

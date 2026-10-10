@@ -1,4 +1,5 @@
 //! CLI adapter delegates all build, quota, action and cleanup decisions to the shared runner.
+use crate::lifecycle::{Operation as HostOperation, Reason as HostReason};
 use crate::{
     Error, Result,
     archive::Archive,
@@ -35,8 +36,8 @@ pub async fn execute(host: Host, lifetime: Duration) -> Result<()> {
     let archive = Arc::new(Archive::new(&host.reports)?);
     let retained_archive = Arc::clone(&archive);
     #[cfg(unix)]
-    let mut terminate =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(|_| Error::Unavailable)?;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|error| Error::host_io(HostOperation::Signal, &error))?;
     let mut task = tokio::task::spawn_blocking(move || {
         let observer = views.observer();
         let report = runner::run(
@@ -75,20 +76,21 @@ pub async fn execute(host: Host, lifetime: Duration) -> Result<()> {
     #[cfg(unix)]
     {
         report = tokio::select! {
-            result=&mut task=>result.map_err(|_|Error::Unavailable)??,
-            signal=tokio::signal::ctrl_c()=>{signal.map_err(|_|Error::Unavailable)?;control.cancel();task.await.map_err(|_|Error::Unavailable)??},
-            _=terminate.recv()=>{control.cancel();task.await.map_err(|_|Error::Unavailable)??},
+            result=&mut task=>result.map_err(|error| Error::host_task(HostOperation::Run, &error))??,
+            signal=tokio::signal::ctrl_c()=>{signal.map_err(|error|Error::host_io(HostOperation::Signal, &error))?;control.cancel();task.await.map_err(|error| Error::host_task(HostOperation::Run, &error))??},
+            _=terminate.recv()=>{control.cancel();task.await.map_err(|error| Error::host_task(HostOperation::Run, &error))??},
         };
     }
     #[cfg(not(unix))]
     {
         report = tokio::select! {
-            result=&mut task=>result.map_err(|_|Error::Unavailable)??,
-            signal=tokio::signal::ctrl_c()=>{signal.map_err(|_|Error::Unavailable)?;control.cancel();task.await.map_err(|_|Error::Unavailable)??},
+            result=&mut task=>result.map_err(|error| Error::host_task(HostOperation::Run, &error))??,
+            signal=tokio::signal::ctrl_c()=>{signal.map_err(|error|Error::host_io(HostOperation::Signal, &error))?;control.cancel();task.await.map_err(|error| Error::host_task(HostOperation::Run, &error))??},
         };
     }
     let (value, failed) = report;
-    let mut bytes = serde_json::to_vec(&value).map_err(|_| Error::Unavailable)?;
+    let mut bytes =
+        serde_json::to_vec(&value).map_err(|_| Error::host(HostOperation::Run, HostReason::SerializationFailed))?;
     bytes.push(b'\n');
     output::Output::new(std::io::stdout())?.terminal(bytes)?;
     if failed {

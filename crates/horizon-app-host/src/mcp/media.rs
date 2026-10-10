@@ -1,13 +1,20 @@
 use super::{Arc, Json, NativeMcp, Value, handle, model};
+use crate::lifecycle::{Lock as HostLock, Operation as HostOperation, Reason as HostReason};
 use crate::{Error, Result};
 use horizon_app_provider::media::Kind;
 
 fn archive(server: &NativeMcp) -> Result<Arc<crate::archive::Archive>> {
-    let mut retained = server.media.lock().map_err(|_| Error::Unavailable)?;
+    let mut retained = server
+        .media
+        .lock()
+        .map_err(|_| Error::host_lock(HostLock::MediaArchive))?;
     if retained.is_none() {
         *retained = Some(Arc::new(server.reports.create()?));
     }
-    retained.as_ref().cloned().ok_or(Error::Unavailable)
+    retained
+        .as_ref()
+        .cloned()
+        .ok_or(Error::host(HostOperation::Media, HostReason::MissingState))
 }
 pub(super) async fn logs(server: &NativeMcp, input: model::Logs) -> std::result::Result<Json<Value>, String> {
     let server = server.clone();
@@ -23,11 +30,12 @@ pub(super) async fn logs(server: &NativeMcp, input: model::Logs) -> std::result:
         server
             .actor
             .export_media(id, kind, std::time::Duration::from_secs(30), |bytes| {
-                serde_json::to_value(archive.media(kind, &bytes)?).map_err(|_| Error::Unavailable)
+                serde_json::to_value(archive.media(kind, &bytes)?)
+                    .map_err(|_| Error::host(HostOperation::Media, HostReason::SerializationFailed))
             })
     })
     .await
-    .map_err(|_| Error::Unavailable.to_string())?
+    .map_err(|error| Error::host_task(HostOperation::Media, &error).to_string())?
     .map(Json)
     .map_err(|error: Error| error.to_string())
 }
@@ -46,7 +54,7 @@ pub(super) async fn video(server: &NativeMcp, input: model::Video) -> std::resul
         if !enabled {return Err(horizon_app_provider::Error::MediaUnavailable.into());}
         let archive=archive(&server)?;
         server.actor.export_media(id, Kind::Video, std::time::Duration::from_secs(30), |bytes| {
-            serde_json::to_value(archive.media(Kind::Video, &bytes)?).map_err(|_|Error::Unavailable)
+            serde_json::to_value(archive.media(Kind::Video, &bytes)?).map_err(|_|Error::host(HostOperation::Media, HostReason::SerializationFailed))
         })
-    }).await.map_err(|_|Error::Unavailable.to_string())?.map(Json).map_err(|error:Error|error.to_string())
+    }).await.map_err(|error| Error::host_task(HostOperation::Media, &error).to_string())?.map(Json).map_err(|error:Error|error.to_string())
 }

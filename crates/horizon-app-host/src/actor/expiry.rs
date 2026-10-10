@@ -1,5 +1,6 @@
 //! Bounded expiry and detached controller retirement.
 use super::{Actor, Arc, BTreeMap, Cleanup, Duration, Error, Instant, Result};
+use crate::lifecycle::{Lock as HostLock, Operation as HostOperation};
 
 impl Actor {
     /// # Errors
@@ -22,7 +23,7 @@ impl Actor {
                     std::thread::sleep(Duration::from_millis(250));
                 }
             })
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|error| Error::host_io(HostOperation::Expiry, &error))?;
         Ok(())
     }
     /// One host sweeper calls this; physical guardians also retain their independent crash lifetimes.
@@ -30,7 +31,7 @@ impl Actor {
         let lanes = self
             .lanes
             .lock()
-            .map_err(|_| Error::Unavailable)?
+            .map_err(|_| Error::host_lock(HostLock::Lanes))?
             .values()
             .cloned()
             .collect::<Vec<_>>();
@@ -67,7 +68,7 @@ impl Actor {
         let uploads = self
             .uploads
             .lock()
-            .map_err(|_| Error::Unavailable)?
+            .map_err(|_| Error::host_lock(HostLock::Uploads))?
             .values()
             .cloned()
             .collect::<Vec<_>>();

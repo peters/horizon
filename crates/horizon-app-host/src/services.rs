@@ -1,4 +1,5 @@
 //! Start and stop the resources owned directly by a controller lane.
+use crate::lifecycle::{Lock as HostLock, Operation as HostOperation, Reason as HostReason};
 use crate::local::{Lease, Local};
 use crate::{Error, Result};
 use horizon_app_process::{Event, Kind};
@@ -42,7 +43,7 @@ pub(crate) fn start(
                 loop {
                     match resources
                         .first()
-                        .ok_or(Error::Unavailable)?
+                        .ok_or(Error::host(HostOperation::Service, HostReason::MissingState))?
                         .next(wait_budget(ready_by)?)?
                     {
                         Event::Started {} => (),
@@ -56,7 +57,7 @@ pub(crate) fn start(
             return Err(horizon_app_provider::Error::TunnelPortRefused.into());
         }
         {
-            let mut claims = claims.lock().map_err(|_| Error::Unavailable)?;
+            let mut claims = claims.lock().map_err(|_| Error::host_lock(HostLock::PortClaims))?;
             if claims.contains_key(&port) {
                 return Err(horizon_app_provider::Error::TunnelPortRefused.into());
             }

@@ -121,6 +121,18 @@ Horizon selects Appium 2.19.0 for iOS 15 or later. This version uses XCUITest 9.
 Older iOS versions keep the provider default and cannot qualify the deep-link test.
 See the [provider version table](https://www.browserstack.com/docs/app-automate/appium/set-up-tests/set-appium-version).
 
+Use the [lifecycle cause procedure](https://github.com/peters/horizon/blob/main/docs/testing/procedures/native-lifecycle-causes.md) for local cause and cleanup tests.
+
+Host lifecycle failures include a typed cause. The cause identifies an invalid
+input, missing state, resource limit, poisoned lock, failed task or I/O error
+kind. CLI and MCP reports keep the same cause. Private paths, configuration
+values and panic text are not part of the cause. A lifecycle failure does not
+mean that the evidence archive is unusable. Keep available provider diagnostics.
+Direct creation and reset also report `app_resource_cleanup_uncertain` when
+cleanup cannot be confirmed. The first cause remains at the start of the error.
+When stdio fails, a later shutdown failure appends the same code once.
+Preserve the original owner and pending records before reconciliation.
+
 ## Linux reboot recovery
 
 Use the original client, owner and private state after a host reboot.

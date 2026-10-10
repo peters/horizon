@@ -7,6 +7,7 @@ pub mod audit;
 pub mod bootstrap;
 pub mod cli;
 pub mod entry;
+pub mod lifecycle;
 pub mod local;
 pub mod mcp;
 mod observations;
@@ -29,6 +30,8 @@ pub enum Error {
     #[error("app_host_unavailable: native host execution is unavailable")]
     Unavailable,
     #[error("app_host_unavailable: {0}")]
+    LifecycleUnavailable(#[from] lifecycle::Fault),
+    #[error("app_host_unavailable: {0}")]
     HostUnavailable(#[from] HostFailure),
     #[error("app_audit_unavailable: inspect the session before replaying a possibly completed action")]
     AuditUnavailable,
@@ -40,6 +43,11 @@ pub enum Error {
     ScreenshotRequiresCapture,
     #[error("app_resource_cleanup_uncertain: reconcile the exact owned native resource")]
     CleanupUncertain,
+    #[error("{cause}; app_resource_cleanup_uncertain: reconcile the exact owned native resource")]
+    CleanupUnconfirmed {
+        #[source]
+        cause: Box<Error>,
+    },
     #[error("app_artifact_unknown: the opaque native artifact is not owned or has expired")]
     ArtifactUnknown,
     #[error("app_run_cancelled: native matrix execution was cancelled")]
@@ -56,23 +64,16 @@ pub enum Error {
     AdmissionDeferred,
 }
 
+impl Error {
+    pub(crate) fn with_unconfirmed_cleanup(self) -> Self {
+        match self {
+            Self::CleanupUncertain | Self::LocalCleanupUncertain(_) | Self::CleanupUnconfirmed { .. } => self,
+            cause => Self::CleanupUnconfirmed { cause: Box::new(cause) },
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Public host diagnostics contain typed causes, never paths or application data.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum HostFailure {
-    #[error("the retained evidence exceeded its 1 GiB byte limit")]
-    EvidenceBytes,
-    #[error("the retained evidence exceeded its 1024 file limit")]
-    EvidenceFiles,
-    #[error("the terminal report exceeded its 8 MiB limit or was already saved")]
-    ReportLimit,
-    #[error("the capture was empty or exceeded its byte limit")]
-    CaptureInvalid,
-    #[error("the evidence archive state lock failed")]
-    ArchiveState,
-    #[error("the evidence archive serialization failed")]
-    ArchiveSerialization,
-    #[error("the evidence archive write failed ({0:?})")]
-    ArchiveWrite(std::io::ErrorKind),
-}
+pub use horizon_app_process::diagnostic::HostFailure;

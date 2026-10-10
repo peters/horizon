@@ -1,4 +1,5 @@
 //! Bounded foreground commands and tunnel guardians bound to the exclusive workspace journal.
+use crate::lifecycle::{Lock as HostLock, Operation as HostOperation, Reason as HostReason};
 use crate::{Error, Result};
 use horizon_app_process::{Event, Request, client::Process};
 use horizon_app_provider::api::BrowserStack;
@@ -100,7 +101,7 @@ impl Lease {
         if self.complete.load(Ordering::Acquire) {
             return Ok(());
         }
-        let mut guardian = self.guardian.lock().map_err(|_| Error::Unavailable)?;
+        let mut guardian = self.guardian.lock().map_err(|_| Error::host_lock(HostLock::Guardian))?;
         if self.complete.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -135,15 +136,20 @@ impl Local {
         root: &Path,
         configuration: Configuration,
     ) -> Result<Self> {
-        let root = root.canonicalize().map_err(|_| Error::Unavailable)?;
+        let root = root
+            .canonicalize()
+            .map_err(|error| Error::host_io(HostOperation::Guardian, &error))?;
         let provider = workspace.provider(account)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let expected = workspace.root_directory()?.metadata().map_err(|_| Error::Unavailable)?;
+            let expected = workspace
+                .root_directory()?
+                .metadata()
+                .map_err(|error| Error::host_io(HostOperation::Guardian, &error))?;
             let selected = std::fs::File::open(&root)
                 .and_then(|file| file.metadata())
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(|error| Error::host_io(HostOperation::Guardian, &error))?;
             if (expected.dev(), expected.ino()) != (selected.dev(), selected.ino()) {
                 return Err(horizon_app_runtime::Error::OwnershipRefused.into());
             }
@@ -193,7 +199,7 @@ impl Local {
             .count()
             >= 64
         {
-            return Err(Error::Unavailable);
+            return Err(Error::host(HostOperation::Guardian, HostReason::LimitExceeded));
         }
         let mut completed = self
             .workspace
@@ -326,24 +332,24 @@ impl Lease {
     /// # Errors
     /// Refuses expired operations, invalid events or a missed read deadline.
     pub fn next(&self, timeout: Duration) -> Result<Event> {
-        let mut guardian = self.guardian.lock().map_err(|_| Error::Unavailable)?;
+        let mut guardian = self.guardian.lock().map_err(|_| Error::host_lock(HostLock::Guardian))?;
         let timeout = timeout.min(self.deadline.saturating_duration_since(Instant::now()));
         if timeout.is_zero() || self.complete.load(Ordering::Acquire) {
             return Err(horizon_app_runtime::Error::OperationExpired.into());
         }
         match &mut *guardian {
             Guardian::Process(process) => Ok(process.next(timeout)?),
-            Guardian::Tunnel(_) => Err(Error::Unavailable),
+            Guardian::Tunnel(_) => Err(Error::host(HostOperation::Guardian, HostReason::WrongGuardianKind)),
         }
     }
     pub(crate) fn tunnel_status(&self) -> Result<Status> {
-        let mut guardian = self.guardian.lock().map_err(|_| Error::Unavailable)?;
+        let mut guardian = self.guardian.lock().map_err(|_| Error::host_lock(HostLock::Guardian))?;
         if self.complete.load(Ordering::Acquire) || Instant::now() >= self.deadline {
             return Err(horizon_app_runtime::Error::OperationExpired.into());
         }
         match &mut *guardian {
             Guardian::Tunnel(tunnel) => Ok(tunnel.status()?),
-            Guardian::Process(_) => Err(Error::Unavailable),
+            Guardian::Process(_) => Err(Error::host(HostOperation::Guardian, HostReason::WrongGuardianKind)),
         }
     }
 }

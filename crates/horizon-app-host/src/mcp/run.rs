@@ -1,4 +1,5 @@
 use super::{Arc, Duration, Error, Json, NativeMcp, RequestContext, RoleServer, Value};
+use crate::lifecycle::{Operation as HostOperation, Reason as HostReason};
 use crate::runner::{self, Control, Progress};
 use rmcp::model::ProgressNotificationParam;
 
@@ -47,7 +48,7 @@ pub(super) async fn execute(
                 if let Some(progress)=progress {
                     sequence=sequence.saturating_add(1);
                     if !cancelled && let Some(token)=&token {
-                        let message=serde_json::to_string(&progress).map_err(|_|Error::Unavailable.to_string())?;
+                        let message=serde_json::to_string(&progress).map_err(|_|Error::host(HostOperation::Run, HostReason::SerializationFailed).to_string())?;
                         let notification=ProgressNotificationParam::new(token.clone(),f64::from(sequence)).with_message(message);
                         if !matches!(tokio::time::timeout(Duration::from_secs(2),context.peer.notify_progress(notification)).await,Ok(Ok(()))) {
                             cancelled=true;control.cancel();
@@ -55,7 +56,7 @@ pub(super) async fn execute(
                     }
                 } else { open=false; }
             }
-            result=&mut task => break result.map_err(|_|Error::Unavailable.to_string())?.map_err(|error|error.to_string())?,
+            result=&mut task => break result.map_err(|error| Error::host_task(HostOperation::Run, &error).to_string())?.map_err(|error|error.to_string())?,
         }
     };
     Ok(Json(report))
