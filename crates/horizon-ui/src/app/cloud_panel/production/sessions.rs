@@ -26,6 +26,7 @@ impl HorizonApp {
             .map(|state| state.sessions.clone())
             .unwrap_or_default();
         let mut remaining = HashSet::new();
+        let mut created = false;
         for session in sessions
             .into_iter()
             .filter(|session| pending.contains(&session.panel_id))
@@ -53,7 +54,7 @@ impl HorizonApp {
                 continue;
             }
             match self.create_cloud_member_as(index, options, workspace, parked) {
-                Ok(_) => {}
+                Ok(_) => created = true,
                 Err(error) => {
                     self.cloud_prototype.error = Some(error.to_string());
                     remaining.insert(session.panel_id);
@@ -64,6 +65,9 @@ impl HorizonApp {
             self.cloud_prototype.groups.0[index].set_collapsed(&mut self.board, true);
         }
         self.save_cloud_prototype();
+        if created {
+            self.record_cloud_parking(index);
+        }
         remaining
     }
 }
