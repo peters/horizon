@@ -1,0 +1,428 @@
+"""The GraphQL policy of the worker's API broker. An agent's GraphQL request reaches GitHub
+with the cloud's token only when everything it can read or change belongs to a repository
+that the caller is granted:
+
+- A query starts at `repository`, `node`, `nodes`, `search` (with `repo:` qualifiers for
+  granted repositories only), `viewer`, `rateLimit`, `meta` or introspection.
+- Users, organizations, teams, projects and other owners give only their own plain fields, so
+  no request lists or counts an owner's repositories.
+- Each selection that can hold a repository's data also asks GitHub which repository that is,
+  under an alias the request does not use. Each object in the reply must be in a granted
+  repository; the broker removes those fields before the agent sees the reply.
+- A mutation is one that gh uses for pull requests, issues, comments, labels and reviews.
+  Before it is sent, every ID in its input is looked up: each must name a repository the
+  caller may push to, a thing in one, or a user, bot or team.
+
+A module that horizon-worker-github loads, not a command."""
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+import re
+import secrets
+import sys
+
+
+def load_graphql():
+    name = 'horizon_worker_github_graphql'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-graphql')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        try:
+            loader.exec_module(module)
+        except BaseException:
+            del sys.modules[name]
+            raise
+    return sys.modules[name]
+
+
+graphql = load_graphql()
+
+ROOTS = {'repository', 'node', 'nodes', 'search', 'viewer', 'rateLimit', 'meta', '__type', '__schema', '__typename'}
+MUTATIONS = {
+    'addComment', 'addLabelsToLabelable', 'addPullRequestReview', 'closeIssue', 'closePullRequest',
+    'convertPullRequestToDraft', 'createIssue', 'createLinkedBranch', 'createPullRequest', 'deleteIssue',
+    'enablePullRequestAutoMerge', 'lockLockable', 'markPullRequestReadyForReview', 'mergePullRequest',
+    'pinIssue', 'removeLabelsFromLabelable', 'reopenIssue', 'reopenPullRequest', 'requestReviews',
+    'transferIssue', 'unlockLockable', 'unpinIssue', 'updateIssue', 'updateIssueComment',
+    'updatePullRequest', '__typename'}
+# Owners and other things above a repository: only their own plain fields. A topic lists the
+# repositories that have it.
+OWNERS = {'User', 'Organization', 'Bot', 'Mannequin', 'EnterpriseUserAccount', 'Enterprise', 'Team', 'App',
+          'ProjectV2', 'Project', 'Gist', 'Topic'}
+# An ID in a mutation's input may name one of these besides a repository or a thing in one.
+ACTOR_IDS = {'User', 'Bot', 'Team', 'Mannequin'}
+# The owners that `node` and `nodes` can read. A project or a gist can be private and is not
+# in a repository, so an ID does not reach it.
+OWNERS_BY_ID = ACTOR_IDS | {'Organization'}
+# A repository that one of these fields gives, and that a request reads only by its identity, is
+# not checked: a pull request from a fork names its head repository. A list of repositories is
+# always checked.
+NAMED_REPOSITORIES = {('PullRequest', 'headRepository'), ('PullRequest', 'baseRepository'),
+                      ('Repository', 'parent'), ('Repository', 'templateRepository')}
+IDENTITY = {'id', 'name', 'nameWithOwner', 'url', 'resourcePath', 'owner', 'isPrivate', 'isFork', 'isArchived',
+            '__typename'}
+# Entries that can reach any object by its ID.
+BY_ID = {'node', 'nodes'}
+MAX_IDS = 100
+REQUEST_KEYS = {'query', 'variables', 'operationName'}
+REPOSITORY = re.compile(r'[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}')
+# Search qualifiers that GitHub joins to repo: with OR.
+WIDENING = ('org:', 'user:', 'owner:')
+NO_GRANT = '%s has no GitHub grant on this worker. Ask for access with the github_access tool.'
+
+
+class Refused(Exception):
+    """The request may not reach GitHub with the cloud's token; the text says why."""
+
+
+class Plan:
+    """What the broker sends for one request, and what it checks before and after."""
+
+    def __init__(self, text, operation, mutation, ids, markers):
+        # The document with the added fields.
+        self.text = text
+        self.operation = operation
+        self.mutation = mutation
+        # IDs in a mutation's input, which `lookup` resolves before the mutation is sent.
+        self.ids = ids
+        # The aliases of the added fields: a repository that cannot be null, one that can,
+        # and a repository's own name.
+        self.markers = markers
+
+    def body(self, variables):
+        body = {'query': self.text, 'variables': variables}
+        if self.operation:
+            body['operationName'] = self.operation
+        return body
+
+
+def alias(document, prefix):
+    while True:
+        name = prefix + secrets.token_hex(4)
+        if name not in document.names:
+            return name
+
+
+def search_repositories(text):
+    """The repositories that a search query is limited to. A query without a `repo:`
+    qualifier, or with a boolean operator or a parenthesis that could widen it, is refused."""
+    if not isinstance(text, str) or len(text) > 1024:
+        raise Refused('a search needs a query of at most 1024 characters.')
+    if text.count('"') % 2:
+        raise Refused('a search on this worker closes each quotation mark.')
+    words = re.findall(r'-?[A-Za-z_]+:"[^"]*"|"[^"]*"|\S+', text)
+    found = []
+    for word in words:
+        if word in ('OR', 'AND', 'NOT') or ('(' in word or ')' in word) and not word.startswith('"'):
+            raise Refused('a search on this worker cannot use OR, AND, NOT or parentheses.')
+        if word.lower().lstrip('-').startswith(WIDENING):
+            raise Refused('a search on this worker cannot use org:, user: or owner:; GitHub adds their '
+                          'repositories to the repo: qualifiers.')
+        if word.lower().startswith('repo:'):
+            value = word[5:].strip('"')
+            if not REPOSITORY.fullmatch(value):
+                raise Refused('a search names a repository that is not owner/name.')
+            found.append(value)
+    if not found:
+        raise Refused('a search on this worker needs a repo: qualifier for a granted repository.')
+    return found
+
+
+class Walk:
+    """Checks one document against the schema and collects the added fields."""
+
+    def __init__(self, schema, document, variables, allowed):
+        self.schema = schema
+        self.document = document
+        self.variables = variables
+        self.allowed = allowed
+        self.inserts = {}
+        self.ids = []
+        self.walked = set()
+        self.stack = []
+        self.markers = (alias(document, 'hzr'), alias(document, 'hzq'), alias(document, 'hzn'))
+
+    def value(self, node, defaults):
+        """The JSON value of an argument: a literal, or a variable's value or default."""
+        kind, raw = node
+        if kind == 'variable':
+            if raw in self.variables:
+                return self.variables[raw]
+            if raw not in defaults:
+                raise Refused('the GraphQL request uses $%s, which the operation does not declare.' % raw)
+            default = defaults[raw]
+            return None if default is None else self.value(default, defaults)
+        if kind == 'list':
+            return [self.value(item, defaults) for item in raw]
+        if kind == 'object':
+            return {name: self.value(item, defaults) for name, item in raw.items()}
+        if kind == 'int':
+            return int(raw)
+        if kind == 'float':
+            return float(raw)
+        return raw
+
+    def need(self, repository, access):
+        if not self.allowed(repository, access):
+            raise Refused(NO_GRANT % repository)
+
+    def root(self, field, mutation, defaults):
+        if mutation:
+            if field.name not in MUTATIONS:
+                raise Refused('the GraphQL mutation %s is not allowed on this worker.' % field.name)
+            types = self.schema.arguments.get(self.schema.mutation, {}).get(field.name, {})
+            for name, node in field.arguments.items():
+                if name not in types:
+                    raise Refused('the GraphQL mutation %s has no argument %s.' % (field.name, name))
+                self.collect_ids(types[name], self.value(node, defaults))
+            return
+        if field.name not in ROOTS:
+            raise Refused('the GraphQL field %s is not allowed on this worker.' % field.name)
+        if field.name == 'repository':
+            owner = self.value(field.arguments.get('owner', ('null', None)), defaults)
+            name = self.value(field.arguments.get('name', ('null', None)), defaults)
+            if not isinstance(owner, str) or not isinstance(name, str) \
+                    or not REPOSITORY.fullmatch(owner + '/' + name):
+                raise Refused('the GraphQL repository field needs an owner and a name.')
+            self.need(owner + '/' + name, 'read')
+        elif field.name == 'search':
+            for repository in search_repositories(self.value(field.arguments.get('query', ('null', None)), defaults)):
+                self.need(repository, 'read')
+
+    def collect_ids(self, reference, value):
+        """Each value at an ID position of an input type."""
+        if value is None:
+            return
+        if isinstance(reference, tuple) and reference[0] == 'nonnull':
+            return self.collect_ids(reference[1], value)
+        if isinstance(reference, tuple) and reference[0] == 'list':
+            for item in value if isinstance(value, list) else [value]:
+                self.collect_ids(reference[1], item)
+            return
+        if reference == 'ID':
+            if not isinstance(value, str) or not value or len(value) > 200:
+                raise Refused('a GraphQL mutation input has an ID that is not a string.')
+            self.ids.append(value)
+            if len(set(self.ids)) > MAX_IDS:
+                raise Refused('a GraphQL mutation on this worker names at most %d IDs.' % MAX_IDS)
+        elif self.schema.kinds.get(reference) == 'INPUT_OBJECT':
+            if not isinstance(value, dict):
+                raise Refused('a GraphQL mutation input is not an object.')
+            fields = self.schema.inputs.get(reference, {})
+            for name, item in value.items():
+                if name not in fields:
+                    raise Refused('the GraphQL input %s has no field %s.' % (reference, name))
+                self.collect_ids(fields[name], item)
+
+    def covered(self, condition):
+        """Whether every object of type `condition` is a repository, is in one, or is a user,
+        bot, team or organization that gives only its plain fields."""
+        return all(name == 'Repository' or name in OWNERS_BY_ID or self.bearing(name)
+                   for name in self.schema.possible.get(condition, ()))
+
+    def selection_set(self, selection_set, parent, defaults, top=None, by_id=False, named=False):
+        """`parent` is the type of the selection set. `top` is the operation's root type for the
+        operation's own selection set. A selection set `by_id` can hold any object, so its
+        fragments must be on types that `covered` accepts. A `named` repository is one that a
+        field in NAMED_REPOSITORIES gives."""
+        if selection_set.end in self.walked:
+            return
+        self.walked.add(selection_set.end)
+        possible = self.schema.possible.get(parent)
+        if possible is None:
+            raise Refused('the GraphQL type %s is not in GitHub\'s schema.' % parent)
+        restricted = bool(possible & OWNERS)
+        names = set()
+        for selection in selection_set.selections:
+            if isinstance(selection, graphql.Field):
+                names.add(selection.name)
+                self.field(selection, parent, restricted, defaults, top)
+            elif isinstance(selection, graphql.InlineFragment):
+                names.add(None)
+                self.by_id(by_id, selection.condition or parent)
+                self.fragment_set(selection.condition or parent, selection.selection_set, defaults)
+            else:
+                names.add(None)
+                fragment = self.document.fragments.get(selection.name)
+                if fragment is None:
+                    raise Refused('the GraphQL fragment %s is not defined.' % selection.name)
+                self.by_id(by_id, fragment.condition)
+                if fragment.name in self.stack:
+                    raise Refused('the GraphQL fragment %s spreads itself.' % fragment.name)
+                self.stack.append(fragment.name)
+                self.fragment_set(fragment.condition, fragment.selection_set, defaults)
+                self.stack.pop()
+        if top is None and not (named and names <= IDENTITY):
+            self.mark(selection_set, parent, possible, names)
+
+    def by_id(self, by_id, condition):
+        if by_id and not self.covered(condition):
+            raise Refused('a GraphQL node on this worker is read only as a repository, a thing in one, '
+                          'or the plain fields of a user, bot, team or organization; %s is not one.' % condition)
+
+    def fragment_set(self, condition, selection_set, defaults):
+        if self.schema.kinds.get(condition) not in ('OBJECT', 'INTERFACE', 'UNION'):
+            raise Refused('the GraphQL fragment is on %s, which is not an object type.' % condition)
+        self.selection_set(selection_set, condition, defaults)
+
+    def field(self, field, parent, restricted, defaults, top):
+        found = self.schema.field(parent, field.name)
+        if found is None:
+            raise Refused('the GraphQL type %s has no field %s.' % (parent, field.name))
+        named = found[0]
+        if named == self.schema.query and top is None:
+            raise Refused('the GraphQL field %s.%s is not allowed on this worker.' % (parent, field.name))
+        if top is not None:
+            self.root(field, top == self.schema.mutation, defaults)
+        if self.schema.leaf(named):
+            return
+        if restricted and not self.schema.possible.get(named, set()) <= OWNERS:
+            raise Refused('the GraphQL field %s.%s is not allowed on this worker: only plain fields of '
+                          'users, organizations, teams, projects and topics can be read.' % (parent, field.name))
+        if field.selection_set is None:
+            raise Refused('the GraphQL field %s.%s needs a selection.' % (parent, field.name))
+        self.selection_set(field.selection_set, named, defaults, by_id=top is not None and field.name in BY_ID,
+                           named=(parent, field.name) in NAMED_REPOSITORIES)
+
+    def bearing(self, name):
+        """The alias for the repository of an object of type `name`, or None when it has no
+        `repository` field of type Repository."""
+        found = self.schema.field(name, 'repository') if name != 'Repository' else None
+        if found is None or found[0] != 'Repository' or found[2] or self.schema.required(name, 'repository'):
+            return None
+        return self.markers[0] if found[1] else self.markers[1]
+
+    def mark(self, selection_set, parent, possible, names):
+        markers, repository = self.markers, ' { nameWithOwner }'
+        if self.schema.kinds[parent] == 'OBJECT':
+            marker = self.bearing(parent)
+            if marker:
+                self.inserts[selection_set.end] = ' %s: repository%s ' % (marker, repository)
+            elif parent == 'Repository':
+                self.inserts[selection_set.end] = ' %s: nameWithOwner ' % markers[2]
+            return
+        added = []
+        for name in sorted(possible):
+            marker = self.bearing(name)
+            if marker:
+                added.append('...on %s { %s: repository%s }' % (name, marker, repository))
+            elif name == 'Repository':
+                added.append('...on Repository { %s: nameWithOwner }' % markers[2])
+        if added:
+            self.inserts[selection_set.end] = ' ' + ' '.join(added) + ' '
+
+    def text(self):
+        text = self.document.text
+        for offset in sorted(self.inserts, reverse=True):
+            text = text[:offset] + self.inserts[offset] + text[offset:]
+        return text
+
+
+def plan(schema, body, allowed):
+    """Checks an agent's GraphQL request; returns the Plan to send. `allowed(repository,
+    access)` says whether the caller may use a repository for `read` or `push`."""
+    if not isinstance(body, dict) or not set(body) <= REQUEST_KEYS or not isinstance(body.get('query'), str):
+        raise Refused('a GraphQL request is an object with a query, variables and an operation name only.')
+    variables = body.get('variables')
+    variables = {} if variables is None else variables
+    if not isinstance(variables, dict):
+        raise Refused('GraphQL variables are an object.')
+    try:
+        document = graphql.parse(body['query'])
+    except graphql.Invalid as error:
+        raise Refused(str(error) + '.') from None
+    if len(document.operations) != 1:
+        raise Refused('a GraphQL request on this worker has exactly one operation.')
+    operation = document.operations[0]
+    name = body.get('operationName')
+    if name is not None and name != operation.name:
+        raise Refused('the GraphQL operation name does not match the document.')
+    if operation.kind == 'subscription':
+        raise Refused('GraphQL subscriptions are not allowed on this worker.')
+    mutation = operation.kind == 'mutation'
+    top = schema.mutation if mutation else schema.query
+    if top is None:
+        raise Refused('GitHub\'s schema has no mutations.')
+    defaults = {variable: default for variable, (_, default) in operation.variables.items()}
+    walk = Walk(schema, document, variables, allowed)
+    walk.selection_set(operation.selection_set, top, defaults, top=top)
+    for fragment in document.fragments.values():
+        if fragment.selection_set.end not in walk.walked:
+            raise Refused('the GraphQL fragment %s is not used.' % fragment.name)
+    return Plan(walk.text(), operation.name, mutation, walk.ids, walk.markers)
+
+
+def lookup(schema, ids):
+    """The query that tells which repository each ID of a mutation's input is in."""
+    possible = sorted(schema.possible.get('Node', ()))
+    parts = []
+    for name in possible:
+        found = schema.field(name, 'repository') if name != 'Repository' else None
+        if name == 'Repository':
+            parts.append('...on Repository { repo: nameWithOwner }')
+        elif found and found[0] == 'Repository' and not found[2] and not schema.required(name, 'repository'):
+            parts.append('...on %s { %s: repository { nameWithOwner } }' % (name, 'held' if found[1] else 'maybe'))
+    text = 'query($ids: [ID!]!) { nodes(ids: $ids) { __typename %s } }' % ' '.join(parts)
+    return {'query': text, 'variables': {'ids': sorted(set(ids))}}
+
+
+def check_lookup(reply, ids, allowed):
+    """Refuses a mutation unless each of its IDs is a repository the caller may push to, a thing
+    in one, or a user, bot or team."""
+    nodes = ((reply or {}).get('data') or {}).get('nodes')
+    wanted = sorted(set(ids))
+    if not isinstance(nodes, list) or len(nodes) != len(wanted):
+        raise Refused('GitHub did not say what the IDs of the GraphQL mutation are.')
+    for node in nodes:
+        if not isinstance(node, dict):
+            raise Refused('the GraphQL mutation names something that GitHub does not show this worker.')
+        kind = node.get('__typename')
+        held = node.get('held') or node.get('maybe') or {}
+        repository = node.get('repo') or held.get('nameWithOwner')
+        if repository:
+            if not allowed(repository, 'push'):
+                raise Refused(NO_GRANT % repository)
+        elif kind not in ACTOR_IDS:
+            raise Refused('the GraphQL mutation names a %s, which is not allowed on this worker.' % kind)
+
+
+def verify(plan, reply, allowed):
+    """Removes the added fields from GitHub's reply after it checks each object's repository.
+    Refuses the whole reply when one object is in a repository the caller may not read."""
+    held, maybe, own = plan.markers
+
+    def walk(value):
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif isinstance(value, dict):
+            for key in (held, maybe):
+                if key in value:
+                    found = value.pop(key)
+                    if found is not None:
+                        repository = found.get('nameWithOwner') if isinstance(found, dict) else None
+                        check(repository)
+            if own in value:
+                check(value.pop(own))
+            for item in value.values():
+                walk(item)
+
+    def check(repository):
+        if not isinstance(repository, str) or not allowed(repository, 'read'):
+            raise Refused('the GraphQL reply holds data of %s, which has no GitHub grant on this worker. '
+                          'Ask for access with the github_access tool.' % (repository or 'another repository'))
+
+    if isinstance(reply, dict):
+        # A marker that failed is null without saying which repository holds the object.
+        for error in reply.get('errors') or ():
+            path = error.get('path') if isinstance(error, dict) else None
+            if isinstance(path, list) and any(key in path for key in plan.markers):
+                raise Refused('GitHub did not say which repository a part of the GraphQL reply is in.')
+        walk(reply.get('data'))
+    return reply
+
+
+if __name__ == '__main__':
+    raise SystemExit('horizon-worker-github-graphql-policy is a module of horizon-worker-github, not a command.')
