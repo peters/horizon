@@ -26,17 +26,19 @@ pub(super) fn prepare(root: &Path, target: &Store, id: OperationId, tailnet: Opt
     let ownership = tailnet::store(root)
         .own_catalog()
         .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
-    let catalog = ownership
-        .load()
-        .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
     let prior = horizon_cloud::tailnet::Selection::load(target.root()).map_err(|_| Error::Json)?;
     let selected = match tailnet {
         Some("none") => None,
         Some(id) => Some(id),
         None => prior.tailnet.as_deref(),
     };
-    if selected.is_some_and(|id| !catalog.tailnets.iter().any(|t| t.id == id)) {
-        return Err(Error::Invalid("Choose a saved tailnet ID from cloud_companions"));
+    if let Some(id) = selected {
+        let catalog = ownership
+            .load()
+            .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
+        if !catalog.tailnets.iter().any(|network| network.id == id) {
+            return Err(Error::Invalid("Choose a saved tailnet ID from cloud_companions"));
+        }
     }
     if target
         .load()?
@@ -83,12 +85,19 @@ fn sync(root: &Path) -> Result<()> {
 }
 
 pub(super) fn recover(target: &Store, id: OperationId) -> Result<()> {
-    if !target
-        .root()
-        .join(format!("tailnet-commit-{id}.pending"))
-        .try_exists()?
-    {
-        return Ok(());
+    let marker_path = target.root().join(format!("tailnet-commit-{id}.pending"));
+    let marker_metadata = match std::fs::symlink_metadata(&marker_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !marker_metadata.is_file() {
+        return Err(Error::Invalid("Pending tailnet marker is not a regular file"));
+    }
+    let mut marker = Vec::new();
+    std::fs::File::open(&marker_path)?.take(2).read_to_end(&mut marker)?;
+    if marker != b"1" {
+        return Err(Error::Invalid("Invalid pending tailnet marker"));
     }
     let root = target
         .root()
@@ -96,9 +105,6 @@ pub(super) fn recover(target: &Store, id: OperationId) -> Result<()> {
         .ok_or(Error::Invalid("Missing cloud catalog root"))?;
     let ownership = tailnet::store(root)
         .own_catalog()
-        .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
-    let catalog = ownership
-        .load()
         .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
     let mut bytes = Vec::new();
     std::fs::File::open(target.root().join(format!("tailnet-request-{id}.json")))?
@@ -108,12 +114,13 @@ pub(super) fn recover(target: &Store, id: OperationId) -> Result<()> {
         return Err(Error::Invalid("Pending tailnet request is too large"));
     }
     let selection: Selection = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
-    if selection
-        .tailnet
-        .as_deref()
-        .is_some_and(|id| !catalog.tailnets.iter().any(|t| t.id == id))
-    {
-        return Err(Error::Invalid("Pending tailnet is no longer saved"));
+    if let Some(id) = selection.tailnet.as_deref() {
+        let catalog = ownership
+            .load()
+            .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
+        if !catalog.tailnets.iter().any(|network| network.id == id) {
+            return Err(Error::Invalid("Pending tailnet is no longer saved"));
+        }
     }
     if target
         .load()?

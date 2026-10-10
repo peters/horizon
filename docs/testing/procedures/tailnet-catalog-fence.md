@@ -20,10 +20,11 @@ The portable catalog lock tests run on Windows.
 2. Run `cargo test -p horizon-cloud tailnet::bindings::tests`.
 3. Run `cargo test -p horizon-core cloud_runtime::tailnet::catalog::tests`.
 4. Run `cargo test -p horizon-core cloud_runtime::companions::lifecycle::tests::tailnets`.
-5. Run `cargo fmt --all -- --check`.
-6. Run `./scripts/check-maintainability.sh`.
-7. Run `python3 scripts/check-horizon-mcp-skills.py`.
-8. Save the test logs with the exact source hash.
+5. Run `cargo test -p horizon-core cloud_runtime::companions::lifecycle::tests::none_catalog`.
+6. Run `cargo fmt --all -- --check`.
+7. Run `./scripts/check-maintainability.sh`.
+8. Run `python3 scripts/check-horizon-mcp-skills.py`.
+9. Save the test logs with the exact source hash.
 
 ## Required results
 
@@ -44,7 +45,11 @@ The journal and credentials stay intact until Settings recovery settles that gen
 Allocation refuses a selected network whose saved ID no longer exists.
 A failed recovery keeps its original selection, request, and commit marker.
 It makes zero provider decisions.
-An explicit `none` request keeps the existing recovery path.
+A default no-network request or an explicit `none` request does not read the catalog.
+An interrupted no-network request can recover with corrupt catalog metadata or an
+unresolved catalog journal. These paths keep exclusive catalog ownership.
+They do not change catalog or credential journal bytes.
+A malformed commit marker or a changed selection on an allocated cloud still refuses recovery.
 
 ## Limits
 
