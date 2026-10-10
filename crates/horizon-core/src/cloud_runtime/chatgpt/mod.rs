@@ -52,14 +52,7 @@ pub fn connections(root: &Path) -> Result<Vec<Connection>> {
     store::connections(root)
 }
 
-/// The registration this host signs in as by default: the active one, else the newest saved one.
-/// # Errors
-/// The connection files could not be read.
-pub fn default_registration(root: &Path) -> Result<Option<store::Record>> {
-    store::default_registration(root)
-}
-
-/// The saved connection the settings card shows, if any.
+/// The token-free connection the settings card shows: the active registration, else the newest saved one.
 /// # Errors
 /// The connection files could not be read.
 pub fn status(root: &Path) -> Result<Option<Connection>> {

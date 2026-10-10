@@ -123,6 +123,9 @@ Settings save requires a provider. Do not create or deploy a cloud.
 
 ### 6.5 C05 — Sign out
 
+> **CAUTION:** SIGN OUT ONLY THE TEST ACCOUNT. This step clears local tokens
+> and asks the service to revoke this connection.
+
 1. On the connected card, click **Sign out**.
 
    Result: The card shows the signed-out message and the **Continue with
@@ -148,7 +151,7 @@ Settings save requires a provider. Do not create or deploy a cloud.
    Result: The waiting text goes away. The loopback callback server ends. A
    later code delivery to the callback does not store anything.
 
-2. Repeat the sign-in once more.
+2. Repeat C02.
 
    Result: A new browser page opens and a new sign-in completes normally.
 
@@ -164,6 +167,9 @@ Settings save requires a provider. Do not create or deploy a cloud.
   A synthetic fixture proves local card states, not provider authentication.
 
 ## 8. Cleanup
+
+> **CAUTION:** CLEAR ONLY THE TEST CONNECTION. Sign-out clears local tokens
+> and asks the service to revoke this connection.
 
 1. If the test account signed in, click **Sign out** on the card.
 

@@ -459,7 +459,7 @@ fn revoke(refresh_token: &str, client_id: &str) -> Option<bool> {
     if !(200..300).contains(&discovery_response.status().as_u16()) {
         return None;
     }
-    let discovery: Discovery = discovery_response.into_body().read_json().ok()?;
+    let discovery: Discovery = super::response::read(discovery_response.into_body(), "revocation discovery").ok()?;
     let response = ureq::post(&discovery.revocation_endpoint)
         .config()
         .timeout_global(Some(Duration::from_secs(30)))

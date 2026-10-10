@@ -40,21 +40,21 @@ impl Connection {
 }
 
 /// What the flow stores for one issued client ID and its verified account.
-pub struct Record {
-    pub email: Option<String>,
-    pub issuer: String,
-    pub subject: String,
-    pub client_id: String,
-    pub ext_agent_host_id: String,
-    pub id_token: Zeroizing<String>,
-    pub access_token: Option<Zeroizing<String>>,
-    pub refresh_token: Option<Zeroizing<String>>,
-    pub token_type: Option<String>,
-    pub expires_in: Option<u64>,
-    pub earliest_refresh_at: Option<i64>,
-    pub scopes: Vec<String>,
-    pub usage_confirmed: bool,
-    pub saved_at_unix: i64,
+pub(super) struct Record {
+    pub(super) email: Option<String>,
+    pub(super) issuer: String,
+    pub(super) subject: String,
+    pub(super) client_id: String,
+    pub(super) ext_agent_host_id: String,
+    pub(super) id_token: Zeroizing<String>,
+    pub(super) access_token: Option<Zeroizing<String>>,
+    pub(super) refresh_token: Option<Zeroizing<String>>,
+    pub(super) token_type: Option<String>,
+    pub(super) expires_in: Option<u64>,
+    pub(super) earliest_refresh_at: Option<i64>,
+    pub(super) scopes: Vec<String>,
+    pub(super) usage_confirmed: bool,
+    pub(super) saved_at_unix: i64,
 }
 
 impl std::fmt::Debug for Record {
@@ -79,7 +79,7 @@ impl std::fmt::Debug for Record {
 }
 
 impl Record {
-    pub fn plan_usage(&self) -> bool {
+    fn plan_usage(&self) -> bool {
         self.scopes.iter().any(|scope| scope == "chatgpt.tokens.use.direct")
     }
 }

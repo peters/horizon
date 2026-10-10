@@ -20,3 +20,30 @@ pub(super) fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8], stage: &'stati
         Error::Malformed
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_response_budget_accepts_valid_json_at_the_limit() {
+        let mut bytes = vec![b' '; 64 * 1024];
+        bytes[..2].copy_from_slice(b"{}");
+        let body = ureq::Body::builder().data(bytes);
+        assert_eq!(
+            read::<serde_json::Value>(body, "test response").unwrap(),
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn the_response_budget_rejects_valid_json_over_the_limit() {
+        let mut bytes = vec![b' '; 64 * 1024 + 1];
+        bytes[..2].copy_from_slice(b"{}");
+        let body = ureq::Body::builder().reader(std::io::Cursor::new(bytes));
+        assert!(matches!(
+            read::<serde_json::Value>(body, "test response"),
+            Err(Error::Malformed)
+        ));
+    }
+}
