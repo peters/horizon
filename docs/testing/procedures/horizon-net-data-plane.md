@@ -67,6 +67,11 @@ Record each test resource in a private resource ledger.
 
    Result: A target change between authorization and registration rejects the previous TCP port.
 
+4. Examine `caller_addresses_cannot_introduce_an_unconfigured_relay`.
+
+   Result: Probe, update and forwarding calls reject the extra relay. No connection reaches that relay.
+   Bytes still pass through the configured relay.
+
 ### 6.2 NET-STATE — Persistent revocation
 
 1. Examine the revocation, expiry and key rotation test results.
@@ -88,6 +93,15 @@ Record each test resource in a private resource ledger.
 5. Examine `withdrawn_persistent_identity_starts_denied_and_reenrolls_only_by_new_authority_update`.
 
    Result: An agent restarts with its withdrawn identity and denies probes and service access. The original enrollment file cannot restore membership. Only a newer authenticated authority update can restore the same identity. A changed local key cannot reuse the old state directory.
+
+6. Examine the persistent public controller tests.
+
+   Result: Applied changes and revocations survive restart. Failed writes preserve policy and existing sessions.
+   Controller clones retain exclusive writer ownership until all owners end.
+
+7. Examine the edited enrollment test.
+
+   Result: A higher enrollment revision cannot replace a committed withdrawal. The committed snapshot remains authoritative.
 
 ### 6.3 NET-TLS — Operator relay on TCP port 443
 

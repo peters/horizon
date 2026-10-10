@@ -76,7 +76,7 @@ impl Store {
             authority_key: config.authority_key.clone(),
             node_key,
         };
-        let mut latest = config.topology.clone();
+        let mut latest: Option<Topology> = None;
         for entry in fs::read_dir(&store.directory)? {
             let entry = entry?;
             let path = entry.path();
@@ -97,16 +97,22 @@ impl Store {
                         "persisted authority or network does not match configuration".into(),
                     ));
                 }
-                if snapshot.topology.revision > latest.revision {
-                    latest = snapshot.topology;
-                } else if snapshot.topology.revision == latest.revision && snapshot.topology != latest {
-                    return Err(Error::InvalidConfiguration(
-                        "conflicting persisted topology revision".into(),
-                    ));
+                match &latest {
+                    Some(previous) if snapshot.topology.revision < previous.revision => {}
+                    Some(previous) if snapshot.topology.revision == previous.revision => {
+                        if snapshot.topology != *previous {
+                            return Err(Error::InvalidConfiguration(
+                                "conflicting persisted topology revision".into(),
+                            ));
+                        }
+                    }
+                    _ => latest = Some(snapshot.topology),
                 }
             }
         }
-        config.topology = latest;
+        if let Some(latest) = latest {
+            config.topology = latest;
+        }
         store.persist(&config.topology)?;
         Ok(store)
     }
@@ -249,6 +255,7 @@ mod tests {
         let mut initial = config();
         let store = Store::open(directory.clone(), &mut initial)?;
         let controller = crate::Controller::new(initial.topology.clone())?;
+        controller.bind_store(store.clone())?;
         let mut proposed = initial.topology.clone();
         proposed.revision = 1;
         for index in 0..7_000 {
@@ -262,10 +269,7 @@ mod tests {
         }
         proposed.validate()?;
         let plan = controller.plan(proposed)?;
-        assert!(matches!(
-            controller.apply_persisted(&plan, |topology| store.persist(topology)),
-            Err(Error::MessageTooLarge)
-        ));
+        assert!(matches!(controller.apply(&plan), Err(Error::MessageTooLarge)));
         assert_eq!(controller.topology(), initial.topology);
         assert!(!directory.join("00000000000000000001.json").exists());
         assert_eq!(
@@ -273,9 +277,34 @@ mod tests {
             2,
             "only initial revision and its ownership lock"
         );
+        drop(controller);
         drop(store);
         let _restored = Store::open(directory, &mut initial)?;
         assert_eq!(initial.topology.revision, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn higher_edited_enrollment_cannot_override_committed_withdrawal() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let directory = temporary.path().join("state");
+        let mut initial = config();
+        let store = Store::open(directory.clone(), &mut initial)?;
+        let mut withdrawn = initial.topology.clone();
+        withdrawn.revision = 1;
+        withdrawn.nodes.clear();
+        store.persist(&withdrawn)?;
+        drop(store);
+        let mut edited = config();
+        edited.topology.revision = 999;
+        let restored = Store::open(directory.clone(), &mut edited)?;
+        assert_eq!(edited.topology, withdrawn);
+        assert!(!directory.join("00000000000000000999.json").exists());
+        drop(restored);
+        let mut edited = config();
+        edited.topology.revision = 1;
+        let _restored = Store::open(directory, &mut edited)?;
+        assert_eq!(edited.topology, withdrawn);
         Ok(())
     }
 

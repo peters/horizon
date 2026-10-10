@@ -9,9 +9,11 @@ use serde::Serialize;
 
 use crate::{
     ApplyOutcome, AuthorizedService, Change, ChangeKind, Error, GrantStatus, NodeStatus, Plan, Result, Status,
-    Topology, model::parse_key,
+    Topology, model::parse_key, store::Store,
 };
 
+/// Clones share policy and retain the persistent state's exclusive writer lock.
+/// Drop all owners before reopening the same agent state directory.
 #[derive(Clone)]
 pub struct Controller {
     state: Arc<Mutex<State>>,
@@ -19,6 +21,7 @@ pub struct Controller {
 
 struct State {
     topology: Topology,
+    store: Option<Store>,
     sessions: BTreeMap<u64, Session>,
     next_session: u64,
     reachable: BTreeMap<EndpointId, Instant>,
@@ -42,11 +45,23 @@ impl Controller {
         Ok(Self {
             state: Arc::new(Mutex::new(State {
                 topology,
+                store: None,
                 sessions: BTreeMap::new(),
                 next_session: 0,
                 reachable: BTreeMap::new(),
             })),
         })
+    }
+
+    pub(crate) fn bind_store(&self, store: Store) -> Result<()> {
+        let mut state = self.lock();
+        if state.store.is_some() {
+            return Err(Error::InvalidConfiguration(
+                "controller already owns persistent state".into(),
+            ));
+        }
+        state.store = Some(store);
+        Ok(())
     }
 
     #[must_use]
@@ -61,16 +76,8 @@ impl Controller {
     }
 
     /// # Errors
-    /// Returns an error if the plan is invalid, modified or stale.
+    /// Returns an error if the plan is invalid, modified or stale, or persistence fails.
     pub fn apply(&self, plan: &Plan) -> Result<ApplyOutcome> {
-        self.apply_persisted(plan, |_| Ok(()))
-    }
-
-    pub(crate) fn apply_persisted(
-        &self,
-        plan: &Plan,
-        persist: impl FnOnce(&Topology) -> Result<()>,
-    ) -> Result<ApplyOutcome> {
         let mut state = self.lock();
         if make_plan(plan.base.clone(), plan.proposed.clone())? != *plan {
             return Err(Error::StalePlan);
@@ -85,7 +92,9 @@ impl Controller {
         if state.topology != plan.base {
             return Err(Error::StalePlan);
         }
-        persist(&plan.proposed)?;
+        if let Some(store) = &state.store {
+            store.persist(&plan.proposed)?;
+        }
         state.topology.clone_from(&plan.proposed);
         let closed_sessions = close_invalid(&mut state);
         Ok(ApplyOutcome {
@@ -96,7 +105,7 @@ impl Controller {
     }
 
     /// # Errors
-    /// Returns an error if the revision counter is exhausted.
+    /// Returns an error if the revision counter is exhausted or persistence fails.
     pub fn revoke(&self, grant_id: &str) -> Result<bool> {
         let mut state = self.lock();
         if !state.topology.grants.contains_key(grant_id) {
@@ -107,8 +116,13 @@ impl Controller {
             .revision
             .checked_add(1)
             .ok_or_else(|| Error::InvalidTopology("revision counter exhausted".into()))?;
-        state.topology.grants.remove(grant_id);
-        state.topology.revision = revision;
+        let mut proposed = state.topology.clone();
+        proposed.grants.remove(grant_id);
+        proposed.revision = revision;
+        if let Some(store) = &state.store {
+            store.persist(&proposed)?;
+        }
+        state.topology = proposed;
         close_invalid(&mut state);
         Ok(true)
     }

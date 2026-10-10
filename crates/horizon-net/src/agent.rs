@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -52,6 +53,7 @@ impl std::fmt::Debug for AgentConfig {
 pub struct Agent {
     endpoint: Endpoint,
     controller: Controller,
+    relays: Arc<BTreeSet<iroh::RelayUrl>>,
     accept_task: Mutex<Option<JoinHandle<()>>>,
     expiry_task: Mutex<Option<JoinHandle<()>>>,
     forward_tasks: Mutex<Vec<JoinHandle<()>>>,
@@ -91,6 +93,9 @@ impl Agent {
                 "controller topology differs from config".into(),
             ));
         }
+        if let Some(store) = &store {
+            controller.bind_store(store.clone())?;
+        }
         let secret: iroh::SecretKey = config
             .secret_key
             .parse()
@@ -110,6 +115,7 @@ impl Agent {
             None => return Err(Error::InvalidConfiguration("local node missing".into())),
         }
         let relays = validate_relays(&config.relay_urls)?;
+        let configured_relays = Arc::new(relays.iter().cloned().collect());
         let mut builder = iroh::endpoint::Builder::empty()
             .preset(iroh::endpoint::presets::Minimal)
             .secret_key(secret)
@@ -158,6 +164,7 @@ impl Agent {
         Ok(Self {
             endpoint,
             controller,
+            relays: configured_relays,
             accept_task: Mutex::new(Some(accept_task)),
             expiry_task: Mutex::new(Some(expiry_task)),
             forward_tasks: Mutex::new(Vec::new()),
@@ -194,7 +201,7 @@ impl Agent {
         }
         let key = destination.id;
         let result = async {
-            let connection = dial(&self.endpoint, destination).await?;
+            let connection = dial(&self.endpoint, destination, &self.relays).await?;
             let (mut send, mut recv) = connection.open_bi().await.map_err(transport)?;
             wire::write(
                 &mut send,
@@ -239,7 +246,7 @@ impl Agent {
     /// Returns an error for invalid policy, unavailable transport or rejected authority.
     pub async fn push_topology(&self, destination: EndpointAddr, topology: Topology) -> Result<()> {
         topology.validate()?;
-        let connection = dial(&self.endpoint, destination).await?;
+        let connection = dial(&self.endpoint, destination, &self.relays).await?;
         let request = Request::Update { topology };
         let result = tokio::time::timeout(DEADLINE, async {
             let (mut send, mut recv) = connection.open_bi().await.map_err(transport)?;
@@ -272,10 +279,12 @@ impl Agent {
         {
             return Err(Error::Denied);
         }
+        validate_destination(&destination, &self.relays)?;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
         let address = listener.local_addr()?;
         let endpoint = self.endpoint.clone();
         let controller = self.controller.clone();
+        let relays = self.relays.clone();
         let task = tokio::spawn(async move {
             let mut tasks = JoinSet::new();
             let permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
@@ -288,9 +297,10 @@ impl Agent {
                         let controller = controller.clone();
                         let destination = destination.clone();
                         let service = service.clone();
+                        let relays = relays.clone();
                         tasks.spawn(async move {
                             let _permit = permit;
-                            let _ = outbound(endpoint, controller, destination, service, socket).await;
+                            let _ = outbound(endpoint, controller, destination, service, socket, relays).await;
                         });
                     }
                     Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
@@ -411,12 +421,11 @@ async fn serve(
         }
         Request::Update { topology } => {
             let accepted = peer == authority
-                && store.is_some_and(|store| {
-                    controller
-                        .plan(topology)
-                        .and_then(|plan| controller.apply_persisted(&plan, |topology| store.persist(topology)))
-                        .is_ok()
-                });
+                && store.is_some()
+                && controller
+                    .plan(topology)
+                    .and_then(|plan| controller.apply(&plan))
+                    .is_ok();
             respond(&mut send, accepted, true).await?;
             Ok(())
         }
@@ -461,9 +470,10 @@ async fn outbound(
     destination: EndpointAddr,
     service: String,
     socket: TcpStream,
+    relays: Arc<BTreeSet<iroh::RelayUrl>>,
 ) -> Result<()> {
     let authorized = controller.authorize(&endpoint.id().to_string(), &service)?;
-    let connection = dial(&endpoint, destination.clone()).await?;
+    let connection = dial(&endpoint, destination.clone(), &relays).await?;
     let id = controller.register(
         endpoint.id(),
         destination.id,
@@ -547,7 +557,19 @@ async fn reject(send: &mut iroh::endpoint::SendStream) -> Result<()> {
     Err(Error::Denied)
 }
 
-async fn dial(endpoint: &Endpoint, destination: EndpointAddr) -> Result<Connection> {
+fn validate_destination(destination: &EndpointAddr, relays: &BTreeSet<iroh::RelayUrl>) -> Result<()> {
+    for address in &destination.addrs {
+        match address {
+            iroh::TransportAddr::Relay(relay) if relays.contains(relay) => {}
+            iroh::TransportAddr::Ip(_) => {}
+            _ => return Err(Error::Denied),
+        }
+    }
+    Ok(())
+}
+
+async fn dial(endpoint: &Endpoint, destination: EndpointAddr, relays: &BTreeSet<iroh::RelayUrl>) -> Result<Connection> {
+    validate_destination(&destination, relays)?;
     tokio::time::timeout(DEADLINE, endpoint.connect(destination, wire::ALPN))
         .await
         .map_err(|_| Error::Timeout)?

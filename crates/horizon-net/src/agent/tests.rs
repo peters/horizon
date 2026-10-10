@@ -5,6 +5,8 @@ use iroh::{RelayMode, endpoint::presets::Minimal};
 use super::*;
 use crate::{Grant, Node, SecretKey, Service, controller::unix_now};
 
+mod relay_policy;
+
 #[tokio::test]
 async fn untrusted_wire_requests_cannot_reach_undeclared_services() -> Result<()> {
     tokio::time::timeout(Duration::from_secs(10), denied_scenario())
@@ -168,6 +170,7 @@ async fn withdrawn_restart() -> Result<()> {
         .await?
     );
     agent.shutdown().await;
+    drop(agent);
     let restarted = Agent::bind_with_store(config.clone(), directory.path().join("worker")).await?;
     restarted.online().await?;
     assert_eq!(restarted.controller().topology(), removed);
@@ -214,6 +217,7 @@ async fn withdrawn_restart() -> Result<()> {
     );
     assert!(request_accepted(&authority, restarted.addr(), Request::Update { topology: rotated }).await?);
     restarted.shutdown().await;
+    drop(restarted);
     assert!(
         Agent::bind_with_store(config, directory.path().join("worker"))
             .await

@@ -85,6 +85,13 @@ shares its trusted local controller and denies remote topology updates. For a
 remote agent, use `Agent::bind_persistent(config_path)` or
 `Agent::bind_with_store(config, state_directory)`.
 
+The controller returned by a persistent agent writes every successful `apply`
+and `revoke` before changing live policy. Its clones share the state writer;
+drop all controller and agent owners before reopening that state directory.
+A failed write leaves policy and existing sessions unchanged. Once a committed
+snapshot exists, editing the enrollment file cannot override its topology,
+even with a higher revision.
+
 Only the configured authority key can call `Agent::push_topology`. The receiver
 commits state and closes invalid sockets before it acknowledges the update.
 An unreachable receiver cannot acknowledge revocation; its existing absolute
@@ -106,6 +113,11 @@ listener binds loopback. UDP address discovery and public metrics are disabled.
 Run `horizon-net relay-config --config relay.json` to print this TOML. Install
 and operate upstream `iroh-relay` separately. Port 443 can require an operator
 service or platform binding capability; workspace agents remain unprivileged.
+
+Destination addresses passed to `probe`, `push_topology` or `forward` can name
+only configured relays. An unconfigured relay fails before transport or a
+forwarding listener starts. Direct IP addresses remain available when IP
+transports are enabled; `relay_only` removes those transports entirely.
 
 The relay allowlist limits infrastructure use. The endpoint grants enforce
 workspace access. The relay holds no workspace topology or decryption key.

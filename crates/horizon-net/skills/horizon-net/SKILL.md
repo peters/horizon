@@ -22,7 +22,11 @@ for local, provider and cleanup evidence.
    finite expiry. A caller cannot choose a different backend address or port.
 6. Keep the embedding application's `Forwarder` alive for its listener lifetime.
    A revoked grant closes existing connections and denies new connections.
-7. Treat reachability and remote acknowledgement as separate evidence. A saved
+7. Use only configured relays in destination endpoint addresses. An additional
+   relay fails before a connection or forwarding listener starts.
+8. Keep all persistent controller owners until their work ends. Drop the agent
+   and its controller clones before reopening the same state directory.
+9. Treat reachability and remote acknowledgement as separate evidence. A saved
    topology does not prove that a remote endpoint accepted it.
 
 `horizon-net relay-config --config relay.json` prints upstream relay TOML. It

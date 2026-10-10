@@ -139,6 +139,7 @@ async fn scenario(termination: Termination) -> Result<(), Error> {
     authority.close().await;
     worker.close().await;
     mac.close().await;
+    drop(mac_controller);
     let (mac, controller) = bind_agent(&mac_key, "mac", &topology, &relay_url, state.path()).await?;
     assert_eq!(controller.topology().revision, 1);
     assert!(

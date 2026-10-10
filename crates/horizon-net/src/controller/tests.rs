@@ -83,3 +83,5 @@ async fn changed_target_between_authorization_and_registration_is_denied() -> Re
     destination.close().await;
     Ok(())
 }
+
+mod persistence;
