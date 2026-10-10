@@ -66,6 +66,8 @@ IDENTITY = {'id', 'name', 'nameWithOwner', 'url', 'resourcePath', 'owner', 'isPr
 # Entries that can reach any object by its ID.
 BY_ID = {'node', 'nodes'}
 MAX_IDS = 100
+# Digits of a number literal; GitHub's own numbers are far shorter.
+MAX_NUMBER = 64
 REQUEST_KEYS = {'query', 'variables', 'operationName'}
 REPOSITORY = re.compile(r'[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}')
 # Search qualifiers that GitHub joins to repo: with OR.
@@ -150,31 +152,44 @@ class Walk:
         self.markers = (alias(document, 'hzr'), alias(document, 'hzn'), alias(document, 'hzt'))
         self.kinds = set()
 
-    def value(self, node, defaults):
-        """The JSON value of an argument: a literal, or a variable's value or default."""
+    def value(self, node, declared):
+        """The JSON value of an argument: a literal, or a declared variable's value or default.
+        `declared` gives each variable's type and default (None without one)."""
         kind, raw = node
         if kind == 'variable':
+            if raw not in declared:
+                raise Refused('the GraphQL request uses $%s, which the operation does not declare.' % raw)
             if raw in self.variables:
                 return self.variables[raw]
-            if raw not in defaults:
-                raise Refused('the GraphQL request uses $%s, which the operation does not declare.' % raw)
-            default = defaults[raw]
-            return None if default is None else self.value(default, defaults)
+            reference, default = declared[raw]
+            if default is None and reference.endswith('!'):
+                raise Refused('the GraphQL request gives no value for $%s, which needs one.' % raw)
+            return None if default is None else self.value(default, declared)
         if kind == 'list':
-            return [self.value(item, defaults) for item in raw]
+            return [self.value(item, declared) for item in raw]
         if kind == 'object':
-            return {name: self.value(item, defaults) for name, item in raw.items()}
-        if kind == 'int':
-            return int(raw)
-        if kind == 'float':
-            return float(raw)
+            return {name: self.value(item, declared) for name, item in raw.items()}
+        if kind in ('int', 'float'):
+            try:
+                if len(raw) > MAX_NUMBER:
+                    raise ValueError(raw)
+                return int(raw) if kind == 'int' else float(raw)
+            except ValueError:
+                raise Refused('the GraphQL request has a number that the worker does not read.') from None
         return raw
+
+    def directives(self, directives, declared):
+        """Only @include and @skip, whose condition is checked like any other value."""
+        for name, arguments in directives:
+            if name not in ('include', 'skip') or set(arguments) != {'if'}:
+                raise Refused('the GraphQL directive @%s is not allowed on this worker.' % name)
+            self.value(arguments['if'], declared)
 
     def need(self, repository, access):
         if not self.allowed(repository, access):
             raise Refused(NO_GRANT % repository)
 
-    def root(self, field, mutation, defaults):
+    def root(self, field, mutation, declared):
         if mutation:
             if field.name not in MUTATIONS:
                 raise Refused('the GraphQL mutation %s is not allowed on this worker.' % field.name)
@@ -182,19 +197,19 @@ class Walk:
             for name, node in field.arguments.items():
                 if name not in types:
                     raise Refused('the GraphQL mutation %s has no argument %s.' % (field.name, name))
-                self.collect_ids(types[name], self.value(node, defaults))
+                self.collect_ids(types[name], self.value(node, declared))
             return
         if field.name not in ROOTS:
             raise Refused('the GraphQL field %s is not allowed on this worker.' % field.name)
         if field.name == 'repository':
-            owner = self.value(field.arguments.get('owner', ('null', None)), defaults)
-            name = self.value(field.arguments.get('name', ('null', None)), defaults)
+            owner = self.value(field.arguments.get('owner', ('null', None)), declared)
+            name = self.value(field.arguments.get('name', ('null', None)), declared)
             if not isinstance(owner, str) or not isinstance(name, str) \
                     or not REPOSITORY.fullmatch(owner + '/' + name):
                 raise Refused('the GraphQL repository field needs an owner and a name.')
             self.need(owner + '/' + name, 'read')
         elif field.name == 'search':
-            for repository in search_repositories(self.value(field.arguments.get('query', ('null', None)), defaults)):
+            for repository in search_repositories(self.value(field.arguments.get('query', ('null', None)), declared)):
                 self.need(repository, 'read')
 
     def collect_ids(self, reference, value):
@@ -228,7 +243,7 @@ class Walk:
         return all(name == 'Repository' or name in OWNERS_BY_ID or self.bearing(name)
                    for name in self.schema.possible.get(condition, ()))
 
-    def selection_set(self, selection_set, parent, defaults, top=None, by_id=False, named=False):
+    def selection_set(self, selection_set, parent, declared, top=None, by_id=False, named=False):
         """Returns the names of the fields that the selection set and its fragments select.
         `parent` is the type of the selection set. `top` is the operation's root type for the
         operation's own selection set and the fragments in it. A selection set `by_id` can hold
@@ -248,20 +263,24 @@ class Walk:
         for selection in selection_set.selections:
             if isinstance(selection, graphql.Field):
                 names.add(selection.name)
-                self.field(selection, parent, restricted, defaults, top)
+                self.field(selection, parent, restricted, declared, top)
             elif isinstance(selection, graphql.InlineFragment):
+                self.directives(selection.directives, declared)
                 self.by_id(by_id, selection.condition or parent)
-                names |= self.fragment_set(selection.condition or parent, selection.selection_set, defaults,
+                names |= self.fragment_set(selection.condition or parent, selection.selection_set, declared,
                                            top, named)
             else:
+                self.directives(selection.directives, declared)
                 fragment = self.document.fragments.get(selection.name)
                 if fragment is None:
                     raise Refused('the GraphQL fragment %s is not defined.' % selection.name)
+                if fragment.directives:
+                    raise Refused('a GraphQL fragment definition on this worker has no directives.')
                 self.by_id(by_id, fragment.condition)
                 if fragment.name in self.stack:
                     raise Refused('the GraphQL fragment %s spreads itself.' % fragment.name)
                 self.stack.append(fragment.name)
-                names |= self.fragment_set(fragment.condition, fragment.selection_set, defaults, top, named)
+                names |= self.fragment_set(fragment.condition, fragment.selection_set, declared, top, named)
                 self.stack.pop()
         if by_id:
             self.insert(selection_set, '%s: __typename' % self.markers[2])
@@ -276,16 +295,17 @@ class Walk:
             raise Refused('a GraphQL node on this worker is read only as a repository, a thing in one, '
                           'or the plain fields of a user, bot, team or organization; %s is not one.' % condition)
 
-    def fragment_set(self, condition, selection_set, defaults, top, named):
+    def fragment_set(self, condition, selection_set, declared, top, named):
         if self.schema.kinds.get(condition) not in ('OBJECT', 'INTERFACE', 'UNION'):
             raise Refused('the GraphQL fragment is on %s, which is not an object type.' % condition)
         # A fragment in the operation's own selection set selects root fields, which get the
         # same checks as the fields next to it.
         if top is not None and condition != top:
             raise Refused('a GraphQL fragment at the top of the operation is on %s, not %s.' % (condition, top))
-        return self.selection_set(selection_set, condition, defaults, top=top, named=named)
+        return self.selection_set(selection_set, condition, declared, top=top, named=named)
 
-    def field(self, field, parent, restricted, defaults, top):
+    def field(self, field, parent, restricted, declared, top):
+        self.directives(field.directives, declared)
         found = self.schema.field(parent, field.name)
         if found is None:
             raise Refused('the GraphQL type %s has no field %s.' % (parent, field.name))
@@ -293,7 +313,7 @@ class Walk:
         if named == self.schema.query and top is None:
             raise Refused('the GraphQL field %s.%s is not allowed on this worker.' % (parent, field.name))
         if top is not None:
-            self.root(field, top == self.schema.mutation, defaults)
+            self.root(field, top == self.schema.mutation, declared)
         if self.schema.leaf(named):
             return
         if restricted and not self.schema.possible.get(named, set()) <= OWNERS:
@@ -301,7 +321,7 @@ class Walk:
                           'users, organizations, teams, projects and topics can be read.' % (parent, field.name))
         if field.selection_set is None:
             raise Refused('the GraphQL field %s.%s needs a selection.' % (parent, field.name))
-        self.selection_set(field.selection_set, named, defaults, by_id=top is not None and field.name in BY_ID,
+        self.selection_set(field.selection_set, named, declared, by_id=top is not None and field.name in BY_ID,
                            named=(parent, field.name) in NAMED_REPOSITORIES)
 
     def bearing(self, name):
@@ -363,9 +383,11 @@ def plan(schema, body, allowed):
     top = schema.mutation if mutation else schema.query
     if top is None:
         raise Refused('GitHub\'s schema has no mutations.')
-    defaults = {variable: default for variable, (_, default) in operation.variables.items()}
+    if operation.directives:
+        raise Refused('a GraphQL operation on this worker has no directives.')
+    declared = operation.variables
     walk = Walk(schema, document, variables, allowed)
-    walk.selection_set(operation.selection_set, top, defaults, top=top)
+    walk.selection_set(operation.selection_set, top, declared, top=top)
     for fragment in document.fragments.values():
         if fragment.selection_set.end not in walk.used:
             raise Refused('the GraphQL fragment %s is not used.' % fragment.name)

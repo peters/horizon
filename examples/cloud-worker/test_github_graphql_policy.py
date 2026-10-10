@@ -274,6 +274,18 @@ class QueryTests(unittest.TestCase):
                 ({'query': '{ viewer { ...F } } fragment F on User { ...G } fragment G on User { ...F }'},
                  'spreads itself'),
                 ({'query': '{ repository(owner: "example", name: $n) { name } }'}, 'does not declare'),
+                ({'query': '{ repository(owner: $o, name: "library") { name } }', 'variables': {'o': 'example'}},
+                 'does not declare'),
+                ({'query': 'query($o: String!) { repository(owner: $o, name: "library") { name } }'}, 'needs one'),
+                ({'query': 'mutation { addComment(input: {subjectId: "I_1", body: "b", clientMutationId: %s}) '
+                           '{ clientMutationId } }' % ('9' * 5000)}, 'number'),
+                ({'query': '{ viewer @include(if: $flag) { login } }'}, 'does not declare'),
+                ({'query': '{ viewer @deprecated { login } }'}, '@deprecated'),
+                ({'query': '{ viewer { ...on User @skip(if: $flag) { login } } }'}, 'does not declare'),
+                ({'query': '{ viewer { ...F @include(if: $flag) } } fragment F on User { login }'}, 'does not declare'),
+                ({'query': '{ viewer { ...F } } fragment F on User @include(if: true) { login }'}, 'definition'),
+                ({'query': 'query Q @include(if: true) { viewer { login } }'}, 'operation on this worker'),
+                ({'query': 'query($a: Int @x) { viewer { login } }'}, 'directive on'),
                 ({'query': '{ viewer { nope } }'}, 'has no field nope'),
                 ({'query': '{ repository(owner: "example", name: "library") { pullRequest(number: 1) } }'},
                  'needs a selection')]:
@@ -285,6 +297,12 @@ class QueryTests(unittest.TestCase):
         for marker in sent.markers:
             self.assertNotIn(marker, graphql.parse('{ repository(owner: "example", name: "library") { name } }').names)
         self.assertEqual(len(set(sent.markers)), 3)
+
+    def test_conditions_and_defaults_are_read_like_other_values(self):
+        plan('query($flag: Boolean!) { viewer @include(if: $flag) { login } }', {'flag': True})
+        plan('query($n: String = "library") { repository(owner: "example", name: $n) { name } }')
+        with self.assertRaisesRegex(policy.Refused, 'example/secret'):
+            plan('query($n: String = "secret") { repository(owner: "example", name: $n) { name } }')
 
     def test_introspection_is_allowed(self):
         plan('{ __type(name: "PullRequest") { fields(includeDeprecated: true) { name } } }')

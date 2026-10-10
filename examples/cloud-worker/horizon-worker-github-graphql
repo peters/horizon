@@ -202,7 +202,8 @@ class Parser:
                 self.take('punct', ':')
                 kind_text = self.type_reference()
                 default = self.value(constant=True) if self.skip('=') else None
-                self.directives()
+                if self.directives():
+                    raise Invalid('the GraphQL document has a directive on $%s' % variable)
                 variables[variable] = (kind_text, default)
         return Operation(kind, name, variables, self.directives(), self.selection_set())
 
