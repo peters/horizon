@@ -200,6 +200,7 @@ class RestTests(BrokerTestCase):
                 ('GET', '/repos/example/project/branches/main/protection', 403, 'stay with the person'),
                 ('GET', '/repositories/111/collaborators', 403, 'stay with the person'),
                 ('GET', '/repos/example/project/%61ctions/%76ariables', 403, 'stay with the person'),
+                ('GET', '/repos/example/project/actions\\variables', 400, 'backslash'),
                 ('GET', '/repos/example/project/%68ooks', 403, 'stay with the person'),
                 ('PUT', '/repos/example/project/%61ctions/secrets/X', 403, 'only pull requests'),
                 ('GET', '/repos/example/project/forks', 403, 'stay with the person'),

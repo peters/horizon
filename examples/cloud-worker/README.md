@@ -1066,8 +1066,9 @@ given out. While a refreshed chain waits for its write, every request gets a
 refusal with `"state":"unstored"`. `horizon-worker-git-auth get` and the `gh`
 wrapper ask the socket first. The Git helper falls back to the static file only
 when no service answers; while the service answers, the proxy adds the token
-itself. The `gh` wrapper falls back to the static file also when the service holds
-no chain (`"state":"absent"`). The `gh` wrapper still
+itself. The `gh` wrapper does the same: while the service answers, also without a
+chain (`"state":"absent"`), `gh` gets the placeholder and the API broker serves the
+static binding. The `gh` wrapper still
 chooses the repository as described above. When the service refuses the
 repository, the wrapper removes the `GH_TOKEN` that an outer wrapped `gh`
 injected, but keeps every token variable that you set yourself. Without one, it

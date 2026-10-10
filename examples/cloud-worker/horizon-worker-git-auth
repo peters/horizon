@@ -512,9 +512,10 @@ def service_credential(request, ask=call_service):
     return None if reply is None else ''
 
 
-def service_environment(env, argv, ask=ask_service):
+def service_environment(env, argv, ask=call_service):
     """gh's environment with the chain service's token for the targeted repository, or None
-    without a chain. A refusal drops a token that an outer wrapped gh injected, and gives gh the
+    when no service answers. Without a chain the service still routes gh to its API broker,
+    which serves the static binding, so gh never gets the static token there. A refusal drops a token that an outer wrapped gh injected, and gives gh the
     placeholder unless the caller set a token, so the API broker answers with its reason."""
     reply = ask({'request': 'gh-token', 'repository': gh_repository(env, list(argv)) or ''})
     if reply is None:

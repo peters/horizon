@@ -102,6 +102,8 @@ def split(target):
         raise Refused(400, 'the request path has an empty or dot segment.')
     if re.search(r'%(?:2[fF]|5[cC]|00)', path):
         raise Refused(400, 'the request path has an encoded slash or NUL.')
+    if '\\' in path:
+        raise Refused(400, 'the request path has a backslash.')
     return path, query
 
 

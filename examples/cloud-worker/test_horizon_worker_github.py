@@ -526,6 +526,12 @@ class SocketTests(ServiceTestCase):
                                           'XDG_CONFIG_HOME': '/tmp/xdg', 'HOME': '/tmp/home'}, ['pr', 'list'])
         for value in (env, nested, own, moved):
             self.assertEqual(value['GH_CONFIG_DIR'], '/workspace/home/.config/gh')
+        # A service without a chain still routes gh to the broker: gh gets the placeholder, never
+        # the static token.
+        absent = auth.service_environment({'GH_REPO': 'example/bound'}, ['pr', 'list'],
+                                          ask=lambda request: {'ok': False, 'state': 'absent'})
+        self.assertEqual(absent['GH_TOKEN'], common.PLACEHOLDER)
+        self.assertIsNone(auth.service_environment({}, ['pr', 'list'], ask=lambda request: None))
 
 
 class SupervisionContractTests(unittest.TestCase):
