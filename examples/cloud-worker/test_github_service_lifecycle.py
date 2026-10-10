@@ -101,11 +101,14 @@ class StartTests(ServiceTestCase):
         isolation = self.root / 'agent-isolation'
         isolation.touch()
         with mock.patch.object(common, 'AGENT_ISOLATION', isolation):
-            server, git_proxy = service.start(self.store, path, sleep=waits.append, proxy=proxy,
-                                              authority=self.root / 'ca.pem')
+            server, git_proxy, api_server = service.start(self.store, path, sleep=waits.append, proxy=proxy,
+                                                          authority=self.root / 'ca.pem')
         self.addCleanup(server.close)
         self.addCleanup(git_proxy.close)
+        self.addCleanup(api_server.close)
         self.assertTrue(path.exists())
+        api = path.with_name('github-api.sock')
+        self.assertEqual(api.stat().st_mode & 0o777, 0o666, 'any account connects; peer credentials decide')
         self.assertEqual(git_proxy.server.getsockname()[0], '127.0.0.1')
         self.assertIn('BEGIN CERTIFICATE', (self.root / 'ca.pem').read_text())
         self.assertEqual(sorted(path.name for path in self.store.runtime.iterdir() if 'proxy' in path.name),
@@ -142,10 +145,12 @@ class StartTests(ServiceTestCase):
         isolated = self.root / 'isolated'
         isolated.touch()
         with mock.patch.object(common, 'AGENT_ISOLATION', isolated):
-            server, git_proxy = service.start(self.store, socket_path, sleep=lambda _: None, prepare=prepare,
-                                              proxy=address, authority=self.root / 'ca.pem')
+            server, git_proxy, api_server = service.start(self.store, socket_path, sleep=lambda _: None,
+                                                          prepare=prepare, proxy=address,
+                                                          authority=self.root / 'ca.pem')
         self.addCleanup(server.close)
         self.addCleanup(git_proxy.close)
+        self.addCleanup(api_server.close)
         self.assertEqual(len(answers), 1)
         self.assertTrue(answers[0].startswith(b'HTTP/1.1 403'), answers)
 
@@ -490,10 +495,12 @@ class VolumeCopyTests(ServiceTestCase):
         isolated = self.root / 'isolated'
         isolated.touch()
         with mock.patch.object(common, 'AGENT_ISOLATION', isolated):
-            server, git_proxy = service.start(self.store, socket_path, sleep=lambda _: None, prepare=prepare,
-                                              proxy=('127.0.0.1', 0), authority=self.root / 'ca.pem')
+            server, git_proxy, api_server = service.start(self.store, socket_path, sleep=lambda _: None,
+                                                          prepare=prepare, proxy=('127.0.0.1', 0),
+                                                          authority=self.root / 'ca.pem')
         self.addCleanup(server.close)
         self.addCleanup(git_proxy.close)
+        self.addCleanup(api_server.close)
         self.assertEqual(seen, [False], 'reconciled once, before the socket existed')
         self.assertTrue(socket_path.exists())
 
@@ -512,6 +519,7 @@ class VolumeCopyTests(ServiceTestCase):
                                    authority=self.root / 'ca.pem')
         self.assertIsNone(server, 'the service ends and the supervisor retires it')
         self.assertFalse(socket_path.exists())
+        self.assertFalse(socket_path.with_name('github-api.sock').exists(), 'gh is never sent to a closed broker')
         # Every attempt released the proxy's port again.
         service.gitproxy.listen(proxy).close()
 

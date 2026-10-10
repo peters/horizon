@@ -250,15 +250,18 @@ try:
         # enough: the supervisor must declare that it starts it, and the image must isolate
         # agents (the launcher's identity is checked below), because both refuse to run without
         # agent isolation.
-        # The service imports its common, agents, Git proxy and HTTP helpers, and these the Git
-        # helper, from the service's own directory before it parses any operation.
+        # The service imports its common, agents, Git proxy, HTTP and API broker helpers (with the
+        # broker's REST and GraphQL policies), and these the Git helper, from the service's own
+        # directory before it parses any operation.
         service = shutil.which('horizon-worker-github')
         beside = Path(service).resolve() if service else None
         # The Git helper is also run from there, so it must be executable. The Git proxy makes
         # its certificate authority with openssl at each start.
         if (beside and all(beside.with_name(helper).is_file()
                            for helper in ('horizon-worker-github-common', 'horizon-worker-github-agents',
-                                          'horizon-worker-github-git', 'horizon-worker-github-http'))
+                                          'horizon-worker-github-git', 'horizon-worker-github-http',
+                                          'horizon-worker-github-api', 'horizon-worker-github-api-rest',
+                                          'horizon-worker-github-graphql', 'horizon-worker-github-graphql-policy'))
                 and os.access(beside.with_name('horizon-worker-git-auth'), os.X_OK)
                 and shutil.which('openssl')
                 and shutil.which('horizon-worker-tailnet') and helper_declares(

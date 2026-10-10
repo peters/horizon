@@ -20,6 +20,11 @@ SERVICE_TIMEOUT = 10
 # authority that the service makes for it, and only for github.com.
 PROXY_PORT = 47281
 PROXY_AUTHORITY = '/run/horizon-worker/github-ca.pem'
+# The service's API broker. While the service runs, gh sends every request to this socket
+# (`http_unix_socket`) and holds only a placeholder token; the broker adds the token to the
+# requests that a grant covers.
+API_SOCKET = '/run/horizon-worker/github-api.sock'
+GH = '/usr/bin/gh'
 GITHUB = 'https://github.com/'
 ROUTE = (('http.' + GITHUB + '.proxy', 'http://127.0.0.1:%d' % PROXY_PORT),
          ('http.' + GITHUB + '.sslCAInfo', PROXY_AUTHORITY))
@@ -267,6 +272,23 @@ def route(env, proxy):
         raise
     if included is None:
         git(env, 'config', '--global', '--add', 'include.path', str(path))
+
+
+def gh_config(env, *args):
+    """gh's own configuration command, for the configuration under HOME that agents' gh reads."""
+    env = {key: value for key, value in env.items() if key not in ('GH_CONFIG_DIR', 'XDG_CONFIG_HOME')}
+    return subprocess.run([GH, 'config', *args], env=env, check=True, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=30).stdout.strip()
+
+
+def route_gh(env, broker):
+    """Sends gh's requests to the service's API broker, or stops doing so. Only the value this
+    helper writes is removed."""
+    current = gh_config(env, 'get', 'http_unix_socket')
+    if broker and current != API_SOCKET:
+        gh_config(env, 'set', 'http_unix_socket', API_SOCKET)
+    elif not broker and current == API_SOCKET:
+        gh_config(env, 'set', 'http_unix_socket', '')
 
 
 IDENTITY_FIELDS = FIELDS - {'token'}
@@ -540,9 +562,10 @@ def main():
     elif operation == 'clear':
         CREDENTIAL.unlink(missing_ok=True)
     elif operation in ('route', 'unroute'):
-        # The service routes Git through its proxy once it listens; the worker's start and the
-        # end of the service route Git to github.com directly again.
+        # The service routes Git through its proxy and gh through its broker once they listen;
+        # the worker's start and the end of the service route both to GitHub directly again.
         route(dict(os.environ, HOME=HOME), proxy=operation == 'route')
+        route_gh(dict(os.environ, HOME=HOME), broker=operation == 'route')
     elif operation == 'get':
         request = sys.stdin.read(8192)
         reply = service_credential(request)

@@ -309,6 +309,10 @@ def handle(connection, store, book, report=None):
         repository = None
     else:
         reply, repository = answer(request, store, book, now, lambda: identify_session(pid))
+        # An agent's gh gets the placeholder: it reaches GitHub through the API broker, which
+        # adds the token itself, so no agent process holds one.
+        if uid != ROOT_UID and 'token' in reply:
+            reply = dict(reply, token=common.PLACEHOLDER)
     kind = request.get('request') if isinstance(request, dict) else None
     with contextlib.suppress(OSError):
         log_request(store.runtime, {'at': int(now), 'uid': uid, 'pid': pid,

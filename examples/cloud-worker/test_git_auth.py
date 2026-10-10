@@ -288,6 +288,22 @@ class GitGrantTests(unittest.TestCase):
                                         capture_output=True).returncode, 1)
         auth.route(self.env, False)
 
+    @unittest.skipUnless(Path(auth.GH).exists(), 'needs gh')
+    def test_the_route_points_gh_at_the_broker_and_removes_only_its_own_value(self):
+        # The agents' gh reads its configuration under HOME, whatever the caller's variables say.
+        env = dict(self.env, GH_CONFIG_DIR=str(self.path / 'elsewhere'), XDG_CONFIG_HOME=str(self.path / 'xdg'))
+        auth.route_gh(env, True)
+        auth.route_gh(env, True)
+        config = self.path / 'home/.config/gh/config.yml'
+        self.assertIn('http_unix_socket: ' + auth.API_SOCKET, config.read_text())
+        self.assertFalse((self.path / 'elsewhere').exists())
+        auth.route_gh(env, False)
+        self.assertEqual(auth.gh_config(env, 'get', 'http_unix_socket'), '')
+        auth.gh_config(env, 'set', 'http_unix_socket', str(self.path / 'own.sock'))
+        auth.route_gh(env, False)
+        self.assertEqual(auth.gh_config(env, 'get', 'http_unix_socket'), str(self.path / 'own.sock'),
+                         'a socket the agent chose stays')
+
     def test_version_1_binding_still_installs_for_the_primary(self):
         primary = self.bare(auth.GIT_DIR)
         legacy = {key: self.primary[key] for key in auth.FIELDS}
