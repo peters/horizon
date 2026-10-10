@@ -477,9 +477,10 @@ start. The log of the worker container in the RunPod console shows the cause:
 Quick start has these limits:
 
 - Quick start is only for a commit without `.horizon/cloud.yml`. If the commit has
-  this file, **New cloud** reads the committed settings instead, and
-  `cloud_deploy --quick-start` stops with an error. An uncommitted file does not
-  count.
+  this file, **New cloud** reads the committed settings instead and says so under
+  **Profile**: `Quick start does not apply: this commit has its own
+  .horizon/cloud.yml, so its profiles are used.` `cloud_deploy --quick-start` stops
+  with an error. An uncommitted file does not count.
 - **Rebuild image & restart** builds nothing for a quick start cloud. It restarts the
   worker on the base image that this Horizon version pins. See
   [Rebuilding a cloud's image](#rebuilding-a-clouds-image).
