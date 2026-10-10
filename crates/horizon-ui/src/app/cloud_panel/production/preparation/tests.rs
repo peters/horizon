@@ -97,3 +97,52 @@ fn a_refused_reconnect_after_a_resume_is_still_that_resume() {
     assert!(runtime.error.as_deref().unwrap_or_default().contains("settings.json"));
     assert_eq!(runtime.operation, Some(super::lifecycle::Action::Resume));
 }
+
+#[test]
+fn a_record_a_dropped_preparation_left_deploys_again_after_a_session_switch() {
+    let (temp, mut app, mut record) = stopped_cloud();
+    let ctx = egui::Context::default();
+    let session = app
+        .session_store
+        .create_session_from_runtime(horizon_core::RuntimeState::default())
+        .unwrap();
+    app.activate_persistent_session(&session);
+    app.cloud_prototype.groups.0[0]
+        .remote
+        .as_mut()
+        .unwrap()
+        .deployment_started = false;
+    // What a preparation leaves for a cloud that never started, when a session switch
+    // dropped it before its report.
+    record["stage"] = "Validate".into();
+    record["operation"] = serde_json::json!({"state": "prepared"});
+    std::fs::create_dir_all(temp.path().join("fixture")).unwrap();
+    std::fs::write(temp.path().join("fixture/deployment.json"), record.to_string()).unwrap();
+    let state: super::cloud_runtime::state::Deployment = serde_json::from_value(record).unwrap();
+    assert!(!super::Runtime::reconnects_on_restore(&state));
+    // The restore builds the runtime from the record.
+    app.cloud_prototype.production.runtimes.insert(
+        1,
+        super::Runtime {
+            stage: Some(state.stage),
+            state: Some(state),
+            ..Default::default()
+        },
+    );
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(
+        !runtime.busy() && runtime.preparation.is_none() && runtime.receiver.is_none(),
+        "the cloud is not left preparing"
+    );
+
+    app.start_production_deployment(1, &ctx);
+    assert!(
+        app.cloud_prototype.production.runtimes[&1].preparation.is_some(),
+        "Deploy prepares again"
+    );
+    app.finish_cloud_preparations(&ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    let error = runtime.error.as_deref().unwrap_or_default();
+    assert!(error.contains("settings.json"), "{error}");
+    assert!(!runtime.busy());
+}
