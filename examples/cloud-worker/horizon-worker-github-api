@@ -45,6 +45,8 @@ ALLOWED_UIDS = (0, 10001)
 PLACEHOLDER = common.PLACEHOLDER
 CONNECTIONS = 32
 HEAD_SECONDS = 30
+# How long another account's connection is kept after its refusal.
+REFUSED_SECONDS = 1
 TIMEOUT = 300
 MAX_GRAPHQL_REQUEST = 1 << 20
 MAX_GRAPHQL_REPLY = 64 << 20
@@ -240,17 +242,12 @@ class Exchange:
         self.broker, self.stream, self.output, self.record = broker, stream, output, record
         # Called once the request head is read: the client then has its time per read.
         self.headed = headed
-        # Whether the caller's account may use the broker.
-        self.permitted = True
         self.request = None
         self.started = False
 
     def run(self):
         request = self.request = relay.read_request(self.stream)
         self.headed()
-        # Read first, so the client gets the refusal instead of a reset connection.
-        if not self.permitted:
-            raise refusal(403, 'this account may not use the GitHub access of this worker.')
         host = (request.field('host') or '').lower()
         try:
             route = rest.route(request.method, host, request.target)
@@ -386,9 +383,19 @@ def handle(connection, broker, allowed=ALLOWED_UIDS):
         connection.settimeout(TIMEOUT)
         pid, uid = agents.peer(connection)
         with connection.makefile('rb') as stream, connection.makefile('wb') as output:
-            exchange = Exchange(broker, stream, output, record, watchdog.cancel)
+            # Another account gets its refusal before the broker waits for a byte, so it can
+            # never hold a slot that an agent's gh needs.
             if uid not in allowed:
-                exchange.permitted = False
+                record['outcome'] = 'refused'
+                with contextlib.suppress(OSError):
+                    refuse(output, 403, PREFIX + 'this account may not use the GitHub access of this worker.')
+                    # A short read of what the client sent meanwhile, so the close does not reset
+                    # the connection before the client reads the refusal.
+                    connection.shutdown(socket.SHUT_WR)
+                    connection.settimeout(REFUSED_SECONDS)
+                    connection.recv(65536)
+                return
+            exchange = Exchange(broker, stream, output, record, watchdog.cancel)
             try:
                 exchange.run()
             except relay.Refusal as refused:

@@ -294,6 +294,11 @@ class RestTests(BrokerTestCase):
         status, _, payload = self.send('GET', '/repos/example/project')
         self.assertEqual(status, 403)
         self.assertIn('this account may not use', json.loads(payload)['message'])
+        # The refusal comes before the broker waits for a byte, so the account holds no slot.
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(5)
+            client.connect(str(self.socket))
+            self.assertTrue(client.recv(65536).startswith(b'HTTP/1.1 403'))
         self.allowed[:] = [os.getuid()]
         service.clear(self.store, retire=lambda: None)
         status, _, payload = self.send('GET', '/repos/example/project')
