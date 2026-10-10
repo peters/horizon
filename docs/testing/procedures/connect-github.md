@@ -362,7 +362,7 @@ this task and G11 use.
 
    Result: The list shows without a sign-in.
 
-### 6.11 G11 — Install the app on an organization
+### 6.11 G11: Install the app on an organization
 
 1. On GitHub, open the settings of the second test app, then **Advanced**.
 
