@@ -85,16 +85,29 @@ impl HorizonApp {
     }
 
     /// Shows or hides the panel once its manifest, audit and result say so.
-    fn finish_visibility_request(&mut self, request: &BrowserVisibilityRequest, published: bool) {
-        let in_flight = &mut self.browser_create_host.visibility_in_flight;
-        if let Some(index) = in_flight
+    /// The board as it is now decides where the panel is; the next stamp writes
+    /// that placement, including a move made while the request ran.
+    fn finish_visibility_request(&mut self, request: &BrowserVisibilityRequest, published: Option<bool>) {
+        let host = &mut self.browser_create_host;
+        if let Some(index) = host
+            .visibility_in_flight
             .iter()
             .position(|local_id| *local_id == request.panel_local_id)
         {
-            in_flight.remove(index);
+            host.visibility_in_flight.remove(index);
         }
-        if !published {
-            return;
+        host.forget_stamped_placement();
+        match published {
+            Some(true) => {}
+            Some(false) => return,
+            None => {
+                self.fail_visibility(
+                    request,
+                    "manifest_update_failed",
+                    "browser panel visibility could not be updated",
+                );
+                return;
+            }
         }
         let Some(panel_id) = self.board.panel_id_by_local_id(&request.panel_local_id) else {
             return;

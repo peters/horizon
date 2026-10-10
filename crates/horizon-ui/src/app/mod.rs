@@ -370,6 +370,8 @@ impl HorizonApp {
             ctx.request_repaint_after(delay);
         }
         self.exit_on_close_request(ctx);
+        // Also while the board is torn down, so every claimed request is answered.
+        self.apply_browser_host_io();
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);

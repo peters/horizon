@@ -12,7 +12,20 @@ use super::browser_requests::{actor_panel, fail_create, launched_by_this_host};
 /// Why a request whose agent left the board since its claim is refused.
 pub(super) const AGENT_GONE: &str = "the requesting agent's panel closed before Horizon could apply the request";
 
+/// The refusal of a request that reaches the board while Horizon exits or
+/// switches sessions.
+pub(super) const HOST_RETIRING: (&str, &str) = (
+    "host_shutdown",
+    "Horizon is exiting or switching sessions; the request was not applied",
+);
+
 impl HorizonApp {
+    /// Whether the board is being torn down, for an exit or a session switch:
+    /// no request applies to it any more.
+    pub(super) fn browser_host_retiring(&self) -> bool {
+        self.shutdown_progress.is_some() || self.pending_session_switch.is_some()
+    }
+
     /// Claims the create, visibility and close requests of the agents on this
     /// board on the coordination worker; a later frame applies them. One
     /// claim runs at a time, so a slow disk never queues one per tick.
@@ -34,9 +47,28 @@ impl HorizonApp {
     }
 
     /// Starts what each claimed request asks for. An agent that left the
-    /// board since its request was claimed gets a typed refusal.
-    fn apply_claimed_requests(&mut self, claimed: ClaimedRequests) {
+    /// board since its request was claimed gets a typed refusal, and so does
+    /// every request while Horizon exits or switches sessions.
+    fn apply_claimed_requests(&mut self, claimed: Option<ClaimedRequests>) {
         self.browser_create_host.claiming = false;
+        let Some(claimed) = claimed else { return };
+        if self.browser_host_retiring() {
+            for request in &claimed.creates {
+                fail_create(
+                    &mut self.browser_create_host.io,
+                    request,
+                    HOST_RETIRING.0,
+                    HOST_RETIRING.1,
+                );
+            }
+            for request in &claimed.visibility {
+                self.fail_visibility(request, HOST_RETIRING.0, HOST_RETIRING.1);
+            }
+            for request in &claimed.closes {
+                self.fail_close(request, HOST_RETIRING.0, HOST_RETIRING.1);
+            }
+            return;
+        }
         for request in claimed.creates {
             match actor_panel(&self.board, &request.actor) {
                 Some(actor_panel) => self.start_requested_browser(request, actor_panel),

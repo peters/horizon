@@ -64,20 +64,21 @@ impl HostIo {
     /// Does `work` after every job asked for before it; nothing waits for it.
     pub(super) fn write(&mut self, work: impl FnOnce() + Send + 'static) {
         self.submit(Box::new(move || {
-            work();
+            let _ = settle(work);
             None
         }));
     }
 
     /// Does `work` after every job asked for before it, then `apply` on the UI
-    /// thread with its outcome.
+    /// thread with its outcome, or with `None` when `work` panicked, so the UI
+    /// always learns that the work ended.
     pub(super) fn then<T: Send + 'static>(
         &mut self,
         work: impl FnOnce() -> T + Send + 'static,
-        apply: impl FnOnce(&mut HorizonApp, T) + Send + 'static,
+        apply: impl FnOnce(&mut HorizonApp, Option<T>) + Send + 'static,
     ) {
         self.submit(Box::new(move || {
-            let outcome = work();
+            let outcome = settle(work);
             Some(Box::new(move |app: &mut HorizonApp| apply(app, outcome)) as Then)
         }));
     }
@@ -147,6 +148,14 @@ impl HostIo {
     fn take_finished(&self) -> Vec<Then> {
         self.finished.try_iter().collect()
     }
+}
+
+/// Runs `work`, keeping a panic inside it, so one failed job never ends the
+/// worker or the jobs queued after it.
+fn settle<T>(work: impl FnOnce() -> T) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+        .inspect_err(|_| tracing::error!("a browser coordination job panicked"))
+        .ok()
 }
 
 impl HorizonApp {
@@ -225,6 +234,15 @@ mod tests {
         assert!(io.busy());
         release.send(()).unwrap();
         wait_idle(&io);
+    }
+
+    #[test]
+    fn a_job_that_panics_still_reports_and_the_worker_goes_on() {
+        let mut io = HostIo::default();
+        io.then(|| -> u8 { panic!("a fixture job fails") }, |_, _| {});
+        io.then(|| 7_u8, |_, _| {});
+        wait_idle(&io);
+        assert_eq!(io.take_finished().len(), 2, "both outcomes reach the UI");
     }
 
     #[test]

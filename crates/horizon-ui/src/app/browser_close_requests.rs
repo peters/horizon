@@ -9,7 +9,7 @@ use horizon_core::browser::manifest::{self, BrowserCloseAuditStatus, BrowserClos
 use horizon_core::{PanelId, PanelKind};
 
 use super::HorizonApp;
-use super::browser_request_claims::AGENT_GONE;
+use super::browser_request_claims::{AGENT_GONE, HOST_RETIRING};
 use super::browser_requests::{ActorPanel, actor_panel};
 
 /// Why a claimed close request is refused, as the typed result code and its
@@ -170,10 +170,11 @@ impl HorizonApp {
                 }
                 dispatched.is_ok()
             },
-            move |app, dispatched| {
-                if dispatched {
-                    app.close_dispatched_browser_panel(request);
-                }
+            move |app, dispatched| match dispatched {
+                Some(true) => app.close_dispatched_browser_panel(request),
+                Some(false) => {}
+                // The audit's outcome is unknown; nothing closes without it.
+                None => app.fail_close(&request, "audit_failed", "Horizon refused an unaudited close"),
             },
         );
     }
@@ -181,6 +182,10 @@ impl HorizonApp {
     /// Closes the panel of an audited close, decided again on the board as it
     /// is now.
     fn close_dispatched_browser_panel(&mut self, request: BrowserCloseRequest) {
+        if self.browser_host_retiring() {
+            self.fail_close(&request, HOST_RETIRING.0, HOST_RETIRING.1);
+            return;
+        }
         let target = actor_panel(&self.board, &request.actor)
             .ok_or(refusal("workspace_unavailable", AGENT_GONE))
             .and_then(|actor_panel| {
@@ -475,7 +480,6 @@ mod tests {
             "ownership_changed"
         );
         app.mark_browser_create_pending_for_tests(PendingBrowserCreateProbe {
-            panel_id: browser_id,
             panel_local_id: browser_local_id.clone(),
         });
         assert_eq!(

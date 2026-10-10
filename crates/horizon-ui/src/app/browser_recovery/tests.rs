@@ -241,13 +241,16 @@ fn moving_then_bulk_closing_refreshes_the_remote_allocation_scope() {
             .is_some()
     };
 
-    app.board.assign_panel_to_workspace(panel_id, destination);
-    // Hold the coordination worker, as a disk that does not answer would: the
-    // close never waits for the stamp of the move.
+    // Hold the coordination worker, as a disk that does not answer would,
+    // with the tick's stamp of the old placement still to run: the close
+    // never waits for the stamp of the move.
     let (release, released) = std::sync::mpsc::channel::<()>();
     app.browser_create_host.io.write(move || {
         let _ = released.recv();
     });
+    app.browser_create_host.forget_stamped_placement();
+    assert!(app.restamp_browser_manifests_for_placement());
+    app.board.assign_panel_to_workspace(panel_id, destination);
     app.close_workspace_panels(destination);
     assert!(app.board.panel(panel_id).is_none());
     let stale = manifest::read_at(&path).expect("a retirement snapshot before the stamp lands");
