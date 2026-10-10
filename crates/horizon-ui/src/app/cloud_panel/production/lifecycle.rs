@@ -569,7 +569,7 @@ fn removable(
     let store = cloud_runtime::state::cloud_directory(root, &launch.id).and_then(|path| Store::lock(&path))?;
     let allowed = match store.load()? {
         Some(state) => cloud_runtime::lifecycle::can_remove(&store, &state)?,
-        None => !launch.deployment_started,
+        None => !launch.deployment_started && cloud_runtime::lifecycle::can_remove_without_deployment(&store)?,
     };
     Ok((store, allowed))
 }

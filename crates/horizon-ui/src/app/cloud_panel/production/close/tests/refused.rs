@@ -16,12 +16,13 @@ fn unrequested_cloud(app: &mut HorizonApp, root: &std::path::Path) -> std::path:
     path
 }
 
-#[cfg(unix)]
+/// What the dialog of cloud 101 offers now, as it renders it.
 fn current_offer(app: &HorizonApp) -> offer::Offer {
     let close = &app.cloud_prototype.production.close;
+    let launch = app.cloud_prototype.groups.0[0].remote.as_ref().unwrap();
     offer::offer(
         &app.cloud_prototype.production.runtimes[&101],
-        true,
+        launch.deployment_started,
         close.records.get(&101).unwrap_or(&offer::Record::Holds),
         close.failed.get(&101),
     )
@@ -123,7 +124,7 @@ fn a_discarded_cloud_leaves_no_close_behind() {
 }
 
 #[test]
-fn a_busy_cloud_removed_anyway_forgets_the_failure() {
+fn an_operation_started_while_the_dialog_was_open_keeps_it_open() {
     let (temp, mut app) = test_app();
     let (_panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
     let close = &mut app.cloud_prototype.production.close;
@@ -133,8 +134,15 @@ fn a_busy_cloud_removed_anyway_forgets_the_failure() {
         .insert(101, Failure::new("Could not delete the cloud resources", true, None));
     app.remove_cloud_anyway(101, &egui::Context::default());
     assert_eq!(app.cloud_prototype.groups.0.len(), 1);
-    assert!(!app.cloud_close_confirmation_open());
-    assert!(app.cloud_prototype.production.close.failed.is_empty());
+    assert!(app.cloud_close_confirmation_open(), "the dialog shows the operation");
+    assert_eq!(
+        current_offer(&app),
+        offer::Offer {
+            primary: None,
+            remove_anyway: false,
+            reason: Some(offer::BUSY.into()),
+        }
+    );
 }
 
 #[test]
@@ -197,4 +205,27 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     drop(other);
     app.remove_cloud_anyway(101, &ctx);
     assert!(app.cloud_prototype.groups.0.is_empty());
+}
+
+#[test]
+#[cfg(unix)] // Durable cloud records require Unix directory durability.
+fn a_storage_journal_without_its_deployment_offers_the_deletion() {
+    let (temp, mut app) = test_app();
+    let path = temp.path().join("fixture");
+    drop(Store::lock(&path).unwrap());
+    std::fs::write(path.join("workspace-volume.required"), "").unwrap();
+    add_cloud(&mut app, temp.path(), None);
+    app.request_cloud_close(101);
+    assert_eq!(
+        current_offer(&app),
+        offer::Offer {
+            primary: Some(Primary::Delete),
+            remove_anyway: false,
+            reason: None,
+        },
+        "the dialog must not claim nothing is at the provider"
+    );
+
+    app.remove_for_close(101, &egui::Context::default());
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1, "the storage may remain");
 }

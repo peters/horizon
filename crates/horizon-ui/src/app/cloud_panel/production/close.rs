@@ -167,11 +167,9 @@ impl HorizonApp {
 
     /// Removes cloud `id` from Horizon after its deletion failed or could not run,
     /// leaving whatever its provider still holds.
+    /// An operation that started while the dialog was open keeps it open, which then shows
+    /// the operation.
     fn remove_cloud_anyway(&mut self, id: u32, ctx: &egui::Context) {
-        self.end_close_confirmation(id);
-        let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
-            return;
-        };
         if self
             .cloud_prototype
             .production
@@ -181,6 +179,10 @@ impl HorizonApp {
         {
             return;
         }
+        self.end_close_confirmation(id);
+        let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
+            return;
+        };
         // Held until the cloud is discarded. Only another controller's operation stops the
         // removal: a record that cannot be locked otherwise is no operation under way.
         let _record = match self.lock_cloud_record(id) {

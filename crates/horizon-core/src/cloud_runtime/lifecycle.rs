@@ -60,6 +60,19 @@ pub fn can_remove(store: &Store, state: &Deployment) -> Result<bool> {
     Ok(!super::providers::retained(store, state)?)
 }
 
+/// Whether a cloud whose record holds no deployment may be removed. A provider journal
+/// left without its deployment may still name resources at the provider.
+/// # Errors
+/// The record directory cannot be read.
+pub fn can_remove_without_deployment(store: &Store) -> Result<bool> {
+    for file in ["hetzner.json", "workspace-volume.json", "workspace-volume.required"] {
+        if store.root().join(file).try_exists()? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// # Errors
 /// Checks only the recorded operation. A provider-confirmed worker hint cannot reset its fence.
 /// Image builds, source preparation and agent credentials are not needed for recovery.
