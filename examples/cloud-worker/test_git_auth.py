@@ -205,6 +205,21 @@ class GitAuthenticationTests(unittest.TestCase):
         self.assertFalse(auth.CREDENTIAL.exists())
         self.assertEqual(linked.stat().st_size, 0)
 
+    def test_a_broken_root_file_gives_way_to_the_earlier_binding_when_an_install_fails(self):
+        auth.write_private(self.value, auth.CREDENTIAL)
+        root_file = self.path / 'root/static-binding.json'
+        root_file.parent.mkdir(mode=0o700)
+        root_file.write_text('not json')
+
+        def agent(operation, value):
+            raise subprocess.CalledProcessError(1, operation)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()), \
+                self.assertRaises(subprocess.CalledProcessError):
+            auth.install_as_root(dict(self.value, token='synthetic-new-token'), agent)
+        self.assertEqual(json.loads(root_file.read_text())['token'], self.value['token'])
+
     def test_a_failed_install_keeps_the_earlier_binding_where_only_root_reads_it(self):
         auth.write_private(self.value, auth.CREDENTIAL)
         root_file = self.path / 'root/static-binding.json'

@@ -168,9 +168,8 @@ def identity_path():
     return CREDENTIAL.with_name('github-identity.json')
 
 
-def read_private(path, owner=None):
-    """The JSON of a private regular file that `owner` (this account by default) owns, or None
-    without one."""
+def read_private(path):
+    """The JSON of a private regular file that this account owns, or None without one."""
     try:
         # Nonblocking: the Git proxy reads it as root, and a FIFO must not stop it.
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
@@ -179,7 +178,7 @@ def read_private(path, owner=None):
     with os.fdopen(fd, 'rb') as source:
         status = os.fstat(source.fileno())
         if not stat.S_ISREG(status.st_mode) or status.st_mode & 0o077 or status.st_size > MAX_BYTES \
-                or status.st_uid != (os.geteuid() if owner is None else owner):
+                or status.st_uid != os.geteuid():
             raise ValueError('Git credential file must be private')
         data = source.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
@@ -273,39 +272,44 @@ def install_identities(value, previous=None):
     write_private(value, identity_path())
 
 
-def empty_earlier():
-    """Empties the agents' own token file of an earlier image in place, with its hard links."""
-    with contextlib.suppress(OSError), open(os.open(CREDENTIAL, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-                                                    | os.O_CLOEXEC), 'wb', closefd=True) as legacy:
-        found = os.fstat(legacy.fileno())
-        if stat.S_ISREG(found.st_mode) and found.st_uid == AGENT_UID:
-            legacy.truncate(0)
+def take_earlier():
+    """The binding in an earlier image's token file in the agents' directory, or None, read and
+    emptied through one descriptor (with its hard links); a file that cannot be emptied raises."""
+    try:
+        fd = os.open(CREDENTIAL, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None  # None there, a directory, or a link (the agent's own copy, which removal takes).
+    with os.fdopen(fd, 'r+b') as legacy:
+        found = os.fstat(fd)
+        if not stat.S_ISREG(found.st_mode) or found.st_uid != AGENT_UID:
+            return None
+        data = legacy.read(MAX_BYTES + 1)
+        legacy.truncate(0)
+    with contextlib.suppress(ValueError, RecursionError, UnicodeDecodeError):
+        value = parse(data.decode())
+        return value if stripped(value) else None
+    return None
 
 
 def install_as_root(value, agent=None):
-    """Under agent isolation the agent keeps the identities and root the token. An earlier
-    image's token file is emptied in place (with its hard links) and removed first."""
+    """Under agent isolation the agent keeps the identities and root the token (take_earlier)."""
     grants(value)
-    earlier = previous = None
-    with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
-        found = read_private(CREDENTIAL, owner=AGENT_UID)
-        earlier, previous = found, stripped(found)
-    empty_earlier()
-    # Any failure but a directory there stops the install before the agent step.
-    with contextlib.suppress(IsADirectoryError):
+    earlier = take_earlier()
+    with contextlib.suppress(IsADirectoryError):  # Any other failure stops the install here.
         CREDENTIAL.unlink(missing_ok=True)
     agent = agent or (lambda operation, data: subprocess.run(
         [*AGENT_RUNNER, operation], input=json.dumps(data).encode(), check=True, cwd='/workspace',
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120))
-    kept = None
+    root = None
     with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
-        kept = read_private(ROOT_CREDENTIAL) or earlier
+        root = read_private(ROOT_CREDENTIAL)
+    kept = root if root is not None else earlier
     try:
-        agent('install-identity', {'binding': stripped(value), 'previous': previous})
+        agent('install-identity', {'binding': stripped(value), 'previous': earlier and stripped(earlier)})
         write_private(value, ROOT_CREDENTIAL)
     except BaseException:
         # Back to one binding (root-only, else earlier), also after a partial agent step.
-        if kept is not None and kept is earlier and not ROOT_CREDENTIAL.exists():
+        if root is None and earlier is not None:
             with contextlib.suppress(ValueError, OSError):
                 write_private(earlier, ROOT_CREDENTIAL)
         try:
@@ -322,7 +326,7 @@ def clear():
     with contextlib.suppress(PermissionError):
         ROOT_CREDENTIAL.unlink(missing_ok=True)
     if root_holds_token():
-        empty_earlier()
+        take_earlier()
     for path in (CREDENTIAL, identity_path()):
         with contextlib.suppress(IsADirectoryError, PermissionError):
             path.unlink(missing_ok=True)
@@ -358,10 +362,8 @@ def configure(version, entries, previous):
 
 
 def route(env, proxy):
-    """Sends Git's github.com requests through the service's proxy, or stops doing so. The
-    values are in ROUTE_FILE, which the global configuration includes once; removing the route
-    removes only that include and the file. The remote URLs stay github.com URLs, so gh still
-    finds the repository of a checkout."""
+    """Sends Git's github.com requests through the service's proxy, or stops doing so, with the
+    values in ROUTE_FILE that the global configuration includes once. Remote URLs stay as they are."""
     path = Path(env['HOME']) / ROUTE_FILE
     included = git_output(env, 'config', '--global', '--fixed-value', '--get-all', 'include.path', str(path))
     if not proxy:
@@ -495,19 +497,17 @@ def ask_service(request):
 
 
 def service_credential(request, ask=call_service):
-    """'' while the chain service answers: Git then goes through its proxy, which adds the token
-    of the chain or of the static binding itself, so Git gets no credential. None when no
-    service answers; the caller then falls back to the private file."""
+    """'' while the chain service answers (its proxy adds the token itself), else None, and the
+    caller falls back to the private file."""
     fields = dict(line.split('=', 1) for line in request.splitlines() if '=' in line)
     reply = ask({'request': 'credential', **{key: fields.get(key, '') for key in ('protocol', 'host', 'path')}})
     return None if reply is None else ''
 
 
 def service_environment(env, argv, ask=call_service):
-    """gh's environment with the service's answer for the targeted repository, or None when no
-    service answers. Without a chain the broker serves the static binding, so gh never gets the
-    static token. A refusal drops a token that an outer wrapped gh injected, and gives gh the
-    placeholder unless the caller set a token, so the API broker answers with its reason."""
+    """gh's environment for the targeted repository, or None when no service answers. A refusal
+    drops a token that an outer wrapped gh injected and gives gh the placeholder (unless the
+    caller set a token), so the API broker answers with its reason."""
     reply = ask({'request': 'gh-token', 'repository': gh_repository(env, list(argv)) or ''})
     if reply is None:
         return None
