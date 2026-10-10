@@ -214,7 +214,8 @@ impl Fence {
 
 /// Saves the record until a save holds every change, then releases its lock. The lock is
 /// released before the flight says it is done, so a reader that sees it done can lock. A
-/// failed save is shown and tried again until it succeeds.
+/// failed save is shown and tried again until it succeeds, unless the cloud's folder is
+/// gone: no session can be recorded there, and what reads the record next finds it missing.
 fn save(store: Store, directory: &Path, flight: &Arc<Mutex<Flight>>, repaint: Option<egui::Context>) {
     let mut retry = FIRST_RETRY;
     loop {
@@ -224,25 +225,16 @@ fn save(store: Store, directory: &Path, flight: &Arc<Mutex<Flight>>, repaint: Op
         };
         match store.save(&record) {
             Ok(()) => {
-                let mut held = flight.lock().unwrap_or_else(PoisonError::into_inner);
-                if held.generation == generation {
-                    drop(store);
-                    held.done = true;
-                    drop(held);
-                    let mut flights = FLIGHTS.lock().unwrap_or_else(PoisonError::into_inner);
-                    if flights
-                        .get(directory)
-                        .is_some_and(|running| Arc::ptr_eq(running, flight))
-                    {
-                        flights.remove(directory);
-                    }
-                    drop(flights);
-                    // The cloud is no longer busy.
-                    if let Some(ctx) = repaint {
-                        ctx.request_repaint();
-                    }
+                let current = flight.lock().unwrap_or_else(PoisonError::into_inner).generation == generation;
+                if current {
+                    land(store, directory, flight, repaint);
                     return;
                 }
+            }
+            Err(error) if !directory.exists() => {
+                tracing::warn!(directory = %directory.display(), %error, "a cloud's folder is gone; its sessions are not recorded");
+                land(store, directory, flight, repaint);
+                return;
             }
             Err(error) => {
                 let mut held = flight.lock().unwrap_or_else(PoisonError::into_inner);
@@ -260,6 +252,24 @@ fn save(store: Store, directory: &Path, flight: &Arc<Mutex<Flight>>, repaint: Op
                 retry = (retry * 2).min(LAST_RETRY);
             }
         }
+    }
+}
+
+/// Ends a save: releases the record's lock, then says the save is done and forgets it.
+fn land(store: Store, directory: &Path, flight: &Arc<Mutex<Flight>>, repaint: Option<egui::Context>) {
+    drop(store);
+    flight.lock().unwrap_or_else(PoisonError::into_inner).done = true;
+    let mut flights = FLIGHTS.lock().unwrap_or_else(PoisonError::into_inner);
+    if flights
+        .get(directory)
+        .is_some_and(|running| Arc::ptr_eq(running, flight))
+    {
+        flights.remove(directory);
+    }
+    drop(flights);
+    // The cloud is no longer busy.
+    if let Some(ctx) = repaint {
+        ctx.request_repaint();
     }
 }
 
@@ -394,5 +404,37 @@ mod tests {
             ["first", "second"],
             "the save records the session it held before the switch and the one added after"
         );
+    }
+
+    #[test]
+    fn a_save_whose_cloud_folder_is_gone_ends() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("fixture");
+        let record: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"fixture","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":{"provider":"runpod","image":"example/worker","cpu":4,"memory_gb":8},
+            "stage":"Ready","operation":{"state":"bound","worker_id":"worker"},"spec":null,"sessions":[]
+        }))
+        .unwrap();
+        Store::lock(&directory).unwrap().save(&record).unwrap();
+        let sessions = Sessions::default();
+        set_writable(&directory, false);
+        sessions
+            .with_record(&directory, None, |record| {
+                record.sessions.push(session("first"));
+                ((), true)
+            })
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while sessions.failure().is_none() {
+            assert!(std::time::Instant::now() < deadline, "the save fails");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Something outside Horizon removes the folder while the save waits to retry.
+        set_writable(&directory, true);
+        std::fs::remove_dir_all(&directory).unwrap();
+        fence(&directory).wait();
+        assert!(!sessions.saving(), "the cloud is no longer busy");
+        assert!(!directory.exists(), "the save does not make the folder again");
     }
 }
