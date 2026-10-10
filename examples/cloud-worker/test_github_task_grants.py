@@ -79,6 +79,16 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(tasks.holders(7, self.proc.root), [12])
         self.assertEqual(tasks.holders(9, self.proc.root), [])
 
+    def test_a_request_reads_the_task_grants_once(self):
+        book = mock.Mock()
+        book.read.return_value = {'requests': [], 'task_grants': [grant('example/extra', 'push', (10, 100))]}
+        access = agents.task_access(book, None, [12])
+        with mock.patch.object(tasks, 'PROC', self.proc.root), \
+                mock.patch.object(agents, 'account', return_value=['client', 'login']):
+            for _ in range(3):
+                access('example/extra')
+        self.assertEqual(book.read.call_count, 1)
+
     def test_root_reads_the_holders_as_the_agent_account(self):
         calls = []
 
@@ -276,7 +286,40 @@ class LateEndTests(BrokerTestCase):
         self.assertEqual([item for item in self.api.seen if b'secret' in item[4]], [])
 
 
+    def test_an_account_change_while_a_request_is_read_sends_no_token(self):
+        account = agents.account(self.store.load()[0])
+        with self.book.edit() as data:
+            data['task_grants'] = [grant('example/secret', 'read', tasks.root(os.getpid()), account)]
+        choose = service.broker.choose
+
+        def then_another_account(*args):
+            chosen = choose(*args)
+            self.install(installation(login='someone-else', chain=chain(access='ghu_other')))
+            return chosen
+        with mock.patch.object(service.broker, 'choose', then_another_account):
+            status, _, payload = self.send('GET', '/repos/example/secret/issues')
+        self.assertEqual(status, 403)
+        self.assertEqual(self.api.seen, [])
+
+
 class GitTests(ProxyTestCase):
+    def test_a_socket_that_passes_to_another_session_before_sending_gets_no_token(self):
+        env = self.routed()
+        account = agents.account(self.store.load()[0])
+        with self.book.edit() as data:
+            data['task_grants'] = [grant('example/secret', 'read', tasks.root(os.getpid()), account)]
+        scan = tasks.holders
+        calls = []
+
+        def holders(inode, *args):
+            calls.append(inode)
+            # The first scan finds this session; the scan before sending finds another one.
+            return scan(inode, *args) if len(calls) == 1 else [os.getppid()]
+        with mock.patch.object(tasks, 'holders', holders):
+            result, _ = self.clone('example/secret', env)
+        self.assertIn('any more', result.stderr)
+        self.assertEqual([item for item in self.github.seen if item[2]], [], 'no token reached GitHub')
+
     def test_a_task_that_ends_while_git_is_answered_sends_no_token(self):
         env = self.routed()
         account = agents.account(self.store.load()[0])

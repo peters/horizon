@@ -280,7 +280,8 @@ class Exchange:
         try:
             # Checked again just before the token goes out: a task's session can end while the
             # request is read.
-            if candidate is not None and not all(candidate.allowed(name, route.access) for name in names):
+            fresh = self.fresh(candidate) if candidate is not None else None
+            if candidate is not None and not (fresh and all(fresh.allowed(name, route.access) for name in names)):
                 raise refusal(403, '%s has no GitHub grant on this worker any more. Ask for access with the '
                                    'github_access tool.' % ', '.join(names))
             try:
@@ -336,6 +337,20 @@ class Exchange:
         self.record['outcome'] = 'refused'
         return graphql_refused(self.output, str(refused))
 
+    def fresh(self, candidate, refuse=False):
+        """The same token as `candidate`, with the grants of now: a task's session can end and
+        the worker can change accounts while a request is read. None, or a GraphQL refusal with
+        `refuse`, when that token no longer serves."""
+        same = [item for item in self.broker.candidates(self.pid)
+                if item.token == candidate.token and item.source == candidate.source and item.usable]
+        if not same:
+            if refuse:
+                raise policy.Refused('this worker\'s GitHub access changed while the request was read; try again.')
+            return None
+        # Static bindings can share one token; any of them may serve.
+        return Candidate(candidate.token, lambda repository, access: any(item.allowed(repository, access)
+                                                                       for item in same), candidate.source)
+
     def graphql_with(self, candidate, schema, body, named, granted):
         """(status, checked reply) of a GraphQL request sent with `candidate`. Raises Elsewhere
         when the request may still go with the next candidate: this one reaches none of the
@@ -355,7 +370,7 @@ class Exchange:
         looked = None
         if plan.ids:
             # The ID lookup carries the token too: checked again right before it.
-            policy.plan(schema, body, candidate.allowed)
+            policy.plan(schema, body, self.fresh(candidate, refuse=True).allowed)
             status, looked = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
                                               policy.lookup(schema, plan.ids), sent=granted)
             looked = looked if status == 200 else None
@@ -364,9 +379,10 @@ class Exchange:
             except policy.Refused as error:
                 raise elsewhere(error, policy.lookup_repositories(looked)) from None
         # Checked again just before the request goes out: a task's session can end meanwhile.
-        policy.plan(schema, body, candidate.allowed)
+        fresh = self.fresh(candidate, refuse=True)
+        policy.plan(schema, body, fresh.allowed)
         if plan.ids:
-            policy.check_lookup(looked, plan.ids, candidate.allowed)
+            policy.check_lookup(looked, plan.ids, fresh.allowed)
         features = [('GraphQL-Features', value) for value in self.request.values('graphql-features')]
         status, reply = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
                                          plan.body(body.get('variables') or {}), features, sent=granted)
