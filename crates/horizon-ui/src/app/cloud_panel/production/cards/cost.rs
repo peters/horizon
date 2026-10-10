@@ -36,12 +36,12 @@ pub(super) fn compute_idle(runtime: &Runtime) -> bool {
 /// What is left of a deleted worker: nothing, or its workspace storage while cleanup is
 /// unfinished (the provider confirmed the worker's deletion; the saved stage reads as before).
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Deleted {
+pub(super) enum Deleted {
     Fully,
     StorageLeft,
 }
 
-fn worker_deleted(runtime: &Runtime) -> Option<Deleted> {
+pub(super) fn worker_deleted(runtime: &Runtime) -> Option<Deleted> {
     if runtime.stage == Some(super::super::Stage::Deleted) {
         Some(Deleted::Fully)
     } else {

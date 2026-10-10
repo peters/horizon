@@ -161,6 +161,10 @@ Settings save requires a provider. Do not create or deploy a cloud.
 - No token value appears in any settings file, deployment state, log or UI
   text.
 - On Unix, the stored directory mode is `0700` and the file mode is `0600`.
+  Credential reads must reject access for other users and a different directory owner.
+- The settings regression test must reject a stale or fabricated account status.
+  The existing API-key settings and key file must remain unchanged.
+- The UI regression test must clear cached account status after an uncertain sign-out.
 - On Windows, use the system Windows PowerShell installation. The saved
   directory and each credential file must have a protected discretionary
   access control list (DACL). It must grant full control only to the current

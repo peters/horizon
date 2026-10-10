@@ -58,6 +58,12 @@ impl HorizonHome {
         self.session_dir(session_id).join("runtime.yaml")
     }
 
+    /// The SQLite runtime index of a session, next to its `runtime.yaml`.
+    #[must_use]
+    pub fn session_runtime_index_path(&self, session_id: &str) -> PathBuf {
+        self.session_dir(session_id).join("runtime.sqlite")
+    }
+
     #[must_use]
     pub fn session_lease_path(&self, session_id: &str) -> PathBuf {
         self.session_dir(session_id).join("lease.json")
@@ -167,6 +173,10 @@ mod tests {
         assert_eq!(
             home.session_runtime_path("session-1"),
             PathBuf::from("/tmp/horizon-home/sessions/session-1/runtime.yaml")
+        );
+        assert_eq!(
+            home.session_runtime_index_path("session-1"),
+            PathBuf::from("/tmp/horizon-home/sessions/session-1/runtime.sqlite")
         );
         assert_eq!(
             home.session_transcripts_dir("session-1"),

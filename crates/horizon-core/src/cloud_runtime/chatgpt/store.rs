@@ -256,9 +256,33 @@ fn private_directory(path: &Path) -> Result<()> {
     windows::protect(path)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        if fs::symlink_metadata(path)?.uid() != rustix::process::geteuid().as_raw() {
+            return Err(Error::Invalid("the credential directory must be owned by this user"));
+        }
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
+    verify_directory(path)?;
+    Ok(())
+}
+
+fn verify_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+        {
+            return Err(Error::Invalid(
+                "the credential directory must be private and owned by this user",
+            ));
+        }
+    }
+    #[cfg(windows)]
+    windows::verify(path)?;
     Ok(())
 }
 
@@ -298,8 +322,7 @@ fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
     if !directory_exists(parent)? {
         return Ok(None);
     }
-    #[cfg(windows)]
-    windows::verify(parent)?;
+    verify_directory(parent)?;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -511,6 +534,7 @@ fn read_records(root: &Path) -> Result<Vec<Record>> {
     if !directory_exists(&directory)? {
         return Ok(records);
     }
+    verify_directory(&directory)?;
     let entries = fs::read_dir(directory)?;
     for entry in entries {
         let entry = entry?;
@@ -624,6 +648,79 @@ mod tests {
             usage_confirmed: false,
             saved_at_unix: now_unix(),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_refuses_a_directory_accessible_to_other_users() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        save(root.path(), &test_record("client-a", "account-a")).unwrap();
+        set_active(root.path(), "client-a").unwrap();
+        for mode in [0o710, 0o755, 0o777] {
+            fs::set_permissions(directory(root.path()), fs::Permissions::from_mode(mode)).unwrap();
+            assert!(super::super::status(root.path()).is_err());
+            assert!(connections(root.path()).is_err());
+            assert!(read_private(&file(root.path(), "client-a")).is_err());
+        }
+        fs::set_permissions(directory(root.path()), fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(super::super::status(root.path()).unwrap().unwrap().can_use_plan());
+    }
+
+    #[test]
+    fn settings_save_rechecks_a_stale_or_fabricated_connection_before_clearing_keys() {
+        use crate::cloud_runtime::setup::{Authentication, Draft};
+        for state in ["signed-out", "changed", "missing", "fabricated", "current"] {
+            let root = tempfile::tempdir().unwrap();
+            let mut baseline = Draft::load(root.path()).unwrap();
+            baseline.settings.default_agents = vec![horizon_cloud::Agent::Codex];
+            baseline.openai_auth = Authentication::ApiKey;
+            *baseline.runpod_key = "synthetic-compute-key".into();
+            *baseline.openai_key = "synthetic-api-key".into();
+            baseline.settings.ssh_identity_file = root.path().join("synthetic-identity");
+            let identity = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+            fs::write(identity.path(), "synthetic-private-identity").unwrap();
+            identity.persist(&baseline.settings.ssh_identity_file).unwrap();
+            let saved = baseline.save().unwrap();
+            let settings = fs::read(root.path().join("settings.json")).unwrap();
+            let key_path = saved.openai_api_key_file.unwrap();
+            let key = fs::read(&key_path).unwrap();
+            if state != "fabricated" {
+                save(root.path(), &test_record("client-a", "account-a")).unwrap();
+                set_active(root.path(), "client-a").unwrap();
+            }
+            let mut draft = Draft::load(root.path()).unwrap();
+            draft.openai_auth = Authentication::ChatGpt;
+            draft.chatgpt = Some(Connection::from(test_record("client-a", "account-a")));
+            match state {
+                "signed-out" => clear_tokens(root.path(), "client-a").unwrap(),
+                "changed" => {
+                    save(root.path(), &test_record("client-b", "account-b")).unwrap();
+                    set_active(root.path(), "client-b").unwrap();
+                }
+                "missing" => fs::remove_file(file(root.path(), "client-a")).unwrap(),
+                _ => {}
+            }
+            assert!(draft.validate().is_ok(), "the cached form still looks ready");
+            if state == "current" {
+                assert!(draft.save().unwrap().openai_api_key_file.is_none());
+            } else {
+                assert!(draft.save().is_err(), "{state} must not replace the API-key settings");
+                assert_eq!(fs::read(root.path().join("settings.json")).unwrap(), settings);
+            }
+            assert_eq!(fs::read(&key_path).unwrap(), key);
+        }
+    }
+
+    #[test]
+    fn a_verified_plan_session_keeps_other_session_mutations_locked() {
+        let root = tempfile::tempdir().unwrap();
+        save(root.path(), &test_record("client-a", "account-a")).unwrap();
+        set_active(root.path(), "client-a").unwrap();
+        let guard = super::super::lock_plan(root.path(), Some("client-a")).unwrap();
+        assert!(session_lock(root.path()).is_err());
+        drop(guard);
+        assert!(session_lock(root.path()).is_ok());
     }
 
     #[test]

@@ -5,7 +5,6 @@
 use super::{Deployment, Event, Stage};
 use crate::app::HorizonApp;
 use horizon_core::cloud_panel::{CloudConfig, CloudGroup, CloudLaunch};
-use horizon_core::{CloudWait, Panel, PanelKind, PanelOptions};
 use std::time::{Duration, Instant};
 
 const PREVIEW_ISSUE: u32 = 8_800_002;
@@ -21,9 +20,7 @@ pub(super) fn seed(app: &mut HorizonApp, ctx: &egui::Context) {
 }
 
 fn seed_stopped(app: &mut HorizonApp, delay: Duration, ctx: &egui::Context) -> bool {
-    // A saved session would persist the synthetic cloud. Any cloud already on the board is left alone.
-    if app.active_session.as_ref().is_none_or(|session| session.persistent) || !app.cloud_prototype.groups.0.is_empty()
-    {
+    if !super::preview::accepts(app) {
         return false;
     }
     let Some((launch, ready)) = preview_launch() else {
@@ -33,39 +30,9 @@ fn seed_stopped(app: &mut HorizonApp, delay: Duration, ctx: &egui::Context) -> b
     let Some(workspace_local) = app.board.workspace(workspace).map(|item| item.local_id.clone()) else {
         return false;
     };
-    // The panel is replaced by its placeholder at once; its command only has to exit.
-    let (command, args) = if cfg!(windows) {
-        ("cmd.exe", vec!["/C".to_owned(), "exit".to_owned()])
-    } else {
-        ("/bin/sh", vec!["-c".to_owned(), "exit".to_owned()])
-    };
-    let options = || PanelOptions {
-        name: Some("Claude".into()),
-        kind: PanelKind::Shell,
-        command: Some(command.into()),
-        args: args.clone(),
-        ..PanelOptions::default()
-    };
-    let Ok(id) = app.board.create_panel(options(), workspace) else {
+    let Some(member) = super::preview::waiting_member(app, workspace, "Claude") else {
         return false;
     };
-    let Some(panel) = app.board.panel_mut(id) else {
-        return false;
-    };
-    let member = panel.local_id.clone();
-    let Ok(placeholder) = Panel::cloud_placeholder(
-        id,
-        workspace,
-        PanelOptions {
-            local_id: Some(member.clone()),
-            ..options()
-        },
-        CloudWait::Reconnecting,
-    ) else {
-        return false;
-    };
-    panel.request_shutdown();
-    *panel = placeholder;
     let mut group = CloudGroup::new(
         PREVIEW_ISSUE,
         "Synthetic stopped cloud".into(),

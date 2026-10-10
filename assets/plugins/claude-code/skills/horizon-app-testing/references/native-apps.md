@@ -73,6 +73,15 @@ Keep screenshot, log, video, and audit evidence private. Secure fields are redac
 but other application content can still be sensitive. Screenshots retain the
 latest 32 captures. Audit retains 256 receipts; compare stream UUIDs before reusing
 cursors after a restart. These limits do not replace a durable test report.
+A matrix report has a `blocked` flag for each step and lane. After a host or
+archive failure, the first affected step has the cause. Later steps are blocked
+and send no native input or screenshot request. The host can still get provider
+logs and video if the archive is available. The native viewer shows `BLOCKED`
+for a recipe that cannot start. Normal assertion failures do not stop the lane.
+The CLI publishes one `lane_blocked` progress event with an `error` cause on stderr.
+Keep this stream in the run's private `output.log`. Each private archive permits
+1,024 evidence files within 1 GiB. A limit failure names the limit and stops
+the affected lane. The terminal report keeps its separate 8 MiB reserve.
 Record step results, artifact identity, actual concurrency, live presentation,
 and provider closure separately.
 

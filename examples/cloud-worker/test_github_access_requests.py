@@ -64,10 +64,8 @@ class AccessRequestTests(ServiceTestCase):
         return agents.decide(self.store, self.book, identifier, decision, now=lambda: now,
                              check=check or mock.Mock(return_value=None))
 
-    def token(self, who, repository='example/extra', path=None, now=NOW):
-        request = ({'request': 'credential', 'protocol': 'https', 'host': 'github.com', 'path': path}
-                   if path else {'request': 'gh-token', 'repository': repository})
-        return self.answer(request, now, who)[0]
+    def token(self, who, repository='example/extra', now=NOW):
+        return self.answer({'request': 'gh-token', 'repository': repository}, now, who)[0]
 
     def test_requests_are_validated_and_only_agent_sessions_may_ask(self):
         for repository, access, reason in [('../escape', 'push', 'x'), ('example/extra', 'admin', 'x'),
@@ -135,7 +133,8 @@ class AccessRequestTests(ServiceTestCase):
         for who in (ALPHA, BETA, None):
             reply = self.token(who)
             self.assertEqual((reply['token'], reply['access']), (ACCESS, 'read'), who)
-        self.assertFalse(self.token(ALPHA, path='example/extra.git/git-receive-pack')['ok'], 'read only')
+        with self.assertRaisesRegex(service.gitproxy.relay.Refusal, 'reading only'):
+            service.gitproxy.plan(self.store, 'example/extra', 'push', NOW)
         self.assertEqual(self.answer({'request': 'request-status', 'id': identifier}, NOW, ALPHA)[0]['scope'],
                          'cloud')
 
@@ -329,7 +328,7 @@ class EndToEndTests(ServiceTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_an_agent_asks_the_person_allows_and_git_gets_the_token(self):
+    def test_an_agent_asks_the_person_allows_and_git_gets_through(self):
         def host():
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
@@ -342,16 +341,17 @@ class EndToEndTests(ServiceTestCase):
         decided = []
         thread = threading.Thread(target=host)
         thread.start()
-        request = 'protocol=https\nhost=github.com\npath=example/extra.git\n'
+        plan = service.gitproxy.plan
         with mock.patch.object(agents.time, 'time', return_value=NOW):
-            self.assertEqual(auth.service_credential(request), '')
+            with self.assertRaises(service.gitproxy.relay.Refusal):
+                plan(self.store, 'example/extra', 'push', NOW)
             success, text = agents.call_tool({'repository': 'example/extra', 'access': 'push', 'reason': 'Push the fix'},
                                              poll=.02)
             thread.join()
             self.assertTrue(success, text)
             self.assertIn('this cloud', text)
             self.assertEqual(decided[0]['status'], 'allowed')
-            self.assertEqual(auth.service_credential(request), 'username=x-access-token\npassword=' + ACCESS + '\n\n')
+            self.assertEqual(plan(self.store, 'example/extra', 'push', NOW).token, ACCESS)
         log = [json.loads(line) for line in (self.store.runtime / agents.LOG).read_text().splitlines()]
         self.assertIn('request', [record['request'] for record in log])
         self.assertNotIn(ACCESS, (self.store.runtime / agents.LOG).read_text())

@@ -441,7 +441,7 @@ fn validate(request: &ServerRequest<'_>) -> Result<(), CloudError> {
             "Select at least one Hetzner server type and location",
         ));
     }
-    if !valid_name(request.image) {
+    if !valid_host_image(request.image) {
         return Err(CloudError::Invalid("Invalid Hetzner host image"));
     }
     if request.user_data.is_empty() || request.user_data.len() > USER_DATA_LIMIT {
@@ -465,6 +465,10 @@ fn validate(request: &ServerRequest<'_>) -> Result<(), CloudError> {
         }
     }
     Ok(())
+}
+
+fn valid_host_image(value: &str) -> bool {
+    value.len() <= 64 && value.split('.').all(valid_name)
 }
 
 /// The server satisfies the request: its type and location are one of the

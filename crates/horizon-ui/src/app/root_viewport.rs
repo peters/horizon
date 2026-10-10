@@ -118,6 +118,7 @@ impl HorizonApp {
 
     pub(super) fn suppress_root_viewport_interaction(&mut self, ctx: &Context) {
         self.canvas_gesture.discard();
+        self.press_frame = super::press_frame::PressFrame::default();
         ctx.input_mut(|input| {
             input.raw.events.clear();
             input.raw.hovered_files.clear();

@@ -93,7 +93,8 @@ class CapabilitiesTests(unittest.TestCase):
         # Helpers elsewhere on PATH do not count: the service loads them beside itself.
         elsewhere = self.root / 'elsewhere'
         elsewhere.mkdir()
-        helpers = ('horizon-worker-github-common', 'horizon-worker-github-agents', 'horizon-worker-git-auth')
+        helpers = ('horizon-worker-github-common', 'horizon-worker-github-agents', 'horizon-worker-github-git',
+                   'horizon-worker-github-http', 'horizon-worker-git-auth')
         for helper in helpers:
             (elsewhere / helper).touch()
         for reported, missing, args, beside, expected in [
@@ -106,6 +107,8 @@ class CapabilitiesTests(unittest.TestCase):
                  False),
                 # Without the agent isolation launcher the service would refuse to run.
                 (declared, ('horizon-worker-tailnet',), ('--git-auth',), helpers, False),
+                # Without openssl the Git proxy cannot make its certificate authority.
+                (declared, ('openssl',), ('--git-auth',), helpers, False),
                 (declared, (), (), helpers, False)]:
             for helper in helpers:
                 path = binaries / helper

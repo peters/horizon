@@ -292,7 +292,7 @@ impl Prepared {
             .arg("--config").arg(self.pull.config.path())
             .args(["buildx", "imagetools", "inspect", image, "--format", "{{json .Manifest}}"]), Duration::from_secs(60))
             .map_err(|error| match error {
-                Error::Provider(horizon_cloud::CloudError::Cancelled) => error,
+                Error::Provider(horizon_cloud::CloudError::Cancelled) | Error::DockerNotResponding(_) => error,
                 _ => Error::Invalid("Worker pull credential cannot read the immutable image; check expiry, scope and image availability"),
             })?;
         let manifest: serde_json::Value = serde_json::from_str(&output).map_err(|_| Error::Json)?;

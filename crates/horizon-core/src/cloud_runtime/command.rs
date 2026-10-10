@@ -2,7 +2,7 @@
 mod build_progress;
 mod prefix;
 pub mod terminal_progress;
-use super::{Error, Event, Result};
+use super::{Error, Event, Result, docker_daemon};
 use horizon_cloud::Cancellation;
 use std::{
     io::{Read, Seek, Write},
@@ -44,6 +44,23 @@ impl Runner<'_> {
             .spawn(name, command, timeout);
         }
         self.spawn(name, command, timeout)
+    }
+    /// Like [`Runner::run`] for a command whose stdout is only parsed: stdout stays out of
+    /// the output, while stderr still shows to explain a failure.
+    ///
+    /// # Errors
+    /// Reports spawn failure, cancellation, timeout and unsuccessful exit.
+    pub fn run_parsed(&self, name: &'static str, command: &mut Command, timeout: Duration) -> Result<String> {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut output = Vec::new();
+        self.capture(name, command, timeout, 4 * 1024 * 1024, false, |bytes| {
+            output.extend_from_slice(bytes);
+            Ok(())
+        })?;
+        Ok(self.redact(String::from_utf8_lossy(&output).into_owned()))
     }
     /// # Errors
     /// Sends a caller-selected private file on stdin without exposing it in argv or output.
@@ -255,7 +272,7 @@ impl Runner<'_> {
             if self.cancel.is_cancelled() || started.elapsed() > timeout {
                 stop(&mut child);
                 self.cancel.check()?;
-                return Err(Error::Invalid(TIMED_OUT));
+                return Err(self.timed_out(name, command)?);
             }
             if status.is_none() {
                 status = child.try_wait()?;
@@ -275,6 +292,25 @@ impl Runner<'_> {
                 thread::sleep(Duration::from_millis(20));
             }
         }
+    }
+    /// A Docker command that outlived its time is a stuck daemon when Docker does not
+    /// answer a health check either; any other timeout stays a plain one.
+    /// # Errors
+    /// Cancellation during the health check.
+    fn timed_out(&self, name: &'static str, command: &Command) -> Result<Error> {
+        let cancelled = || self.cancel.is_cancelled();
+        let stuck = docker_daemon::Target::of(command).is_some_and(|target| {
+            target.probe(docker_daemon::PROBE_TIMEOUT, &cancelled) == docker_daemon::Health::NotResponding
+        });
+        self.cancel.check()?;
+        if !stuck {
+            return Ok(Error::Invalid(TIMED_OUT));
+        }
+        (self.emit)(Event::Output(format!(
+            "Docker did not answer docker version within {} s",
+            docker_daemon::PROBE_TIMEOUT.as_secs()
+        )));
+        Ok(Error::DockerNotResponding(name))
     }
     fn redact(&self, mut value: String) -> String {
         for secret in &self.secrets {
@@ -374,6 +410,50 @@ mod tests {
     }
 
     #[test]
+    fn a_timed_out_docker_command_is_a_stuck_daemon_only_when_docker_does_not_answer() {
+        use std::path::Path;
+        let temp = tempfile::tempdir().unwrap();
+        let (cancel, lines) = (Cancellation::default(), std::cell::RefCell::new(Vec::new()));
+        let emit = |event| {
+            if let Event::Output(line) = event {
+                lines.borrow_mut().push(line);
+            }
+        };
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &emit,
+            secrets: vec![],
+        };
+        let create = |program: &Path| {
+            let mut command = Command::new(program);
+            command.args(["create", "--name", "horizon-contract-1"]);
+            runner.run(
+                "worker image contract creation",
+                &mut command,
+                Duration::from_millis(150),
+            )
+        };
+        // Docker answers its health check: the timeout is a plain one.
+        let docker = docker_daemon::fake_docker(
+            temp.path(),
+            "[ \"$1\" = version ] && echo 29.8.1 && exit\nexec sleep 30",
+        );
+        assert!(matches!(create(&docker), Err(Error::Invalid(TIMED_OUT))));
+        assert!(lines.borrow().is_empty());
+        // Docker answers nothing: the daemon is stuck.
+        let docker = docker_daemon::fake_docker(temp.path(), "exec sleep 30");
+        let result = create(&docker);
+        assert!(
+            matches!(
+                result,
+                Err(Error::DockerNotResponding("worker image contract creation"))
+            ),
+            "{result:?}"
+        );
+        assert_eq!(*lines.borrow(), ["Docker did not answer docker version within 5 s"]);
+    }
+
+    #[test]
     fn descendant_inheriting_output_cannot_bypass_deadline() {
         let cancel = Cancellation::default();
         let emit = |_| {};
@@ -460,6 +540,41 @@ mod tests {
             )
             .unwrap();
         assert_eq!(output, "[REDACTED]");
+    }
+
+    #[test]
+    fn parsed_stdout_stays_out_of_the_output_and_stderr_shows() {
+        let events = std::cell::RefCell::new(Vec::new());
+        let cancel = Cancellation::default();
+        let emit = |event| events.borrow_mut().push(event);
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &emit,
+            secrets: vec![],
+        };
+        let status = r#"echo '{"state":"ok","last_error":null}'"#;
+        let output = runner
+            .run_parsed("test", Command::new("sh").args(["-c", status]), Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(output.trim(), r#"{"state":"ok","last_error":null}"#);
+        let failing = format!("{status}; echo denied >&2; exit 1");
+        let error = runner
+            .run_parsed(
+                "test",
+                Command::new("sh").args(["-c", &failing]),
+                Duration::from_secs(2),
+            )
+            .unwrap_err();
+        assert!(matches!(error, Error::Command("test")));
+        let lines: Vec<String> = events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Output(line) => Some(line.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines, ["denied"], "only stderr is output");
     }
 
     #[test]

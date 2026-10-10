@@ -39,12 +39,49 @@ with socket.socket() as listener:
 """
 
 
+def application_document(cwd, device_address=None, firefox_system_access=False):
+    """Disposable Horizon config. System access stays off unless requested."""
+    fixture = {
+        'version': 11, 'window': {'width': 1480, 'height': 900},
+        'appearance': {'theme': 'dark'},
+        'workspaces': [{'name': 'Disposable VNC debug', 'cwd': cwd,
+            'terminals': [
+                {'name': 'Live render heartbeat', 'command': '/usr/bin/python3',
+                 'args': ['-u', '-c', "import time\nprint('HORIZON DEBUG / noVNC LIVE VIEW')\nfor i in range(3600):\n print('Live frame heartbeat:', i, flush=True); time.sleep(1)"],
+                 'position': [40, 60], 'size': [550, 420]},
+                {'name': 'Device input test', 'command': '/bin/bash',
+                 'args': ['--noprofile', '--norc'],
+                 'position': [630, 60], 'size': [550, 420]}]}]}
+    if device_address:
+        fixture['workspaces'][0]['terminals'] = [
+            {'name': 'Native device view', 'kind': 'device', 'command': device_address,
+             'position': [40, 60], 'size': [1150, 780]}]
+    if firefox_system_access:
+        fixture['browser'] = {'backend': 'firefox', 'firefox_system_access': True}
+        if not device_address:
+            fixture['workspaces'][0]['terminals'] = [
+                {'name': 'Google sign-in', 'kind': 'browser',
+                 'command': 'https://accounts.google.com/ServiceLogin?hl=en',
+                 'position': [40, 60], 'size': [700, 640]},
+                {'name': 'X login', 'kind': 'browser',
+                 'command': 'https://x.com/i/flow/login',
+                 'position': [760, 60], 'size': [680, 640]},
+                {'name': 'Live render heartbeat', 'command': '/usr/bin/python3',
+                 'args': ['-u', '-c', "import time\nprint('HORIZON DEBUG / noVNC LIVE VIEW')\nfor i in range(3600):\n print('Live frame heartbeat:', i, flush=True); time.sleep(1)"],
+                 'position': [40, 720], 'size': [550, 140]},
+            ]
+    return fixture
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--horizon', type=Path, required=True, help='Horizon debug binary for an isolated smoke')
     parser.add_argument('--tools', type=Path, help='Optional unpacked Debian tools root')
     parser.add_argument('--native-view', action='store_true', help='Expose direct VNC without noVNC/websockify')
     parser.add_argument('--device-address', help='Read-only native Device panel endpoint inside the Horizon fixture')
+    parser.add_argument(
+        '--firefox-system-access', action='store_true',
+        help='Set browser.firefox_system_access in the fixture config. Firefox disclosure procedure only.')
     parser.add_argument('--state', type=Path, required=True, help='New private evidence directory')
     args = parser.parse_args()
     args.state.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -113,21 +150,8 @@ def main():
         sandbox.wait_for_unix_socket(box.host_socket, children[-1])
         spawn('openbox', ['openbox'])
         config = data / 'horizon.yaml'
-        fixture = {
-            'version': 11, 'window': {'width': 1480, 'height': 900},
-            'appearance': {'theme': 'dark'},
-            'workspaces': [{'name': 'Disposable VNC debug', 'cwd': str(data.resolve()),
-                'terminals': [
-                    {'name': 'Live render heartbeat', 'command': '/usr/bin/python3',
-                     'args': ['-u', '-c', "import time\nprint('HORIZON DEBUG / noVNC LIVE VIEW')\nfor i in range(3600):\n print('Live frame heartbeat:', i, flush=True); time.sleep(1)"],
-                     'position': [40, 60], 'size': [550, 420]},
-                    {'name': 'Device input test', 'command': '/bin/bash',
-                     'args': ['--noprofile', '--norc'],
-                     'position': [630, 60], 'size': [550, 420]}]}]}
-        if args.device_address:
-            fixture['workspaces'][0]['terminals'] = [
-                {'name': 'Native device view', 'kind': 'device', 'command': args.device_address,
-                 'position': [40, 60], 'size': [1150, 780]}]
+        fixture = application_document(
+            str(data.resolve()), args.device_address, args.firefox_system_access)
         config.write_text(json.dumps(fixture))  # JSON is a YAML subset.
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', [str(app), '--config', str(config), '--ephemeral'])

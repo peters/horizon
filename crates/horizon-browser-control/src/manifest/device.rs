@@ -235,6 +235,21 @@ pub struct NativeSessionMetadata {
 pub struct NativeRecipeResult {
     pub recipe: String,
     pub passed: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub blocked: bool,
+}
+
+impl NativeRecipeResult {
+    #[must_use]
+    pub fn status_label(&self) -> &'static str {
+        if self.blocked {
+            "BLOCKED"
+        } else if self.passed {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    }
 }
 
 impl NativeSessionMetadata {
@@ -278,7 +293,10 @@ impl NativeSessionMetadata {
                 .into_iter()
                 .flatten()
                 .all(|s| plain(s))
-            || !value.recipes.iter().all(|r| plain(&r.recipe))
+            || !value
+                .recipes
+                .iter()
+                .all(|r| plain(&r.recipe) && !(r.blocked && r.passed))
             || value.build_sha256.len() != 64
             || !value.build_sha256.bytes().all(|b| b.is_ascii_hexdigit())
         {
@@ -645,6 +663,7 @@ mod tests {
             recipes: vec![NativeRecipeResult {
                 recipe: "start".into(),
                 passed: false,
+                blocked: false,
             }],
         };
         assert_eq!(
@@ -674,11 +693,24 @@ mod tests {
         assert!(NativeSessionMetadata::from_wire_text(&"x".repeat(65 * 1024)).is_none());
         let old: DeviceServerDetails = serde_json::from_str(r#"{"name":"desktop","desktop_size":[1,1]}"#).unwrap();
         assert!(old.native_session.is_none());
+        let mut blocked = native.clone();
+        blocked.recipes[0].passed = false;
+        blocked.recipes[0].blocked = true;
+        assert_eq!(
+            NativeSessionMetadata::from_wire_text(&blocked.wire_text().unwrap()),
+            Some(blocked.clone())
+        );
+        blocked.recipes[0].passed = true;
+        assert!(blocked.wire_text().is_none());
+        let mut legacy = serde_json::to_value(&native).unwrap();
+        legacy["recipes"][0].as_object_mut().unwrap().remove("blocked");
+        assert_eq!(serde_json::from_value::<NativeSessionMetadata>(legacy).unwrap(), native);
         let mut large = native;
         large.recipes = (0..128)
             .map(|n| NativeRecipeResult {
                 recipe: format!("recipe-{n}-{}", "x".repeat(100)),
                 passed: true,
+                blocked: false,
             })
             .collect();
         assert!(large.wire_text().unwrap().len() > 8192);

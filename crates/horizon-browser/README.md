@@ -41,11 +41,33 @@ because that accessor is itself a detection signal. The engine reads native
 Client Hint values on a network-free temporary target and closes that target
 before attaching the caller's `about:blank` page, so it cannot enter caller
 history or frames. Title updates use protocol target metadata rather than a
-page-JS binding. Firefox installs a narrow `navigator.webdriver` value shim
-with WebDriver BiDi `script.addPreloadScript` before the initial navigation;
-startup fails instead of silently downgrading when that required BiDi command
-is rejected. Chromium panels minimizing common signals also use a reserved
-nonzero loopback DevTools port so Chromium does not enable its port-zero
+page-JS binding. Firefox can clear the Marionette and Remote Agent
+automation flags from the chrome context when `firefox_system_access` is
+true. That option starts geckodriver with `--allow-system-access`. Mozilla
+documents the flag as full system access for every local client that can
+reach the driver port, so it stays off unless you set it. The clear changes
+a key pair only when both keys are already booleans, then stops. Current
+Firefox publishes `IsBrowserAutomationRunning` and the legacy `Active` keys.
+`Navigator.webdriver` reads the first pair, so `Active` stays as it was.
+Those keys still report whether Marionette and Remote Agent are running.
+Firefox ESR 140 has only the `Active` pair, so that is the pair that changes.
+A shared
+Firefox process does that once, on the session transport, before page
+commands are limited to one window. If system access is off, the chrome
+context is unavailable, or neither key pair is already present, Firefox
+falls back to a narrow
+`navigator.webdriver` value shim installed with WebDriver BiDi
+`script.addPreloadScript` before the initial navigation. That session
+reports `AutomationDisclosureStatus::PreloadFallback`. A completed native
+clear reports `CommonSignalsMinimized`. A remote Firefox or Chromium session
+uses classic WebDriver and reports `UnsupportedByBackend` for minimization.
+Remote Chromium does not receive the local automation launch flag. Local
+Chromium still reports `CommonSignalsMinimized` from its own startup. An older
+manifest that omits the field reports `Unreported`, not `BrowserDefault`.
+Startup fails when
+that fallback command is rejected, and also when the session cannot return
+from the chrome context. Chromium panels minimizing common signals also use a
+reserved nonzero loopback DevTools port so Chromium does not enable its port-zero
 `AutomationControlled` behavior. Startup retries with a fresh reservation when
 another local process wins the required socket handoff. Callers that need the
 browser's unmodified behavior can select

@@ -205,6 +205,22 @@ impl Draft {
 
     fn save_with_chatgpt_gate(mut self, require_chatgpt_sign_in: bool) -> Result<Settings> {
         self.validate_with_chatgpt_gate(require_chatgpt_sign_in)?;
+        let _chatgpt_session = if require_chatgpt_sign_in
+            && self.openai_auth == Authentication::ChatGpt
+            && self.selected_agents().contains(&Agent::Codex)
+        {
+            Some(
+                super::chatgpt::lock_plan(
+                    &self.root,
+                    self.chatgpt.as_ref().map(|connection| connection.client_id.as_str()),
+                )
+                .map_err(|_| {
+                    Error::Invalid("The saved ChatGPT sign-in changed or could not be verified; reload these settings")
+                })?,
+            )
+        } else {
+            None
+        };
         let mut write = storage::Transaction::new(&self.root)?;
         write.verify_current(self.original.as_deref())?;
         if !self.runpod_key.trim().is_empty() {

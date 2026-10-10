@@ -4,6 +4,7 @@ pub mod agent_work;
 mod agents;
 mod board;
 pub mod browser;
+pub mod cloud_list;
 #[cfg(feature = "cloud-workspaces")]
 pub mod cloud_panel;
 #[cfg(feature = "cloud-workspaces")]
@@ -79,6 +80,8 @@ pub use runtime_state::{
     live_claude_session_ids, new_local_id, reserve_saved_session_deletions, saved_session_deletion_pending,
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
+#[cfg(feature = "cloud-workspaces")]
+pub use session_store::{CloudPanelStatus, ParkedPanel};
 pub use session_store::{
     ResolvedSession, SessionDeletionNotice, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary,
     StartupChooser, StartupDecision, StartupPromptReason,

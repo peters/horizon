@@ -1,34 +1,24 @@
 //! A cloud operation's output as a first-class view: grouped by step, timed, with
-//! failures highlighted and the decisive line pinned below the log.
+//! failures highlighted. The cause is read beside the steps, not again under the log.
 use super::super::{LineKind, LogLine, Runtime, Stage};
-use super::status::Failure;
 use super::strip::stage_color;
 use crate::theme;
 use egui::{Align, FontId, Layout, Rect, RichText, Stroke, UiBuilder, Vec2};
 use std::collections::HashMap;
 
 const TEXT_SIZE: f32 = 13.0;
-/// The pinned root cause keeps this height; a longer cause scrolls inside it, so the
-/// view never grows past the height it was given.
-const ROOT_CAUSE_HEIGHT: f32 = 72.0;
+/// The least the log shows: a few one-row lines, however little room it was given.
+const MIN_LOG_HEIGHT: f32 = 4.0 * (TEXT_SIZE + 3.0 + ROW_GAP);
 
-/// The log in `height`, with `failure` pinned under it. `place` keeps the scroll
-/// position of the body's log apart from the drawer's.
-pub(super) fn show(
-    ui: &mut egui::Ui,
-    id: u32,
-    place: &str,
-    runtime: &mut Runtime,
-    height: f32,
-    failure: Option<&Failure>,
-) {
-    let pinned = failure.map_or(0.0, |_| ROOT_CAUSE_HEIGHT + 6.0);
+/// The log in `height`. `place` keeps the scroll position of the body's log apart
+/// from the drawer's.
+pub(super) fn show(ui: &mut egui::Ui, id: u32, place: &str, runtime: &mut Runtime, height: f32) {
     let frame = egui::Frame::new()
         .fill(theme::BG())
         .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
         .corner_radius(8)
         .inner_margin(egui::Margin::symmetric(12, 10));
-    let inner = (height - pinned - frame.total_margin().sum().y).max(60.0);
+    let inner = (height - frame.total_margin().sum().y).max(MIN_LOG_HEIGHT);
     // Another view scrolled up holds new lines aside; this one, still at the end, shows them.
     let follows = runtime.unpinned_last & view_bit(place) == 0;
     frame.show(ui, |ui| {
@@ -52,9 +42,6 @@ pub(super) fn show(
             runtime.verbose_unpinned = true;
         }
     });
-    if let Some(failure) = failure {
-        root_cause(ui, failure);
-    }
 }
 
 /// Each place a log is shown keeps its own follow state.
@@ -390,49 +377,6 @@ fn row(ui: &mut egui::Ui, line: &LogLine) {
     }
 }
 
-/// The cause, what it means, and Horizon's own summary when the cause is a different line.
-fn root_cause(ui: &mut egui::Ui, failure: &Failure) {
-    egui::Frame::new()
-        .fill(theme::blend(theme::BG(), theme::PALETTE_RED(), 0.16))
-        .stroke(Stroke::new(1.0, theme::alpha(theme::PALETTE_RED(), 120)))
-        .corner_radius(8)
-        .inner_margin(egui::Margin::symmetric(12, 8))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            let inner = ROOT_CAUSE_HEIGHT - 16.0;
-            ui.set_min_height(inner);
-            ui.set_max_height(inner);
-            egui::ScrollArea::vertical()
-                .id_salt("cloud-root-cause")
-                .max_height(inner)
-                .auto_shrink([false, false])
-                .show(ui, |ui| root_cause_text(ui, failure));
-        });
-}
-
-fn root_cause_text(ui: &mut egui::Ui, failure: &Failure) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(
-            RichText::new("Root cause")
-                .monospace()
-                .size(TEXT_SIZE)
-                .color(theme::PALETTE_RED()),
-        );
-        ui.label(
-            RichText::new(failure.headline())
-                .monospace()
-                .size(TEXT_SIZE)
-                .color(theme::PALETTE_RED()),
-        );
-    });
-    let explanation = match (failure.meaning, &failure.cause) {
-        (Some(meaning), _) => meaning.to_owned(),
-        (None, Some(_)) => failure.summary.clone(),
-        (None, None) => "Horizon found no failure line in the output above.".to_owned(),
-    };
-    ui.label(RichText::new(explanation).size(12.5).color(theme::FG_SOFT()));
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::super::Stage;
@@ -440,33 +384,43 @@ mod tests {
     use crate::test_egui::DiscardTextures;
 
     #[test]
-    fn a_long_root_cause_stays_inside_the_height_it_was_given() {
+    fn a_failed_log_gives_its_lines_the_whole_height_it_was_given() {
         let mut runtime = Runtime::default();
         for index in 0..40 {
             runtime
                 .logs
                 .push_back(LogLine::new(format!("line {index}"), Some(Stage::Push), None));
         }
-        let failure = Failure {
-            summary: "Uploading image failed; inspect deployment output".into(),
-            cause: Some("error from registry: ".to_owned() + &"denied because of a very long reason ".repeat(20)),
-            meaning: Some(
-                "The registry refused the request. Its saved credentials have expired or lack access to this image.",
-            ),
-        };
+        runtime.push_log("Error response from daemon: Conflict. ".to_owned() + &"0123456789abcdef".repeat(8));
         let mut used = 0.0;
-        let _ = egui::Context::default()
+        let output = egui::Context::default()
             .run_ui(egui::RawInput::default(), |ui| {
                 ui.set_width(420.0);
                 let top = ui.cursor().top();
-                show(ui, 1, "test", &mut runtime, 300.0, Some(&failure));
+                show(ui, 1, "test", &mut runtime, 300.0);
                 used = ui.cursor().top() - top;
             })
             .discard_textures();
-        assert!(
-            used <= 300.0 + 12.0,
-            "the log and its pinned cause fit the given height: {used}"
-        );
+        assert!(used <= 300.0 + 12.0, "the log fits the given height: {used}");
+        let mut lines = 0;
+        for shape in &output.shapes {
+            // A line without a time draws an empty label, which has no bounds.
+            if let egui::Shape::Text(text) = &shape.shape
+                && !text.galley.text().is_empty()
+            {
+                assert!(
+                    !text.galley.text().starts_with("Root cause"),
+                    "the cause is not repeated"
+                );
+                assert!(
+                    text.visual_bounding_rect().right() <= 420.0 + 1.0,
+                    "a long hash wraps inside the card: {}",
+                    text.galley.text()
+                );
+                lines += usize::from(text.galley.text().starts_with("line "));
+            }
+        }
+        assert!(lines >= 8, "several lines stay readable beside a long failure: {lines}");
     }
 
     fn headings(runtime: &mut Runtime) -> Vec<String> {
@@ -477,7 +431,7 @@ mod tests {
         let mut shown = Vec::new();
         let output = egui::Context::default()
             .run_ui(egui::RawInput::default(), |ui| {
-                show(ui, 1, "test", runtime, 400.0, None);
+                show(ui, 1, "test", runtime, 400.0);
             })
             .discard_textures();
         for shape in &output.shapes {
@@ -577,7 +531,7 @@ mod tests {
         let shown: Vec<String> = {
             let output = egui::Context::default()
                 .run_ui(egui::RawInput::default(), |ui| {
-                    show(ui, 1, "test", &mut runtime, 400.0, None);
+                    show(ui, 1, "test", &mut runtime, 400.0);
                 })
                 .discard_textures();
             output
@@ -649,7 +603,7 @@ mod tests {
                     },
                     |ui| {
                         ui.set_width(640.0);
-                        show(ui, 7, "body", &mut runtime, 280.0, None);
+                        show(ui, 7, "body", &mut runtime, 280.0);
                     },
                 )
                 .discard_textures(),
@@ -699,7 +653,7 @@ mod tests {
                     },
                     |ui| {
                         ui.set_width(200.0);
-                        show(ui, 9, "body", &mut runtime, 140.0, None);
+                        show(ui, 9, "body", &mut runtime, 140.0);
                     },
                 )
                 .discard_textures();

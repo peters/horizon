@@ -85,6 +85,22 @@ exit 0
         }
     }
 
+    fn text(&self) -> String {
+        self.panel.terminal().expect("terminal").last_lines_text(20)
+    }
+
+    /// Polls until a poll finds no output, so the next frame has no pending wakeup.
+    fn drain_output(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            self.panel.process_output();
+            if !self.panel.had_recent_output() {
+                return;
+            }
+            assert!(Instant::now() < deadline, "terminal kept reporting output");
+        }
+    }
+
     fn wait_for_mouse_mode(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -145,16 +161,22 @@ fn mouse_reporting_hover_and_canvas_pan_reuse_unchanged_grid() {
     harness.panel.process_output();
     let before = harness.cache.rebuilds;
     assert!(before > 0);
+    let screen = harness.text();
+    // alacritty_terminal can send a Wakeup with no output: when its loop takes an input message
+    // before the sender wakes the poller, that wakeup finds nothing to do and is sent as one.
+    // Each frame starts after a poll with no output, so such a wakeup cannot rebuild the grid.
     for interactive in [true, false] {
         for x in [50.0, 80.0, 110.0] {
-            harness.panel.process_output();
+            harness.drain_output();
+            let rebuilds = harness.cache.rebuilds;
             harness.frame(Pos2::new(x, 40.0), interactive);
+            assert_eq!(
+                harness.cache.rebuilds, rebuilds,
+                "pointer motion must not rebuild unchanged terminal text (x {x}, interactive {interactive})"
+            );
         }
     }
-    assert_eq!(
-        harness.cache.rebuilds, before,
-        "pointer motion must not rebuild unchanged terminal text"
-    );
+    assert_eq!(harness.text(), screen, "pointer reports must not change the screen");
 
     harness.panel.terminal().expect("terminal").write_input(b"update\n");
     harness.wait_for_text("UPDATED-2");

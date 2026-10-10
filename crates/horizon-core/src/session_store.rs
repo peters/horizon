@@ -1,5 +1,7 @@
 mod deletion_notice;
+mod lease;
 mod model;
+mod runtime_index;
 #[cfg(test)]
 mod tests;
 
@@ -16,6 +18,8 @@ use crate::runtime_state::RuntimeState;
 use model::{ProfileSnapshot, SessionIndex, SessionMeta, StoredSession};
 
 pub use deletion_notice::SessionDeletionNotice;
+#[cfg(feature = "cloud-workspaces")]
+pub use runtime_index::{CloudPanelStatus, ParkedPanel};
 
 pub use model::{
     ResolvedSession, SessionLease, SessionOpenDisposition, SessionSummary, StartupChooser, StartupDecision,
@@ -32,6 +36,7 @@ pub struct SessionStore {
     home: HorizonHome,
     config_path: PathBuf,
     profile_id: String,
+    index: runtime_index::IndexCache,
 }
 
 impl SessionStore {
@@ -42,6 +47,7 @@ impl SessionStore {
             home,
             config_path,
             profile_id,
+            index: runtime_index::IndexCache::default(),
         }
     }
 
@@ -134,8 +140,8 @@ impl SessionStore {
     /// Returns an error if the source session cannot be loaded or if the new
     /// session data cannot be persisted.
     pub fn duplicate_session(&self, source_session_id: &str) -> Result<ResolvedSession> {
-        let source_runtime_path = self.home.session_runtime_path(source_session_id);
-        let mut runtime_state = RuntimeState::load(&source_runtime_path)?
+        let mut runtime_state = self
+            .load_runtime(source_session_id)?
             .ok_or_else(|| Error::State(format!("missing runtime state for session {source_session_id}")))?;
         runtime_state.regenerate_browser_local_ids();
         let session = self.create_session_from_runtime(runtime_state)?;
@@ -197,7 +203,7 @@ impl SessionStore {
             )));
         }
 
-        if let Some(runtime_state) = RuntimeState::load(&self.home.session_runtime_path(session_id))? {
+        if let Some(runtime_state) = self.load_runtime(session_id)? {
             for workspace in &runtime_state.workspaces {
                 for panel in &workspace.panels {
                     if panel.kind == crate::panel::PanelKind::Browser {
@@ -216,6 +222,7 @@ impl SessionStore {
                 }
             }
         }
+        self.index.forget(session_id);
         remove_dir_if_exists(&self.home.session_dir(session_id))?;
         let mut index = self.load_session_index()?;
         index.remove_profile_session(&self.profile_id, session_id);
@@ -239,6 +246,7 @@ impl SessionStore {
 
         let runtime_yaml = runtime_state.to_yaml()?;
         atomic_write(&runtime_path, runtime_yaml.as_bytes())?;
+        self.index_runtime_state(session_id, runtime_state, &runtime_yaml);
 
         let existing_meta = self.load_session_meta(session_id).unwrap_or_else(|_| {
             SessionMeta::new(
@@ -283,50 +291,6 @@ impl SessionStore {
         Ok(())
     }
 
-    /// Create or replace the lease file for an active session.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the lease directory cannot be created or if the
-    /// lease file cannot be serialized and written.
-    pub fn acquire_lease(&self, session_id: &str) -> Result<SessionLease> {
-        let lease_path = self.home.session_lease_path(session_id);
-        if let Some(parent) = lease_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let lease = SessionLease::new(session_id.to_string());
-        let json = serde_json::to_vec_pretty(&lease).map_err(|error| Error::State(error.to_string()))?;
-        atomic_write(&lease_path, &json)?;
-        Ok(lease)
-    }
-
-    /// Update the heartbeat timestamp on an existing session lease.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the refreshed lease cannot be serialized or written.
-    pub fn refresh_lease(&self, lease: &mut SessionLease) -> Result<()> {
-        lease.last_heartbeat_at = current_unix_millis();
-        let json = serde_json::to_vec_pretty(lease).map_err(|error| Error::State(error.to_string()))?;
-        atomic_write(&self.home.session_lease_path(&lease.session_id), &json)?;
-        Ok(())
-    }
-
-    /// Remove a session lease file if it exists.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the lease file exists but cannot be removed.
-    pub fn release_lease(&self, session_id: &str) -> Result<()> {
-        let path = self.home.session_lease_path(session_id);
-        match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
-        }
-    }
-
     /// Persist a new session from an already prepared runtime state snapshot.
     ///
     /// # Errors
@@ -354,6 +318,7 @@ impl SessionStore {
 
         let runtime_yaml = runtime_state.to_yaml()?;
         atomic_write(&runtime_path, runtime_yaml.as_bytes())?;
+        self.index_runtime_state(&session_id, &runtime_state, &runtime_yaml);
         let meta_yaml = serde_yaml::to_string(&meta).map_err(|error| Error::State(error.to_string()))?;
         atomic_write(&self.home.session_meta_path(&session_id), meta_yaml.as_bytes())?;
 
@@ -371,15 +336,15 @@ impl SessionStore {
     }
 
     fn load_existing_session(&self, session_id: &str) -> Result<ResolvedSession> {
-        let runtime_path = self.home.session_runtime_path(session_id);
-        let runtime_state = RuntimeState::load(&runtime_path)?
+        let runtime_state = self
+            .load_runtime(session_id)?
             .ok_or_else(|| Error::State(format!("missing runtime state for session {session_id}")))?;
         let meta = self.load_session_meta(session_id)?;
 
         Ok(ResolvedSession {
             session_id: session_id.to_string(),
             runtime_state,
-            runtime_state_path: runtime_path,
+            runtime_state_path: self.home.session_runtime_path(session_id),
             transcript_root: self.home.session_transcripts_dir(session_id),
             meta,
         })
@@ -472,19 +437,6 @@ impl SessionStore {
             serde_yaml::from_str::<SessionMeta>(&contents).map_err(|error| Error::State(error.to_string()))?;
         meta.version = SESSION_META_VERSION;
         Ok(meta)
-    }
-
-    fn load_session_lease(&self, session_id: &str) -> Result<Option<SessionLease>> {
-        let path = self.home.session_lease_path(session_id);
-        if !path.exists() {
-            return Ok(None);
-        }
-
-        let contents = fs::read_to_string(path)?;
-        let mut lease =
-            serde_json::from_str::<SessionLease>(&contents).map_err(|error| Error::State(error.to_string()))?;
-        lease.version = SESSION_LEASE_VERSION;
-        Ok(Some(lease))
     }
 }
 

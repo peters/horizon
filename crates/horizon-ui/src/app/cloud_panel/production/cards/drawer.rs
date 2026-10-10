@@ -258,7 +258,6 @@ fn status(
 ) {
     /// The log's share of a drawer: its heading and a few lines.
     const OUTPUT_ROOM: f32 = 180.0;
-    let failure = context.status.failure.as_ref();
     if room < 2.0 * OUTPUT_ROOM {
         // Too short to split: the summary and a short log scroll together inside the drawer.
         solid_scroll_area(ui)
@@ -268,7 +267,7 @@ fn status(
                 overview(ui, id, runtime, context, response);
                 ui.add_space(10.0);
                 output_heading(ui, runtime);
-                super::output::show(ui, id, "drawer", runtime, OUTPUT_ROOM, failure);
+                super::output::show(ui, id, "drawer", runtime, OUTPUT_ROOM);
             });
         return;
     }
@@ -281,7 +280,7 @@ fn status(
     ui.add_space(10.0);
     output_heading(ui, runtime);
     let left = room - (ui.cursor().top() - top);
-    super::output::show(ui, id, "drawer", runtime, left, failure);
+    super::output::show(ui, id, "drawer", runtime, left);
 }
 
 fn output_heading(ui: &mut egui::Ui, runtime: &Runtime) {
@@ -332,17 +331,12 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
                     .size(13.0)
                     .color(theme::FG_DIM()),
                 );
-                ui.label(
-                    RichText::new(failure.headline())
-                        .monospace()
-                        .size(19.0)
-                        .color(theme::PALETTE_RED()),
-                );
+                let cause = super::cause::show(ui, ("drawer", id), runtime.progress.attempt(), failure.headline());
                 if let Some(meaning) = failure.meaning {
                     ui.label(RichText::new(meaning).size(14.0).color(theme::FG()));
                 }
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if let Some(next) = super::next::Next::of(status)
                         && ui.add(action_button(next.label())).clicked()
                     {
@@ -351,7 +345,12 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
                     if ui.add(action_button("Copy error")).clicked() {
                         ui.ctx().copy_text(copy.clone());
                     }
+                    cause.toggle(ui);
                 });
+                let retry = super::next::Next::of(status).filter(|next| matches!(next, super::next::Next::Retry(_)));
+                if super::docker::status(ui, failure, retry.map(super::next::Next::label)) {
+                    response.action = retry.and_then(super::next::Next::action);
+                }
             });
         return;
     }

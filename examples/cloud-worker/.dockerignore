@@ -19,6 +19,8 @@
 !horizon-worker-github
 !horizon-worker-github-common
 !horizon-worker-github-agents
+!horizon-worker-github-git
+!horizon-worker-github-http
 !horizon-worker-browserstack
 !bin/
 bin/**

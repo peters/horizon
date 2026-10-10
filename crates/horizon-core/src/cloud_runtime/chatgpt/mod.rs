@@ -59,6 +59,16 @@ pub fn status(root: &Path) -> Result<Option<Connection>> {
     store::default_registration(root).map(|record| record.map(Connection::from))
 }
 
+/// Keep the verified current registration stable until settings have committed.
+pub(crate) fn lock_plan(root: &Path, expected_client: Option<&str>) -> Result<std::fs::File> {
+    let guard = store::session_lock(root)?;
+    let connection = status(root)?.ok_or(Error::Missing)?;
+    if Some(connection.client_id.as_str()) != expected_client || !connection.can_use_plan() {
+        return Err(Error::Invalid("the saved plan sign-in changed; reload these settings"));
+    }
+    Ok(guard)
+}
+
 /// Starts sign-in in the system browser and opens its loopback callback. The receiver
 /// gets the saved connection when the flow finishes.
 /// # Errors

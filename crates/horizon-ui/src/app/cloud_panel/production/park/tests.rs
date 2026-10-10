@@ -1,3 +1,4 @@
+use super::read::parked_sessions;
 use super::*;
 use crate::app::cloud_panel::production::{Deployment, Runtime};
 use crate::app::test_support::test_app;
@@ -5,16 +6,21 @@ use horizon_core::{
     Board, PanelState, RuntimeState, WorkspaceState,
     cloud_panel::{CloudConfig, CloudGroup, CloudLaunch},
 };
+use std::time::Duration;
 
 const MEMBERS: [&str; 2] = ["one", "two"];
 
 /// A ready cloud with two shell members that wait to attach, as after a restart.
-fn ready_cloud() -> (tempfile::TempDir, HorizonApp) {
+pub(in crate::app::cloud_panel::production) fn ready_cloud() -> (tempfile::TempDir, HorizonApp) {
     let (temp, app) = test_app();
     ready_cloud_in(temp, app, [0.0, 0.0])
 }
 
-fn ready_cloud_in(temp: tempfile::TempDir, mut app: HorizonApp, origin: [f32; 2]) -> (tempfile::TempDir, HorizonApp) {
+pub(in crate::app::cloud_panel::production) fn ready_cloud_in(
+    temp: tempfile::TempDir,
+    mut app: HorizonApp,
+    origin: [f32; 2],
+) -> (tempfile::TempDir, HorizonApp) {
     let profile = CloudConfig::parse(
         "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker\n    cpu: 4\n    memory_gb: 8\n",
     )
@@ -84,7 +90,7 @@ fn ready_cloud_in(temp: tempfile::TempDir, mut app: HorizonApp, origin: [f32; 2]
     (temp, app)
 }
 
-fn member(app: &HorizonApp, local: &str) -> PanelId {
+pub(in crate::app::cloud_panel::production) fn member(app: &HorizonApp, local: &str) -> PanelId {
     app.board.panel_id_by_local_id(local).unwrap()
 }
 
@@ -110,12 +116,16 @@ fn runtime(app: &HorizonApp) -> &Runtime {
 
 #[test]
 fn a_cloud_out_of_view_at_ready_parks_without_opening_a_connection() {
-    let (_temp, mut app) = ready_cloud();
+    let (temp, mut app) = ready_cloud();
     app.board.focused = None;
     app.sync_cloud_presentations();
     for local in MEMBERS {
         assert_eq!(wait_of(&app, local), Some(CloudWait::Parked), "{local}");
     }
+    assert!(
+        !temp.path().join(".horizon").join("sessions").exists(),
+        "an ephemeral session records no park state"
+    );
     assert!(runtime(&app).pending_member_attachments.is_empty());
     assert!(runtime(&app).parking.tracker.is_some_and(|tracker| tracker.is_parked()));
     // A later reconnecting message does not hide why the member waits.
@@ -560,3 +570,23 @@ fn collect_text(shape: &egui::Shape, text: &mut String) {
         _ => {}
     }
 }
+
+impl Parking {
+    /// Parks the cloud, with the statuses that its sessions last showed.
+    pub(in crate::app::cloud_panel::production) fn park_with(&mut self, statuses: Vec<SessionStatus>) {
+        self.tracker = Some(ParkTracker::parked());
+        self.statuses = statuses.into_iter().map(|status| (status.id.clone(), status)).collect();
+    }
+
+    /// As [`Parking::park_with`], from a read that started at `started`.
+    pub(in crate::app::cloud_panel::production) fn read_with(
+        &mut self,
+        statuses: Vec<SessionStatus>,
+        started: Instant,
+    ) {
+        self.park_with(statuses);
+        self.statuses_since = Some(started);
+    }
+}
+
+mod index;

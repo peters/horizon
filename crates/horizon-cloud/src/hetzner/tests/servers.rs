@@ -50,6 +50,84 @@ fn posts(requests: &Requests) -> Vec<Value> {
 }
 
 #[test]
+fn ubuntu_image_names_with_periods_are_serialized_without_widening_placement_names() {
+    let placements = placements();
+    let (hetzner, requests, task) = provider(vec![(200, listing("servers", json!([]))), (201, created(42))]);
+    let mut state = CreateState::Prepared;
+    hetzner
+        .ensure_server(
+            &ServerRequest {
+                image: "ubuntu-24.04",
+                ..request(&placements)
+            },
+            &mut state,
+            &Cancellation::default(),
+            |_| Ok(()),
+            |_| {},
+        )
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(posts(&requests)[0]["image"], "ubuntu-24.04");
+    for (server_type, location) in [("cx.33", "nbg1"), ("cx33", "nbg.1")] {
+        let invalid = [Placement {
+            server_type: server_type.into(),
+            location: location.into(),
+        }];
+        let (hetzner, requests, task) = provider(Vec::new());
+        let mut state = CreateState::Prepared;
+        assert!(
+            hetzner
+                .ensure_server(
+                    &request(&invalid),
+                    &mut state,
+                    &Cancellation::default(),
+                    |_| Ok(()),
+                    |_| {}
+                )
+                .is_err()
+        );
+        assert_eq!(state, CreateState::Prepared);
+        task.join().unwrap();
+        assert!(requests.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn malformed_host_images_are_refused_before_provider_io() {
+    let placements = placements();
+    for image in [
+        "",
+        ".",
+        "ubuntu-24..04",
+        ".ubuntu",
+        "ubuntu.",
+        "Ubuntu-24.04",
+        "ubuntu/24.04",
+        "https://example.com/image",
+    ] {
+        let (hetzner, requests, task) = provider(Vec::new());
+        let mut state = CreateState::Prepared;
+        assert!(
+            hetzner
+                .ensure_server(
+                    &ServerRequest {
+                        image,
+                        ..request(&placements)
+                    },
+                    &mut state,
+                    &Cancellation::default(),
+                    |_| Ok(()),
+                    |_| {}
+                )
+                .is_err()
+        );
+        assert_eq!(state, CreateState::Prepared);
+        task.join().unwrap();
+        assert!(requests.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn a_server_joins_the_network_it_is_requested_on() {
     let placements = placements();
     for (network, sent) in [(Some(7), json!([7])), (None, Value::Null)] {

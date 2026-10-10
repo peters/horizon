@@ -28,6 +28,8 @@ PRIVILEGED = {'sshd', 'idle', 'github'}
 # A service whose exit ends only that service: the worker stays up and drops it from its
 # published services. Without the GitHub service, Git falls back to the static token file.
 DISPENSABLE = {'github'}
+# Seconds between attempts to remove the Git proxy route; None ends the attempts.
+UNROUTE_WAITS = (0.5, 1, 2, 4, None)
 GITHUB_CHAIN_CONTRACT = 'horizon-github-chain-contract=1'
 DESKTOP_UNHEALTHY_SECONDS = 10
 # Present when agents run as UID 10001: horizon-worker-tailnet isolate, before this supervisor.
@@ -197,6 +199,23 @@ def stop_groups(groups):
         raise ValueError('; '.join(failures))
 
 
+def unroute_git(run=subprocess.run, sleep=time.sleep):
+    """Points Git at github.com directly again once the GitHub service is gone, so its proxy's
+    port routes nothing; Git then falls back to the static binding. A busy Git configuration
+    lock gets a few more attempts. If the route stays, every GitHub operation of the worker
+    fails, so the worker stops instead of reporting itself ready."""
+    for wait in UNROUTE_WAITS:
+        try:
+            run(['horizon-worker-git-auth', 'unroute'], check=True, timeout=60,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        except (OSError, subprocess.SubprocessError):
+            if wait is None:
+                break
+            sleep(wait)
+    raise ValueError('Worker Git still routes github.com through the stopped GitHub service')
+
+
 class Supervisor:
     def __init__(self, workspace=WORKSPACE, runtime=RUNTIME, control_endpoint=CONTROL_ENDPOINT):
         self.workspace = workspace
@@ -253,6 +272,8 @@ class Supervisor:
             stop_groups([(child, identity)])
         except ValueError as error:
             print('Worker service cleanup: ' + str(error), file=sys.stderr, flush=True)
+        if name == 'github':
+            unroute_git()
         if self.published is not None:
             self.publish(self.published)
 

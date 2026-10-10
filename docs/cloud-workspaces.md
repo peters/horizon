@@ -284,7 +284,8 @@ processes can retain authentication already loaded into memory or their
 environment; start a new session to apply the changed authentication choice.
 
 Optional repository Git authentication uses explicit `git_credentials` bindings.
-See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
+With [Connect GitHub](#connect-github), a binding is a fallback for the
+repositories that the app does not reach. See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
 for private file permissions, repository matching, removal and token-scope limits.
 
 ### Connect GitHub
@@ -292,11 +293,22 @@ for private file permissions, repository matching, removal and token-scope limit
 **Cloud settings › GitHub › Connect GitHub** gives clouds GitHub access as you,
 with no token to create or copy.
 
-1. Horizon opens GitHub in your browser with a private GitHub App already
-   described. You click **Create GitHub App**. Horizon keeps the app's client
+1. Horizon opens GitHub in your browser with a GitHub App already described.
+   You click **Create GitHub App**. Horizon keeps the app's client
    secret in `credentials/github-app-<app>` (0600) and never keeps its private key.
+   The app is named **Horizon for <login>** when Horizon already knows your GitHub
+   login from an earlier sign-in on this computer and no public app has that name;
+   otherwise it is **Horizon** and a short random suffix. Horizon cannot see a
+   private app, so a private app with the same name is not detected. Then GitHub's
+   form says that the name is taken: change the name there and click **Create GitHub
+   App** again. GitHub's form also lets you change the name in other cases.
 2. GitHub shows the installation page. You choose the repositories that clouds
-   may reach. **Choose repositories** on the card opens this page again.
+   may reach. **Choose repositories** on the card opens this page again. To give
+   clouds the repositories of an organization, install the app on that
+   organization too. The app is public so that an organization can install it;
+   it reaches only the repositories where it is installed. An app that an older
+   Horizon created is private: select **Make public** in its **Advanced**
+   settings first.
 3. GitHub does not let a new app turn on its device sign-in. When the card says
    so, open the app's settings, select **Enable Device Flow** and save. This is
    needed once, for the default mode.
@@ -315,14 +327,18 @@ cloud gets access to its repository and its same-worker siblings, where the app
 is installed. **Skip** continues without GitHub access, and so does a declined or
 expired sign-in, or a worker image without the service. When cloud settings also
 have a `git_credentials` binding for the repository, Git keeps using that binding
-in those cases, and the card says so. While the app's access reaches every
-repository of the cloud, Horizon removes that binding from the worker; otherwise
-the binding stays for the repositories the app does not reach. A cloud whose checkout no
-longer has a GitHub origin loses the access its worker held.
+in those cases, and the card says so. The binding is a fallback: while the app's
+access reaches every repository of the cloud, Horizon removes that binding from
+the worker; otherwise the binding stays for the repositories the app does not
+reach. The app's access comes first for a repository that both reach. A cloud
+whose checkout no longer has a GitHub origin loses the access its worker held.
 
 The worker's root service renews the access every 8 hours for about 6 months,
-also while this computer is off. Agents get short-lived access tokens through
-Git and `gh` and never see the refresh token. Commits use your name and your
+also while this computer is off. Git reaches GitHub through the worker's Git
+proxy, which adds the access only for the repositories of the cloud, so Git never
+gets a token. The proxy also adds the token of a `git_credentials` binding for its
+repository. `gh` gets a short-lived access token for a repository of the cloud.
+Agents never see the refresh token. Commits use your name and your
 GitHub private commit address. The steps card shows **GitHub: signed in as
 <login>**.
 
@@ -332,8 +348,10 @@ cloud** and **Deny**. The worker checks that the app reaches the repository
 before it allows anything.
 
 Access is per cloud. Every agent session of a cloud can use each repository the
-cloud has access to, because Git and `gh` get the same token for all of them. Put
-work that must not reach a repository in a cloud without access to it.
+cloud has access to. The Git proxy limits Git only. `gh` still gets the full
+access token, and an agent can use that token outside `gh` for every repository
+that the app reaches. Put work that must not reach a repository in a cloud without
+access to it, and install the app only on the repositories that agents may use.
 
 **Disconnect** stops new clouds from getting access. It does not end the access
 of running clouds: delete the app on GitHub for that. Deleting the app ends every
@@ -892,6 +910,59 @@ strip at its bottom on the main canvas: working or idle, ended, or not found, wi
 the last line of the session. In a detached window or a fullscreen cloud, a parked
 panel shows only its snapshot until it attaches. The worker needs only Python 3
 and tmux for this.
+
+### Cloud list
+
+The sidebar groups the workspaces by what they need from you:
+
+| Group | Workspaces |
+|---|---|
+| **Needs you** | A cloud that failed, waits for a decision, asks for GitHub access, or has a parked session that ended or is not found. |
+| **Cloud** | A cloud that is attached, disconnected, not deployed yet, or busy with an operation. A disconnected cloud shows **Disconnected**: its sessions continue on the worker. |
+| **Parked** | A cloud with parked terminals, or with a stopped worker. |
+| **This PC** | A workspace without a cloud. |
+
+Each group header shows how many workspaces it has. At the right of the header
+line, a summary in secondary text shows the hourly rate of the running workers of
+the group, **no local cost** for **Parked**, and **live** for **This PC**. The
+summary never wraps. When the sidebar is narrow, it shows fewer parts, and then a
+shortened first part. Hover over it to see all of it.
+
+Each row shows a status dot, the workspace name and one status line. The status
+line is the last line with words on the screen of the primary terminal (the first
+agent, else the focused terminal, else the first terminal). Frames, prompts and
+footer hints are not status lines. For a parked cloud, the line comes from the
+session status that the worker sends. A parked row is compact: it shows only the
+dot and the name, and its dot shows the status line on hover. A filled dot is
+green when an agent works, yellow when the workspace waits for you, red when an
+operation failed, the accent color while Horizon works on the cloud, and grey when
+nothing runs. A ring is a parked cloud (green when an agent still works on the
+worker), or a stopped worker.
+
+Click a row to go to its workspace. A parked cloud then attaches, as described in
+[Parked terminals](#parked-terminals).
+
+#### Stop idle workers
+
+When a group has idle clouds, its header shows **Stop idle…**. An idle cloud is
+ready, its card offers **Stop**, no agent works on it, and it does not wait for
+you. A cloud whose sessions still attach is not idle. A parked cloud is idle only
+after a status read shows each of its parked terminals: right after the park or
+after a failed read, it is not offered. Click **Stop idle…** to open a list of the idle clouds of the group. Each
+cloud has a check box, its workspace and its hourly rate. All clouds are selected
+at first. Clear the clouds that must continue to run. Before you confirm, the
+dialog shows what the stop saves each hour, for example `Saves $0.024/h`. When a
+worker does not report a rate, the saving is a lower bound. Click
+**Stop N workers** to stop the selected workers, or **Keep running** to close the
+dialog. A cloud that became busy or started to work after the list was read
+continues to run. The status of a parked cloud can be some seconds old, so
+Horizon reads the status of its sessions again before it stops the worker. When an
+agent works, when the read does not find a parked session, or when no status
+arrives in 30 seconds, the cloud continues to run. A session that is not found
+moves the cloud to **Needs you**.
+
+Stop ends the running processes. The workspace storage is kept and stays
+billable, and **Resume** on the card starts a worker again.
 
 A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
 runtime card. Compute replacement retains the same network workspace but stops

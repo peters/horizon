@@ -72,6 +72,9 @@ pub struct Deployment {
     /// reported. Omitted when none, so earlier records keep their encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_self_stop: Option<super::worker_contract::SelfStop>,
+    /// Device identity observed after tailnet enrollment; reconnect refreshes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailnet_device: Option<super::tailnet::DeviceName>,
     /// Same-worker siblings pinned before the image was built. Omitted when none, so
     /// single-repository records keep their encoding; a set without members is none.
     #[serde(
@@ -351,6 +354,46 @@ mod tests {
         let encoded = serde_json::to_vec_pretty(&state).unwrap();
         assert_eq!(String::from_utf8(encoded).unwrap(), LEGACY_ENCODING);
         assert!(state.siblings.is_none());
+        assert!(state.tailnet_device.is_none());
+    }
+
+    #[test]
+    #[cfg(unix)] // Store::lock requires Unix directory durability.
+    fn tailnet_identity_survives_legacy_migration_and_refresh() {
+        use super::super::allocation::{AllocationId, ControllerId, ProjectId, ProjectIdentity, legacy::Records};
+
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut state: Deployment = serde_json::from_str(LEGACY_ENCODING).unwrap();
+        state.cloud_id = "legacy-cloud".into();
+        let actual = super::super::tailnet::DeviceName {
+            name: "renamed-worker-1.example.ts.net".into(),
+            observed: true,
+        };
+        state.tailnet_device = Some(actual.clone());
+        store.save(&state).unwrap();
+        assert_eq!(store.load().unwrap().unwrap().tailnet_device, Some(actual.clone()));
+        let identity = ProjectIdentity::new(
+            ProjectId::generate(),
+            "saved-session".into(),
+            "workspace".into(),
+            state.cloud_id.clone(),
+        )
+        .unwrap();
+        let records = Records::from_legacy(
+            &serde_json::to_vec(&state).unwrap(),
+            identity,
+            AllocationId::generate(),
+            ControllerId::generate(),
+        )
+        .unwrap();
+        let restored = Records::decode(&records.allocation_bytes().unwrap(), &records.project_bytes().unwrap())
+            .unwrap()
+            .deployment();
+        assert_eq!(restored.tailnet_device, Some(actual));
+        state.tailnet_device = None;
+        store.save(&state).unwrap();
+        assert!(store.load().unwrap().unwrap().tailnet_device.is_none());
     }
 
     #[test]

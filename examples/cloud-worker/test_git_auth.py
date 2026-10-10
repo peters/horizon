@@ -237,6 +237,57 @@ class GitGrantTests(unittest.TestCase):
                                         capture_output=True).returncode, 1)
         self.assertEqual(git('config', '--global', 'user.email', env=self.env), 'chosen@example.invalid')
 
+    def test_the_route_sends_github_urls_through_the_proxy_and_keeps_remote_urls_for_gh(self):
+        primary = self.bare(auth.GIT_DIR)
+        self.bare(auth.SIBLINGS / 'library/repository.git')
+        identities = [{key: grant[key] for key in (*auth.IDENTITY_FIELDS, 'target')} for grant in self.value['grants']]
+
+        def routed():
+            found = subprocess.run(['git', 'config', '--global', '--includes', '--get-regexp',
+                                    r'^(http\..*\.(proxy|sslcainfo)|url\..*)$'],
+                                   env=self.env, capture_output=True, text=True).stdout.splitlines()
+            return sorted(found)
+        expected = sorted(['http.https://github.com/.proxy http://127.0.0.1:47281',
+                           'http.https://github.com/.sslcainfo /run/horizon-worker/github-ca.pem',
+                           *('url.https://github.com/.insteadof ' + form for form in auth.REWRITTEN)])
+        # The agent's own entry that equals one of the route's stays after the route ends.
+        git('config', '--global', 'url.https://github.com/.insteadOf', 'git@github.com:', env=self.env)
+        auth.route(self.env, True)
+        auth.route(self.env, True)
+        self.assertEqual(routed(), sorted(expected + ['url.https://github.com/.insteadof git@github.com:']),
+                         'set once, however often the service starts')
+        git('config', '--global', '--unset-all', 'url.https://github.com/.insteadOf', env=self.env)
+        self.assertEqual(routed(), expected)
+        # Installs and restores leave the route to the service that holds the proxy's port.
+        auth.configure_chain({'grants': identities, 'previous': []})
+        auth.install(self.value)
+        auth.CREDENTIAL.unlink()
+        auth.restore_static({'previous': identities})
+        self.assertEqual(routed(), expected)
+        # gh finds the repository from the remote URL, which stays a github.com URL.
+        self.assertEqual(git('ls-remote', '--get-url', 'origin', cwd=primary, env=self.env),
+                         'https://github.com/example/consumer.git')
+        checkout = self.path / 'checkout'
+        git('init', '-q', str(checkout), env=self.env)
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        os.chdir(checkout)
+        for remote in ('https://github.com/example/consumer.git', 'git@github.com:example/consumer.git',
+                       'http://github.com/example/consumer'):
+            subprocess.run(['git', 'remote', 'remove', 'origin'], env=self.env, capture_output=True)
+            git('remote', 'add', 'origin', remote, env=self.env)
+            self.assertEqual(auth.gh_repository(self.env, ['pr', 'create']), 'example/consumer', remote)
+        git('config', '--global', 'url.https://example.invalid/.insteadOf', 'https://other.invalid/', env=self.env)
+        git('config', '--global', '--add', 'url.https://github.com/.insteadOf', 'git@github.com:', env=self.env)
+        auth.route(self.env, False)
+        self.assertEqual(routed(), ['url.https://example.invalid/.insteadof https://other.invalid/',
+                                    'url.https://github.com/.insteadof git@github.com:'],
+                         'only the route the helper wrote is removed')
+        self.assertFalse((Path(self.env['HOME']) / auth.ROUTE_FILE).exists())
+        self.assertEqual(subprocess.run(['git', 'config', '--global', '--get-all', 'include.path'], env=self.env,
+                                        capture_output=True).returncode, 1)
+        auth.route(self.env, False)
+
     def test_version_1_binding_still_installs_for_the_primary(self):
         primary = self.bare(auth.GIT_DIR)
         legacy = {key: self.primary[key] for key in auth.FIELDS}

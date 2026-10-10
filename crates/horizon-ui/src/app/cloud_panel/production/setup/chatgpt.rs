@@ -83,11 +83,21 @@ impl Card {
                     self.signing_out = None;
                 }
                 Ok(Err(message)) => {
+                    *connection_slot = None;
+                    self.connection = None;
                     self.message = Some((MessageTone::Error, message));
                     self.signing_out = None;
                 }
                 Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
-                Err(TryRecvError::Disconnected) => self.signing_out = None,
+                Err(TryRecvError::Disconnected) => {
+                    *connection_slot = None;
+                    self.connection = None;
+                    self.message = Some((
+                        MessageTone::Error,
+                        "Sign-out could not be verified. Reopen settings to check the saved account.".into(),
+                    ));
+                    self.signing_out = None;
+                }
             }
         }
         if let Some(rx) = &self.confirming {
@@ -292,6 +302,43 @@ pub(super) fn row(
 mod tests {
     use super::{Abort, Card};
     use crate::test_egui::DiscardTextures as _;
+
+    #[test]
+    fn uncertain_sign_out_invalidates_both_cached_connections() {
+        for disconnected in [false, true] {
+            let connection = horizon_core::cloud_runtime::chatgpt::Connection {
+                client_id: "client-a".into(),
+                email: None,
+                subject: "account-a".into(),
+                scopes: vec!["chatgpt.tokens.use.direct".into()],
+                plan_usage: true,
+                usage_confirmed: true,
+                signed_in: true,
+                saved_at_unix: 0,
+            };
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let mut card = Card {
+                loaded: true,
+                connection: Some(connection.clone()),
+                signing_out: Some(receiver),
+                ..Card::default()
+            };
+            if disconnected {
+                drop(sender);
+            } else {
+                sender
+                    .send(Err("The local clear could not be verified.".into()))
+                    .unwrap();
+            }
+            let mut slot = Some(connection);
+            let _ = egui::Context::default()
+                .run_ui(egui::RawInput::default(), |ui| card.tick(ui, &mut slot))
+                .discard_textures();
+            assert!(slot.is_none() && card.connection.is_none());
+            assert!(!card.busy());
+            assert!(card.message.is_some());
+        }
+    }
 
     #[test]
     fn a_failed_sign_in_stops_its_server_at_once() {

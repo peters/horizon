@@ -77,6 +77,7 @@ impl WebDriverService {
             BackendKind::ChromiumCdp => return Err("Chromium does not use WebDriver service startup".to_string()),
         };
 
+        let mut permit_system_access = note_system_access(config);
         for attempt in 1..=STARTUP_ATTEMPTS {
             let webdriver_listener = reserve_loopback_listener()?;
             let address = webdriver_listener
@@ -93,7 +94,16 @@ impl WebDriverService {
                 .transpose()
                 .map_err(|error| format!("failed to read reserved Firefox BiDi port: {error}"))?
                 .map(|address| address.port());
-            let args = service_args(config.backend, address.port(), bidi_port, base_args.clone());
+            let args = if config.backend == BackendKind::FirefoxBidi {
+                firefox_service_arguments(
+                    config,
+                    address.port(),
+                    bidi_port.unwrap_or(address.port()),
+                    permit_system_access,
+                )
+            } else {
+                service_args(config.backend, address.port(), bidi_port, base_args.clone())
+            };
             drop(bidi_listener);
             drop(webdriver_listener);
             let mut process = ServiceProcess::spawn(&command, &args, control.clone(), label)
@@ -113,19 +123,19 @@ impl WebDriverService {
                     });
                 }
                 if let Some(status) = process.child_status() {
-                    let error = format!(
-                        "{label} exited before becoming ready ({status}); stderr: {}",
-                        process.stderr_tail()
-                    );
-                    if attempt == STARTUP_ATTEMPTS {
-                        return Err(error);
+                    let stderr = process.stderr_tail();
+                    let complete = process.stderr_is_complete();
+                    match driver_exit(label, status, &stderr, permit_system_access, complete, attempt)? {
+                        DriverExit::DropSystemAccess => {
+                            permit_system_access = false;
+                            break;
+                        }
+                        DriverExit::Retry => break,
                     }
-                    tracing::warn!(attempt, "{error}; retrying with fresh reserved ports");
-                    break;
                 }
                 if Instant::now() >= deadline {
-                    let stderr = process.stderr_tail();
                     let _ = process.kill();
+                    let stderr = process.stderr_tail();
                     return Err(format!("timed out waiting for {label}; stderr: {stderr}"));
                 }
                 std::thread::sleep(STARTUP_POLL);
@@ -135,8 +145,91 @@ impl WebDriverService {
     }
 }
 
+enum DriverExit {
+    DropSystemAccess,
+    Retry,
+}
+
+fn note_system_access(config: &BrowserConfig) -> bool {
+    let permit = firefox_requests_system_access(config);
+    if permit {
+        tracing::warn!(
+            "geckodriver --allow-system-access is enabled; any local client that reaches this WebDriver port can run with Firefox UI privileges"
+        );
+    }
+    permit
+}
+
+fn driver_exit(
+    label: &str,
+    status: std::process::ExitStatus,
+    stderr: &str,
+    permit_system_access: bool,
+    stderr_complete: bool,
+    attempt: usize,
+) -> Result<DriverExit, String> {
+    let error = format!("{label} exited before becoming ready ({status}); stderr: {stderr}");
+    if retry_without_system_access(permit_system_access, stderr_complete, stderr) {
+        tracing::warn!("{error}; retrying without --allow-system-access");
+        if attempt == STARTUP_ATTEMPTS {
+            return Err(error);
+        }
+        return Ok(DriverExit::DropSystemAccess);
+    }
+    if attempt == STARTUP_ATTEMPTS {
+        return Err(error);
+    }
+    tracing::warn!(attempt, "{error}; retrying with fresh reserved ports");
+    Ok(DriverExit::Retry)
+}
+
 fn status_is_ready(status: &serde_json::Value) -> bool {
     status.pointer("/value/ready").and_then(serde_json::Value::as_bool) == Some(true)
+}
+
+pub(super) fn firefox_service_arguments(
+    config: &BrowserConfig,
+    port: u16,
+    bidi_port: u16,
+    permit_system_access: bool,
+) -> Vec<String> {
+    let mut extra = Vec::new();
+    // geckodriver 0.37 rejects this privilege inside `moz:firefoxOptions`.
+    // Older drivers reject the process flag, so startup retries without it.
+    if permit_system_access && firefox_requests_system_access(config) {
+        extra.push("--allow-system-access".to_string());
+    }
+    service_args(BackendKind::FirefoxBidi, port, Some(bidi_port), extra)
+}
+
+/// True only for a minimized Firefox session. Safari and `BrowserDefault` never
+/// pass `--allow-system-access`, so an unfinished stderr tail must not claim
+/// that startup is retrying without that flag.
+#[must_use]
+pub(super) fn firefox_requests_system_access(config: &BrowserConfig) -> bool {
+    config.firefox_system_access
+        && config.backend == BackendKind::FirefoxBidi
+        && config.automation_disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals
+}
+
+/// Drop `--allow-system-access` when geckodriver rejected it, or when the
+/// stderr reader did not finish. An unfinished tail must not count as acceptance.
+#[must_use]
+pub(super) fn retry_without_system_access(permit_system_access: bool, stderr_complete: bool, stderr: &str) -> bool {
+    permit_system_access && (!stderr_complete || geckodriver_rejected_system_access(stderr))
+}
+
+pub(super) fn geckodriver_rejected_system_access(stderr: &str) -> bool {
+    // clap 4 says "unexpected argument". clap 2 and 3 say
+    // "Found argument '--allow-system-access' which wasn't expected".
+    let text = stderr.to_ascii_lowercase().replace(['\u{2019}', '\u{2018}'], "'");
+    text.contains("allow-system-access")
+        && (text.contains("unexpected")
+            || text.contains("unrecognized")
+            || text.contains("unknown")
+            || text.contains("wasn't expected")
+            || text.contains("was not expected")
+            || text.contains("not valid in this context"))
 }
 
 fn service_args(backend: BackendKind, port: u16, bidi_port: Option<u16>, mut extra: Vec<String>) -> Vec<String> {
@@ -190,7 +283,7 @@ pub(super) fn prepare_profile(path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SafariLease, service_args, status_is_ready};
+    use super::{SafariLease, geckodriver_rejected_system_access, service_args, status_is_ready};
     use crate::BackendKind;
 
     #[test]
@@ -203,6 +296,86 @@ mod tests {
             service_args(BackendKind::SafariWebDriver, 5555, None, Vec::new()),
             ["--port", "5555"]
         );
+    }
+
+    #[test]
+    fn older_geckodriver_can_start_without_system_access() {
+        assert!(geckodriver_rejected_system_access(
+            "geckodriver: error: unexpected argument '--allow-system-access' found"
+        ));
+        assert!(geckodriver_rejected_system_access(
+            "error: Found argument '--allow-system-access' which wasn't expected, or isn't valid in this context"
+        ));
+        assert!(geckodriver_rejected_system_access(
+            "error: Found argument '--allow-system-access' which wasn’t expected, or isn’t valid in this context"
+        ));
+        assert!(!geckodriver_rejected_system_access("address already in use"));
+        assert!(!geckodriver_rejected_system_access(
+            "unexpected error while starting firefox"
+        ));
+        assert!(super::retry_without_system_access(true, false, ""));
+        assert!(super::retry_without_system_access(
+            true,
+            true,
+            "geckodriver: error: unexpected argument '--allow-system-access' found"
+        ));
+        assert!(!super::retry_without_system_access(
+            true,
+            true,
+            "address already in use"
+        ));
+        assert!(!super::retry_without_system_access(false, false, ""));
+        let config = crate::BrowserConfig {
+            backend: BackendKind::FirefoxBidi,
+            ..crate::BrowserConfig::default()
+        };
+        let browser_default = crate::BrowserConfig {
+            backend: BackendKind::FirefoxBidi,
+            automation_disclosure: crate::AutomationDisclosurePolicy::BrowserDefault,
+            ..crate::BrowserConfig::default()
+        };
+        let safari = crate::BrowserConfig {
+            backend: BackendKind::SafariWebDriver,
+            ..crate::BrowserConfig::default()
+        };
+        assert!(!super::firefox_requests_system_access(&config));
+        let opted_in = crate::BrowserConfig {
+            firefox_system_access: true,
+            ..config.clone()
+        };
+        assert!(super::firefox_requests_system_access(&opted_in));
+        assert!(!super::firefox_requests_system_access(&browser_default));
+        assert!(!super::firefox_requests_system_access(&safari));
+        assert!(!super::retry_without_system_access(
+            super::firefox_requests_system_access(&browser_default),
+            false,
+            ""
+        ));
+        assert!(!super::retry_without_system_access(
+            super::firefox_requests_system_access(&safari),
+            false,
+            ""
+        ));
+        assert!(
+            !super::firefox_service_arguments(&config, 9, 10, true)
+                .iter()
+                .any(|argument| argument == "--allow-system-access")
+        );
+        assert!(
+            super::firefox_service_arguments(&opted_in, 9, 10, true)
+                .iter()
+                .any(|argument| argument == "--allow-system-access")
+        );
+        assert!(
+            !super::firefox_service_arguments(&opted_in, 9, 10, false)
+                .iter()
+                .any(|argument| argument == "--allow-system-access")
+        );
+        let browser_default_opt_in = crate::BrowserConfig {
+            firefox_system_access: true,
+            ..browser_default.clone()
+        };
+        assert!(!super::firefox_requests_system_access(&browser_default_opt_in));
     }
 
     #[test]

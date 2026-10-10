@@ -28,7 +28,21 @@ reveal a helper panel as a workaround. Only when the user explicitly requests
 another independent browser session may you call `browser_create` with
 `allow_additional: true`. Omit `backend` to use Horizon's
 configured browser, or select `chromium`, `firefox`, or `safari` when the
-platform supports it. To run at a configured remote target instead of a
+platform supports it. Read `automation_disclosure` on `browser_list` and
+`browser_panel`. In the UI, hover the local backend picker or the remote identity
+header to read the same status. `common_signals_minimized` means the native
+`navigator.webdriver` getter is still native. On Firefox that result needs
+`firefox_system_access: true` and geckodriver 0.37 or newer. The option passes
+geckodriver `--allow-system-access`. Mozilla documents that flag as full
+system access for any local client that can reach the driver port. Leave it
+false unless that privilege is acceptable. `preload_fallback` means Firefox
+installed a script getter that returns false. Sign-in pages can reject that
+getter. The default minimized Firefox session uses that fallback. Chromium
+does not install it. A remote Firefox or Chromium session reports
+`unsupported_by_backend` for minimization. Remote Firefox does not clear the
+native flag or install the preload. Remote Chromium does not receive the
+local automation flag. `unreported` means an older manifest omitted the
+field. That is not an established result. To run at a configured remote target instead of a
 local browser, pass `target` with its name and omit `backend`; Horizon
 resolves the provider and credentials from its configuration, and a
 refusal carries a typed code and at most the target, provider or credential
@@ -55,7 +69,10 @@ for a known panel. Discovery and control are scoped to the workspace that
 contains your agent panel: `browser_list` never shows panels from other
 workspaces, every other tool rejects their ids, and a panel's `visible` field
 is host presentation state, not proof that the panel is in your workspace. If
-nothing usable is listed, create a panel rather than guessing an id. Before
+nothing usable is listed, create a panel rather than guessing an id. On a cloud
+worker, your injected actor must match a registered workspace session. For a
+request addressed to the current worker, an actor outside that workspace receives `panel_outside_workspace` before a browser starts.
+Use the registered session identity; do not retry an unregistered actor. Before
 interacting, call `browser_snapshot` or `browser_query` and prefer its
 short-lived `ref` in `browser_act`. Navigation, another snapshot or query, and
 `browser_wait` can invalidate earlier refs, so reacquire a ref immediately

@@ -522,19 +522,28 @@ fn safe_https_url(url: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
 }
 
-/// The manifest for a private app that can read and write repository contents and
-/// pull requests as its user. GitHub sends the manifest flow's code to
-/// `redirect_url`; user sign-ins return to `callback_url`. Device Flow and expiring
-/// tokens are app settings the manifest cannot set; GitHub turns expiring tokens on
-/// for new apps.
+/// The manifest for an app that can read and write repository contents and pull
+/// requests as its user. It is public because a private app installs only on the
+/// account that owns it, never on an organization; public only lets another account
+/// install it, and it reaches nothing until installed. GitHub shows `description` on
+/// the app's page. GitHub sends the manifest flow's code to `redirect_url`; user
+/// sign-ins return to `callback_url`. Device Flow and expiring tokens are app settings
+/// the manifest cannot set; GitHub turns expiring tokens on for new apps.
 #[must_use]
-pub fn manifest(name: &str, homepage: &str, redirect_url: &str, callback_url: &str) -> serde_json::Value {
+pub fn manifest(
+    name: &str,
+    description: &str,
+    homepage: &str,
+    redirect_url: &str,
+    callback_url: &str,
+) -> serde_json::Value {
     serde_json::json!({
         "name": name,
+        "description": description,
         "url": homepage,
         "redirect_url": redirect_url,
         "callback_urls": [callback_url],
-        "public": false,
+        "public": true,
         "request_oauth_on_install": false,
         "hook_attributes": {"url": homepage, "active": false},
         "default_permissions": {

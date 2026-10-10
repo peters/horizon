@@ -66,6 +66,26 @@ cannot claim readiness. Use returned SSH aliases and isolated worktrees for
 ordinary SSH, Git, or rsync work within the authorized task. A stopped or
 unavailable target needs owner action; inspection grants no new access.
 
+## Tailnet device identity
+
+In a cloud card, open **Connections** and read **Tailnet** > **Device name**.
+Use **Copy** to copy that name. The first entry in the worker's public device
+snapshot supplies the actual name, including an administrator rename or collision
+suffix. Horizon removes the final DNS dot. A full reported name includes the
+MagicDNS domain. A bare name does not include an unknown domain.
+
+Connect again to refresh this saved observation. Horizon reads the snapshot after
+enrollment during each deployment or reconnection. The worker needs its existing
+`/usr/bin/python3` and atomic inventory publisher. Horizon waits for two new
+snapshot generations. The second generation excludes an earlier status read that
+was still in progress during reconnection. The read has a 15-second limit and
+can be cancelled. It does not poll the tailnet from the drawer. If freshness
+cannot be confirmed, only an image with
+`horizon-tailnet-contract=2` supplies the derived stable name. Older images do
+not supply a derived name. This fallback is an expected short name; it is not a
+confirmed device identity or full MagicDNS address. No tailnet selection means
+no saved device identity.
+
 ## Local Network Bridge
 
 On Unix workers, `horizon-cloud-worker local-network mcp` provides these tools:
@@ -108,6 +128,24 @@ to click **Open Container registry**, add the credential, and then click the
 retry in the card header: **Retry deploy**, **Reconnect** or **Resume worker**,
 for the operation that failed.
 
+## Cloud list in the sidebar
+
+The sidebar groups the person's workspaces in **Needs you**, **Cloud**, **Parked**
+and **This PC**. **Needs you** holds a cloud that failed or waits for a decision,
+whose parked session ended or is not found, or whose agent waits for GitHub
+access. **Cloud** holds a cloud that is attached, disconnected, not deployed yet,
+or busy with an operation. A disconnected cloud shows **Disconnected**: its
+sessions continue on the worker. **Parked** holds a cloud
+with parked terminals or a stopped worker. **This PC** holds workspaces without a
+cloud. Each row shows a status dot and one status line, for example the last line
+of a parked agent. A **Parked** row is compact: its status line is the hover and
+accessibility text of its dot. A group header shows the hourly cost of its running
+workers. A click on a row goes to its workspace, and a parked cloud then attaches.
+A group with idle clouds shows **Stop idle…**: the person selects idle clouds and
+sees the hourly saving before their workers stop. No MCP tool reads or changes
+this list. To find a cloud for the person, name its
+workspace and its group.
+
 ## GitHub access
 
 With Connect GitHub (Horizon **Cloud settings › GitHub**), each cloud's worker holds
@@ -132,10 +170,22 @@ Windows PowerShell installation must be available. Horizon verifies a
 protected discretionary access control list (DACL) for the current user
 before it writes or reads credentials.
 A cancelled attempt does not open a new authorization page.
+On Unix, credential reads reject a directory that another user owns or can access.
+Save checks the current saved account again. If another window changes or signs
+out that account, reopen settings before saving. An uncertain sign-out clears
+the card's cached account status until settings load it again.
 
 - Git and `gh` work without a token in the environment. The worker's root service
   answers for the cloud's repositories and its same-worker siblings. Agents never
   see the refresh token.
+- Git reaches github.com through the worker's Git proxy (`http.https://github.com/.proxy`
+  and `.sslCAInfo` in `~/.config/git/horizon-route`, which the global Git configuration
+  includes; leave them in place). Remote
+  URLs stay `https://github.com/...`, so `gh` still finds the repository of a
+  checkout. The proxy adds the cloud's access only for the cloud's repositories,
+  so Git never holds a token. Public repositories stay readable. A refusal shows
+  as `remote: Horizon: ...`; for a repository the task needs, ask with
+  `github_access`.
 - On workers whose image provides it, `horizon-worker-github mcp` offers
   `github_access` (`repository`, `access` `push` or `read`, `reason`). It asks the
   person for access to one more repository. The person allows it for the cloud,
@@ -144,6 +194,13 @@ A cancelled attempt does not open a new authorization page.
   repository instead of a new request.
 - Ask only for a repository the task needs, with a short, true reason. A
   repository where the person's GitHub App is not installed cannot be allowed.
+- For an organization's repository, the person installs their GitHub App on that
+  organization too. Apps that Connect GitHub creates are public so that an
+  organization can install them; an app only reaches repositories where it is
+  installed. An app that an older Horizon created is private and installs only on
+  its owner's account: its owner first selects **Make public** in the app's
+  **Advanced** settings on GitHub. Tell the person these steps; agents cannot take
+  them.
 - When the cloud has no GitHub access, do not ask the person for a token. Say that
   GitHub is not connected for this cloud.
 - On this computer, **New cloud** lists the repositories the person's GitHub App is
