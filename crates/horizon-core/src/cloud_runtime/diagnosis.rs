@@ -253,10 +253,10 @@ fn known_cause(lower: &str) -> bool {
 }
 
 /// Whether `marker` begins a word of `text`: "error:" and "errors" count, the
-/// "error" in a crate named "thiserror" does not.
+/// "error" in a crate named "thiserror" or a field named `last_error` does not.
 fn starts_a_word(text: &str, marker: &str) -> bool {
     text.match_indices(marker)
-        .any(|(index, _)| !text[..index].ends_with(|c: char| c.is_ascii_alphanumeric()))
+        .any(|(index, _)| !text[..index].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_'))
 }
 
 /// Counts of nothing, such as `0 failed` in `test result: ok. 214 passed; 0 failed`,
@@ -385,6 +385,16 @@ mod tests {
             "error: could not connect",
             "a later success summary is not picked as the cause"
         );
+    }
+
+    #[test]
+    fn a_field_named_after_an_error_is_not_a_failure() {
+        let status = r#"{"state":"ok","login":"octo-cat","serving":true,"last_error":null}"#;
+        assert!(!is_failure(status), "{status}");
+        assert!(!is_failure("retry_failed_count: 0"));
+        assert!(is_failure("error: x"));
+        let found = diagnose(["error: x", status].into_iter(), "Deployment failed").unwrap();
+        assert_eq!(found.cause, "error: x", "the JSON line is never the root cause");
     }
 
     #[test]

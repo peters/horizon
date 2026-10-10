@@ -297,7 +297,7 @@ fn the_manifest_asks_for_contents_and_pull_requests_only() {
         "http://127.0.0.1:1234/manifest",
         "http://127.0.0.1/callback",
     );
-    assert_eq!(manifest["public"], false);
+    assert_eq!(manifest["public"], true, "an organization can install it");
     assert_eq!(manifest["hook_attributes"]["active"], false);
     assert_eq!(
         manifest["default_permissions"],

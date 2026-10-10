@@ -155,7 +155,7 @@ pub(super) fn start_page(port: u16, state: &str, name: &str) -> String {
     format!(
         "<!doctype html><meta charset=utf-8><title>Connect GitHub</title>\
          <body style=\"font:15px system-ui;background:#0d1117;color:#e6edf3;padding:40px\">\
-         <p>Opening GitHub to create your private Horizon app…</p>\
+         <p>Opening GitHub to create your Horizon app…</p>\
          <form id=f method=post action=\"https://github.com/settings/apps/new?state={state}\">\
          <input type=hidden name=manifest value=\"{escaped}\">\
          <button type=submit>Continue to GitHub</button></form>\

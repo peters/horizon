@@ -100,6 +100,12 @@ impl Settings {
         format!("https://github.com/apps/{}/installations/new", self.slug)
     }
 
+    /// The page where the app's owner makes it public, so that another account can install it.
+    #[must_use]
+    pub fn visibility_url(&self) -> String {
+        format!("https://github.com/settings/apps/{}/advanced", self.slug)
+    }
+
     fn client_secret(&self) -> Result<Secret> {
         validate_private_key_file(&self.client_secret_file)?;
         let secret = zeroize::Zeroizing::new(std::fs::read_to_string(&self.client_secret_file)?);
@@ -433,11 +439,7 @@ fn sign_in(
         .into_iter()
         .partition(|grant| installed.contains(&grant.repository));
     for grant in &missing {
-        say(&format!(
-            "the app is not installed on {}. Add it at {}",
-            grant.repository,
-            settings.installation_url()
-        ));
+        say(&not_installed(settings, &user.login, &grant.repository));
     }
     if reachable.is_empty() {
         return Ok(Signed::Refused(
@@ -474,6 +476,25 @@ fn sign_in(
     Ok(Signed::In {
         complete: missing.is_empty(),
     })
+}
+
+/// What to do for a repository the app is not installed on. Another account, such as an
+/// organization, can install the app only when it is public, and an app that Horizon
+/// created before its apps were public is private.
+fn not_installed(settings: &Settings, login: &str, repository: &str) -> String {
+    let owner = repository.split_once('/').map_or(repository, |(owner, _)| owner);
+    if owner.eq_ignore_ascii_case(login) {
+        return format!(
+            "the app is not installed on {repository}. Add it at {}",
+            settings.installation_url()
+        );
+    }
+    format!(
+        "the app is not installed on {repository}. The app belongs to {login}, so it installs on {owner} \
+         only when it is public: if it is private, select Make public at {}, then add it to {owner} at {}",
+        settings.visibility_url(),
+        settings.installation_url()
+    )
 }
 
 /// Whether access to `repositories` reaches every grant of the cloud; never for a cloud

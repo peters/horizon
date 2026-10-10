@@ -31,7 +31,13 @@ pub(super) enum Status {
 }
 
 pub(super) fn status(connection: &Connection, runner: &Runner<'_>) -> Result<Status> {
-    let output = runner.run(
+    // The status is parsed, not shown: its JSON line is not deployment output.
+    let quiet = Runner {
+        cancel: runner.cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let output = quiet.run(
         "GitHub access status",
         &mut connection.command(STATUS),
         Duration::from_secs(20),

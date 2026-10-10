@@ -292,11 +292,16 @@ for private file permissions, repository matching, removal and token-scope limit
 **Cloud settings › GitHub › Connect GitHub** gives clouds GitHub access as you,
 with no token to create or copy.
 
-1. Horizon opens GitHub in your browser with a private GitHub App already
-   described. You click **Create GitHub App**. Horizon keeps the app's client
+1. Horizon opens GitHub in your browser with a GitHub App already described.
+   You click **Create GitHub App**. Horizon keeps the app's client
    secret in `credentials/github-app-<app>` (0600) and never keeps its private key.
 2. GitHub shows the installation page. You choose the repositories that clouds
-   may reach. **Choose repositories** on the card opens this page again.
+   may reach. **Choose repositories** on the card opens this page again. To give
+   clouds the repositories of an organization, install the app on that
+   organization too. The app is public so that an organization can install it;
+   it reaches only the repositories where it is installed. An app that an older
+   Horizon created is private: select **Make public** in its **Advanced**
+   settings first.
 3. GitHub does not let a new app turn on its device sign-in. When the card says
    so, open the app's settings, select **Enable Device Flow** and save. This is
    needed once, for the default mode.

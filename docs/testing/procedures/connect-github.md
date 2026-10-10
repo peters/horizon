@@ -46,6 +46,9 @@ after one approval.
 - For G09: a checkout whose `.horizon/cloud.yml` profile builds an image to a test
   package `ghcr.io/<owner>/<test-image>`, and no image repository bound for it in
   **Cloud settings › Container registry**.
+- For G11: a test organization `<org>` that the GitHub account owns, with a test
+  repository `<org>/<repo-c>`, and a local checkout of `<repo-c>` with a committed
+  `.horizon/cloud.yml`.
 - A browser that is signed in to the GitHub account. It is the default browser.
 
 ## 5. Setup
@@ -347,6 +350,32 @@ after one approval.
 
    Result: The list shows without a sign-in.
 
+### 6.11 G11 — Install the app on an organization
+
+1. On GitHub, open the settings of the app, then **Advanced**.
+
+   Result: GitHub shows **Make private**. The app is public, so other accounts can
+   install it.
+
+2. Open the checkout of `<repo-c>` and start a cloud `gh-org` in Ask mode. Approve
+   the code on GitHub.
+
+   Result: The steps card shows **GitHub: the app is not installed on
+   <org>/<repo-c>.** It also says that the app installs on `<org>` only when it is
+   public, and it shows the links to the **Advanced** page and the installation
+   page.
+
+3. Open the installation page, select `<org>`, then select `<repo-c>` and click
+   **Install**.
+
+   Result: GitHub shows the app installed on `<org>`.
+
+4. Click **Connect GitHub** again on the `gh-org` card. Approve the code on GitHub.
+
+   Result: The card shows the cloud connected to `<org>/<repo-c>`. The deployment
+   output shows no line of JSON from the worker's GitHub service, and no diagnosis
+   names such a line as the root cause.
+
 ## 7. Pass criteria
 
 - The app secret file is private, and Horizon keeps no private key of the app.
@@ -361,14 +390,15 @@ after one approval.
 - The first push to `ghcr.io` asks once to publish images, and a later push does not.
 - New cloud lists the connected repositories after one sign-in of this computer and
   clones a private one without a token.
+- A new app is public. An organization installs it and its cloud gets access.
 
 ## 8. Cleanup
 
-> **CAUTION:** THE NEXT STEP DELETES SIX CLOUDS AND THEIR WORKSPACES. Delete only
+> **CAUTION:** THE NEXT STEP DELETES SEVEN CLOUDS AND THEIR WORKSPACES. Delete only
 > the clouds of this procedure.
 
-1. Delete the clouds `gh-ask`, `gh-skip`, `gh-auto`, `gh-auto-2`, `gh-publish` and
-   `gh-publish-2` with **Delete cloud…**.
+1. Delete the clouds `gh-ask`, `gh-skip`, `gh-auto`, `gh-auto-2`, `gh-publish`,
+   `gh-publish-2` and `gh-org` with **Delete cloud…**.
 
    Result: The board does not show them. The provider shows no worker for them.
 

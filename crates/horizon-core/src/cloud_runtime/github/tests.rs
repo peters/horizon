@@ -557,3 +557,26 @@ fn only_access_to_every_checkout_replaces_the_settings_binding() {
         "no grants is not complete access"
     );
 }
+
+#[test]
+fn a_repository_of_another_account_needs_a_public_app() {
+    let app = settings(Mode::Ask, std::path::Path::new("/secret"));
+    let own = not_installed(&app, "Octo-Cat", "octo-cat/web");
+    assert_eq!(
+        own,
+        "the app is not installed on octo-cat/web. Add it at https://github.com/apps/horizon-example/installations/new"
+    );
+    let org = not_installed(&app, "Octo-Cat", "acme/web");
+    assert!(
+        org.starts_with("the app is not installed on acme/web. The app belongs to Octo-Cat"),
+        "{org}"
+    );
+    assert!(
+        org.contains("select Make public at https://github.com/settings/apps/horizon-example/advanced"),
+        "{org}"
+    );
+    assert!(
+        org.ends_with("add it to acme at https://github.com/apps/horizon-example/installations/new"),
+        "{org}"
+    );
+}
