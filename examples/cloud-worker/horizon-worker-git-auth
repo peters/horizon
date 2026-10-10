@@ -286,32 +286,33 @@ def install_identities(value, previous=None):
 
 def install_as_root(value, agent=None):
     """Under agent isolation the agent configures Git and keeps the identities; root keeps the
-    token. An earlier image's token file leaves the agents' reach first (back if this fails)."""
+    token. An earlier image's token file is emptied in place (with its hard links) and removed
+    first; if this install fails, the root-only file keeps that earlier binding instead."""
     grants(value)
-    earlier = ROOT_CREDENTIAL.with_name('earlier-binding.json')
-    private_folder(earlier.parent)
-    moved = False
+    earlier = previous = None
+    with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
+        found = read_private(CREDENTIAL, owner=AGENT_UID)
+        earlier, previous = found, stripped(found)
     with contextlib.suppress(OSError):
-        if stat.S_ISREG(CREDENTIAL.lstat().st_mode):
-            os.rename(CREDENTIAL, earlier)
-            moved = True
+        fd = os.open(CREDENTIAL, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                os.ftruncate(fd, 0)
+        finally:
+            os.close(fd)
+    with contextlib.suppress(IsADirectoryError, PermissionError):
+        CREDENTIAL.unlink(missing_ok=True)
     try:
-        legacy = None
-        with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
-            legacy = stripped(read_private(earlier, owner=AGENT_UID)) if moved else None
-        payload = {'binding': stripped(value), 'previous': legacy}
+        payload = {'binding': stripped(value), 'previous': previous}
         (agent or (lambda operation, data: subprocess.run(
             [*AGENT_RUNNER, operation], input=json.dumps(data).encode(), check=True, cwd='/workspace',
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)))('install-identity', payload)
         write_private(value, ROOT_CREDENTIAL)
     except BaseException:
-        if moved:
-            with contextlib.suppress(OSError):
-                os.rename(earlier, CREDENTIAL)
+        if earlier is not None:
+            with contextlib.suppress(ValueError, OSError):
+                write_private(earlier, ROOT_CREDENTIAL)
         raise
-    earlier.unlink(missing_ok=True)
-    with contextlib.suppress(IsADirectoryError, PermissionError):  # it could not move, such as across filesystems
-        CREDENTIAL.unlink(missing_ok=True)
 
 
 def clear():

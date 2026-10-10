@@ -109,15 +109,29 @@ class GitAuthenticationTests(unittest.TestCase):
             auth.clear()
         self.assertFalse(root_file.exists())
 
-    def test_an_earlier_token_file_that_cannot_move_goes_after_the_root_write(self):
+    def test_an_earlier_token_file_is_emptied_with_its_hard_links_before_the_agent_works(self):
         auth.write_private(self.value, auth.CREDENTIAL)
+        linked = auth.CREDENTIAL.with_name('copy.json')
+        os.link(auth.CREDENTIAL, linked)
         root_file = self.path / 'root/static-binding.json'
+
+        def agent(operation, value):
+            self.assertEqual(linked.stat().st_size, 0, 'a hard link holds no token while the agent works')
+            self.assertFalse(auth.CREDENTIAL.exists())
         with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
                 mock.patch.object(auth, 'root_holds_token', return_value=True), \
-                mock.patch.object(auth.os, 'rename', side_effect=OSError(18, 'Invalid cross-device link')):
-            auth.install_as_root(self.value, lambda operation, value: None)
-        self.assertFalse(auth.CREDENTIAL.exists())
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()):
+            auth.install_as_root(self.value, agent)
         self.assertTrue(root_file.exists())
+
+    def test_a_link_in_place_of_the_earlier_file_is_removed_before_the_agent_works(self):
+        auth.CREDENTIAL.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(self.path / 'elsewhere.json', auth.CREDENTIAL)
+        seen = []
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', self.path / 'root/static-binding.json'), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True):
+            auth.install_as_root(self.value, lambda operation, value: seen.append(auth.CREDENTIAL.is_symlink()))
+        self.assertEqual(seen, [False])
 
     def test_the_gh_fallback_under_isolation_reads_the_routed_configuration(self):
         isolated = self.path / 'isolated'
@@ -129,15 +143,19 @@ class GitAuthenticationTests(unittest.TestCase):
             auth.main()
         self.assertEqual(execute.call_args.args[2]['GH_CONFIG_DIR'], '/workspace/home/.config/gh')
 
-    def test_a_failed_root_write_keeps_the_earlier_binding(self):
+    def test_a_failed_install_keeps_the_earlier_binding_where_only_root_reads_it(self):
         auth.write_private(self.value, auth.CREDENTIAL)
-        with mock.patch.object(auth, 'ROOT_CREDENTIAL', self.path / 'root/static-binding.json'), \
+        root_file = self.path / 'root/static-binding.json'
+
+        def agent(operation, value):
+            raise subprocess.CalledProcessError(1, 'install-identity')
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
                 mock.patch.object(auth, 'root_holds_token', return_value=True), \
                 mock.patch.object(auth, 'AGENT_UID', os.getuid()), \
-                mock.patch.object(auth, 'write_private', side_effect=ValueError('no storage')), \
-                self.assertRaises(ValueError):
-            auth.install_as_root(self.value, lambda operation, value: None)
-        self.assertEqual(auth.read_grants()[1][0]['token'], self.value['token'], 'the earlier binding is back')
+                self.assertRaises(subprocess.CalledProcessError):
+            auth.install_as_root(dict(self.value, token='synthetic-new-token'), agent)
+        self.assertFalse(auth.CREDENTIAL.exists())
+        self.assertEqual(json.loads(root_file.read_text())['token'], self.value['token'])
 
     def test_a_token_file_of_another_account_is_refused(self):
         with mock.patch.object(auth.subprocess, 'run'):

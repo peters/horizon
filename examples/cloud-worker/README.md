@@ -680,7 +680,8 @@ from source, images and session state in `/run/horizon-credentials/github.json`
 `/run/horizon-github/static-binding.json` (root only), and the agents' directory
 keeps only the binding's repositories and identities, in
 `/run/horizon-credentials/github-identity.json`; no agent process can read the
-token. Git's HTTPS helper matches the exact repository path; `gh` reads the same
+token. A token file that an earlier image left in the agents' directory is emptied
+in place, with every hard link to it, and removed before the agent configures Git. Git's HTTPS helper matches the exact repository path; `gh` reads the same
 binding into only its child environment where the agent can read it. On an image with the
 `horizon-worker-github` service, the binding is a fallback for the repositories
 that Connect GitHub does not reach: the service's Git proxy adds its token, and
