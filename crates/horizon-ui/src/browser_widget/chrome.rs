@@ -541,6 +541,112 @@ mod tests {
     }
 
     #[test]
+    fn disclosure_status_stays_visible_on_a_narrow_panel() {
+        for width in [720.0, 280.0] {
+            assert!(
+                hover_shows_status(local_disclosure_panel(), "common_signals_minimized", width),
+                "local picker hid common_signals_minimized at width {width}"
+            );
+            assert!(
+                hover_shows_status(remote_disclosure_panel(), "unsupported_by_backend", width),
+                "remote identity hid unsupported_by_backend at width {width}"
+            );
+        }
+    }
+
+    fn local_disclosure_panel() -> BrowserPanelState {
+        let local = BrowserPanelState::inert();
+        local
+            .frame_slot
+            .publish_backend_capabilities_for_tests(disclosure_capabilities(
+                BackendKind::FirefoxBidi,
+                true,
+                horizon_browser::AutomationDisclosureStatus::CommonSignalsMinimized,
+            ));
+        local
+    }
+
+    fn remote_disclosure_panel() -> BrowserPanelState {
+        let remote = BrowserPanelState::inert_remote("ios_phone", "browserstack");
+        remote
+            .frame_slot
+            .publish_backend_capabilities_for_tests(disclosure_capabilities(
+                BackendKind::ChromiumCdp,
+                false,
+                horizon_browser::AutomationDisclosureStatus::UnsupportedByBackend,
+            ));
+        remote
+    }
+
+    fn disclosure_capabilities(
+        backend: BackendKind,
+        bidi: bool,
+        automation_disclosure: horizon_browser::AutomationDisclosureStatus,
+    ) -> horizon_browser::ActiveBackendCapabilities {
+        horizon_browser::ActiveBackendCapabilities {
+            backend,
+            capabilities: horizon_browser::BackendCapabilities::remote_session(),
+            bidi,
+            automation_disclosure,
+        }
+    }
+
+    fn hover_shows_status(mut browser: BrowserPanelState, status: &str, width: f32) -> bool {
+        let height = 220.0;
+        for y in [12.0, 46.0, 78.0] {
+            let mut x = 8.0;
+            while x < width {
+                if status_inside(&mut browser, status, width, height, egui::pos2(x, y)) {
+                    return true;
+                }
+                x += 20.0;
+            }
+        }
+        false
+    }
+
+    fn status_inside(
+        browser: &mut BrowserPanelState,
+        status: &str,
+        width: f32,
+        height: f32,
+        pointer: egui::Pos2,
+    ) -> bool {
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+        let mut pass = |time: f64| {
+            ctx.run_ui(hover_input_size(pointer, time, width, height), |ui| {
+                let mut state = crate::browser_widget::BrowserUiState::default();
+                super::show(ui, horizon_core::PanelId(2), browser, &mut state, true);
+            })
+            .discard_textures()
+        };
+        let _ = pass(0.0);
+        shape_has_status(&pass(1.0), status, width, height)
+    }
+
+    fn shape_has_status(output: &egui::FullOutput, status: &str, width: f32, height: f32) -> bool {
+        fn walk(shape: &egui::Shape, status: &str, width: f32, height: f32) -> bool {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text.contains(status) => {
+                    let bounds = text.visual_bounding_rect();
+                    bounds.width() > 0.0
+                        && bounds.left() >= -1.0
+                        && bounds.right() <= width + 1.0
+                        && bounds.top() >= -1.0
+                        && bounds.bottom() <= height + 1.0
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().any(|shape| walk(shape, status, width, height)),
+                _ => false,
+            }
+        }
+        output
+            .shapes
+            .iter()
+            .any(|shape| walk(&shape.shape, status, width, height))
+    }
+
+    #[test]
     fn remote_identity_hover_shows_the_disclosure_status() {
         let mut remote = BrowserPanelState::inert_remote("ios_phone", "browserstack");
         remote
@@ -571,8 +677,12 @@ mod tests {
     }
 
     fn hover_input(pointer: egui::Pos2, time: f64) -> egui::RawInput {
+        hover_input_size(pointer, time, 720.0, 200.0)
+    }
+
+    fn hover_input_size(pointer: egui::Pos2, time: f64, width: f32, height: f32) -> egui::RawInput {
         egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(720.0, 200.0))),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
             time: Some(time),
             events: vec![egui::Event::PointerMoved(pointer)],
             ..egui::RawInput::default()

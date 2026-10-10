@@ -14,6 +14,7 @@ owner: peters
 
 This procedure tests the native Firefox `navigator.webdriver` getter.
 It also tests the preload fallback and one synthetic sign-in check.
+It also tests the disclosure status on the local picker and the remote identity hover.
 
 ## 2. Applicability
 
@@ -246,6 +247,14 @@ It also tests the preload fallback and one synthetic sign-in check.
 
     Result: The login form is still open. Continue stays unused.
 
+### 6.7 STATUS — Disclosure text at two panel widths
+
+1. Run `cargo test -p horizon-ui --bin horizon disclosure_status_stays_visible_on_a_narrow_panel`.
+
+   Result: The local picker tooltip shows `common_signals_minimized`.
+   The remote identity tooltip shows `unsupported_by_backend`.
+   Both strings stay inside the panel at width 720 and at width 280.
+
 ## 7. Pass criteria
 
 - Task 6.1 reports the title `false native`.
@@ -253,6 +262,7 @@ It also tests the preload fallback and one synthetic sign-in check.
 - Task 6.6 starts with `browser.firefox_system_access` set to true.
 - Task 6.6 shows "Couldn't find this account".
 - Task 6.6 does not show "This browser or app may not be secure."
+- Task 6.7 shows both disclosure strings at width 720 and at width 280.
 
 ## 8. Cleanup
 
