@@ -489,7 +489,10 @@ def allow_task(data, record, result, current):
     """Adds a task grant for the session that asked, under the book's lock."""
     grants, access = [], record['access']
     for grant in data['task_grants']:
-        if grant['root'] == record['root'] and grant['account'] == record['account'] \
+        # A grant of another account serves nothing any more; it does not count.
+        if grant['account'] != record['account']:
+            continue
+        if grant['root'] == record['root'] \
                 and auth.same_repository(grant['repository'], record['repository']):
             access = common.stronger(access, grant['access'])
         else:

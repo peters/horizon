@@ -199,6 +199,13 @@ class DecisionTests(ServiceTestCase):
                                        check=another_account)['error'], 'chain_changed')
         self.assertEqual(self.book.read()['task_grants'], [])
 
+    def test_grants_of_another_account_do_not_count_toward_the_bound(self):
+        with self.book.edit() as data:
+            data['task_grants'] = [grant('example/old', 'push', tasks.root(os.getpid()), ['other-app', 'someone'])]
+        with mock.patch.object(tasks, 'MAX_TASK_GRANTS', 1):
+            self.assertEqual(self.decide(self.ask(self.me)['id'])['status'], 'allowed')
+        self.assertEqual([item['repository'] for item in self.book.read()['task_grants']], ['example/extra'])
+
     def test_every_decision_drops_ended_task_grants(self):
         with self.book.edit() as data:
             data['task_grants'] = [grant('example/gone', 'push', (os.getpid(), self.me[3][1] + 1),
