@@ -195,8 +195,8 @@ def plan(store, repository, access, now, static=static_binding, holders=lambda: 
     it may do. Raises Refusal for a push that neither covers."""
     state, problem = usable_state(store)
     book = agents.Book(store.runtime)
-    granted, name = agents.granted_access(state, repository, lambda wanted: agents.task_access(
-        book, state, holders())(wanted)) if state is not None else (None, repository)
+    granted, name = agents.granted_access(state, repository, agents.task_access(
+        book, state, holders)) if state is not None else (None, repository)
     if granted is not None and agents.covered(granted, access):
         if state['chain']['access_expires_at'] - now <= common.SERVE_MARGIN:
             raise refusal(503, 'the GitHub access token expired and this worker could not refresh it yet.')
@@ -313,7 +313,15 @@ class Exchange:
         self.store, self.stream, self.output, self.environ = store, stream, output, environ
         # `owned` tells whether the allowed account still holds the client end; `holders`
         # gives the processes that hold it, for task grants.
-        self.headed, self.owned, self.holders = headed, owned, holders
+        self.headed, self.owned = headed, owned
+        found = []
+
+        def once():
+            # Scanned once per request: the plan and its check before sending share it.
+            if not found:
+                found.append(holders())
+            return found[0]
+        self.holders = once
         self.record = record if record is not None else new_record('invalid')
         self.request = None
         # Set once the reply to the client may have begun; no refusal can follow it.

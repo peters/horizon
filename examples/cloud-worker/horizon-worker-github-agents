@@ -168,9 +168,13 @@ def granted_access(state, repository, task=None):
 
 
 def task_access(book, state, pids):
-    """`task` for granted_access: the task grants of the caller held by the processes `pids`."""
+    """`task` for granted_access: the task grants of the caller held by the processes `pids`,
+    a list or a function that gives it, which runs only when there are task grants."""
     def access(repository):
-        return tasks.access(book.read()['task_grants'], repository, pids, account(state))
+        grants = book.read()['task_grants']
+        if not grants:
+            return None
+        return tasks.access(grants, repository, pids() if callable(pids) else pids, account(state))
     return access
 
 

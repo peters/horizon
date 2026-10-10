@@ -167,6 +167,12 @@ class DecisionTests(ServiceTestCase):
         found, _ = service.broker.candidates(self.store, NOW, static=lambda: None, pid=self.outside)
         self.assertFalse(found[0].allowed('example/extra', 'read'))
 
+    def test_the_proxy_looks_for_the_callers_processes_only_when_a_task_has_grants(self):
+        def holders():
+            raise AssertionError('no task grant, so no scan')
+        plan = service.gitproxy.plan(self.store, 'example/other', 'read', NOW, holders=holders)
+        self.assertIsNone(plan.token)
+
     def test_a_session_that_ended_is_not_allowed(self):
         ended = self.me[:3] + ([os.getpid(), self.me[3][1] + 1],)
         identifier = self.ask(ended)['id']
