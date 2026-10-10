@@ -55,9 +55,11 @@ impl HorizonApp {
         // their snapshots, and the worker's last status is still the best line.
         if matches!(condition, Condition::Ready | Condition::Idle) && runtime.parking.is_parked() {
             let statuses = runtime.parking.statuses();
-            working = statuses
-                .values()
-                .any(|status| status.activity == SessionActivity::Working);
+            // A terminal that is still attached reports for itself.
+            working = attached_working
+                || statuses
+                    .values()
+                    .any(|status| status.activity == SessionActivity::Working);
             // Right after the park, after a failed read, or for a terminal that parked
             // since the last read, nothing shows that no agent works.
             known = !runtime.parking.read_failed()
