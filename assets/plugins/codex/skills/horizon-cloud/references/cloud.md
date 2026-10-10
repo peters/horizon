@@ -191,6 +191,16 @@ GitHub and chooses its repositories; agents cannot set it up.
   so Git never holds a token. Public repositories stay readable. A refusal shows
   as `remote: Horizon: ...`; for a repository the task needs, ask with
   `github_access`.
+- `gh` reaches GitHub through the worker's API broker (`http_unix_socket` in the gh
+  configuration; leave it in place) and holds only the placeholder token
+  `horizon-api-broker`, so `gh auth token` prints that. The broker adds the cloud's
+  access to requests for the cloud's repositories: a repository's own REST paths,
+  searches with a `repo:` qualifier for each repository, and GraphQL that reads
+  or changes only those repositories. Pass `-R owner/name` or work in a checkout.
+  It refuses account-wide and organization-wide requests, such as `gh api
+  user/repos`, and changes to repository settings. A refusal shows as
+  `Horizon: ...` (`GraphQL: Horizon: ...` for GraphQL); for a repository the
+  task needs, ask with `github_access`.
 - On workers whose image provides it, `horizon-worker-github mcp` offers
   `github_access` (`repository`, `access` `push` or `read`, `reason`). It asks the
   person for access to one more repository. The person allows it for the cloud,

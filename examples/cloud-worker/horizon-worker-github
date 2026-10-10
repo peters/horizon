@@ -40,6 +40,7 @@ def load_common():
 common = load_common()
 agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_github_agents')
 gitproxy = common.load_sibling('horizon-worker-github-git', 'horizon_worker_github_git')
+broker = common.load_sibling('horizon-worker-github-api', 'horizon_worker_github_api')
 auth = common.auth
 GIT_AUTH = common.GIT_AUTH
 Store = common.Store
@@ -232,14 +233,16 @@ def refresh_loop(store, sleep=time.sleep):
         sleep(delay)
 
 
-def start(store, path, sleep=None, prepare=None, proxy=gitproxy.ADDRESS, authority=gitproxy.AUTHORITY):
-    """The listening socket and the Git proxy, after up to START_ATTEMPTS tries with doubled
-    waits, or None. The proxy's port is bound first and held across the tries, and the proxy
-    answers before `prepare` routes Git through it, so Git never points at a port that no
-    service answers. `prepare` runs after the checks and before the socket exists, until it
-    succeeds once."""
+def start(store, path, sleep=None, prepare=None, proxy=gitproxy.ADDRESS, authority=gitproxy.AUTHORITY, api=None):
+    """The listening socket, the Git proxy and the API broker's socket (`api`, by default next
+    to `path`), after up to START_ATTEMPTS tries with doubled waits, or None. The proxy's port
+    and the broker's socket are bound first and held across the tries, and both answer before
+    `prepare` routes Git and gh through them, so neither points at a service that does not
+    answer. `prepare` runs after the checks and before the socket exists, until it succeeds
+    once."""
     sleep, attempts, wait = sleep or time.sleep, START_ATTEMPTS, START_WAIT_SECONDS
-    git_server = git_proxy = None
+    api = api or path.with_name(broker.SOCKET.name)
+    git_server = git_proxy = api_server = None
     for attempt in range(attempts):
         try:
             if not common.AGENT_ISOLATION.exists():
@@ -250,11 +253,15 @@ def start(store, path, sleep=None, prepare=None, proxy=gitproxy.ADDRESS, authori
             if git_proxy is None:
                 git_proxy = gitproxy.Proxy(git_server, gitproxy.make_identity(store.runtime, authority))
                 threading.Thread(target=gitproxy.accept_forever, args=(git_proxy, store), daemon=True).start()
+            if api_server is None:
+                api_server = broker.listen(api)
+                threading.Thread(target=broker.accept_forever, args=(api_server, broker.Broker(store, os.environ)),
+                                 daemon=True).start()
             # Repeated on the next attempt when it fails: the socket never opens before it is done.
             if prepare is not None:
                 prepare()
                 prepare = None
-            return agents.listen(path), git_proxy
+            return agents.listen(path), git_proxy, api_server
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             print('GitHub access cannot start: ' + type(error).__name__, flush=True)
             if attempt + 1 < attempts:
@@ -263,6 +270,8 @@ def start(store, path, sleep=None, prepare=None, proxy=gitproxy.ADDRESS, authori
         git_proxy.close()
     elif git_server is not None:
         git_server.close()
+    if api_server is not None:
+        broker.close(api_server, api)
     return None
 
 
@@ -278,7 +287,7 @@ def serve(store=None, path=agents.SOCKET, proxy=gitproxy.ADDRESS, authority=gitp
     servers = start(store, path, prepare=lambda: prepare(store), proxy=proxy, authority=authority)
     if servers is None:
         return 1
-    server, _ = servers
+    server = servers[0]
     threading.Thread(target=refresh_loop, args=(store,), daemon=True).start()
     agents.accept_forever(server, store, book, status)
     return 0
@@ -316,9 +325,10 @@ def settle(store, configure, static):
 
 
 def prepare(store, route=None):
-    """Before the service answers: the repositories match the stored chain, and Git reaches
-    github.com through the proxy, whose port the service already holds. The proxy serves the
-    static binding too, so Git is routed with or without a chain."""
+    """Before the service answers: the repositories match the stored chain, Git reaches
+    github.com through the proxy, whose port the service already holds, and gh reaches GitHub
+    through the API broker, whose socket it already holds. Both serve the static binding too,
+    so Git and gh are routed with or without a chain."""
     reconcile(store)
     (route or run_route)()
 

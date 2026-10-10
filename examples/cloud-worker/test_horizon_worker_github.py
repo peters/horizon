@@ -470,7 +470,7 @@ class SocketTests(ServiceTestCase):
         clock.start()
         self.addCleanup(clock.stop)
 
-    def test_git_gets_no_token_and_gh_only_that_of_a_granted_repository(self):
+    def test_git_gets_no_token_and_gh_only_a_placeholder_for_a_granted_repository(self):
         replies = []
         for path in ('example/project.git', 'Example/Project', 'example/project.git/git-receive-pack'):
             # Git reaches GitHub through the proxy; the socket hands it nothing.
@@ -481,9 +481,11 @@ class SocketTests(ServiceTestCase):
             self.assertFalse(reply['ok'], request)
             replies.append(json.dumps(reply))
         reply = auth.ask_service({'request': 'gh-token', 'repository': 'example/library'})
-        self.assertEqual((reply['token'], reply['repository'], reply['access']), (ACCESS, 'example/library', 'read'))
+        self.assertEqual((reply['token'], reply['repository'], reply['access']),
+                         (common.PLACEHOLDER, 'example/library', 'read'), 'gh reaches GitHub through the broker')
         replies.append(json.dumps(reply))
         self.assertNotIn(REFRESH, ''.join(replies))
+        self.assertNotIn(ACCESS, ''.join(replies))
         log = (self.store.runtime / agents.LOG).read_text()
         self.assertNotIn(ACCESS, log)
         record = json.loads(log.splitlines()[-1])
@@ -510,13 +512,26 @@ class SocketTests(ServiceTestCase):
     def test_gh_receives_the_targeted_token_and_drops_only_an_injected_one(self):
         env = auth.service_environment({'GH_REPO': 'example/library'}, ['pr', 'list'])
         self.assertEqual((env['GH_TOKEN'], env['GH_REPO'], env['GH_HOST'], env[auth.INJECTED]),
-                         (ACCESS, 'example/library', 'github.com', '1'))
+                         (common.PLACEHOLDER, 'example/library', 'github.com', '1'))
         with contextlib.redirect_stderr(io.StringIO()):
             nested = auth.service_environment(dict(env, GH_REPO='example/other'), ['pr', 'list'])
             own = auth.service_environment({'GH_REPO': 'example/other', 'GH_TOKEN': 'own-token'}, ['pr', 'list'])
-        self.assertNotIn('GH_TOKEN', nested)
-        self.assertNotIn(auth.INJECTED, nested)
+        # The broker answers a repository without a grant with its reason; gh needs a token to ask.
+        self.assertEqual((nested['GH_TOKEN'], nested[auth.INJECTED]), (common.PLACEHOLDER, '1'))
+        self.assertEqual(nested['GH_REPO'], 'example/other')
         self.assertEqual(own['GH_TOKEN'], 'own-token')
+        self.assertNotIn(auth.INJECTED, own)
+        # gh reads the routed configuration, whatever configuration the caller names.
+        moved = auth.service_environment({'GH_REPO': 'example/library', 'GH_CONFIG_DIR': '/tmp/elsewhere',
+                                          'XDG_CONFIG_HOME': '/tmp/xdg', 'HOME': '/tmp/home'}, ['pr', 'list'])
+        for value in (env, nested, own, moved):
+            self.assertEqual(value['GH_CONFIG_DIR'], '/workspace/home/.config/gh')
+        # A service without a chain still routes gh to the broker: gh gets the placeholder, never
+        # the static token.
+        absent = auth.service_environment({'GH_REPO': 'example/bound'}, ['pr', 'list'],
+                                          ask=lambda request: {'ok': False, 'state': 'absent'})
+        self.assertEqual(absent['GH_TOKEN'], common.PLACEHOLDER)
+        self.assertIsNone(auth.service_environment({}, ['pr', 'list'], ask=lambda request: None))
 
 
 class SupervisionContractTests(unittest.TestCase):
