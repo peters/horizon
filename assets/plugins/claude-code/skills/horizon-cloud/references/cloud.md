@@ -105,6 +105,16 @@ With Connect GitHub (Horizon **Cloud settings › GitHub**), each cloud's worker
 its own GitHub access, as the person, and renews it itself. The person connects
 GitHub and chooses its repositories; agents cannot set it up.
 
+## Codex authentication
+
+In **Cloud settings › Coding agents**, Codex takes **API key**, **Subscription
+login** or **ChatGPT plan**. The ChatGPT plan mode signs in with a ChatGPT
+account through the person's browser (Sign in with ChatGPT); the stored tokens
+stay under the cloud root on the person's machine. Agents cannot run the
+sign-in, and worker handoff of the saved sign-in is not implemented yet: a
+worker's Codex still signs in through its own terminal, like Subscription
+login.
+
 - Git and `gh` work without a token in the environment. The worker's root service
   answers for the cloud's repositories and its same-worker siblings. Agents never
   see the refresh token.
