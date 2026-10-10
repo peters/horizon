@@ -350,7 +350,7 @@ fn engine_checks(
             "Workspace storage",
             CheckState::Unknown,
             "Docker workspace free space could not be measured",
-            Some("Give the selected account access to the engine's storage filesystem and check again."),
+            Some("Make sure the Linux host has a filesystem-capable stat utility and the account can query the engine's storage path."),
         );
     }
     Ok(())
@@ -455,8 +455,8 @@ mod tests {
         assert_eq!(report.checks[0].state, CheckState::Warning);
     }
 
-    // Native engine admission measures storage with the Unix df tool.
-    #[cfg(unix)]
+    // Storage measurement runs on the native Linux engine host.
+    #[cfg(target_os = "linux")]
     #[test]
     fn native_engine_admission_enforces_version_architecture_and_capacity() {
         let root = tempfile::tempdir().unwrap();
@@ -519,8 +519,8 @@ mod tests {
         assert!(!blocked.ready());
     }
 
-    // Native Docker engine free space uses the Unix df tool.
-    #[cfg(unix)]
+    // Storage measurement runs on the native Linux engine host.
+    #[cfg(target_os = "linux")]
     #[test]
     fn an_unmeasurable_engine_directory_keeps_the_probe_unready() {
         let root = tempfile::tempdir().unwrap();

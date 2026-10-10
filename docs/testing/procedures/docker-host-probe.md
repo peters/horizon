@@ -28,6 +28,7 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
 - OpenSSH on Linux and macOS.
 - For the optional live lane, an authorized Linux host with Tailscale SSH access.
 - For a successful engine probe, Docker Engine 28 or later and measurable free space on its native Linux storage filesystem.
+- The Linux engine host must have `uname` and a `stat` tool with filesystem format support for `%a` and `%S`.
 
 ## 4. Setup
 
@@ -65,11 +66,11 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
 
 2. Examine the storage transport command.
 
-   Result: `df -Pk` queries filesystem capacity. The probe does not read container files or list the engine's storage directory. A directory listing permission is not required.
+   Result: `stat -f -c '%a %S'` reports available blocks and the fundamental block size. The output has no source or mount paths. The probe does not read container files or list the engine's storage directory. A directory listing permission is not required. See the [filesystem format reference](https://uutils.org/coreutils/docs/utils/stat.html).
 
 3. Examine the host-kernel and storage-path regression tests.
 
-   Result: A different host operating system or kernel blocks storage admission. A missing kernel is unknown. Invalid storage paths fail before execution. Capacity parsing accepts spaces in source and mount paths. Ambiguous output is unknown.
+   Result: A different host operating system or kernel blocks storage admission. A missing kernel is unknown. Invalid storage paths fail before execution. A filesystem query accepts spaces and percent signs in its path. Invalid or overflowing capacity output is unknown.
 
 ### 5.4 DHP-IMAGE — Built worker image
 

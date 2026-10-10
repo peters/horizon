@@ -129,12 +129,15 @@ impl Transport<'_> {
         }
         let mut command = if self.0.ssh.is_some() {
             let mut command = self.ssh()?;
-            command.arg(format!("sh -c {}", quote(&format!("LC_ALL=C df -Pk {}", quote(root)))));
+            command.arg(format!(
+                "sh -c {}",
+                quote(&format!("LC_ALL=C stat -f -c {} {}", quote("%a %S"), quote(root)))
+            ));
             command
         } else {
-            let mut command = Command::new("df");
+            let mut command = Command::new("stat");
             command.env("LC_ALL", "C");
-            command.args(["-Pk", root]);
+            command.args(["-f", "-c", "%a %S", root]);
             command
         };
         let output = runner.run_parsed("Docker storage probe", &mut command, Duration::from_secs(8))?;
@@ -156,24 +159,13 @@ impl Transport<'_> {
 }
 
 fn free_bytes(output: &str) -> Option<u64> {
-    let mut lines = output.lines();
-    lines.next()?;
-    let line = lines.next()?;
-    if lines.next().is_some() {
-        return None;
-    }
-    if line.matches('%').count() != 1 {
-        return None;
-    }
-    let (columns, _) = line.split_once('%')?;
-    let mut fields = columns.split_whitespace().rev();
-    fields.next()?.parse::<u64>().ok()?;
+    let mut fields = output.split_whitespace();
     let available = fields.next()?.parse::<u64>().ok()?;
-    let used = fields.next()?.parse::<u64>().ok()?;
-    let total = fields.next()?.parse::<u64>().ok()?;
-    (available <= total && used <= total)
-        .then_some(available)?
-        .checked_mul(1024)
+    let block_size = fields.next()?.parse::<u64>().ok()?;
+    if fields.next().is_some() || block_size == 0 {
+        return None;
+    }
+    available.checked_mul(block_size)
 }
 
 #[cfg(test)]
@@ -181,21 +173,47 @@ mod tests {
     use super::free_bytes;
 
     #[test]
-    fn free_space_columns_ignore_spaces_in_sources_and_mounts() {
-        for line in [
-            "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk 100 30 60 30% /workspace",
-            "Filesystem 1024-blocks Used Available Capacity Mounted on\nserver:/shared disk 100 30 60 30% /workspace directory",
+    fn filesystem_capacity_uses_available_blocks_and_fundamental_block_size() {
+        assert_eq!(free_bytes("60 4096\n"), Some(60 * 4096));
+        assert_eq!(free_bytes("0 4096\n"), Some(0));
+        for output in [
+            "",
+            "not capacity",
+            "60",
+            "60 0",
+            "60 4096 extra",
+            "18446744073709551615 4096",
         ] {
-            assert_eq!(free_bytes(line), Some(60 * 1024));
+            assert_eq!(free_bytes(output), None);
         }
-        for line in [
-            "not a capacity report",
-            "/dev/disk 100 30 120 30% /workspace",
-            "/dev/disk 100 30 60 30% /ambiguous 1 2 3 4% path",
-            "/dev/disk 18446744073709551615 0 18446744073709551615 0% /workspace",
-        ] {
-            assert_eq!(free_bytes(&format!("Filesystem header\n{line}")), None);
-        }
-        assert_eq!(free_bytes("Filesystem header\nsource\n100 30 60 30% /workspace"), None);
+    }
+
+    // A native Linux engine uses the host's filesystem-capable stat utility.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn filesystem_queries_accept_spaces_and_percent_signs_in_paths() {
+        use super::*;
+        let root = tempfile::Builder::new()
+            .prefix("storage% with spaces")
+            .tempdir()
+            .unwrap();
+        let host = Binding {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            ssh: None,
+            context: None,
+            allow_emulation: false,
+        };
+        let cancel = crate::cloud_runtime::Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        assert!(
+            Transport(&host)
+                .disk_free(&runner, root.path().to_str().unwrap())
+                .is_ok()
+        );
     }
 }

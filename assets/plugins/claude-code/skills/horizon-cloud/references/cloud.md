@@ -243,6 +243,8 @@ or macOS. Docker must expose a local Linux engine with Docker 28 or later.
 Docker Desktop is not supported. The selected account must be able to query
 free space on the engine's storage filesystem. Directory listing and file
 read access are not required. An unknown storage result blocks admission.
+The Linux host needs `uname` and a `stat` tool that supports filesystem format
+`%a %S`. The output contains only available blocks and their block size.
 
 Host operating-system and kernel checks detect common virtual-machine
 mismatches. A matching kernel version does not prove filesystem identity.
