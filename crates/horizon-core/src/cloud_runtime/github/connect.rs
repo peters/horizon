@@ -75,15 +75,17 @@ pub fn known_login(root: &Path, docker_config: &Path) -> Option<String> {
 }
 
 /// Starts the manifest flow and opens its first page with `open`. The receiver gets
-/// the new app's settings once GitHub created it.
+/// the new app's settings once GitHub created it. A flow cancelled before it starts,
+/// for example while [`app_name`] asked GitHub, opens nothing.
 /// # Errors
-/// The loopback port could not be opened.
+/// The flow was cancelled, or the loopback port could not be opened.
 pub fn start(
     root: &Path,
     name: &str,
     open: fn(&str) -> std::io::Result<()>,
     cancel: crate::cloud_runtime::Cancellation,
 ) -> Result<Receiver<Result<Settings>>> {
+    cancel.check()?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     let state = uuid::Uuid::new_v4().simple().to_string();

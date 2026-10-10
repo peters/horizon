@@ -110,4 +110,8 @@ fn a_cancelled_connect_flow_ends_without_an_app() {
         std::fs::read_dir(root.path()).unwrap().next().is_none(),
         "no secret is written"
     );
+    let cancelled = Cancellation::default();
+    cancelled.cancel();
+    let opened = |_: &str| -> std::io::Result<()> { panic!("a cancelled flow opens no page") };
+    assert!(connect::start(root.path(), "Horizon synthetic", opened, cancelled).is_err());
 }
