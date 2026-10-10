@@ -22,6 +22,14 @@ impl Purpose {
         })
     }
 
+    /// A failed check, except a stuck Docker, which no login can fix.
+    fn refusal(self, error: Error) -> Error {
+        match error {
+            Error::DockerNotResponding(_) => error,
+            _ => self.failure(),
+        }
+    }
+
     fn actions(self) -> &'static [&'static str] {
         match self {
             Self::Pull => &["pull"],
@@ -48,7 +56,7 @@ impl Prepared {
             )
             .and_then(|()| acr::verify(auth, material, &self.binding.repository, purpose, runner.cancel));
             runner.cancel.check()?;
-            result.map_err(|_| purpose.failure())
+            result.map_err(|error| purpose.refusal(error))
         })
     }
 
