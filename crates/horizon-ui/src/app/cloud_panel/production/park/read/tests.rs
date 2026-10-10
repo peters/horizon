@@ -1,6 +1,7 @@
-use super::every_local;
+use super::{Parking, every_local};
 use horizon_core::cloud_runtime::session_status::{SessionActivity, SessionStatus};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 fn status(id: &str, activity: SessionActivity) -> SessionStatus {
     SessionStatus {
@@ -46,4 +47,21 @@ fn every_parked_panel_gets_a_status_and_an_unreported_one_is_missing() {
         none.iter()
             .all(|(_, status)| status.activity == SessionActivity::Missing)
     );
+}
+
+#[test]
+fn a_read_that_misses_a_newly_parked_panel_does_not_count_as_new() {
+    let mut parking = Parking::default();
+    let (started, now) = (Instant::now(), Instant::now() + Duration::from_secs(2));
+    parking.read_started = Some(started);
+    let read = vec![("one".to_owned(), status("tmux-1", SessionActivity::Idle))];
+    let parked = ["one".to_owned(), "new".to_owned()];
+
+    parking.apply_read(Ok(read.clone()), &parked, now);
+    assert!(!parking.read_since(started), "the new panel has no status yet");
+    assert_eq!(parking.next_read, Some(now), "the next read is due at once");
+    assert_eq!(parking.statuses["one"].activity, SessionActivity::Idle);
+
+    parking.apply_read(Ok(read), &parked[..1], now);
+    assert!(parking.read_since(started));
 }

@@ -24,6 +24,35 @@ impl Parking {
         self.statuses_since.is_some_and(|since| since >= at)
     }
 
+    /// Applies a finished read. A panel that parked while the read was in flight has
+    /// no status in it: then the read does not count as a new read of the cloud, and
+    /// the next read is due at once.
+    pub(super) fn apply_read<'a>(
+        &mut self,
+        result: StatusRead,
+        parked: impl IntoIterator<Item = &'a String>,
+        now: Instant,
+    ) {
+        self.next_read = Some(now + STATUS_INTERVAL);
+        match result {
+            Ok(statuses) => {
+                self.error = None;
+                self.statuses = statuses.into_iter().collect();
+                if parked.into_iter().all(|local| self.statuses.contains_key(local)) {
+                    self.statuses_since = self.read_started;
+                } else {
+                    self.next_read = Some(now);
+                }
+            }
+            Err(error) => {
+                // An old status is not shown as current.
+                self.error = Some(error.to_string());
+                self.statuses.clear();
+                self.statuses_since = None;
+            }
+        }
+    }
+
     /// Makes the next read due at `now`. A read in flight finishes first.
     pub(in crate::app::cloud_panel::production) fn read_now(&mut self, now: Instant) {
         if self.reader.is_none() {
@@ -160,20 +189,7 @@ impl HorizonApp {
             let finished = match reader.try_recv() {
                 Ok(result) => {
                     runtime.parking.reader = None;
-                    runtime.parking.next_read = Some(now + STATUS_INTERVAL);
-                    match result {
-                        Ok(statuses) => {
-                            runtime.parking.error = None;
-                            runtime.parking.statuses = statuses.into_iter().collect();
-                            runtime.parking.statuses_since = runtime.parking.read_started;
-                        }
-                        Err(error) => {
-                            // An old status is not shown as current.
-                            runtime.parking.error = Some(error.to_string());
-                            runtime.parking.statuses.clear();
-                            runtime.parking.statuses_since = None;
-                        }
-                    }
+                    runtime.parking.apply_read(result, parked.keys(), now);
                     let reported: Vec<(PanelId, AgentStatus)> = parked
                         .iter()
                         .map(|(local, id)| (*id, agent_status(runtime.parking.statuses.get(local))))
