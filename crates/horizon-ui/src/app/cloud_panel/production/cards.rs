@@ -6,6 +6,7 @@ use horizon_core::{Board, cloud_panel::CloudGroup};
 mod body;
 mod cause;
 mod cost;
+mod docker;
 mod drawer;
 mod github;
 pub(super) mod list;

@@ -234,6 +234,10 @@ fn opened(ui: &mut egui::Ui, id: u32, runtime: &Runtime, status: &Status) -> Opt
             }
             cause.toggle(ui);
         });
+        let retry = super::next::Next::of(status).filter(|next| matches!(next, super::next::Next::Retry(_)));
+        if super::docker::status(ui, failure, retry.map(super::next::Next::label)) {
+            action = Some(StepAction::Next);
+        }
         return action;
     }
     let measured = runtime.progress.measured();

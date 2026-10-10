@@ -347,6 +347,10 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
                     }
                     cause.toggle(ui);
                 });
+                let retry = super::next::Next::of(status).filter(|next| matches!(next, super::next::Next::Retry(_)));
+                if super::docker::status(ui, failure, retry.map(super::next::Next::label)) {
+                    response.action = retry.and_then(super::next::Next::action);
+                }
             });
         return;
     }
