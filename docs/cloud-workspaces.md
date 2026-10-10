@@ -175,10 +175,14 @@ including for launching the declaring repository's own cloud.
 ## One-time machine setup
 
 A new workspace runs in the cloud by default. **New** in the sidebar and the
-**New Workspace** menu of the empty canvas show **Cloud** first, then
-**Cloud GPU** and **This PC**:
+**New Workspace** menu of the empty canvas show **Cloud** first, then **This PC**
+and **Cloud GPU**:
 
-- **Cloud** makes the workspace and opens **New cloud** for it.
+- **Cloud** makes the workspace and opens **New cloud** for it. Under **Cloud**,
+  the menu shows the machine of a quick start and its hourly price, for example
+  `from €0.0088/h · 2 vCPU · 4 GB · Hetzner`: the cheapest offer of the providers
+  that this computer can deploy to. A repository with its own profile can ask for a
+  larger machine. **New cloud** then shows that machine and its price.
 - **Cloud GPU** does the same and selects the first profile with `gpu: true`. When
   the repository has no GPU profile, the dialog says so and keeps the default
   profile on a CPU worker.
@@ -194,6 +198,15 @@ A repository can ask for This PC with `placement: local` at the top level of
 **This repository runs on This PC** with **Open on This PC**, which opens a
 terminal in the repository in that workspace and closes the dialog. You can still
 start a cloud for it.
+
+In **New cloud** from **New workspace**, select **Keep my choice for this
+repository** to keep where the repository runs. **Start cloud** keeps **Cloud**,
+and **Open on This PC** (or **Open on This PC instead**) keeps **This PC**. The
+next time, **New cloud** says **You keep This PC for this repository.** or
+**You keep Cloud for this repository.** A kept choice wins over the `placement` of
+the repository: a kept **This PC** offers **Open on This PC**, and a kept **Cloud**
+does not. Click **Forget** to remove the choice. Horizon keeps the choices on this
+computer only, in `~/.horizon/cloud/repository-choices.json`.
 
 In an existing workspace, choose **Cloud** from the panel-creation menu (or
 **Cloud > New cloud**), enter a title, and press Enter. Horizon discovers the Git
