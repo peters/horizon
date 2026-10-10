@@ -104,12 +104,13 @@ impl Registry {
                 results: Vec::new(),
             });
             previous.updated = Instant::now();
-            if matches!(progress.phase, "recipe_passed" | "recipe_failed")
+            if matches!(progress.phase, "recipe_passed" | "recipe_failed" | "recipe_blocked")
                 && let Some(recipe) = &progress.recipe
             {
                 previous.results.push(NativeRecipeResult {
                     recipe: recipe.clone(),
                     passed: progress.phase == "recipe_passed",
+                    blocked: progress.phase == "recipe_blocked",
                 });
             }
             Some(previous.results.clone())
@@ -668,6 +669,7 @@ mod tests {
                 step: None,
                 session: Some(session.id),
                 view: None,
+                error: None,
             };
             observer.observe(&mut event).unwrap();
             let endpoint = event.view.take().unwrap().endpoint;
@@ -734,7 +736,8 @@ mod tests {
             final_metadata.recipes,
             vec![NativeRecipeResult {
                 recipe: "reset".into(),
-                passed: false
+                passed: false,
+                blocked: false,
             }]
         );
         let mut kind = [0];
@@ -770,6 +773,7 @@ mod tests {
             step: None,
             session: Some(session.id),
             view: None,
+            error: None,
         };
         observer.observe(&mut event).unwrap();
         let mut client = TcpStream::connect(&event.view.take().unwrap().endpoint).unwrap();
@@ -809,7 +813,11 @@ mod tests {
                 observer.observe(&mut event).unwrap();
                 std::thread::sleep(Duration::from_millis(1100));
             }
-            event.phase = "recipe_failed";
+            event.phase = if recipe == "later" {
+                "recipe_blocked"
+            } else {
+                "recipe_failed"
+            };
             event.recipe = Some(recipe.into());
             event.step = None;
             observer.observe(&mut event).unwrap();
@@ -822,7 +830,8 @@ mod tests {
             final_metadata.recipes,
             ["reset", "later"].map(|recipe| NativeRecipeResult {
                 recipe: recipe.into(),
-                passed: false
+                passed: false,
+                blocked: recipe == "later",
             })
         );
         drop(observer);
@@ -847,6 +856,7 @@ mod tests {
             step: None,
             session: Some(session.id),
             view: None,
+            error: None,
         };
         let observer = registry.observer();
         observer.observe(&mut event).unwrap();
@@ -892,6 +902,7 @@ mod tests {
             step: None,
             session: Some(session.id),
             view: None,
+            error: None,
         };
         observer.observe(&mut event).unwrap();
         let view = event.view.take().unwrap();
@@ -927,6 +938,7 @@ mod tests {
             step: None,
             session: Some(session.id),
             view: None,
+            error: None,
         };
         registry.observe(&mut event).unwrap();
         let initial = event.view.take().unwrap().metadata;
@@ -976,7 +988,8 @@ mod tests {
             replaced.recipes,
             vec![NativeRecipeResult {
                 recipe: "login".into(),
-                passed: false
+                passed: false,
+                blocked: false,
             }]
         );
         assert_eq!(replaced.step.as_deref(), Some("reset"));

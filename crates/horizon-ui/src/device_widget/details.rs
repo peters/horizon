@@ -34,7 +34,7 @@ impl NativeLabels {
             progress: match (&native.recipe, &native.step, result) {
                 (Some(recipe), Some(step), _) => format!("{recipe} · {step}"),
                 (Some(recipe), None, Some(result)) => {
-                    format!("{recipe}: {}", if result.passed { "PASS" } else { "FAIL" })
+                    format!("{recipe}: {}", result.status_label())
                 }
                 (Some(recipe), None, _) => recipe.clone(),
                 _ => String::new(),
@@ -145,7 +145,7 @@ fn connection(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServerDetai
         }
         row(ui, "Build SHA256", &native.build_sha256);
         for result in &native.recipes {
-            row(ui, &result.recipe, if result.passed { "PASS" } else { "FAIL" });
+            row(ui, &result.recipe, result.status_label());
         }
     }
     if device.display_name(server.name.as_deref()).is_none() {
@@ -315,6 +315,7 @@ mod tests {
         native.recipes = vec![horizon_core::browser::manifest::device::NativeRecipeResult {
             recipe: "login".into(),
             passed: true,
+            blocked: false,
         }];
         native.step = Some("retry".into());
         assert_eq!(NativeLabels::new(&native).progress, "login · retry");
@@ -324,7 +325,10 @@ mod tests {
             .push(horizon_core::browser::manifest::device::NativeRecipeResult {
                 recipe: "login".into(),
                 passed: false,
+                blocked: false,
             });
         assert_eq!(NativeLabels::new(&native).progress, "login: FAIL");
+        native.recipes.last_mut().unwrap().blocked = true;
+        assert_eq!(NativeLabels::new(&native).progress, "login: BLOCKED");
     }
 }

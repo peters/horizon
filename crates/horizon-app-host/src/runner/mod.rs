@@ -311,6 +311,7 @@ impl Plan<'_> {
                 step: None,
                 session: None,
                 view: None,
+                error: None,
             })?;
             let start = Instant::now();
             let result = control
@@ -399,6 +400,7 @@ impl Plan<'_> {
             allocations: Vec::new(),
             error: None,
             cleanup_confirmed: true,
+            blocked: false,
             steps: Vec::new(),
             media: Vec::new(),
             provider_session_link: None,
@@ -435,16 +437,13 @@ impl Plan<'_> {
                 step: None,
                 session: Some(session),
                 view: None,
+                error: None,
             })
         {
-            report.error = Some(error.to_string());
-            if let Some(session) = owned.session.take() {
-                report.cleanup_confirmed = runtime.close(session).is_ok();
-            }
-            self.media(runtime, control, &mut report, observation);
-            return report;
+            report.error.get_or_insert_with(|| error.to_string());
+            report.blocked = true;
         }
-        self.steps(runtime, control, &mut report, &mut owned, observation);
+        let failure = self.steps(runtime, control, &mut report, &mut owned, observation);
         if let Err(error) = progress(Progress {
             run,
             matrix_index: Some(target.matrix_index),
@@ -453,16 +452,17 @@ impl Plan<'_> {
             step: None,
             session: report.session,
             view: None,
+            error: None,
         }) {
-            report.error = Some(error.to_string());
+            report.error.get_or_insert_with(|| error.to_string());
         }
         if let Some(session) = owned.session.take()
             && let Err(error) = runtime.close(session)
         {
             report.cleanup_confirmed = false;
-            report.error = Some(error.to_string());
+            report.error.get_or_insert_with(|| error.to_string());
         }
-        self.media(runtime, control, &mut report, observation);
+        self.media(runtime, control, &mut report, observation, failure);
         report
     }
     fn steps<R: Runtime>(
@@ -472,11 +472,13 @@ impl Plan<'_> {
         report: &mut DeviceResult,
         owned: &mut OwnedSession<'_, R>,
         observation: &Observation<'_>,
-    ) {
+    ) -> Option<Error> {
+        let mut failure = None;
         let run = observation.run;
         let progress = observation.progress;
-        let capture = observation.capture;
         let platform = report.target.platform;
+        report.blocked |= report.session.is_none();
+        let mut progress_available = !report.blocked;
         for recipe in self.recipes.iter().filter(|recipe| {
             recipe
                 .platforms
@@ -485,83 +487,147 @@ impl Plan<'_> {
         }) {
             let first_step = report.steps.len();
             for step in &recipe.steps {
+                if report.blocked {
+                    report.steps.push(Step {
+                        recipe: recipe.id.clone(),
+                        step: step.id.clone(),
+                        passed: false,
+                        blocked: true,
+                        duration_millis: 0,
+                        error: None,
+                        screenshot: None,
+                    });
+                    continue;
+                }
                 let start = Instant::now();
-                let mut screenshot = None;
-                let outcome = (|| {
-                    control.remaining()?;
-                    let session = report.session.ok_or(Error::SessionUnknown)?;
-                    progress(Progress {
+                let outcome = self.execute_step(
+                    runtime,
+                    control,
+                    report,
+                    owned,
+                    observation,
+                    ScopedStep {
+                        recipe: &recipe.id,
+                        step,
+                    },
+                );
+                if let Err(error) = outcome.as_ref()
+                    && lane_unavailable(error)
+                {
+                    report.blocked = true;
+                    failure = Some(*error);
+                    report.error.get_or_insert_with(|| error.to_string());
+                    if progress(Progress {
                         run,
                         matrix_index: Some(report.matrix_index),
-                        phase: "step",
+                        phase: "lane_blocked",
                         recipe: Some(recipe.id.clone()),
                         step: Some(step.id.clone()),
-                        session: Some(session),
+                        session: report.session,
                         view: None,
-                    })?;
-                    control.remaining()?;
-                    // Screenshot steps use the retained capture below, avoiding a discarded second request.
-                    let action = if matches!(step.action, Action::Screenshot {}) {
-                        Ok(None)
-                    } else {
-                        runtime.act(session, &step.action)
-                    };
-                    let action = action.map_err(|failure| {
-                        report.cleanup_confirmed &= failure.cleanup_confirmed;
-                        failure.error
-                    });
-                    let session = match action? {
-                        Some(replacement) => {
-                            // Retain cleanup ownership before any fallible capture or callback.
-                            owned.session = Some(replacement);
-                            report.session = Some(replacement);
-                            report.allocations.push(replacement);
-                            progress(Progress {
-                                run,
-                                matrix_index: Some(report.matrix_index),
-                                phase: "session_created",
-                                recipe: Some(recipe.id.clone()),
-                                step: Some(step.id.clone()),
-                                session: Some(replacement),
-                                view: None,
-                            })?;
-                            control.remaining()?;
-                            replacement
-                        }
-                        None => session,
-                    };
-                    if self.screenshots || matches!(step.action, Action::Screenshot {}) {
-                        screenshot = Some(capture(
-                            session,
-                            CaptureKind::Screenshot,
-                            &runtime.screenshot(session)?,
-                        )?);
+                        error: Some(error.to_string()),
+                    })
+                    .is_err()
+                    {
+                        progress_available = false;
                     }
-                    Ok::<(), Error>(())
-                })();
+                }
                 report.steps.push(Step {
                     recipe: recipe.id.clone(),
                     step: step.id.clone(),
                     passed: outcome.is_ok(),
+                    blocked: false,
                     duration_millis: millis(start),
-                    error: outcome.err().map(|error| error.to_string()),
-                    screenshot,
+                    error: outcome.as_ref().err().map(ToString::to_string),
+                    screenshot: outcome.ok().flatten(),
                 });
             }
-            let passed = report.steps[first_step..].iter().all(|step| step.passed);
-            if let Err(error) = progress(Progress {
-                run,
-                matrix_index: Some(report.matrix_index),
-                phase: if passed { "recipe_passed" } else { "recipe_failed" },
-                recipe: Some(recipe.id.clone()),
-                step: None,
-                session: report.session,
-                view: None,
-            }) {
-                report.error = Some(error.to_string());
-                return;
+            let steps = &report.steps[first_step..];
+            let passed = steps.iter().all(|step| step.passed);
+            let recipe_blocked = steps.iter().all(|step| step.blocked);
+            if progress_available
+                && let Err(error) = progress(Progress {
+                    run,
+                    matrix_index: Some(report.matrix_index),
+                    phase: if recipe_blocked {
+                        "recipe_blocked"
+                    } else if passed {
+                        "recipe_passed"
+                    } else {
+                        "recipe_failed"
+                    },
+                    recipe: Some(recipe.id.clone()),
+                    step: None,
+                    session: report.session,
+                    view: None,
+                    error: None,
+                })
+            {
+                report.error.get_or_insert_with(|| error.to_string());
+                report.blocked = true;
+                failure.get_or_insert(error);
+                progress_available = false;
             }
         }
+        failure
+    }
+    fn execute_step<R: Runtime>(
+        &self,
+        runtime: &R,
+        control: &Control,
+        report: &mut DeviceResult,
+        owned: &mut OwnedSession<'_, R>,
+        observation: &Observation<'_>,
+        selected: ScopedStep<'_>,
+    ) -> Result<Option<Evidence>> {
+        control.remaining()?;
+        let session = report.session.ok_or(Error::SessionUnknown)?;
+        (observation.progress)(Progress {
+            run: observation.run,
+            matrix_index: Some(report.matrix_index),
+            phase: "step",
+            recipe: Some(selected.recipe.to_owned()),
+            step: Some(selected.step.id.clone()),
+            session: Some(session),
+            view: None,
+            error: None,
+        })?;
+        control.remaining()?;
+        // Screenshot steps use the retained capture below, avoiding a discarded second request.
+        let action = if matches!(selected.step.action, Action::Screenshot {}) {
+            Ok(None)
+        } else {
+            runtime.act(session, &selected.step.action)
+        };
+        let action = action.map_err(|failure| {
+            report.cleanup_confirmed &= failure.cleanup_confirmed;
+            failure.error
+        });
+        let session = match action? {
+            Some(replacement) => {
+                // Retain cleanup ownership before any fallible capture or callback.
+                owned.session = Some(replacement);
+                report.session = Some(replacement);
+                report.allocations.push(replacement);
+                (observation.progress)(Progress {
+                    run: observation.run,
+                    matrix_index: Some(report.matrix_index),
+                    phase: "session_created",
+                    recipe: Some(selected.recipe.to_owned()),
+                    step: Some(selected.step.id.clone()),
+                    session: Some(replacement),
+                    view: None,
+                    error: None,
+                })?;
+                control.remaining()?;
+                replacement
+            }
+            None => session,
+        };
+        if self.screenshots || matches!(selected.step.action, Action::Screenshot {}) {
+            return (observation.capture)(session, CaptureKind::Screenshot, &runtime.screenshot(session)?).map(Some);
+        }
+        Ok(None)
     }
     fn media(
         &self,
@@ -569,6 +635,7 @@ impl Plan<'_> {
         control: &Control,
         report: &mut DeviceResult,
         observation: &Observation<'_>,
+        failure: Option<Error>,
     ) {
         use horizon_app_provider::media::Kind;
         let Some(session) = report.session else {
@@ -588,10 +655,14 @@ impl Plan<'_> {
         }
         for session in report.allocations.clone() {
             for kind in kinds.iter().copied() {
-                let result = control.remaining().and_then(|remaining| {
-                    let bytes = finalized_media(runtime, control, session, kind, remaining)?;
-                    (observation.capture)(session, CaptureKind::Provider(kind), &bytes)
-                });
+                let result = if let Some(error @ Error::HostUnavailable(_)) = failure {
+                    Err(error)
+                } else {
+                    control.remaining().and_then(|remaining| {
+                        let bytes = finalized_media(runtime, control, session, kind, remaining)?;
+                        (observation.capture)(session, CaptureKind::Provider(kind), &bytes)
+                    })
+                };
                 report.media.push(Media {
                     session,
                     kind,
@@ -602,6 +673,22 @@ impl Plan<'_> {
         }
     }
 }
+fn lane_unavailable(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Unavailable
+            | Error::Process(horizon_app_process::Error::StateUnavailable)
+            | Error::HostUnavailable(_)
+            | Error::SessionUnknown
+            | Error::Cancelled
+            | Error::Native(horizon_app_testing::Error::SessionClosed)
+            | Error::Runtime(horizon_app_runtime::Error::OperationExpired)
+            | Error::Provider(
+                horizon_app_provider::Error::TunnelStartFailed | horizon_app_provider::Error::TunnelCleanupUncertain
+            )
+    )
+}
+
 fn finalized_media(
     runtime: &impl Runtime,
     control: &Control,
@@ -646,6 +733,11 @@ impl<R: Runtime> Drop for OwnedSession<'_, R> {
 }
 
 type Capture<'a> = dyn Fn(Uuid, CaptureKind, &[u8]) -> Result<Evidence> + Sync + 'a;
+#[derive(Clone, Copy)]
+struct ScopedStep<'a> {
+    recipe: &'a str,
+    step: &'a horizon_app_testing::recipe::Step,
+}
 struct Observation<'a> {
     run: Uuid,
     capture: &'a Capture<'a>,
