@@ -53,7 +53,7 @@ fn texts(form: &Production) -> (bool, Vec<String>) {
 }
 
 #[test]
-fn cloud_gpu_takes_each_repositorys_first_gpu_profile_and_says_when_there_is_none() {
+fn cloud_gpu_takes_the_first_gpu_profile_of_each_repository_or_its_default() {
     let (_temp, mut app) = test_app();
     let workspace = app.board.create_workspace("cloud");
     let form = &mut app.cloud_prototype.production;
@@ -65,7 +65,11 @@ fn cloud_gpu_takes_each_repositorys_first_gpu_profile_and_says_when_there_is_non
     };
     form.new_workspace = Some(intent(true));
     form.repository = "/synthetic/cpu-only".into();
-    assert_eq!(gpu_profile(form, &config(CPU_ONLY)), None);
+    assert_eq!(
+        gpu_profile(form, &config(CPU_ONLY)).as_deref(),
+        Some("dev"),
+        "no GPU profile: the repository's default, not a kept name"
+    );
     form.profiles = Some(config(CPU_ONLY));
     let (_, shown) = texts(form);
     assert!(shown.iter().any(|text| text.contains("no GPU profile")), "{shown:?}");

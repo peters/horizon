@@ -112,8 +112,9 @@ impl HorizonApp {
 }
 
 /// The profile Cloud GPU asks for in `config`, read for the dialog's repository: its first
-/// GPU profile, once for each repository, so a reread keeps the person's pick. With none,
-/// the dialog keeps its profile and says the cloud runs on a CPU worker.
+/// GPU profile, once for each repository, so a reread keeps the person's pick (`None`). With
+/// no GPU profile it is the repository's default, and the dialog says the cloud runs on a
+/// CPU worker.
 pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option<String> {
     let repository = form.repository.clone();
     let intent = form.new_workspace.as_mut().filter(|intent| intent.gpu)?;
@@ -127,7 +128,7 @@ pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option
         .find(|(_, profile)| profile.gpu)
         .map(|(name, _)| name.clone());
     intent.no_gpu = found.is_none();
-    found
+    Some(found.unwrap_or_else(|| config.default.clone()))
 }
 
 /// What the dialog says above its fields for a workspace from New workspace, and the This PC
