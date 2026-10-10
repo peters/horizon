@@ -59,7 +59,7 @@ fn read_statuses(
         .unwrap_or_default();
     let tmux = parked_sessions(sessions, locals);
     if tmux.is_empty() {
-        return Ok(Vec::new());
+        return Ok(every_local(locals, &tmux, Vec::new()));
     }
     let ids: Vec<String> = tmux.keys().cloned().collect();
     let worker = deployment
@@ -77,10 +77,37 @@ fn read_statuses(
             &cloud_runtime::Cancellation::default(),
         )?);
     }
-    Ok(statuses
+    Ok(every_local(locals, &tmux, statuses))
+}
+
+/// A status for each parked panel in `locals`, from the `statuses` of the sessions in
+/// `tmux`. A panel without a recorded session, or whose session the worker did not
+/// report, is `Missing`: an incomplete read never shows a cloud as idle.
+pub(super) fn every_local(
+    locals: &[String],
+    tmux: &HashMap<String, String>,
+    statuses: Vec<SessionStatus>,
+) -> Vec<(String, SessionStatus)> {
+    let mut found: HashMap<String, SessionStatus> = statuses
         .into_iter()
         .filter_map(|status| Some((tmux.get(&status.id)?.clone(), status)))
-        .collect())
+        .collect();
+    locals
+        .iter()
+        .map(|local| {
+            let status = found.remove(local).unwrap_or_else(|| SessionStatus {
+                id: tmux
+                    .iter()
+                    .find(|(_, panel)| *panel == local)
+                    .map(|(session, _)| session.clone())
+                    .unwrap_or_default(),
+                activity: SessionActivity::Missing,
+                quiet_for: None,
+                lines: Vec::new(),
+            });
+            (local.clone(), status)
+        })
+        .collect()
 }
 
 /// The agent status that a parked panel shows for its last session status.
@@ -91,6 +118,9 @@ fn agent_status(status: Option<&SessionStatus>) -> AgentStatus {
         AgentStatus::Idle
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests;
 
 impl HorizonApp {
     /// Starts a status read of the parked terminals of cloud `index` when one is

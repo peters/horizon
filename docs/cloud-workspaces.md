@@ -955,7 +955,9 @@ worker does not report a rate, the saving is a lower bound. Click
 dialog. A cloud that became busy or started to work after the list was read
 continues to run. The status of a parked cloud can be some seconds old, so
 Horizon reads the status of its sessions again before it stops the worker. When an
-agent works, or when no status arrives in 30 seconds, the cloud continues to run.
+agent works, when the read does not find a parked session, or when no status
+arrives in 30 seconds, the cloud continues to run. A session that is not found
+moves the cloud to **Needs you**.
 
 Stop ends the running processes. The workspace storage is kept and stays
 billable, and **Resume** on the card starts a worker again.
