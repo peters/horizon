@@ -316,12 +316,16 @@ fn launch(platform: Platform) -> Result<Launch, Error> {
 }
 
 fn launch_policy(platform: Platform, evidence: Evidence) -> Result<Launch, Error> {
+    launch_policy_os(platform, evidence, "27.0")
+}
+
+fn launch_policy_os(platform: Platform, evidence: Evidence, os_version: &str) -> Result<Launch, Error> {
     Launch::new(
         Device {
             platform,
             form: Form::Phone,
             model: "Example phone".into(),
-            os_version: "27.0".into(),
+            os_version: os_version.into(),
         },
         App {
             build: vec!["build".into()],
@@ -335,6 +339,25 @@ fn launch_policy(platform: Platform, evidence: Evidence) -> Result<Launch, Error
         "run-1".into(),
         evidence,
     )
+}
+
+#[test]
+fn older_ios_keeps_its_compatible_provider_generation() -> Result<(), Error> {
+    let fake = Arc::new(Fake::default());
+    let mut driver = NativeDriver::allocate(
+        fake.clone(),
+        &launch_policy_os(Platform::Ios, Evidence::default(), "14.8")?,
+    )?;
+    driver.close()?;
+    let calls = fake.calls.lock().unwrap();
+    let options = calls[0]
+        .2
+        .as_ref()
+        .unwrap()
+        .pointer("/capabilities/alwaysMatch/bstack:options")
+        .unwrap();
+    assert!(options.get("appiumVersion").is_none());
+    Ok(())
 }
 
 #[test]
@@ -353,13 +376,13 @@ fn native_allocation_uses_app_capabilities_and_platform_specific_launch_values()
             .unwrap();
         assert!(caps.get("browserName").is_none());
         assert_eq!(caps["bstack:options"]["local"], true);
+        assert_eq!(caps["bstack:options"]["appiumVersion"], "2.19.0");
         if platform == Platform::Ios {
             assert_eq!(
                 caps["appium:processArguments"]["env"]["YOUPARK_BASE_URL"],
                 "http://localhost:8080"
             );
         } else {
-            assert_eq!(caps["bstack:options"]["appiumVersion"], "2.19.0");
             assert!(
                 caps["appium:optionalIntentArguments"]
                     .as_str()

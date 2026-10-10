@@ -76,7 +76,7 @@ pub fn execute(arguments: &[String]) {
     if let Err(error) = run(arguments) {
         if arguments.first().is_some_and(|argument| argument == "--run") {
             if error != crate::Error::RunFailed {
-                crate::cli::report_error(error);
+                crate::cli::report_error(&error);
             }
         } else {
             eprintln!("{error}");

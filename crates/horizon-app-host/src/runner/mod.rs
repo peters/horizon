@@ -48,7 +48,7 @@ impl Control {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct OperationFailure {
     error: Error,
     cleanup_confirmed: bool,
@@ -462,7 +462,7 @@ impl Plan<'_> {
             report.cleanup_confirmed = false;
             report.error.get_or_insert_with(|| error.to_string());
         }
-        self.media(runtime, control, &mut report, observation, failure);
+        self.media(runtime, control, &mut report, observation, failure.as_ref());
         report
     }
     fn steps<R: Runtime>(
@@ -515,7 +515,7 @@ impl Plan<'_> {
                     && (matches!(step.action, Action::Reset {}) || lane_unavailable(error))
                 {
                     report.blocked = true;
-                    failure = Some(*error);
+                    failure = Some(error.clone());
                     report.error.get_or_insert_with(|| error.to_string());
                     if progress(Progress {
                         run,
@@ -635,7 +635,7 @@ impl Plan<'_> {
         control: &Control,
         report: &mut DeviceResult,
         observation: &Observation<'_>,
-        failure: Option<Error>,
+        failure: Option<&Error>,
     ) {
         use horizon_app_provider::media::Kind;
         let Some(session) = report.session else {
@@ -659,7 +659,7 @@ impl Plan<'_> {
                     matches!(error, Error::HostUnavailable(reason) if *reason != crate::HostFailure::CaptureInvalid)
                 });
                 let result = if let Some(error) = archive_failure {
-                    Err(error)
+                    Err(error.clone())
                 } else {
                     control.remaining().and_then(|remaining| {
                         let bytes = finalized_media(runtime, control, session, kind, remaining)?;
