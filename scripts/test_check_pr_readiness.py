@@ -82,6 +82,30 @@ class ReadinessTests(unittest.TestCase):
         self.commit()
         self.assertEqual(self.run_check()[0], 0)
 
+    def test_many_pure_renames_do_not_count_toward_scope(self):
+        for i in range(11):
+            self.write(f"crates/horizon-core/src/a{i}.rs", f"fn a{i}() {{}}\n")
+        self.commit()
+        self.base = self.git("rev-parse", "HEAD").strip()
+        for i in range(11):
+            self.git("mv", f"crates/horizon-core/src/a{i}.rs", f"crates/horizon-core/src/b{i}.rs")
+        self.commit()
+        self.assertEqual(self.run_check()[0], 0)
+
+    def test_renaming_a_procedure_is_not_an_update(self):
+        self.write("docs/testing/procedures/a.md", "Steps.\n")
+        self.commit()
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.git("mv", "docs/testing/procedures/a.md", "docs/testing/procedures/b.md")
+        self.write("crates/horizon-ui/src/app/panel.rs")
+        self.commit()
+        self.assertIn("error ui-procedure:", self.run_check()[1])
+
+    def test_ui_file_names_that_end_in_tests(self):
+        self.write("crates/horizon-ui/src/app/contests.rs")
+        self.commit()
+        self.assertIn("error ui-procedure:", self.run_check()[1])
+
     def test_test_procedures_do_not_count_toward_scope(self):
         for i in range(11):
             self.write(f"docs/testing/procedures/p{i}.md")
@@ -115,12 +139,15 @@ class ReadinessTests(unittest.TestCase):
         self.commit()
         for body in ["The recording is recording.gif.\n", "See https://github.com/user-attachments/assets/abc for details.\n",
                      "![still](https://example.invalid/shot.png)\n", "<video src=\"https://example.invalid/a.mp4\"></video>\n",
-                     "<!-- ![f](https://example.invalid/a.gif) -->\n", "```\n![f](https://example.invalid/a.gif)\n```\n"]:
+                     "<!-- ![f](https://example.invalid/a.gif) -->\n", "```\n![f](https://example.invalid/a.gif)\n```\n",
+                     "Use `![demo](https://example.invalid/demo.gif)` to embed it.\n",
+                     "- Item\n\n  ```\n  ![f](https://example.invalid/a.gif)\n  ```\n"]:
             with self.subTest(body=body):
                 self.assertIn("error ui-gif:", self.run_check(body=body)[1])
         for body in ["<img src=\"https://example.invalid/a.gif\" width=\"600\">\n", "https://github.com/user-attachments/assets/abc\n",
                      "![flow](https://github.com/user-attachments/assets/abc)\n",
-                     "![flow](https://example.invalid/a.gif \"demo\")\n", "![flow](<https://example.invalid/a.gif>)\n"]:
+                     "![flow](https://example.invalid/a.gif \"demo\")\n", "![flow](<https://example.invalid/a.gif>)\n",
+                     "<img\n  width=\"600\"\n  src=\"https://example.invalid/a.gif\">\n"]:
             with self.subTest(body=body):
                 self.assertEqual(self.run_check(body=body)[0], 0)
 
@@ -186,6 +213,14 @@ class ReadinessTests(unittest.TestCase):
         self.commit()
         out = self.run_check()[1]
         self.assertEqual(out.count("error test-plan-location:"), 2)
+
+    def test_moving_a_plan_out_of_procedures_is_flagged(self):
+        self.write("docs/testing/procedures/x.md", "Steps.\n")
+        self.commit()
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.git("mv", "docs/testing/procedures/x.md", "docs/testing/x2.md")
+        self.commit()
+        self.assertIn("error test-plan-location:", self.run_check()[1])
 
     def test_skip_marker_on_head_is_a_note(self):
         self.write("crates/horizon-core/src/lib.rs")

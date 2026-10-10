@@ -70,7 +70,11 @@ def rendered(body):
     """The PR body without HTML comments and fenced code blocks, which GitHub does not
     show as media."""
     body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
-    return re.sub(r"^(```|~~~).*?^\1[^\n]*$", "", body, flags=re.S | re.M)
+    body = re.sub(r"^[ \t]*(```+|~~~+).*?^[ \t]*\1[^\n]*$", "", body, flags=re.S | re.M)
+    body = re.sub(r"^(?: {4}|\t).*$", "", body, flags=re.M)
+    body = re.sub(r"(`+)(?:(?!\1).)+\1", "", body)
+    # A tag over several lines counts as one line.
+    return re.sub(r"<(img|video)\b[^>]*>", lambda m: " ".join(m.group(0).split()), body, flags=re.S | re.I)
 
 
 def is_media(line):
@@ -104,7 +108,8 @@ def is_ui(path):
 
 
 def is_test(path):
-    return "/tests/" in path or path.endswith(("tests.rs", "_test.rs", "_tests.rs")) or Path(path).name.startswith("test_")
+    name = Path(path).name
+    return "/tests/" in path or name in ("tests.rs", "test.rs") or name.endswith(("_test.rs", "_tests.rs")) or name.startswith("test_")
 
 
 def is_source(path):
@@ -116,7 +121,8 @@ def check(repo, base, title, body, scope_approved, no_visible_change):
     paths = {path for path, _, _, _ in files}
     errors, notes = [], []
 
-    source = [(p, a, d) for p, a, d, _ in files if is_source(p)]
+    # A pure rename (no edited lines) is a mechanical move and does not count.
+    source = [(p, a, d) for p, a, d, status in files if is_source(p) and not (status == "R" and a + d == 0)]
     lines = sum(a + d for _, a, d in source)
     if (len(source) > MAX_FILES or lines > MAX_LINES) and not scope_approved:
         errors.append(("scope", f"{len(source)} source or test files and {lines} changed lines. More than "
@@ -124,8 +130,9 @@ def check(repo, base, title, body, scope_approved, no_visible_change):
                        "approval, run again with --scope-approved, or split the PR."))
 
     # A deleted procedure does not count: the rule needs a procedure in the result.
+    # Only a procedure that is written or edited counts: not a deletion, not a pure rename.
     procedure_changed = any(p.startswith(PROCEDURES) and p.endswith(".md") and not p.endswith("TEMPLATE.md")
-                            for p, _, _, status in files if status != "D")
+                            for p, a, d, status in files if status != "D" and (status != "R" or a + d > 0))
     ui = sorted(p for p in paths if is_ui(p))
     if ui and no_visible_change and not (body and re.search(r"no visible (change|behavior)", body, re.I)):
         errors.append(("ui-not-visible", "--no-visible-change needs a PR body (--body) that says the change has "
@@ -155,9 +162,9 @@ def check(repo, base, title, body, scope_approved, no_visible_change):
                                "bundled skill copies together."))
 
     for path, _, _, status in files:
-        if (status == "A" and path.startswith("docs/testing/") and path.endswith(".md")
+        if (status in "AR" and path.startswith("docs/testing/") and path.endswith(".md")
                 and not path.startswith((PROCEDURES, "docs/testing/reports/"))):
-            errors.append(("test-plan-location", f"{path} is a new plan directly under docs/testing/. Put a "
+            errors.append(("test-plan-location", f"{path} is a new or moved plan outside the procedures and reports. Put a "
                            f"procedure under {PROCEDURES} or a report under docs/testing/reports/."))
 
     if SKIP_MARKER in git(repo, "log", "-1", "--format=%B"):
