@@ -281,7 +281,9 @@ class Exchange:
             # Checked again just before the token goes out: a task's session can end while the
             # request is read.
             fresh = self.fresh(candidate) if candidate is not None else None
-            if candidate is not None and not (fresh and all(fresh.allowed(name, route.access) for name in names)):
+            if candidate is not None and fresh is None:
+                raise refusal(503, 'this worker\'s GitHub access changed while the request was read; try again.')
+            if candidate is not None and not all(fresh.allowed(name, route.access) for name in names):
                 raise refusal(403, '%s has no GitHub grant on this worker any more. Ask for access with the '
                                    'github_access tool.' % ', '.join(names))
             try:
@@ -341,7 +343,11 @@ class Exchange:
         """The same token as `candidate`, with the grants of now: a task's session can end and
         the worker can change accounts while a request is read. None, or a GraphQL refusal with
         `refuse`, when that token no longer serves."""
-        same = [item for item in self.broker.candidates(self.pid)
+        try:
+            found = self.broker.candidates(self.pid)
+        except relay.Refusal:
+            found = []
+        same = [item for item in found
                 if item.token == candidate.token and item.source == candidate.source and item.usable]
         if not same:
             if refuse:

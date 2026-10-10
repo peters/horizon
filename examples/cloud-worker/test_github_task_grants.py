@@ -298,7 +298,8 @@ class LateEndTests(BrokerTestCase):
             return chosen
         with mock.patch.object(service.broker, 'choose', then_another_account):
             status, _, payload = self.send('GET', '/repos/example/secret/issues')
-        self.assertEqual(status, 403)
+        self.assertEqual(status, 503)
+        self.assertIn(b'changed while the request was read', payload)
         self.assertEqual(self.api.seen, [])
 
 

@@ -173,7 +173,7 @@ def task_access(book, state, pids):
     read = []
 
     def access(repository):
-        # Read once per request; a check before sending makes a new one.
+        # Read once; the check right before sending builds a new one from the store.
         if not read:
             read.append(book.read()['task_grants'])
         grants = read[0]
