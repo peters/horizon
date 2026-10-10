@@ -107,6 +107,8 @@ class CapabilitiesTests(unittest.TestCase):
                  False),
                 # Without the agent isolation launcher the service would refuse to run.
                 (declared, ('horizon-worker-tailnet',), ('--git-auth',), helpers, False),
+                # Without openssl the Git proxy cannot make its certificate authority.
+                (declared, ('openssl',), ('--git-auth',), helpers, False),
                 (declared, (), (), helpers, False)]:
             for helper in helpers:
                 path = binaries / helper

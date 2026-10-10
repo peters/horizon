@@ -848,7 +848,9 @@ agents are isolated. If the service cannot open its socket or the port of its Gi
 proxy, it tries five times with doubled waits from 2 seconds and then stops. The supervisor then removes it
 from the published services and routes Git to github.com directly again
 (`horizon-worker-git-auth unroute`), and the worker keeps running. Git and `gh`
-then use the static token file, and `status` reports `"serving": false`. The
+then use the static token file, and `status` reports `"serving": false`. If the
+supervisor cannot remove the route in five attempts in about 8 seconds, the
+worker stops instead, because every GitHub operation would fail. The
 service is not started again until the worker restarts. It refreshes the chain
 when the access token expires in 30 minutes or less:
 
@@ -888,8 +890,9 @@ agent user (`horizon-worker-git-auth route`):
 The remote URLs stay `https://github.com/owner/name.git`, so `gh` and the `gh`
 wrapper still find the repository of a checkout. Git trusts the authority only
 for `github.com`. Each start of the worker removes these entries before the
-service starts (`horizon-worker-git-auth unroute` in `horizon-worker-configure`),
-and the supervisor removes them when the service stops, so Git never points at a
+service starts (`horizon-worker-git-auth unroute` in `horizon-worker-configure`;
+the start fails if this fails), and the supervisor removes them when the service
+stops, so Git never points at a
 port that no service holds. The helper removes only the values that it wrote.
 The proxy does these steps for each connection:
 

@@ -14,7 +14,7 @@ subprocess.run(['git', 'lfs', 'install', '--skip-repo'], check=True)
 subprocess.run(['git', 'config', '--global', 'lfs.storage', '/workspace/source/lfs'], check=True)
 # The GitHub service routes Git through its proxy again once it holds a chain; until it does,
 # Git must not point at a proxy that no process serves.
-subprocess.run(['/usr/local/bin/horizon-worker-git-auth', 'unroute'], check=False)
+subprocess.run(['/usr/local/bin/horizon-worker-git-auth', 'unroute'], check=True)
 capabilities = json.loads(Path('/workspace/capabilities.json').read_text())
 servers = {}
 if capabilities.get('agents', []):

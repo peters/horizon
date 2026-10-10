@@ -254,11 +254,13 @@ try:
         # helper, from the service's own directory before it parses any operation.
         service = shutil.which('horizon-worker-github')
         beside = Path(service).resolve() if service else None
-        # The Git helper is also run from there, so it must be executable.
+        # The Git helper is also run from there, so it must be executable. The Git proxy makes
+        # its certificate authority with openssl at each start.
         if (beside and all(beside.with_name(helper).is_file()
                            for helper in ('horizon-worker-github-common', 'horizon-worker-github-agents',
                                           'horizon-worker-github-git', 'horizon-worker-github-http'))
                 and os.access(beside.with_name('horizon-worker-git-auth'), os.X_OK)
+                and shutil.which('openssl')
                 and shutil.which('horizon-worker-tailnet') and helper_declares(
                 'horizon-worker-supervise', '--github-chain-contract', 'horizon-github-chain-contract=1')):
             print('horizon-github-chain-contract=1')
