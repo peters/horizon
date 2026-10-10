@@ -321,8 +321,10 @@ the binding stays for the repositories the app does not reach. A cloud whose che
 longer has a GitHub origin loses the access its worker held.
 
 The worker's root service renews the access every 8 hours for about 6 months,
-also while this computer is off. Agents get short-lived access tokens through
-Git and `gh` and never see the refresh token. Commits use your name and your
+also while this computer is off. Git reaches GitHub through the worker's Git
+proxy, which adds the access only for the repositories of the cloud, so Git never
+gets a token. `gh` gets a short-lived access token for a repository of the cloud.
+Agents never see the refresh token. Commits use your name and your
 GitHub private commit address. The steps card shows **GitHub: signed in as
 <login>**.
 
@@ -332,8 +334,8 @@ cloud** and **Deny**. The worker checks that the app reaches the repository
 before it allows anything.
 
 Access is per cloud. Every agent session of a cloud can use each repository the
-cloud has access to, because Git and `gh` get the same token for all of them. Put
-work that must not reach a repository in a cloud without access to it.
+cloud has access to. Put work that must not reach a repository in a cloud without
+access to it.
 
 **Disconnect** stops new clouds from getting access. It does not end the access
 of running clouds: delete the app on GitHub for that. Deleting the app ends every

@@ -1,0 +1,433 @@
+"""Git's way to GitHub on the worker. The agents' Git configuration sends every
+https://github.com/ request through this proxy on 127.0.0.1:47281 (`http.<url>.proxy`) and
+trusts a certificate authority that the root service makes at each start
+(`http.<url>.sslCAInfo`). The proxy ends the tunnel itself, reads each Git request, and adds
+the cloud's access token only to a request for a repository the caller is granted, so no agent
+process holds the token. A read of another repository goes to GitHub without the token, which
+serves only public repositories; a push to one is refused. Remote URLs stay as they are, so
+gh still recognizes them. A module that horizon-worker-github loads, not a command."""
+import base64
+import contextlib
+import http.client
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import socket
+import ssl
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+
+def load_common():
+    name = 'horizon_worker_github_common'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-common')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+common = load_common()
+auth = common.auth
+agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_github_agents')
+relay = common.load_sibling('horizon-worker-github-http', 'horizon_worker_github_http')
+
+ADDRESS = ('127.0.0.1', auth.PROXY_PORT)
+# The authority Git trusts for github.com; public, so every account can read it.
+AUTHORITY = Path(auth.PROXY_AUTHORITY)
+# Only the agent account: root's Git has another home and never uses the proxy.
+AGENT_UIDS = (10001,)
+TUNNEL = 'github.com:443'
+CONNECTIONS = 32
+# Until the Git request's head is read; a slower client loses the connection.
+HEAD_SECONDS = 30
+# Per read or write after that, not per request: a large push streams as long as it takes.
+TIMEOUT = 300
+MAX_LFS_REQUEST = 1 << 20
+MAX_LFS_REPLY = 4 << 20
+# The repository is the first two segments, as GitHub reads them; the rest is one of the
+# Git or Git LFS endpoints. No percent-encoding, dot segment or other path reaches GitHub.
+PATH = re.compile(r'/(?P<owner>[A-Za-z0-9_.-]{1,100})/(?P<name>[A-Za-z0-9_.-]{1,104})/(?P<rest>info/refs|'
+                  r'git-upload-pack|git-receive-pack|info/lfs/objects/batch|info/lfs/locks|info/lfs/locks/verify|'
+                  r'info/lfs/locks/[A-Za-z0-9_-]{1,64}/unlock)')
+SERVICES = {'service=git-upload-pack': 'read', 'service=git-receive-pack': 'push'}
+LOCK_QUERY = re.compile(r'[A-Za-z0-9_.~%=&+/-]{0,2048}')
+REQUEST_FIELDS = {'accept', 'accept-encoding', 'accept-language', 'content-encoding', 'content-type',
+                  'git-protocol', 'user-agent'}
+REPLY_FIELDS = {'cache-control', 'content-encoding', 'content-type', 'expires', 'pragma', 'retry-after',
+                'x-github-request-id'}
+# GitHub moves a renamed repository with a redirect on github.com; Git follows it through this
+# proxy again, so the new name is checked like any other.
+REDIRECT = re.compile(r'https://github\.com/[\x21-\x7e]{1,2048}')
+PREFIX = 'Horizon: '
+LEAF = ('proxy-certificate.pem', 'proxy-key.pem')
+
+
+def refusal(status, message):
+    return relay.Refusal(status, PREFIX + message)
+
+
+def make_identity(private, public=AUTHORITY, openssl='openssl'):
+    """A new certificate authority, published at `public` for Git to trust, and a github.com
+    certificate from it, kept in the root-only `private` directory. Returns the TLS context
+    that serves it. The authority's key is deleted at once, so nothing can sign another
+    certificate with it."""
+    with tempfile.TemporaryDirectory(dir=private) as work:
+        work = Path(work)
+        extensions = work / 'leaf.ext'
+        extensions.write_text('subjectAltName=DNS:github.com\nbasicConstraints=critical,CA:FALSE\n'
+                              'keyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\n')
+        key = ['-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes']
+        for command in (
+                [openssl, 'req', '-x509', *key, '-keyout', work / 'ca.key', '-out', work / 'ca.pem', '-days', '3650',
+                 '-subj', '/CN=Horizon worker Git proxy', '-addext', 'basicConstraints=critical,CA:TRUE,pathlen:0',
+                 '-addext', 'keyUsage=critical,keyCertSign'],
+                [openssl, 'req', '-new', *key, '-keyout', work / 'leaf.key', '-out', work / 'leaf.csr',
+                 '-subj', '/CN=github.com'],
+                [openssl, 'x509', '-req', '-in', work / 'leaf.csr', '-CA', work / 'ca.pem', '-CAkey', work / 'ca.key',
+                 '-set_serial', '0x' + secrets.token_hex(16), '-days', '3650', '-extfile', extensions,
+                 '-out', work / 'leaf.pem']):
+            subprocess.run([str(part) for part in command], check=True, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        (work / 'ca.key').unlink()
+        os.replace(work / 'leaf.pem', private / LEAF[0])
+        os.replace(work / 'leaf.key', private / LEAF[1])
+        public.parent.mkdir(parents=True, exist_ok=True)
+        staged = public.with_name('.' + public.name + '.new')
+        staged.write_bytes((work / 'ca.pem').read_bytes())
+        staged.chmod(0o644)
+        os.replace(staged, public)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(private / LEAF[0], private / LEAF[1])
+    context.set_alpn_protocols(['http/1.1'])
+    return context
+
+
+def operation(method, target):
+    """(repository, access, kind) for one request: access is `read` or `push`, or None when
+    the LFS batch body decides it; kind is `git` or `lfs`. Raises Refusal for anything else."""
+    path, _, query = target.partition('?')
+    match = PATH.fullmatch(path)
+    repository = match and match['owner'] + '/' + match['name'].removesuffix('.git')
+    if not match or not auth.valid_repository(repository):
+        raise refusal(404, 'the worker\'s Git proxy relays only Git and Git LFS requests for a GitHub repository.')
+    rest = match['rest']
+    if rest == 'info/refs' and method == 'GET' and query in SERVICES:
+        return repository, SERVICES[query], 'git'
+    if rest == 'info/lfs/locks' and method == 'GET' and LOCK_QUERY.fullmatch(query):
+        return repository, 'read', 'lfs'
+    if query or method != 'POST' or rest == 'info/refs':
+        raise refusal(405, 'the worker\'s Git proxy does not relay this Git request.')
+    if rest == 'git-upload-pack':
+        return repository, 'read', 'git'
+    if rest == 'git-receive-pack':
+        return repository, 'push', 'git'
+    if rest == 'info/lfs/objects/batch':
+        return repository, None, 'lfs'
+    return repository, 'push', 'lfs'
+
+
+def batch(data):
+    """(access, body to send) for an LFS batch request: downloads read, uploads push. The body
+    goes on as the proxy read it, so GitHub cannot read another operation from it."""
+    try:
+        value = json.loads(data, object_pairs_hook=auth.unique_keys)
+    except (ValueError, RecursionError, UnicodeDecodeError):
+        value = None
+    operation = value.get('operation') if isinstance(value, dict) else None
+    if operation not in ('download', 'upload'):
+        raise refusal(400, 'malformed Git LFS batch request.')
+    return ('read' if operation == 'download' else 'push'), json.dumps(value, separators=(',', ':')).encode()
+
+
+def usable_state(store):
+    """(state, refusal message) for the chain that may be served now."""
+    state = store.load(serving=True)[0]
+    if state is None and store.load()[0] is not None:
+        return None, 'the GitHub sign-in of this worker is not stored yet; try again in a minute.'
+    if state is None:
+        return None, 'this worker has no GitHub sign-in. Connect GitHub in Horizon.'
+    if state['state'] != 'ok':
+        return None, 'GitHub access on this worker was revoked; connect GitHub again in Horizon.'
+    return state, None
+
+
+class Plan:
+    """How the proxy sends one request: with the token (`token` set), or without it, when
+    `refusal` explains a reply that GitHub refuses."""
+
+    def __init__(self, repository, token=None, refusal=None):
+        self.repository, self.token, self.refusal = repository, token, refusal
+
+
+def plan(store, repository, access, now):
+    """The Plan for one request. Raises Refusal for a push that no grant covers."""
+    state, problem = usable_state(store)
+    granted, name = agents.granted_access(state, repository) if state is not None else (None, repository)
+    if granted is not None and agents.covered(granted, access):
+        if state['chain']['access_expires_at'] - now <= common.SERVE_MARGIN:
+            raise refusal(503, 'the GitHub access token expired and this worker could not refresh it yet.')
+        return Plan(name, token=state['chain']['access_token'])
+    if granted is not None:
+        raise refusal(403, '%s is granted for reading only. Ask for push access with the github_access tool.'
+                      % name)
+    if access == 'push':
+        raise refusal(403, problem or ('%s has no GitHub grant on this worker. Ask for access with the '
+                                       'github_access tool.' % repository))
+    return Plan(repository, refusal=problem or (
+        '%s has no GitHub grant on this worker, and GitHub does not serve it without one. Ask for access '
+        'with the github_access tool.' % repository))
+
+
+def credential(token):
+    return 'Basic ' + base64.b64encode(('x-access-token:' + token).encode()).decode()
+
+
+def upstream(environ=os.environ):
+    """github.com over verified HTTPS, or the loopback fake that tests name."""
+    base, _, loopback = common.github_bases(environ)
+    if not loopback:
+        return relay.Upstream('github.com')
+    host, port = base.removeprefix('http://').split(':')
+    return relay.Upstream(host, int(port), tls=False)
+
+
+def address_hex(host):
+    """An IPv4 address as /proc/net/tcp writes it."""
+    return '%08X' % struct.unpack('=I', socket.inet_aton(host))[0]
+
+
+def socket_owner(connection, table=Path('/proc/net/tcp')):
+    """The UID that owns the client end of an established loopback connection, as the kernel
+    reports it, or None. A socket that its process already closed reports root, so only an
+    established one with an inode counts."""
+    client, server = connection.getpeername(), connection.getsockname()
+    local = '%s:%04X' % (address_hex(client[0]), client[1])
+    remote = '%s:%04X' % (address_hex(server[0]), server[1])
+    with open(table) as lines:
+        next(lines, None)
+        for line in lines:
+            fields = line.split()
+            if len(fields) > 9 and fields[1] == local and fields[2] == remote:
+                return int(fields[7]) if fields[3] == '01' and fields[9] != '0' else None
+    return None
+
+
+def read_tunnel(connection):
+    """The CONNECT request, read one byte at a time, so that no byte of the TLS handshake
+    after it leaves the socket."""
+    data = b''
+    while not data.endswith(b'\r\n\r\n'):
+        byte = connection.recv(1)
+        if not byte:
+            raise relay.ClientGone()
+        data += byte
+        if len(data) > relay.MAX_HEAD:
+            raise relay.Refusal(431, 'The request head is too long.')
+    return relay.read_request(io.BytesIO(data))
+
+
+class Exchange:
+    """One Git request inside one tunnel."""
+
+    def __init__(self, store, stream, output, environ, headed):
+        self.store, self.stream, self.output, self.environ = store, stream, output, environ
+        self.headed = headed
+        self.record = {'request': 'invalid', 'repository': None, 'granted': False}
+        self.request = None
+        # Set once the reply to the client may have begun; no refusal can follow it.
+        self.started = False
+
+    def run(self):
+        request = self.request = relay.read_request(self.stream)
+        self.headed()
+        if (request.field('host') or '').lower() not in ('github.com', TUNNEL):
+            raise refusal(400, 'the worker\'s Git proxy relays only requests for github.com.')
+        repository, access, kind = operation(request.method, request.target)
+        self.record.update(request=kind, repository=repository)
+        data = None
+        if access is None:
+            if request.field('content-encoding'):
+                raise refusal(400, 'a compressed Git LFS batch request cannot be examined.')
+            relay.continue_if_asked(request, self.output)
+            access, data = batch(relay.read_body(request, MAX_LFS_REQUEST))
+        self.record['request'] = kind + '-' + access
+        chosen = plan(self.store, repository, access, time.time())
+        self.record['granted'] = chosen.token is not None
+        # An LFS reply is examined for the token, so it must come uncompressed.
+        fields = [(field, value) for field, value in request.fields if field in REQUEST_FIELDS
+                  and not (kind == 'lfs' and field in ('accept-encoding', 'content-encoding'))]
+        secrets = ()
+        if chosen.token is not None:
+            secrets = (chosen.token, credential(chosen.token).split(' ', 1)[1])
+            fields.append(('Authorization', credential(chosen.token)))
+        if data is None:
+            relay.continue_if_asked(request, self.output)
+            pieces, length = relay.body(request), request.length
+        else:
+            pieces, length = [data], len(data)
+        target = upstream(self.environ)
+        connection = target.connect(TIMEOUT)
+        try:
+            try:
+                response = relay.send(connection, target, request.method, request.target, fields, pieces, length)
+            except (OSError, http.client.HTTPException):
+                raise refusal(502, 'this worker could not reach GitHub; try again.') from None
+            self.reply(response, chosen, kind, secrets)
+        finally:
+            connection.close()
+
+    def reply(self, response, chosen, kind, secrets):
+        keep = REPLY_FIELDS
+        if 300 <= response.status < 400:
+            if not REDIRECT.fullmatch(response.getheader('Location') or ''):
+                raise refusal(403, 'GitHub redirected the request for %s away from github.com.' % chosen.repository)
+            keep = REPLY_FIELDS | {'location'}
+        elif response.status == 401 and chosen.token is not None:
+            raise refusal(403, 'GitHub refused the sign-in of this worker for %s. Connect GitHub again in '
+                               'Horizon.' % chosen.repository)
+        elif response.status in (401, 403, 404) and chosen.token is None:
+            raise refusal(403, chosen.refusal)
+        data = None
+        if kind == 'lfs':
+            if (response.getheader('Content-Encoding') or 'identity').lower() != 'identity':
+                raise refusal(502, 'the Git LFS reply from GitHub is compressed, so it cannot be examined.')
+            data = response.read(MAX_LFS_REPLY + 1)
+            if len(data) > MAX_LFS_REPLY:
+                raise refusal(502, 'the Git LFS reply from GitHub is too large.')
+            text = data.decode('latin-1')
+            if any(secret in text for secret in secrets):
+                raise refusal(502, 'the Git LFS reply from GitHub held this worker\'s sign-in; it was not passed on.')
+        self.started = True
+        relay.relay(self.output, response, keep, secrets, data)
+
+
+class Proxy:
+    """The listening socket and the TLS context that serves github.com in each tunnel."""
+
+    def __init__(self, server, context):
+        self.server, self.context = server, context
+
+
+def refuse_tunnel(connection, status):
+    connection.sendall(relay.head(status, [('Content-Length', '0')]))
+
+
+def tunnel_exchange(tls, store, environ, headed):
+    """The Git request inside an open tunnel. Returns its log record."""
+    with tls.makefile('rb') as stream, tls.makefile('wb') as output:
+        exchange = Exchange(store, stream, output, environ, headed)
+        try:
+            exchange.run()
+        except relay.Refusal as refused:
+            if not exchange.started:
+                if exchange.request is not None:
+                    relay.drain(exchange.request)
+                relay.refuse(output, refused.status, refused.message)
+        except relay.ClientGone:
+            pass
+        except Exception:
+            # Unexpected, such as unreadable storage: Git gets a reason, not an empty reply.
+            if not exchange.started:
+                with contextlib.suppress(OSError):
+                    relay.refuse(output, 502, PREFIX + 'the worker\'s GitHub access failed; try again.')
+            raise
+        finally:
+            headed()
+        return exchange.record
+
+
+def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, table=Path('/proc/net/tcp')):
+    """Answers one connection: the tunnel, one Git request in it, then the end."""
+    current = [connection]
+
+    def cut():
+        with contextlib.suppress(OSError):
+            current[0].shutdown(socket.SHUT_RDWR)
+    watchdog = threading.Timer(HEAD_SECONDS, cut)
+    watchdog.daemon = True
+    watchdog.start()
+    record = {'request': 'tunnel', 'repository': None, 'granted': False}
+    uid = None
+    try:
+        connection.settimeout(TIMEOUT)
+        with contextlib.suppress(OSError, ValueError):
+            uid = socket_owner(connection, table)
+        if uid not in allowed:
+            return refuse_tunnel(connection, 403)
+        try:
+            tunnel = read_tunnel(connection)
+        except relay.Refusal as refused:
+            return refuse_tunnel(connection, refused.status)
+        if tunnel.method != 'CONNECT' or tunnel.target.lower() != TUNNEL:
+            return refuse_tunnel(connection, 403)
+        connection.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
+        current[0] = context.wrap_socket(connection, server_side=True)
+        with current[0] as tls:
+            record = tunnel_exchange(tls, store, environ, watchdog.cancel)
+    except (ssl.SSLError, relay.ClientGone, TimeoutError, ConnectionError):
+        pass
+    finally:
+        watchdog.cancel()
+        with contextlib.suppress(OSError):
+            agents.log_request(store.runtime, dict(record, at=int(time.time()), uid=uid, pid=None))
+
+
+def listen(address=ADDRESS):
+    """The proxy's listening socket. Bound before any agent runs and held for the life of the
+    service, so no agent holds the port."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(address)
+        server.listen(CONNECTIONS)
+    except OSError:
+        server.close()
+        raise
+    return server
+
+
+def accept_forever(proxy, store, allowed=AGENT_UIDS, environ=os.environ):
+    slots = threading.BoundedSemaphore(CONNECTIONS)
+
+    def run(connection):
+        try:
+            with connection:
+                handle(connection, store, proxy.context, allowed, environ)
+        # One bad client must not end the proxy; the message never holds request data.
+        except Exception as error:
+            print('GitHub Git proxy request failed: ' + type(error).__name__, flush=True)
+        finally:
+            slots.release()
+
+    while True:
+        try:
+            connection, _ = proxy.server.accept()
+        except OSError as error:
+            if proxy.server.fileno() < 0:
+                return
+            print('GitHub Git proxy accept failed: ' + type(error).__name__, flush=True)
+            time.sleep(1)
+            continue
+        slots.acquire()
+        try:
+            threading.Thread(target=run, args=(connection,), daemon=True).start()
+        except RuntimeError:
+            slots.release()
+            connection.close()
+
+
+if __name__ == '__main__':
+    sys.exit('horizon-worker-github-git is a module of horizon-worker-github, not a command.')

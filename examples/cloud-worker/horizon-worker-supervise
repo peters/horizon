@@ -197,6 +197,16 @@ def stop_groups(groups):
         raise ValueError('; '.join(failures))
 
 
+def unroute_git(run=subprocess.run):
+    """Points Git at github.com directly again once the GitHub service is gone, so its proxy's
+    port routes nothing; Git then falls back to the static binding."""
+    try:
+        run(['horizon-worker-git-auth', 'unroute'], check=True, timeout=60,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        print('Worker Git still routes github.com through the stopped GitHub service.', file=sys.stderr, flush=True)
+
+
 class Supervisor:
     def __init__(self, workspace=WORKSPACE, runtime=RUNTIME, control_endpoint=CONTROL_ENDPOINT):
         self.workspace = workspace
@@ -253,6 +263,8 @@ class Supervisor:
             stop_groups([(child, identity)])
         except ValueError as error:
             print('Worker service cleanup: ' + str(error), file=sys.stderr, flush=True)
+        if name == 'github':
+            unroute_git()
         if self.published is not None:
             self.publish(self.published)
 

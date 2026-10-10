@@ -748,8 +748,10 @@ report `horizon-git-auth-contract=2` from `horizon-worker-check --git-auth`.
 The token files above are static: they stop working when the token expires, and
 every agent can read them. The `horizon-worker-github` service replaces them with
 a GitHub App user token chain that the worker keeps fresh on its own, also while
-your computer is off. Agents never see the chain. They get only the current
-access token, and only for the repositories that you granted.
+your computer is off. Agents never see the chain. Git gets no token: it goes to
+GitHub through the service's Git proxy, which adds the current access token only
+to requests for the repositories that you granted. The `gh` wrapper still gets
+the access token of a granted repository from the service.
 
 A GitHub App user access token lasts 8 hours. Its refresh token lasts about six
 months. Each refresh gives a new access token and a new refresh token, and GitHub
@@ -781,8 +783,9 @@ horizon-worker-github install < chain.json
 - The times are Unix seconds. A chain whose refresh token already expired is
   refused.
 - Each target repository gets the same configuration as a version 2 install: a
-  clean HTTPS `origin`, no separate push URL and the author identity. The Git
-  helper does this work as the agent user, and it gets no token. The previous
+  clean HTTPS `origin`, no separate push URL and the author identity. Git's
+  github.com URLs go through the Git proxy (see below). The Git helper does this
+  work as the agent user, and it gets no token. The previous
   chain stays stored and served until every repository is configured; only then
   is the new chain stored. If the configuration or that save fails, the
   repositories of the previous chain are configured again and the previous chain
@@ -834,8 +837,8 @@ service only for an image that has the isolation launcher.
 
 **Refresh.** `horizon-worker-github serve` runs as root for the life of the
 worker. `horizon-worker-supervise` starts it whenever the image contains it and
-agents are isolated. If the service cannot open its socket, it tries five times
-with doubled waits from 2 seconds and then stops. The supervisor then removes it
+agents are isolated. If the service cannot open its socket or the port of its Git
+proxy, it tries five times with doubled waits from 2 seconds and then stops. The supervisor then removes it
 from the published services and the worker keeps running; Git and `gh` fall
 back to the static token file, and `status` reports `"serving": false`. The
 service is not started again until the worker restarts. It refreshes the chain
@@ -855,6 +858,50 @@ If a reply is lost after GitHub already rotated the chain, the next refresh gets
 `bad_refresh_token` and the chain becomes `revoked`. Connect GitHub again in
 Horizon in that case.
 
+**Git through the proxy.** The service listens on `127.0.0.1:47281` before it
+configures any repository. With a chain, the Git helper configures Git as the
+agent user:
+
+```ini
+[url "http://127.0.0.1:47281/"]
+	insteadOf = https://github.com/
+	insteadOf = git@github.com:
+	insteadOf = ssh://git@github.com/
+```
+
+The configured `origin` stays `https://github.com/owner/name.git`. A static
+binding (`horizon-worker-git-auth install` or `restore`) removes these entries,
+so Git goes to GitHub directly again. The proxy does these steps for each
+connection:
+
+- It reads the user ID of the connecting process from the kernel
+  (`/proc/net/tcp`). It answers only root and the agent user (UID 10001).
+- It accepts one strict HTTP/1.1 request. It refuses an absolute URL, a folded
+  or non-ASCII field, a body with two lengths or a transfer coding other than
+  `chunked`.
+- It accepts only the Git and Git LFS requests of one repository: `info/refs`
+  for a fetch or a push, `git-upload-pack`, `git-receive-pack`, the LFS batch
+  request and the LFS lock requests. It refuses percent-encoding, dot segments
+  and all other paths.
+- A fetch, an LFS download and the LFS lock list need `read`. A push, an LFS
+  upload and the other LFS lock requests need `push`.
+- For a granted repository, it adds the access token and sends the request to
+  `https://github.com`. It sends on only the fields that Git needs, never the
+  client's own `Authorization` or cookies.
+- A read of a repository without a grant goes to GitHub without a token, so
+  public repositories stay available. GitHub refuses a private one, and the
+  proxy then tells Git that the repository has no grant.
+- A push to a repository without a grant, or with a `read` grant, gets a
+  refusal. The request does not go to GitHub.
+- It does not follow redirects, and it never answers 401, so Git never asks for
+  a user name or a password. Git shows each refusal as `remote: Horizon: ...`.
+- It never passes on a reply field that holds the token, and it refuses an LFS
+  reply that holds the token.
+
+The proxy writes one line for each request to the request log below. The line
+has the kind (`git-read`, `git-push`, `lfs-read` or `lfs-push`), the repository,
+the user ID and whether the proxy added the token.
+
 **Agent access.** Agents ask the service on `/run/horizon-worker/github.sock`.
 The socket accepts every local account, but the service reads the caller's user
 ID from the kernel (`SO_PEERCRED`) and answers only root and the agent user
@@ -862,31 +909,26 @@ ID from the kernel (`SO_PEERCRED`) and answers only root and the agent user
 `/run/horizon-github/requests.log` with the time, user ID, process ID, the
 repository and the result, but never a token. Each request is one JSON line:
 
-- `{"request": "credential", "protocol": "https", "host": "github.com",
-  "path": "owner/name.git"}` answers with `username` and `password`, as Git's
-  credential helper needs them.
+- `{"request": "credential", ...}` always gets a refusal: Git goes through the
+  proxy and needs no token.
 - `{"request": "gh-token", "repository": "owner/name"}` answers with `token`,
   `repository` and `access`.
 
 The reply never contains the refresh token or the client secret. A repository
-without a grant, a host other than github.com or plain HTTP gets a refusal. A
-token that expires within one minute is not given out. While a refreshed chain
-waits for its write, every request gets a refusal with `"state":"unstored"`.
-`horizon-worker-git-auth get` and the `gh` wrapper ask the socket first and fall
-back to the static file only when no service answers or it holds no chain
-(`"state":"absent"`). The `gh` wrapper still
+without a grant gets a refusal. A token that expires within one minute is not
+given out. While a refreshed chain waits for its write, every request gets a
+refusal with `"state":"unstored"`. `horizon-worker-git-auth get` and the `gh`
+wrapper ask the socket first and fall back to the static file only when no
+service answers or it holds no chain (`"state":"absent"`). The `gh` wrapper still
 chooses the repository as described above. When it refuses a nested `gh`, it
 removes the `GH_TOKEN` that an outer wrapped `gh` injected, but keeps every token
 variable that you set yourself.
 
-`access: "read"` is a routing guard, not a GitHub permission. The service refuses
-a `read` grant only when the request names `git-receive-pack`. Git's credential
-requests normally carry only the repository path, so a push and a fetch look the
-same, and `gh` gets the same token for both. The token can do what the GitHub App
-and your account allow on that repository. To make a repository truly read-only
-for agents, limit the GitHub App's permissions or your own access to it. A
-process that keeps `GH_TOKEN` in its environment for more than 8 hours uses an
-expired token; start `gh` again to get the current one.
+For Git, `access: "read"` is enforced: the proxy refuses each push. For `gh`, it
+is a routing guard: `gh` gets the same token for a read and a write. The token
+can do what the GitHub App and your account allow on that repository. A process
+that keeps `GH_TOKEN` in its environment for more than 8 hours uses an expired
+token; start `gh` again to get the current one.
 
 **Asking for more access.** An agent that needs a repository without a grant
 asks you for it with the `github_access` MCP tool. You decide in Horizon:

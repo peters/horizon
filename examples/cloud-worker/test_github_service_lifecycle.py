@@ -86,21 +86,39 @@ class HostStatusTests(ServiceTestCase):
 class StartTests(ServiceTestCase):
     def test_a_start_that_fails_is_retried_then_ends_the_service(self):
         path = self.root / 'run/worker/github.sock'
+        proxy = ('127.0.0.1', 0)
         waits = []
         with mock.patch.object(common, 'AGENT_ISOLATION', self.root / 'missing'), \
                 contextlib.redirect_stdout(io.StringIO()) as output:
-            self.assertIsNone(service.start(self.store, path, sleep=waits.append))
+            self.assertIsNone(service.start(self.store, path, sleep=waits.append, proxy=proxy))
             with mock.patch.object(service, 'START_WAIT_SECONDS', 0):
-                self.assertEqual(service.serve(self.store, path), 1)
+                self.assertEqual(service.serve(self.store, path, proxy=proxy), 1)
         self.assertEqual(waits, [2, 4, 8, 16])
         self.assertIn('GitHub access cannot start: ValueError', output.getvalue())
         self.assertFalse(path.exists())
         isolation = self.root / 'agent-isolation'
         isolation.touch()
         with mock.patch.object(common, 'AGENT_ISOLATION', isolation):
-            server = service.start(self.store, path, sleep=waits.append)
+            server, git_server = service.start(self.store, path, sleep=waits.append, proxy=proxy)
         self.addCleanup(server.close)
+        self.addCleanup(git_server.close)
         self.assertTrue(path.exists())
+        self.assertEqual(git_server.getsockname()[0], '127.0.0.1')
+
+    def test_a_proxy_port_that_another_process_holds_ends_the_start_and_opens_no_socket(self):
+        path = self.root / 'run/worker/github.sock'
+        holder = service.gitproxy.listen(('127.0.0.1', 0))
+        self.addCleanup(holder.close)
+        isolation = self.root / 'agent-isolation'
+        isolation.touch()
+        prepared = []
+        with mock.patch.object(common, 'AGENT_ISOLATION', isolation), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(service.start(self.store, path, sleep=lambda _: None, prepare=lambda: prepared.append(1),
+                                            proxy=holder.getsockname()))
+        self.assertIn('GitHub access cannot start: OSError', output.getvalue())
+        self.assertEqual(prepared, [], 'repositories are never sent to a port the service does not hold')
+        self.assertFalse(path.exists())
 
     def test_install_needs_agent_isolation(self):
         source = io.TextIOWrapper(io.BytesIO(json.dumps(installation()).encode()))
@@ -295,7 +313,7 @@ class VolumeCopyTests(ServiceTestCase):
         self.install()
         stored = self.stored()
         self.store.pending = dict(stored, serial=stored['serial'] + 1, chain=chain(access='ghu_synthetic-unwritten'))
-        request = {'request': 'credential', 'protocol': 'https', 'host': 'github.com', 'path': 'example/project'}
+        request = {'request': 'gh-token', 'repository': 'example/project'}
         reply, _ = self.answer(request, NOW)
         self.assertEqual((reply['ok'], reply['state']), (False, 'unstored'),
                          'absent would send Git to the static file')
@@ -443,8 +461,10 @@ class VolumeCopyTests(ServiceTestCase):
         isolated = self.root / 'isolated'
         isolated.touch()
         with mock.patch.object(common, 'AGENT_ISOLATION', isolated):
-            server = service.start(self.store, socket_path, sleep=lambda _: None, prepare=prepare)
+            server, git_server = service.start(self.store, socket_path, sleep=lambda _: None, prepare=prepare,
+                                               proxy=('127.0.0.1', 0))
         self.addCleanup(server.close)
+        self.addCleanup(git_server.close)
         self.assertEqual(seen, [False], 'reconciled once, before the socket existed')
         self.assertTrue(socket_path.exists())
 
@@ -455,10 +475,15 @@ class VolumeCopyTests(ServiceTestCase):
 
         def prepare():
             raise ValueError('GitHub repositories not reconciled: CalledProcessError')
+        probe = service.gitproxy.listen(('127.0.0.1', 0))
+        proxy = probe.getsockname()
+        probe.close()
         with mock.patch.object(common, 'AGENT_ISOLATION', isolated), contextlib.redirect_stdout(io.StringIO()):
-            server = service.start(self.store, socket_path, sleep=lambda _: None, prepare=prepare)
+            server = service.start(self.store, socket_path, sleep=lambda _: None, prepare=prepare, proxy=proxy)
         self.assertIsNone(server, 'the service ends and the supervisor retires it')
         self.assertFalse(socket_path.exists())
+        # Every attempt released the proxy's port again.
+        service.gitproxy.listen(proxy).close()
 
     def test_a_revocation_that_only_memory_holds_still_ends_serving(self):
         self.install()

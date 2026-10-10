@@ -237,6 +237,29 @@ class GitGrantTests(unittest.TestCase):
                                         capture_output=True).returncode, 1)
         self.assertEqual(git('config', '--global', 'user.email', env=self.env), 'chosen@example.invalid')
 
+    def test_a_chain_sends_github_urls_through_the_proxy_and_a_static_binding_does_not(self):
+        primary = self.bare(auth.GIT_DIR)
+        self.bare(auth.SIBLINGS / 'library/repository.git')
+        identities = [{key: grant[key] for key in (*auth.IDENTITY_FIELDS, 'target')} for grant in self.value['grants']]
+
+        def routed():
+            found = subprocess.run(['git', 'config', '--global', '--get-all', 'url.' + auth.PROXY_URL + '.insteadOf'],
+                                   env=self.env, capture_output=True, text=True).stdout.split()
+            return sorted(found)
+        auth.configure_chain({'grants': identities, 'previous': []})
+        auth.configure_chain({'grants': identities, 'previous': identities})
+        self.assertEqual(routed(), sorted(auth.PROXIED), 'set once, however often the chain is configured')
+        self.assertEqual(git('ls-remote', '--get-url', 'origin', cwd=primary, env=self.env),
+                         'http://127.0.0.1:47281/example/consumer.git')
+        self.assertEqual(git('config', '--get', 'remote.origin.url', cwd=primary, env=self.env),
+                         'https://github.com/example/consumer.git', 'the configured remote stays as it was')
+        auth.install(self.value)
+        self.assertEqual(routed(), [], 'a static binding reaches GitHub directly')
+        auth.configure_chain({'grants': identities, 'previous': []})
+        auth.CREDENTIAL.unlink()
+        auth.restore_static({'previous': identities})
+        self.assertEqual(routed(), [], 'a failed first chain install leaves Git as it was')
+
     def test_version_1_binding_still_installs_for_the_primary(self):
         primary = self.bare(auth.GIT_DIR)
         legacy = {key: self.primary[key] for key in auth.FIELDS}

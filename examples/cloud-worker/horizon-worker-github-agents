@@ -58,7 +58,7 @@ RETAIN_SECONDS = 48 * 3600
 # Access is per cloud: every agent session uses the same token, so an allowed repository
 # reaches all of them (#1393 tracks enforcement per task).
 DECISIONS = ('allow-cloud', 'deny')
-KINDS = ('credential', 'gh-token', 'request', 'request-status')
+KINDS = ('credential', 'gh-token', 'request', 'request-status', 'state')
 TOOL = 'github_access'
 WAIT_SECONDS = 600
 POLL_SECONDS = 5
@@ -156,20 +156,6 @@ def cloud_access(state, repository):
     return best
 
 
-def request_path(path):
-    """(repository path, whether it names a push) for a credential request path."""
-    path = path.strip('/')
-    push = False
-    for suffix in ('/info/refs', '/git-receive-pack', '/git-upload-pack'):
-        if path.endswith(suffix):
-            push = push or suffix == '/git-receive-pack'
-            path = path[:-len(suffix)]
-    if '?' in path:
-        path, query = path.split('?', 1)
-        push = push or 'git-receive-pack' in query
-    return path.removesuffix('.git'), push
-
-
 def granted_access(state, repository):
     """(access, repository name) from the installed and cloud grants."""
     if not auth.valid_repository(repository):
@@ -185,24 +171,17 @@ def canonical(state, repository):
 
 
 def credential_answer(request, state, now):
+    if request['request'] == 'credential':
+        # Git reaches GitHub through the service's Git proxy, which adds the token itself.
+        return refusal('ok', 'Git reaches GitHub through this worker\'s Git proxy, which hands out no token.'), None
     chain = state['chain']
     if chain['access_expires_at'] - now <= common.SERVE_MARGIN:
         return refusal('ok', 'The GitHub access token has expired or expires within a minute, and this worker '
                              'could not refresh it yet.'), None
-    if request['request'] == 'credential':
-        if request.get('protocol') != 'https' or request.get('host') != 'github.com':
-            return refusal('ok', 'Only HTTPS access to github.com is granted.'), None
-        repository, push = request_path(str(request.get('path', '')))
-    else:
-        repository, push = request.get('repository'), False
+    repository = request.get('repository')
     access, name = granted_access(state, repository)
     if access is None:
         return refusal('ok', 'This repository has no GitHub grant on this worker.'), repository
-    if push and access != 'push':
-        return refusal('ok', 'This repository is granted for reading only.'), repository
-    if request['request'] == 'credential':
-        return {'ok': True, 'state': 'ok', 'username': 'x-access-token', 'password': chain['access_token'],
-                'expires_at': chain['access_expires_at']}, name
     return {'ok': True, 'state': 'ok', 'token': chain['access_token'], 'repository': name, 'access': access,
             'expires_at': chain['access_expires_at']}, name
 
@@ -277,6 +256,8 @@ def answer(request, store, book, now, identify):
         return refusal('absent', 'No GitHub token chain is installed on this worker.'), None
     if state['state'] != 'ok':
         return refusal('revoked', 'GitHub access on this worker was revoked; connect GitHub again in Horizon.'), None
+    if request['request'] == 'state':
+        return {'ok': True, 'state': 'ok'}, None
     if request['request'] == 'request':
         return ask(request, state, book, now, identify)
     if request['request'] == 'request-status':
@@ -291,15 +272,20 @@ def peer(connection):
     return pid, uid
 
 
+# The socket and the Git proxy log from many threads; one rotation at a time.
+LOG_LOCK = threading.Lock()
+
+
 def log_request(directory, record):
     """One line per request without any token, in a root-only log that keeps two files."""
     path = directory / LOG
-    with contextlib.suppress(FileNotFoundError):
-        if path.lstat().st_size > LOG_LIMIT:
-            os.replace(path, directory / (LOG + '.1'))
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    with os.fdopen(fd, 'a') as output:
-        output.write(json.dumps(record, separators=(',', ':')) + '\n')
+    with LOG_LOCK:
+        with contextlib.suppress(FileNotFoundError):
+            if path.lstat().st_size > LOG_LIMIT:
+                os.replace(path, directory / (LOG + '.1'))
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        with os.fdopen(fd, 'a') as output:
+            output.write(json.dumps(record, separators=(',', ':')) + '\n')
 
 
 def identify_session(pid):
@@ -513,7 +499,7 @@ def call_tool(arguments, ask_service=auth.ask_service, sleep=time.sleep, clock=t
             return False, 'The worker lost the request; ask again.'
         reply = dict(status, id=reply['id'])
     if reply.get('status') == 'allowed':
-        return True, ('Allowed for this cloud: Git and gh now get a token for %s. Run the command again.'
+        return True, ('Allowed for this cloud: Git and gh on this worker now reach %s. Run the command again.'
                       % repository)
     if reply.get('status') == 'denied':
         return True, 'The person denied access to %s. Do not ask again; continue without it.' % repository

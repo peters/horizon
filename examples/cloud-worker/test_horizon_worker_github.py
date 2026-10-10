@@ -470,18 +470,12 @@ class SocketTests(ServiceTestCase):
         clock.start()
         self.addCleanup(clock.stop)
 
-    def test_agents_receive_only_granted_access_tokens(self):
+    def test_git_gets_no_token_and_gh_only_that_of_a_granted_repository(self):
         replies = []
-        for path, expected in [('example/project.git', ACCESS), ('Example/Project', ACCESS),
-                               ('example/library.git', ACCESS), ('example/other.git', ''),
-                               ('example/library.git/git-receive-pack', ''),
-                               ('example/project.git/git-receive-pack', ACCESS)]:
-            reply = auth.service_credential('protocol=https\nhost=github.com\npath=' + path + '\n')
-            self.assertEqual(reply, 'username=x-access-token\npassword=' + expected + '\n\n' if expected else '', path)
-            replies.append(reply)
-        for request in ({'request': 'credential', 'protocol': 'http', 'host': 'github.com', 'path': 'example/project'},
-                        {'request': 'credential', 'protocol': 'https', 'host': 'github.com.invalid',
-                         'path': 'example/project'},
+        for path in ('example/project.git', 'Example/Project', 'example/project.git/git-receive-pack'):
+            # Git reaches GitHub through the proxy; the socket hands it nothing.
+            self.assertEqual(auth.service_credential('protocol=https\nhost=github.com\npath=' + path + '\n'), '')
+        for request in ({'request': 'credential', 'protocol': 'https', 'host': 'github.com', 'path': 'example/project'},
                         {'request': 'gh-token', 'repository': 'example/other'}, {'request': 'refresh'}, ['x']):
             reply = auth.ask_service(request)
             self.assertFalse(reply['ok'], request)
@@ -492,7 +486,7 @@ class SocketTests(ServiceTestCase):
         self.assertNotIn(REFRESH, ''.join(replies))
         log = (self.store.runtime / agents.LOG).read_text()
         self.assertNotIn(ACCESS, log)
-        record = json.loads(log.splitlines()[0])
+        record = json.loads(log.splitlines()[-1])
         self.assertEqual((record['uid'], record['pid'], record['granted']), (os.getuid(), os.getpid(), True))
         self.assertEqual(self.store.runtime.stat().st_mode & 0o777, 0o700)
 
@@ -501,7 +495,8 @@ class SocketTests(ServiceTestCase):
             reply = auth.ask_service({'request': 'gh-token', 'repository': 'example/project'})
         self.assertEqual((reply['ok'], reply['state']), (False, 'refused'))
         with mock.patch.object(service.time, 'time', return_value=chain()['access_expires_at'] - 30):
-            self.assertEqual(auth.service_credential('protocol=https\nhost=github.com\npath=example/project\n'), '')
+            reply = auth.ask_service({'request': 'gh-token', 'repository': 'example/project'})
+        self.assertEqual((reply['ok'], reply['state']), (False, 'ok'))
 
     def test_without_a_chain_the_helper_falls_back_to_its_private_file(self):
         service.clear(self.store, retire=lambda: None)

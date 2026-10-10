@@ -1,0 +1,252 @@
+"""Strict HTTP/1.1 pieces that the worker's GitHub relays share: one request from a local
+client, its body as it arrives, the request to GitHub and GitHub's reply relayed back. Every
+connection carries one request. A module that horizon-worker-github loads, not a command."""
+import contextlib
+import http.client
+import re
+import ssl
+
+MAX_HEAD = 16384
+MAX_FIELDS = 64
+PIECE = 65536
+METHOD = re.compile(rb'[A-Z]{1,16}')
+# Origin form only: a relay never takes an absolute URL, so the client cannot choose the host.
+TARGET = re.compile(rb'/[\x21-\x7e]{0,8191}')
+FIELD_NAME = re.compile(rb"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}")
+FIELD_VALUE = re.compile(rb'[\t\x20-\x7e]*')
+CHUNK_SIZE = re.compile(rb'([0-9A-Fa-f]{1,8})(?:;[\t\x20-\x7e]*)?')
+LENGTH = re.compile(r'[0-9]{1,15}')
+REASONS = {400: 'Bad Request', 403: 'Forbidden', 404: 'Not Found', 405: 'Method Not Allowed',
+           413: 'Content Too Large', 431: 'Request Header Fields Too Large', 501: 'Not Implemented',
+           502: 'Bad Gateway', 503: 'Service Unavailable'}
+
+
+class Refusal(Exception):
+    """A request the relay answers itself with `status` and a plain text message."""
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+class ClientGone(Exception):
+    """The client closed its connection or sent less than it announced."""
+
+
+class Request:
+    """One parsed request head. Field names are lower case; the body is still in `stream`."""
+
+    def __init__(self, method, target, fields, stream):
+        self.method = method
+        self.target = target
+        self.fields = fields
+        self.stream = stream
+        self.chunked = False
+        self.length = 0
+
+    def values(self, name):
+        return [value for field, value in self.fields if field == name]
+
+    def field(self, name):
+        values = self.values(name)
+        return values[-1] if values else None
+
+
+def read_line(stream, budget):
+    """One CRLF-terminated line without its end, and the budget left."""
+    data = stream.readline(budget + 1)
+    if not data:
+        raise ClientGone()
+    if len(data) > budget:
+        raise Refusal(431, 'The request head is too long.')
+    if not data.endswith(b'\r\n'):
+        raise Refusal(400, 'Malformed request head.')
+    return data[:-2], budget - len(data)
+
+
+def read_request(stream):
+    """The request head from `stream`, checked strictly: no obsolete line folding, no field
+    the relay cannot read the same way GitHub does, and one unambiguous body length."""
+    line, budget = read_line(stream, MAX_HEAD)
+    parts = line.split(b' ')
+    if (len(parts) != 3 or not METHOD.fullmatch(parts[0]) or not TARGET.fullmatch(parts[1])
+            or parts[2] not in (b'HTTP/1.1', b'HTTP/1.0')):
+        raise Refusal(400, 'Malformed request line.')
+    fields = []
+    while True:
+        line, budget = read_line(stream, budget)
+        if not line:
+            break
+        name, colon, value = line.partition(b':')
+        if len(fields) >= MAX_FIELDS or not colon or not FIELD_NAME.fullmatch(name) \
+                or not FIELD_VALUE.fullmatch(value):
+            raise Refusal(400, 'Malformed request header field.')
+        fields.append((name.decode('ascii').lower(), value.strip(b' \t').decode('ascii')))
+    request = Request(parts[0].decode('ascii'), parts[1].decode('ascii'), fields, stream)
+    framing(request)
+    return request
+
+
+def framing(request):
+    """Sets how the body is delimited; refuses anything two parsers could read differently."""
+    lengths, codings = request.values('content-length'), request.values('transfer-encoding')
+    if codings:
+        if lengths or [coding.lower() for coding in codings] != ['chunked']:
+            raise Refusal(400, 'Only one chunked transfer coding without a length is accepted.')
+        request.chunked, request.length = True, None
+    elif lengths:
+        if len(lengths) != 1 or not LENGTH.fullmatch(lengths[0]):
+            raise Refusal(400, 'Malformed Content-Length.')
+        request.length = int(lengths[0])
+
+
+def body(request, limit=None):
+    """The request body in pieces as they arrive. Raises Refusal beyond `limit` bytes."""
+    seen = 0
+    if not request.chunked:
+        remaining = request.length
+        if limit is not None and remaining > limit:
+            raise Refusal(413, 'The request body is too large.')
+        while remaining:
+            piece = request.stream.read(min(PIECE, remaining))
+            if not piece:
+                raise ClientGone()
+            remaining -= len(piece)
+            yield piece
+        return
+    while True:
+        line, _ = read_line(request.stream, 1024)
+        size = CHUNK_SIZE.fullmatch(line)
+        if not size:
+            raise Refusal(400, 'Malformed chunk.')
+        remaining = int(size.group(1), 16)
+        if remaining == 0:
+            break
+        seen += remaining
+        if limit is not None and seen > limit:
+            raise Refusal(413, 'The request body is too large.')
+        while remaining:
+            piece = request.stream.read(min(PIECE, remaining))
+            if not piece:
+                raise ClientGone()
+            remaining -= len(piece)
+            yield piece
+        if request.stream.read(2) != b'\r\n':
+            raise Refusal(400, 'Malformed chunk.')
+    # Trailer fields are read and dropped; none is forwarded.
+    budget = MAX_HEAD
+    while True:
+        line, budget = read_line(request.stream, budget)
+        if not line:
+            return
+
+
+def read_body(request, limit):
+    return b''.join(body(request, limit))
+
+
+def drain(request, limit=1 << 20):
+    """Reads and drops a small body the relay refused, so the client reads the refusal
+    instead of a reset connection. A larger or broken body is left; the connection ends."""
+    if request.chunked or request.length:
+        with contextlib.suppress(Refusal, ClientGone, OSError, ValueError):
+            for _ in body(request, limit):
+                pass
+
+
+def continue_if_asked(request, output):
+    """Answers `Expect: 100-continue` once the relay accepted the request."""
+    if (request.field('expect') or '').lower() == '100-continue':
+        output.write(b'HTTP/1.1 100 Continue\r\n\r\n')
+        output.flush()
+
+
+class Upstream:
+    """Where a relay sends a request: a GitHub host over verified HTTPS, or a loopback fake
+    over plain HTTP in tests."""
+
+    def __init__(self, host, port=443, tls=True):
+        self.host, self.port, self.tls = host, port, tls
+
+    def connect(self, timeout):
+        if self.tls:
+            return http.client.HTTPSConnection(self.host, self.port, timeout=timeout,
+                                               context=ssl.create_default_context())
+        return http.client.HTTPConnection(self.host, self.port, timeout=timeout)
+
+
+def send(connection, upstream, method, target, fields, pieces, length):
+    """Sends one request with exactly `fields`, the Host field and the body framing; returns
+    the reply. `length` is the body's size, or None to send it chunked as it arrives."""
+    connection.putrequest(method, target, skip_host=True, skip_accept_encoding=True)
+    connection.putheader('Host', upstream.host)
+    for name, value in fields:
+        connection.putheader(name, value)
+    if length is None:
+        connection.putheader('Transfer-Encoding', 'chunked')
+        connection.endheaders()
+        for piece in pieces:
+            connection.send(b'%X\r\n%s\r\n' % (len(piece), piece))
+        connection.send(b'0\r\n\r\n')
+    else:
+        if length or method not in ('GET', 'HEAD'):
+            connection.putheader('Content-Length', str(length))
+        connection.endheaders()
+        for piece in pieces:
+            connection.send(piece)
+    return connection.getresponse()
+
+
+def head(status, fields, reason=None):
+    if reason is None or not re.fullmatch(r'[\x20-\x7e]{1,64}', reason):
+        reason = REASONS.get(status, 'Status')
+    lines = ['HTTP/1.1 %d %s' % (status, reason), *('%s: %s' % field for field in fields), 'Connection: close']
+    return ('\r\n'.join(lines) + '\r\n\r\n').encode('latin-1')
+
+
+def refuse(output, status, message, content_type='text/plain; charset=utf-8', text=None):
+    """Answers with `status` and `message`; `text` replaces the body, such as JSON."""
+    data = (text if text is not None else message + '\n').encode('utf-8')
+    output.write(head(status, [('Content-Type', content_type), ('Content-Length', str(len(data)))]) + data)
+    output.flush()
+
+
+def reply_fields(response, keep, secrets=()):
+    """GitHub's reply fields that the relay passes on: only names in `keep`, and never one
+    whose value holds any of `secrets`."""
+    fields = []
+    for name, value in response.getheaders():
+        if name.lower() not in keep or not FIELD_VALUE.fullmatch(value.encode('latin-1', 'replace')):
+            continue
+        if any(secret in value for secret in secrets):
+            continue
+        fields.append((name, value))
+    return fields
+
+
+def relay(output, response, keep, secrets=(), data=None):
+    """Writes GitHub's reply to the client: status, kept fields and the body, which is `data`
+    when the caller already read it. The client reads to the end of the connection unless
+    the length is known."""
+    fields = reply_fields(response, keep, secrets)
+    if data is not None:
+        fields.append(('Content-Length', str(len(data))))
+    elif response.length is not None:
+        fields.append(('Content-Length', str(response.length)))
+    output.write(head(response.status, fields, response.reason))
+    if data is not None:
+        output.write(data)
+    else:
+        # read1 hands on what has arrived, so Git's progress and keepalives are not held back.
+        while True:
+            piece = response.read1(PIECE)
+            if not piece:
+                break
+            output.write(piece)
+            output.flush()
+    output.flush()
+
+
+if __name__ == '__main__':
+    raise SystemExit('horizon-worker-github-http is a module of horizon-worker-github, not a command.')

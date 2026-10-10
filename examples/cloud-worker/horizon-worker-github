@@ -1,9 +1,9 @@
 #!/usr/bin/python3
-"""Root service that keeps a GitHub App user token chain fresh while the host is offline and
-gives agents the short-lived access token of their granted repositories over a Unix socket.
-Agents never read the chain. Never prints a token. Root operations: install (JSON on stdin),
-serve (started by horizon-worker-supervise), status, clear, requests and decide. Agents run
-`mcp` for the github_access tool."""
+"""Root service that keeps a GitHub App user token chain fresh while the host is offline. Git
+reaches GitHub through its loopback proxy, which adds the access token only to requests for
+granted repositories, so agents never hold the token or the chain. Never prints a token. Root
+operations: install (JSON on stdin), serve (started by horizon-worker-supervise), status,
+clear, requests and decide. Agents run `mcp` for the github_access tool."""
 import contextlib
 import http.client
 import importlib.machinery
@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import random
 import re
+import resource
 import secrets
 import subprocess
 import sys
@@ -36,6 +37,7 @@ def load_common():
 
 common = load_common()
 agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_github_agents')
+gitproxy = common.load_sibling('horizon-worker-github-git', 'horizon_worker_github_git')
 auth = common.auth
 GIT_AUTH = common.GIT_AUTH
 Store = common.Store
@@ -228,39 +230,50 @@ def refresh_loop(store, sleep=time.sleep):
         sleep(delay)
 
 
-def start(store, path, sleep=None, prepare=None):
-    """The listening socket, after up to START_ATTEMPTS tries with doubled waits, or None.
+def start(store, path, sleep=None, prepare=None, proxy=gitproxy.ADDRESS, authority=gitproxy.AUTHORITY):
+    """The listening socket and the Git proxy, after up to START_ATTEMPTS tries with doubled
+    waits, or None. The proxy's port is bound first and held across the tries, so the
+    repositories that `prepare` routes through it never point at a port no service holds.
     `prepare` runs after the checks and before the socket exists, until it succeeds once."""
     sleep, attempts, wait = sleep or time.sleep, START_ATTEMPTS, START_WAIT_SECONDS
+    git_server = context = None
     for attempt in range(attempts):
         try:
             if not common.AGENT_ISOLATION.exists():
                 raise ValueError('Agent isolation is not active')
             common.github_bases(os.environ)
             common.private_directory(store.runtime, create=True)
+            git_server = git_server or gitproxy.listen(proxy)
+            context = context or gitproxy.make_identity(store.runtime, authority)
             # Repeated on the next attempt when it fails: the socket never opens before it is done.
             if prepare is not None:
                 prepare()
                 prepare = None
-            return agents.listen(path)
-        except (OSError, ValueError) as error:
+            return agents.listen(path), gitproxy.Proxy(git_server, context)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
             print('GitHub access cannot start: ' + type(error).__name__, flush=True)
             if attempt + 1 < attempts:
                 sleep(wait * 2 ** attempt)
+    if git_server is not None:
+        git_server.close()
     return None
 
 
-def serve(store=None, path=agents.SOCKET):
+def serve(store=None, path=agents.SOCKET, proxy=gitproxy.ADDRESS, authority=gitproxy.AUTHORITY):
     """Runs for the worker's life. Returns 1 when it cannot start; the supervisor then drops
-    the service and the Git helper falls back to its private file."""
+    the service and Git reaches GitHub directly, with the static binding if there is one."""
     store = store or Store()
+    # A crash dump of this process would hold the token chain.
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     # The socket opens only after the repositories match the stored chain, so the supervisor
     # never publishes a service that does not answer yet.
     book = agents.Book(store.runtime)
-    server = start(store, path, prepare=lambda: reconcile(store))
-    if server is None:
+    servers = start(store, path, prepare=lambda: reconcile(store), proxy=proxy, authority=authority)
+    if servers is None:
         return 1
+    server, git_proxy = servers
     threading.Thread(target=refresh_loop, args=(store,), daemon=True).start()
+    threading.Thread(target=gitproxy.accept_forever, args=(git_proxy, store), daemon=True).start()
     agents.accept_forever(server, store, book, status)
     return 0
 
