@@ -1044,6 +1044,52 @@ fn exhausted_evidence_blocks_every_later_step_without_losing_the_live_driver() {
 }
 
 #[test]
+fn invalid_screenshot_stops_actions_but_keeps_provider_diagnostics() {
+    let fake = Fake::default();
+    let mut first = recipe();
+    first.steps[0].action = Action::Home {};
+    let recipes = [first, recipe()];
+    let plan = Plan {
+        targets: targets().into_iter().skip(1).take(1).collect(),
+        recipes: &recipes,
+        parallel: 1,
+        screenshots: true,
+        video: true,
+        logs_on_failure: true,
+    };
+    let failure = Error::HostUnavailable(crate::HostFailure::CaptureInvalid);
+    let report = plan
+        .execute(
+            &fake,
+            &Control::new(Duration::from_secs(10)).unwrap(),
+            |session, kind, bytes| match kind {
+                CaptureKind::Screenshot => Err(failure),
+                CaptureKind::Provider(_) => capture(session, kind, bytes),
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+    let device = &report.devices[0];
+    assert_eq!(fake.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.screenshots.load(Ordering::SeqCst), 1);
+    assert_eq!(device.error.as_deref(), Some(failure.to_string().as_str()));
+    assert!(device.blocked && device.cleanup_confirmed && device.steps[1].blocked);
+    assert_eq!(fake.media_calls.lock().unwrap().len(), 5);
+    assert_eq!(device.media.len(), 5);
+    assert!(
+        device.media[..4]
+            .iter()
+            .all(|media| media.evidence.is_some() && media.error.is_none())
+    );
+    assert!(
+        device.media[4]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("app_media_unavailable:"))
+    );
+}
+
+#[test]
 fn forced_host_loss_blocks_later_recipes_and_retains_the_initial_cause() {
     let failure = Error::Native(horizon_app_testing::Error::SessionClosed);
     let fake = Fake {

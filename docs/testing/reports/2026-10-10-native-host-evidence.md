@@ -27,12 +27,13 @@ the iOS deep-link change.
 | Long-run evidence budget | pass | A deterministic test reserved 290 images at 2 MiB each. It admitted evidence above the old limit and refused evidence above 1 GiB. The terminal report still fit its separate reserve. |
 | Archive exhaustion | pass | A simulated test driver remained open. The runner recorded the archive cause, stopped actions and image captures, and blocked all later steps. |
 | Closed driver session | pass | A simulated test driver returned session closed. The runner retained that cause after a cleanup error, blocked later recipes and tried bounded provider media exports while the archive remained usable. |
+| Invalid screenshot | pass | A simulated test driver returned an invalid image. The runner blocked later actions and kept four provider diagnostic captures because the archive remained usable. The unavailable network capture had an explicit error. |
 | Failed progress sink | pass | The terminal report kept every recipe and blocked step after the progress callback failed. |
 | Native viewer | pass | The frozen Linux candidate displayed all three result states through a public native Device viewer. |
 | Paid iPhone endurance | incomplete | The combined driver candidate kept 219 valid screenshots, 476,578,360 bytes in total. Each lane passed more than 29 minutes of steps. The final steps and media exports reached the configured lifetime. The full endurance requirement remains open. |
 
 Required local validation passed on the final source. The full workspace test
-reported 5,550 passed tests, no failed tests and 45 ignored tests. The speech test,
+reported 5,551 passed tests, no failed tests and 45 ignored tests. The speech test,
 blocking Clippy and strict Clippy passed. The advisory pedantic tier reported
 existing findings in unchanged Wayland, Chromecast and cloud tests.
 

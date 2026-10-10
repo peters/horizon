@@ -655,7 +655,10 @@ impl Plan<'_> {
         }
         for session in report.allocations.clone() {
             for kind in kinds.iter().copied() {
-                let result = if let Some(error @ Error::HostUnavailable(_)) = failure {
+                let archive_failure = failure.filter(|error| {
+                    matches!(error, Error::HostUnavailable(reason) if *reason != crate::HostFailure::CaptureInvalid)
+                });
+                let result = if let Some(error) = archive_failure {
                     Err(error)
                 } else {
                     control.remaining().and_then(|remaining| {
