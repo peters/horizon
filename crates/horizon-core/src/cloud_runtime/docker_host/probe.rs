@@ -154,7 +154,16 @@ pub fn probe(host: &Binding, profile: Option<&Profile>, cancel: &Cancellation) -
         );
         return Ok(result);
     };
-    engine_checks(&mut result, &info, &transport, &runner, profile)?;
+    let mut filesystem = filesystem_state(&info);
+    if filesystem == CheckState::Ready {
+        filesystem = if let Ok(host) = transport.host_kernel(&runner) {
+            host_filesystem_state(&info, &host)
+        } else {
+            cancel.check()?;
+            CheckState::Unknown
+        };
+    }
+    engine_checks(&mut result, &info, &transport, &runner, profile, filesystem)?;
     profile_checks(&mut result, profile);
     Ok(result)
 }
@@ -250,6 +259,7 @@ fn engine_checks(
     transport: &Transport<'_>,
     runner: &Runner<'_>,
     profile: Option<&Profile>,
+    filesystem: CheckState,
 ) -> Result<()> {
     result.cpu = Some(info.cpu);
     result.memory_bytes = Some(info.mem_total);
@@ -281,14 +291,13 @@ fn engine_checks(
         format!("{} / {}", info.os_type, info.architecture),
         (info.os_type != "linux").then_some("Select a Linux container engine."),
     );
-    let filesystem = filesystem_state(info);
     result.check(
         "Engine filesystem",
         filesystem,
         match filesystem {
-            CheckState::Ready => "Engine operating system indicates native Linux",
-            CheckState::Blocked => "Docker Desktop storage is inside a separate virtual machine",
-            _ => "Docker did not report the engine operating system",
+            CheckState::Ready => "Engine reports the chosen Linux host's kernel version",
+            CheckState::Blocked => "Engine storage belongs to another operating system or virtual machine",
+            _ => "Engine host filesystem could not be confirmed",
         },
         (filesystem != CheckState::Ready)
             .then_some("Use a native Linux Docker engine whose storage is visible to the selected account."),
@@ -359,6 +368,19 @@ fn filesystem_state(info: &Info) -> CheckState {
     }
 }
 
+fn host_filesystem_state(info: &Info, host: &str) -> CheckState {
+    let Some((system, kernel)) = host.trim().split_once(' ') else {
+        return CheckState::Unknown;
+    };
+    if info.kernel_version.is_empty() {
+        CheckState::Unknown
+    } else if system != "Linux" || kernel != info.kernel_version {
+        CheckState::Blocked
+    } else {
+        CheckState::Ready
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,6 +396,19 @@ mod tests {
             operating_system: "Ubuntu".into(),
             kernel_version: "6.8.0".into(),
         }
+    }
+
+    #[test]
+    fn vm_backed_and_unconfirmed_hosts_cannot_measure_local_engine_storage() {
+        let mut info = engine(std::path::Path::new("/unused"));
+        info.kernel_version = "6.8.0".into();
+        assert_eq!(host_filesystem_state(&info, "Linux 6.8.0\n"), CheckState::Ready);
+        for host in ["Darwin 24.0.0", "Linux 6.14.0"] {
+            assert_eq!(host_filesystem_state(&info, host), CheckState::Blocked);
+        }
+        assert_eq!(host_filesystem_state(&info, ""), CheckState::Unknown);
+        info.kernel_version.clear();
+        assert_eq!(host_filesystem_state(&info, "Linux 6.8.0"), CheckState::Unknown);
     }
 
     #[test]
@@ -453,7 +488,15 @@ mod tests {
                 architecture: None,
                 free_bytes: None,
             };
-            engine_checks(&mut report, info, &Transport(&host), &runner, Some(profile)).unwrap();
+            engine_checks(
+                &mut report,
+                info,
+                &Transport(&host),
+                &runner,
+                Some(profile),
+                CheckState::Ready,
+            )
+            .unwrap();
             report
         };
         let mut info = engine(root.path());
@@ -505,6 +548,7 @@ mod tests {
             &Transport(&host),
             &runner,
             None,
+            CheckState::Ready,
         )
         .unwrap();
         assert!(!report.ready());

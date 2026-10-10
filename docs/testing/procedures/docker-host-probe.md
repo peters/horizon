@@ -27,7 +27,7 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
 - The repository build prerequisites from `AGENTS.md`.
 - OpenSSH on Linux and macOS.
 - For the optional live lane, an authorized Linux host with Tailscale SSH access.
-- For a successful engine probe, Docker Engine 28 or later and readable native Linux storage.
+- For a successful engine probe, Docker Engine 28 or later and measurable free space on its native Linux storage filesystem.
 
 ## 4. Setup
 
@@ -62,6 +62,14 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
 1. Examine the storage and cancellation test results.
 
    Result: Docker Desktop, absent engine metadata and unmeasurable storage cannot pass admission. Cancellation returns an error.
+
+2. Examine the storage transport command.
+
+   Result: `df -Pk` queries filesystem capacity. The probe does not read container files or list the engine's storage directory. A directory listing permission is not required.
+
+3. Examine the host-kernel and storage-path regression tests.
+
+   Result: A different host operating system or kernel blocks storage admission. A missing kernel is unknown. Invalid storage paths fail before execution. Capacity parsing accepts spaces in source and mount paths. Ambiguous output is unknown.
 
 ### 5.4 DHP-IMAGE — Built worker image
 

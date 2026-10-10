@@ -43,12 +43,37 @@ fn docker_context_names_follow_engine_rules() {
     }
 }
 #[test]
-fn missing_ssh_identity_is_a_blocker_without_attempting_docker() {
+fn missing_requirements_are_blockers_without_attempting_docker() {
     let report = probe(&host(), None, &crate::cloud_runtime::Cancellation::default()).unwrap();
     assert!(!report.ready());
     assert_eq!(report.checks.len(), 1);
     assert_eq!(report.checks[0].state, CheckState::Blocked);
+    assert_eq!(
+        report.checks[0].name,
+        if cfg!(windows) {
+            "Controller platform"
+        } else {
+            "SSH identity"
+        }
+    );
     assert!(report.checks[0].remedy.is_some());
+}
+
+#[test]
+fn storage_rejects_relative_and_option_paths_before_execution() {
+    let binding = host();
+    let cancel = crate::cloud_runtime::Cancellation::default();
+    let runner = crate::cloud_runtime::command::Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    for path in ["", "relative", "--total", "/ambiguous\npath", "/invalid\0path"] {
+        assert!(matches!(
+            Transport(&binding).disk_free(&runner, path),
+            Err(Error::Invalid("Docker storage needs an absolute Linux path"))
+        ));
+    }
 }
 
 #[test]

@@ -240,5 +240,17 @@ the local network map and needs no private-key file.
 This foundation has no public MCP operation or deployment interface.
 It installs no software and changes no access. The controller runs on Linux
 or macOS. Docker must expose a local Linux engine with Docker 28 or later.
-Docker Desktop is not supported. The selected account must be able to read
-the engine's storage filesystem. An unknown storage result blocks admission.
+Docker Desktop is not supported. The selected account must be able to query
+free space on the engine's storage filesystem. Directory listing and file
+read access are not required. An unknown storage result blocks admission.
+
+Host operating-system and kernel checks detect common virtual-machine
+mismatches. A matching kernel version does not prove filesystem identity.
+Configure a native engine bound directly to the selected host. Engine storage in
+another filesystem namespace and forwarded Unix sockets are not supported.
+
+The live SSH lane was tested with Tailscale 1.102.4. Its wrapper consumes the
+destination first and forwards the remaining arguments to OpenSSH. It supplies
+tailnet host keys and strict host-key checking before those arguments.
+Horizon does not override those trust options. See the verified
+[wrapper source](https://github.com/tailscale/tailscale/blob/3caf7d9e7dcaba589cfc58beda596929733e4fea/cmd/tailscale/cli/ssh.go#L105-L156).
