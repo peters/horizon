@@ -143,7 +143,9 @@ pub(super) fn agents_status(draft: &Draft, fixed_agents: bool) -> (Tone, &'stati
     } else if codex_chatgpt(draft) && agent_key(draft, Agent::Codex) == Some(Key::Missing) {
         (
             Tone::Attention,
-            if plan_grant_missing(draft) {
+            if draft.chatgpt_status_error.is_some() {
+                "Account status unavailable"
+            } else if plan_grant_missing(draft) {
                 "Needs plan access"
             } else {
                 "Needs sign-in"
@@ -187,7 +189,9 @@ impl Readiness {
         let agents = agent_keys(draft);
         if let Some((agent, _)) = agents.iter().find(|(_, key)| *key == Key::Missing) {
             return attention(if codex_chatgpt(draft) && *agent == Agent::Codex {
-                if plan_grant_missing(draft) {
+                if draft.chatgpt_status_error.is_some() {
+                    "The saved account status could not be verified. Reopen Cloud settings to retry.".into()
+                } else if plan_grant_missing(draft) {
                     "This account lacks plan access. Sign out and use an eligible account, or choose an API key.".into()
                 } else {
                     "Sign in with ChatGPT for Codex, or choose another Codex option.".into()

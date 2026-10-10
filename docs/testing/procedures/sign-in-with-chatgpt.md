@@ -48,7 +48,7 @@ subscription choice changes to **ChatGPT plan** when the form opens.
    Codex row after step 1.
 
    Result: **ChatGPT plan** is selected for Codex, and the card asks for the
-   sign-in.
+   sign-in. Save requires the new sign-in when Codex is selected.
 
 ## 6. Tasks
 
@@ -155,6 +155,18 @@ Settings save requires a provider. Do not create or deploy a cloud.
 
    Result: A new browser page opens and a new sign-in completes normally.
 
+### 6.7 C07 — Account status unavailable
+
+1. Open Cloud settings while another operation holds the account lock.
+
+   Result: The card reports that the saved account status is unavailable.
+   Save reports the status error. It does not claim that sign-out succeeded.
+
+2. After the other operation ends, reopen Cloud settings.
+
+   Result: The card reads the saved account again.
+
+
 ## 7. Pass criteria
 
 - Every task above shows its Result.
@@ -164,7 +176,13 @@ Settings save requires a provider. Do not create or deploy a cloud.
   Credential reads must reject access for other users and a different directory owner.
 - The settings regression test must reject a stale or fabricated account status.
   The existing API-key settings and key file must remain unchanged.
-- The UI regression test must clear cached account status after an uncertain sign-out.
+- After a failed or interrupted sign-out, the UI must keep the last known account
+  and show an error. It must not report successful sign-out.
+- Local tokens must be cleared before remote revocation starts. A local failure
+  must not send the revocation request. The session lock must be free during
+  remote revocation.
+- Discovery endpoints must use HTTPS on the trusted provider origin. Requests
+  must not follow redirects to another origin.
 - The token-response tests must reject empty access and refresh tokens.
 - The sign-in publication tests must recover an interruption before or after the
   credential commit. An activation failure must not publish new credentials.

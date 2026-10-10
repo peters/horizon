@@ -1,4 +1,5 @@
 mod cloud_park;
+pub use cloud_park::ParkedScreen;
 mod lifecycle;
 mod spawn;
 mod work_resume;
@@ -471,6 +472,10 @@ impl Panel {
     ) -> Result<Self> {
         let mut panel = spawn::placeholder_panel(id, workspace_id, opts, spawn::Placeholder::Cloud(wait))?;
         panel.cloud_wait = Some(wait);
+        // A parked member keeps no terminal, also one restored as parked.
+        if wait == CloudWait::Parked {
+            panel.show_parked_placeholder();
+        }
         Ok(panel)
     }
 
@@ -484,10 +489,14 @@ impl Panel {
         if self.cloud_wait.is_none_or(|shown| shown == wait) {
             return Ok(false);
         }
-        let Some(terminal) = self.terminal() else {
+        let size = self
+            .terminal()
+            .map(|terminal| (terminal.rows(), terminal.cols()))
+            .or_else(|| self.parked_screen().map(ParkedScreen::size));
+        let Some((rows, cols)) = size else {
             return Ok(false);
         };
-        let replacement = spawn::placeholder_terminal(self, terminal.rows(), terminal.cols(), wait)?;
+        let replacement = spawn::placeholder_terminal(self, rows, cols, wait)?;
         if let PanelContent::Terminal(mut old) =
             std::mem::replace(&mut self.content, PanelContent::Terminal(replacement))
         {
@@ -653,7 +662,10 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => {}
+            PanelContent::GitChanges(_)
+            | PanelContent::Usage(_)
+            | PanelContent::Device(_)
+            | PanelContent::Parked(_) => {}
             PanelContent::Browser(browser) => browser.request_shutdown(),
         }
     }
@@ -677,7 +689,10 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => true,
+            PanelContent::GitChanges(_)
+            | PanelContent::Usage(_)
+            | PanelContent::Device(_)
+            | PanelContent::Parked(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -690,7 +705,10 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => true,
+            PanelContent::GitChanges(_)
+            | PanelContent::Usage(_)
+            | PanelContent::Device(_)
+            | PanelContent::Parked(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }

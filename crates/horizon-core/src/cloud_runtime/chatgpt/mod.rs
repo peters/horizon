@@ -18,6 +18,23 @@ pub use store::Connection;
 /// revocation endpoint come from it.
 const CONFIG_URL: &str = "https://auth.openai.com/.well-known/openid-configuration";
 
+/// Discovery cannot move signing-key trust or renewable credentials to another origin.
+fn provider_endpoint(value: &str) -> Result<url::Url> {
+    let endpoint = url::Url::parse(value).map_err(|_| Error::Malformed)?;
+    if endpoint.scheme() != "https"
+        || endpoint.host_str() != Some("auth.openai.com")
+        || endpoint.port_or_known_default() != Some(443)
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err(Error::Invalid(
+            "the sign-in endpoint is outside the trusted provider origin",
+        ));
+    }
+    Ok(endpoint)
+}
+
 /// Errors the Sign in with `ChatGPT` flow reports.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -90,7 +107,7 @@ pub fn confirm_usage(root: &Path, client_id: &str) -> Result<()> {
     store::confirm_usage(root, client_id)
 }
 
-/// Revokes the renewable session, then clears its tokens locally.
+/// Clears the tokens locally, then revokes the renewable session.
 /// Returns whether the remote revocation was confirmed.
 /// # Errors
 /// The registration could not be read or written.
@@ -104,4 +121,34 @@ pub fn sign_out(root: &Path, client_id: &str) -> Result<Option<bool>> {
 /// The registration has no refresh token, or the token endpoint refused the refresh.
 pub fn refresh(root: &Path, client_id: &str) -> Result<()> {
     flow::refresh(root, client_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_endpoints_cannot_change_the_trusted_origin() {
+        for endpoint in [
+            CONFIG_URL,
+            "https://auth.openai.com/.well-known/jwks.json",
+            "https://auth.openai.com/api/accounts/oauth/revoke",
+            "https://auth.openai.com:443/keys",
+        ] {
+            assert!(provider_endpoint(endpoint).is_ok(), "{endpoint}");
+        }
+        for endpoint in [
+            "http://auth.openai.com/keys",
+            "https://auth.openai.com:8443/keys",
+            "https://auth.openai.com.example.invalid/keys",
+            "https://auth.openai.com@other.example.invalid/keys",
+            "https://user:password@auth.openai.com/keys",
+            "https://127.0.0.1/keys",
+            "https://auth.openai.com/keys#fragment",
+            "file:///keys",
+            "//auth.openai.com/keys",
+        ] {
+            assert!(provider_endpoint(endpoint).is_err(), "{endpoint}");
+        }
+    }
 }

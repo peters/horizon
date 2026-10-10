@@ -125,7 +125,11 @@ MCP arguments cannot replace the configured project or credentials.
 `latest-2` selects the third distinct numeric OS release in the physical-device catalog.
 A missing matrix entry causes refusal before any partial matrix starts.
 Android selects Appium 2.19.0 instead of the legacy default.
-iOS uses the provider's OS-compatible version.
+iOS 15 or later also selects Appium 2.19.0, with XCUITest 9.9.6.
+Older iOS versions keep the provider default.
+The iOS `deep_link` action requires iOS 16.4 or later, Xcode 14.3 or later,
+and XCUITest 4.17 or later. See the
+[deep-link procedure](../testing/procedures/native-ios-deep-links.md).
 
 ## 4. Declare the project
 
@@ -190,6 +194,20 @@ Do not combine `--only` with `--force-local`; this combination removes the tunne
 ## 5. Managed backend protocol
 
 The foreground command receives a private `HORIZON_APP_BACKEND_DIR`.
+Its `TMPDIR`, `TEMP` and `TMP` variables use the same owned task directory.
+The trusted guardian uses the caller's existing temporary directory if the caller sets one.
+Project inputs cannot change the guardian's temporary directory.
+
+The native-process library has a `start_with_diagnostics` operation for host adapters.
+Its callback receives a held log capability before the declared command starts.
+This capability can retain one finite host cause in the backend's private `output.log` after normal process closure.
+It does not recover a process, change its owner or reopen an arbitrary path.
+Child stdout, child stderr and diagnostics share a 4 MiB file limit.
+The limit reserves 1 KiB for the first host cause.
+A private marker verifies the exact retained record; child output cannot claim diagnostic retention.
+A failed diagnostic write does not replace the original host cause.
+Guardian termination records use the ordinary log budget and do not claim the host's first cause.
+Host adapters must retain the capability before process expiry or cleanup.
 It emits one bounded stdout record after the app backend is ready.
 
 ```json
@@ -440,6 +458,66 @@ Absence from a provider list does not prove release.
 Repeated creation is not recovery.
 Unknown or missing ownership causes refusal.
 Reconciliation stops sessions and services before it retires uploads.
+
+### Recover local resources after a Linux reboot
+
+New guardian receipts contain the Linux kernel boot ID.
+If this ID differs from the current boot ID, the previous processes cannot remain alive.
+Exact reconciliation records this proof before it releases the local journal resource.
+It preserves the original receipt and does not signal a process ID.
+The proof can release a resource even if Linux reused its process ID.
+An unavailable boot ID keeps the resource uncertain.
+macOS does not support this automatic reboot proof.
+
+Older receipts contain no boot ID.
+Process absence alone cannot release these resources.
+A guardian crash can leave its child processes alive.
+Use the following operator procedure only after a real host reboot.
+
+1. Inspect the original owner's pending operations.
+
+   ```bash
+   horizon --native-reconcile-status --client /absolute/path/to/client.json
+   ```
+
+   Result: The output contains the current boot ID and the original owner's pending operation IDs.
+   The command requires the existing journal and original owner binding.
+   It refuses missing state or an unknown owner without creating files or directories.
+   This command does not clean up provider resources or local processes.
+
+2. Make sure each pending local operation started before the host reboot.
+
+   Result: Independent evidence establishes that the reboot stopped the original processes.
+   Use only the exact `run` and `tunnel` operations from the original client.
+   Include every pending local operation, also when it has no dispatched resource.
+
+> **CAUTION:** USE THIS CONFIRMATION ONLY AFTER A REAL HOST REBOOT.
+> A process crash or a missing process ID does not supply this proof.
+> Keep the original client, owner and private state.
+
+3. Run exact reconciliation with the current boot ID and all pending local operation IDs.
+
+   ```bash
+   horizon --native-reconcile --client /absolute/path/to/client.json \
+     --confirm-host-reboot CURRENT-BOOT-UUID \
+     --local-operations RUN-UUID,TUNNEL-UUID
+   ```
+
+   Result: The host checks ownership and the current boot ID.
+   The IDs must exactly match all pending owned `run` and `tunnel` operations.
+   Missing or extra IDs cause refusal before cleanup starts.
+   The existing journal and original owner binding must be present.
+   Each legacy guardian and recorded child must be absent.
+   A receipt from the current boot stays uncertain.
+   A private recovery record contains the exact operator confirmation.
+   The original guardian receipt stays unchanged.
+
+The confirmation is a trusted operator maintenance command.
+App contracts and MCP tool arguments cannot supply it.
+This command uses the normal session-before-local-before-upload cleanup order.
+It does not initialize a journal, create a new owner or replay an operation.
+The ID check does not prove that later receipt or provider cleanup can succeed.
+If any proof fails, preserve the original state and owner.
 
 Completed provider history retains 32 unreferenced records per owner, ordered by creation time.
 Active controller entries and unfinished cleanup remain protected.

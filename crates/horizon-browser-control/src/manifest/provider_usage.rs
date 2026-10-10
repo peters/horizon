@@ -1,5 +1,8 @@
-//! Bounded host-scoped, read-only requests for shared provider usage.
+//! Bounded host-scoped requests for the live host: shared provider usage, catalogs and
+//! cloud offers only read; companion requests and the `attach`, `park` and `stop` of a
+//! cloud list request change clouds, and the host authorizes each one.
 pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
+pub use super::cloud_list::{CloudListOperation, CloudListRequest};
 use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};
 use super::{AgentIdentity, ManifestLock};
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
@@ -33,6 +36,9 @@ pub struct UsageRequest {
     /// An explicit companion cloud request, validated and executed by the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_companion: Option<CompanionRequest>,
+    /// A cloud list request, answered by the host for the caller's workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_list: Option<CloudListRequest>,
     claimed: bool,
 }
 
@@ -50,6 +56,9 @@ pub struct UsageResult {
     /// The host's answer to a companion cloud request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub companion: Option<serde_json::Value>,
+    /// The host's answer to a cloud list request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_list: Option<serde_json::Value>,
     pub error: Option<String>,
 }
 
@@ -64,6 +73,7 @@ impl UsageRequest {
             catalog: None,
             offers: None,
             companion: None,
+            cloud_list: None,
             error,
         }
     }
@@ -153,7 +163,14 @@ fn enqueue_offers_at(
             "Invalid cloud offer requirements",
         ));
     }
-    enqueue_request_at(root, identity, None, None, Some(requirements), None)
+    enqueue_request_at(
+        root,
+        identity,
+        Ask {
+            cloud_offers: Some(requirements),
+            ..Ask::default()
+        },
+    )
 }
 
 /// Queues a companion cloud request for the live host. Ensure Ready and Stop return
@@ -175,7 +192,43 @@ fn enqueue_companion_at(
             "Invalid cloud companion request",
         ));
     }
-    enqueue_request_at(root, identity, None, None, None, Some(request))
+    enqueue_request_at(
+        root,
+        identity,
+        Ask {
+            cloud_companion: Some(request),
+            ..Ask::default()
+        },
+    )
+}
+
+/// Queues a cloud list request for the live host, which answers for the clouds in
+/// the caller's workspace.
+/// # Errors
+/// Invalid host identity, malformed request, a full queue or unavailable private storage.
+pub fn enqueue_cloud_list(identity: AgentIdentity<'_>, request: CloudListRequest) -> std::io::Result<String> {
+    enqueue_cloud_list_at(BrowserRuntimePaths::resolve().root(), identity, request)
+}
+
+fn enqueue_cloud_list_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    request: CloudListRequest,
+) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud list request",
+        ));
+    }
+    enqueue_request_at(
+        root,
+        identity,
+        Ask {
+            cloud_list: Some(request),
+            ..Ask::default()
+        },
+    )
 }
 
 fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, provider: Option<String>) -> std::io::Result<String> {
@@ -188,17 +241,35 @@ fn enqueue_query_at(
     provider: Option<String>,
     catalog: Option<horizon_browser::provider_catalog::CatalogQuery>,
 ) -> std::io::Result<String> {
-    enqueue_request_at(root, identity, provider, catalog, None, None)
+    enqueue_request_at(
+        root,
+        identity,
+        Ask {
+            provider,
+            catalog,
+            ..Ask::default()
+        },
+    )
 }
 
-fn enqueue_request_at(
-    root: &Path,
-    identity: AgentIdentity<'_>,
+/// What one queued request asks the host.
+#[derive(Default)]
+struct Ask {
     provider: Option<String>,
     catalog: Option<horizon_browser::provider_catalog::CatalogQuery>,
     cloud_offers: Option<serde_json::Value>,
     cloud_companion: Option<CompanionRequest>,
-) -> std::io::Result<String> {
+    cloud_list: Option<CloudListRequest>,
+}
+
+fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std::io::Result<String> {
+    let Ask {
+        provider,
+        catalog,
+        cloud_offers,
+        cloud_companion,
+        cloud_list,
+    } = ask;
     if catalog.as_ref().is_some_and(|q| !q.valid()) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -242,6 +313,7 @@ fn enqueue_request_at(
         catalog,
         cloud_offers,
         cloud_companion,
+        cloud_list,
     };
     write_private_json(&path(root, &request.request_id, "request"), &request)?;
     Ok(request.request_id)
@@ -476,6 +548,38 @@ mod tests {
             assert!(enqueue_companion_at(root.path(), identity, invalid).is_err());
         }
         assert!(enqueue_companion_at(root.path(), AgentIdentity::new("horizon:agent", None), request).is_err());
+    }
+
+    #[test]
+    fn cloud_list_requests_reach_only_their_host_and_answer_only_their_actor() {
+        let root = tempfile::tempdir().unwrap();
+        let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
+        let request = CloudListRequest {
+            operation: CloudListOperation::Stop,
+            cloud: Some("cloud-1".into()),
+        };
+        let id = enqueue_cloud_list_at(root.path(), identity, request.clone()).unwrap();
+        assert!(claim_at(root.path(), "host-b").unwrap().is_empty());
+        let claimed = claim_at(root.path(), "host-a").unwrap().remove(0);
+        assert_eq!(claimed.cloud_list.as_ref(), Some(&request));
+        let mut result = claimed.result(Vec::new(), None);
+        result.cloud_list = Some(serde_json::json!({"stop": "requested"}));
+        complete_at(root.path(), &result).unwrap();
+        assert!(take_at(root.path(), AgentIdentity::new("horizon:other", Some("host-a")), &id).is_err());
+        assert_eq!(
+            take_at(root.path(), identity, &id).unwrap().unwrap().cloud_list,
+            Some(serde_json::json!({"stop": "requested"}))
+        );
+        let invalid = CloudListRequest {
+            operation: CloudListOperation::Stop,
+            cloud: None,
+        };
+        assert!(enqueue_cloud_list_at(root.path(), identity, invalid).is_err());
+        let list = CloudListRequest {
+            operation: CloudListOperation::List,
+            cloud: None,
+        };
+        assert!(enqueue_cloud_list_at(root.path(), AgentIdentity::new("horizon:agent", None), list).is_err());
     }
 
     #[test]

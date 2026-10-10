@@ -175,10 +175,14 @@ including for launching the declaring repository's own cloud.
 ## One-time machine setup
 
 A new workspace runs in the cloud by default. **New** in the sidebar and the
-**New Workspace** menu of the empty canvas show **Cloud** first, then
-**Cloud GPU** and **This PC**:
+**New Workspace** menu of the empty canvas show **Cloud** first, then **This PC**
+and **Cloud GPU**:
 
-- **Cloud** makes the workspace and opens **New cloud** for it.
+- **Cloud** makes the workspace and opens **New cloud** for it. Under **Cloud**,
+  the menu shows the machine of a quick start and its hourly price, for example
+  `from €0.0088/h · 2 vCPU · 4 GB · Hetzner`: the cheapest offer of the providers
+  that this computer can deploy to. A repository with its own profile can ask for a
+  larger machine. **New cloud** then shows that machine and its price.
 - **Cloud GPU** does the same and selects the first profile with `gpu: true`. When
   the repository has no GPU profile, the dialog says so and keeps the default
   profile on a CPU worker.
@@ -194,6 +198,15 @@ A repository can ask for This PC with `placement: local` at the top level of
 **This repository runs on This PC** with **Open on This PC**, which opens a
 terminal in the repository in that workspace and closes the dialog. You can still
 start a cloud for it.
+
+In **New cloud** from **New workspace**, select **Keep my choice for this
+repository** to keep where the repository runs. **Start cloud** keeps **Cloud**,
+and **Open on This PC** (or **Open on This PC instead**) keeps **This PC**. The
+next time, **New cloud** says **You keep This PC for this repository.** or
+**You keep Cloud for this repository.** A kept choice wins over the `placement` of
+the repository: a kept **This PC** offers **Open on This PC**, and a kept **Cloud**
+does not. Click **Forget** to remove the choice. Horizon keeps the choices on this
+computer only, in `~/.horizon/cloud/repository-choices.json`.
 
 In an existing workspace, choose **Cloud** from the panel-creation menu (or
 **Cloud > New cloud**), enter a title, and press Enter. Horizon discovers the Git
@@ -888,9 +901,9 @@ the card restores the panel.
 ### Parked terminals
 
 When no terminal of a ready cloud is on the screen for 2 minutes, Horizon parks
-the terminals of that cloud. A parked terminal has no SSH client and no live
-terminal on this computer. It shows a static snapshot of its last screen, and
-its session continues in tmux on the worker. The focused panel and a panel that fills the
+the terminals of that cloud. A parked terminal has no SSH client, no terminal and
+no process on this computer. It shows the text of its last screen in a dim color,
+without a cursor, and its session continues in tmux on the worker. The focused panel and a panel that fills the
 window do not park.
 
 The cloud attaches again after it stays in view for 1 second. It attaches at
@@ -908,8 +921,14 @@ While a cloud has parked terminals, Horizon reads the state of their sessions
 every 10 seconds through one SSH command. A parked panel shows this state in a
 strip at its bottom on the main canvas: working or idle, ended, or not found, with
 the last line of the session. In a detached window or a fullscreen cloud, a parked
-panel shows only its snapshot until it attaches. The worker needs only Python 3
+panel shows only its last screen until it attaches. The worker needs only Python 3
 and tmux for this.
+
+A new cloud opens its first panel when it becomes ready, and the canvas moves to
+it. When you went to another workspace while the cloud deployed, your view and
+focus stay where they are: the cloud list shows the cloud as ready, and the first
+panel opens when you come to the cloud's workspace, for example with a click on
+its row.
 
 ### Cloud list
 
@@ -963,6 +982,23 @@ moves the cloud to **Needs you**.
 
 Stop ends the running processes. The workspace storage is kept and stays
 billable, and **Resume** on the card starts a worker again.
+
+#### The cloud list for agents
+
+A local agent panel in a workspace reads the clouds of that workspace with the
+`cloud_list` MCP tool, or with `horizon-browser cloud list` in its shell. The
+answer has the ID, the name, the group, the status line and the hourly rate of
+each cloud, and whether it is idle. The agent can act on one of these clouds as
+the sidebar does:
+
+- **attach** moves your view to the cloud, as a click on its row does.
+- **park** parks the terminals of a cloud that is out of view now. Horizon
+  refuses a cloud in view, because it attaches again.
+- **stop** stops the worker of an idle cloud, as **Stop idle…** does. Horizon
+  refuses a cloud that is not idle.
+
+An agent sees only the clouds of its own workspace. Clouds of other workspaces
+and requests from outside Horizon are not available.
 
 A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
 runtime card. Compute replacement retains the same network workspace but stops

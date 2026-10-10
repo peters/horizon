@@ -108,5 +108,6 @@ impl HorizonApp {
     }
 }
 
+mod agent;
 #[cfg(all(test, unix))]
 mod tests;

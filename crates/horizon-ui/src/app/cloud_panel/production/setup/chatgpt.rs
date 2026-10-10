@@ -24,6 +24,8 @@ pub(in crate::app::cloud_panel) struct Card {
     loaded: bool,
     /// The saved connection, loaded once and refreshed when a flow finishes.
     connection: Option<chatgpt::Connection>,
+    /// A failed sign-out leaves only the last known account, not verified status.
+    sign_out_uncertain: bool,
     message: Option<(MessageTone, String)>,
     /// Ends the sign-in under way when the card goes, such as on Cancel.
     abort: Option<Abort>,
@@ -57,6 +59,7 @@ impl Card {
                 Ok(Ok(connection)) => {
                     *connection_slot = Some(connection.clone());
                     self.connection = Some(connection);
+                    self.sign_out_uncertain = false;
                     self.signing_in = None;
                 }
                 Ok(Err(message)) => {
@@ -70,6 +73,7 @@ impl Card {
         if let Some(rx) = &self.signing_out {
             match rx.try_recv() {
                 Ok(Ok(revoked)) => {
+                    self.sign_out_uncertain = false;
                     *connection_slot = None;
                     self.connection = None;
                     self.message = Some((
@@ -83,15 +87,13 @@ impl Card {
                     self.signing_out = None;
                 }
                 Ok(Err(message)) => {
-                    *connection_slot = None;
-                    self.connection = None;
+                    self.sign_out_uncertain = true;
                     self.message = Some((MessageTone::Error, message));
                     self.signing_out = None;
                 }
                 Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
                 Err(TryRecvError::Disconnected) => {
-                    *connection_slot = None;
-                    self.connection = None;
+                    self.sign_out_uncertain = true;
                     self.message = Some((
                         MessageTone::Error,
                         "Sign-out could not be verified. Reopen settings to check the saved account.".into(),
@@ -156,7 +158,7 @@ impl Card {
         });
     }
 
-    /// Revokes the renewable session on the provider, then clears the tokens locally.
+    /// Clears the tokens locally, then revokes the renewable session on the provider.
     fn sign_out(&mut self, ctx: &egui::Context, root: &std::path::Path, client_id: String) {
         let (tx, rx) = channel();
         self.signing_out = Some(rx);
@@ -194,7 +196,12 @@ impl Card {
             .as_deref()
             .map_or_else(|| format!("account {}", connection.subject), str::to_owned);
         ui.horizontal(|ui| {
-            label(ui, &format!("Signed in as {name}"));
+            let account = if self.sign_out_uncertain {
+                format!("Last known account: {name}")
+            } else {
+                format!("Signed in as {name}")
+            };
+            label(ui, &account);
             if connection.plan_usage {
                 ui.label(RichText::new("ChatGPT plan").size(12.0).color(theme::PALETTE_GREEN()));
             }
@@ -305,7 +312,7 @@ mod tests {
     use crate::test_egui::DiscardTextures as _;
 
     #[test]
-    fn uncertain_sign_out_invalidates_both_cached_connections() {
+    fn uncertain_sign_out_keeps_the_last_known_account_visible() {
         for disconnected in [false, true] {
             let connection = horizon_core::cloud_runtime::chatgpt::Connection {
                 client_id: "client-a".into(),
@@ -335,7 +342,10 @@ mod tests {
             let _ = egui::Context::default()
                 .run_ui(egui::RawInput::default(), |ui| card.tick(ui, &mut slot))
                 .discard_textures();
-            assert!(slot.is_none() && card.connection.is_none());
+            assert_eq!(slot.as_ref().unwrap().client_id, "client-a");
+            assert_eq!(card.connection.as_ref().unwrap().client_id, "client-a");
+            assert!(slot.as_ref().unwrap().signed_in);
+            assert!(card.sign_out_uncertain);
             assert!(!card.busy());
             assert!(card.message.is_some());
         }

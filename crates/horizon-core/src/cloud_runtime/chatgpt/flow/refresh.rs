@@ -42,6 +42,8 @@ fn refresh_with(root: &Path, client_id: &str, request: impl FnOnce(&str, &str) -
 fn request(client_id: &str, refresh_token: &str) -> Result<TokenResponse> {
     let response = ureq::post(TOKEN_URL)
         .config()
+        .https_only(true)
+        .max_redirects(0)
         .timeout_global(Some(Duration::from_secs(30)))
         .http_status_as_error(false)
         .build()

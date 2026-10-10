@@ -483,6 +483,8 @@ fn exchange(code: &str, client_id: &str, code_verifier: &str, redirect_uri: &str
     ];
     let response = ureq::post(TOKEN_URL)
         .config()
+        .https_only(true)
+        .max_redirects(0)
         .timeout_global(Some(Duration::from_secs(30)))
         .http_status_as_error(false)
         .build()
@@ -495,22 +497,34 @@ fn exchange(code: &str, client_id: &str, code_verifier: &str, redirect_uri: &str
     super::response::read(response.into_body(), "token exchange")
 }
 
-/// Revokes the renewable session, then clears the stored tokens. Returns whether the
+/// Clears the stored tokens, then revokes the renewable session. Returns whether the
 /// remote revocation was confirmed.
 /// # Errors
 /// The registration could not be read or written.
 pub(super) fn sign_out(root: &Path, client_id: &str) -> Result<Option<bool>> {
+    sign_out_with(root, client_id, revoke)
+}
+
+fn sign_out_with(
+    root: &Path,
+    client_id: &str,
+    revoke: impl FnOnce(&str, &str) -> Option<bool>,
+) -> Result<Option<bool>> {
     let lock = store::session_lock(root)?;
     let record = store::registration(&lock, client_id)?.ok_or(Error::Missing)?;
-    let confirmed = record.refresh_token.as_ref().and_then(|token| revoke(token, client_id));
     store::clear_tokens(&lock, client_id)?;
-    Ok(confirmed)
+    // The plan stops locally before a slow or failed provider request. Revocation
+    // uses the old token and needs no guard once the local clear has committed.
+    drop(lock);
+    Ok(record.refresh_token.as_ref().and_then(|token| revoke(token, client_id)))
 }
 
 /// Ends the renewable session at the configured revocation endpoint.
 fn revoke(refresh_token: &str, client_id: &str) -> Option<bool> {
     let discovery_response = ureq::get(CONFIG_URL)
         .config()
+        .https_only(true)
+        .max_redirects(0)
         .timeout_global(Some(Duration::from_secs(30)))
         .http_status_as_error(false)
         .build()
@@ -520,8 +534,11 @@ fn revoke(refresh_token: &str, client_id: &str) -> Option<bool> {
         return None;
     }
     let discovery: Discovery = super::response::read(discovery_response.into_body(), "revocation discovery").ok()?;
-    let response = ureq::post(&discovery.revocation_endpoint)
+    let endpoint = super::provider_endpoint(&discovery.revocation_endpoint).ok()?;
+    let response = ureq::post(endpoint.as_str())
         .config()
+        .https_only(true)
+        .max_redirects(0)
         .timeout_global(Some(Duration::from_secs(30)))
         .http_status_as_error(false)
         .build()
@@ -554,6 +571,39 @@ mod deadline_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sign_out_clears_local_tokens_and_releases_the_guard_before_remote_revocation() {
+        for confirmed in [None, Some(false), Some(true)] {
+            let root = tempfile::tempdir().unwrap();
+            store::activate(root.path(), &store::tests::test_record("client-a", "account-a")).unwrap();
+            let result = sign_out_with(root.path(), "client-a", |token, client| {
+                assert_eq!(token, "refresh");
+                assert_eq!(client, "client-a");
+                let connection = super::super::status(root.path()).unwrap().unwrap();
+                assert!(!connection.signed_in && !connection.can_use_plan());
+                assert!(!root.path().join("chatgpt/active").exists());
+                let lock = store::session_lock(root.path()).unwrap();
+                let record = store::registration(&lock, client).unwrap().unwrap();
+                assert!(record.access_token.is_none() && record.refresh_token.is_none());
+                assert!(record.id_token.is_empty());
+                confirmed
+            })
+            .unwrap();
+            assert_eq!(result, confirmed);
+        }
+    }
+
+    #[test]
+    fn a_busy_sign_out_never_revokes_or_changes_the_saved_tokens() {
+        let root = tempfile::tempdir().unwrap();
+        store::activate(root.path(), &store::tests::test_record("client-a", "account-a")).unwrap();
+        let path = root.path().join("chatgpt/client-a.json");
+        let before = std::fs::read(&path).unwrap();
+        let _lock = store::session_lock(root.path()).unwrap();
+        assert!(sign_out_with(root.path(), "client-a", |_, _| panic!("local sign-out failed")).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
 
     #[test]
     fn empty_token_values_are_malformed_before_a_registration_can_be_written() {

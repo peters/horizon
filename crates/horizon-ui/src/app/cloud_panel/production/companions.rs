@@ -468,6 +468,7 @@ impl HorizonApp {
             state.tick(root, &self.cloud_prototype.groups, ctx);
         }
         self.poll_cloud_companion_requests(ctx);
+        self.answer_cloud_list_requests(ctx);
     }
 }
 

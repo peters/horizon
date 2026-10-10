@@ -39,6 +39,8 @@ pub struct Draft {
     pub anthropic_auth: Authentication,
     /// This machine's active `ChatGPT` sign-in, if any, without its tokens.
     pub chatgpt: Option<super::chatgpt::Connection>,
+    /// A failed status read is distinct from a verified signed-out account.
+    pub chatgpt_status_error: Option<String>,
     pub registries: Vec<super::registry::draft::Draft>,
     /// Optional: Hetzner as a second provider for CPU clouds.
     pub hetzner: HetznerDraft,
@@ -70,6 +72,13 @@ impl Draft {
             |bytes| serde_json::from_slice(bytes).map_err(|_| Error::Json),
         )?;
         settings.validate()?;
+        let (chatgpt, chatgpt_status_error) = match super::chatgpt::status(root) {
+            Ok(connection) => (connection, None),
+            Err(error) => {
+                tracing::warn!(%error, "could not read the saved ChatGPT sign-in");
+                (None, Some(error.to_string()))
+            }
+        };
         Ok(Self {
             root: root.into(),
             original,
@@ -87,13 +96,8 @@ impl Draft {
                 },
             ),
             anthropic_auth: authentication(settings.anthropic_api_key_file.as_ref()),
-            chatgpt: match super::chatgpt::status(root) {
-                Ok(connection) => connection,
-                Err(error) => {
-                    tracing::warn!(%error, "could not read the saved ChatGPT sign-in");
-                    None
-                }
-            },
+            chatgpt,
+            chatgpt_status_error,
             registries: settings.registries.as_ref().map_or_else(Vec::new, |config| {
                 config
                     .bindings
@@ -173,6 +177,15 @@ impl Draft {
                 if agent != Agent::Codex {
                     return Err(Error::Invalid(
                         "ChatGPT plan authentication is supported only for Codex",
+                    ));
+                }
+                if require_chatgpt_sign_in
+                    && self.selected_agents().contains(&agent)
+                    && self.chatgpt.is_none()
+                    && self.chatgpt_status_error.is_some()
+                {
+                    return Err(Error::Invalid(
+                        "Saved account status unavailable. Reopen settings after the other sign-in operation ends.",
                     ));
                 }
                 // Only Codex offers the mode; a selected Codex needs a renewable sign-in with plan access.
@@ -352,6 +365,7 @@ impl Draft {
     /// the Save validation see the stored connection without reopening the files.
     pub fn adopt_chatgpt(&mut self, connection: Option<super::chatgpt::Connection>) {
         self.chatgpt = connection;
+        self.chatgpt_status_error = None;
     }
 
     /// Takes the GitHub App that [`save_github`] saved. When the form was opened from the

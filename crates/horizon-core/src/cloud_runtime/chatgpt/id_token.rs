@@ -36,6 +36,8 @@ pub(super) struct Key {
     x: Option<String>,
     #[serde(default)]
     y: Option<String>,
+    #[serde(default)]
+    crv: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -126,7 +128,6 @@ pub(super) fn validate_with_jwks(
     let key = keys
         .iter()
         .find(|key| key.kid.as_deref() == header.kid.as_deref())
-        .or_else(|| (keys.len() == 1).then(|| &keys[0]))
         .ok_or(Error::IdToken)?;
     let signing_input = format!("{header_b64}.{payload_b64}");
     verify(&header.alg, key, signing_input.as_bytes(), &signature)?;
@@ -135,8 +136,11 @@ pub(super) fn validate_with_jwks(
 
 /// GETs a JSON document, refusing non-2xx answers.
 fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T> {
-    let response = ureq::get(url)
+    let endpoint = super::provider_endpoint(url)?;
+    let response = ureq::get(endpoint.as_str())
         .config()
+        .https_only(true)
+        .max_redirects(0)
         .timeout_global(Some(std::time::Duration::from_secs(30)))
         .http_status_as_error(false)
         .build()
@@ -167,11 +171,17 @@ fn verify(alg: &str, key: &Key, signing_input: &[u8], signature: &[u8]) -> Resul
             verified.map_err(|_| Error::IdToken)
         }
         ("ES256", "EC") => {
+            if key.crv.as_deref() != Some("P-256") {
+                return Err(Error::IdToken);
+            }
             let (Some(x), Some(y)) = (key.x.as_ref(), key.y.as_ref()) else {
                 return Err(Error::IdToken);
             };
             let x = URL_SAFE_NO_PAD.decode(x).map_err(|_| Error::IdToken)?;
             let y = URL_SAFE_NO_PAD.decode(y).map_err(|_| Error::IdToken)?;
+            if x.len() != 32 || y.len() != 32 {
+                return Err(Error::IdToken);
+            }
             let mut point = vec![0x04];
             point.extend_from_slice(&x);
             point.extend_from_slice(&y);
@@ -216,6 +226,32 @@ mod tests {
     }
 
     #[test]
+    fn a_single_signing_key_must_still_match_the_token_key_id() {
+        let mut keys = jwks(EC_JWK).keys;
+        keys[0].kid = Some("another-key".into());
+        assert!(matches!(
+            validate_with_jwks(EC_TOKEN, "oaiapp_test_client", "nonce-abc", &keys),
+            Err(Error::IdToken)
+        ));
+    }
+
+    #[test]
+    fn es256_requires_the_declared_curve_and_exact_coordinate_lengths() {
+        for field in ["curve", "x", "y"] {
+            let mut keys = jwks(EC_JWK).keys;
+            match field {
+                "curve" => keys[0].crv = Some("P-384".into()),
+                "x" => keys[0].x = Some(URL_SAFE_NO_PAD.encode([0; 31])),
+                _ => keys[0].y = Some(URL_SAFE_NO_PAD.encode([0; 33])),
+            }
+            assert!(matches!(
+                validate_with_jwks(EC_TOKEN, "oaiapp_test_client", "nonce-abc", &keys),
+                Err(Error::IdToken)
+            ));
+        }
+    }
+
+    #[test]
     fn wrong_audience_nonce_or_issuer_is_rejected() {
         let keys = jwks(EC_JWK).keys;
         assert!(matches!(
@@ -248,7 +284,7 @@ mod tests {
 
     #[test]
     fn signed_audience_arrays_allow_only_the_issued_client() {
-        let keys = jwks(r#"{"kty":"EC","kid":"audience-fixture","x":"ygYA7utTHj-p2ziVf60S2yJOk2fZ2lBmNoBWxZltRN8","y":"DZobeasPkiRlChyabgjmlvRg4foe--4uVVbhjX2v7ps"}"#).keys;
+        let keys = jwks(r#"{"kty":"EC","crv":"P-256","kid":"audience-fixture","x":"ygYA7utTHj-p2ziVf60S2yJOk2fZ2lBmNoBWxZltRN8","y":"DZobeasPkiRlChyabgjmlvRg4foe--4uVVbhjX2v7ps"}"#).keys;
         for (token, accepted) in [
             (
                 "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfdGVzdF9jbGllbnQiXSwiZXhwIjo0MTAyNDQ0ODAwLCJzdWIiOiJzeW50aGV0aWMtYXVkaWVuY2UtdXNlciIsIm5vbmNlIjoiYXVkaWVuY2Utbm9uY2UifQ.h-DK7ernIxHpgoF8B6kMBt5LfE9SQabhorJnkUuotAsnWL-e7Klj15HyVI7yFtJF25ZHS4rzlOK3Zha9oAAXYQ",
@@ -286,7 +322,7 @@ mod tests {
 
     #[test]
     fn signed_tokens_must_be_within_their_validity_window() {
-        let keys = jwks(r#"{"kty":"EC","kid":"time-fixture","x":"5Ey59VqcSYAd6qPO0n8eLNtZVueFrWHatmx_GLAwVFs","y":"b9yvan1-wusxKf9QJIsYbKMvJ5RI0EIUqPTaEJF6VK4"}"#).keys;
+        let keys = jwks(r#"{"kty":"EC","crv":"P-256","kid":"time-fixture","x":"5Ey59VqcSYAd6qPO0n8eLNtZVueFrWHatmx_GLAwVFs","y":"b9yvan1-wusxKf9QJIsYbKMvJ5RI0EIUqPTaEJF6VK4"}"#).keys;
         for (token, accepted) in [
             (
                 "eyJhbGciOiJFUzI1NiIsImtpZCI6InRpbWUtZml4dHVyZSJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjoxLCJzdWIiOiJzeW50aGV0aWMtdGltZS11c2VyIiwibm9uY2UiOiJ0aW1lLW5vbmNlIn0.TFVs6FV5zNMaWPreND9e1DZb5Gk_0b0TFq3PmWiAKLvmFJU4VFhNs1i5OlqkZFPJsUcMlOyUAdB-zi8MEIGk1w",

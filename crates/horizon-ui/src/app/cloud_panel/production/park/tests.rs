@@ -578,6 +578,13 @@ impl Parking {
         self.statuses = statuses.into_iter().map(|status| (status.id.clone(), status)).collect();
     }
 
+    /// Attaches the terminals of the cloud, as when it became ready in view, with a
+    /// grace period so long that only a park on request parks it.
+    pub(in crate::app::cloud_panel::production) fn attach_for_test(&mut self) {
+        self.tracker = Some(ParkTracker::attached());
+        self.policy.park_grace = Duration::from_secs(3600);
+    }
+
     /// As [`Parking::park_with`], from a read that started at `started`.
     pub(in crate::app::cloud_panel::production) fn read_with(
         &mut self,

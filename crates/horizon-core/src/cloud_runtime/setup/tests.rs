@@ -48,6 +48,27 @@ fn a_codex_setting_without_a_key_derives_the_chatgpt_sign_in() {
 }
 
 #[test]
+fn an_unavailable_account_status_is_not_reported_as_signed_out() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(super::super::chatgpt::confirm_usage(root.path(), "missing-client").is_err());
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.path().join("chatgpt/session.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+    let mut draft = prepared(root.path());
+    draft.settings.default_agents = vec![Agent::Codex];
+    assert!(draft.chatgpt.is_none());
+    assert!(draft.chatgpt_status_error.as_deref().unwrap().contains("in progress"));
+    assert!(draft.validate().unwrap_err().to_string().contains("status unavailable"));
+    drop(lock);
+    let reopened = Draft::load(root.path()).unwrap();
+    assert!(reopened.chatgpt.is_none());
+    assert!(reopened.chatgpt_status_error.is_none());
+}
+
+#[test]
 fn unsupported_plan_authentication_preserves_saved_agent_credentials() {
     let root = tempfile::tempdir().unwrap();
     let mut base = prepared(root.path());

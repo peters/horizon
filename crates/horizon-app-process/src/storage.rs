@@ -16,6 +16,42 @@ pub struct Directory {
 
 #[cfg(unix)]
 impl Directory {
+    pub(crate) fn clone_held(&self) -> Result<Self> {
+        Ok(Self {
+            file: self.file.try_clone().map_err(|_| Error::StateUnavailable)?,
+        })
+    }
+
+    pub(crate) fn sync_held(&self) -> std::io::Result<()> {
+        self.file.sync_all()
+    }
+
+    pub(crate) fn existing_file(&self, name: &str, append: bool) -> std::io::Result<File> {
+        use std::os::unix::fs::MetadataExt;
+        if !matches!(name, "output.log" | "host-diagnostic.json") {
+            return Err(std::io::ErrorKind::InvalidInput.into());
+        }
+        let flags = if append {
+            OFlags::RDWR | OFlags::APPEND
+        } else {
+            OFlags::RDONLY
+        };
+        let file = File::from(rustix::fs::openat(
+            &self.file,
+            name,
+            flags | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || metadata.uid() != rustix::process::getuid().as_raw()
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(std::io::ErrorKind::PermissionDenied.into());
+        }
+        Ok(file)
+    }
     /// # Errors
     /// Requires an existing private, owned directory without symlink components.
     pub fn open(path: &Path) -> Result<Self> {

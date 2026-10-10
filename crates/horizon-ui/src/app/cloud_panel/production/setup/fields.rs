@@ -195,6 +195,9 @@ pub(super) fn agents(
                     // The ChatGPT card ticks in every mode and while unselected, so a
                     // flow under way always lands and its busy state always ends.
                     super::chatgpt::Card::tick(chatgpt, ui, &mut draft.chatgpt);
+                    if draft.chatgpt.is_some() {
+                        draft.chatgpt_status_error = None;
+                    }
                 }
                 if !selected {
                     return;
@@ -211,6 +214,7 @@ pub(super) fn agents(
                 });
                 if *mode == Authentication::ChatGpt {
                     if agent == Agent::Codex {
+                        account_status_error(ui, draft.chatgpt_status_error.as_deref());
                         super::chatgpt::row(ui, &mut draft.chatgpt, &root, chatgpt);
                     } else {
                         caption(ui, "Claude does not support ChatGPT sign-in. Choose another option.");
@@ -237,6 +241,15 @@ pub(super) fn agents(
             });
         }
     });
+}
+
+fn account_status_error(ui: &mut Ui, error: Option<&str>) {
+    if let Some(error) = error {
+        ui.colored_label(
+            theme::PALETTE_RED(),
+            format!("Saved account status unavailable: {error}"),
+        );
+    }
 }
 
 /// What these settings add up to, and the options few people need.
