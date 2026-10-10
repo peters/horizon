@@ -51,6 +51,7 @@ enum Event {
 struct Receipt {
     operation: Uuid,
     guardian_pid: u32,
+    boot_id: Option<Uuid>,
     child_pid: Option<u32>,
     binary: Option<PathBuf>,
     config: Option<PathBuf>,
@@ -93,6 +94,7 @@ pub fn run_guard() -> Result<()> {
     let receipt = std::sync::Mutex::new(Receipt {
         operation: wire.operation,
         guardian_pid: std::process::id(),
+        boot_id: horizon_app_process::boot::current(),
         child_pid: None,
         binary: None,
         config: None,

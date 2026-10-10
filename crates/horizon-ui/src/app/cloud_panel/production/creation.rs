@@ -140,7 +140,10 @@ impl HorizonApp {
         }
         // The Start button and Enter in the title take the same path: with "Start new
         // cloud once available" checked for a sold-out worker, both arm the watch.
-        if actions.create && !self.cloud_prototype.production.title.trim().is_empty() {
+        if actions.create
+            && !self.cloud_prototype.production.title.trim().is_empty()
+            && self.keep_new_workspace_choice(horizon_core::cloud_panel::WorkspacePlacement::Cloud)
+        {
             selector::summary::start(&mut self.cloud_prototype.production);
         }
         watch::poll(&mut self.cloud_prototype.production);

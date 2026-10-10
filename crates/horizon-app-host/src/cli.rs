@@ -14,7 +14,7 @@ impl Drop for Cancel {
     }
 }
 
-pub(crate) fn report_error(error: Error) {
+pub(crate) fn report_error(error: &Error) {
     let event = serde_json::json!({"phase":"error","message":error.to_string()});
     let mut bytes = event.to_string().into_bytes();
     bytes.push(b'\n');

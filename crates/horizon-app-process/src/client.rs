@@ -4,7 +4,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::{Error, Event, Request, Result};
+use crate::{DiagnosticLog, Error, Event, Request, Result, storage};
 
 /// Host-private guardian lease. Closing stdin is the cancellation and host-crash signal.
 pub struct Process {
@@ -20,7 +20,29 @@ impl Process {
     /// `worker` is a trusted bundled executable, never supplied by a project or MCP client.
     /// A journal failure occurs before the worker is allowed to start the declared command.
     pub fn start(worker: &Path, request: Request, journal: impl FnOnce(uuid::Uuid, u32) -> Result<()>) -> Result<Self> {
+        Self::start_inner(worker, request, journal, None::<fn(DiagnosticLog)>)
+    }
+
+    /// Capture a held diagnostic capability before authorizing the declared child.
+    /// # Errors
+    /// The callback receives only the exact existing log of this armed guardian.
+    pub fn start_with_diagnostics(
+        worker: &Path,
+        request: Request,
+        journal: impl FnOnce(uuid::Uuid, u32) -> Result<()>,
+        diagnostics: impl FnOnce(DiagnosticLog),
+    ) -> Result<Self> {
+        Self::start_inner(worker, request, journal, Some(diagnostics))
+    }
+
+    fn start_inner(
+        worker: &Path,
+        request: Request,
+        journal: impl FnOnce(uuid::Uuid, u32) -> Result<()>,
+        diagnostics: Option<impl FnOnce(DiagnosticLog)>,
+    ) -> Result<Self> {
         let spec = request.spec;
+        let directory = storage::Directory::open(&spec.state)?;
         let mut command = Command::new(worker);
         command
             .arg("--guard")
@@ -28,6 +50,7 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        inherit_temp(&mut command)?;
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -80,6 +103,9 @@ impl Process {
             Event::Armed {} => (),
             _ => return Err(Error::StartFailed),
         }
+        if let Some(diagnostics) = diagnostics {
+            diagnostics(DiagnosticLog::capture(&spec, process.child.id(), directory)?);
+        }
         journal(spec.operation, process.child.id())?;
         process.started = true; // a lost start write may still have reached the guardian
         crate::lifetime::remaining(spec.deadline_millis)?;
@@ -107,6 +133,11 @@ impl Process {
     /// # Errors
     /// Completion requires guardian acknowledgement and exit; lost cleanup is uncertainty.
     pub fn close(&mut self) -> Result<()> {
+        if self.started
+            && let Some(input) = self.input.as_mut()
+        {
+            let _ = input.write_all(b"close\n").and_then(|()| input.flush());
+        }
         self.input.take();
         if !self.started {
             // EOF lets the armed guardian durably acknowledge that no child was authorized.
@@ -158,4 +189,20 @@ impl Drop for Process {
         let _ = self.close();
         let _ = self.child.try_wait();
     }
+}
+
+fn inherit_temp(command: &mut Command) -> Result<()> {
+    let Some(path) = ["TMPDIR", "TEMP", "TMP"].into_iter().find_map(std::env::var_os) else {
+        return Ok(());
+    };
+    let path = std::path::PathBuf::from(path)
+        .canonicalize()
+        .map_err(|_| Error::StateUnavailable)?;
+    if !path.is_dir() {
+        return Err(Error::StateUnavailable);
+    }
+    for key in ["TMPDIR", "TEMP", "TMP"] {
+        command.env(key, &path);
+    }
+    Ok(())
 }

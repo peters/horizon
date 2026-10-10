@@ -16,9 +16,10 @@ This procedure makes sure that the sidebar groups the workspaces in **Needs you*
 **Cloud**, **Parked** and **This PC**. It also makes sure that each row shows a
 status dot, the name and a status line, that each group header shows its count
 and summary on one line, and that a click on a parked row attaches its cloud.
-It also makes sure that **Stop idle…** stops the selected idle workers after it
-shows the hourly saving, and that a parked cloud whose session ends goes to
-**Needs you**.
+It also makes sure that an agent in the cloud workspace can read the list and
+attach, park and stop its cloud with `cloud_list`, that **Stop idle…** stops the
+selected idle workers after it shows the hourly saving, and that a parked cloud
+whose session ends goes to **Needs you**.
 
 ## 2. Applicability
 
@@ -29,6 +30,8 @@ shows the hourly saving, and that a parked cloud whose session ends goes to
     [park and attach procedure](cloud-park-attach.md) tests them.
   - A cloud whose agent asks for GitHub access. The unit tests of the cloud
     list cover it.
+  - A `cloud_list` stop of a cloud that is not idle, and a request from an agent
+    in a different workspace. The unit tests of `cloud_list` cover them.
 
 ## 3. Safety
 
@@ -49,10 +52,13 @@ shows the hourly saving, and that a parked cloud whose session ends goes to
 - A Hetzner API key in the Cloud settings of the test account.
 - A synthetic repository with one commit and the shell-only `.horizon/cloud.yml`
   of the [park and attach procedure](cloud-park-attach.md#4-equipment-and-preconditions).
+- An agent panel kind (Claude Code or Codex) and `horizon-browser` from the
+  candidate on the `PATH` of Horizon. The agent panel runs the commands of task
+  6.4 in its shell.
 
 ## 5. Setup
 
-1. Do steps 1 to 6 of the setup of the
+1. Do steps 1 to 7 of the setup of the
    [park and attach procedure](cloud-park-attach.md#5-setup). Give the cloud a
    generic title, for example `Cloud one`.
 
@@ -112,7 +118,38 @@ shows the hourly saving, and that a parked cloud whose session ends goes to
    Result: The canvas moves to the cloud workspace. In about 1 second, the cloud
    attaches. The row moves back to **CLOUD** and shows the status line again.
 
-### 6.4 STOP: Stop idle workers
+### 6.4 AGENT: The cloud list from an agent
+
+1. Add an agent panel to the cloud workspace, outside the cloud card. In the
+   agent panel, run this command.
+
+   ```sh
+   horizon-browser cloud list -o -
+   ```
+
+   Result: The JSON report shows one cloud with `"group": "cloud"`,
+   `"idle": true` and the status line `synthetic output <n>`. Write down the
+   value of `"cloud"`, for example `cloud-1`.
+
+2. Make sure that a panel of the cloud is on the screen. Run
+   `horizon-browser cloud park <cloud> -o -`.
+
+   Result: The report shows the error `cloud_list_in_view`. The cloud stays
+   attached.
+
+3. Drag the empty canvas until only the agent panel is on the screen. Run the
+   park command again.
+
+   Result: The report shows `"park": "parking"`. In about 1 second, the row of
+   the cloud moves to **PARKED**.
+
+4. Run `horizon-browser cloud attach <cloud> -o -`.
+
+   Result: The report shows `"attach": "in_view"`. The canvas moves to the
+   cloud, and in about 1 second the cloud attaches. The row moves back to
+   **CLOUD**.
+
+### 6.5 STOP: Stop idle workers
 
 1. Make sure that no agent works in the cloud. Look at the header line of
    **CLOUD**.
@@ -140,7 +177,7 @@ shows the hourly saving, and that a parked cloud whose session ends goes to
    then that it is stopped. The row moves to **PARKED** with a ring. The header
    of **PARKED** shows no **Stop idle…**.
 
-### 6.5 NEEDS YOU: A parked session ends
+### 6.6 NEEDS YOU: A parked session ends
 
 1. On the cloud card, click **Resume**. Wait until the card shows **Ready**.
 
@@ -172,16 +209,18 @@ shows the hourly saving, and that a parked cloud whose session ends goes to
 - 6.1 shows the rows, the counts and the summaries on one header line.
 - 6.2 moves the parked cloud to **PARKED** with a compact row.
 - 6.3 attaches the cloud from a click on its row.
-- 6.4 shows the hourly saving before the confirmation and stops only the selected
+- 6.4 lists the cloud for the agent, refuses to park it in view, parks it out of
+  view and attaches it again.
+- 6.5 shows the hourly saving before the confirmation and stops only the selected
   worker.
-- 6.5 moves the parked cloud whose session ended to **NEEDS YOU** with the line
+- 6.6 moves the parked cloud whose session ended to **NEEDS YOU** with the line
   `Ended with status 3`.
 
 ## 8. Cleanup
 
 > **CAUTION:** THIS STEP DELETES THE WORKER AND ITS STORAGE.
 
-1. On the cloud card, open **Manage** and delete the cloud. After 6.4, the worker
+1. On the cloud card, open **Manage** and delete the cloud. After 6.5, the worker
    is stopped: the deletion removes the workspace volume.
 
    Result: The card shows that the worker and the managed storage are deleted.

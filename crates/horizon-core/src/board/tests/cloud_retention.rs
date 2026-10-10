@@ -282,6 +282,10 @@ fn running_cloud_member_parks_with_its_last_screen() {
     }
 
     let panel = board.panel_mut(member).unwrap();
+    let size = panel
+        .terminal()
+        .map(|terminal| (terminal.rows(), terminal.cols()))
+        .unwrap();
     panel.set_parked_agent_status(crate::agents::AgentStatus::Working);
     assert_eq!(
         panel.agent_status(),
@@ -297,33 +301,34 @@ fn running_cloud_member_parks_with_its_last_screen() {
     assert_eq!(
         board.panel(member).unwrap().agent_status(),
         crate::agents::AgentStatus::Working,
-        "the placeholder screen must not reset the reported status"
+        "the parked screen must not reset the reported status"
     );
-    assert!(text(&board).contains("AGENT SCREEN"), "{}", text(&board));
-    let released = |board: &Board| board.panel(member).unwrap().terminal().unwrap().pty_released();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !released(&board) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the placeholder must release its PTY"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    // The last screen stays as passive text: no terminal, so no PTY and no grid.
+    let parked = board.panel(member).unwrap();
+    assert!(parked.terminal().is_none());
+    let screen = parked.parked_screen().unwrap();
+    assert!(
+        screen.lines().iter().any(|line| line.contains("AGENT SCREEN")),
+        "{screen:?}"
+    );
+    assert_eq!(screen.size(), size);
 
-    // A stop replaces the parked screen, and a later park says why the panel waits.
+    // A stop replaces the parked screen with a placeholder of the same size, and a later
+    // park says why the panel waits.
     let panel = board.panel_mut(member).unwrap();
     assert!(panel.show_cloud_wait(CloudWait::Stopped).unwrap());
+    let placeholder = panel.terminal().unwrap();
+    assert_eq!((placeholder.rows(), placeholder.cols()), size);
     assert!(panel.park_cloud().unwrap());
     assert_eq!(panel.cloud_wait(), Some(CloudWait::Parked));
-    assert!(text(&board).contains("This panel is parked."), "{}", text(&board));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !released(&board) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "a parked placeholder must release its PTY"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let parked = board.panel(member).unwrap();
+    assert!(parked.terminal().is_none(), "a parked placeholder keeps no terminal");
+    let screen = parked.parked_screen().unwrap();
+    assert!(
+        screen.lines().iter().any(|line| line == "This panel is parked."),
+        "{screen:?}"
+    );
+    assert_eq!(screen.size(), size);
 }
 
 #[cfg(unix)]
@@ -367,10 +372,11 @@ fn a_parked_snapshot_keeps_blank_rows_and_the_scrolled_viewport() {
     let before = viewport(&board, scrolled);
     assert!(!before.iter().any(|row| row == "300"), "the viewport is scrolled back");
 
+    let parked = |board: &Board, id| board.panel(id).unwrap().parked_screen().unwrap().lines().to_vec();
     for id in [blank, scrolled] {
         let shown = viewport(&board, id);
         assert!(board.panel_mut(id).unwrap().park_cloud().unwrap());
-        assert_eq!(viewport(&board, id), shown, "the parked panel shows what the user saw");
+        assert_eq!(parked(&board, id), shown, "the parked panel shows what the user saw");
     }
-    assert_eq!(viewport(&board, scrolled), before);
+    assert_eq!(parked(&board, scrolled), before);
 }

@@ -150,6 +150,15 @@ impl Journal {
     }
 
     /// # Errors
+    /// Requires an existing private journal and registry. Missing or replaced state is not initialized.
+    pub fn open_existing(state: &Path, account: &Account) -> Result<Self> {
+        Ok(Self {
+            store: Store::open_existing(&state.join(Account::capacity_namespace()))?,
+            realm: account.realm().to_owned(),
+        })
+    }
+
+    /// # Errors
     /// Records intent durably before builds, uploads, tunnel spawn or remote allocation.
     pub fn start(&self, owner: Uuid, root: &Path, kind: Kind, lifetime: Duration) -> Result<Operation> {
         if owner.is_nil() || lifetime.is_zero() || lifetime > Duration::from_mins(30) {

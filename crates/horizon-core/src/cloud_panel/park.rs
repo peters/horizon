@@ -74,6 +74,16 @@ impl ParkTracker {
         matches!(self.state, State::Parked { .. })
     }
 
+    /// Parks an attached cloud at once when it is out of view, as at the end of its
+    /// grace period. A cloud in view stays attached: it would attach again.
+    pub fn park_now(&mut self, sight: Sight) -> Option<ParkAction> {
+        if sight != Sight::Hidden || self.is_parked() {
+            return None;
+        }
+        *self = Self::parked();
+        Some(ParkAction::Park)
+    }
+
     /// Records what the user sees at `now`. Returns an action when the cloud
     /// changes; the tracker then already shows the new state.
     pub fn observe(&mut self, sight: Sight, now: Instant, policy: ParkPolicy) -> Option<ParkAction> {
@@ -118,6 +128,17 @@ mod tests {
         attach_dwell: Duration::from_millis(400),
         park_grace: Duration::from_secs(120),
     };
+
+    #[test]
+    fn a_park_on_request_parks_only_an_attached_cloud_out_of_view() {
+        let mut tracker = ParkTracker::attached();
+        assert_eq!(tracker.park_now(Sight::Visible), None);
+        assert_eq!(tracker.park_now(Sight::InUse), None);
+        assert!(!tracker.is_parked());
+        assert_eq!(tracker.park_now(Sight::Hidden), Some(ParkAction::Park));
+        assert!(tracker.is_parked());
+        assert_eq!(tracker.park_now(Sight::Hidden), None, "it is parked already");
+    }
 
     #[test]
     fn hidden_cloud_parks_only_after_the_whole_grace_period() {
