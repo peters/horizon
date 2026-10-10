@@ -223,8 +223,9 @@ a new sign-in attempt.
 The loopback callback has a ten-minute deadline. Local connections cannot extend
 that deadline. Incomplete HTTP requests are refused.
 It restores the previous account selection if the credential write did not finish.
-Refresh waits for the provider's earliest time. A refused or malformed response
-does not change the saved token pair.
+A refresh before the provider's earliest time fails without a provider request.
+It does not wait or schedule a retry. A refused or malformed response does not
+change the saved token pair. Token responses must specify the Bearer token type.
 
 - Git and `gh` work without a token in the environment. The worker's root service
   answers for the cloud's repositories and its same-worker siblings. Agents never

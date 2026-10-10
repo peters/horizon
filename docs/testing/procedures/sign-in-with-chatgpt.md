@@ -180,6 +180,22 @@ Settings save requires a provider. Do not create or deploy a cloud.
    Result: Its credentials do not change. The card does not report that all
    plan use has stopped.
 
+### 6.9 C09 — Verify macOS credential ACLs
+
+Run this lane on macOS. Linux tests do not qualify it.
+
+1. Run `cargo test -p horizon-core cloud_runtime::chatgpt::store::macos`.
+   Result: The directory, file and inherited ACL regressions pass.
+2. Confirm that the tests add an allow entry for the system `nobody` account
+   only on disposable objects with synthetic data.
+   Result: The mode bits stay private, but readers refuse the extended ACL.
+3. Confirm that an atomic replacement and a new credential directory have no
+   extended ACL after an owned write.
+   Result: New token bytes are written only after ACL protection.
+
+The system `/bin/ls` and `/bin/chmod` are required. A permission command failure,
+warning, oversized output or timeout must stop credential access.
+
 ## 7. Pass criteria
 
 - Every task above shows its Result.
@@ -197,6 +213,9 @@ Settings save requires a provider. Do not create or deploy a cloud.
 - Discovery endpoints must use HTTPS on the trusted provider origin. Requests
   must not follow redirects to another origin.
 - The token-response tests must reject empty access and refresh tokens.
+  They must reject missing or unsupported token types. Bearer is case-insensitive.
+- If a sign-in or usage-confirmation worker ends unexpectedly, the card must
+  show an error and release the form. A failed sign-in must stop its callback.
 - ID-token tests must reject a missing or empty key ID, even with a valid
   signature from a key that also has no key ID.
 - The sign-in publication tests must recover an interruption before or after the
@@ -242,19 +261,3 @@ Settings save requires a provider. Do not create or deploy a cloud.
 If the run must be kept, write a report in `docs/testing/reports/` with
 [the report template](../reports/TEMPLATE.md). If not, put the results in the
 pull request. Keep private evidence out of the repository.
-
-## C09. Verify macOS credential ACLs
-
-Run this lane on macOS. Linux tests do not qualify it.
-
-1. Run `cargo test -p horizon-core cloud_runtime::chatgpt::store::macos`.
-   Result: The directory, file and inherited ACL regressions pass.
-2. Confirm that the tests add an allow entry for the system `nobody` account
-   only on disposable objects with synthetic data.
-   Result: The mode bits stay private, but readers refuse the extended ACL.
-3. Confirm that an atomic replacement and a new credential directory have no
-   extended ACL after an owned write.
-   Result: New token bytes are written only after ACL protection.
-
-The system `/bin/ls` and `/bin/chmod` are required. A permission command failure,
-warning, oversized output or timeout must stop credential access.

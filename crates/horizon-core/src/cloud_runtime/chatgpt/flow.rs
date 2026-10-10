@@ -440,7 +440,7 @@ struct TokenResponse {
     refresh_token: Option<zeroize::Zeroizing<String>>,
     #[serde(default, deserialize_with = "store::protected_token")]
     id_token: Option<zeroize::Zeroizing<String>>,
-    #[serde(default)]
+    #[serde(deserialize_with = "bearer_token_type")]
     token_type: String,
     #[serde(default)]
     expires_in: Option<u64>,
@@ -448,6 +448,19 @@ struct TokenResponse {
     scope: Option<String>,
     #[serde(default)]
     earliest_refresh_at: Option<i64>,
+}
+
+fn validate_token_type(token_type: &str) -> Result<()> {
+    if !token_type.eq_ignore_ascii_case("bearer") {
+        return Err(Error::Malformed);
+    }
+    Ok(())
+}
+
+fn bearer_token_type<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<String, D::Error> {
+    let token_type: String = serde::Deserialize::deserialize(deserializer)?;
+    validate_token_type(&token_type).map_err(serde::de::Error::custom)?;
+    Ok(token_type)
 }
 
 fn nonempty_string<'de, D: serde::Deserializer<'de>>(
@@ -609,13 +622,48 @@ mod tests {
     fn empty_token_values_are_malformed_before_a_registration_can_be_written() {
         for (access, refresh) in [("", "refresh"), ("access", ""), ("  ", "refresh"), ("access", "  ")] {
             let bytes = serde_json::to_vec(&serde_json::json!({
-                "access_token": access, "refresh_token": refresh, "id_token": "synthetic-id"
+                "access_token": access, "refresh_token": refresh, "id_token": "synthetic-id", "token_type": "Bearer"
             }))
             .unwrap();
             assert!(matches!(
                 super::super::response::parse::<TokenResponse>(&bytes, "synthetic exchange"),
                 Err(Error::Malformed)
             ));
+        }
+    }
+
+    #[test]
+    fn token_responses_require_a_present_case_insensitive_bearer_type() {
+        for token_type in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!(7)),
+            Some(serde_json::json!("")),
+            Some(serde_json::json!("mac")),
+            Some(serde_json::json!(" Bearer ")),
+        ] {
+            let mut response = serde_json::json!({"access_token":"access", "refresh_token":"refresh"});
+            if let Some(value) = token_type {
+                response["token_type"] = value;
+            }
+            assert!(matches!(
+                super::super::response::parse::<TokenResponse>(
+                    &serde_json::to_vec(&response).unwrap(),
+                    "synthetic token response"
+                ),
+                Err(Error::Malformed)
+            ));
+        }
+        for token_type in ["Bearer", "bearer", "bEaReR"] {
+            let response =
+                serde_json::json!({"access_token":"access", "refresh_token":"refresh", "token_type":token_type});
+            assert!(
+                super::super::response::parse::<TokenResponse>(
+                    &serde_json::to_vec(&response).unwrap(),
+                    "synthetic token response"
+                )
+                .is_ok()
+            );
         }
     }
 
@@ -855,7 +903,7 @@ mod tests {
     #[test]
     fn a_refresh_response_does_not_require_an_id_token() {
         let token: TokenResponse = serde_json::from_str(
-            r#"{"access_token":"synthetic-access","refresh_token":"synthetic-refresh","expires_in":3600}"#,
+            r#"{"access_token":"synthetic-access","refresh_token":"synthetic-refresh","token_type":"Bearer","expires_in":3600}"#,
         )
         .unwrap();
         assert!(token.id_token.is_none());

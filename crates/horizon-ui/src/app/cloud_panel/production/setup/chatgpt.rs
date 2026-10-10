@@ -102,7 +102,10 @@ impl Card {
                     self.signing_in = None;
                 }
                 Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => self.signing_in = None,
+                Err(TryRecvError::Disconnected) => {
+                    self.message = Some((MessageTone::Error, "Sign-in ended unexpectedly. Try again.".into()));
+                    self.signing_in = None;
+                }
             }
         }
         if let Some(rx) = &self.signing_out {
@@ -147,7 +150,13 @@ impl Card {
                     self.confirming = None;
                 }
                 Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => self.confirming = None,
+                Err(TryRecvError::Disconnected) => {
+                    self.message = Some((
+                        MessageTone::Error,
+                        "Usage confirmation ended unexpectedly. Try again.".into(),
+                    ));
+                    self.confirming = None;
+                }
             }
         }
         // A finished attempt, also a failed one, stops its loopback server at once.
@@ -350,7 +359,7 @@ pub(super) fn row(
 
 #[cfg(test)]
 mod tests {
-    use super::{Abort, Card, Completion, SignOutResult};
+    use super::{Abort, Card, Completion, MessageTone, SignOutResult};
     use crate::test_egui::DiscardTextures as _;
 
     #[test]
@@ -479,6 +488,51 @@ mod tests {
             .discard_textures();
         assert!(cancel.is_cancelled(), "the loopback server ends with the attempt");
         assert!(!card.busy());
+    }
+
+    #[test]
+    fn disconnected_workers_report_failure_and_release_the_form() {
+        let cancel = horizon_core::cloud_runtime::Cancellation::default();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut card = Card {
+            signing_in: Some(receiver),
+            abort: Some(Abort(cancel.clone())),
+            ..Card::default()
+        };
+        drop(sender);
+        let mut slot = None;
+        card.tick(&mut slot);
+        assert!(cancel.is_cancelled());
+        assert!(!card.busy());
+        assert!(
+            matches!(card.message.as_ref(), Some((MessageTone::Error, message)) if message.contains("Sign-in ended unexpectedly"))
+        );
+        assert!(slot.is_none());
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let connection = horizon_core::cloud_runtime::chatgpt::Connection {
+            client_id: "client-a".into(),
+            email: None,
+            subject: "account-a".into(),
+            scopes: vec!["chatgpt.tokens.use.direct".into()],
+            plan_usage: true,
+            usage_confirmed: false,
+            signed_in: true,
+            saved_at_unix: 0,
+        };
+        card.connection = Some(connection.clone());
+        slot = Some(connection);
+        card.confirming = Some(receiver);
+        card.message = None;
+        drop(sender);
+        card.tick(&mut slot);
+        assert!(!card.busy());
+        assert!(
+            matches!(card.message.as_ref(), Some((MessageTone::Error, message)) if message.contains("Usage confirmation ended unexpectedly"))
+        );
+        assert!(!slot.as_ref().unwrap().usage_confirmed);
+        assert!(!card.connection.as_ref().unwrap().usage_confirmed);
+        assert_eq!(slot.as_ref().unwrap().client_id, "client-a");
     }
 
     #[test]

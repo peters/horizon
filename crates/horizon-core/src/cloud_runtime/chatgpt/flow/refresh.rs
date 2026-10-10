@@ -18,6 +18,7 @@ fn refresh_with(root: &Path, client_id: &str, request: impl FnOnce(&str, &str) -
         .filter(|token| !token.trim().is_empty())
         .ok_or(Error::Invalid("The connection has no refresh token"))?;
     let token = request(client_id, refresh_token)?;
+    super::validate_token_type(&token.token_type)?;
     let rotated = token.refresh_token.as_ref().ok_or_else(|| {
         Error::Provider("ChatGPT rotated the session without a new refresh token. Sign in again.".into())
     })?;
@@ -152,7 +153,15 @@ mod tests {
 
     #[test]
     fn provider_and_malformed_refresh_failures_preserve_the_current_record_byte_for_byte() {
-        for kind in ["provider", "missing", "empty-access", "empty-refresh", "malformed"] {
+        for kind in [
+            "provider",
+            "missing",
+            "empty-access",
+            "empty-refresh",
+            "unsupported-type",
+            "empty-type",
+            "malformed",
+        ] {
             let root = tempfile::tempdir().unwrap();
             let path = saved(root.path(), None);
             let before = std::fs::read(&path).unwrap();
@@ -163,6 +172,11 @@ mod tests {
                     "missing" => Ok(response("new-access", None, None)),
                     "empty-access" => Ok(response("", Some("new-refresh"), None)),
                     "empty-refresh" => Ok(response("new-access", Some(""), None)),
+                    "unsupported-type" | "empty-type" => {
+                        let mut token = response("new-access", Some("new-refresh"), None);
+                        token.token_type = if kind == "empty-type" { "" } else { "mac" }.into();
+                        Ok(token)
+                    }
                     _ => super::super::super::response::parse(b"{}", "synthetic refresh"),
                 })
                 .is_err()
