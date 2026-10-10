@@ -1147,13 +1147,16 @@ enum Queueing {
 fn wait_for_queue(child: &mut Child, manifest_path: &std::path::Path) -> Queueing {
     let deadline = Instant::now() + JOB_PROGRESS_GUARD;
     loop {
-        if let Ok(bytes) = std::fs::read(manifest_path)
-            && let Ok(manifest) = serde_json::from_slice::<BrowserManifest>(&bytes)
-            && !manifest.actions.is_empty()
-        {
+        if action_queued(manifest_path) {
             return Queueing::Queued;
         }
         if let Some(status) = child.try_wait().expect("poll browser job") {
+            // The job may have queued its action after the read above and then exited at its
+            // deadline. That run had its action in flight, and a retry would find the action
+            // in the manifest before its own job queued one.
+            if action_queued(manifest_path) {
+                return Queueing::Queued;
+            }
             let mut stderr = String::new();
             if let Some(stream) = child.stderr.as_mut() {
                 stream
@@ -1169,6 +1172,13 @@ fn wait_for_queue(child: &mut Child, manifest_path: &std::path::Path) -> Queuein
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+fn action_queued(manifest_path: &std::path::Path) -> bool {
+    std::fs::read(manifest_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<BrowserManifest>(&bytes).ok())
+        .is_some_and(|manifest| !manifest.actions.is_empty())
 }
 
 fn wait_for_manifest_action(child: &mut Child, manifest_path: &std::path::Path) {
