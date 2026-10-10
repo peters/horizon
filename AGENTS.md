@@ -470,6 +470,202 @@ When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `Micro
 - **Hyper-V Video + WARP** are the only GPU adapters on standard Azure VMs. GUI launch tests must run in an interactive user session (scheduled task with `Interactive` logon or RDP)
 - **When SCP-ing manifest directories**, copy individual files — `scp -r` can create nested subdirectories that winget rejects with "Subdirectory not supported in manifest path"
 
+### Resource use and unexpected process stops (Linux)
+
+Use this procedure when Horizon uses too much memory or CPU, or stops unexpectedly.
+The cgroup commands require Linux cgroup v2. The profiler and debugger commands require the corresponding tools and privileged access.
+The process-tree command requires `pstree`. The build-scope example requires access to the systemd user manager.
+
+A large process group does not prove a memory leak in Horizon.
+Separate the main process, child processes, file cache, and temporary files before you select a fix.
+
+> **CAUTION:** KEEP THE DAILY SESSION ACTIVE. Do not stop, restart, signal, or move a live process without explicit permission.
+> A debugger can temporarily stop the process. Attach it only with explicit permission for the live session.
+
+1. Identify the exact Horizon process.
+
+   ```bash
+   pgrep -a -x horizon
+   ps -C horizon -o pid,ppid,rss,vsz,stat,etimes,args
+   ```
+
+   Result: You can distinguish the daily session from candidates that use `--ephemeral`.
+   Do not select a process by its application name alone.
+   Replace `12345` below with the selected PID.
+
+   ```bash
+   horizon_pid=12345
+   ps -p "$horizon_pid" -o pid,ppid,lstart,etimes,args
+   readlink -e "/proc/$horizon_pid/exe"
+   cat "/proc/$horizon_pid/stat"
+   cat "/proc/$horizon_pid/cgroup"
+   ```
+
+   Result: The executable, process start time, and cgroup identify the selected process.
+   Check this identity before each profiler or debugger attachment. A PID can refer to a different process later.
+
+2. Examine memory use in the main process and its children.
+
+   ```bash
+   cat "/proc/$horizon_pid/smaps_rollup"
+   pstree -p "$horizon_pid"
+   ps -eo pid,ppid,comm,rss,vsz,stat --sort=-rss | head -25
+   ```
+
+   Result: RSS shows resident memory. PSS divides shared memory between the processes that use it.
+   Do not add RSS values and report the total as unique physical memory.
+   Include descendants and processes in the same cgroup. Children can move to separate cgroups.
+
+   Compare samples over time under the same workload.
+   Always sample the main process, even if children have larger RSS values.
+
+3. Examine memory charges in the cgroup.
+
+   ```bash
+   horizon_cgroup="$(awk -F: '$1 == "0" {print $3}' "/proc/$horizon_pid/cgroup")"
+   if [ -n "$horizon_cgroup" ] && [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+     horizon_cgroup_root="/sys/fs/cgroup$horizon_cgroup"
+     cat "$horizon_cgroup_root/memory.current"
+     cat "$horizon_cgroup_root/memory.stat"
+     cat "$horizon_cgroup_root/memory.events"
+     cat "$horizon_cgroup_root/memory.pressure"
+     cat "$horizon_cgroup_root/memory.high" "$horizon_cgroup_root/memory.max"
+   else
+     printf >&2 'No cgroup v2 path for the selected process. Stop this step.\n'
+   fi
+   ```
+
+   Result: `anon` shows anonymous memory. `file` includes file cache and `shmem`; do not add `file` and `shmem`.
+
+   Increasing `high` events show memory reclaim at the cgroup limit.
+   File cache from disk builds also counts toward `memory.high` and `memory.max`.
+   A large cgroup charge can coexist with a small Horizon PSS. Do not identify the owner from the total alone.
+
+   `systemd-oomd` can stop a group without an increase in the kernel `oom_kill` counter.
+   Examine parent cgroups if the selected cgroup has no pressure.
+
+4. Examine temporary storage and system pressure.
+
+   ```bash
+   findmnt -T /tmp
+   findmnt -T /var/tmp
+   df -h /tmp /var/tmp
+   free -h
+   cat /proc/pressure/memory /proc/pressure/io
+   ```
+
+   Result: `tmpfs` files use RAM or swap. Files can remain after the process that wrote them stops.
+   If `/tmp` is large, examine directory sizes during a period with low disk activity.
+   Keep large Cargo targets and build caches on disk. Check disk capacity before you move data.
+
+   Select a `tmpfs` limit from host capacity and the workload. A 30 GiB limit is an example, not a default.
+   A small limit does not prevent pressure from child allocations or file cache on disk.
+   Linux cannot reduce a `tmpfs` limit below its current use. Preserve active worktrees and build files.
+
+5. Examine the cause of the stop.
+
+   ```bash
+   journalctl -u systemd-oomd --since '1 hour ago' --no-pager
+   journalctl -k --since '1 hour ago' --no-pager \
+     -g 'oom|Out of memory|Killed process|segfault|horizon|NVRM|writeback completion'
+   ```
+
+   Result: The logs can distinguish memory pressure, a process fault, GPU errors, and disk stalls.
+   A `systemd-oomd` stop affects a cgroup. Horizon can stop because a child caused pressure in the same group.
+   A stop of the desktop session can also remove the Horizon display.
+   `SIGKILL` does not produce a core dump.
+
+   Disk stalls can delay file synchronization and cause short test deadlines to expire.
+   Preserve the failed run. Compare the same test binary with small, isolated temporary test files.
+   Check the parent directories for unrelated `.git` entries.
+   Keep large build outputs on disk. Do not remove deadline checks to obtain a passing result.
+
+6. Examine the local monitor, if this workstation has it.
+
+   ```bash
+   systemctl status horizon-watch.service --no-pager
+   systemctl show horizon-watch.service -p MainPID -p ControlGroup -p MemoryCurrent
+   tail -n 5 /var/lib/horizon-diagnostics/samples.jsonl
+   ```
+
+   Result: The local service records process trees, memory charges, and pressure every five seconds.
+   It follows the daily launcher executable and excludes ephemeral candidates.
+   Detailed process samples, GPU use, and system events use separate intervals.
+   Abnormal pressure or Horizon memory growth can start a ten-second CPU profile.
+   Signal traces select the main PID and record the sender, target, and process exit.
+   Logs remain on disk after Horizon stops.
+
+   Read the installed script at `/usr/local/lib/horizon-diagnostics/watch.py` before you change the local service.
+   The service runs outside the Horizon cgroup and starts at boot. Its own memory and output have limits.
+   A signal sender identifies the immediate process. Correlate it with system logs before you name the cause.
+
+   This service and its script are local diagnostic tools. Horizon does not install them. The repository does not contain them.
+
+   If the service is absent, collect equivalent samples with a task-owned monitor outside the affected cgroup.
+   Do not claim that a monitor works until its PID, current samples, and output growth are visible.
+   Check signal capture with a disposable process. Do not signal the daily session as a test.
+
+7. If CPU use or main-process memory growth needs more evidence, record a short profile.
+
+   ```bash
+   horizon_evidence="$(mktemp -d /var/tmp/horizon-resource-evidence.XXXXXX)"
+   chmod 700 "$horizon_evidence"
+   sudo perf record --no-inherit -e cpu-clock -F 49 -g --call-graph dwarf,4096 \
+     -p "$horizon_pid" -o "$horizon_evidence/perf.data" -- sleep 10
+   sudo perf report -i "$horizon_evidence/perf.data" --stdio --no-children -g none
+   ```
+
+   Result: The profile samples the selected process without a debugger stop.
+   Do not change global `perf` or `ptrace` restrictions to collect it.
+   A stripped executable can lack function names. A CPU profile does not identify retained heap allocations.
+   The existing `scripts/profile.sh` starts a separate candidate; it does not attach to the daily session.
+
+   If allocation evidence is necessary, reproduce the workload with symbols and an allocation profiler in an isolated candidate.
+   Preserve the exact features, workload, executable identity, and private evidence.
+   If thread stacks are necessary, use this command only with the explicit permission from the caution above.
+
+   ```bash
+   sudo gdb -q -nx -nh --batch -iex 'set auto-load off' -p "$horizon_pid" \
+     -ex 'set pagination off' -ex 'thread apply all bt 12' -ex detach -ex quit \
+     > "$horizon_evidence/threads.txt" 2>&1
+   ```
+
+   Result: The debugger saves bounded thread stacks and detaches from the selected process.
+   Examine the detach result and process state immediately. The application can pause during this command.
+   Report debugger delays or failed profiler access. Do not claim unavailable evidence.
+
+8. Select the fix from the measured cause.
+
+   - If child builds cause pressure, limit build concurrency and isolate build cgroups from the daily session.
+   - If `tmpfs` files cause pressure, move large build caches to disk after you check capacity and active users.
+   - If Horizon PSS grows under a stable workload, examine retained allocations in an isolated candidate.
+   - If CPU use grows, compare idle, pointer input, resize, and terminal output as separate workloads.
+   - If disk stalls or GPU errors occur, preserve the system evidence before you change drivers or stop services.
+
+   For a new authorized build, use an isolated cgroup. Adjust these example limits to the host and task.
+   Make sure that `/var/tmp` is on disk and has enough free space before you start.
+
+   ```bash
+   horizon_build_cache="$(mktemp -d /var/tmp/horizon-build.XXXXXX)"
+   mkdir "$horizon_build_cache/tmp"
+   systemd-run --user --scope --collect \
+     -p MemoryHigh=8G -p MemoryMax=12G -p MemorySwapMax=2G -p CPUWeight=10 \
+     env CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR="$horizon_build_cache/target" \
+       TMPDIR="$horizon_build_cache/tmp" cargo test --workspace
+   ```
+
+   Result: The new build has its own cgroup and two Cargo jobs.
+   The limits also apply to file cache that this cgroup owns. They do not reserve RAM.
+   Keep the cache until the task finishes. Do not move existing live processes to this scope.
+
+   Result: The proposed fix addresses the process or resource that caused the failure.
+   Do not disable `systemd-oomd` or remove memory limits as a substitute for the diagnosis.
+   Follow the normal worktree, validation, review, and merge rules for a repository fix.
+   Keep raw logs, profiles, cores, credentials, terminal content, and private host details out of the repository and PR.
+
+   References: [Linux cgroup v2](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html),
+   [temporary directories](https://systemd.io/TEMPORARY_DIRECTORIES/).
+
 ### Performance Profiling
 
 - Prefer repeatable workloads over ad-hoc observation: profile idle, panning, mouse-move, resize, and scroll as separate cases instead of treating "high CPU" as one bucket

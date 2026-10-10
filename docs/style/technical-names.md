@@ -29,6 +29,20 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | contract marker | A line, for example `horizon-tailnet-contract=1`, that a worker image reports to show a function. | — |
 | nonce | A random value that a run makes one time. A reply that contains it is current. | token |
 
+## Resource diagnostics
+
+| Name | Meaning |
+|---|---|
+| RSS | Resident Set Size. The resident pages of a process, including shared pages. |
+| PSS | Proportional Set Size. Shared pages divided between the processes that use them. |
+| cgroup | A Linux process group with shared resource accounting and optional limits. |
+| tmpfs | A filesystem that stores its files in RAM or swap. |
+| perf | The Linux tool that records performance samples and kernel events. |
+| gdb | The debugger that can attach to a process and temporarily stop it. |
+| ptrace | The Linux interface that a debugger can use to inspect a process. |
+| systemd-oomd | The service that stops eligible cgroups after sustained memory pressure. |
+| allocation profiler | A tool that records heap allocations and their release. |
+
 ## Horizon objects
 
 | Name | Meaning | Do not use |
