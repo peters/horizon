@@ -35,6 +35,7 @@ mod navigation_input;
 mod panel_chrome;
 mod panels;
 mod persistence;
+mod press_frame;
 mod remote_hosts;
 mod root_chrome;
 mod root_viewport;
@@ -315,6 +316,7 @@ pub struct HorizonApp {
     remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,
     session_manager: Option<RuntimeSessionManagerState>,
     canvas_gesture: canvas_gesture::CanvasGesture,
+    press_frame: press_frame::PressFrame,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
     command_palette: Option<CommandPalette>,
@@ -490,6 +492,9 @@ impl eframe::App for HorizonApp {
                 )
             });
             self.handle_native_image_pastes();
+        }
+        if raw_input.viewport_id == egui::ViewportId::ROOT && self.press_frame.split(&mut raw_input.events) {
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
         }
         self.filter_canvas_gesture(ctx, raw_input);
         let viewport_id = raw_input.viewport_id;

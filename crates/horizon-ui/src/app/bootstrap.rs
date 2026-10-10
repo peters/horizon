@@ -173,6 +173,7 @@ impl HorizonApp {
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,
             canvas_gesture: super::canvas_gesture::CanvasGesture::default(), pending_preset_pick: None,
+            press_frame: super::press_frame::PressFrame::default(),
             dir_picker: None,
             command_palette: None,
             search_overlay: None,
