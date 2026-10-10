@@ -120,3 +120,27 @@ from local cleanup. Report unresolved closure and held capacity explicitly.
 Horizon selects Appium 2.19.0 for iOS 15 or later. This version uses XCUITest 9.9.6.
 Older iOS versions keep the provider default and cannot qualify the deep-link test.
 See the [provider version table](https://www.browserstack.com/docs/app-automate/appium/set-up-tests/set-appium-version).
+
+## Linux reboot recovery
+
+Use the original client, owner and private state after a host reboot.
+New guardian receipts contain a kernel boot ID. Exact reconciliation can release
+a local resource when this ID differs from the current Linux boot ID.
+It records the proof and preserves the original receipt. It does not signal PIDs.
+Missing boot IDs remain uncertain. macOS has no automatic reboot proof.
+
+Use `horizon --native-reconcile-status --client <private-client.json>` to inspect
+the current boot ID and the original owner's pending operations. The existing
+journal and original owner binding must be present. The command does not create
+files or directories or clean up resources. For legacy receipts, use the runbook's operator
+procedure only after independent proof of a real host reboot.
+The maintenance command is `horizon --native-reconcile --client <private-client.json>
+--confirm-host-reboot <current-boot-uuid> --local-operations <run-uuid,tunnel-uuid>`.
+Supply exactly all pending owned `run` and `tunnel` IDs, including records with no
+dispatched resource. Missing or extra IDs cause refusal before cleanup starts.
+The existing journal and original owner binding must be present. The command does
+not initialize a journal or create an owner. Each legacy guardian and child PID
+must be absent. Later receipt or provider checks can still refuse cleanup.
+A current boot receipt stays uncertain. A private record retains the confirmation.
+App contracts and MCP tool arguments cannot supply this operator confirmation.
+A process crash or PID absence alone does not prove a reboot.

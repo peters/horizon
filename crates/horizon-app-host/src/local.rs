@@ -18,6 +18,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+pub mod recovery;
+
 /// Trusted bundled executable and pinned tunnel configuration, never MCP/project arguments.
 pub struct Configuration {
     pub process_worker: PathBuf,
@@ -28,15 +30,30 @@ pub struct Configuration {
 }
 
 #[derive(Deserialize)]
-struct Receipt {
+pub(super) struct Receipt {
     operation: Uuid,
     guardian_pid: u32,
+    #[serde(default)]
+    child_pid: Option<u32>,
+    #[serde(default)]
+    boot_id: Option<Uuid>,
     complete: bool,
 }
 pub(crate) fn confirm_receipt(workspace: &Workspace, id: Uuid, state: &Path) -> Result<()> {
+    confirm_receipt_with_reboot(workspace, id, state, None)
+}
+
+pub(crate) fn confirm_receipt_with_reboot(
+    workspace: &Workspace,
+    id: Uuid,
+    state: &Path,
+    confirmation: Option<&recovery::RebootConfirmation>,
+) -> Result<()> {
     workspace.journal().recover_owned(workspace.owner(), id, |recovery| {
-        let receipt: Receipt = horizon_app_process::storage::Directory::open(state)
-            .and_then(|directory| directory.receipt())
+        let directory = horizon_app_process::storage::Directory::open(state)
+            .map_err(|_| horizon_app_runtime::Error::ReconciliationRequired)?;
+        let receipt: Receipt = directory
+            .receipt()
             .map_err(|_| horizon_app_runtime::Error::ReconciliationRequired)?;
         let identity = match recovery {
             Recovery::LocalIntent => !receipt.operation.is_nil() && receipt.guardian_pid != 0,
@@ -46,8 +63,11 @@ pub(crate) fn confirm_receipt(workspace: &Workspace, id: Uuid, state: &Path) -> 
             } => receipt.operation == operation && receipt.guardian_pid == guardian_pid,
             _ => false,
         };
-        if !identity || !receipt.complete {
+        if !identity {
             return Err(horizon_app_runtime::Error::ReconciliationRequired);
+        }
+        if !receipt.complete {
+            recovery::confirm_reboot(&directory, id, &receipt, confirmation)?;
         }
         Ok(Resolution::ConfirmedClosed)
     })?;
