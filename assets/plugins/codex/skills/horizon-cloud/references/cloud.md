@@ -111,9 +111,11 @@ for the operation that failed.
 ## Cloud list in the sidebar
 
 The sidebar groups the person's workspaces in **Needs you**, **Cloud**, **Parked**
-and **This PC**. **Needs you** holds a cloud whose operation failed, whose parked
-session ended, or whose agent waits for GitHub access. **Cloud** holds an attached
-cloud and a cloud that Horizon deploys or reconnects now. **Parked** holds a cloud
+and **This PC**. **Needs you** holds a cloud that failed or waits for a decision,
+whose parked session ended or is not found, or whose agent waits for GitHub
+access. **Cloud** holds a cloud that is attached, disconnected, not deployed yet,
+or busy with an operation. A disconnected cloud shows **Disconnected**: its
+sessions continue on the worker. **Parked** holds a cloud
 with parked terminals or a stopped worker. **This PC** holds workspaces without a
 cloud. Each row shows a status dot and one status line, for example the last line
 of a parked agent. A **Parked** row is compact: its status line is the hover and
