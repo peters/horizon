@@ -351,7 +351,6 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
                     if ui.add(action_button("Copy error")).clicked() {
                         ui.ctx().copy_text(copy.clone());
                     }
-                    super::docker::button(ui, failure);
                 });
                 let retry = super::next::Next::of(status).filter(|next| matches!(next, super::next::Next::Retry(_)));
                 if super::docker::status(ui, failure, retry.map(super::next::Next::label)) {

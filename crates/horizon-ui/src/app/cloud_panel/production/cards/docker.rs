@@ -160,29 +160,8 @@ pub(super) fn offered(failure: &Failure) -> bool {
     failure.meaning.is_some_and(diagnosis::restarts_docker)
 }
 
-/// The offer in a failure's row of actions, until a restart is under way.
-pub(super) fn button(ui: &mut egui::Ui, failure: &Failure) {
-    if !offered(failure) {
-        return;
-    }
-    let shared = Shared::of(ui.ctx());
-    if !matches!(shared.current(ui.ctx()), Step::Idle) {
-        return;
-    }
-    if ui
-        .add(action_button("Restart Docker…"))
-        .on_hover_text("Find out how Docker runs on this computer and ask before restarting it")
-        .clicked()
-    {
-        shared.spawn(ui.ctx(), Step::Checking, |shared, ctx, generation| {
-            let (target, plan) = (shared.with(|state| state.inspect))();
-            shared.report(ctx, generation, |step| *step = Step::Confirm { target, plan });
-        });
-    }
-}
-
-/// The check, question, progress or result of a restart, under a failure's actions.
-/// `retry` labels the cloud's own retry; true when the person chose it.
+/// The offer, check, question, progress or result of a restart, under a failure's
+/// actions. `retry` labels the cloud's own retry; true when the person chose it.
 pub(super) fn status(ui: &mut egui::Ui, failure: &Failure, retry: Option<&str>) -> bool {
     if !offered(failure) {
         return false;
@@ -190,7 +169,7 @@ pub(super) fn status(ui: &mut egui::Ui, failure: &Failure, retry: Option<&str>) 
     let shared = Shared::of(ui.ctx());
     let mut retried = false;
     match shared.current(ui.ctx()) {
-        Step::Idle => return false,
+        Step::Idle => offer(ui, &shared),
         Step::Checking => busy(ui, &shared, "Checking how Docker runs on this computer…"),
         Step::Confirm {
             target,
@@ -250,6 +229,22 @@ pub(super) fn status(ui: &mut egui::Ui, failure: &Failure, retry: Option<&str>) 
         }
     }
     retried
+}
+
+/// Restart Docker… on a row of its own, so a narrow card never wraps its label.
+fn offer(ui: &mut egui::Ui, shared: &Shared) {
+    ui.add_space(4.0);
+    let button = action_button("Restart Docker…").wrap_mode(egui::TextWrapMode::Extend);
+    if ui
+        .add(button)
+        .on_hover_text("Find out how Docker runs on this computer and ask before restarting it")
+        .clicked()
+    {
+        shared.spawn(ui.ctx(), Step::Checking, |shared, ctx, generation| {
+            let (target, plan) = (shared.with(|state| state.inspect))();
+            shared.report(ctx, generation, |step| *step = Step::Confirm { target, plan });
+        });
+    }
 }
 
 fn start(ctx: &egui::Context, shared: &Shared, target: Target, plan: Plan) {
@@ -372,7 +367,6 @@ mod tests {
         };
         let output = ctx
             .run_ui(input, |ui| {
-                ui.horizontal(|ui| button(ui, failure));
                 retried = status(ui, failure, Some("Retry deploy"));
             })
             .discard_textures();

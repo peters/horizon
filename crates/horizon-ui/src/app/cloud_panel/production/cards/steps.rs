@@ -224,7 +224,6 @@ fn opened(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) -> Option<StepA
             if ui.add(button("Copy error")).clicked() {
                 action = Some(StepAction::CopyError);
             }
-            super::docker::button(ui, failure);
         });
         let retry = super::next::Next::of(status).filter(|next| matches!(next, super::next::Next::Retry(_)));
         if super::docker::status(ui, failure, retry.map(super::next::Next::label)) {
