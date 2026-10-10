@@ -10,6 +10,7 @@ members = [
     "crates/horizon-cast",
     "crates/horizon-chromecast",
     "crates/horizon-media",
+    "crates/horizon-net",
     "crates/horizon-cloud-worker",
     "crates/horizon-cloud-protocol",
     "crates/horizon-cloud",
@@ -50,6 +51,9 @@ struct_excessive_bools = "allow"
 assert_is_empty = "allow"
 
 [workspace.dependencies]
+# Stable QUIC/TLS endpoint transport; explicit relays avoid public infrastructure.
+iroh = { version = "1.3.0", default-features = false, features = ["tls-ring"] }
+horizon-net = { path = "crates/horizon-net", version = "0.2.7" }
 horizon-app-testing = { path = "crates/horizon-app-testing", version = "0.2.7" }
 horizon-app-provider = { path = "crates/horizon-app-provider", version = "0.2.7" }
 horizon-app-runtime = { path = "crates/horizon-app-runtime", version = "0.2.7" }
