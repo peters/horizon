@@ -46,9 +46,15 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
    cargo test -p horizon-core cloud_runtime::docker_host
    ```
 
-   Result: All focused tests pass. Missing credentials produce a blocker with a remedy. A malformed or prerelease engine version cannot pass admission. Zero CPU, memory or free storage blocks admission with or without a selected profile.
+   Result: All focused tests pass. Missing credentials produce a blocker with a remedy. A malformed or prerelease engine version cannot pass admission. Zero CPU, memory or free storage blocks admission with or without a selected profile. Unknown architectures block admission even when emulation is selected. ARM64 needs explicit emulation and deployment validation.
 
-### 5.2 DHP-TRUST — Connection identity and compatibility
+### 5.2 DHP-FEATURE — Optional cloud support
+
+1. Run `cargo test -p horizon-core --no-default-features --test docker_host_probe_live`.
+
+   Result: The integration test compiles and has no tests when cloud support is disabled.
+
+### 5.3 DHP-TRUST — Connection identity and compatibility
 
 1. Examine the focused test results for binding and SSH trust cases.
 
@@ -58,7 +64,7 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
 
    Result: Unknown hosts, ambiguous names, expired keys and absent host keys block the probe before SSH. A signed-out client receives a sign-in remedy when its peer map is null or absent.
 
-### 5.3 DHP-STORAGE — Admission and cancellation
+### 5.4 DHP-STORAGE — Admission and cancellation
 
 1. Examine the storage and cancellation test results.
 
@@ -72,13 +78,13 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
 
    Result: A different host operating system or kernel blocks storage admission. A missing kernel is unknown. Invalid storage paths fail before execution. A filesystem query accepts spaces and percent signs in its path. Invalid or overflowing capacity output is unknown.
 
-### 5.4 DHP-IMAGE — Built worker image
+### 5.5 DHP-IMAGE — Built worker image
 
 1. Examine the built-image regression test result.
 
    Result: The unchanged pinned image passes its contract check. A build recipe retains the warning for deployment validation.
 
-### 5.5 DHP-LIVE — Optional authorized Tailscale probe
+### 5.6 DHP-LIVE — Optional authorized Tailscale probe
 
 1. If live access is authorized, create a private JSON binding outside the repository.
 

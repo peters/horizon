@@ -274,6 +274,14 @@ fn storage_fits(free: u64, profile: Option<&Profile>) -> bool {
         })
 }
 
+fn architecture_state(architecture: &str, allow_emulation: bool) -> CheckState {
+    match architecture {
+        "amd64" | "x86_64" => CheckState::Ready,
+        "arm64" | "aarch64" if allow_emulation => CheckState::Warning,
+        _ => CheckState::Blocked,
+    }
+}
+
 fn engine_checks(
     result: &mut Probe,
     info: &Info,
@@ -321,24 +329,19 @@ fn engine_checks(
     if filesystem != CheckState::Ready {
         return Ok(());
     }
-    let native = matches!(info.architecture.as_str(), "amd64" | "x86_64");
+    let architecture = architecture_state(&info.architecture, transport.0.allow_emulation);
     result.check(
         "Worker architecture",
-        if native {
-            CheckState::Ready
-        } else if transport.0.allow_emulation {
-            CheckState::Warning
-        } else {
-            CheckState::Blocked
+        architecture,
+        match architecture {
+            CheckState::Ready => "x86 worker image runs natively",
+            CheckState::Warning => {
+                "x86 emulation was requested on ARM64; configure it and validate the worker image before deployment"
+            }
+            _ => "Worker architecture is not supported by the selected policy",
         },
-        if native {
-            "x86 worker image runs natively"
-        } else if transport.0.allow_emulation {
-            "x86 emulation was explicitly enabled; performance is reduced"
-        } else {
-            "This engine needs emulation for Horizon's x86 worker image"
-        },
-        (!native && !transport.0.allow_emulation).then_some("Use an x86 host or explicitly enable x86 emulation."),
+        (architecture == CheckState::Blocked)
+            .then_some("Use an x86 host, or explicitly enable x86 emulation on an ARM64 host."),
     );
     let fits = capacity_fits(info, profile);
     result.check(
@@ -428,6 +431,22 @@ mod tests {
             "27.9.9",
         ] {
             assert!(!private_ports_supported(version), "{version}");
+        }
+    }
+
+    #[test]
+    fn emulation_requires_a_known_arm64_architecture() {
+        for architecture in ["amd64", "x86_64"] {
+            assert_eq!(architecture_state(architecture, false), CheckState::Ready);
+            assert_eq!(architecture_state(architecture, true), CheckState::Ready);
+        }
+        for architecture in ["arm64", "aarch64"] {
+            assert_eq!(architecture_state(architecture, false), CheckState::Blocked);
+            assert_eq!(architecture_state(architecture, true), CheckState::Warning);
+        }
+        for architecture in ["", "unexpected", "armv7l", "ppc64le"] {
+            assert_eq!(architecture_state(architecture, false), CheckState::Blocked);
+            assert_eq!(architecture_state(architecture, true), CheckState::Blocked);
         }
     }
 

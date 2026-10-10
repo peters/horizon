@@ -1,5 +1,5 @@
 //! Explicit opt-in read-only probe of an authorized Tailscale SSH host.
-#![cfg(unix)]
+#![cfg(all(unix, feature = "cloud-workspaces"))]
 use horizon_core::cloud_runtime::{Cancellation, docker_host};
 #[test]
 #[ignore = "requires an explicitly authorized read-only Tailscale SSH host"]
