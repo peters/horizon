@@ -182,13 +182,16 @@ class WorkflowTests(unittest.TestCase):
         }
         self.assertEqual(workflow.count(prefix), len(expected))
         self.assertNotIn("apt-get", workflow)
+        # localci runs the workflow on a developer computer; the installer must not run there.
+        guarded = re.findall(r"- if: \$\{\{ !env\.LOCALCI[^\n]*\n\s+run: " + re.escape(prefix), workflow)
+        self.assertEqual(len(guarded), len(expected))
         for name, packages in expected.items():
             with self.subTest(job=name):
                 commands = re.findall(r"run: " + re.escape(prefix) + r"([^\n]+)", jobs[name])
                 self.assertEqual([shlex.split(command) for command in commands], [packages])
                 if name == "rust-test":
                     self.assertIn(
-                        "- if: matrix.os == 'ubuntu-latest' && matrix.shard == 'speech'\n"
+                        "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' }}\n"
                         "        run: " + prefix,
                         jobs[name],
                     )
