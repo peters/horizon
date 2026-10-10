@@ -267,6 +267,20 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - For implementation work, create a focused branch in a separate worktree from fresh `origin/main` unless the user explicitly asks to use the current checkout. Keep unrelated files in the primary checkout untouched.
 - Run the full Horizon validation matrix in the exact worktree and commit that will be pushed. Complete applicable local UI smoke, including the PR GIF for UI changes described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before opening the PR. Any required cross-machine smoke must finish on the current head before reporting the PR ready to merge.
 - Always review the full diff yourself before you open a PR. Then do the local review loop in the localci skill: run the GitHub Copilot CLI review, fix the findings, run `localci`, and review again. Do not start a separate review agent. The local Copilot review and the Copilot review on the PR are the independent reviews. If `copilot` is not installed, your own review is the local review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
+- Before you open a PR, write its title and body, then run the readiness check:
+
+  ```bash
+  python3 scripts/check-pr-readiness.py --title "<title>" --body <body-file>
+  ```
+
+  The check finds the PR rules that Copilot reports as findings:
+  - the scope limits;
+  - the test procedure and the GIF of a UI change;
+  - the test procedure of a feature;
+  - the two bundled skill copies;
+  - the place of new test plans.
+
+  Fix each error. If `peters` approved a larger PR, add `--scope-approved`. If the UI files change no visible behavior, say so in the PR body and add `--no-visible-change`.
 - Open PRs ready for review by default, not as drafts, unless the user explicitly requests a draft. Include reproduction details for bug fixes, runtime or platform assumptions when relevant, and screenshots, logs, or completed smoke evidence for behavior-affecting changes.
 - Every PR gets an independent Copilot review. Request it after the PR exists through the REST API, using the login `copilot-pull-request-reviewer[bot]`. The POST returns 200 whether or not it registered, so the only proof is that the PR gained a `review_requested` event — count them either side of the request:
 
