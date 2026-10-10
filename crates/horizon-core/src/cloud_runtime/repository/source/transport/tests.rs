@@ -197,12 +197,14 @@ fn the_history_comes_in_pieces_and_each_finished_piece_is_kept() {
     let target = temp.path().join("deep");
     let (cancel, progress) = (Cancellation::default(), Progress::default());
     let commits = |folder: &Path| count(folder, &["rev-list", "--count", "refs/remotes/origin/main"]);
-    assert!(in_steps(&remote, &target, None, &cancel, &progress, 1).is_err());
+    // Each try is dropped after its last piece. Any other failure is named in the message.
+    let dropped = Err(interrupted(Failure::Network));
+    assert_eq!(in_steps(&remote, &target, None, &cancel, &progress, 1), dropped);
     assert_eq!((commits(&target), marker_done(&target)), ("1".to_owned(), 1));
-    assert!(in_steps(&remote, &target, None, &cancel, &progress, 2).is_err());
+    assert_eq!(in_steps(&remote, &target, None, &cancel, &progress, 2), dropped);
     assert_eq!((commits(&target), marker_done(&target)), ("100".to_owned(), 2));
     // A drop during the third piece keeps the two before it, and the try after starts at the third.
-    assert!(in_steps(&remote, &target, None, &cancel, &progress, 3).is_err());
+    assert_eq!(in_steps(&remote, &target, None, &cancel, &progress, 3), dropped);
     assert_eq!((commits(&target), marker_done(&target)), ("130".to_owned(), 3));
     clone(&remote, &target, None, &cancel, &progress).unwrap();
     assert!(super::super::is_checkout(&target) && !target.join(".git").join(MARKER).exists());
