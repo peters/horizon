@@ -68,6 +68,9 @@ pub struct Facts {
     pub pkexec: Option<PathBuf>,
     /// `docker desktop version` answered: Docker Desktop 4.37 or later with its CLI.
     pub desktop_cli: bool,
+    /// The Docker command that answered `docker desktop version`, which the Docker
+    /// Desktop restart runs as well; plain `docker` when empty.
+    pub docker: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -197,7 +200,14 @@ fn windows(facts: &Facts, pipe: &str) -> Plan {
 fn desktop(facts: &Facts, instructions: &str) -> Plan {
     let shown = DESKTOP_CLI.join(" ");
     if facts.desktop_cli {
-        restart(&DESKTOP_CLI, &shown, Some(&shown))
+        let docker: Vec<&str> = facts.docker.iter().map(String::as_str).collect();
+        let docker = if docker.is_empty() {
+            &DESKTOP_CLI[..1]
+        } else {
+            &docker[..]
+        };
+        let argv = [docker, &DESKTOP_CLI[1..]].concat();
+        restart(&argv, &shown, Some(&shown))
     } else {
         manual(instructions, None)
     }
@@ -340,5 +350,16 @@ mod tests {
         assert_eq!(runs(&facts), Err(MAC_OTHER.into()));
         facts.context = Some(DESKTOP_CONTEXT.into());
         assert_eq!(runs(&facts), Ok(DESKTOP_CLI.join(" ")));
+        // The restart reaches Docker Desktop with the configuration the probe used.
+        facts.docker = ["/usr/local/bin/docker", "--config", "/state/docker"]
+            .map(String::from)
+            .into();
+        let config = "/usr/local/bin/docker --config /state/docker desktop restart";
+        assert_eq!(runs(&facts).as_deref(), Ok(config));
+        assert_eq!(
+            plan(&facts).command(),
+            Some("docker desktop restart"),
+            "a person types plain docker"
+        );
     }
 }

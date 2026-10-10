@@ -104,6 +104,15 @@ impl Target {
         command
     }
 
+    /// The program and its global options, for a command that must reach this Docker too.
+    fn prefix(&self) -> Vec<String> {
+        let command = self.docker();
+        std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .map(|part| part.to_string_lossy().into_owned())
+            .collect()
+    }
+
     /// Asks the daemon for its version, waiting at most `timeout` or until `stop`.
     #[must_use]
     pub fn probe(&self, timeout: Duration, stop: &dyn Fn() -> bool) -> Health {
@@ -132,7 +141,8 @@ impl Target {
     #[must_use]
     pub fn facts(&self) -> Facts {
         let os = Os::current();
-        let (context, endpoint) = self.endpoint();
+        let inherited = std::env::var("DOCKER_HOST").ok().filter(|host| !host.is_empty());
+        let (context, endpoint) = self.endpoint(inherited);
         let endpoint = endpoint.map(|endpoint| match endpoint {
             Endpoint::Socket(path) => Endpoint::Socket(path.canonicalize().unwrap_or(path)),
             other => other,
@@ -144,6 +154,7 @@ impl Target {
         let desktop_relevant = os != Os::Linux
             || context.as_deref() == Some("desktop-linux")
             || matches!((&endpoint, &home), (Some(Endpoint::Socket(path)), Some(home)) if path.starts_with(home.join(".docker")));
+        let desktop = desktop_relevant.then(|| self.desktop_cli()).flatten();
         Facts {
             os,
             context,
@@ -152,16 +163,17 @@ impl Target {
             user_unit: systemd && unit_active(true),
             system_unit: systemd && unit_active(false),
             pkexec: on_path("pkexec").filter(|_| os == Os::Linux),
-            desktop_cli: desktop_relevant && self.desktop_cli(),
+            desktop_cli: desktop.is_some(),
+            docker: desktop.unwrap_or_default(),
             endpoint,
         }
     }
 
-    /// The context name and daemon address the CLI uses. An explicit host wins, as it
-    /// does for the CLI; `DOCKER_HOST` shows as the default context's address.
-    fn endpoint(&self) -> (Option<String>, Option<Endpoint>) {
-        if let Some(host) = &self.host {
-            return (None, Some(Endpoint::parse(host)));
+    /// The context name and daemon address the CLI uses. As for the CLI, an explicit
+    /// host wins, then the `inherited` `DOCKER_HOST`, then the context.
+    fn endpoint(&self, inherited: Option<String>) -> (Option<String>, Option<Endpoint>) {
+        if let Some(host) = self.host.clone().or(inherited) {
+            return (None, Some(Endpoint::parse(&host)));
         }
         let mut command = self.docker();
         command.args(["context", "inspect", "--format", CONTEXT_FORMAT]);
@@ -176,13 +188,25 @@ impl Target {
         }
     }
 
-    fn desktop_cli(&self) -> bool {
-        let mut command = Command::new(&self.program);
-        command.args(["desktop", "version"]);
-        matches!(
-            bounded(command, LOOKUP_TIMEOUT, &|| false),
-            Ran::Exited { success: true, .. }
-        )
+    /// The Docker command that answers `docker desktop version`, which then restarts
+    /// Docker Desktop too: with the cloud's options first, then without them, as the
+    /// default configuration may be the one that finds the plugin.
+    fn desktop_cli(&self) -> Option<Vec<String>> {
+        let plain = Self {
+            program: self.program.clone(),
+            ..Self::default()
+        };
+        std::iter::once(self)
+            .chain((*self != plain).then_some(&plain))
+            .find(|target| {
+                let mut command = target.docker();
+                command.args(["desktop", "version"]);
+                matches!(
+                    bounded(command, LOOKUP_TIMEOUT, &|| false),
+                    Ran::Exited { success: true, .. }
+                )
+            })
+            .map(Self::prefix)
     }
 
     /// Runs `argv`, then waits until Docker answers. `waiting` hears when the wait starts.
@@ -307,13 +331,27 @@ fn bounded(mut command: Command, timeout: Duration, stop: &dyn Fn() -> bool) -> 
     }
 }
 
-/// Kills the process group, as an `ssh` that `docker --host ssh://` starts is in it. A
-/// child that outlives the kill, such as the root `systemctl` that `pkexec` starts, is
-/// waited for on its own thread so that the caller never blocks on it.
+/// Kills the process group, or on Windows the process tree, as an `ssh` that
+/// `docker --host ssh://` starts or a CLI plugin is in it. A child that outlives the
+/// kill, such as the root `systemctl` that `pkexec` starts, is waited for on its own
+/// thread so that the caller never blocks on it.
 fn end(mut child: Child) {
     #[cfg(unix)]
     if let Some(id) = rustix::process::Pid::from_raw(child.id().cast_signed()) {
         let _ = rustix::process::kill_process_group(id, rustix::process::Signal::KILL);
+    }
+    // Before the kill: `taskkill /T` finds the descendants through their living parent.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &child.id().to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
     }
     let _ = child.kill();
     thread::spawn(move || child.wait());
@@ -412,8 +450,9 @@ mod tests {
             host: Some("ssh://build.example".into()),
             ..Target::default()
         };
+        let inherited = || Some("tcp://192.0.2.10:2376".to_owned());
         assert_eq!(
-            remote.endpoint(),
+            remote.endpoint(inherited()),
             (None, Some(Endpoint::Remote("ssh://build.example".into())))
         );
         let temp = tempfile::tempdir().unwrap();
@@ -422,7 +461,33 @@ mod tests {
             ..Target::default()
         };
         let socket = Endpoint::Socket("/run/user/1000/docker.sock".into());
-        assert_eq!(context.endpoint(), (Some("rootless".into()), Some(socket)));
+        assert_eq!(context.endpoint(None), (Some("rootless".into()), Some(socket)));
+        assert_eq!(
+            context.endpoint(inherited()),
+            (None, Some(Endpoint::Remote("tcp://192.0.2.10:2376".into()))),
+            "DOCKER_HOST overrides the context, as it does for the CLI"
+        );
+    }
+
+    #[test]
+    fn docker_desktop_is_found_and_restarted_with_the_cloud_docker_options() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = Target {
+            program: fake_docker(
+                temp.path(),
+                "[ \"$1 $2 $3 $4\" = '--config /state/docker desktop version' ]",
+            ),
+            config: Some("/state/docker".into()),
+            host: None,
+        };
+        let program = target.program.to_string_lossy().into_owned();
+        let configured = [program.as_str(), "--config", "/state/docker"].map(String::from);
+        assert_eq!(target.desktop_cli(), Some(configured.into()));
+        // The plugin found only through the default configuration restarts without the cloud's.
+        fake_docker(temp.path(), "[ \"$1 $2\" = 'desktop version' ]");
+        assert_eq!(target.desktop_cli(), Some(vec![program]));
+        fake_docker(temp.path(), "exit 1");
+        assert_eq!(target.desktop_cli(), None);
     }
 
     #[test]
