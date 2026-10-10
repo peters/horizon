@@ -143,6 +143,10 @@ fn park_parks_an_attached_cloud_only_while_it_is_out_of_view() {
     app.sync_cloud_parking();
     assert!(runtime(&mut app).parking.is_parked());
     assert_eq!(app.answer_cloud_list(&park, &ctx).unwrap()["park"], "parked");
+    // A parked cloud that comes into view attaches again, so a park is refused.
+    app.board.focus(member(&app, "one"));
+    let error = app.answer_cloud_list(&park, &ctx).unwrap_err();
+    assert!(error.starts_with("cloud_list_in_view"), "{error}");
 }
 
 #[test]

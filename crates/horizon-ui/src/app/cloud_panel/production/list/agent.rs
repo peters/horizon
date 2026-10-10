@@ -93,7 +93,13 @@ impl HorizonApp {
             CloudListOperation::Park => {
                 let runtime = self.cloud_prototype.production.runtimes.get(&issue);
                 let parking = runtime.map(|runtime| &runtime.parking);
+                // A parked cloud in view attaches in the next frames, so it is refused too.
                 if parking.is_some_and(super::super::park::Parking::is_parked) {
+                    if self.cloud_sight(index) != Sight::Hidden {
+                        return Err(
+                            "cloud_list_in_view: a cloud in view attaches again; it parks when out of view".into(),
+                        );
+                    }
                     return Ok(json!({ "cloud": wanted, "park": "parked" }));
                 }
                 // A cloud whose terminals still attach after Ready, or that is in another
