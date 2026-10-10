@@ -504,8 +504,14 @@ class OperationTests(ServiceTestCase):
                 self.flushed.append(len(self.writes))
         output = Output()
         relay.relay(output, Reply(), set())
-        self.assertEqual(output.writes[1:], [b'progress 1', b'progress 2'])
+        self.assertIn(b'Transfer-Encoding: chunked\r\n', output.writes[0])
+        self.assertEqual(output.writes[1:], [b'A\r\nprogress 1\r\n', b'A\r\nprogress 2\r\n', b'0\r\n\r\n'])
         self.assertTrue({2, 3} <= set(output.flushed), 'each piece is flushed when it arrives')
+        # An HTTP/1.0 client reads to the end of the connection instead.
+        output.writes, Reply.pieces = [], [b'progress 1']
+        relay.relay(output, Reply(), set(), chunked=False)
+        self.assertNotIn(b'Transfer-Encoding', output.writes[0])
+        self.assertEqual(output.writes[1:], [b'progress 1'])
 
     def test_the_service_routes_git_after_the_repositories_are_reconciled(self):
         steps = []
