@@ -58,7 +58,7 @@ whose session ends goes to **Needs you**.
 
 ## 5. Setup
 
-1. Do steps 1 to 6 of the setup of the
+1. Do steps 1 to 7 of the setup of the
    [park and attach procedure](cloud-park-attach.md#5-setup). Give the cloud a
    generic title, for example `Cloud one`.
 
