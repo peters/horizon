@@ -159,7 +159,7 @@ default) returns each cloud's `cloud` ID, name, group (`needs_you`, `cloud` or
   the person. For a parked cloud, the stop waits for a new status read and does
   not occur when an agent works. Get explicit authorization from the person first.
 
-From a Horizon panel, `horizon-browser cloud list|attach|park|stop [CLOUD-ID]`
+From a Horizon agent panel, `horizon-browser cloud list|attach|park|stop [CLOUD-ID]`
 calls the same tool.
 
 ## GitHub access

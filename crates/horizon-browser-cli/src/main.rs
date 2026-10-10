@@ -48,7 +48,7 @@ USAGE:
 
 COMMANDS:
     orientation Rotate a remote device through browser_orientation; reports measured acknowledgement.
-    cloud  The cloud list of your Horizon workspace through cloud_list, from a Horizon panel.
+    cloud  The cloud list of your Horizon workspace through cloud_list, from a Horizon agent panel.
     do     Ask an optional local agent to complete a goal through Horizon MCP.
            This is the default when the first argument is a quoted goal.
     run    Execute a fail-fast JSON plan through the existing MCP tools.
