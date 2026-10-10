@@ -514,14 +514,6 @@ impl DurableRun {
         Ok((run, plan, selection))
     }
 
-    /// Record a live keep-alive standalone host so resume can reconnect to it.
-    ///
-    /// # Errors
-    /// Returns when the sidecar file cannot be written.
-    pub fn bind_live_standalone(&mut self) -> Result<(), RunStateError> {
-        Self::bind_live_standalone_in(&self.directory)
-    }
-
     /// Record a live keep-alive host into an already published job directory.
     ///
     /// # Errors

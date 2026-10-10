@@ -115,13 +115,6 @@ struct FrameMetricCounters {
     interaction_frame_max_us: AtomicU64,
 }
 
-impl FrameData {
-    #[must_use]
-    pub fn byte_size(&self) -> usize {
-        self.rgb.len()
-    }
-}
-
 /// Latest-frame guard payload. Exposed through [`FrameSlot::latest`]; treat
 /// as read-only UI data.
 #[derive(Clone, Default, Debug)]

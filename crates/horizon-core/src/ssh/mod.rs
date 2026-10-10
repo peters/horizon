@@ -34,7 +34,7 @@ impl SshConnection {
 
     #[must_use]
     pub fn to_command_args(&self) -> Vec<String> {
-        let mut args = self.base_transport_args("-p", false);
+        let mut args = self.base_transport_args(false);
         args.push(self.transport_target());
 
         if let Some(remote_command) = non_empty(self.remote_command.as_deref()) {
@@ -46,14 +46,14 @@ impl SshConnection {
 
     #[must_use]
     pub fn ssh_transport_args(&self) -> Vec<String> {
-        let mut args = self.base_transport_args("-p", true);
+        let mut args = self.base_transport_args(true);
         args.push(self.transport_target());
         args
     }
 
     #[must_use]
     pub fn ssh_probe_transport_args(&self, connect_timeout_secs: u16) -> Vec<String> {
-        let mut args = self.base_transport_args("-p", true);
+        let mut args = self.base_transport_args(true);
         args.extend(["-o".to_string(), format!("ConnectTimeout={connect_timeout_secs}")]);
         args.push(self.transport_target());
         args
@@ -74,28 +74,15 @@ impl SshConnection {
     }
 
     #[must_use]
-    pub fn scp_transport_args(&self) -> Vec<String> {
-        self.base_transport_args("-P", true)
-    }
-
-    #[must_use]
-    pub fn scp_transport_target(&self) -> String {
-        self.user.as_deref().filter(|user| !user.trim().is_empty()).map_or_else(
-            || scp_host(&self.host),
-            |user| format!("{user}@{}", scp_host(&self.host)),
-        )
-    }
-
-    #[must_use]
     pub fn transport_target(&self) -> String {
         self.display_label()
     }
 
-    fn base_transport_args(&self, port_flag: &str, batch_mode: bool) -> Vec<String> {
+    fn base_transport_args(&self, batch_mode: bool) -> Vec<String> {
         let mut args = Vec::new();
 
         if let Some(port) = self.port {
-            args.extend([port_flag.to_string(), port.to_string()]);
+            args.extend(["-p".to_string(), port.to_string()]);
         }
         if let Some(identity_file) = self.identity_file.as_deref() {
             args.extend(["-i".to_string(), expand_tilde(identity_file)]);
@@ -137,15 +124,6 @@ fn expand_tilde(path: &str) -> String {
     }
 
     path.to_string()
-}
-
-fn scp_host(host: &str) -> String {
-    let trimmed = host.trim();
-    if trimmed.contains(':') && !trimmed.starts_with('[') && !trimmed.ends_with(']') {
-        return format!("[{trimmed}]");
-    }
-
-    trimmed.to_string()
 }
 
 #[cfg(test)]
@@ -306,39 +284,5 @@ mod tests {
                 "prod".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn scp_transport_args_use_uppercase_port_flag() {
-        let connection = SshConnection {
-            host: "prod".to_string(),
-            port: Some(2222),
-            ..SshConnection::default()
-        };
-
-        assert_eq!(
-            connection.scp_transport_args(),
-            vec![
-                "-P".to_string(),
-                "2222".to_string(),
-                "-o".to_string(),
-                "BatchMode=yes".to_string(),
-                "-o".to_string(),
-                "ServerAliveInterval=15".to_string(),
-                "-o".to_string(),
-                "ServerAliveCountMax=1".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn scp_transport_target_brackets_ipv6_literals() {
-        let connection = SshConnection {
-            host: "2001:db8::5".to_string(),
-            user: Some("deploy".to_string()),
-            ..SshConnection::default()
-        };
-
-        assert_eq!(connection.scp_transport_target(), "deploy@[2001:db8::5]");
     }
 }

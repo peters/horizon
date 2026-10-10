@@ -129,19 +129,6 @@ impl NavigationTemplate {
         }
         Ok(())
     }
-
-    /// Origin plus literal path segments. Variable segments are omitted.
-    #[must_use]
-    pub fn origin_and_path(&self) -> String {
-        let mut url = self.origin.as_str().to_string();
-        for segment in &self.path {
-            if let ValueSource::Literal { value } = &segment.source {
-                url.push('/');
-                url.push_str(value);
-            }
-        }
-        url
-    }
 }
 
 impl QueryComponent {
