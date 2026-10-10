@@ -927,7 +927,9 @@ The proxy does these steps for each connection:
   renamed repository. Git follows it through the proxy again, so the new name
   needs its own grant. It never answers 401, so Git never asks for a user name or
   a password. Git shows each refusal as `remote: Horizon: ...`.
-- It passes on GitHub's reply as it arrives, so Git shows its progress. It never
+- It passes on GitHub's reply as it arrives, so Git shows its progress. A reply
+  without a length goes to Git in chunks, and the proxy ends the TLS of the
+  tunnel with `close_notify`, so Git sees where the reply ends. It never
   passes on a reply field that holds the token, and it refuses an LFS reply that
   holds the token.
 
