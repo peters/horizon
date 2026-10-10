@@ -261,7 +261,8 @@ try:
                            for helper in ('horizon-worker-github-common', 'horizon-worker-github-agents',
                                           'horizon-worker-github-git', 'horizon-worker-github-http',
                                           'horizon-worker-github-api', 'horizon-worker-github-api-rest',
-                                          'horizon-worker-github-graphql', 'horizon-worker-github-graphql-policy'))
+                                          'horizon-worker-github-graphql', 'horizon-worker-github-graphql-policy',
+                                          'horizon-worker-github-tasks', 'horizon-worker-github-mcp'))
                 and os.access(beside.with_name('horizon-worker-git-auth'), os.X_OK)
                 and shutil.which('openssl')
                 and shutil.which('horizon-worker-tailnet') and helper_declares(

@@ -93,13 +93,16 @@ class Candidate:
         self.token, self.allowed, self.source, self.usable = token, allowed, source, usable
 
 
-def candidates(store, now, static=None):
-    """The tokens for a request, the chain's first, and the reason when none may serve."""
+def candidates(store, now, static=None, pid=None):
+    """The tokens for a request of process `pid`, the chain's first (with the task grants of
+    the session of `pid`), and the reason when none may serve."""
     found = []
     state, problem = gitproxy.usable_state(store)
     if state is not None:
+        task = agents.task_access(agents.Book(store.runtime), state, [pid] if pid else [])
+
         def chain_allowed(repository, access, state=state):
-            granted, _ = agents.granted_access(state, repository)
+            granted, _ = agents.granted_access(state, repository, task)
             return granted is not None and agents.covered(granted, access)
         usable = state['chain']['access_expires_at'] - now > common.SERVE_MARGIN
         found.append(Candidate(state['chain']['access_token'], chain_allowed, 'chain', usable))
@@ -142,8 +145,8 @@ class Broker:
         self.store, self.environ, self.static = store, environ, static
         self.schema = Schema()
 
-    def candidates(self):
-        found, problem = candidates(self.store, time.time(), self.static)
+    def candidates(self, pid=None):
+        found, problem = candidates(self.store, time.time(), self.static, pid)
         if not any(candidate.usable for candidate in found):
             raise refusal(403, problem or 'this worker has no GitHub sign-in. Connect GitHub in Horizon.')
         return found
@@ -187,12 +190,13 @@ class Broker:
         return None
 
 
-def choose(broker, route, sent=lambda: None):
-    """(candidate or None, repository) for a REST route; refuses a repository without a grant.
-    `sent` runs when the broker sends a token to GitHub itself, to resolve a repository ID."""
+def choose(broker, route, pid=None, sent=lambda: None):
+    """(candidate or None, repository) for a REST route of process `pid`; refuses a repository
+    without a grant. `sent` runs when the broker sends a token to GitHub itself, to resolve a
+    repository ID."""
     if route.kind == 'content':
         return None, None
-    found = broker.candidates()
+    found = broker.candidates(pid)
     if route.kind == 'plain':
         return next(candidate for candidate in found if candidate.usable), None
     wanted = list(route.repositories) if route.kind == 'search' else [route.repository]
@@ -238,8 +242,10 @@ class Exchange:
     """One request on one connection; updates `record` in place, so the log keeps what
     happened also when the connection ends early."""
 
-    def __init__(self, broker, stream, output, record, headed=lambda: None):
+    def __init__(self, broker, stream, output, record, headed=lambda: None, pid=None):
         self.broker, self.stream, self.output, self.record = broker, stream, output, record
+        # The calling process, whose session's task grants count.
+        self.pid = pid
         # Called once the request head is read: the client then has its time per read.
         self.headed = headed
         self.request = None
@@ -256,7 +262,7 @@ class Exchange:
         self.record.update(request=route.kind, host=host)
         if route.kind == 'graphql':
             return self.graphql(request)
-        candidate, repository = choose(self.broker, route, lambda: self.record.update(granted=True))
+        candidate, repository = choose(self.broker, route, self.pid, lambda: self.record.update(granted=True))
         self.record['repository'] = repository
         self.forward(request, route, candidate)
 
@@ -299,7 +305,7 @@ class Exchange:
             # A token went to GitHub, also for a request that the policy refuses after it.
             self.record['granted'] = True
 
-        found = self.broker.candidates()
+        found = self.broker.candidates(self.pid)
         first = next(candidate for candidate in found if candidate.usable)
         schema = self.broker.schema.get(lambda query: self.broker.call(rest.API, 'POST', '/graphql', first.token,
                                                                        query, sent=granted))
@@ -395,7 +401,7 @@ def handle(connection, broker, allowed=ALLOWED_UIDS):
                     connection.settimeout(REFUSED_SECONDS)
                     connection.recv(65536)
                 return
-            exchange = Exchange(broker, stream, output, record, watchdog.cancel)
+            exchange = Exchange(broker, stream, output, record, watchdog.cancel, pid)
             try:
                 exchange.run()
             except relay.Refusal as refused:

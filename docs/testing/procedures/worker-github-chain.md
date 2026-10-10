@@ -26,7 +26,8 @@ the decision.
   `horizon-worker-github-common`, `horizon-worker-github-agents`,
   `horizon-worker-github-git`, `horizon-worker-github-http`,
   `horizon-worker-github-api`, `horizon-worker-github-api-rest`,
-  `horizon-worker-github-graphql` and `horizon-worker-github-graphql-policy`,
+  `horizon-worker-github-graphql`, `horizon-worker-github-graphql-policy`,
+  `horizon-worker-github-tasks` and `horizon-worker-github-mcp`,
   `horizon-worker-git-auth`, `horizon-worker-supervise` or the token chain part
   of `horizon-worker-check`.
 - Platforms: Linux with Docker.
@@ -694,7 +695,80 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    Result: The JSON shows `"status":"denied"`. The status shows
    `"pending_requests":0`.
 
-### 6.12 C8: Clear
+### 6.12 R4: Allow for this task
+
+1. Mark a second synthetic agent session, and write its tool input:
+
+   ```bash
+   docker exec <c> mkdir -p /workspace/sessions/agent-task
+   docker exec <c> sh -c 'echo codex > /workspace/sessions/agent-task/agent'
+   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github_access","arguments":{"repository":"example/secret","access":"read","reason":"Read the shared types"}}}' \
+       | docker exec -i <c> tee /workspace/home/task-in.jsonl
+   docker exec <c> chown 10001:10001 /workspace/home/task-in.jsonl
+   ```
+
+   Result: The commands exit with status 0. The file contains one line.
+
+2. Start the session. It calls the tool, then reads the repository with Git and
+   with `gh`:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud new-session -d -s agent-task \
+       'horizon-worker-github mcp < /workspace/home/task-in.jsonl > /workspace/home/task-out.jsonl; git ls-remote https://github.com/example/secret.git > /workspace/home/task-git.txt 2>&1; echo "exit=$?" >> /workspace/home/task-git.txt; gh api repos/example/secret > /workspace/home/task-gh.txt 2>&1; echo "exit=$?" >> /workspace/home/task-gh.txt; sleep 600'
+   ```
+
+   Result: The command exits with status 0.
+
+3. List the requests:
+
+   ```bash
+   docker exec <c> horizon-worker-github requests
+   ```
+
+   Result: The JSON shows one request for `example/secret` with
+   `"session":"agent-task"` and `"task":true`. Write its `id` as `<id>`.
+
+4. Allow the request for the task:
+
+   ```bash
+   docker exec <c> horizon-worker-github decide <id> allow-task
+   ```
+
+   Result: The JSON shows `"ok":true`, `"status":"allowed"` and `"scope":"task"`.
+
+5. Wait 10 seconds. Then examine the outputs of the session:
+
+   ```bash
+   docker exec <c> cat /workspace/home/task-out.jsonl /workspace/home/task-git.txt /workspace/home/task-gh.txt
+   ```
+
+   Result: The tool output shows `Allowed for this task`. The Git output and the
+   `gh` output show `exit=0` and no `Horizon:` line.
+
+6. Read the repository from a process outside the session:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent git ls-remote https://github.com/example/secret.git; echo "exit=$?"
+   docker exec <c> horizon-worker-github status
+   ```
+
+   Result: Git shows `remote: Horizon: example/secret has no GitHub grant on this
+   worker` and a nonzero exit. The status does not show `example/secret`.
+
+7. End the session, and then read the repository again from a new window of the
+   session `agent-smoke`:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud kill-session -t agent-task
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud new-window -t agent-smoke \
+       'git ls-remote https://github.com/example/secret.git > /workspace/home/after.txt 2>&1; echo "exit=$?" >> /workspace/home/after.txt; sleep 60'
+   docker exec <c> sh -c 'sleep 5; cat /workspace/home/after.txt'
+   ```
+
+   Result: The output shows `remote: Horizon: example/secret has no GitHub grant
+   on this worker` and a nonzero exit. The task grant ended with its session.
+
+### 6.13 C8: Clear
 
 1. Remove the chain:
 
@@ -713,7 +787,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: `services.json` still contains `github`. The worker did not stop.
 
-### 6.13 G1: Real GitHub refresh
+### 6.14 G1: Real GitHub refresh
 
 Do this lane in a new container without `HORIZON_WORKER_GITHUB_TEST_URL`. Do
 the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
@@ -823,8 +897,9 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
 - The token chain survives a recreated container.
 - `bad_refresh_token` makes the state `revoked`, and agents then get no token.
 - `clear` makes the state `absent`, and the worker continues to run.
-- Only an agent session can ask for access. An allowed repository reaches every
-  session of the cloud.
+- Only an agent session can ask for access. A repository allowed for the cloud
+  reaches every session of the cloud. A repository allowed for a task reaches
+  only the session that asked, with Git and `gh`, and ends with that session.
 - A decision fails, and the request stays pending, when GitHub does not show the
   repository.
 - In lane G, the real refresh works and GitHub refuses the old refresh token.

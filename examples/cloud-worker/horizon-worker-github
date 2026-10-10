@@ -41,6 +41,7 @@ common = load_common()
 agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_github_agents')
 gitproxy = common.load_sibling('horizon-worker-github-git', 'horizon_worker_github_git')
 broker = common.load_sibling('horizon-worker-github-api', 'horizon_worker_github_api')
+mcp = common.load_sibling('horizon-worker-github-mcp', 'horizon_worker_github_mcp')
 auth = common.auth
 GIT_AUTH = common.GIT_AUTH
 Store = common.Store
@@ -496,12 +497,12 @@ def main(argv):
     operation = argv[0] if argv else ''
     if argv == ['mcp']:
         # The agent's own process: it asks the root service over the socket.
-        agents.serve_mcp()
+        mcp.serve_mcp()
         return 0
     if not (len(argv) == 1 and operation in ('install', 'serve', 'status', 'clear', 'requests')
             or len(argv) == 3 and operation == 'decide' and argv[2] in agents.DECISIONS):
         print('Usage: horizon-worker-github install|serve|status|clear|requests|mcp\n'
-              '       horizon-worker-github decide ID allow-cloud|deny', file=sys.stderr)
+              '       horizon-worker-github decide ID allow-cloud|allow-task|deny', file=sys.stderr)
         return 2
     if os.geteuid() != 0:
         print('horizon-worker-github runs as root only.', file=sys.stderr)
