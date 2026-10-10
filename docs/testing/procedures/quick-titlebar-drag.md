@@ -51,10 +51,13 @@ in an arranged cloud the panels must change places.
 
 ## 6. Tasks
 
-Do each drag with `xdotool` on the fixture display: `mousemove` to the
-titlebar, `mousedown 1`, then 20 `mousemove_relative` steps with no pause
-before the first step, then `mouseup 1`. Take the titlebar position from a
-fresh screenshot.
+Do each drag with `xdotool` on the fixture display. Move the pointer to the
+titlebar and wait 0.4 seconds. Then send `mousedown 1` and 20
+`mousemove_relative` steps in one `xdotool` command, so that they arrive
+before Horizon paints a frame. Wait 0.5 seconds, then send `mouseup 1`. Take
+the titlebar position from a fresh screenshot.
+
+A Horizon without this change does not move the panel for such a drag.
 
 ### 6.1 DOWN — Quick vertical drag
 
