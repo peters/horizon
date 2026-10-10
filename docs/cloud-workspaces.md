@@ -352,6 +352,22 @@ the next push asks again. **Skip: do not publish** stops the deployment at
 **Push image**. An image repository bound in **Cloud settings › Container
 registry** publishes with its own credential instead.
 
+### A refused image push
+
+If the registry refuses the push or the pull of the image, a retry gets the same
+refusal. Thus the failure on the card offers **Open Container registry** instead of
+**Retry deploy**. The header of the card keeps **Retry deploy** for later.
+
+**Open Container registry** opens **Cloud settings** for the image repository that
+the profile of the cloud names. If **Container registry** has no binding for that
+repository, the card shows the repository with **Not set up**, who publishes to it,
+and that workers have no pull credential yet. Click **Add credentials**: the entry
+for the repository opens with its name filled in and **Expiry and publishing**
+open. Add a publishing credential and a read-only pull credential, save the
+settings, then click **Retry deploy** on the cloud card. To add a different
+repository, click **Add another**. **Cloud settings…** in the Cloud menu does not
+fill in a repository.
+
 ## Provider API and storage requirements
 
 Direct root SSH endpoints accept numeric IPs and validated ASCII DNS hostnames.

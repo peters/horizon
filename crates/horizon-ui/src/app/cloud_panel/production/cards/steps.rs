@@ -9,7 +9,8 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StepAction {
-    Retry,
+    /// The failure's one next action: its fix, or a retry.
+    Next,
     CopyError,
     /// Connect GitHub again: reconnect after the cloud was marked for a new sign-in.
     Reconnect,
@@ -137,7 +138,7 @@ fn time_text(runtime: &Runtime, stage: Stage, mark: &Mark) -> Option<String> {
 }
 
 /// Every step top to bottom. The running step shows its measured progress, a failed
-/// one its cause with Retry and Copy error.
+/// one its cause with its next action and Copy error.
 pub(super) fn vertical(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) -> Option<StepAction> {
     let mut action = None;
     let stages = status.track.stages;
@@ -212,10 +213,12 @@ fn opened(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) -> Option<StepA
         ui.add_space(4.0);
         let mut action = None;
         ui.horizontal(|ui| {
-            if let Some(label) = status.primary.and_then(super::status::Primary::retry_label)
-                && ui.add(crate::app::cloud_panel::runtime::action_button(label)).clicked()
+            if let Some(next) = super::next::Next::of(status)
+                && ui
+                    .add(crate::app::cloud_panel::runtime::action_button(next.label()))
+                    .clicked()
             {
-                action = Some(StepAction::Retry);
+                action = Some(StepAction::Next);
             }
             if ui
                 .add(crate::app::cloud_panel::runtime::action_button("Copy error"))

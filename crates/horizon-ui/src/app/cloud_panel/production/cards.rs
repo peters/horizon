@@ -8,6 +8,7 @@ mod cost;
 mod drawer;
 mod github;
 mod machine;
+mod next;
 mod output;
 pub(super) mod placement;
 mod rebuild;

@@ -343,11 +343,10 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if let Some(primary) = status.primary
-                        && let Some(retry) = primary.retries()
-                        && ui.add(action_button(primary.label())).clicked()
+                    if let Some(next) = super::next::Next::of(status)
+                        && ui.add(action_button(next.label())).clicked()
                     {
-                        response.action = Some(retry);
+                        response.action = next.action();
                     }
                     if ui.add(action_button("Copy error")).clicked() {
                         ui.ctx().copy_text(copy.clone());
@@ -462,7 +461,7 @@ fn manage(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'
 /// Carries a step action from the body into the same handling as the drawer's.
 pub(super) fn step_action(action: StepAction, status: &Status, ctx: &egui::Context) -> Option<Action> {
     match action {
-        StepAction::Retry => status.primary.and_then(super::status::Primary::retries),
+        StepAction::Next => super::next::Next::of(status).and_then(super::next::Next::action),
         StepAction::Reconnect => Some(Action::Deploy),
         StepAction::CopyError => {
             if let Some(failure) = &status.failure {

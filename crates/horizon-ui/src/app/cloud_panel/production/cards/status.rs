@@ -51,11 +51,6 @@ impl Primary {
         }
     }
 
-    /// The label of a retry offered beside a failure, when this action retries it.
-    pub(super) fn retry_label(self) -> Option<&'static str> {
-        self.retries().map(|_| self.label())
-    }
-
     /// The operation that retries a failure, as the header's own button does: a resume or
     /// stop is retried as itself, never as a new deployment.
     pub(super) fn retries(self) -> Option<super::Action> {
@@ -128,6 +123,11 @@ impl Failure {
         };
         *runtime.diagnosis.borrow_mut() = Some((key, failure.clone()));
         failure
+    }
+
+    /// What fixes this failure where a retry alone fails again.
+    pub(super) fn remedy(&self) -> Option<diagnosis::Remedy> {
+        self.meaning.and_then(diagnosis::remedy)
     }
 
     /// The line the header leads with: the cause when found, else the summary.

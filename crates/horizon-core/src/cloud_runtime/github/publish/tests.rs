@@ -194,3 +194,22 @@ fn a_stored_chain_reads_back_as_written() {
     assert_eq!(back.refresh_token.expose(), "ghr_c");
     assert!(back.web);
 }
+
+#[test]
+fn cloud_settings_name_the_publishing_account_without_asking_github() {
+    let docker = tempfile::tempdir().unwrap();
+    let path = docker.path().join(STORE);
+    assert_eq!(publisher(docker.path()), None, "without a chain the card asks first");
+    let mut ended = chain("gho_old", "ghr_old", Duration::from_hours(4));
+    ended.refresh_expires_at = SystemTime::now() - Duration::from_mins(1);
+    stored::save(&path, "octo-cat", &ended, false).unwrap();
+    assert_eq!(publisher(docker.path()), None, "an ended chain asks again");
+    stored::save(
+        &path,
+        "octo-cat",
+        &chain("gho_fresh", "ghr_fresh", Duration::from_hours(4)),
+        false,
+    )
+    .unwrap();
+    assert_eq!(publisher(docker.path()).as_deref(), Some("octo-cat"));
+}

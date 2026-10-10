@@ -107,6 +107,9 @@ const MEANINGS: [Known; 12] = [
             "from registry: unauthorized",
             "from registry: unauthenticated",
             "requested access to the resource is denied",
+            // Docker's words for a push to a registry that wants a login it does not have.
+            "push access denied",
+            "no basic auth credentials",
         ],
         REGISTRY_REFUSED,
     ),
@@ -226,6 +229,22 @@ pub fn meaning_in(line: &str, summary: &str) -> Option<&'static str> {
     meaning
 }
 
+/// What fixes a well-known cause where a retry alone fails again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Remedy {
+    /// A login for the image repository in Cloud settings › Container registry: a
+    /// publishing credential for a refused push, a pull credential for a refused pull.
+    RegistryLogin,
+}
+
+/// The fix for a failure whose meaning is `meaning`, when Horizon offers one.
+#[must_use]
+pub fn remedy(meaning: &str) -> Option<Remedy> {
+    [PUSH_REFUSED, REGISTRY_REFUSED]
+        .contains(&meaning)
+        .then_some(Remedy::RegistryLogin)
+}
+
 /// Whether a line reports a failure rather than progress or a retry.
 #[must_use]
 pub fn is_failure(line: &str) -> bool {
@@ -332,6 +351,33 @@ mod tests {
         .meaning
         .unwrap();
         assert_eq!(pull, REGISTRY_REFUSED);
+    }
+
+    #[test]
+    fn a_registry_refusal_is_fixed_by_a_login_and_other_causes_by_a_retry() {
+        let lines = ["error from registry: unauthenticated: User cannot be authenticated with the token provided."];
+        for summary in [SUMMARY, "Readiness failed"] {
+            let meaning = diagnose(lines.into_iter(), summary).unwrap().meaning.unwrap();
+            assert_eq!(remedy(meaning), Some(Remedy::RegistryLogin), "{summary}");
+        }
+        let without_login = [
+            "push access denied, repository does not exist or may require authorization: authorization failed: \
+             no basic auth credentials",
+        ];
+        let meaning = diagnose(without_login.into_iter(), SUMMARY).unwrap().meaning.unwrap();
+        assert_eq!(meaning, PUSH_REFUSED);
+        assert_eq!(remedy(meaning), Some(Remedy::RegistryLogin));
+        for line in [
+            "write /var/lib/docker: no space left on device",
+            "provider API: unauthorized",
+            "dial tcp: lookup registry.invalid: no such host",
+        ] {
+            let meaning = diagnose([line].into_iter(), "Requesting a worker failed")
+                .unwrap()
+                .meaning
+                .unwrap();
+            assert_eq!(remedy(meaning), None, "{line}");
+        }
     }
 
     #[test]
