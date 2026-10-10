@@ -22,10 +22,9 @@ const TIMEOUT: Duration = Duration::from_mins(10);
 const SECRET_DIRECTORY: &str = "credentials";
 /// Shown as the app's homepage on GitHub.
 const HOMEPAGE: &str = "https://github.com/peters/horizon";
-/// Shown on the app's page on GitHub.
-const DESCRIPTION: &str = "Gives Horizon cloud workers short-lived access to the repositories you choose. \
-                           Horizon created this app on your computer and never stores its private key. \
-                           You choose where it is installed and can remove it at any time.";
+/// Shown on the app's page on GitHub, which allows 140 characters.
+const DESCRIPTION: &str = "Gives Horizon cloud workers short-lived access to the repositories you choose. Horizon never stores its private key.";
+const _: () = assert!(DESCRIPTION.len() <= 140);
 /// The longest app name GitHub accepts.
 const MAX_NAME: usize = 34;
 
