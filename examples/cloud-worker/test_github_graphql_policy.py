@@ -167,7 +167,7 @@ class QueryTests(unittest.TestCase):
         query = 'query($o: String!, $n: String!) { repository(owner: $o, name: $n) { name pullRequest(number: 1) ' \
                 '{ title comments(first: 5) { nodes { body } } } } }'
         sent = plan(query, {'o': 'example', 'n': 'library'})
-        held, _, own = sent.markers
+        held, own, _ = sent.markers
         self.assertIn('%s: nameWithOwner' % own, sent.text)
         self.assertEqual(sent.text.count('%s: repository { nameWithOwner }' % held), 2)
         self.assertEqual(sent.body({'o': 'example', 'n': 'library'})['query'], sent.text)
@@ -182,6 +182,10 @@ class QueryTests(unittest.TestCase):
         failed = {'data': {'repository': None}, 'errors': [{'path': ['repository', 'pullRequest', held]}]}
         with self.assertRaisesRegex(policy.Refused, 'did not say which repository'):
             policy.verify(sent, failed, allowed)
+        # An object that GitHub puts in no repository is not shown either.
+        reply['data']['repository']['pullRequest']['comments']['nodes'][0][held] = None
+        with self.assertRaisesRegex(policy.Refused, 'another repository'):
+            policy.verify(sent, reply, allowed)
 
     def test_a_repository_without_a_grant_is_refused_before_github(self):
         with self.assertRaisesRegex(policy.Refused, 'example/secret has no GitHub grant'):
@@ -220,10 +224,19 @@ class QueryTests(unittest.TestCase):
         reply = {'data': {'node': {'title': 'x', held: {'nameWithOwner': 'example/secret'}}}}
         with self.assertRaises(policy.Refused):
             policy.verify(sent, reply, allowed)
-        # A plain `id` on the interface still asks which repository each possible type is in.
-        sent = plan('{ nodes(ids: ["a"]) { id } }')
+        # A plain `id` on the interface still asks which repository each possible type is in,
+        # and what type each object is.
+        sent = plan('{ nodes(ids: ["a", "b"]) { id } }')
+        held, _, kind = sent.markers
         self.assertIn('...on PullRequest', sent.text)
         self.assertIn('...on Repository', sent.text)
+        self.assertIn('%s: __typename' % kind, sent.text)
+        reply = {'data': {'nodes': [{'id': 'a', kind: 'PullRequest', held: {'nameWithOwner': 'example/library'}},
+                                    {'id': 'b', kind: 'User'}]}}
+        self.assertEqual(policy.verify(sent, reply, allowed), {'data': {'nodes': [{'id': 'a'}, {'id': 'b'}]}})
+        for other in ['ProjectV2', 'MarketplaceListing', None]:
+            with self.assertRaisesRegex(policy.Refused, 'cannot be', msg=other):
+                policy.verify(sent, {'data': {'nodes': [{'id': 'b', kind: other}]}}, allowed)
         for query in ['{ node(id: "a") { ...on MarketplaceListing { name } } }',
                       '{ node(id: "a") { ...on Node { id } } }', '{ node(id: "a") { ...L } } fragment L on '
                       'MarketplaceListing { name }', '{ node(id: "a") { ...on ProjectV2 { readme } } }']:
@@ -233,10 +246,22 @@ class QueryTests(unittest.TestCase):
 
     def test_a_fork_is_named_without_a_check_until_its_data_is_read(self):
         query = '{ repository(owner: "example", name: "library") { pullRequest(number: 1) { headRepository { %s } } } }'
-        sent = plan(query % 'nameWithOwner')
-        self.assertEqual(sent.text.count(sent.markers[2]), 1, 'only the granted repository')
-        sent = plan(query % 'issues(first: 1) { nodes { title } }')
-        self.assertEqual(sent.text.count(sent.markers[2]), 2)
+        own = 1
+        for identity in ['nameWithOwner', '...on Repository { nameWithOwner }', '...F', 'isPrivate ...on Repository { ...F }']:
+            text = query % identity + (' fragment F on Repository { nameWithOwner }' if 'F' in identity else '')
+            sent = plan(text)
+            self.assertEqual(sent.text.count(sent.markers[own]), 1, 'only the granted repository: ' + text)
+        for read in ['issues(first: 1) { nodes { title } }', '...on Repository { issues(first: 1) { nodes { title } } }',
+                     '...F']:
+            text = query % read + (' fragment F on Repository { nameWithOwner issues(first: 1) { nodes { title } } }'
+                                   if 'F' in read else '')
+            sent = plan(text)
+            self.assertGreaterEqual(sent.text.count(sent.markers[own]), 2, text)
+        # A fragment that names a fork and also reads a repository is checked where it reads.
+        text = ('{ repository(owner: "example", name: "library") { ...F pullRequest(number: 1) { headRepository '
+                '{ ...F } } } } fragment F on Repository { nameWithOwner }')
+        sent = plan(text)
+        self.assertIn('fragment F on Repository { nameWithOwner  %s: nameWithOwner }' % sent.markers[own], sent.text)
 
     def test_requests_that_could_hide_or_widen_what_they_read_are_refused(self):
         for body, reason in [
@@ -268,8 +293,25 @@ class QueryTests(unittest.TestCase):
 
 class MutationTests(unittest.TestCase):
     def test_only_listed_mutations(self):
-        with self.assertRaisesRegex(policy.Refused, 'createRepository is not allowed'):
-            plan('mutation { createRepository(input: {name: "x"}) { repository { name } } }')
+        for text in ['mutation { createRepository(input: {name: "x"}) { repository { name } } }',
+                     'mutation { ...on Mutation { createRepository(input: {name: "x"}) { repository { name } } } }',
+                     'mutation { ... { createRepository(input: {name: "x"}) { clientMutationId } } }',
+                     'mutation { ...M } fragment M on Mutation { createRepository(input: {name: "x"}) '
+                     '{ repository { name } } }']:
+            with self.assertRaisesRegex(policy.Refused, 'createRepository is not allowed', msg=text):
+                plan(text)
+
+    def test_fragments_at_the_top_get_the_checks_of_root_fields(self):
+        sent = plan('mutation { ...M } fragment M on Mutation { addComment(input: {subjectId: "I_1", body: "b"}) '
+                    '{ clientMutationId } }')
+        self.assertEqual(sent.ids, ['I_1'])
+        with self.assertRaisesRegex(policy.Refused, 'example/secret has no GitHub grant'):
+            plan('{ ...Q } fragment Q on Query { repository(owner: "example", name: "secret") { name } }')
+        with self.assertRaisesRegex(policy.Refused, 'organization is not allowed'):
+            plan('{ ...on Query { organization(login: "example") { login } } }')
+        with self.assertRaisesRegex(policy.Refused, 'not Query'):
+            plan('{ ...on User { login } }')
+        plan('{ ...on Query { repository(owner: "example", name: "library") { name } } }')
 
     def test_each_input_id_is_looked_up_and_needs_push(self):
         sent = plan('mutation($input: AddCommentInput!) { addComment(input: $input) { clientMutationId } }',
