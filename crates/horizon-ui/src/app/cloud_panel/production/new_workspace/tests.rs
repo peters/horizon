@@ -66,11 +66,13 @@ fn cloud_gpu_takes_each_repositorys_first_gpu_profile_and_says_when_there_is_non
     form.new_workspace = Some(intent(true));
     form.repository = "/synthetic/cpu-only".into();
     assert_eq!(gpu_profile(form, &config(CPU_ONLY)), None);
+    form.profiles = Some(config(CPU_ONLY));
     let (_, shown) = texts(form);
     assert!(shown.iter().any(|text| text.contains("no GPU profile")), "{shown:?}");
     // Another repository, although it also has `dev`, gets its own GPU profile.
     form.repository = "/synthetic/gpu-too".into();
     assert_eq!(gpu_profile(form, &config(GPU_TOO)).as_deref(), Some("gpu"));
+    form.profiles = Some(config(GPU_TOO));
     let (_, shown) = texts(form);
     assert!(!shown.iter().any(|text| text.contains("no GPU profile")), "{shown:?}");
     // A reread of the same repository keeps the person's pick.
@@ -94,6 +96,12 @@ fn a_repository_that_asks_for_this_pc_is_offered_it() {
     form.profiles = Some(config(&format!("{CPU_ONLY}placement: local\n")));
     let (chosen, shown) = texts(form);
     assert!(!chosen, "nothing is chosen without a click");
+    assert!(shown.iter().any(|text| text == "Open on This PC"));
+    // Nothing is said while the profiles are being read again.
+    form.profiles = None;
+    assert!(!texts(form).1.iter().any(|text| text == "Open on This PC"));
+    form.profiles = Some(config(&format!("{CPU_ONLY}placement: local\n")));
+    let (_, shown) = texts(form);
     assert!(shown.iter().any(|text| text == "This repository runs on This PC"));
     assert!(shown.iter().any(|text| text == "Open on This PC"));
 }
@@ -148,4 +156,28 @@ fn a_session_switch_ends_the_dialog_and_its_empty_workspace_before_saving() {
     app.open_cloud_for_workspace(&ctx, workspace);
     app.close_cloud_creation_for_session_switch();
     assert!(app.board.workspace(workspace).is_some());
+}
+
+#[test]
+fn a_session_switch_also_ends_the_account_setup_of_a_first_cloud() {
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.cloud_prototype.ready = true;
+    let _existing = app.board.create_workspace("existing workspace");
+    let before = app.board.workspaces.len();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    // The dialog steps aside for the account setup, to come back once keys are saved.
+    app.open_cloud_accounts(&ctx, true);
+    assert!(!app.cloud_prototype.production.creating);
+    assert!(app.cloud_prototype.production.setup.resumes_creation());
+    app.close_cloud_creation_for_session_switch();
+    assert!(
+        !app.cloud_prototype.production.setup.open,
+        "the setup ends with the session"
+    );
+    assert_eq!(
+        app.board.workspaces.len(),
+        before,
+        "nothing empty is saved with the board"
+    );
 }

@@ -60,9 +60,15 @@ impl HorizonApp {
         }
     }
 
-    /// Ends an open New cloud dialog before a session switch saves the board.
+    /// Ends an open New cloud dialog before a session switch saves the board, also while it
+    /// waits behind the account setup of a first cloud, which ends with it.
     pub(in crate::app) fn close_cloud_creation_for_session_switch(&mut self) {
-        if self.cloud_prototype.production.creating {
+        let form = &mut self.cloud_prototype.production;
+        let waiting = form.setup.open && form.setup.resumes_creation();
+        if waiting {
+            form.setup = super::setup::State::default();
+        }
+        if form.creating || waiting {
             self.close_cloud_creation();
         }
     }
@@ -119,6 +125,11 @@ pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option
 /// What the dialog says above its fields for a workspace from New workspace, and the This PC
 /// choice of a repository whose `cloud.yml` asks for it. True when the person chose This PC.
 pub(super) fn notes(ui: &mut Ui, form: &Production) -> bool {
+    // Only about the profiles read for what the field shows now, not while another
+    // repository is typed or read.
+    if form.profiles.is_none() || form.launch.loading() || form.source.editing() {
+        return false;
+    }
     if form.new_workspace.as_ref().is_some_and(|intent| intent.no_gpu) {
         ui.label(
             RichText::new(
