@@ -7,7 +7,7 @@ use crate::theme;
 use egui::RichText;
 use horizon_core::cloud_runtime::{
     diagnosis,
-    docker_daemon::{self, Health, Phase, Plan, RestartError, Setup, Target},
+    docker_daemon::{self, Plan, RestartError, Target},
     settings::Settings,
 };
 use std::sync::{Arc, Mutex, PoisonError};
@@ -22,7 +22,6 @@ enum Step {
     Confirm {
         target: Target,
         plan: Plan,
-        health: Health,
     },
     Restarting {
         doing: String,
@@ -35,9 +34,9 @@ enum Step {
     },
 }
 
-/// Finds the cloud's Docker, how to restart it and whether it answers now.
-type Inspect = fn() -> (Target, Plan, Health);
-type Restart = fn(&Target, &[Vec<String>], &dyn Fn(Phase)) -> Result<String, RestartError>;
+/// Finds the cloud's Docker and how to restart it.
+type Inspect = fn() -> (Target, Plan);
+type Restart = fn(&Target, &[String], &dyn Fn()) -> Result<String, RestartError>;
 
 struct State {
     step: Step,
@@ -94,15 +93,14 @@ impl Shared {
     }
 }
 
-fn inspect() -> (Target, Plan, Health) {
+fn inspect() -> (Target, Plan) {
     let path = horizon_core::HorizonHome::resolve()
         .root()
         .join("cloud")
         .join("settings.json");
     let target = Settings::load(&path).map_or_else(|_| Target::default(), |settings| Target::from_settings(&settings));
     let plan = docker_daemon::plan(&target.facts());
-    let health = target.probe(docker_daemon::PROBE_TIMEOUT);
-    (target, plan, health)
+    (target, plan)
 }
 
 /// Whether `failure` came from a stuck or stopped Docker.
@@ -126,8 +124,8 @@ pub(super) fn button(ui: &mut egui::Ui, failure: &Failure) {
     {
         shared.set(ui.ctx(), Step::Checking);
         shared.spawn(ui.ctx(), |shared, ctx| {
-            let (target, plan, health) = (shared.with(|state| state.inspect))();
-            shared.set(ctx, Step::Confirm { target, plan, health });
+            let (target, plan) = (shared.with(|state| state.inspect))();
+            shared.set(ctx, Step::Confirm { target, plan });
         });
     }
 }
@@ -147,8 +145,7 @@ pub(super) fn status(ui: &mut egui::Ui, failure: &Failure, retry: Option<&str>) 
         Step::Confirm {
             target,
             plan: plan @ Plan::Restart { .. },
-            health,
-        } => confirmation_card(ui, &question(&plan, &health), |ui| {
+        } => confirmation_card(ui, &question(&plan), |ui| {
             if ui.add(danger_button("Restart Docker")).clicked() {
                 start(ui.ctx(), &shared, target, plan);
             }
@@ -206,10 +203,10 @@ pub(super) fn status(ui: &mut egui::Ui, failure: &Failure, retry: Option<&str>) 
 }
 
 fn start(ctx: &egui::Context, shared: &Shared, target: Target, plan: Plan) {
-    let Plan::Restart { steps, shown, .. } = &plan else {
+    let Plan::Restart { argv, shown, .. } = &plan else {
         return;
     };
-    let (steps, shown) = (steps.clone(), shown.clone());
+    let argv = argv.clone();
     shared.set(
         ctx,
         Step::Restarting {
@@ -219,19 +216,15 @@ fn start(ctx: &egui::Context, shared: &Shared, target: Target, plan: Plan) {
     );
     shared.spawn(ctx, move |shared, ctx| {
         let restart = shared.with(|state| state.restart);
-        let report = |phase| {
-            let doing = match phase {
-                Phase::Running(_) => format!("Restarting Docker: {shown}"),
-                Phase::Waiting => "Waiting for Docker to answer…".to_owned(),
-            };
+        let waiting = || {
             shared.with(|state| {
-                if let Step::Restarting { doing: current, .. } = &mut state.step {
-                    *current = doing;
+                if let Step::Restarting { doing, .. } = &mut state.step {
+                    "Waiting for Docker to answer…".clone_into(doing);
                 }
             });
             ctx.request_repaint();
         };
-        let step = match restart(&target, &steps, &report) {
+        let step = match restart(&target, &argv, &waiting) {
             Ok(version) => Step::Answered(version),
             Err(error) => Step::Failed {
                 error: format!("Docker did not come back: {error}."),
@@ -243,23 +236,17 @@ fn start(ctx: &egui::Context, shared: &Shared, target: Target, plan: Plan) {
 }
 
 /// What restarting does, asked before it happens.
-fn question(plan: &Plan, health: &Health) -> String {
-    let Plan::Restart { setup, shown, .. } = plan else {
+fn question(plan: &Plan) -> String {
+    let Plan::Restart { shown, .. } = plan else {
         return String::new();
     };
-    let now = match health {
-        Health::Answering { version } => {
-            format!("Docker {version} answers right now, so a restart may not be needed. ")
-        }
-        _ => String::new(),
-    };
-    let rights = if *setup == Setup::Service {
+    let rights = if plan.asks_password() {
         " Your computer asks for an administrator password."
     } else {
         ""
     };
     format!(
-        "{now}Restart Docker? This stops every container that runs in this Docker, also containers that \
+        "Restart Docker? This stops every container that runs in this Docker, also containers that \
          other programs started, then starts Docker again. Horizon runs: {shown}.{rights} When Docker \
          answers again, retry the cloud."
     )
@@ -297,63 +284,62 @@ mod tests {
 
     const ROOTLESS: &str = "systemctl --user restart docker";
 
-    fn stuck() -> Failure {
-        let summary = "Docker is not responding: worker image contract creation did not finish and Docker did not answer a health check";
+    fn failure(line: &str) -> Failure {
         Failure {
-            summary: summary.to_owned(),
-            cause: Some("Docker did not answer docker version within 5 s".to_owned()),
-            meaning: diagnosis::meaning(summary),
+            summary: "worker image contract creation failed; inspect deployment output".into(),
+            cause: Some(line.into()),
+            meaning: diagnosis::meaning(line),
         }
     }
 
-    fn rootless() -> Plan {
-        Plan::Restart {
-            setup: Setup::Rootless,
-            steps: vec![vec![
-                "systemctl".into(),
-                "--user".into(),
-                "restart".into(),
-                "docker.service".into(),
-            ]],
-            shown: ROOTLESS.into(),
-            command: Some(ROOTLESS.into()),
-        }
+    fn stuck() -> Failure {
+        failure("Docker did not answer docker version within 5 s")
+    }
+
+    fn rootless() -> (Target, Plan) {
+        let argv = ["systemctl", "--user", "restart", "docker.service"]
+            .map(str::to_owned)
+            .to_vec();
+        let (shown, command) = (ROOTLESS.into(), Some(ROOTLESS.into()));
+        let plan = Plan::Restart { argv, shown, command };
+        (Target::default(), plan)
     }
 
     /// One pass of a failure box: its texts with their centers, and whether Retry was chosen.
     fn frame(ctx: &egui::Context, failure: &Failure, events: Vec<Event>) -> (Vec<(String, Pos2)>, bool) {
         let mut retried = false;
+        let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(720.0, 600.0));
+        let input = RawInput {
+            events,
+            screen_rect: Some(screen),
+            ..RawInput::default()
+        };
         let output = ctx
-            .run_ui(
-                RawInput {
-                    events,
-                    screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(720.0, 600.0))),
-                    ..RawInput::default()
-                },
-                |ui| {
-                    ui.horizontal(|ui| button(ui, failure));
-                    retried = status(ui, failure, Some("Retry deploy"));
-                },
-            )
-            .discard_textures();
-        let texts = output
-            .shapes
-            .iter()
-            .filter_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.visual_bounding_rect().center())),
-                _ => None,
+            .run_ui(input, |ui| {
+                ui.horizontal(|ui| button(ui, failure));
+                retried = status(ui, failure, Some("Retry deploy"));
             })
-            .collect();
-        (texts, retried)
+            .discard_textures();
+        let texts = output.shapes.iter().filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.visual_bounding_rect().center())),
+            _ => None,
+        });
+        (texts.collect(), retried)
+    }
+
+    fn texts(ctx: &egui::Context, failure: &Failure) -> Vec<String> {
+        frame(ctx, failure, Vec::new())
+            .0
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
     }
 
     fn click(ctx: &egui::Context, failure: &Failure, label: &str) -> bool {
-        let (texts, _) = frame(ctx, failure, Vec::new());
-        let at = texts
-            .iter()
-            .find(|(text, _)| text == label)
-            .unwrap_or_else(|| panic!("no {label} in {texts:?}"))
-            .1;
+        let (shown, _) = frame(ctx, failure, Vec::new());
+        let Some(&(_, at)) = shown.iter().find(|(text, _)| text == label) else {
+            panic!("no {label} in {shown:?}");
+        };
         let press = |pressed| Event::PointerButton {
             pos: at,
             button: PointerButton::Primary,
@@ -369,161 +355,114 @@ mod tests {
     fn until(ctx: &egui::Context, failure: &Failure, wanted: &str) -> Vec<String> {
         let deadline = Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            let texts: Vec<String> = frame(ctx, failure, Vec::new())
-                .0
-                .into_iter()
-                .map(|(text, _)| text)
-                .collect();
-            if texts.iter().any(|text| text.contains(wanted)) {
-                return texts;
+            let shown = texts(ctx, failure);
+            if shown.iter().any(|text| text.contains(wanted)) {
+                return shown;
             }
-            assert!(Instant::now() < deadline, "no {wanted} in {texts:?}");
+            assert!(Instant::now() < deadline, "no {wanted} in {shown:?}");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
 
-    fn fake(ctx: &egui::Context, inspect: Inspect, restart: Restart) {
-        Shared::of(ctx).with(|state| {
-            state.inspect = inspect;
-            state.restart = restart;
-        });
+    /// A window whose restart finds `inspect` and restarts with `restart`, then asks.
+    fn asked(inspect: Inspect, restart: Restart) -> (egui::Context, Failure, Vec<String>) {
+        let (ctx, failure) = (egui::Context::default(), stuck());
+        Shared::of(&ctx).with(|state| (state.inspect, state.restart) = (inspect, restart));
+        assert!(!click(&ctx, &failure, "Restart Docker…"));
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while matches!(Shared::of(&ctx).with(|state| state.step.clone()), Step::Checking) {
+            assert!(Instant::now() < deadline, "the check never finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let shown = texts(&ctx, &failure);
+        assert!(
+            !shown.iter().any(|text| text == "Restart Docker…"),
+            "one restart at a time"
+        );
+        (ctx, failure, shown)
     }
 
     #[test]
     fn only_a_failure_that_docker_caused_offers_a_restart() {
-        assert!(offered(&stuck()));
         for docker in [
+            "Docker did not answer docker version within 5 s",
             "Cannot connect to the Docker daemon at unix:///run/user/1000/docker.sock",
             "Error response from daemon: Conflict. The container name \"/horizon-contract-1\" is already in use by container \"0123\".",
         ] {
-            let failure = Failure {
-                summary: "worker image contract creation failed; inspect deployment output".into(),
-                cause: Some(docker.into()),
-                meaning: diagnosis::meaning(docker),
-            };
-            assert!(offered(&failure), "{docker}");
+            assert!(offered(&failure(docker)), "{docker}");
+            assert_eq!(texts(&egui::Context::default(), &failure(docker)), ["Restart Docker…"]);
         }
-        let registry = Failure {
-            summary: "Uploading image failed; inspect deployment output".into(),
-            cause: Some("error from registry: denied".into()),
-            meaning: diagnosis::meaning("error from registry: denied"),
-        };
+        let registry = failure("error from registry: denied");
         assert!(!offered(&registry));
-        let (texts, _) = frame(&egui::Context::default(), &registry, Vec::new());
-        assert!(texts.is_empty(), "{texts:?}");
+        assert!(texts(&egui::Context::default(), &registry).is_empty());
     }
 
     #[test]
     fn a_confirmed_restart_reports_docker_answering_and_offers_the_clouds_retry() {
-        let ctx = egui::Context::default();
-        let failure = stuck();
-        fake(
-            &ctx,
-            || (Target::default(), rootless(), Health::NotResponding),
-            |_, steps, report| {
-                assert_eq!(steps, [["systemctl", "--user", "restart", "docker.service"]]);
-                report(Phase::Running(ROOTLESS.into()));
-                report(Phase::Waiting);
-                Ok("29.8.1".into())
-            },
-        );
-        assert!(!click(&ctx, &failure, "Restart Docker…"));
-        let question = until(&ctx, &failure, "Restart Docker?");
-        let asked = question.iter().find(|text| text.contains("Restart Docker?")).unwrap();
-        assert!(asked.contains("stops every container"), "{asked}");
-        assert!(asked.contains(ROOTLESS), "{asked}");
-        assert!(!asked.contains("answers right now"), "{asked}");
+        let (ctx, failure, question) = asked(rootless, |_, argv, waiting| {
+            assert_eq!(argv, ["systemctl", "--user", "restart", "docker.service"]);
+            waiting();
+            Ok("29.8.1".into())
+        });
+        let asked = question
+            .iter()
+            .find(|text| text.contains("Restart Docker?"))
+            .expect("the question");
         assert!(
-            !question.iter().any(|text| text == "Restart Docker…"),
-            "the offer gives way to the question"
+            asked.contains("stops every container") && asked.contains(ROOTLESS),
+            "{asked}"
         );
-
         assert!(!click(&ctx, &failure, "Restart Docker"));
         until(&ctx, &failure, "Docker 29.8.1 answers again.");
         assert!(
             click(&ctx, &failure, "Retry deploy"),
             "Retry runs the cloud's own retry"
         );
-        let (texts, _) = frame(&ctx, &failure, Vec::new());
-        assert!(texts.iter().any(|(text, _)| text == "Restart Docker…"), "{texts:?}");
+        assert_eq!(texts(&ctx, &failure), ["Restart Docker…"]);
     }
 
     #[test]
     fn cancelling_the_question_restarts_nothing() {
-        let ctx = egui::Context::default();
-        let failure = stuck();
-        fake(
-            &ctx,
-            || {
-                let health = Health::Answering {
-                    version: "29.8.1".into(),
-                };
-                (Target::default(), rootless(), health)
-            },
-            |_, _, _| panic!("a cancelled question restarts nothing"),
-        );
-        click(&ctx, &failure, "Restart Docker…");
-        let question = until(&ctx, &failure, "Restart Docker?");
-        assert!(
-            question.iter().any(|text| text.contains("answers right now")),
-            "{question:?}"
-        );
+        let (ctx, failure, _) = asked(rootless, |_, _, _| panic!("a cancelled question restarts nothing"));
         click(&ctx, &failure, "Cancel");
-        let (texts, _) = frame(&ctx, &failure, Vec::new());
-        assert!(texts.iter().any(|(text, _)| text == "Restart Docker…"), "{texts:?}");
+        assert_eq!(texts(&ctx, &failure), ["Restart Docker…"]);
     }
 
     #[test]
     fn a_docker_horizon_must_not_restart_shows_what_to_do_instead() {
-        let ctx = egui::Context::default();
-        let failure = stuck();
-        fake(
-            &ctx,
+        let (ctx, failure, shown) = asked(
             || {
-                let plan = Plan::Manual {
-                    setup: Setup::Service,
-                    instructions: "Docker runs as a system service.".into(),
-                    command: Some("sudo systemctl restart docker".into()),
-                };
-                (Target::default(), plan, Health::NotResponding)
+                let (instructions, command) = (
+                    "Docker runs as a service.".into(),
+                    Some("sudo systemctl restart docker".into()),
+                );
+                (Target::default(), Plan::Manual { instructions, command })
             },
             |_, _, _| panic!("Horizon runs nothing for a manual plan"),
         );
-        click(&ctx, &failure, "Restart Docker…");
-        let texts = until(&ctx, &failure, "Docker runs as a system service.");
-        assert!(
-            texts.iter().any(|text| text == "sudo systemctl restart docker"),
-            "{texts:?}"
-        );
-        assert!(texts.iter().any(|text| text == "Copy command"), "{texts:?}");
-        assert!(!texts.iter().any(|text| text == "Restart Docker"), "{texts:?}");
+        for wanted in [
+            "Docker runs as a service.",
+            "sudo systemctl restart docker",
+            "Copy command",
+        ] {
+            assert!(shown.iter().any(|text| text == wanted), "{wanted}: {shown:?}");
+        }
+        assert!(!shown.iter().any(|text| text == "Restart Docker"), "{shown:?}");
         click(&ctx, &failure, "Close");
+        assert_eq!(texts(&ctx, &failure), ["Restart Docker…"]);
     }
 
     #[test]
     fn a_failed_restart_says_why_and_gives_the_command_to_run() {
-        let ctx = egui::Context::default();
-        let failure = stuck();
-        fake(
-            &ctx,
-            || (Target::default(), rootless(), Health::NotResponding),
-            |_, _, _| {
-                Err(RestartError::NotAnswering {
-                    last: Health::NotResponding,
-                })
-            },
-        );
-        click(&ctx, &failure, "Restart Docker…");
-        until(&ctx, &failure, "Restart Docker?");
+        let (ctx, failure, _) = asked(rootless, |_, _, _| {
+            let last = docker_daemon::Health::NotResponding;
+            Err(RestartError::NotAnswering { last })
+        });
         click(&ctx, &failure, "Restart Docker");
-        let texts = until(&ctx, &failure, "Docker did not come back");
-        assert!(
-            texts
-                .iter()
-                .any(|text| text == "Docker did not come back: Docker restarted but still does not answer."),
-            "{texts:?}"
-        );
-        assert!(texts.iter().any(|text| text == ROOTLESS), "{texts:?}");
-        assert!(!texts.iter().any(|text| text == "Retry deploy"), "{texts:?}");
+        let shown = until(&ctx, &failure, "Docker did not come back");
+        let error = "Docker did not come back: Docker restarted but still does not answer.";
+        assert!(shown.iter().any(|text| text == error), "{shown:?}");
+        assert!(shown.iter().any(|text| text == ROOTLESS), "{shown:?}");
+        assert!(!shown.iter().any(|text| text == "Retry deploy"), "{shown:?}");
     }
 }

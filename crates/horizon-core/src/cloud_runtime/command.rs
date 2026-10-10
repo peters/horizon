@@ -389,10 +389,10 @@ mod tests {
 
     #[test]
     fn a_timed_out_docker_command_is_a_stuck_daemon_only_when_docker_does_not_answer() {
+        use std::{os::unix::fs::PermissionsExt, path::Path};
         let temp = tempfile::tempdir().unwrap();
         let docker = temp.path().join("docker");
-        let cancel = Cancellation::default();
-        let lines = std::cell::RefCell::new(Vec::new());
+        let (cancel, lines) = (Cancellation::default(), std::cell::RefCell::new(Vec::new()));
         let emit = |event| {
             if let Event::Output(line) = event {
                 lines.borrow_mut().push(line);
@@ -403,34 +403,39 @@ mod tests {
             emit: &emit,
             secrets: vec![],
         };
-        for (version, stuck) in [("echo 29.8.1", false), ("exec sleep 30", true)] {
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let script = format!("#!/bin/sh\nif [ \"$1\" = version ]; then {version}; exit; fi\nexec sleep 30\n");
-                std::fs::write(&docker, script).unwrap();
-                std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
-            lines.borrow_mut().clear();
-            let result = runner.run(
+        let create = |program: &Path| {
+            let mut command = Command::new(program);
+            command.args(["create", "--name", "horizon-contract-1"]);
+            runner.run(
                 "worker image contract creation",
-                Command::new(&docker).args(["create", "--name", "horizon-contract-1"]),
+                &mut command,
                 Duration::from_millis(150),
-            );
-            match result {
-                Err(Error::DockerNotResponding("worker image contract creation")) if stuck => {
-                    assert_eq!(*lines.borrow(), ["Docker did not answer docker version within 5 s"]);
-                }
-                Err(Error::Invalid(TIMED_OUT)) if !stuck => assert!(lines.borrow().is_empty()),
-                other => panic!("{version}: {other:?}"),
-            }
-        }
-        // Any other program's timeout is a plain one, with no health check.
-        let result = runner.run(
-            "test",
-            Command::new("sh").args(["-c", "sleep 30"]),
-            Duration::from_millis(150),
+            )
+        };
+        // Docker answers its health check: the timeout is a plain one.
+        std::fs::write(
+            &docker,
+            "#!/bin/sh\n[ \"$1\" = version ] && echo 29.8.1 && exit\nexec sleep 30\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(create(&docker), Err(Error::Invalid(TIMED_OUT))));
+        assert!(lines.borrow().is_empty());
+        // Docker answers nothing: the daemon is stuck.
+        std::fs::write(&docker, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        let result = create(&docker);
+        assert!(
+            matches!(
+                result,
+                Err(Error::DockerNotResponding("worker image contract creation"))
+            ),
+            "{result:?}"
         );
-        assert!(matches!(result, Err(Error::Invalid(TIMED_OUT))), "{result:?}");
+        assert_eq!(*lines.borrow(), ["Docker did not answer docker version within 5 s"]);
+        // Any other program's timeout is a plain one, with no health check.
+        let other = temp.path().join("dockerd");
+        std::fs::rename(&docker, &other).unwrap();
+        assert!(matches!(create(&other), Err(Error::Invalid(TIMED_OUT))));
     }
 
     #[test]

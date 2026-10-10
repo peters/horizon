@@ -542,28 +542,31 @@ mod tests {
         const CONFLICT: &str = "docker: Error response from daemon: Conflict. The container name \"/horizon-contract-0b1c\" \
              is already in use by container \"0123456789ab\". You have to remove (or rename) that container to be able to \
              reuse that name.";
-        let summary = "worker image contract creation failed; inspect deployment output";
-        let found = diagnose([CONFLICT].into_iter(), summary).unwrap();
-        assert_eq!(found.cause, CONFLICT);
-        assert_eq!(found.meaning, Some(DOCKER_NAME_IN_USE));
-
-        let summary = "Docker is not responding: worker image contract creation did not finish and Docker did not \
-             answer a health check";
-        let found = diagnose(["Docker did not answer docker version within 5 s"].into_iter(), summary).unwrap();
-        assert_eq!(found.cause, "Docker did not answer docker version within 5 s");
-        assert_eq!(found.meaning, Some(DOCKER_NOT_RESPONDING));
+        let found = diagnose([CONFLICT].into_iter(), "worker image contract creation failed").unwrap();
+        assert_eq!(
+            (found.cause.as_str(), found.meaning),
+            (CONFLICT, Some(DOCKER_NAME_IN_USE))
+        );
+        let summary = "Docker is not responding: worker image contract creation did not finish";
+        let line = "Docker did not answer docker version within 5 s";
+        let found = diagnose([line].into_iter(), summary).unwrap();
+        assert_eq!(
+            (found.cause.as_str(), found.meaning),
+            (line, Some(DOCKER_NOT_RESPONDING))
+        );
         assert_eq!(
             meaning(summary),
             Some(DOCKER_NOT_RESPONDING),
             "the summary alone says it too"
         );
-
         for docker in [DOCKER_NOT_RESPONDING, DOCKER_NAME_IN_USE, DOCKER_NOT_RUNNING] {
             assert!(restarts_docker(docker));
         }
         assert!(!restarts_docker(REGISTRY_REFUSED));
-        // A plain timeout is not a stuck Docker.
-        assert!(!meaning("Local operation timed out").is_some_and(restarts_docker));
+        assert!(
+            !meaning("Local operation timed out").is_some_and(restarts_docker),
+            "a plain timeout"
+        );
     }
 
     #[test]

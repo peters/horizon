@@ -4,7 +4,7 @@
 //! is the next symptom, such as a container name still in use by a create that was
 //! stopped. A short `docker version` tells a stuck daemon from a slow command.
 mod plan;
-pub use plan::{Endpoint, Facts, Os, Plan, Setup, plan};
+pub use plan::{Endpoint, Facts, Os, Plan, plan};
 use std::{
     ffi::OsStr,
     io::Read,
@@ -150,7 +150,6 @@ impl Target {
             home,
             user_unit: systemd && unit_loaded(true, "docker.service"),
             system_unit: systemd && unit_loaded(false, "docker.service"),
-            desktop_unit: systemd && desktop_relevant && unit_loaded(true, "docker-desktop.service"),
             pkexec: os == Os::Linux && on_path("pkexec"),
             desktop_cli: desktop_relevant && self.desktop_cli(),
             desktop_app: os == Os::MacOs && Path::new("/Applications/Docker.app").is_dir(),
@@ -188,40 +187,30 @@ impl Target {
         matches!(bounded(command, LOOKUP_TIMEOUT), Ran::Exited { success: true, .. })
     }
 
-    /// Runs `steps` in order, then waits until Docker answers. `report` hears each
-    /// phase as it starts.
+    /// Runs `argv`, then waits until Docker answers. `waiting` hears when the wait starts.
     /// # Errors
-    /// The first step that fails or outlives its time, or Docker still not answering.
-    pub fn restart(&self, steps: &[Vec<String>], report: &dyn Fn(Phase)) -> Result<String, RestartError> {
-        for step in steps {
-            let Some((program, args)) = step.split_first() else {
-                continue;
-            };
-            let shown = step.join(" ");
-            report(Phase::Running(shown.clone()));
-            let mut command = Command::new(program);
-            command.args(args);
-            match bounded(command, STEP_TIMEOUT) {
-                Ran::Exited { success: true, .. } => {}
-                Ran::Exited { stderr, stdout, .. } => {
-                    return Err(RestartError::Refused {
-                        command: shown,
-                        detail: last_line(&stderr)
-                            .or_else(|| last_line(&stdout))
-                            .unwrap_or("it gave no reason")
-                            .to_owned(),
-                    });
-                }
-                Ran::TimedOut => return Err(RestartError::TimedOut { command: shown }),
-                Ran::Failed(error) => {
-                    return Err(RestartError::Refused {
-                        command: shown,
-                        detail: error.to_string(),
-                    });
-                }
+    /// The command failing or outliving its time, or Docker still not answering.
+    pub fn restart(&self, argv: &[String], waiting: &dyn Fn()) -> Result<String, RestartError> {
+        let shown = argv.join(" ");
+        let mut command = Command::new(argv.first().map_or("", String::as_str));
+        command.args(argv.iter().skip(1));
+        let refused = |detail: &str| RestartError::Refused {
+            command: shown.clone(),
+            detail: detail.to_owned(),
+        };
+        match bounded(command, STEP_TIMEOUT) {
+            Ran::Exited { success: true, .. } => {}
+            Ran::Exited { stderr, stdout, .. } => {
+                return Err(refused(
+                    last_line(&stderr)
+                        .or_else(|| last_line(&stdout))
+                        .unwrap_or("it gave no reason"),
+                ));
             }
+            Ran::TimedOut => return Err(RestartError::TimedOut { command: shown }),
+            Ran::Failed(error) => return Err(refused(&error.to_string())),
         }
-        report(Phase::Waiting);
+        waiting();
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         loop {
             let health = self.probe(PROBE_TIMEOUT);
@@ -234,13 +223,6 @@ impl Target {
             thread::sleep(Duration::from_secs(2));
         }
     }
-}
-
-/// What a restart is doing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Phase {
-    Running(String),
-    Waiting,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -342,7 +324,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     /// A `docker` program that runs `script` with the arguments it was given.
-    pub(crate) fn fake_docker(directory: &Path, script: &str) -> PathBuf {
+    fn fake_docker(directory: &Path, script: &str) -> PathBuf {
         let path = directory.join("docker");
         std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -361,14 +343,12 @@ mod tests {
             "--host",
             "x",
         ]);
-        assert_eq!(
-            Target::of(&command),
-            Some(Target {
-                program: "/usr/local/bin/docker".into(),
-                config: Some("/state/docker".into()),
-                host: Some("ssh://build.example".into()),
-            })
-        );
+        let target = Target {
+            program: "/usr/local/bin/docker".into(),
+            config: Some("/state/docker".into()),
+            host: Some("ssh://build.example".into()),
+        };
+        assert_eq!(Target::of(&command), Some(target));
         let mut plain = Command::new("docker");
         plain.args(["push", "--config", "ignored"]);
         assert_eq!(Target::of(&plain), Some(Target::default()));
@@ -379,22 +359,25 @@ mod tests {
     #[test]
     fn a_health_check_tells_an_answer_a_refusal_and_a_hang_apart() {
         let temp = tempfile::tempdir().unwrap();
-        let target = |script| Target {
+        let target = |script: &str| Target {
             program: fake_docker(temp.path(), script),
-            ..Target::default()
+            config: Some("/state/docker".into()),
+            host: Some("unix:///run/user/1000/docker.sock".into()),
+        };
+        let answer = |version: &str| Health::Answering {
+            version: version.into(),
         };
         assert_eq!(
-            target("echo 29.8.1").probe(PROBE_TIMEOUT),
-            Health::Answering {
-                version: "29.8.1".into()
-            }
+            target("echo \"$*\"").probe(PROBE_TIMEOUT),
+            answer(
+                "--config /state/docker --host unix:///run/user/1000/docker.sock version --format {{.Server.Version}}"
+            ),
+            "the health check asks the cloud's own Docker"
         );
+        let refusal = "Cannot connect to the Docker daemon at unix:///run/docker.sock.";
         assert_eq!(
-            target("echo 'Cannot connect to the Docker daemon at unix:///run/docker.sock.' >&2; exit 1")
-                .probe(PROBE_TIMEOUT),
-            Health::NotRunning {
-                detail: "Cannot connect to the Docker daemon at unix:///run/docker.sock.".into()
-            }
+            target(&format!("echo '{refusal}' >&2; exit 1")).probe(PROBE_TIMEOUT),
+            Health::NotRunning { detail: refusal.into() }
         );
         let started = Instant::now();
         assert_eq!(
@@ -410,31 +393,14 @@ mod tests {
     }
 
     #[test]
-    fn the_probe_uses_the_cloud_configuration_and_host() {
-        let temp = tempfile::tempdir().unwrap();
-        let target = Target {
-            program: fake_docker(temp.path(), "echo \"$*\""),
-            config: Some("/state/docker".into()),
-            host: Some("unix:///run/user/1000/docker.sock".into()),
-        };
-        assert_eq!(
-            target.probe(PROBE_TIMEOUT),
-            Health::Answering {
-                version: "--config /state/docker --host unix:///run/user/1000/docker.sock version --format {{.Server.Version}}"
-                    .into()
-            }
-        );
-    }
-
-    #[test]
     fn an_explicit_host_is_the_endpoint_without_asking_docker() {
-        let target = Target {
+        let remote = Target {
             program: "/nonexistent/docker".into(),
             host: Some("ssh://build.example".into()),
             ..Target::default()
         };
         assert_eq!(
-            target.endpoint(),
+            remote.endpoint(),
             (None, Some(Endpoint::Remote("ssh://build.example".into())))
         );
         let temp = tempfile::tempdir().unwrap();
@@ -442,42 +408,34 @@ mod tests {
             program: fake_docker(temp.path(), "printf 'rootless\\tunix:///run/user/1000/docker.sock\\n'"),
             ..Target::default()
         };
-        assert_eq!(
-            context.endpoint(),
-            (
-                Some("rootless".into()),
-                Some(Endpoint::Socket("/run/user/1000/docker.sock".into()))
-            )
-        );
+        let socket = Endpoint::Socket("/run/user/1000/docker.sock".into());
+        assert_eq!(context.endpoint(), (Some("rootless".into()), Some(socket)));
     }
 
     #[test]
-    fn a_restart_reports_its_phases_and_waits_for_an_answer() {
+    fn a_restart_waits_for_an_answer_and_a_refused_one_says_why() {
         let temp = tempfile::tempdir().unwrap();
         let target = Target {
             program: fake_docker(temp.path(), "echo 29.8.1"),
             ..Target::default()
         };
-        let phases = std::cell::RefCell::new(Vec::new());
-        let version = target
-            .restart(&[vec!["true".into()]], &|phase| phases.borrow_mut().push(phase))
-            .unwrap();
-        assert_eq!(version, "29.8.1");
-        assert_eq!(*phases.borrow(), [Phase::Running("true".into()), Phase::Waiting]);
-
-        let refused = target.restart(
-            &[vec![
-                "sh".into(),
-                "-c".into(),
-                "echo 'Interactive authentication required.' >&2; exit 1".into(),
-            ]],
-            &|_| {},
+        let waited = std::cell::Cell::new(false);
+        assert_eq!(
+            target.restart(&["true".into()], &|| waited.set(true)),
+            Ok("29.8.1".into())
         );
+        assert!(waited.get());
+
+        let script = "echo 'Interactive authentication required.' >&2; exit 1";
+        let refused = target.restart(&["sh".into(), "-c".into(), script.into()], &|| {
+            panic!("nothing to wait for")
+        });
+        let detail = "Interactive authentication required.".into();
         assert_eq!(
             refused,
             Err(RestartError::Refused {
-                command: "sh -c echo 'Interactive authentication required.' >&2; exit 1".into(),
-                detail: "Interactive authentication required.".into()
+                command: format!("sh -c {script}"),
+                detail
             })
         );
     }
