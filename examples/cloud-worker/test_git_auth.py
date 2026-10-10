@@ -259,6 +259,9 @@ class GitAuthenticationTests(unittest.TestCase):
                 auth.restore_static({'previous': []})
         with mock.patch.object(auth, 'AGENT_ISOLATION', self.path / 'none'):
             self.assertFalse(auth.isolated())
+        with mock.patch.object(auth.os, 'stat', side_effect=OSError(5, 'Input/output error')), \
+                self.assertRaises(OSError):
+            auth.isolated()
 
     def test_gh_injects_authentication_only_into_child_environment(self):
         with mock.patch.object(auth.subprocess, 'run'):

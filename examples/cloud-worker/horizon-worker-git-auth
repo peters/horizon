@@ -159,7 +159,7 @@ def isolated():
         return True
     except PermissionError:  # The agent account cannot look into the marker's directory.
         return True
-    except OSError:
+    except FileNotFoundError:  # Only a missing marker proves that agents are not isolated.
         return False
 
 
