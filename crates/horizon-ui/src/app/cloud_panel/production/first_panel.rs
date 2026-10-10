@@ -66,7 +66,11 @@ impl HorizonApp {
             if reveals_first_panel(self.cloud_sight(index)) {
                 self.cloud_add_panel(ctx, issue, kind, None);
             } else {
+                // A new panel takes the focus; here it stays with what the person uses.
+                let (focused, active) = (self.board.focused, self.board.active_workspace);
                 self.cloud_add_member(issue, kind, None);
+                self.board.focused = focused;
+                self.board.active_workspace = active;
             }
         }
     }
