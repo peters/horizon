@@ -42,7 +42,7 @@ pub(super) fn line(answer: &Value) -> Option<String> {
     };
     let provider = offer.get("provider")?.as_str()?;
     Some(format!(
-        "{vcpu} vCPU · {memory} GB · from {symbol}{hourly:.4}/h on {provider}"
+        "from {symbol}{hourly:.4}/h · {vcpu} vCPU · {memory} GB · {provider}"
     ))
 }
 
@@ -59,7 +59,7 @@ mod tests {
         ]}});
         assert_eq!(
             line(&answer).as_deref(),
-            Some("2 vCPU · 4 GB · from €0.0088/h on Hetzner")
+            Some("from €0.0088/h · 2 vCPU · 4 GB · Hetzner")
         );
         assert_eq!(line(&json!({"comparison": {"offers": []}})), None);
         assert_eq!(line(&json!({"offers": []})), None);

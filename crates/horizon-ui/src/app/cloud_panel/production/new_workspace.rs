@@ -150,12 +150,12 @@ pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option
 /// What the dialog says above its fields for a workspace from New workspace, and the This PC
 /// choice of a repository whose `cloud.yml` asks for it. True when the person chose This PC.
 pub(super) fn notes(ui: &mut Ui, form: &mut Production) -> bool {
-    // Only about the profiles read for what the field shows now, not while another
-    // repository is typed or read.
-    if form.profiles.is_none() || form.launch.loading() || form.source.editing() {
+    // Only about the repository the field shows now, not while another one is typed or
+    // read. A kept choice needs no profile: it is about the repository.
+    if form.launch.loading() || form.source.editing() || form.repository.trim().is_empty() {
         return false;
     }
-    if form.new_workspace.as_ref().is_some_and(|intent| intent.no_gpu) {
+    if form.profiles.is_some() && form.new_workspace.as_ref().is_some_and(|intent| intent.no_gpu) {
         ui.label(
             RichText::new(
                 "This repository has no GPU profile, so the cloud runs on a CPU worker. For a GPU, add a profile \

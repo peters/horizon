@@ -66,7 +66,10 @@ pub(in crate::app) fn menu(button: &Response, cloud_ready: bool, machine: Option
                 && enabled
                 && let Some(machine) = machine
             {
-                ui.label(RichText::new(machine).size(11.5).color(theme::FG_DIM()));
+                ui.add(
+                    egui::Label::new(RichText::new(machine).size(11.5).color(theme::FG_DIM()))
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                );
             }
         }
     });

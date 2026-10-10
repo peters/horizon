@@ -997,7 +997,7 @@ This task starts no cloud. `<local>` is a new repository whose committed
    Result: A menu shows **Cloud**, **This PC** and **Cloud GPU**, in that order.
    Under **Cloud**, the text `Checking machine prices…` changes in some seconds to
    the machine of a quick start and its hourly price, for example
-   `2 vCPU · 4 GB · from €0.0088/h on Hetzner`. The price is the cheapest offer that
+   `from €0.0088/h · 2 vCPU · 4 GB · Hetzner`. The price is the cheapest offer that
    **New cloud** shows for a quick start.
 
 3. Click **This PC**.

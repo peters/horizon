@@ -98,6 +98,7 @@ fn cloud_gpu_takes_the_first_gpu_profile_of_each_repository_or_its_default() {
 fn a_repository_that_asks_for_this_pc_is_offered_it() {
     let (_temp, mut app) = test_app();
     let form = &mut app.cloud_prototype.production;
+    form.repository = "/synthetic/local".into();
     form.profiles = Some(config(GPU_TOO));
     let (chosen, shown) = texts(form);
     assert!(!chosen);
@@ -247,4 +248,14 @@ fn a_kept_choice_wins_over_what_the_repository_asks_for() {
         "{shown:?}"
     );
     assert!(!shown.iter().any(|text| text == "Open on This PC"), "{shown:?}");
+
+    // A kept choice shows before any profile is read: it is about the repository.
+    keep(
+        form.new_workspace.as_mut().unwrap(),
+        repository,
+        WorkspacePlacement::Local,
+    );
+    form.profiles = None;
+    let (_, shown) = texts(form);
+    assert!(shown.iter().any(|text| text == "Open on This PC"), "{shown:?}");
 }

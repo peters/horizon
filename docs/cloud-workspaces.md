@@ -180,7 +180,7 @@ and **Cloud GPU**:
 
 - **Cloud** makes the workspace and opens **New cloud** for it. Under **Cloud**,
   the menu shows the machine of a quick start and its hourly price, for example
-  `2 vCPU · 4 GB · from €0.0088/h on Hetzner`: the cheapest offer of the providers
+  `from €0.0088/h · 2 vCPU · 4 GB · Hetzner`: the cheapest offer of the providers
   that this computer can deploy to. A repository with its own profile can ask for a
   larger machine. **New cloud** then shows that machine and its price.
 - **Cloud GPU** does the same and selects the first profile with `gpu: true`. When

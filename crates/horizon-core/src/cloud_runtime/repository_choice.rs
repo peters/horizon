@@ -14,8 +14,8 @@ const MAX_ENTRIES: usize = 1_000;
 pub struct Choices(BTreeMap<String, WorkspacePlacement>);
 
 /// The name under which `repository`, as the New cloud field holds it, is kept: a local
-/// folder by its full path, a link without a trailing slash or `.git`. `None` for an
-/// empty field.
+/// folder by its full path (`~` is the home folder), a link without a trailing slash or
+/// `.git`. `None` for an empty field.
 #[must_use]
 pub fn key(repository: &str) -> Option<String> {
     let trimmed = repository.trim().trim_end_matches('/');
@@ -23,10 +23,9 @@ pub fn key(repository: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    let path = Path::new(trimmed);
-    if path.is_absolute()
-        && let Ok(full) = path.canonicalize()
-    {
+    let path = crate::dir_search::expand_tilde(trimmed);
+    if path.is_absolute() {
+        let full = path.canonicalize().unwrap_or(path);
         return Some(full.to_string_lossy().into_owned());
     }
     Some(trimmed.to_owned())
@@ -109,6 +108,8 @@ mod tests {
         choices.set(root.path(), &path, None).unwrap();
         assert_eq!(Choices::load(root.path()).get(&path), None);
         assert!(choices.set(root.path(), "  ", Some(WorkspacePlacement::Local)).is_err());
+        let home = crate::dir_search::expand_tilde("~/code/app");
+        assert_eq!(key("~/code/app"), key(&home.to_string_lossy()));
     }
 
     #[test]
