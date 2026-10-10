@@ -1,0 +1,402 @@
+"""GraphQL as the worker's API broker reads it: a strict parser for the executable documents
+that agents send to GitHub, and the parts of GitHub's schema that the broker's policy needs.
+The parser keeps the offset of each selection set's closing brace, so the policy can add
+fields to the document without printing it again. A module that horizon-worker-github loads,
+not a command."""
+import re
+
+MAX_DOCUMENT = 256 << 10
+MAX_DEPTH = 40
+MAX_TOKENS = 50000
+
+TOKEN = re.compile(r'''
+    (?P<ignored>[﻿ \t\r\n,]+|\#[^\r\n]*)
+  | (?P<spread>\.\.\.)
+  | (?P<punct>[!$&():=@\[\]{|}])
+  | (?P<name>[_A-Za-z][_0-9A-Za-z]*)
+  | (?P<float>-?(?:0|[1-9][0-9]*)(?:\.[0-9]+(?:[eE][+-]?[0-9]+)?|[eE][+-]?[0-9]+))
+  | (?P<int>-?(?:0|[1-9][0-9]*))
+  | (?P<block>"""(?:[^"\\]|\\"""|\\(?!""")|"(?!""))*""")
+  | (?P<string>"(?:[^"\\\r\n]|\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4}))*")
+''', re.VERBOSE)
+ESCAPES = {'"': '"', '\\': '\\', '/': '/', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t'}
+
+
+class Invalid(Exception):
+    """The document cannot be read, or reads in a way the broker does not accept."""
+
+
+class SelectionSet:
+    def __init__(self, selections, end):
+        self.selections = selections
+        # The offset of the closing brace in the document.
+        self.end = end
+
+
+class Field:
+    def __init__(self, alias, name, arguments, directives, selection_set):
+        self.alias = alias
+        self.name = name
+        self.arguments = arguments
+        self.directives = directives
+        self.selection_set = selection_set
+
+    @property
+    def key(self):
+        return self.alias or self.name
+
+
+class Spread:
+    def __init__(self, name, directives):
+        self.name = name
+        self.directives = directives
+
+
+class InlineFragment:
+    def __init__(self, condition, directives, selection_set):
+        self.condition = condition
+        self.directives = directives
+        self.selection_set = selection_set
+
+
+class Operation:
+    def __init__(self, kind, name, variables, directives, selection_set):
+        self.kind = kind
+        self.name = name
+        # Variable name to (type text, default value or None).
+        self.variables = variables
+        self.directives = directives
+        self.selection_set = selection_set
+
+
+class Fragment:
+    def __init__(self, name, condition, directives, selection_set):
+        self.name = name
+        self.condition = condition
+        self.directives = directives
+        self.selection_set = selection_set
+
+
+class Document:
+    def __init__(self, text, operations, fragments, names):
+        self.text = text
+        self.operations = operations
+        self.fragments = fragments
+        # Every name in the document, so an added alias can be one that it does not use.
+        self.names = names
+
+
+def tokens(text):
+    if len(text) > MAX_DOCUMENT:
+        raise Invalid('the GraphQL document is too long')
+    found, position = [], 0
+    while position < len(text):
+        match = TOKEN.match(text, position)
+        if not match:
+            raise Invalid('the GraphQL document has an unexpected character at offset %d' % position)
+        kind = match.lastgroup
+        if kind != 'ignored':
+            if len(found) >= MAX_TOKENS:
+                raise Invalid('the GraphQL document is too long')
+            value = match.group()
+            if kind == 'spread':
+                kind = 'punct'
+            found.append((kind, value, match.start()))
+        position = match.end()
+    found.append(('end', '', len(text)))
+    return found
+
+
+def string_value(kind, raw):
+    if kind == 'block':
+        return block_string(raw[3:-3].replace('\\"""', '"""'))
+    out, index = [], 1
+    while index < len(raw) - 1:
+        char = raw[index]
+        if char == '\\':
+            escape = raw[index + 1]
+            if escape == 'u':
+                out.append(chr(int(raw[index + 2:index + 6], 16)))
+                index += 6
+                continue
+            out.append(ESCAPES[escape])
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return ''.join(out)
+
+
+def block_string(raw):
+    lines = re.split(r'\r\n|[\n\r]', raw)
+    indents = [len(line) - len(line.lstrip(' \t')) for line in lines[1:] if line.strip(' \t')]
+    common = min(indents) if indents else 0
+    lines = [lines[0]] + [line[common:] for line in lines[1:]]
+    while lines and not lines[0].strip(' \t'):
+        lines.pop(0)
+    while lines and not lines[-1].strip(' \t'):
+        lines.pop()
+    return '\n'.join(lines)
+
+
+class Parser:
+    def __init__(self, text):
+        self.text = text
+        self.tokens = tokens(text)
+        self.index = 0
+        self.depth = 0
+        self.names = {value for kind, value, _ in self.tokens if kind == 'name'}
+
+    def peek(self, kind=None, value=None):
+        token = self.tokens[self.index]
+        return (kind is None or token[0] == kind) and (value is None or token[1] == value)
+
+    def take(self, kind, value=None):
+        token = self.tokens[self.index]
+        if token[0] != kind or (value is not None and token[1] != value):
+            wanted = value or kind
+            raise Invalid('the GraphQL document has %r where %r belongs, at offset %d'
+                          % (token[1] or 'the end', wanted, token[2]))
+        self.index += 1
+        return token
+
+    def skip(self, value):
+        if self.peek('punct', value):
+            self.index += 1
+            return True
+        return False
+
+    def name(self):
+        return self.take('name')[1]
+
+    def document(self):
+        operations, fragments = [], {}
+        while not self.peek('end'):
+            if self.peek('punct', '{'):
+                operations.append(Operation('query', None, {}, [], self.selection_set()))
+            elif self.peek('name', 'fragment'):
+                fragment = self.fragment()
+                if fragment.name in fragments:
+                    raise Invalid('the GraphQL document defines the fragment %s twice' % fragment.name)
+                fragments[fragment.name] = fragment
+            elif self.peek('name'):
+                operations.append(self.operation())
+            else:
+                self.take('name')
+        if not operations:
+            raise Invalid('the GraphQL document has no operation')
+        return Document(self.text, operations, fragments, self.names)
+
+    def operation(self):
+        kind = self.name()
+        if kind not in ('query', 'mutation', 'subscription'):
+            raise Invalid('the GraphQL document has an unknown operation type %s' % kind)
+        name = self.name() if self.peek('name') else None
+        variables = {}
+        if self.skip('('):
+            while not self.skip(')'):
+                self.take('punct', '$')
+                variable = self.name()
+                if variable in variables:
+                    raise Invalid('the GraphQL operation declares $%s twice' % variable)
+                self.take('punct', ':')
+                kind_text = self.type_reference()
+                default = self.value(constant=True) if self.skip('=') else None
+                self.directives()
+                variables[variable] = (kind_text, default)
+        return Operation(kind, name, variables, self.directives(), self.selection_set())
+
+    def type_reference(self):
+        """The type as text without spaces, such as `[ID!]!`."""
+        if self.skip('['):
+            text = '[' + self.type_reference()
+            self.take('punct', ']')
+            text += ']'
+        else:
+            text = self.name()
+        return text + '!' if self.skip('!') else text
+
+    def fragment(self):
+        self.take('name', 'fragment')
+        name = self.name()
+        if name == 'on':
+            raise Invalid('a GraphQL fragment cannot be named on')
+        self.take('name', 'on')
+        condition = self.name()
+        return Fragment(name, condition, self.directives(), self.selection_set())
+
+    def selection_set(self):
+        self.depth += 1
+        if self.depth > MAX_DEPTH:
+            raise Invalid('the GraphQL document is nested too deeply')
+        self.take('punct', '{')
+        selections = []
+        while not self.peek('punct', '}'):
+            selections.append(self.selection())
+        end = self.take('punct', '}')[2]
+        self.depth -= 1
+        return SelectionSet(selections, end)
+
+    def selection(self):
+        if self.skip('...'):
+            if self.peek('name') and not self.peek('name', 'on'):
+                return Spread(self.name(), self.directives())
+            condition = None
+            if self.skip_name('on'):
+                condition = self.name()
+            return InlineFragment(condition, self.directives(), self.selection_set())
+        alias, name = None, self.name()
+        if self.skip(':'):
+            alias, name = name, self.name()
+        arguments = self.arguments()
+        directives = self.directives()
+        selection_set = self.selection_set() if self.peek('punct', '{') else None
+        return Field(alias, name, arguments, directives, selection_set)
+
+    def skip_name(self, value):
+        if self.peek('name', value):
+            self.index += 1
+            return True
+        return False
+
+    def arguments(self, constant=False):
+        arguments = {}
+        if self.skip('('):
+            while not self.skip(')'):
+                name = self.name()
+                if name in arguments:
+                    raise Invalid('the GraphQL document gives the argument %s twice' % name)
+                self.take('punct', ':')
+                arguments[name] = self.value(constant)
+        return arguments
+
+    def directives(self):
+        directives = []
+        while self.skip('@'):
+            directives.append((self.name(), self.arguments()))
+        return directives
+
+    def value(self, constant=False):
+        self.depth += 1
+        if self.depth > MAX_DEPTH:
+            raise Invalid('the GraphQL document is nested too deeply')
+        kind, raw, _ = self.tokens[self.index]
+        if kind == 'punct' and raw == '$' and not constant:
+            self.index += 1
+            result = ('variable', self.name())
+        elif kind == 'punct' and raw == '[':
+            self.index += 1
+            items = []
+            while not self.skip(']'):
+                items.append(self.value(constant))
+            result = ('list', items)
+        elif kind == 'punct' and raw == '{':
+            self.index += 1
+            fields = {}
+            while not self.skip('}'):
+                name = self.name()
+                if name in fields:
+                    raise Invalid('the GraphQL document gives the input field %s twice' % name)
+                self.take('punct', ':')
+                fields[name] = self.value(constant)
+            result = ('object', fields)
+        elif kind in ('int', 'float'):
+            self.index += 1
+            result = (kind, raw)
+        elif kind in ('string', 'block'):
+            self.index += 1
+            result = ('string', string_value(kind, raw))
+        elif kind == 'name':
+            self.index += 1
+            result = ('boolean', raw == 'true') if raw in ('true', 'false') else \
+                ('null', None) if raw == 'null' else ('enum', raw)
+        else:
+            raise Invalid('the GraphQL document has %r where a value belongs' % (raw or 'the end'))
+        self.depth -= 1
+        return result
+
+
+def parse(text):
+    return Parser(text).document()
+
+
+def unwrap(reference):
+    """The named type of an introspection type reference, and whether its outer type is
+    non-null and whether it is a list anywhere."""
+    nonnull = reference.get('kind') == 'NON_NULL'
+    listed = False
+    while reference.get('ofType'):
+        listed = listed or reference.get('kind') == 'LIST'
+        reference = reference['ofType']
+    return reference['name'], nonnull, listed
+
+
+class Schema:
+    """The types of GitHub's GraphQL schema from an introspection reply: each type's kind, its
+    fields and their types, its input fields, and the object types an abstract type can be."""
+
+    def __init__(self, introspection):
+        schema = introspection['__schema']
+        self.query = schema['queryType']['name']
+        self.mutation = (schema.get('mutationType') or {}).get('name')
+        self.kinds, self.fields, self.arguments, self.inputs, self.possible = {}, {}, {}, {}, {}
+        for item in schema['types']:
+            name = item['name']
+            self.kinds[name] = item['kind']
+            self.fields[name] = {field['name']: unwrap(field['type']) for field in item.get('fields') or ()}
+            self.arguments[name] = {field['name']: {argument['name']: unwrap_full(argument['type'])
+                                                    for argument in field.get('args') or ()}
+                                    for field in item.get('fields') or ()}
+            self.inputs[name] = {field['name']: unwrap_full(field['type']) for field in item.get('inputFields') or ()}
+            if item['kind'] == 'OBJECT':
+                self.possible[name] = {name}
+            elif item.get('possibleTypes'):
+                self.possible[name] = {possible['name'] for possible in item['possibleTypes']}
+        for name, kind in self.kinds.items():
+            if kind in ('INTERFACE', 'UNION'):
+                self.possible.setdefault(name, set())
+        if self.query not in self.fields:
+            raise Invalid('the GraphQL schema has no query type')
+
+    def leaf(self, name):
+        return self.kinds.get(name) in ('SCALAR', 'ENUM')
+
+    def field(self, parent, name):
+        """The named type of `parent.name`, with its outer non-null and list flags; None for a
+        field the type does not have. __typename is on every composite type."""
+        if name == '__typename':
+            return ('String', True, False)
+        # Introspection's entry fields are not in the query type's own fields.
+        if parent == self.query and name in INTROSPECTION_ROOTS:
+            return INTROSPECTION_ROOTS[name]
+        return self.fields.get(parent, {}).get(name)
+
+    def required(self, parent, name):
+        """Whether `parent.name` has an argument that a request must give."""
+        return any(isinstance(kind, tuple) and kind[0] == 'nonnull'
+                   for kind in self.arguments.get(parent, {}).get(name, {}).values())
+
+
+INTROSPECTION_ROOTS = {'__schema': ('__Schema', True, False), '__type': ('__Type', False, False)}
+
+
+def unwrap_full(reference):
+    """An input type reference as nested ('list', inner) and ('nonnull', inner) wrappers
+    around the named type."""
+    if reference.get('kind') == 'NON_NULL':
+        return ('nonnull', unwrap_full(reference['ofType']))
+    if reference.get('kind') == 'LIST':
+        return ('list', unwrap_full(reference['ofType']))
+    return reference['name']
+
+
+# What the broker asks GitHub for, once for each start of the service.
+INTROSPECTION = ('query{__schema{queryType{name} mutationType{name} types{kind name possibleTypes{name} '
+                 'fields(includeDeprecated:true){name args{name type{...T}} type{...T}} '
+                 'inputFields{name type{...T}}}}} '
+                 'fragment T on __Type{kind name ofType{kind name ofType{kind name ofType{kind name '
+                 'ofType{kind name ofType{kind name}}}}}}')
+
+
+if __name__ == '__main__':
+    raise SystemExit('horizon-worker-github-graphql is a module of horizon-worker-github, not a command.')
