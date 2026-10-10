@@ -53,6 +53,8 @@ CONNECTIONS = 32
 HEAD_SECONDS = 30
 # Per read or write after that, not per request: a large push streams as long as it takes.
 TIMEOUT = 300
+# For the client's close_notify after the reply.
+CLOSE_SECONDS = 5
 MAX_LFS_REQUEST = 1 << 20
 MAX_LFS_REPLY = 4 << 20
 # The repository is the first two segments, as GitHub reads them; the rest is one of the
@@ -357,7 +359,7 @@ class Exchange:
             if any(secret in text for secret in secrets):
                 raise refusal(502, 'the Git LFS reply from GitHub held this worker\'s sign-in; it was not passed on.')
         self.started = True
-        relay.relay(self.output, response, keep, secrets, data)
+        relay.relay(self.output, response, keep, secrets, data, self.request.version == 'HTTP/1.1')
 
 
 class Proxy:
@@ -434,6 +436,10 @@ def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, t
         with current[0] as tls:
             record = tunnel_exchange(tls, store, environ, watchdog.cancel,
                                      lambda: owner_allowed(tls, (uid,), tables))
+            # close_notify: Git's GnuTLS reports a tunnel that ends without it as an error.
+            tls.settimeout(CLOSE_SECONDS)
+            with contextlib.suppress(OSError, ValueError):
+                tls.unwrap()
     except (ssl.SSLError, relay.ClientGone, TimeoutError, ConnectionError):
         pass
     finally:

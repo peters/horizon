@@ -32,6 +32,8 @@ class FakeGitHub(http.server.ThreadingHTTPServer):
     def __init__(self, root):
         super().__init__(('127.0.0.1', 0), GitHandler)
         self.root, self.seen = root, []
+        # How Git replies end: `length`, `chunked`, or `close` (the end of the connection).
+        self.framing = 'length'
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
     @property
@@ -105,10 +107,17 @@ class GitHandler(http.server.BaseHTTPRequestHandler):
                 status = int(value.split()[0])
             elif name:
                 fields.append((name, value.strip()))
+        if self.server.framing == 'chunked':
+            self.protocol_version = 'HTTP/1.1'
         self.send_response(status)
         for field in fields:
             self.send_header(*field)
-        self.send_header('Content-Length', str(len(payload)))
+        if self.server.framing == 'length':
+            self.send_header('Content-Length', str(len(payload)))
+        elif self.server.framing == 'chunked':
+            self.send_header('Transfer-Encoding', 'chunked')
+            self.send_header('Connection', 'close')
+            payload = b'%X\r\n%s\r\n0\r\n\r\n' % (len(payload), payload) if payload else b'0\r\n\r\n'
         self.end_headers()
         self.wfile.write(payload)
 
@@ -218,6 +227,24 @@ class GitProxyTests(ServiceTestCase):
         records = [json.loads(line) for line in log.splitlines()]
         self.assertIn({'request': 'git-push', 'repository': 'example/project', 'granted': True, 'uid': os.getuid()},
                       [{key: record[key] for key in ('request', 'repository', 'granted', 'uid')} for record in records])
+
+    def test_replies_of_unknown_length_reach_git_with_a_clear_end(self):
+        # GitHub sends Git replies chunked; the proxy chunks them again and closes TLS with
+        # close_notify, so GnuTLS does not report a cut connection.
+        env = self.routed()
+        for framing in ('chunked', 'close'):
+            with self.subTest(framing=framing):
+                self.github.framing = framing
+                for repository in ('example/project', 'example/public'):
+                    result, worktree = self.clone(repository, env)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    result = git('fetch', '-q', 'origin', cwd=worktree, env=env, check=False)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    shutil.rmtree(worktree)
+                result, project = self.clone('example/project', env)
+                result = self.push(project, env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                shutil.rmtree(project)
 
     def test_reads_of_other_repositories_never_carry_the_token_and_pushes_are_refused(self):
         env = self.routed()

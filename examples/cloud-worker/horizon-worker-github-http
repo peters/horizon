@@ -37,9 +37,10 @@ class ClientGone(Exception):
 class Request:
     """One parsed request head. Field names are lower case; the body is still in `stream`."""
 
-    def __init__(self, method, target, fields, stream):
+    def __init__(self, method, target, fields, stream, version='HTTP/1.1'):
         self.method = method
         self.target = target
+        self.version = version
         self.fields = fields
         self.stream = stream
         self.chunked = False
@@ -85,7 +86,7 @@ def read_request(stream):
                 or not FIELD_VALUE.fullmatch(value):
             raise Refusal(400, 'Malformed request header field.')
         fields.append((name.decode('ascii').lower(), value.strip(b' \t').decode('ascii')))
-    request = Request(parts[0].decode('ascii'), parts[1].decode('ascii'), fields, stream)
+    request = Request(parts[0].decode('ascii'), parts[1].decode('ascii'), fields, stream, parts[2].decode('ascii'))
     framing(request)
     return request
 
@@ -228,15 +229,19 @@ def reply_fields(response, keep, secrets=()):
     return fields
 
 
-def relay(output, response, keep, secrets=(), data=None):
+def relay(output, response, keep, secrets=(), data=None, chunked=True):
     """Writes GitHub's reply to the client: status, kept fields and the body, which is `data`
-    when the caller already read it. The client reads to the end of the connection unless
-    the length is known."""
+    when the caller already read it. A body of unknown length goes chunked when `chunked` (an
+    HTTP/1.1 client), so the client sees where it ends; an HTTP/1.0 client reads to the end of
+    the connection."""
     fields = reply_fields(response, keep, secrets)
     if data is not None:
         fields.append(('Content-Length', str(len(data))))
     elif response.length is not None:
         fields.append(('Content-Length', str(response.length)))
+        chunked = False
+    elif chunked:
+        fields.append(('Transfer-Encoding', 'chunked'))
     output.write(head(response.status, fields, response.reason))
     if data is not None:
         output.write(data)
@@ -246,8 +251,10 @@ def relay(output, response, keep, secrets=(), data=None):
             piece = response.read1(PIECE)
             if not piece:
                 break
-            output.write(piece)
+            output.write(b'%X\r\n%s\r\n' % (len(piece), piece) if chunked else piece)
             output.flush()
+        if chunked:
+            output.write(b'0\r\n\r\n')
     output.flush()
 
 
