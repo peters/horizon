@@ -437,14 +437,18 @@ mod tests {
         for docker in [
             "Docker did not answer docker version within 5 s",
             "Cannot connect to the Docker daemon at unix:///run/user/1000/docker.sock",
-            "Error response from daemon: Conflict. The container name \"/horizon-contract-1\" is already in use by container \"0123\".",
         ] {
             assert!(offered(&failure(docker)), "{docker}");
             assert_eq!(texts(&egui::Context::default(), &failure(docker)), ["Restart Docker…"]);
         }
-        let registry = failure("error from registry: denied");
-        assert!(!offered(&registry));
-        assert_eq!(texts(&egui::Context::default(), &registry), Vec::<String>::new());
+        // A name in use comes from a healthy Docker too, and a restart stops every container.
+        for other in [
+            "error from registry: denied",
+            "Error response from daemon: Conflict. The container name \"/horizon-contract-1\" is already in use by container \"0123\".",
+        ] {
+            assert!(!offered(&failure(other)), "{other}");
+            assert_eq!(texts(&egui::Context::default(), &failure(other)), Vec::<String>::new());
+        }
     }
 
     #[test]

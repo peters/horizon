@@ -79,10 +79,10 @@ const PUBLISHING: [&str; 2] = ["uploading image", "publishing credential"];
 const DOCKER_NOT_RESPONDING: &str =
     "Docker stopped answering, so its commands wait without end. Restart Docker, then retry.";
 
-/// A name still held after a timed-out create: the client was stopped, the daemon kept
-/// or never finished the container, which a hung daemon does.
-const DOCKER_NAME_IN_USE: &str = "A container from an earlier attempt still has this name. This usually follows a Docker \
-     command that hung and was stopped, so Docker itself may be stuck. Restart Docker, then retry.";
+/// A name still held after an earlier attempt. A healthy Docker reports it too, so it
+/// does not offer a restart; a stuck one fails the next command as not responding.
+const DOCKER_NAME_IN_USE: &str = "A container from an earlier attempt still has this name. Remove that container or \
+     retry. If Docker commands also hang, Docker itself may be stuck.";
 
 const DOCKER_NOT_RUNNING: &str = "Docker is not running on this computer. Start it, then retry.";
 
@@ -185,7 +185,7 @@ const MEANINGS: [Known; 14] = [
 /// Docker can fix.
 #[must_use]
 pub fn restarts_docker(meaning: &str) -> bool {
-    [DOCKER_NOT_RESPONDING, DOCKER_NAME_IN_USE, DOCKER_NOT_RUNNING].contains(&meaning)
+    [DOCKER_NOT_RESPONDING, DOCKER_NOT_RUNNING].contains(&meaning)
 }
 
 /// How many failure lines before the newest one may explain it.
@@ -559,9 +559,11 @@ mod tests {
             Some(DOCKER_NOT_RESPONDING),
             "the summary alone says it too"
         );
-        for docker in [DOCKER_NOT_RESPONDING, DOCKER_NAME_IN_USE, DOCKER_NOT_RUNNING] {
+        for docker in [DOCKER_NOT_RESPONDING, DOCKER_NOT_RUNNING] {
             assert!(restarts_docker(docker));
         }
+        // A healthy Docker reports a name in use too; a restart would stop every container.
+        assert!(!restarts_docker(DOCKER_NAME_IN_USE));
         assert!(!restarts_docker(REGISTRY_REFUSED));
         assert!(
             !meaning("Local operation timed out").is_some_and(restarts_docker),

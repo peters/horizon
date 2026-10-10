@@ -184,8 +184,9 @@ fn mac(facts: &Facts, socket: &Path) -> Plan {
 }
 
 fn windows(facts: &Facts, pipe: &str) -> Plan {
-    let desktop_pipe = facts.context.as_deref() == Some(DESKTOP_CONTEXT) || pipe.ends_with("dockerDesktopLinuxEngine");
-    if desktop_pipe || (facts.desktop_cli && pipe.ends_with("docker_engine")) {
+    // The generic `docker_engine` pipe can be the Windows Docker service even where
+    // Docker Desktop's CLI is installed, so only Docker Desktop's own pipe or context counts.
+    if facts.context.as_deref() == Some(DESKTOP_CONTEXT) || pipe.ends_with("dockerDesktopLinuxEngine") {
         desktop(facts, WINDOWS_DESKTOP)
     } else {
         manual(WINDOWS_OTHER, Some("Restart-Service docker"))
@@ -314,10 +315,8 @@ mod tests {
         assert_eq!(runs(&facts), Err(WINDOWS_DESKTOP.into()));
         facts.desktop_cli = true;
         assert_eq!(runs(&facts), cli);
-        // The engine pipe without Docker Desktop's CLI may be the Windows service.
+        // The generic engine pipe may be the Windows service, even beside Docker Desktop's CLI.
         facts.endpoint = Some(Endpoint::parse("npipe:////./pipe/docker_engine"));
-        assert_eq!(runs(&facts), cli);
-        facts.desktop_cli = false;
         assert_eq!(runs(&facts), Err(WINDOWS_OTHER.into()));
         assert_eq!(plan(&facts).command(), Some("Restart-Service docker"));
     }
