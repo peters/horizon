@@ -5,7 +5,7 @@ use super::dashboard::{caption, label};
 use crate::{app::util::primary_button, theme};
 use egui::{RichText, vec2};
 use horizon_core::cloud_runtime::chatgpt;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
 /// Whether a card message reports an error or a success.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -14,11 +14,46 @@ enum MessageTone {
     Success,
 }
 
+struct SignOutResult {
+    revoked: Option<bool>,
+    selected: Option<chatgpt::Connection>,
+}
+
+struct Completion<T> {
+    sender: Option<Sender<T>>,
+    ctx: egui::Context,
+    viewport: egui::ViewportId,
+}
+
+impl<T> Completion<T> {
+    fn new(sender: Sender<T>, ctx: &egui::Context) -> Self {
+        Self {
+            sender: Some(sender),
+            ctx: ctx.clone(),
+            viewport: ctx.viewport_id(),
+        }
+    }
+
+    fn send(self, result: T) {
+        if let Some(sender) = &self.sender {
+            let _ = sender.send(result);
+        }
+    }
+}
+
+impl<T> Drop for Completion<T> {
+    fn drop(&mut self) {
+        // A panic must disconnect the channel before the awakened frame polls it.
+        drop(self.sender.take());
+        self.ctx.request_repaint_of(self.viewport);
+    }
+}
+
 /// What the card waits for and what it last learned.
 #[derive(Default)]
 pub(in crate::app::cloud_panel) struct Card {
     signing_in: Option<Receiver<Result<chatgpt::Connection, String>>>,
-    signing_out: Option<Receiver<Result<Option<bool>, String>>>,
+    signing_out: Option<Receiver<Result<SignOutResult, String>>>,
     confirming: Option<Receiver<Result<(), String>>>,
     /// Whether the saved connection was loaded from the draft.
     loaded: bool,
@@ -49,7 +84,7 @@ impl Card {
     /// Keeps `connection_slot`, the draft's `chatgpt` field, in step with finished flows.
     /// It runs on every frame, also while another mode is selected, so a finished
     /// flow always lands and the busy state always ends.
-    pub(super) fn tick(&mut self, ui: &egui::Ui, connection_slot: &mut Option<chatgpt::Connection>) {
+    pub(super) fn tick(&mut self, connection_slot: &mut Option<chatgpt::Connection>) {
         if !self.loaded {
             self.connection.clone_from(connection_slot);
             self.loaded = true;
@@ -66,32 +101,19 @@ impl Card {
                     self.message = Some((MessageTone::Error, message));
                     self.signing_in = None;
                 }
-                Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
+                Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => self.signing_in = None,
             }
         }
         if let Some(rx) = &self.signing_out {
             match rx.try_recv() {
-                Ok(Ok(revoked)) => {
-                    self.sign_out_uncertain = false;
-                    *connection_slot = None;
-                    self.connection = None;
-                    self.message = Some((
-                        MessageTone::Success,
-                        if revoked == Some(true) {
-                            "Signed out. Codex no longer uses your ChatGPT plan.".into()
-                        } else {
-                            "Signed out locally. Remote revocation was not confirmed; disconnect this app in ChatGPT Settings.".into()
-                        },
-                    ));
-                    self.signing_out = None;
-                }
+                Ok(Ok(result)) => self.finish_sign_out(result, connection_slot),
                 Ok(Err(message)) => {
                     self.sign_out_uncertain = true;
                     self.message = Some((MessageTone::Error, message));
                     self.signing_out = None;
                 }
-                Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
+                Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
                     self.sign_out_uncertain = true;
                     self.message = Some((
@@ -124,7 +146,7 @@ impl Card {
                     self.message = Some((MessageTone::Error, message));
                     self.confirming = None;
                 }
-                Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
+                Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => self.confirming = None,
             }
         }
@@ -134,6 +156,22 @@ impl Card {
         }
     }
 
+    fn finish_sign_out(&mut self, result: SignOutResult, connection_slot: &mut Option<chatgpt::Connection>) {
+        self.sign_out_uncertain = false;
+        self.connection = result.selected;
+        connection_slot.clone_from(&self.connection);
+        let mut message = if self.connection.is_some() {
+            "Signed out of the previous account. Another saved account is still selected.".to_owned()
+        } else {
+            "Signed out locally. Codex no longer uses your ChatGPT plan.".to_owned()
+        };
+        if result.revoked != Some(true) {
+            message.push_str(" Remote revocation was not confirmed; disconnect this app in ChatGPT Settings.");
+        }
+        self.message = Some((MessageTone::Success, message));
+        self.signing_out = None;
+    }
+
     /// Opens the `ChatGPT` sign-in in the system browser against the loopback callback.
     fn sign_in(&mut self, ctx: &egui::Context, root: &std::path::Path) {
         let (tx, rx) = channel();
@@ -141,7 +179,7 @@ impl Card {
         self.message = None;
         let cancel = horizon_core::cloud_runtime::Cancellation::default();
         self.abort = Some(Abort(cancel.clone()));
-        let ctx = ctx.clone();
+        let completion = Completion::new(tx, ctx);
         let root: std::path::PathBuf = root.to_owned();
         std::thread::spawn(move || {
             let result: Result<chatgpt::Connection, String> =
@@ -153,8 +191,7 @@ impl Card {
                         Err(_) => Err("The sign-in flow ended unexpectedly".to_owned()),
                     },
                 };
-            let _ = tx.send(result);
-            ctx.request_repaint();
+            completion.send(result);
         });
     }
 
@@ -163,12 +200,18 @@ impl Card {
         let (tx, rx) = channel();
         self.signing_out = Some(rx);
         self.message = None;
-        let ctx = ctx.clone();
+        let completion = Completion::new(tx, ctx);
         let root: std::path::PathBuf = root.to_owned();
         std::thread::spawn(move || {
-            let result = chatgpt::sign_out(&root, &client_id).map_err(|error| error.to_string());
-            let _ = tx.send(result);
-            ctx.request_repaint();
+            let result = chatgpt::sign_out(&root, &client_id)
+                .and_then(|revoked| {
+                    chatgpt::status(&root).map(|selected| SignOutResult {
+                        revoked,
+                        selected: selected.filter(|connection| connection.signed_in),
+                    })
+                })
+                .map_err(|error| error.to_string());
+            completion.send(result);
         });
     }
 
@@ -177,15 +220,14 @@ impl Card {
         let (tx, rx) = channel();
         self.confirming = Some(rx);
         self.message = None;
-        let ctx = ctx.clone();
+        let completion = Completion::new(tx, ctx);
         let root: std::path::PathBuf = root.to_owned();
         std::thread::spawn(move || {
             let result = chatgpt::confirm_usage(&root, &client_id).map_err(|error| error.to_string());
             if let Err(error) = &result {
                 tracing::warn!(%error, "could not record the ChatGPT plan-usage confirmation");
             }
-            let _ = tx.send(result);
-            ctx.request_repaint();
+            completion.send(result);
         });
     }
 
@@ -264,7 +306,7 @@ pub(super) fn row(
     root: &std::path::Path,
     card: &mut Card,
 ) {
-    card.tick(ui, connection_slot);
+    card.tick(connection_slot);
     let signing_in = card.signing_in.is_some();
     // A signed-out registration is retained on disk; only a live connection shows
     // the connected row.
@@ -308,8 +350,77 @@ pub(super) fn row(
 
 #[cfg(test)]
 mod tests {
-    use super::{Abort, Card};
+    use super::{Abort, Card, Completion, SignOutResult};
     use crate::test_egui::DiscardTextures as _;
+
+    #[test]
+    fn worker_publication_and_panics_wake_after_channel_state_changes() {
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicU8, Ordering},
+        };
+        for panics in [false, true] {
+            let ctx = egui::Context::default();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let receiver = Mutex::new(receiver);
+            let observed = Arc::new(AtomicU8::new(0));
+            let callback_observed = observed.clone();
+            ctx.set_request_repaint_callback(move |_| {
+                let state = match receiver.lock().unwrap().try_recv() {
+                    Ok(7) => 1,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => 2,
+                    _ => 0,
+                };
+                callback_observed.store(state, Ordering::SeqCst);
+            });
+            let completion = Completion::new(sender, &ctx);
+            let result = std::thread::spawn(move || {
+                assert!(!panics, "synthetic worker failure");
+                completion.send(7);
+            })
+            .join();
+            assert_eq!(result.is_err(), panics);
+            assert_eq!(observed.load(Ordering::SeqCst), if panics { 2 } else { 1 });
+        }
+    }
+
+    #[test]
+    fn sign_out_completion_keeps_a_newly_selected_account() {
+        let account = |client: &str| horizon_core::cloud_runtime::chatgpt::Connection {
+            client_id: client.into(),
+            email: None,
+            subject: client.into(),
+            scopes: vec!["chatgpt.tokens.use.direct".into()],
+            plan_usage: true,
+            usage_confirmed: true,
+            signed_in: true,
+            saved_at_unix: 0,
+        };
+        let previous = account("client-a");
+        let selected = account("client-b");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut card = Card {
+            loaded: true,
+            connection: Some(previous.clone()),
+            signing_out: Some(receiver),
+            ..Card::default()
+        };
+        sender
+            .send(Ok(SignOutResult {
+                revoked: Some(true),
+                selected: Some(selected),
+            }))
+            .unwrap();
+        let mut slot = Some(previous);
+        card.tick(&mut slot);
+        assert_eq!(slot.as_ref().unwrap().client_id, "client-b");
+        assert_eq!(card.connection.as_ref().unwrap().client_id, "client-b");
+        assert!(!card.sign_out_uncertain);
+        assert!(!card.busy());
+        let message = &card.message.as_ref().unwrap().1;
+        assert!(message.contains("Another saved account is still selected"));
+        assert!(!message.contains("no longer uses"));
+    }
 
     #[test]
     fn uncertain_sign_out_keeps_the_last_known_account_visible() {
@@ -340,7 +451,7 @@ mod tests {
             }
             let mut slot = Some(connection);
             let _ = egui::Context::default()
-                .run_ui(egui::RawInput::default(), |ui| card.tick(ui, &mut slot))
+                .run_ui(egui::RawInput::default(), |_ui| card.tick(&mut slot))
                 .discard_textures();
             assert_eq!(slot.as_ref().unwrap().client_id, "client-a");
             assert_eq!(card.connection.as_ref().unwrap().client_id, "client-a");
@@ -364,7 +475,7 @@ mod tests {
         };
         sender.send(Err("The browser could not be opened.".into())).unwrap();
         let _ = egui::Context::default()
-            .run_ui(egui::RawInput::default(), |ui| card.tick(ui, &mut draft.chatgpt))
+            .run_ui(egui::RawInput::default(), |_ui| card.tick(&mut draft.chatgpt))
             .discard_textures();
         assert!(cancel.is_cancelled(), "the loopback server ends with the attempt");
         assert!(!card.busy());
@@ -402,7 +513,7 @@ mod tests {
         sender.send(Ok(())).unwrap();
         let mut slot = Some(connection);
         let _ = egui::Context::default()
-            .run_ui(egui::RawInput::default(), |ui| card.tick(ui, &mut slot))
+            .run_ui(egui::RawInput::default(), |_ui| card.tick(&mut slot))
             .discard_textures();
         assert!(!card.busy(), "the confirmation ending releases Save");
         assert!(card.connection.as_ref().unwrap().usage_confirmed);

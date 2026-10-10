@@ -125,9 +125,14 @@ pub(super) fn validate_with_jwks(
         return Err(Error::IdToken);
     }
 
+    let kid = header
+        .kid
+        .as_deref()
+        .filter(|kid| !kid.is_empty())
+        .ok_or(Error::IdToken)?;
     let key = keys
         .iter()
-        .find(|key| key.kid.as_deref() == header.kid.as_deref())
+        .find(|key| key.kid.as_deref() == Some(kid))
         .ok_or(Error::IdToken)?;
     let signing_input = format!("{header_b64}.{payload_b64}");
     verify(&header.alg, key, signing_input.as_bytes(), &signature)?;
@@ -233,6 +238,42 @@ mod tests {
             validate_with_jwks(EC_TOKEN, "oaiapp_test_client", "nonce-abc", &keys),
             Err(Error::IdToken)
         ));
+    }
+
+    #[test]
+    fn valid_signatures_without_an_identifying_key_id_are_refused() {
+        use ring::{
+            rand::SystemRandom,
+            signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair},
+        };
+        let random = SystemRandom::new();
+        let private = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &random).unwrap();
+        let signer = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, private.as_ref(), &random).unwrap();
+        let public = signer.public_key().as_ref();
+        let payload = EC_TOKEN.split('.').nth(1).unwrap();
+        for kid in [None, Some(serde_json::Value::Null), Some(serde_json::json!(""))] {
+            let mut header = serde_json::json!({"alg":"ES256"});
+            if let Some(kid) = &kid {
+                header["kid"] = kid.clone();
+            }
+            let mut key = serde_json::json!({"kty":"EC","crv":"P-256","x":URL_SAFE_NO_PAD.encode(&public[1..33]),"y":URL_SAFE_NO_PAD.encode(&public[33..])});
+            if let Some(kid) = kid {
+                key["kid"] = kid;
+            }
+            let key: Key = serde_json::from_value(key).unwrap();
+            let input = format!(
+                "{}.{}",
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap()),
+                payload
+            );
+            let signature = signer.sign(&random, input.as_bytes()).unwrap();
+            verify("ES256", &key, input.as_bytes(), signature.as_ref()).unwrap();
+            let token = format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature.as_ref()));
+            assert!(matches!(
+                validate_with_jwks(&token, "oaiapp_test_client", "nonce-abc", &[key]),
+                Err(Error::IdToken)
+            ));
+        }
     }
 
     #[test]

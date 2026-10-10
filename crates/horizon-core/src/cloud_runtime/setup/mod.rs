@@ -185,7 +185,7 @@ impl Draft {
                     && self.chatgpt_status_error.is_some()
                 {
                     return Err(Error::Invalid(
-                        "Saved account status unavailable. Reopen settings after the other sign-in operation ends.",
+                        "Saved account status unavailable. Reopen settings and try again.",
                     ));
                 }
                 // Only Codex offers the mode; a selected Codex needs a renewable sign-in with plan access.

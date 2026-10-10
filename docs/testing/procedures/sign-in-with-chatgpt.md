@@ -167,6 +167,19 @@ Settings save requires a provider. Do not create or deploy a cloud.
    Result: The card reads the saved account again.
 
 
+### 6.8 C08 — Another account becomes selected before sign-out
+
+1. Load the card for test account A. Select test account B through another
+   authorized test operation before you click **Sign out** for A.
+
+   Result: The tokens for A are cleared. B remains selected. The card shows B
+   and reports that another account is still selected.
+
+2. Examine the record for B.
+
+   Result: Its credentials do not change. The card does not report that all
+   plan use has stopped.
+
 ## 7. Pass criteria
 
 - Every task above shows its Result.
@@ -184,6 +197,8 @@ Settings save requires a provider. Do not create or deploy a cloud.
 - Discovery endpoints must use HTTPS on the trusted provider origin. Requests
   must not follow redirects to another origin.
 - The token-response tests must reject empty access and refresh tokens.
+- ID-token tests must reject a missing or empty key ID, even with a valid
+  signature from a key that also has no key ID.
 - The sign-in publication tests must recover an interruption before or after the
   credential commit. An activation failure must not publish new credentials.
 - The snapshot test must prevent a concurrent writer between the record read and
