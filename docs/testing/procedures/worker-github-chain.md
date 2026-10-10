@@ -14,8 +14,9 @@ owner: peters
 
 This procedure makes sure that the chain service on a worker keeps a token chain
 fresh without the host. It also makes sure that Git reaches GitHub through the
-Git proxy of the service, which adds the access token only for a granted
-repository. Agents never get the token chain, and Git never gets a token. It
+Git proxy of the service, and `gh` through its API broker, which add the access
+token only for a granted repository. Agents never get the token chain, and Git
+and `gh` never get a token. It
 also makes sure that an agent can ask for more access, and that the worker obeys
 the decision.
 
@@ -23,7 +24,10 @@ the decision.
 
 - Candidate: each candidate that changes `horizon-worker-github`, its modules
   `horizon-worker-github-common`, `horizon-worker-github-agents`,
-  `horizon-worker-github-git` and `horizon-worker-github-http`,
+  `horizon-worker-github-git`, `horizon-worker-github-http`,
+  `horizon-worker-github-api`, `horizon-worker-github-api-rest`,
+  `horizon-worker-github-graphql`, `horizon-worker-github-graphql-policy`,
+  `horizon-worker-github-tasks` and `horizon-worker-github-mcp`,
   `horizon-worker-git-auth`, `horizon-worker-supervise` or the token chain part
   of `horizon-worker-check`.
 - Platforms: Linux with Docker.
@@ -158,6 +162,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
        def do_GET(self):
            if '.git/' in self.path:
                return self.git()
+           with open('/root/github/seen.log', 'a') as log:
+               log.write('api %s %s\n' % (self.path, 'token' if self.headers.get('Authorization') else 'none'))
            if self.path == '/repos/example/missing':
                return self.reply(404, {'message': 'Not Found'})
            self.reply(200, {'permissions': {'pull': True, 'push': True}})
@@ -167,8 +173,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    Result: The file exists. It answers the first refresh with `ghu_synthetic-1`.
    It answers that each repository except `example/missing` accepts a push. It
    serves the Git repositories in `/root/github` and records in
-   `/root/github/seen.log` whether each Git request had a token, but never the
-   token. `example/project`, `example/extra` and `example/secret` are private:
+   `/root/github/seen.log` whether each Git request and each API `GET` had a
+   token, but never the token. `example/project`, `example/extra` and `example/secret` are private:
    they need a `ghu_synthetic-` token, or the `ghp_synthetic-` token of a static
    binding.
 
@@ -341,8 +347,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    ```
 
    Result: The command shows `https://github.com/example/project.git`, then
-   `ghu_synthetic-1`. The remote URL stays a GitHub URL, so the wrapper finds
-   the repository of the checkout.
+   `horizon-api-broker`. The remote URL stays a GitHub URL, so the wrapper finds
+   the repository of the checkout. `gh` holds only the placeholder.
 
 4. Clone a private repository that has no grant:
 
@@ -350,8 +356,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> horizon-worker-tailnet agent git clone -q https://github.com/example/secret.git /workspace/home/secret
    ```
 
-   Result: The command fails. It shows `remote: Horizon: example/secret has no
-   GitHub grant on this worker`. It does not ask for a user name.
+   Result: The command fails. It shows a line that starts with `remote: Horizon:
+   example/secret has no GitHub grant on this worker`. It does not ask for a user name.
 
 5. Clone a public repository that has no grant. Then try to push to it:
 
@@ -363,8 +369,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
        && git -C public push -q origin HEAD:main'
    ```
 
-   Result: The clone works. The push fails and shows `remote: Horizon:
-   example/public has no GitHub grant on this worker`.
+   Result: The clone works. The push fails and shows a line that starts with
+   `remote: Horizon: example/public has no GitHub grant on this worker`.
 
 6. Examine what the fake GitHub received:
 
@@ -373,7 +379,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    ```
 
    Result: `example/project` shows `token`. `example/secret` and
-   `example/public` show only `none`.
+   `example/public` show only `none`. No line starts with `api` yet.
 
 7. Ask the socket for a Git credential as the agent user:
 
@@ -390,12 +396,56 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> horizon-worker-tailnet agent /usr/bin/env GH_REPO=example/project gh auth token
    ```
 
-   Result: The command shows `ghu_synthetic-1`.
+   Result: The command shows `horizon-api-broker`.
 
 9. Do step 8 again with `GH_REPO=example/other`.
 
-   Result: The command shows `horizon: no Git grant for this repository`. It shows
-   no token.
+   Result: The command shows `horizon-api-broker` too. `gh` holds only the
+   placeholder, and the API broker refuses its requests for `example/other` with
+   its reason (step 12).
+
+10. Examine the route of `gh`:
+
+    ```bash
+    docker exec <c> horizon-worker-tailnet agent /usr/bin/gh config get http_unix_socket
+    docker exec <c> stat -c '%a %U' /run/horizon-worker/github-api.sock
+    ```
+
+    Result: The first command shows `/run/horizon-worker/github-api.sock`. The
+    second shows `666 root`.
+
+11. Read the granted repository with `gh` through the API broker:
+
+    ```bash
+    docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project && gh api repos/example/project'
+    ```
+
+    Result: The command shows `{"permissions": {"pull": true, "push": true}}`.
+
+12. Read a repository that has no grant, and a path outside a repository:
+
+    ```bash
+    docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project && gh api repos/example/secret'
+    docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project && gh api user/repos'
+    ```
+
+    Result: Both commands fail. Each shows the broker's JSON body, then a line
+    from `gh`. For the first command that line is `gh: Horizon: example/secret
+    has no GitHub grant on this worker. Ask for access with the github_access
+    tool. (HTTP 403)`. For the second it starts with `gh: Horizon: this worker
+    does not let an agent reach /user/repos`.
+
+13. Send the placeholder past the broker:
+
+    ```bash
+    docker exec <c> horizon-worker-tailnet agent curl -s -o /dev/null -w '%{http_code}\n' \
+        --unix-socket /run/horizon-worker/github-api.sock http://api.github.com/repos/example/project
+    docker exec <c> grep '^api' /root/github/seen.log
+    ```
+
+    Result: The first command shows `200`: the broker adds the token, and the
+    caller holds none. The log shows `api /repos/example/project token` for
+    steps 11 and 13 only. No line names `example/secret` or `/user/repos`.
 
 ### 6.6 C5: Private storage
 
@@ -420,12 +470,15 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    ```bash
    docker exec <c> tail -3 /run/horizon-github/requests.log
+   docker exec <c> grep '"request":"git-' /run/horizon-github/requests.log | tail -1
    docker exec <c> grep -c 'ghu_\|ghr_' /run/horizon-github/requests.log
    ```
 
-   Result: Each line shows `uid` 10001. The lines of the socket also show a
-   `pid`, and the lines of the Git proxy show a kind such as `git-push` and an
-   `outcome` such as `relayed`. The count is `0`.
+   Result: Each line shows `uid` 10001. The last lines are of the socket
+   (`gh-token`, with a `pid`) and of the API broker (`"kind":"api"`). The line of
+   the Git proxy shows its kind in `request`, such as `git-push` or `git-read`, an
+   `outcome` such as `relayed`, and `"pid":null`: the proxy names no process in
+   its log. The count is `0`.
 
 ### 6.7 C6: Container recreation
 
@@ -469,9 +522,14 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
 ### 6.8 C7: Revoked chain
 
-1. Start the fake GitHub again. Do step 2 of task C2.
+1. Make sure that the fake GitHub runs:
 
-   Result: Both commands exit with status 0.
+   ```bash
+   docker exec <c> pgrep -f fake-github.py
+   ```
+
+   Result: The command shows one process ID. If it shows nothing, do step 2 of
+   task C2 again.
 
 2. Do step 3 of task C2 again with the refresh token `ghr_synthetic-revoked`.
 
@@ -530,7 +588,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
 ### 6.9 R1: Request outside an agent session
 
-1. Install a new chain. Do the steps 2, 3 and 4 of task C2 again.
+1. Install a new chain. Do the steps 3 and 4 of task C2 again. The fake GitHub
+   still runs.
 
    Result: The JSON shows `"state":"ok"` and `"pending_requests":0`.
 
@@ -580,9 +639,10 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> horizon-worker-github requests
    ```
 
-   Result: The JSON shows one request for `example/extra` with `"access":"push"`
-   and `"session":"agent-smoke"`, and no agent name: the session's agent marker
-   is not a verified identity. Write its `id` as `<id>`.
+   Result: The JSON shows one request for `example/extra` with `"access":"push"`,
+   `"session":"agent-smoke"` and `"task":true` (the session runs, so it could also
+   be allowed for the task), and no agent name: the session's agent marker is not
+   a verified identity. Write its `id` as `<id>`.
 
 5. Allow the request for the cloud:
 
@@ -598,18 +658,20 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> cat /workspace/home/mcp-out.jsonl /workspace/home/git.txt
    ```
 
-   Result: The tool output shows `Allowed for this cloud`. The Git output shows
+   Result: The tool output shows `Allowed for this cloud` and `every agent
+   session`. The Git output shows
    `exit=0` and no `remote: Horizon:` line.
 
 7. Read the repository from a process outside the session:
 
    ```bash
    docker exec <c> horizon-worker-tailnet agent git ls-remote https://github.com/example/extra.git; echo "exit=$?"
+   docker exec <c> horizon-worker-github status
    ```
 
-   Result: The command shows `exit=0`. Access is per cloud, so a process outside
-   the asking session gets through too. The status shows `example/extra` with
-   `"target":null`.
+   Result: The first command shows `exit=0`. Access is per cloud, so a process
+   outside the asking session gets through too. The status shows `example/extra`
+   with `"target":null`.
 
 ### 6.11 R3: Repository that GitHub does not show
 
@@ -635,7 +697,81 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    Result: The JSON shows `"status":"denied"`. The status shows
    `"pending_requests":0`.
 
-### 6.12 C8: Clear
+### 6.12 R4: Allow for this task
+
+1. Mark a second synthetic agent session, and write its tool input:
+
+   ```bash
+   docker exec <c> mkdir -p /workspace/sessions/agent-task
+   docker exec <c> sh -c 'echo codex > /workspace/sessions/agent-task/agent'
+   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github_access","arguments":{"repository":"example/secret","access":"read","reason":"Read the shared types"}}}' \
+       | docker exec -i <c> tee /workspace/home/task-in.jsonl
+   docker exec <c> chown 10001:10001 /workspace/home/task-in.jsonl
+   ```
+
+   Result: The commands exit with status 0. The file contains one line.
+
+2. Start the session. It calls the tool, then reads the repository with Git and
+   with `gh`:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud new-session -d -s agent-task \
+       'horizon-worker-github mcp < /workspace/home/task-in.jsonl > /workspace/home/task-out.jsonl; git ls-remote https://github.com/example/secret.git > /workspace/home/task-git.txt 2>&1; echo "exit=$?" >> /workspace/home/task-git.txt; gh api repos/example/secret > /workspace/home/task-gh.txt 2>&1; echo "exit=$?" >> /workspace/home/task-gh.txt; sleep 600'
+   ```
+
+   Result: The command exits with status 0.
+
+3. List the requests:
+
+   ```bash
+   docker exec <c> horizon-worker-github requests
+   ```
+
+   Result: The JSON shows one request for `example/secret` with
+   `"session":"agent-task"` and `"task":true`. Write its `id` as `<id>`.
+
+4. Allow the request for the task:
+
+   ```bash
+   docker exec <c> horizon-worker-github decide <id> allow-task
+   ```
+
+   Result: The JSON shows `"ok":true`, `"status":"allowed"` and `"scope":"task"`.
+
+5. Wait 10 seconds. Then examine the outputs of the session:
+
+   ```bash
+   docker exec <c> cat /workspace/home/task-out.jsonl /workspace/home/task-git.txt /workspace/home/task-gh.txt
+   ```
+
+   Result: The tool output shows `Allowed for this task`. The Git output and the
+   `gh` output show `exit=0` and no `Horizon:` line. `gh` writes no line end, so
+   its file shows the JSON and `exit=0` on one line.
+
+6. Read the repository from a process outside the session:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent git ls-remote https://github.com/example/secret.git; echo "exit=$?"
+   docker exec <c> horizon-worker-github status
+   ```
+
+   Result: Git shows a line that starts with `remote: Horizon: example/secret has
+   no GitHub grant on this worker` and a nonzero exit. The status does not show `example/secret`.
+
+7. End the session, and then read the repository again from a new window of the
+   session `agent-smoke`:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud kill-session -t agent-task
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud new-window -t agent-smoke \
+       'git ls-remote https://github.com/example/secret.git > /workspace/home/after.txt 2>&1; echo "exit=$?" >> /workspace/home/after.txt; sleep 60'
+   docker exec <c> sh -c 'sleep 5; cat /workspace/home/after.txt'
+   ```
+
+   Result: The output shows a line that starts with `remote: Horizon:
+   example/secret has no GitHub grant on this worker` and a nonzero exit. The task grant ended with its session.
+
+### 6.13 C8: Clear
 
 1. Remove the chain:
 
@@ -644,7 +780,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    docker exec <c> horizon-worker-github status
    ```
 
-   Result: The JSON shows `"state":"absent"`.
+   Result: `clear` shows nothing. The status JSON shows `"state":"absent"`.
 
 2. Examine the services:
 
@@ -654,7 +790,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: `services.json` still contains `github`. The worker did not stop.
 
-### 6.13 G1: Real GitHub refresh
+### 6.14 G1: Real GitHub refresh
 
 Do this lane in a new container without `HORIZON_WORKER_GITHUB_TEST_URL`. Do
 the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
@@ -712,13 +848,19 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
 
    Result: `last_refresh_at` has a value and `last_error` is `null`.
 
-7. Read the repository as the agent user:
+7. Read the repository as the agent user. Then read it, and another
+   repository, with `gh`:
 
    ```bash
    docker exec <c> horizon-worker-tailnet agent /usr/bin/git ls-remote https://github.com/<owner>/<name>.git
+   docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace && gh pr list -R <owner>/<name> \
+       && gh api graphql -f query="{ repository(owner: \"cli\", name: \"cli\") { name } }"'
    ```
 
-   Result: The command shows the references of the synthetic repository.
+   Result: The first command shows the references of the synthetic repository.
+   The second shows the pull requests of the synthetic repository (it can be an
+   empty list), then fails with `GraphQL: Horizon: cli/cli has no GitHub grant
+   on this worker`.
 
 > **CAUTION:** THE NEXT STEP SENDS THE OLD REFRESH TOKEN TO GITHUB. The token goes
 > over standard input, never in a command line, so it stays out of the shell
@@ -746,16 +888,21 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
 - Git fetches and pushes a granted repository through the Git proxy. The proxy
   adds the token only for a granted repository. A private repository without a
   grant and a push without a grant fail with a `remote: Horizon:` message.
-- The socket gives Git no token. The `gh` wrapper gets the access token only for
-  a granted repository, and finds the repository of a checkout without `GH_REPO`.
+- The socket gives Git no token. The `gh` wrapper gets only the placeholder
+  `horizon-api-broker`, and finds the repository of a checkout without `GH_REPO`.
+- `gh` reaches a granted repository through the API broker, which adds the
+  token. A repository without a grant and a path outside a repository get a
+  `Horizon:` refusal, and those requests do not reach GitHub. In lane G, the
+  GraphQL policy refuses a repository without a grant.
 - A static binding also goes through the Git proxy. Git gets no token from it.
 - The agent user cannot read the token chain. No reply and no log line contains
   a token.
 - The token chain survives a recreated container.
 - `bad_refresh_token` makes the state `revoked`, and agents then get no token.
 - `clear` makes the state `absent`, and the worker continues to run.
-- Only an agent session can ask for access. An allowed repository reaches every
-  session of the cloud.
+- Only an agent session can ask for access. A repository allowed for the cloud
+  reaches every session of the cloud. A repository allowed for a task reaches
+  only the session that asked, with Git and `gh`, and ends with that session.
 - A decision fails, and the request stays pending, when GitHub does not show the
   repository.
 - In lane G, the real refresh works and GitHub refuses the old refresh token.
@@ -764,7 +911,7 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
 
 1. Remove the token chain. Do step 1 of task C8.
 
-   Result: The JSON shows `"state":"absent"`.
+   Result: `clear` shows nothing. The status JSON shows `"state":"absent"`.
 
 > **CAUTION:** THE NEXT STEP DELETES A CONTAINER, A VOLUME AND AN IMAGE. Use only
 > the names that this run made.
@@ -777,7 +924,8 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
    docker rmi chain-smoke:<nonce>
    ```
 
-   Result: Docker shows each name.
+   Result: Docker shows the container and volume names, then `Untagged` and
+   `Deleted` lines for the image.
 
 > **CAUTION:** REVOKE ONLY THE AUTHORIZATION OF THE TEST GITHUB APP.
 

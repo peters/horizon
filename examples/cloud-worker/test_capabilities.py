@@ -94,7 +94,9 @@ class CapabilitiesTests(unittest.TestCase):
         elsewhere = self.root / 'elsewhere'
         elsewhere.mkdir()
         helpers = ('horizon-worker-github-common', 'horizon-worker-github-agents', 'horizon-worker-github-git',
-                   'horizon-worker-github-http', 'horizon-worker-git-auth')
+                   'horizon-worker-github-http', 'horizon-worker-github-api', 'horizon-worker-github-api-rest',
+                   'horizon-worker-github-graphql', 'horizon-worker-github-graphql-policy', 'horizon-worker-github-tasks',
+                   'horizon-worker-github-mcp', 'horizon-worker-git-auth')
         for helper in helpers:
             (elsewhere / helper).touch()
         for reported, missing, args, beside, expected in [

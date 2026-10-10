@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Check a branch against the pull request rules in AGENTS.md before the PR opens.
+
+Copilot reports these rules as review findings, and each finding costs a review
+round. The check finds them in a second instead:
+
+- scope: more than 10 source or test files, or more than 1,500 lines, needs approval;
+- UI changes: a test procedure, and an embedded animated GIF in the PR body (at the top);
+- features (a `feat` title): a test procedure;
+- the two bundled skill copies change together;
+- new test plans go under docs/testing/procedures/ or docs/testing/reports/.
+
+Usage: check-pr-readiness.py [--base REF] [--title TEXT] [--body FILE]
+       [--scope-approved] [--no-visible-change]
+"""
+
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+CODE = {".rs", ".py", ".sh", ".ps1", ".js", ".cjs", ".mjs", ".ts", ".tsx", ".swift", ".kt", ".java", ".c", ".h", ".m"}
+SKILL_COPIES = ("assets/plugins/claude-code/skills/", "assets/plugins/codex/skills/")
+UI_CRATE = "crates/horizon-ui/"
+PROCEDURES = "docs/testing/procedures/"
+MAX_FILES = 10
+MAX_LINES = 1500
+SKIP_MARKER = "[" + "skip ci]"
+
+
+def git(repo, *args):
+    out = subprocess.run(["git", "-C", str(repo), "-c", "core.quotepath=off", *args],
+                         capture_output=True, text=True, check=False)
+    if out.returncode != 0:
+        raise SystemExit(f"check-pr-readiness: git {' '.join(args)}: {out.stderr.strip()}")
+    return out.stdout
+
+
+def changed_files(repo, base):
+    """(path, added, deleted, status) for each file that differs from the base. A rename
+    is one file at its new path, with only its edited lines, so a pure move costs nothing."""
+    status = {}
+    fields = git(repo, "diff", "--name-status", "-z", "-M", base, "HEAD").split("\0")
+    i = 0
+    while i < len(fields) - 1:
+        code = fields[i]
+        if code[:1] in "RC":
+            status[fields[i + 2]] = code[0]
+            i += 3
+        else:
+            status[fields[i + 1]] = code[0]
+            i += 2
+    files = []
+    fields = git(repo, "diff", "--numstat", "-z", "-M", base, "HEAD").split("\0")
+    i = 0
+    while i < len(fields) - 1:
+        added, deleted, path = fields[i].split("\t", 2)
+        if path == "":
+            path = fields[i + 2]
+            i += 3
+        else:
+            i += 1
+        files.append((path, 0 if added == "-" else int(added), 0 if deleted == "-" else int(deleted), status.get(path, "M")))
+    return files
+
+
+def rendered(body):
+    """The PR body without HTML comments and fenced code blocks, which GitHub does not
+    show as media."""
+    body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
+    body = re.sub(r"^[ \t]*(```+|~~~+).*?^[ \t]*\1[^\n]*$", "", body, flags=re.S | re.M)
+    body = re.sub(r"^(?: {4}|\t).*$", "", body, flags=re.M)
+    body = re.sub(r"(`+)(?:(?!\1).)+\1", "", body)
+    # A tag over several lines counts as one line.
+    return re.sub(r"<(img|video)\b[^>]*>", lambda m: " ".join(m.group(0).split()), body, flags=re.S | re.I)
+
+
+def is_media(line):
+    """An embedded animated GIF: Markdown image syntax, an <img> tag, or an attachment URL
+    alone on its line, which GitHub shows as media. A file name in prose, a still image
+    such as PNG or JPEG, and a video do not count. GitHub attachment URLs have no file
+    extension, so the check cannot see their type offline and accepts them."""
+    line = line.strip()
+    urls = re.findall(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+[\"'(][^)]*)?\)", line)
+    urls += re.findall(r"<img\b[^>]*\bsrc=[\"']?([^\"'\s>]+)", line, re.I)
+    if re.fullmatch(r"https://github\.com/user-attachments/assets/\S+", line):
+        urls.append(line)
+    return any(is_gif_url(url) for url in urls)
+
+
+def is_gif_url(url):
+    path = url.split("?", 1)[0].split("#", 1)[0]
+    name = path.rsplit("/", 1)[-1]
+    if "." not in name:
+        return "/user-attachments/assets/" in path
+    return name.lower().endswith(".gif")
+
+
+def is_ui(path):
+    """A file that changes what Horizon shows: UI source, an embedded UI asset, or the
+    UI build script. Tests do not count."""
+    if not path.startswith(UI_CRATE) or is_test(path):
+        return False
+    rest = path[len(UI_CRATE):]
+    return (rest.startswith("src/") and rest.endswith(".rs")) or rest.startswith("assets/") or rest == "build.rs"
+
+
+def is_test(path):
+    name = Path(path).name
+    return "/tests/" in path or name in ("tests.rs", "test.rs") or name.endswith(("_test.rs", "_tests.rs")) or name.startswith("test_")
+
+
+def is_source(path):
+    return Path(path).suffix in CODE and not path.startswith("docs/testing/")
+
+
+def check(repo, base, title, body, scope_approved, no_visible_change):
+    files = changed_files(repo, base)
+    paths = {path for path, _, _, _ in files}
+    errors, notes = [], []
+
+    # A pure rename (no edited lines) is a mechanical move and does not count.
+    source = [(p, a, d) for p, a, d, status in files if is_source(p) and not (status == "R" and a + d == 0)]
+    lines = sum(a + d for _, a, d in source)
+    if (len(source) > MAX_FILES or lines > MAX_LINES) and not scope_approved:
+        errors.append(("scope", f"{len(source)} source or test files and {lines} changed lines. More than "
+                       f"{MAX_FILES} files or {MAX_LINES} lines needs explicit approval from peters. After the "
+                       "approval, run again with --scope-approved, or split the PR."))
+
+    # A deleted procedure does not count: the rule needs a procedure in the result.
+    # Only a procedure that is written or edited counts: not a deletion, not a pure rename.
+    procedure_changed = any(p.startswith(PROCEDURES) and p.endswith(".md") and not p.endswith("TEMPLATE.md")
+                            for p, a, d, status in files if status != "D" and (status != "R" or a + d > 0))
+    ui = sorted(p for p in paths if is_ui(p))
+    if ui and no_visible_change and not (body and re.search(r"no visible (change|behavior)", body, re.I)):
+        errors.append(("ui-not-visible", "--no-visible-change needs a PR body (--body) that says the change has "
+                       "no visible behavior, for example \"No visible change: ...\"."))
+    if ui and not no_visible_change:
+        if not procedure_changed:
+            errors.append(("ui-procedure", f"{len(ui)} UI source files changed (for example {ui[0]}), but no test "
+                           f"procedure under {PROCEDURES} changed. If the change is not visible, say so in the PR "
+                           "body and run again with --no-visible-change."))
+        if body is None:
+            notes.append(("ui-gif", "UI files changed: pass --body FILE to check for the animated GIF."))
+        else:
+            lines = [l for l in rendered(body).splitlines() if l.strip()]
+            media = [i for i, l in enumerate(lines) if is_media(l)]
+            if not media:
+                errors.append(("ui-gif", "UI files changed, but the PR body has no animated GIF of the change."))
+            elif media[0] >= 15:
+                notes.append(("ui-gif", "AGENTS.md asks for the animated GIF at the top of the PR body."))
+
+    if title and re.match(r"feat(\(|:|!)", title.strip()) and not procedure_changed:
+        errors.append(("feature-procedure", f"The title marks a feature, but no test procedure under {PROCEDURES} changed."))
+
+    for path in sorted(paths):
+        for mine, other in (SKILL_COPIES, SKILL_COPIES[::-1]):
+            if path.startswith(mine) and other + path[len(mine):] not in paths:
+                errors.append(("skill-copies", f"{path} changed, but {other + path[len(mine):]} did not. Change both "
+                               "bundled skill copies together."))
+
+    for path, _, _, status in files:
+        if (status in "AR" and path.startswith("docs/testing/") and path.endswith(".md")
+                and not path.startswith((PROCEDURES, "docs/testing/reports/"))):
+            errors.append(("test-plan-location", f"{path} is a new or moved plan outside the procedures and reports. Put a "
+                           f"procedure under {PROCEDURES} or a report under docs/testing/reports/."))
+
+    if SKIP_MARKER in git(repo, "log", "-1", "--format=%B"):
+        notes.append(("skip-marker", "The head commit has the skip marker, so GitHub runs no CI for this head. "
+                      "Push the final head without it."))
+    if git(repo, "status", "--porcelain").strip():
+        notes.append(("uncommitted", "There are uncommitted changes; the check covers committed changes only."))
+    return errors, notes
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser.add_argument("--repo", default=str(ROOT), help=argparse.SUPPRESS)
+    parser.add_argument("--base", help="the base commit (default: the merge base with origin/main)")
+    parser.add_argument("--title", help="the PR title")
+    parser.add_argument("--body", help="a file with the PR body")
+    parser.add_argument("--scope-approved", action="store_true", help="peters approved a larger PR")
+    parser.add_argument("--no-visible-change", action="store_true", help="the UI files change no visible behavior")
+    args = parser.parse_args(argv)
+    repo = Path(args.repo)
+    base = args.base or git(repo, "merge-base", "HEAD", "origin/main").strip()
+    body = Path(args.body).read_text(encoding="utf-8") if args.body else None
+    errors, notes = check(repo, base, args.title, body, args.scope_approved, args.no_visible_change)
+    for rule, message in errors:
+        print(f"error {rule}: {message}")
+    for rule, message in notes:
+        print(f"note  {rule}: {message}")
+    print(f"check-pr-readiness: {len(errors)} errors, {len(notes)} notes")
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
