@@ -236,7 +236,7 @@ impl Agent {
         };
         let result = tokio::time::timeout(DEADLINE, result)
             .await
-            .map_err(|_| Error::Timeout)?;
+            .unwrap_or(Err(Error::Timeout));
         self.controller.observed(key, result.is_ok());
         result
     }

@@ -133,6 +133,91 @@ fn no_relay_configuration_can_fall_back_to_public_servers() {
 }
 
 #[tokio::test]
+async fn probe_timeout_clears_previous_reachability() -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(45), timed_out_probe())
+        .await
+        .map_err(|_| Error::Timeout)?
+}
+
+async fn timed_out_probe() -> Result<()> {
+    let (relay, relay_url) = test_relay().await?;
+    let (config, _, peer_key) = withdrawal_fixture(&relay_url);
+    let controller = Controller::new(config.topology.clone())?;
+    let agent = Agent::bind(config, controller.clone()).await?;
+    let peer = Endpoint::builder(Minimal)
+        .secret_key(peer_key)
+        .alpns(vec![wire::ALPN.to_vec()])
+        .relay_mode(RelayMode::custom([relay_url.parse().map_err(transport)?]))
+        .clear_ip_transports()
+        .bind()
+        .await
+        .map_err(transport)?;
+    agent.online().await?;
+    peer.online().await;
+    let endpoint = peer.clone();
+    let (observed_request, mut received) = tokio::sync::oneshot::channel();
+    let responder = tokio::spawn(async move {
+        let connection = endpoint.accept().await.ok_or(Error::Denied)?.await.map_err(transport)?;
+        let (mut send, mut recv) = connection.accept_bi().await.map_err(transport)?;
+        let request: Request = wire::read(&mut recv).await?;
+        assert!(matches!(request, Request::Probe { network } if network == "withdrawn-island"));
+        wire::write(&mut send, &Response { accepted: true }).await?;
+        send.finish().map_err(transport)?;
+        connection.closed().await;
+
+        let connection = endpoint.accept().await.ok_or(Error::Denied)?.await.map_err(transport)?;
+        let (send, mut recv) = connection.accept_bi().await.map_err(transport)?;
+        let request: Request = wire::read(&mut recv).await?;
+        assert!(matches!(request, Request::Probe { network } if network == "withdrawn-island"));
+        observed_request
+            .send(())
+            .map_err(|()| Error::Transport("probe fixture observer disappeared".into()))?;
+        // Keep the real reply stream open without replying until the owner aborts this task.
+        let _held = (connection, send, recv);
+        std::future::pending::<Result<()>>().await
+    });
+    agent.probe(peer.addr()).await?;
+    assert!(
+        controller
+            .status()
+            .nodes
+            .iter()
+            .any(|node| node.key == peer.id().to_string() && node.reachable)
+    );
+    assert_eq!(controller.status().sessions, 0);
+    let started = std::time::Instant::now();
+    let result = agent.probe(peer.addr()).await;
+    let elapsed = started.elapsed();
+    let request_received = received.try_recv().is_ok();
+    let reachable = controller
+        .status()
+        .nodes
+        .iter()
+        .any(|node| node.key == peer.id().to_string() && node.reachable);
+    let unexpectedly_finished = responder.is_finished();
+    responder.abort();
+    let _ = responder.await;
+    peer.close().await;
+    agent.close().await;
+    relay.shutdown().await.map_err(transport)?;
+    assert!(
+        request_received,
+        "the peer accepted the second real probe before withholding its response"
+    );
+    assert!(!unexpectedly_finished, "the peer kept its response stream open");
+    assert!(matches!(result, Err(Error::Timeout)));
+    assert!(
+        elapsed < Duration::from_secs(30),
+        "historical reachability must still be fresh at the timeout"
+    );
+    assert!(
+        !reachable,
+        "a failed current probe clears the prior successful observation"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn response_completion_cannot_hold_connection_slots_forever() {
     let completion = std::future::pending::<()>();
     assert!(matches!(
