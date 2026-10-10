@@ -15,8 +15,10 @@ owner: peters
 This procedure makes sure that the sidebar groups the workspaces in **Needs you**,
 **Cloud**, **Parked** and **This PC**. It also makes sure that each row shows a
 status dot, the name and a status line, that each group header shows its count
-and summary on one line, that a click on a parked row attaches its cloud, and
-that a parked cloud whose session ends goes to **Needs you**.
+and summary on one line, and that a click on a parked row attaches its cloud.
+It also makes sure that **Stop idle…** stops the selected idle workers after it
+shows the hourly saving, and that a parked cloud whose session ends goes to
+**Needs you**.
 
 ## 2. Applicability
 
@@ -110,26 +112,58 @@ that a parked cloud whose session ends goes to **Needs you**.
    Result: The canvas moves to the cloud workspace. In about 1 second, the cloud
    attaches. The row moves back to **CLOUD** and shows the status line again.
 
-### 6.4 NEEDS YOU: A parked session ends
+### 6.4 STOP: Stop idle workers
 
-1. Click in the cloud shell. Push Ctrl+C. Then type this command and push Enter.
+1. Make sure that no agent works in the cloud. Look at the header line of
+   **CLOUD**.
+
+   Result: The header shows **Stop idle…** after the count.
+
+2. Click **Stop idle…**.
+
+   Result: A dialog shows the cloud with a selected check box, its workspace and
+   its hourly rate, the line `Saves $<rate>/h`, and the buttons **Stop 1 worker**
+   and **Keep running**. When the provider reports no rate, the row shows
+   `no reported rate` and the line is `Saving unknown`.
+
+3. Clear the check box of the cloud.
+
+   Result: The saving line goes away. **Stop 0 workers** is not available.
+
+4. Click **Keep running**.
+
+   Result: The dialog closes. The worker continues to run.
+
+5. Click **Stop idle…** again, and then click **Stop 1 worker**.
+
+   Result: The dialog closes. The cloud card shows that the worker stops, and
+   then that it is stopped. The row moves to **PARKED** with a ring. The header
+   of **PARKED** shows no **Stop idle…**.
+
+### 6.5 NEEDS YOU: A parked session ends
+
+1. On the cloud card, click **Resume**. Wait until the card shows **Ready**.
+
+   Result: The cloud shell shows a prompt.
+
+2. Click in the cloud shell. Type this command and push Enter.
 
    ```sh
    sleep 240; exit 3
    ```
 
-   Result: The loop stops. The shell does not show a prompt.
+   Result: The shell does not show a prompt.
 
-2. Do step 1 of task 6.2. Wait 2 minutes and 15 seconds.
+3. Do step 1 of task 6.2. Wait 2 minutes and 15 seconds.
 
    Result: The cloud workspace moves to the group **PARKED**.
 
-3. Wait 2 more minutes.
+4. Wait 2 more minutes.
 
    Result: The cloud workspace moves to the group **NEEDS YOU**. Its row shows a
    yellow dot, the name and the line `Ended with status 3`.
 
-4. Hold the pointer on the yellow dot.
+5. Hold the pointer on the yellow dot.
 
    Result: A tooltip shows `Waiting for you`.
 
@@ -138,14 +172,17 @@ that a parked cloud whose session ends goes to **Needs you**.
 - 6.1 shows the rows, the counts and the summaries on one header line.
 - 6.2 moves the parked cloud to **PARKED** with a compact row.
 - 6.3 attaches the cloud from a click on its row.
-- 6.4 moves the parked cloud whose session ended to **NEEDS YOU** with the line
+- 6.4 shows the hourly saving before the confirmation and stops only the selected
+  worker.
+- 6.5 moves the parked cloud whose session ended to **NEEDS YOU** with the line
   `Ended with status 3`.
 
 ## 8. Cleanup
 
 > **CAUTION:** THIS STEP DELETES THE WORKER AND ITS STORAGE.
 
-1. On the cloud card, open **Manage** and delete the cloud.
+1. On the cloud card, open **Manage** and delete the cloud. After 6.4, the worker
+   is stopped: the deletion removes the workspace volume.
 
    Result: The card shows that the worker and the managed storage are deleted.
 

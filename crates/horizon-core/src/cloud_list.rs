@@ -108,6 +108,10 @@ impl Dot {
 /// What Horizon knows about one cloud of a workspace.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CloudFacts {
+    /// The id of the cloud on the board.
+    pub id: u32,
+    /// The title of the cloud.
+    pub name: String,
     pub condition: Condition,
     /// An agent session of the cloud shows its working indicator.
     pub working: bool,
@@ -115,6 +119,64 @@ pub struct CloudFacts {
     pub line: String,
     /// What the worker bills each hour now, when its provider reports a rate.
     pub hourly_rate: Option<f64>,
+    /// A stop of the worker can start now: its card offers Stop.
+    pub stoppable: bool,
+    /// `working` is known: for a parked cloud, a status read without error covers
+    /// each parked terminal.
+    pub known: bool,
+}
+
+impl CloudFacts {
+    /// An idle cloud that a bulk stop offers: its worker runs and can stop now, it is
+    /// known that no agent works on it, and it does not wait for the user.
+    #[must_use]
+    pub fn idle(&self) -> bool {
+        self.stoppable
+            && self.known
+            && !self.working
+            && matches!(self.condition, Condition::Ready | Condition::Idle | Condition::Parked)
+    }
+}
+
+/// An hourly rate as the cloud list shows it. Three decimals keep sub-cent rates apart,
+/// as on a cloud card.
+#[must_use]
+pub fn rate_text(rate: f64) -> String {
+    format!("${rate:.3}/h")
+}
+
+/// What stopping the workers of `clouds` saves each hour, said before the stop is
+/// confirmed. A worker without a reported rate makes the sum a lower bound, which is
+/// rounded down so that it never says more than the sum.
+#[must_use]
+pub fn saving_text<'a>(clouds: impl IntoIterator<Item = &'a CloudFacts>) -> String {
+    let (mut sum, mut known, mut unknown) = (0.0, 0_usize, 0_usize);
+    for cloud in clouds {
+        match cloud.hourly_rate {
+            Some(rate) => {
+                sum += rate;
+                known += 1;
+            }
+            None => unknown += 1,
+        }
+    }
+    let without = |count: usize| {
+        if count == 1 {
+            "1 worker reports no rate".to_owned()
+        } else {
+            format!("{count} workers report no rate")
+        }
+    };
+    match (known, unknown) {
+        (0, 0) => String::new(),
+        (0, _) => "Saving unknown".to_owned(),
+        (_, 0) => format!("Saves {}", rate_text(sum)),
+        _ => format!(
+            "Saves at least {}; {}",
+            rate_text((sum * 1000.0).floor() / 1000.0),
+            without(unknown)
+        ),
+    }
 }
 
 /// One row of the cloud list.
@@ -165,8 +227,7 @@ impl Row {
 #[must_use]
 pub fn group_summary<'a>(group: Group, rows: impl IntoIterator<Item = &'a Row>) -> Vec<String> {
     let rate: f64 = rows.into_iter().filter_map(|row| row.hourly_rate).sum();
-    // The same form as the rate on a cloud card: sub-cent rates stay distinguishable.
-    let rate = (rate > 0.0).then(|| format!("${rate:.3}/h"));
+    let rate = (rate > 0.0).then(|| rate_text(rate));
     match group {
         Group::NeedsYou | Group::Cloud => rate.into_iter().collect(),
         Group::Parked => rate.into_iter().chain(["no local cost".to_owned()]).collect(),
@@ -315,11 +376,63 @@ mod tests {
 
     fn cloud(condition: Condition, working: bool, rate: Option<f64>) -> CloudFacts {
         CloudFacts {
+            id: 1,
+            name: "sample".to_owned(),
             condition,
             working,
             line: format!("{condition:?}"),
             hourly_rate: rate,
+            stoppable: true,
+            known: true,
         }
+    }
+
+    #[test]
+    fn a_bulk_stop_offers_only_idle_clouds_that_can_stop_now() {
+        for (condition, idle) in [
+            (Condition::Failed, false),
+            (Condition::Attention, false),
+            (Condition::Busy, false),
+            (Condition::Ready, true),
+            (Condition::Idle, true),
+            (Condition::Parked, true),
+            (Condition::Stopped, false),
+        ] {
+            assert_eq!(cloud(condition, false, None).idle(), idle, "{condition:?}");
+        }
+        assert!(!cloud(Condition::Ready, true, None).idle(), "an agent works on it");
+        assert!(
+            !cloud(Condition::Parked, true, None).idle(),
+            "an agent works on the worker"
+        );
+        let mut blocked = cloud(Condition::Ready, false, None);
+        blocked.stoppable = false;
+        assert!(!blocked.idle(), "its card does not offer Stop");
+        let mut unread = cloud(Condition::Parked, false, None);
+        unread.known = false;
+        assert!(!unread.idle(), "no read covers each parked terminal");
+    }
+
+    #[test]
+    fn the_saving_of_a_bulk_stop_adds_up_the_reported_rates() {
+        let rated = [
+            cloud(Condition::Ready, false, Some(0.0121)),
+            cloud(Condition::Parked, false, Some(0.24)),
+        ];
+        assert_eq!(saving_text(&rated), "Saves $0.252/h");
+        let unknown = cloud(Condition::Ready, false, None);
+        assert_eq!(
+            saving_text([&rated[0], &unknown]),
+            "Saves at least $0.012/h; 1 worker reports no rate"
+        );
+        // A lower bound is rounded down: $0.0129/h is at least $0.012/h, not $0.013/h.
+        let below = cloud(Condition::Ready, false, Some(0.0129));
+        assert_eq!(
+            saving_text([&below, &unknown, &unknown]),
+            "Saves at least $0.012/h; 2 workers report no rate"
+        );
+        assert_eq!(saving_text([&unknown, &unknown]), "Saving unknown");
+        assert_eq!(saving_text(&[]), "");
     }
 
     #[test]

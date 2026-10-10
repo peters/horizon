@@ -3,24 +3,21 @@
 //! grid on this computer; its agent continues in tmux on the worker. While a cloud
 //! has parked terminals, Horizon reads a short status of their sessions, which the
 //! parked panels show in a strip and as their agent status.
-use super::{HorizonApp, PanelKind, Settings, Stage, Store, cloud_runtime};
+use super::{HorizonApp, PanelKind, Stage, cloud_runtime};
 use horizon_core::{
-    AgentStatus, CloudWait, PanelId, ParkedPanel,
+    CloudWait, PanelId, ParkedPanel,
     cloud_panel::park::{ParkAction, ParkPolicy, ParkTracker, Sight},
-    cloud_runtime::session_status::{self, SessionActivity, SessionStatus},
+    cloud_runtime::session_status::{SessionActivity, SessionStatus},
 };
 use std::{
     collections::{HashMap, HashSet},
-    sync::mpsc::{Receiver, TryRecvError, channel},
-    time::{Duration, Instant},
+    sync::mpsc::Receiver,
+    time::Instant,
 };
 
-/// How often the sessions of parked terminals are read.
-const STATUS_INTERVAL: Duration = Duration::from_secs(10);
-const STRIP_HEIGHT: f32 = 22.0;
+use read::StatusRead;
 
-/// The statuses of a finished read, by the local id of each parked panel.
-type StatusRead = cloud_runtime::Result<Vec<(String, SessionStatus)>>;
+const STRIP_HEIGHT: f32 = 22.0;
 
 /// The park state of one cloud.
 #[derive(Default)]
@@ -30,6 +27,10 @@ pub(super) struct Parking {
     /// The last status of each parked terminal, by its panel's local id.
     statuses: HashMap<String, SessionStatus>,
     reader: Option<Receiver<StatusRead>>,
+    /// When the read in flight started.
+    read_started: Option<Instant>,
+    /// When the read that gave `statuses` started.
+    statuses_since: Option<Instant>,
     next_read: Option<Instant>,
     error: Option<String>,
     policy: ParkPolicy,
@@ -41,69 +42,14 @@ impl Parking {
         self.tracker.is_some_and(|tracker| tracker.is_parked())
     }
 
+    /// Whether the last status read of the parked terminals failed.
+    pub(super) fn read_failed(&self) -> bool {
+        self.error.is_some()
+    }
+
     /// The last status of each parked terminal, by its panel's local id.
     pub(super) fn statuses(&self) -> &HashMap<String, SessionStatus> {
         &self.statuses
-    }
-}
-
-/// The tmux session of each parked panel in `locals`, by session id, from the
-/// sessions that the cloud's record holds.
-fn parked_sessions(sessions: Vec<super::Session>, locals: &[String]) -> HashMap<String, String> {
-    sessions
-        .into_iter()
-        .filter(|session| locals.contains(&session.panel_id))
-        .map(|session| (session.tmux, session.panel_id))
-        .collect()
-}
-
-/// Reads the status of the parked panels `locals` of the cloud `cloud_id` on the worker of `deployment`.
-fn read_statuses(
-    deployment: &super::Deployment,
-    root: &std::path::Path,
-    cloud_id: &str,
-    locals: &[String],
-) -> StatusRead {
-    let settings = Settings::load(&root.join("settings.json"))?;
-    let directory = cloud_runtime::state::cloud_directory(root, cloud_id)?;
-    // The saved record, not the copy from when the cloud became ready: a panel opened
-    // since then records its session only there.
-    let sessions = Store::lock(&directory)?
-        .load()?
-        .map(|state| state.sessions)
-        .unwrap_or_default();
-    let tmux = parked_sessions(sessions, locals);
-    if tmux.is_empty() {
-        return Ok(Vec::new());
-    }
-    let ids: Vec<String> = tmux.keys().cloned().collect();
-    let worker = deployment
-        .worker
-        .as_ref()
-        .ok_or(cloud_runtime::Error::Invalid("Cloud has no worker"))?;
-    // One command reads at most MAX_SESSIONS sessions, so larger clouds read in batches.
-    let mut statuses = Vec::with_capacity(ids.len());
-    for batch in ids.chunks(session_status::MAX_SESSIONS) {
-        statuses.extend(session_status::read(
-            worker,
-            &settings,
-            &directory,
-            batch,
-            &cloud_runtime::Cancellation::default(),
-        )?);
-    }
-    Ok(statuses
-        .into_iter()
-        .filter_map(|status| Some((tmux.get(&status.id)?.clone(), status)))
-        .collect())
-}
-
-/// The agent status that a parked panel shows for its last session status.
-fn agent_status(status: Option<&SessionStatus>) -> AgentStatus {
-    if status.is_some_and(|status| status.activity == SessionActivity::Working) {
-        AgentStatus::Working
-    } else {
-        AgentStatus::Idle
     }
 }
 
@@ -411,6 +357,7 @@ impl HorizonApp {
                         runtime.pending_member_attachments.extend(parked);
                         runtime.next_attachment_attempt = None;
                         runtime.parking.statuses.clear();
+                        runtime.parking.statuses_since = None;
                         runtime.parking.error = None;
                         // A read in flight answers for terminals that are attaching now.
                         runtime.parking.reader = None;
@@ -437,102 +384,6 @@ impl HorizonApp {
             }
             self.read_parked_status(index, now);
         }
-    }
-
-    /// Starts a status read of the parked terminals of cloud `index` when one is
-    /// due, and applies a finished one.
-    fn read_parked_status(&mut self, index: usize, now: Instant) {
-        let issue = self.cloud_prototype.groups.0[index].issue;
-        let Some(parking) = self
-            .cloud_prototype
-            .production
-            .runtimes
-            .get(&issue)
-            .map(|runtime| &runtime.parking)
-        else {
-            return;
-        };
-        let due =
-            parking.tracker.is_some_and(|tracker| tracker.is_parked()) && parking.next_read.is_none_or(|at| now >= at);
-        if parking.reader.is_none() && !due {
-            return;
-        }
-        let parked: HashMap<String, PanelId> = self
-            .parkable_members(index)
-            .into_iter()
-            .filter(|(_, id)| {
-                self.board
-                    .panel(*id)
-                    .is_some_and(|panel| panel.cloud_wait() == Some(CloudWait::Parked))
-            })
-            .collect();
-        let group = &self.cloud_prototype.groups.0[index];
-        let (issue, launch) = (group.issue, group.remote.clone());
-        let root = self.cloud_prototype.root.clone();
-        let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&issue) else {
-            return;
-        };
-        if let Some(reader) = &runtime.parking.reader {
-            let finished = match reader.try_recv() {
-                Ok(result) => {
-                    runtime.parking.reader = None;
-                    runtime.parking.next_read = Some(now + STATUS_INTERVAL);
-                    match result {
-                        Ok(statuses) => {
-                            runtime.parking.error = None;
-                            runtime.parking.statuses = statuses.into_iter().collect();
-                        }
-                        Err(error) => {
-                            // An old status is not shown as current.
-                            runtime.parking.error = Some(error.to_string());
-                            runtime.parking.statuses.clear();
-                        }
-                    }
-                    let reported: Vec<(PanelId, AgentStatus)> = parked
-                        .iter()
-                        .map(|(local, id)| (*id, agent_status(runtime.parking.statuses.get(local))))
-                        .collect();
-                    for (id, status) in reported {
-                        if let Some(panel) = self.board.panel_mut(id) {
-                            panel.set_parked_agent_status(status);
-                        }
-                    }
-                    true
-                }
-                Err(TryRecvError::Empty) => false,
-                Err(TryRecvError::Disconnected) => {
-                    runtime.parking.reader = None;
-                    false
-                }
-            };
-            if finished {
-                self.record_cloud_parking(index);
-            }
-            return;
-        }
-        if parked.is_empty() || runtime.parking.next_read.is_some_and(|at| now < at) {
-            return;
-        }
-        let locals: Vec<String> = parked.into_keys().collect();
-        let (Some(deployment), Some(root), Some(launch)) = (
-            runtime.state.clone().filter(|state| state.worker.is_some()),
-            root,
-            launch,
-        ) else {
-            return;
-        };
-        runtime.parking.next_read = Some(now + STATUS_INTERVAL);
-        let (tx, rx) = channel();
-        runtime.parking.reader = Some(rx);
-        let repaint = runtime.repaint_context.clone();
-        std::thread::spawn(move || {
-            let result = read_statuses(&deployment, &root, &launch.id, &locals);
-            if tx.send(result).is_ok()
-                && let Some(context) = repaint
-            {
-                context.request_repaint();
-            }
-        });
     }
 
     /// The strip text of a parked panel.
@@ -604,5 +455,6 @@ impl HorizonApp {
     }
 }
 
+mod read;
 #[cfg(all(test, unix))]
 pub(super) mod tests;

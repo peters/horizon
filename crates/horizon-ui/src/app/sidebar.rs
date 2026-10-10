@@ -4,7 +4,7 @@ mod new_workspace;
 mod rows;
 mod toolbar;
 
-pub(in crate::app) use list::ListCache;
+pub(in crate::app) use list::{IdleCloud, ListCache};
 pub(in crate::app) use new_workspace::{NewWorkspace, menu as new_workspace_menu};
 
 use std::collections::HashMap;
@@ -13,7 +13,7 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder,
     Vec2,
 };
-use horizon_core::cloud_list::{self, Group, Row};
+use horizon_core::cloud_list::{Group, Row};
 use horizon_core::{PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
@@ -64,6 +64,8 @@ struct SidebarActions {
     close_all_in_workspace: Option<WorkspaceId>,
     clear_layout: Option<WorkspaceId>,
     arrange_layout: Option<(WorkspaceId, WorkspaceLayout)>,
+    /// The group whose idle clouds the user chooses to stop.
+    stop_idle: Option<Group>,
 }
 
 #[derive(Clone, Copy)]
@@ -195,18 +197,7 @@ impl HorizonApp {
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
 
-                for group in Group::ALL {
-                    let rows = workspace_data.iter().filter(|entry| entry.row.group == group);
-                    let count = rows.clone().count();
-                    if count == 0 {
-                        continue;
-                    }
-                    let summary = cloud_list::group_summary(group, rows.map(|entry| &entry.row));
-                    list::render_group_header(ui, group, count, &summary);
-                    for workspace in workspace_data.iter().filter(|entry| entry.row.group == group) {
-                        self.render_sidebar_workspace(ui, workspace, actions, &mut drag_state);
-                    }
-                }
+                self.render_sidebar_groups(ui, workspace_data, actions, &mut drag_state);
             });
 
         if drag_state.drop_requested {
@@ -519,6 +510,10 @@ impl HorizonApp {
         });
         if let Some(panel_id) = actions.focus_panel {
             self.board.focus(panel_id);
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(group) = actions.stop_idle {
+            self.request_idle_stop(group);
         }
 
         let pan_to_panel_workspace = actions
