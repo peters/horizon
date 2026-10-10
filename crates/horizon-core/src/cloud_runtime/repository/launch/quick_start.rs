@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn the_trusted_report_is_the_current_checker_contract_and_satisfies_the_builtin_profile() {
+    fn the_trusted_report_preserves_the_published_pin_and_denies_unverified_tailnet() {
         let checker = include_str!("../../../../../../examples/cloud-worker/horizon-worker-check");
         let lines: Vec<_> = CONTRACT.lines().collect();
         assert!(!lines.is_empty());
@@ -258,7 +258,11 @@ mod tests {
         crate::cloud_runtime::worker_contract::validate(report, &profile.capabilities, true, true).unwrap();
         crate::cloud_runtime::worker_contract::validate_idle_report(report, true).unwrap();
         let contract = crate::cloud_runtime::WorkerContract::reported(report);
-        assert!(contract.tailnet && contract.session_restart && contract.prepare_checkout);
+        assert!(
+            !contract.tailnet,
+            "the published pin does not prove sole-tag enrollment"
+        );
+        assert!(contract.session_restart && contract.prepare_checkout);
         assert!(contract.pinned_submodules && contract.lfs_selection);
     }
 

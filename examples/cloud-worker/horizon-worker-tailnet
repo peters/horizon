@@ -25,6 +25,7 @@ SELF = '/usr/local/bin/horizon-worker-tailnet'
 # Written at container start from the provider environment, which SSH commands do not see.
 NAME = 'device-name'
 NAME_PREFIX = 'horizon-cloud-'
+WORKER_TAG = 'tag:horizon-worker'
 
 
 def private_directory(path):
@@ -91,6 +92,9 @@ def publish_devices():
     PUBLIC.mkdir(mode=0o755, exist_ok=True)
     os.chmod(PUBLIC, 0o755)
     own = report.get('Self')
+    if report.get('BackendState') != 'Running' or not tagged(report):
+        own = None
+        report['Peer'] = {}
     values = ([own] if own else []) + list((report.get('Peer') or {}).values())
     devices = [{'name': value.get('DNSName') or value.get('HostName', ''),
                 'addresses': value.get('TailscaleIPs', []), 'online': bool(value.get('Online'))}
@@ -104,6 +108,22 @@ def publish_devices():
         os.replace(pending, PUBLIC / 'devices.json')
     finally:
         pending.unlink(missing_ok=True)
+
+
+def tagged(report):
+    # A key with extra tags can widen access beyond the worker policy.
+    return (report.get('Self') or {}).get('Tags') == [WORKER_TAG]
+
+
+def require_worker_tag():
+    report = json.loads(call('status', '--json'))
+    if report.get('BackendState') != 'Running':
+        raise ValueError()
+    if not tagged(report):
+        call('logout')
+        (STATE / 'selection').unlink(missing_ok=True)
+        publish_devices()
+        raise ValueError('Use an auth key with only tag:horizon-worker')
 
 
 def status(wait=False):
@@ -176,6 +196,7 @@ def configure():
         backend = status(wait=True)
         name = recorded_name()
         if old == identity and backend == 'Running':
+            require_worker_tag()
             rename(name)
             print('ready')
             return
@@ -199,11 +220,13 @@ def configure():
         try:
             os.write(fd, key.encode())
             call('up', '--auth-key=file:/proc/self/fd/' + str(fd), '--accept-dns=false',
+                 '--advertise-tags=' + WORKER_TAG,
                  *(['--hostname=' + name] if name else []), '--timeout=30s', pass_fds=(fd,))
         finally:
             os.close(fd)
         if status(wait=True) != 'Running':
             raise ValueError()
+        require_worker_tag()
         publish_devices()
         print('ready')
 
@@ -435,6 +458,7 @@ def agent(arguments):
         if name.startswith(('TS_', 'TAILSCALE_')) or name == 'RUNPOD_API_KEY':
             environment.pop(name)
     if (STATE / 'selection').exists():
+        require_worker_tag()
         environment.update(ALL_PROXY=PROXY, all_proxy=PROXY,
                            HTTP_PROXY='http://127.0.0.1:1056', HTTPS_PROXY='http://127.0.0.1:1056',
                            http_proxy='http://127.0.0.1:1056', https_proxy='http://127.0.0.1:1056',
@@ -461,6 +485,8 @@ def main():
         if (STATE / 'selection').exists():
             (RUNTIME / 'agent-isolation').touch(mode=0o600)
             start()
+    elif sys.argv[1:] == ['--tagged-enrollment-contract']:
+        print('horizon-tailnet-contract=3')
     elif sys.argv[1:] == ['--stable-name-contract']:
         # Contract 2: the device name comes from the cloud ID, not the container host name.
         print('horizon-tailnet-contract=2')
@@ -468,7 +494,8 @@ def main():
         serve()
     elif sys.argv[1:] == ['status']:
         # No credential or daemon state is returned.
-        print('joined' if (STATE / 'selection').exists() and status() == 'Running' else 'none')
+        report = json.loads(call('status', '--json')) if (STATE / 'selection').exists() else {}
+        print('joined' if report.get('BackendState') == 'Running' and tagged(report) else 'none')
     elif len(sys.argv) >= 3 and sys.argv[1] == 'agent':
         agent(sys.argv[2:])
     else:
@@ -479,5 +506,5 @@ if __name__ == '__main__':
     try:
         main()
     except Exception:
-        print('Tailnet operation failed. Check key validity, worker storage permissions and restart privileged sessions.', file=sys.stderr)
+        print('Tailnet operation failed. Use a key with only tag:horizon-worker; check worker storage permissions and restart privileged sessions.', file=sys.stderr)
         sys.exit(1)

@@ -904,7 +904,10 @@ impl HorizonApp {
                 .ok_or(cloud_runtime::Error::Invalid("Cloud has no worker"))?;
             options.cloud_connection = Some(connection);
             options.command = Some("ssh".into());
-            options.args = Connection::new(worker, &settings, store.root())?.attach_args(&session, &launch.revision)?;
+            let tailnet = cloud_runtime::tailnet::Selection::load(store.root())
+                .map_err(|_| cloud_runtime::Error::Invalid("Invalid tailnet selection"))?;
+            options.args =
+                Connection::new(worker, &settings, store.root())?.attach_args(&session, &launch.revision, &tailnet)?;
             options.cwd = None;
             options.local_id = Some(id);
             options.session_binding = None;

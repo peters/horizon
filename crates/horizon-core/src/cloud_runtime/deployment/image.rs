@@ -37,16 +37,9 @@ pub(super) fn validate_allocation_image(
             ),
         }
         .and_then(|contract| {
-            if crate::cloud_runtime::tailnet::Selection::load(&request.state_root)
-                .map_err(|_| super::super::Error::Invalid("Invalid tailnet selection"))?
-                .tailnet
-                .is_some()
-                && !contract.tailnet
-            {
-                return Err(super::super::Error::Invalid(
-                    "This image cannot isolate tailnet credentials; rebuild with the current cloud worker",
-                ));
-            }
+            let selected = crate::cloud_runtime::tailnet::Selection::load(&request.state_root)
+                .map_err(|_| super::super::Error::Invalid("Invalid tailnet selection"))?;
+            crate::cloud_runtime::tailnet::validate_worker_contract(&selected, &contract)?;
             Ok(Some(contract))
         });
     }

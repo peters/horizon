@@ -254,11 +254,11 @@ fn the_newest_stop_an_agent_asked_for_is_read_only_when_well_formed() {
 }
 
 #[test]
-fn tailnet_v2_implies_enrollment_and_stable_naming() {
+fn stable_naming_does_not_imply_tagged_enrollment() {
     for (marker, enrollment, stable) in [
         ("", false, false),
-        ("horizon-tailnet-contract=1", true, false),
-        ("horizon-tailnet-contract=2", true, true),
+        ("horizon-tailnet-contract=1", false, false),
+        ("horizon-tailnet-contract=2", false, true),
         ("horizon-tailnet-contract=20", false, false),
         ("prefix horizon-tailnet-contract=2", false, false),
     ] {
@@ -266,4 +266,17 @@ fn tailnet_v2_implies_enrollment_and_stable_naming() {
         assert_eq!(contract.tailnet, enrollment, "{marker}");
         assert_eq!(contract.tailnet_stable_name, stable, "{marker}");
     }
+}
+
+#[test]
+fn tailnet_images_must_enforce_tagged_enrollment() {
+    for output in [
+        "horizon-tailnet-contract=1\n",
+        "horizon-tailnet-contract=3\n",
+        "horizon-tailnet-contract=1\n horizon-tailnet-contract=3\n",
+        "horizon-tailnet-contract=1\nhorizon-tailnet-contract=3-suffix\n",
+    ] {
+        assert!(!WorkerContract::reported(output).tailnet);
+    }
+    assert!(WorkerContract::reported("horizon-tailnet-contract=1\nhorizon-tailnet-contract=3\n").tailnet);
 }

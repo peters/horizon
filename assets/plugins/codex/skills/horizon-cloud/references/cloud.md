@@ -58,7 +58,13 @@ A stopped companion stays stopped. Stop preserves storage and worktrees.
 On Hetzner, resume creates a server on the retained volume.
 Provisioned clouds keep their network. For a new eligible cloud, omit `tailnet`
 to preserve selection, use a returned saved ID to select one, or `none` for no network.
-Never pass an auth key. Nested companions do not start automatically.
+A new cloud defaults to None. A selected tailnet requires a preauthorized,
+non-ephemeral auth key with only `tag:horizon-worker` and a worker image that
+reports tailnet contracts 1 and 3. These contracts also apply before reconnect
+and before a new session starts on a retained cloud. The tailnet policy must restrict this tag to
+the required services. Horizon does not change policy; worker enrollment refuses
+untagged nodes and nodes with extra tags. Never pass an auth key. Nested companions
+do not start automatically.
 
 On workers, read `cloud_companions_list`, then `cloud_companion_inspect` with
 one declared alias for a live SSH/worktree check. Snapshots older than 60 seconds

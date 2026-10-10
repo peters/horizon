@@ -312,6 +312,8 @@ try:
             # Contract 2: the device name stays the same for the cloud's life.
             if helper_declares('horizon-worker-tailnet', '--stable-name-contract', 'horizon-tailnet-contract=2'):
                 print('horizon-tailnet-contract=2')
+            if helper_declares('horizon-worker-tailnet', '--tagged-enrollment-contract', 'horizon-tailnet-contract=3'):
+                print('horizon-tailnet-contract=3')
     # Session restart: horizon-worker-session --relaunch replaces a lost process in its worktree.
     print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n'
           'horizon-session-restart-contract=1\nhorizon-shared-checkout-contract=1\nhorizon-prepare-checkout-contract=1')

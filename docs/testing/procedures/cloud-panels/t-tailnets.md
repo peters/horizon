@@ -44,9 +44,12 @@ send TCP traffic to each other over the tailnet.
 - The equipment in the [main procedure](../cloud-panels.md#4-equipment-and-preconditions).
 - The fixture with a Secret Service from S05.
 - The test tailnet. Its auth key is reusable, pre-authorized and not ephemeral.
+  It has only `tag:horizon-worker`. The administrator sets a policy that permits
+  the worker tag to reach only the declared test services. The policy denies
+  access to an unrelated test device.
 - The PC is a device on the test tailnet. Tests T05, T06 and T07 need this.
 - A worker image that reports `horizon-tailnet-contract=1` and
-  `horizon-tailnet-contract=2`. Use
+  `horizon-tailnet-contract=2` and `horizon-tailnet-contract=3`. Use
   [`check-markers.py`](../../../../examples/cloud-worker/README.md#helpers-from-the-published-artifact)
   in B05 to examine the image.
 - A worker shell in each cloud of this area. Until the fix for
@@ -789,8 +792,46 @@ This task needs a root shell. Use the SSH route of E09 in
 
     Result: The server stops.
 
+### 6.15 T15 — Examine the default and the worker tag
+
+1. Open **New cloud…** with a saved test tailnet in the catalog.
+
+   Result: **None** is selected. Cancel the dialog without allocation.
+
+2. In the root shell of `smoke-a`, examine the node tags.
+
+   ```sh
+   tailscale --socket=/run/horizon-tailnet/tailscaled.sock status --json | jq -c '.Self.Tags'
+   ```
+
+   Result: The output is `["tag:horizon-worker"]`. The node does not have other tags.
+
+3. From the worker shell, try to connect to the denied test service.
+
+   ```sh
+   curl -sS --max-time 10 --socks5-hostname 127.0.0.1:1055 http://<denied-test-device>:<denied-test-port>/
+   ```
+
+   Result: The connection fails. T06 still reaches its permitted service.
+   Keep the private target and the error in the evidence.
+
+4. With a separate disposable cloud, select a binding with a dedicated untagged
+   test key. Do not use the key of an owner device.
+
+   Result: Enrollment fails. No agent session starts on the tailnet, and the
+   worker is not connected as an owner device. Delete this test cloud.
+   An expired non-ephemeral node can remain in the administrative device list;
+   logout alone does not prove deletion. Record it for exact cleanup in area X.
+
+5. With the same disposable test setup, try a key with an extra test tag.
+
+   Result: Enrollment fails. The worker logs out instead of returning Ready.
+   Record and remove only the node that this test created.
+
 ## 7. Pass criteria
 
+- T15 selects **None** by default, accepts only the worker tag, and denies the
+  unrelated test service. An untagged or extra-tag node cannot become Ready.
 - T01 and T02 keep the auth key only in the Secret Service. No settings file
   contains `tskey`.
 - **Save tailnet** stays disabled for a short key.

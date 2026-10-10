@@ -19,9 +19,14 @@ platform qualification remains separately tracked in #741.
 credential store. Names and opaque IDs are the only saved catalog metadata; keys
 are never returned by CLI/MCP, loaded back into the form, or included in project
 configuration. Add multiple networks, replace a key, or remove a saved binding.
-Use a preauthorized, non-ephemeral key; reuse requires a reusable key.
+Use a preauthorized, non-ephemeral key with only `tag:horizon-worker`. Use a
+reusable key to enroll more than one cloud. The tailnet administrator must set a
+policy for this tag that permits only the required test or workspace services.
+Horizon does not change the tailnet policy. An untagged key or a key with extra
+tags is refused. The worker cannot use the identity of the owner.
 
-Choose **None** or a saved network in **New cloud** before provisioning. A cloud
+**None** is the default in each **New cloud** dialog. Choose a saved network
+only when the cloud needs it. A cloud
 retains that choice after allocation, including stop/resume. Removing a binding
 does not move its existing clouds to another network. Remote Hosts are outside
 this MVP. OAuth enrollment, API-based administration and Remote Hosts are
@@ -41,9 +46,10 @@ saves the auth key. Node state and the administrative socket are root-only;
 workspace code, agents, browsers and desktop services run as UID 10001 without
 capabilities or privilege escalation. The cloud volume retains node identity
 across worker restarts. Provider volumes that cannot enforce ownership/modes are
-refused. Custom images must advertise `horizon-tailnet-contract=1` before a
-selected-network cloud can be allocated; **None** remains compatible with older
-images.
+refused. Custom images must report `horizon-tailnet-contract=1` and
+`horizon-tailnet-contract=3` before Horizon can allocate a cloud with a selected
+network. Reconnect and new sessions also require these markers from the actual
+worker. **None** remains compatible with older images.
 
 Each cloud has one device name in its tailnet for the life of the cloud. The
 worker makes the name from the cloud ID. The name stays the same after a stop

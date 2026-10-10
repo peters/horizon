@@ -27,6 +27,7 @@ class TailnetTests(unittest.TestCase):
         self.state.mkdir(); self.runtime.mkdir()
         self.calls = []
         self.joined = False
+        self.tags = [worker.WORKER_TAG]
         # The daemon's host name: the container's own until a preference names the device.
         self.hostname = 'd1021da2f9b5'
         for name, value in [('STATE', self.state), ('RUNTIME', self.runtime), ('PUBLIC', root / 'public')]:
@@ -41,7 +42,7 @@ class TailnetTests(unittest.TestCase):
         self.assertNotIn('TS_AUTHKEY', os.environ)
         if args[0] == 'status':
             return json.dumps({'BackendState': 'Running' if self.joined else 'NeedsLogin',
-                               'Self': {'HostName': self.hostname}}).encode()
+                               'Self': {'HostName': self.hostname, 'Tags': self.tags}}).encode()
         if args[0] in {'up', 'set'}:
             for arg in args:
                 if arg.startswith('--hostname='):
@@ -100,6 +101,7 @@ class TailnetTests(unittest.TestCase):
         self.assertEqual(self.configure('work', KEY), 'ready\n')
         [up] = [args for args in self.calls if args[0] == 'up']
         self.assertIn('--hostname=' + NAME, up)
+        self.assertIn('--advertise-tags=' + worker.WORKER_TAG, up)
         self.assertEqual(self.hostname, NAME)
         self.assertFalse(any(args[0] == 'set' for args in self.calls))
 
@@ -113,7 +115,7 @@ class TailnetTests(unittest.TestCase):
                 self.resume(container=container)
                 self.assertEqual(self.configure('work', None), 'ready\n')
                 self.assertEqual(self.hostname, NAME)
-                self.assertEqual(self.calls, [('status', '--json'), ('status', '--json')])
+                self.assertEqual(self.calls, [('status', '--json')] * 3)
 
     def test_resume_renames_a_cloud_enrolled_with_the_container_host_name(self):
         self.configure('work', None); self.configure('work', KEY)
@@ -173,6 +175,58 @@ class TailnetTests(unittest.TestCase):
                 with self.assertRaises(ValueError): self.configure('work', KEY)
                 self.assertFalse(any(args[0] in {'up', 'set'} for args in self.calls))
 
+    def test_untagged_and_overbroad_nodes_are_logged_out_before_ready(self):
+        for tags in [[], None, ['tag:other'], [worker.WORKER_TAG, 'tag:admin']]:
+            with self.subTest(tags=tags):
+                self.tags = tags
+                self.joined = False
+                self.calls.clear()
+                with self.assertRaises(ValueError):
+                    self.configure('work', KEY)
+                self.assertFalse(self.joined)
+                self.assertIn(('logout',), self.calls)
+                self.assertFalse((self.state / 'selection').exists())
+                snapshot = json.loads((worker.PUBLIC / 'devices.json').read_text())
+                self.assertEqual(snapshot['devices'], [])
+
+    def test_existing_owner_node_is_not_reused(self):
+        (self.state / 'selection').write_text('work')
+        self.joined = True
+        self.tags = []
+        with self.assertRaises(ValueError):
+            self.configure('work', None)
+        self.assertFalse(self.joined)
+        self.assertFalse(any(args[0] == 'up' for args in self.calls))
+
+    def test_agent_launch_does_not_use_an_existing_owner_node(self):
+        (self.state / 'selection').write_text('work')
+        self.joined = True
+        self.tags = []
+        with patch.object(worker.os, 'geteuid', return_value=0), \
+                patch.object(worker.Path, 'cwd', return_value=Path('/workspace')), \
+                patch.object(worker, 'handoff'), patch.object(worker, 'handoff_uploads'), \
+                patch.object(worker.os, 'execve') as execute:
+            with self.assertRaises(ValueError):
+                worker.agent(['/usr/bin/true'])
+        execute.assert_not_called()
+        self.assertFalse(self.joined)
+
+    def test_owner_inventory_is_not_published(self):
+        for backend in ['Running', 'NeedsLogin', 'Stopped']:
+            with self.subTest(backend=backend):
+                report = {'BackendState': backend, 'Self': {'HostName': 'Owner device'},
+                          'Peer': {'peer': {'HostName': 'Private peer'}}}
+                with patch.object(worker, 'call', return_value=json.dumps(report).encode()):
+                    worker.publish_devices()
+                self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text()), {'devices': []})
+
+    def test_helper_declares_tagged_enrollment_contract(self):
+        with patch.object(worker.sys, 'argv', ['worker', '--tagged-enrollment-contract']), \
+                patch('sys.stdout', new_callable=io.StringIO) as output:
+            worker.main()
+        self.assertEqual(output.getvalue(), 'horizon-tailnet-contract=3\n')
+        self.assertEqual(self.calls, [])
+
     def test_helper_declares_the_stable_name_contract(self):
         with patch.object(worker.sys, 'argv', ['worker', '--stable-name-contract']), \
                 patch('sys.stdout', new_callable=io.StringIO) as output:
@@ -222,7 +276,8 @@ class TailnetTests(unittest.TestCase):
             pending.append(source)
             barrier.wait(timeout=5)
             replace(source, destination)
-        report = json.dumps({'Self': {'HostName': 'Synthetic device'}}).encode()
+        report = json.dumps({'BackendState': 'Running',
+                             'Self': {'HostName': 'Synthetic device', 'Tags': [worker.WORKER_TAG]}}).encode()
         with patch.object(worker, 'call', return_value=report), patch.object(worker.os, 'replace', side_effect=publish):
             with ThreadPoolExecutor(max_workers=2) as pool:
                 tasks = [pool.submit(worker.publish_devices) for _ in range(2)]
@@ -242,10 +297,12 @@ class TailnetTests(unittest.TestCase):
 
     def test_resume_waits_for_persistent_identity_before_requesting_a_key(self):
         (self.state / 'selection').write_text('work')
-        reports = [b'{"BackendState":"Starting"}', b'{"BackendState":"Running"}']
+        reports = [b'{"BackendState":"Starting"}',
+                   json.dumps({'BackendState': 'Running', 'Self': {'Tags': [worker.WORKER_TAG]}}).encode()]
+        reports.append(reports[-1])
         with patch.object(worker, 'call', side_effect=reports) as call, patch.object(worker.time, 'sleep'):
             self.assertEqual(self.configure('work', None), 'ready\n')
-        self.assertEqual([args.args for args in call.call_args_list], [('status', '--json')] * 2)
+        self.assertEqual([args.args for args in call.call_args_list], [('status', '--json')] * 3)
 
     def test_resume_timeout_and_admission_states_never_request_or_reuse_a_key(self):
         (self.state / 'selection').write_text('work')
@@ -276,10 +333,20 @@ class TailnetTests(unittest.TestCase):
                 if selected: selection.write_text('work')
                 else: selection.unlink(missing_ok=True)
                 with patch.object(worker.sys, 'argv', ['worker', 'status']), \
-                        patch.object(worker, 'call', return_value=json.dumps({'BackendState': state}).encode()), \
+                        patch.object(worker, 'call', return_value=json.dumps({'BackendState': state, 'Self': {'Tags': [worker.WORKER_TAG]}}).encode()), \
                         patch('sys.stdout', new_callable=io.StringIO) as output:
                     worker.main()
                 self.assertEqual(output.getvalue(), expected + '\n')
+
+    def test_status_does_not_call_an_owner_node_joined(self):
+        (self.state / 'selection').write_text('work')
+        self.joined = True
+        self.tags = []
+        with patch.object(worker.sys, 'argv', ['worker', 'status']), \
+                patch('sys.stdout', new_callable=io.StringIO) as output:
+            worker.main()
+        self.assertEqual(output.getvalue(), 'none\n')
+        self.assertTrue(self.joined, 'status must be read only')
 
     def test_resume_never_needs_a_key_or_touches_the_host_tailscale(self):
         (self.state / 'selection').write_text('work')

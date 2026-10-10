@@ -132,6 +132,7 @@ mod tests {
                 name: "Work".into(),
             }],
         };
+        assert_eq!(Selection::load(temp.path()).unwrap(), Selection::default());
         Selection::save(temp.path(), Some("work"), &catalog).unwrap();
         assert_eq!(Selection::load(temp.path()).unwrap().tailnet.as_deref(), Some("work"));
         assert!(Selection::save(temp.path(), Some("unknown"), &catalog).is_err());

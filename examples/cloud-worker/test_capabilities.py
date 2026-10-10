@@ -241,7 +241,8 @@ class CapabilitiesTests(unittest.TestCase):
                           ['/usr/bin/setpriv', '--help'],
                           ['/usr/bin/id', '-u', 'horizon-agent'],
                           ['/usr/bin/id', '-g', 'horizon-agent'],
-                          ['horizon-worker-tailnet', '--stable-name-contract']])
+                          ['horizon-worker-tailnet', '--stable-name-contract'],
+                          ['horizon-worker-tailnet', '--tagged-enrollment-contract']])
 
     def test_tailnet_contract_refuses_mismatched_isolation_uid_or_gid(self):
         for identity in [(0, 10001), (10002, 10001), (10001, 0), (10001, 10002)]:
@@ -268,6 +269,18 @@ class CapabilitiesTests(unittest.TestCase):
                     declared = command == ['horizon-worker-tailnet', '--stable-name-contract']
                     return subprocess.CompletedProcess(command, code if declared else 0, stdout=reply if declared else b'')
                 status, output, _ = self.run_check(run=run, missing=missing)
+                self.assertEqual(status, 0, output)
+                self.assertEqual(marker in output.splitlines(), expected)
+
+    def test_tagged_enrollment_is_reported_only_when_the_helper_declares_it(self):
+        marker = 'horizon-tailnet-contract=3'
+        for code, reply, expected in [(0, (marker + '\n').encode(), True), (0, b'', False),
+                                      (0, (marker + ' extra\n').encode(), False), (1, b'', False)]:
+            with self.subTest(code=code, reply=reply):
+                def run(command, **kwargs):
+                    declared = command == ['horizon-worker-tailnet', '--tagged-enrollment-contract']
+                    return subprocess.CompletedProcess(command, code if declared else 0, stdout=reply if declared else b'')
+                status, output, _ = self.run_check(run=run)
                 self.assertEqual(status, 0, output)
                 self.assertEqual(marker in output.splitlines(), expected)
 

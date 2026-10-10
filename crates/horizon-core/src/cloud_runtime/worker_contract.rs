@@ -11,6 +11,7 @@ const SELF_STOP_MARKER: &str = "horizon-self-stop-contract=1";
 const PINNED_SUBMODULES_MARKER: &str = "horizon-source-shallow-contract=1";
 const LFS_SELECTION_MARKER: &str = "horizon-source-lfs-selection-contract=1";
 const PREPARE_CHECKOUT_MARKER: &str = "horizon-prepare-checkout-contract=1";
+pub(super) const TAILNET_MARKERS: [&str; 2] = ["horizon-tailnet-contract=1", "horizon-tailnet-contract=3"];
 /// A reason longer than this was not written by `horizon-worker-stop`.
 const SELF_STOP_REASON_LIMIT: usize = 200;
 
@@ -51,7 +52,7 @@ impl SelfStop {
 /// Optional worker features the checker reports beside the required markers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkerContract {
-    /// Root-only enrollment with unprivileged agent sessions.
+    /// Tagged root-only enrollment with unprivileged agent sessions.
     pub tailnet: bool,
     /// The image sets a stable device name from the cloud ID.
     pub tailnet_stable_name: bool,
@@ -78,7 +79,7 @@ pub struct WorkerContract {
 impl WorkerContract {
     pub(super) fn reported(output: &str) -> Self {
         Self {
-            tailnet: reports(output, "horizon-tailnet-contract=1") || reports(output, "horizon-tailnet-contract=2"),
+            tailnet: TAILNET_MARKERS.iter().all(|marker| reports(output, marker)),
             tailnet_stable_name: reports(output, "horizon-tailnet-contract=2"),
             session_restart: reports(output, SESSION_RESTART_MARKER),
             container_started: output

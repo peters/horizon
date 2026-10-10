@@ -182,7 +182,11 @@ workspace services before they can execute user code. `horizon-worker-tailnet`
 is a root control helper; agents cannot enroll, retrieve credentials, or open the
 administrative socket. `configure` accepts bounded private JSON on stdin and
 returns only `ready` or `needs_key`. Enrollment uses an anonymous memory file,
-never an auth key in argv, environment or a retained file.
+never an auth key in argv, environment or a retained file. Enrollment requests
+only `tag:horizon-worker`. The helper checks that the joined node has exactly this
+tag before it returns `ready` or starts an agent through its proxies. An untagged
+node or a node with extra tags is logged out and refused. The tailnet administrator
+must restrict this tag to the required services; Horizon does not edit policy.
 
 `/workspace/.horizon-tailnet` and `/run/horizon-tailnet` are root-only. The volume
 root stays root-owned and non-writable by agents. The supervisor restarts the
@@ -196,6 +200,12 @@ declares it. Then the device name comes from the cloud ID and stays the same for
 the life of the cloud. It is not the random container host name. A UUID cloud ID
 gives `horizon-cloud-<cloud ID>`. An ID that needs a change or a shorter form
 gives a digest form; see the tailnet section of the cloud workspaces guide.
+`horizon-tailnet-contract=3` requires the tagged enrollment checks. The checker
+reports it only when `horizon-worker-tailnet --tagged-enrollment-contract` declares
+it. A selected tailnet needs contracts 1 and 3 before allocation, reconnect, and
+new session attachment. The actual worker must report these markers before the
+host sends enrollment data or starts a session. **None** remains compatible with
+older images.
 `resume` records the name from `HORIZON_CLOUD_OPERATION` at container start.
 `configure` gives it to `tailscale up --hostname` or `tailscale set --hostname`.
 See
