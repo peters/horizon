@@ -39,16 +39,38 @@ def git(repo, *args):
 
 
 def changed_files(repo, base):
-    """(path, added, deleted, status) for each file that differs from the base."""
+    """(path, added, deleted, status) for each file that differs from the base. A rename
+    is one file at its new path, with only its edited lines, so a pure move costs nothing."""
     status = {}
-    for line in git(repo, "diff", "--name-status", "--no-renames", base, "HEAD").splitlines():
-        code, path = line.split("\t", 1)
-        status[path] = code[0]
+    fields = git(repo, "diff", "--name-status", "-z", "-M", base, "HEAD").split("\0")
+    i = 0
+    while i < len(fields) - 1:
+        code = fields[i]
+        if code[:1] in "RC":
+            status[fields[i + 2]] = code[0]
+            i += 3
+        else:
+            status[fields[i + 1]] = code[0]
+            i += 2
     files = []
-    for line in git(repo, "diff", "--numstat", "--no-renames", base, "HEAD").splitlines():
-        added, deleted, path = line.split("\t", 2)
+    fields = git(repo, "diff", "--numstat", "-z", "-M", base, "HEAD").split("\0")
+    i = 0
+    while i < len(fields) - 1:
+        added, deleted, path = fields[i].split("\t", 2)
+        if path == "":
+            path = fields[i + 2]
+            i += 3
+        else:
+            i += 1
         files.append((path, 0 if added == "-" else int(added), 0 if deleted == "-" else int(deleted), status.get(path, "M")))
     return files
+
+
+def rendered(body):
+    """The PR body without HTML comments and fenced code blocks, which GitHub does not
+    show as media."""
+    body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
+    return re.sub(r"^(```|~~~).*?^\1[^\n]*$", "", body, flags=re.S | re.M)
 
 
 def is_media(line):
@@ -57,7 +79,7 @@ def is_media(line):
     such as PNG or JPEG, and a video do not count. GitHub attachment URLs have no file
     extension, so the check cannot see their type offline and accepts them."""
     line = line.strip()
-    urls = re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", line)
+    urls = re.findall(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+[\"'(][^)]*)?\)", line)
     urls += re.findall(r"<img\b[^>]*\bsrc=[\"']?([^\"'\s>]+)", line, re.I)
     if re.fullmatch(r"https://github\.com/user-attachments/assets/\S+", line):
         urls.append(line)
@@ -116,7 +138,7 @@ def check(repo, base, title, body, scope_approved, no_visible_change):
         if body is None:
             notes.append(("ui-gif", "UI files changed: pass --body FILE to check for the animated GIF."))
         else:
-            lines = [l for l in body.splitlines() if l.strip()]
+            lines = [l for l in rendered(body).splitlines() if l.strip()]
             media = [i for i, l in enumerate(lines) if is_media(l)]
             if not media:
                 errors.append(("ui-gif", "UI files changed, but the PR body has no animated GIF of the change."))

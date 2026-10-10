@@ -74,6 +74,14 @@ class ReadinessTests(unittest.TestCase):
         self.commit()
         self.assertIn("error scope:", self.run_check()[1])
 
+    def test_pure_rename_does_not_count_toward_scope(self):
+        self.write("crates/horizon-core/src/big.rs", "".join(f"line {i}\n" for i in range(1600)))
+        self.commit()
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.git("mv", "crates/horizon-core/src/big.rs", "crates/horizon-core/src/moved.rs")
+        self.commit()
+        self.assertEqual(self.run_check()[0], 0)
+
     def test_test_procedures_do_not_count_toward_scope(self):
         for i in range(11):
             self.write(f"docs/testing/procedures/p{i}.md")
@@ -106,11 +114,13 @@ class ReadinessTests(unittest.TestCase):
         self.write("docs/testing/procedures/panel.md")
         self.commit()
         for body in ["The recording is recording.gif.\n", "See https://github.com/user-attachments/assets/abc for details.\n",
-                     "![still](https://example.invalid/shot.png)\n", "<video src=\"https://example.invalid/a.mp4\"></video>\n"]:
+                     "![still](https://example.invalid/shot.png)\n", "<video src=\"https://example.invalid/a.mp4\"></video>\n",
+                     "<!-- ![f](https://example.invalid/a.gif) -->\n", "```\n![f](https://example.invalid/a.gif)\n```\n"]:
             with self.subTest(body=body):
                 self.assertIn("error ui-gif:", self.run_check(body=body)[1])
         for body in ["<img src=\"https://example.invalid/a.gif\" width=\"600\">\n", "https://github.com/user-attachments/assets/abc\n",
-                     "![flow](https://github.com/user-attachments/assets/abc)\n"]:
+                     "![flow](https://github.com/user-attachments/assets/abc)\n",
+                     "![flow](https://example.invalid/a.gif \"demo\")\n", "![flow](<https://example.invalid/a.gif>)\n"]:
             with self.subTest(body=body):
                 self.assertEqual(self.run_check(body=body)[0], 0)
 
