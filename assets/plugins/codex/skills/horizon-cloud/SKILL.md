@@ -14,6 +14,11 @@ private Horizon state for MCP results.
 Hetzner offers include all current x86 types in permitted locations. The configured
 server types are fallback preferences; they do not restrict explicit worker choices.
 
+Cloud cards show the last-read tailnet device name under Connections > Tailnet.
+Copy includes the MagicDNS domain when the worker reports it. A stable-name
+fallback requires `horizon-tailnet-contract=2`; it does not supply an unknown
+domain. Connect again to refresh names after an administrator rename.
+
 Discovery and price results do not authorize spending or lifecycle changes.
 Get explicit authorization for the exact resource before starting or stopping a worker.
 Keep credentials in Horizon. Do not send keys, tokens, endpoints, or raw provider

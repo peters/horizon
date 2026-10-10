@@ -2,6 +2,7 @@
 mod keychain;
 use super::{Error, Result, command::Runner, ssh::Connection, state};
 pub use horizon_cloud::tailnet::{Catalog, Selection, Store, Tailnet, valid_key};
+use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 
 #[must_use]
@@ -112,4 +113,257 @@ pub(in crate::cloud_runtime) fn validate_pending(cloud: &Path) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// The device name last read from the worker, or the image's stable-name fallback.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct DeviceName {
+    pub name: String,
+    pub observed: bool,
+}
+
+impl DeviceName {
+    /// A published DNS name includes its `MagicDNS` domain. A bare name does not.
+    #[must_use]
+    pub fn full_name(&self) -> bool {
+        self.name.contains('.')
+    }
+
+    fn published(bytes: &[u8]) -> Option<Self> {
+        #[derive(serde::Deserialize)]
+        struct Snapshot {
+            devices: Vec<Device>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Device {
+            name: String,
+        }
+        let snapshot: Snapshot = serde_json::from_slice(bytes).ok()?;
+        let name = snapshot.devices.into_iter().next()?.name;
+        let name = name.trim_end_matches('.');
+        valid_dns_name(name).then(|| Self {
+            name: name.into(),
+            observed: true,
+        })
+    }
+
+    fn derived(cloud_id: &str, stable: bool) -> Option<Self> {
+        if !stable || !horizon_cloud::valid_id(cloud_id) {
+            return None;
+        }
+        let label = cloud_id.to_ascii_lowercase().replace('_', "-");
+        let mut name = format!("horizon-cloud-{label}");
+        let digest_suffix = name.rsplit_once('-').is_some_and(|(_, suffix)| {
+            suffix.len() == 20 && suffix.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        });
+        // Match the worker helper's collision-free transformation of lossy/long IDs.
+        if label != cloud_id || name.len() > 63 || name.ends_with('-') || digest_suffix {
+            name.truncate(name.len().min(42));
+            let prefix = name.trim_end_matches('-');
+            let digest = Sha256::digest(cloud_id.as_bytes());
+            let suffix = digest[..10]
+                .iter()
+                .flat_map(|byte| {
+                    let hex = b"0123456789abcdef";
+                    [
+                        char::from(hex[usize::from(byte >> 4)]),
+                        char::from(hex[usize::from(byte & 15)]),
+                    ]
+                })
+                .collect::<String>();
+            name = format!("{prefix}-{suffix}");
+        }
+        Some(Self { name, observed: false })
+    }
+}
+
+fn valid_dns_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+                && label.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+                && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+/// Read only the public device snapshot, without copying its peers into logs or state.
+/// The read follows enrollment; every deployment/reconnection refreshes the observation.
+/// # Errors
+/// Propagates selection corruption or cancellation; an unavailable snapshot is optional.
+pub(super) fn configure_and_record(
+    connection: &Connection,
+    store: &state::Store,
+    state: &mut state::Deployment,
+    contract: &super::worker_contract::WorkerContract,
+    runner: &Runner<'_>,
+) -> Result<()> {
+    configure(connection, store.root(), runner)?;
+    state.tailnet_device = device_name(connection, store.root(), &state.cloud_id, contract, runner)?;
+    store.save(state)
+}
+
+fn device_name(
+    connection: &Connection,
+    cloud: &Path,
+    cloud_id: &str,
+    contract: &super::WorkerContract,
+    runner: &Runner<'_>,
+) -> Result<Option<DeviceName>> {
+    let selected = Selection::load(cloud).map_err(mapped)?;
+    observe_device_name(
+        selected.tailnet.is_some(),
+        cloud_id,
+        contract.tailnet_stable_name,
+        runner.cancel,
+        || {
+            runner.private_exchange(
+                &mut connection.pinned_command("cat /run/horizon-tailnet-devices/devices.json"),
+                &[],
+                Duration::from_secs(10),
+            )
+        },
+    )
+}
+
+fn observe_device_name(
+    selected: bool,
+    cloud_id: &str,
+    stable: bool,
+    cancel: &horizon_cloud::Cancellation,
+    read: impl FnOnce() -> Result<Vec<u8>>,
+) -> Result<Option<DeviceName>> {
+    if !selected {
+        return Ok(None);
+    }
+    let report = read();
+    cancel.check()?;
+    Ok(report
+        .ok()
+        .as_deref()
+        .and_then(DeviceName::published)
+        .or_else(|| DeviceName::derived(cloud_id, stable)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_actual_names_and_unavailable_legacy_snapshots() {
+        let cancel = horizon_cloud::Cancellation::default();
+        assert!(
+            observe_device_name(false, "cloud1", true, &cancel, || panic!(
+                "no network read without a tailnet"
+            ))
+            .unwrap()
+            .is_none()
+        );
+        let actual = observe_device_name(true, "cloud1", false, &cancel, || {
+            Ok(br#"{"devices":[{"name":"renamed-1.example.ts.net."}]}"#.to_vec())
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(actual.name, "renamed-1.example.ts.net");
+        assert!(actual.observed);
+        for stable in [false, true] {
+            let missing =
+                observe_device_name(true, "cloud1", stable, &cancel, || Err(Error::PrivateTransport)).unwrap();
+            assert_eq!(missing.is_some(), stable);
+        }
+        let canceled = observe_device_name(true, "cloud1", true, &cancel, || {
+            cancel.cancel();
+            Err(Error::PrivateTransport)
+        });
+        assert!(canceled.is_err(), "cancellation never supplies a success fallback");
+    }
+
+    #[test]
+    #[cfg(unix)] // Synthetic shell output exercises the Unix process transport.
+    fn the_snapshot_read_is_bounded_without_log_events() {
+        let cancel = horizon_cloud::Cancellation::default();
+        let events = std::sync::Mutex::new(Vec::new());
+        let emit = |event| events.lock().unwrap().push(event);
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &emit,
+            secrets: vec![],
+        };
+        let identity = observe_device_name(true, "cloud1", true, &cancel, || {
+            runner.private_exchange(
+                std::process::Command::new("sh").args(["-c", "head -c 65537 /dev/zero"]),
+                &[],
+                Duration::from_secs(5),
+            )
+        })
+        .unwrap()
+        .unwrap();
+        assert!(!identity.observed);
+        assert_eq!(identity.name, "horizon-cloud-cloud1");
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "peer contents stay out of deployment logs"
+        );
+    }
+
+    #[test]
+    fn snapshot_keeps_the_first_devices_actual_dns_name() {
+        let snapshot = br#"{"devices":[{"name":"renamed-worker-1.example.ts.net.","online":false},{"name":"peer.example.ts.net."}]}"#;
+        let identity = DeviceName::published(snapshot).unwrap();
+        assert_eq!(identity.name, "renamed-worker-1.example.ts.net");
+        assert!(identity.observed);
+        assert!(identity.full_name());
+        let bare = DeviceName::published(br#"{"devices":[{"name":"old-random-container"}]}"#).unwrap();
+        assert!(!bare.full_name());
+    }
+
+    #[test]
+    fn an_invalid_self_never_uses_a_peers_name() {
+        for json in [
+            br#"{"devices":[]}"#.as_slice(),
+            br#"{"devices":[{"name":""},{"name":"peer.example.ts.net"}]}"#,
+            br#"{"devices":[{"name":"bad/name"}]}"#,
+            br#"{"devices":[{"name":"bad\nname"}]}"#,
+            br#"{"devices":[{"name":"-name.example"}]}"#,
+            br#"{"devices":[{"name":"name..example"}]}"#,
+            b"invalid",
+        ] {
+            assert!(DeviceName::published(json).is_none());
+        }
+    }
+
+    #[test]
+    fn only_v2_derives_a_name_and_matches_the_worker_helper() {
+        assert!(DeviceName::derived("cloud-123", false).is_none());
+        assert!(DeviceName::derived("invalid/cloud", true).is_none());
+        let direct = DeviceName::derived("cloud-123", true).unwrap();
+        assert_eq!(direct.name, "horizon-cloud-cloud-123");
+        assert!(!direct.observed);
+        assert!(!direct.full_name());
+        for id in ["Mixed_ID", "name-", "a-0123456789abcdef0123", &"a".repeat(100)] {
+            let name = DeviceName::derived(id, true).unwrap().name;
+            assert!(valid_dns_name(&name));
+            assert!(name.len() <= 63);
+        }
+        for (id, expected) in [
+            ("Mixed_ID", "horizon-cloud-mixed-id-12af5122d9932e2b2577"),
+            ("name-", "horizon-cloud-name-f0a4e7e61161383a47dc"),
+            (
+                "a-0123456789abcdef0123",
+                "horizon-cloud-a-0123456789abcdef0123-ab1695dda518dd53fce3",
+            ),
+            (
+                &"a".repeat(100),
+                "horizon-cloud-aaaaaaaaaaaaaaaaaaaaaaaaaaaa-2816597888e4a0d3a36b",
+            ),
+        ] {
+            assert_eq!(DeviceName::derived(id, true).unwrap().name, expected);
+        }
+        assert_ne!(
+            DeviceName::derived("Mixed_ID", true),
+            DeviceName::derived("mixed-id", true)
+        );
+    }
 }

@@ -25,6 +25,14 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &mut Runtime, context: &mut Conte
                 &context.launch.id,
                 runtime.receiver.is_some() || runtime.state.as_ref().is_some_and(|s| s.spec.is_some()),
             );
+            if let Some(device) = runtime
+                .state
+                .as_ref()
+                .filter(|state| state.spec.is_some())
+                .and_then(|state| state.tailnet_device.as_ref())
+            {
+                tailnet_device(ui, device);
+            }
         });
     }
     let releasable = runtime.can_release_remote_devices();
@@ -133,4 +141,35 @@ pub(in crate::app::cloud_panel::production::cards) fn access(
     .then_some(Action::Desktop);
     ui.add_space(4.0);
     super::super::super::local_network::show(ui, runtime).or(desktop)
+}
+
+fn tailnet_device(ui: &mut egui::Ui, device: &horizon_core::cloud_runtime::tailnet::DeviceName) {
+    ui.add_space(6.0);
+    ui.label(RichText::new("Device name").size(12.0).color(theme::FG_DIM()));
+    ui.horizontal(|ui| {
+        let name_width = (ui.available_width() - 64.0).max(0.0);
+        ui.add_sized(
+            egui::vec2(name_width, 18.0),
+            egui::Label::new(RichText::new(&device.name).monospace().color(theme::FG())).truncate(),
+        )
+        .on_hover_text(&device.name);
+        if ui
+            .add_sized(
+                egui::vec2(56.0, 26.0),
+                egui::Button::new("Copy").wrap_mode(egui::TextWrapMode::Extend),
+            )
+            .on_hover_text("Copy the tailnet device name")
+            .clicked()
+        {
+            ui.ctx().copy_text(device.name.clone());
+        }
+    });
+    let note = if !device.observed {
+        "Expected name from the worker image. Connect again to read the actual name. MagicDNS domain is unavailable."
+    } else if !device.full_name() {
+        "Last read from the worker. MagicDNS domain is unavailable. Connect again to refresh."
+    } else {
+        "Last read from the worker, including its MagicDNS domain. Connect again to refresh."
+    };
+    ui.label(RichText::new(note).size(12.0).color(theme::FG_SOFT()));
 }

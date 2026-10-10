@@ -160,6 +160,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         session_restart: None,
         timeline: None,
         last_self_stop: None,
+        tailnet_device: None,
         siblings: None,
     };
     store.save(&state).unwrap();

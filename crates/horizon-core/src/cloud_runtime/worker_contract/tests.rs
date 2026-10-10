@@ -252,3 +252,18 @@ fn the_newest_stop_an_agent_asked_for_is_read_only_when_well_formed() {
         assert_eq!(WorkerContract::reported(&output).last_self_stop, None, "{invalid}");
     }
 }
+
+#[test]
+fn tailnet_v2_implies_enrollment_and_stable_naming() {
+    for (marker, enrollment, stable) in [
+        ("", false, false),
+        ("horizon-tailnet-contract=1", true, false),
+        ("horizon-tailnet-contract=2", true, true),
+        ("horizon-tailnet-contract=20", false, false),
+        ("prefix horizon-tailnet-contract=2", false, false),
+    ] {
+        let contract = WorkerContract::reported(marker);
+        assert_eq!(contract.tailnet, enrollment, "{marker}");
+        assert_eq!(contract.tailnet_stable_name, stable, "{marker}");
+    }
+}

@@ -55,6 +55,8 @@ pub(super) struct Project {
     pub browserstack_targets: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_restart: Option<OperationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailnet_device: Option<crate::cloud_runtime::tailnet::DeviceName>,
 }
 
 impl Project {
@@ -90,6 +92,7 @@ impl Records {
             session_restart,
             timeline: _,
             last_self_stop: _,
+            tailnet_device,
             // Records with siblings are the sibling record version, which `from_legacy` refuses.
             siblings: _,
         } = legacy;
@@ -123,6 +126,7 @@ impl Records {
                 browserstack_released,
                 browserstack_targets,
                 session_restart,
+                tailnet_device,
             },
         }
     }
@@ -154,6 +158,7 @@ impl Records {
             // reason an agent last stopped the worker; the next readiness check reports it again.
             timeline: None,
             last_self_stop: None,
+            tailnet_device: self.project.tailnet_device.clone(),
             siblings: None,
         }
     }

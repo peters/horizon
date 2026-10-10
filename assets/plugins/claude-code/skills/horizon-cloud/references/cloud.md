@@ -66,6 +66,22 @@ cannot claim readiness. Use returned SSH aliases and isolated worktrees for
 ordinary SSH, Git, or rsync work within the authorized task. A stopped or
 unavailable target needs owner action; inspection grants no new access.
 
+## Tailnet device identity
+
+In a cloud card, open **Connections** and read **Tailnet** > **Device name**.
+Use **Copy** to copy that name. The first entry in the worker's public device
+snapshot supplies the actual name, including an administrator rename or collision
+suffix. Horizon removes the final DNS dot. A full reported name includes the
+MagicDNS domain. A bare name does not include an unknown domain.
+
+Connect again to refresh this saved observation. Horizon reads the snapshot after
+enrollment during each deployment or reconnection. It does not poll the tailnet
+from the drawer. If the snapshot is unavailable, only an image with
+`horizon-tailnet-contract=2` supplies the derived stable name. Older images do
+not supply a derived name. This fallback is an expected short name; it is not a
+confirmed device identity or full MagicDNS address. No tailnet selection means
+no saved device identity.
+
 ## Local Network Bridge
 
 On Unix workers, `horizon-cloud-worker local-network mcp` provides these tools:

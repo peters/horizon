@@ -53,6 +53,8 @@ impl SelfStop {
 pub struct WorkerContract {
     /// Root-only enrollment with unprivileged agent sessions.
     pub tailnet: bool,
+    /// The image sets a stable device name from the cloud ID.
+    pub tailnet_stable_name: bool,
     /// `horizon-worker-session --relaunch` can replace a session process lost in a
     /// container reset, in its existing worktree. Older images report such sessions lost.
     pub session_restart: bool,
@@ -76,7 +78,8 @@ pub struct WorkerContract {
 impl WorkerContract {
     pub(super) fn reported(output: &str) -> Self {
         Self {
-            tailnet: reports(output, "horizon-tailnet-contract=1"),
+            tailnet: reports(output, "horizon-tailnet-contract=1") || reports(output, "horizon-tailnet-contract=2"),
+            tailnet_stable_name: reports(output, "horizon-tailnet-contract=2"),
             session_restart: reports(output, SESSION_RESTART_MARKER),
             container_started: output
                 .lines()
