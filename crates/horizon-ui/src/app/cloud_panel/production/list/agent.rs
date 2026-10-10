@@ -160,6 +160,8 @@ impl HorizonApp {
             if let Some(member) = member {
                 self.board.focus(member);
             }
+            // The attach runs in a later frame; an idle board would wait for its poll.
+            ctx.request_repaint();
             return;
         }
         match (member, workspace) {
