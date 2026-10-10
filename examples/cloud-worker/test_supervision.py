@@ -364,8 +364,12 @@ class SupervisionTests(unittest.TestCase):
             CHECK(self.root, self.root)
             self.stop_unreaped(child)
             if service == 'github':
-                # The worker keeps running without it and publishes its services again.
-                self.supervisor.assert_running()
+                # The worker keeps running without it, routes Git to github.com directly again
+                # and publishes its services again.
+                unrouted = []
+                with mock.patch.dict(Supervisor.retire.__globals__, {'unroute_git': lambda: unrouted.append(1)}):
+                    self.supervisor.assert_running()
+                self.assertEqual(unrouted, [1])
                 self.assertNotIn(service, self.supervisor.children)
                 self.assertNotIn(service, json.loads((self.root / 'services.json').read_text())['services'])
                 CHECK(self.root, self.root)
@@ -375,6 +379,40 @@ class SupervisionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'exited'):
                     CHECK(self.root, self.root)
             self.supervisor.close()
+
+    def test_a_route_that_cannot_be_removed_stops_the_worker(self):
+        unroute = MODULE['unroute_git']
+        waits = []
+        # A busy Git configuration lock clears on a later attempt.
+        attempts = iter([subprocess.CalledProcessError(255, 'git'), OSError('busy'), None])
+
+        def run(command, **_kwargs):
+            self.assertEqual(command, ['horizon-worker-git-auth', 'unroute'])
+            failure = next(attempts)
+            if failure is not None:
+                raise failure
+        unroute(run=run, sleep=waits.append)
+        self.assertEqual(waits, [0.5, 1])
+
+        def fail(command, **_kwargs):
+            raise subprocess.CalledProcessError(255, command)
+        waits.clear()
+        with self.assertRaisesRegex(ValueError, 'still routes github.com'):
+            unroute(run=fail, sleep=waits.append)
+        self.assertEqual(waits, [0.5, 1, 2, 4])
+        # The worker is not published as ready again: retiring the service fails the worker.
+        self.ready(False)
+        child = self.start('github')
+        self.stop_unreaped(child)
+
+        def stays():
+            raise ValueError('Worker Git still routes github.com through the stopped GitHub service')
+        with mock.patch.dict(Supervisor.retire.__globals__, {'unroute_git': stays}), \
+                mock.patch.object(self.supervisor, 'publish') as publish, \
+                self.assertRaisesRegex(ValueError, 'still routes'):
+            self.supervisor.assert_running()
+        publish.assert_not_called()
+        self.supervisor.close()
 
     def test_the_github_service_starts_only_with_agent_isolation(self):
         isolation = self.root / 'agent-isolation'

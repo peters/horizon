@@ -284,7 +284,8 @@ processes can retain authentication already loaded into memory or their
 environment; start a new session to apply the changed authentication choice.
 
 Optional repository Git authentication uses explicit `git_credentials` bindings.
-See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
+With [Connect GitHub](#connect-github), a binding is a fallback for the
+repositories that the app does not reach. See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
 for private file permissions, repository matching, removal and token-scope limits.
 
 ### Connect GitHub
@@ -315,14 +316,18 @@ cloud gets access to its repository and its same-worker siblings, where the app
 is installed. **Skip** continues without GitHub access, and so does a declined or
 expired sign-in, or a worker image without the service. When cloud settings also
 have a `git_credentials` binding for the repository, Git keeps using that binding
-in those cases, and the card says so. While the app's access reaches every
-repository of the cloud, Horizon removes that binding from the worker; otherwise
-the binding stays for the repositories the app does not reach. A cloud whose checkout no
-longer has a GitHub origin loses the access its worker held.
+in those cases, and the card says so. The binding is a fallback: while the app's
+access reaches every repository of the cloud, Horizon removes that binding from
+the worker; otherwise the binding stays for the repositories the app does not
+reach. The app's access comes first for a repository that both reach. A cloud
+whose checkout no longer has a GitHub origin loses the access its worker held.
 
 The worker's root service renews the access every 8 hours for about 6 months,
-also while this computer is off. Agents get short-lived access tokens through
-Git and `gh` and never see the refresh token. Commits use your name and your
+also while this computer is off. Git reaches GitHub through the worker's Git
+proxy, which adds the access only for the repositories of the cloud, so Git never
+gets a token. The proxy also adds the token of a `git_credentials` binding for its
+repository. `gh` gets a short-lived access token for a repository of the cloud.
+Agents never see the refresh token. Commits use your name and your
 GitHub private commit address. The steps card shows **GitHub: signed in as
 <login>**.
 
@@ -332,8 +337,10 @@ cloud** and **Deny**. The worker checks that the app reaches the repository
 before it allows anything.
 
 Access is per cloud. Every agent session of a cloud can use each repository the
-cloud has access to, because Git and `gh` get the same token for all of them. Put
-work that must not reach a repository in a cloud without access to it.
+cloud has access to. The Git proxy limits Git only. `gh` still gets the full
+access token, and an agent can use that token outside `gh` for every repository
+that the app reaches. Put work that must not reach a repository in a cloud without
+access to it, and install the app only on the repositories that agents may use.
 
 **Disconnect** stops new clouds from getting access. It does not end the access
 of running clouds: delete the app on GitHub for that. Deleting the app ends every

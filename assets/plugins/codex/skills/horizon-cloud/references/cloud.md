@@ -117,6 +117,14 @@ GitHub and chooses its repositories; agents cannot set it up.
 - Git and `gh` work without a token in the environment. The worker's root service
   answers for the cloud's repositories and its same-worker siblings. Agents never
   see the refresh token.
+- Git reaches github.com through the worker's Git proxy (`http.https://github.com/.proxy`
+  and `.sslCAInfo` in `~/.config/git/horizon-route`, which the global Git configuration
+  includes; leave them in place). Remote
+  URLs stay `https://github.com/...`, so `gh` still finds the repository of a
+  checkout. The proxy adds the cloud's access only for the cloud's repositories,
+  so Git never holds a token. Public repositories stay readable. A refusal shows
+  as `remote: Horizon: ...`; for a repository the task needs, ask with
+  `github_access`.
 - On workers whose image provides it, `horizon-worker-github mcp` offers
   `github_access` (`repository`, `access` `push` or `read`, `reason`). It asks the
   person for access to one more repository. The person allows it for the cloud,
