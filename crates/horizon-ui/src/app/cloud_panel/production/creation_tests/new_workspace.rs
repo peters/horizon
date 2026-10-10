@@ -17,8 +17,8 @@ fn new_offers_the_cloud_first_above_the_sidebar_and_a_cancel_leaves_no_workspace
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     click(&ctx, &mut app, label_position(&output, "New"));
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    let gpu = label_position(&output, "Cloud GPU");
-    // The toolbar has a Cloud menu too: the menu's own row is the one right above Cloud GPU.
+    let this_pc = label_position(&output, "This PC");
+    // The toolbar has a Cloud menu too: the menu's own row is the one right above This PC.
     let cloud = output
         .shapes
         .iter()
@@ -28,11 +28,20 @@ fn new_offers_the_cloud_first_above_the_sidebar_and_a_cancel_leaves_no_workspace
             }
             _ => None,
         })
-        .filter(|position| position.y < gpu.y && (position.x - gpu.x).abs() < 80.0)
+        .filter(|position| position.y < this_pc.y && (position.x - this_pc.x).abs() < 80.0)
         .max_by(|a, b| a.y.total_cmp(&b.y))
-        .expect("a Cloud row above Cloud GPU");
-    let rows = [cloud, gpu, label_position(&output, "This PC")];
-    assert!(rows[0].y < rows[1].y && rows[1].y < rows[2].y, "the cloud comes first");
+        .expect("a Cloud row above This PC");
+    let rows = [cloud, this_pc, label_position(&output, "Cloud GPU")];
+    assert!(
+        rows[0].y < rows[1].y && rows[1].y < rows[2].y,
+        "the cloud comes first, and This PC second"
+    );
+    // Under Cloud, the machine of a quick start and its price; the tests reach no provider.
+    assert!(
+        output.shapes.iter().any(|shape| matches!(&shape.shape,
+            Shape::Text(text) if text.galley.job.text == super::super::new_workspace::machine::CHECKING)),
+        "the machine line is under Cloud"
+    );
     for row in rows {
         // Drawn above the sidebar, not under it.
         assert_eq!(ctx.layer_id_at(row).unwrap().order, egui::Order::Tooltip);

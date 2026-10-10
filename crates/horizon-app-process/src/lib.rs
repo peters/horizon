@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod boot;
 pub mod client;
+pub mod diagnostic;
+mod output;
+pub use output::DiagnosticLog;
 #[cfg(unix)]
 mod group;
 #[cfg(unix)]

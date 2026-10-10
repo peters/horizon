@@ -5,7 +5,8 @@ The two-user tests run the built control service and browser MCP with real owner
 they need root or passwordless sudo, setpriv and the binaries: HORIZON_TEST_CLOUD_WORKER,
 and HORIZON_TEST_BROWSER or a horizon-browser beside it. The CI cloud worker step runs
 after the workspace tests, which build horizon-browser for the browser CLI tests. The
-real-browser test also needs unshare and Google Chrome or Chromium on the system PATH;
+queue tests also need unshare. The real-browser test needs Google Chrome or Chromium
+on the system PATH;
 the CI Ubuntu runner and the worker image have Google Chrome.
 """
 import importlib.machinery
@@ -370,6 +371,7 @@ class BrowserLaneTests(unittest.TestCase):
         with mock.patch.object(TAILNET, 'Path', side_effect=path):
             TAILNET.handoff_browser_root()
 
+    @unittest.skipUnless(shutil.which('unshare'), 'needs unshare to show the service its workspace')
     def test_agent_browser_create_reaches_the_control_service_only_as_the_agent_lane(self):
         if os.geteuid() != 0:
             return self.nested()
@@ -384,7 +386,7 @@ class BrowserLaneTests(unittest.TestCase):
 
         # After: the handoff gives the earlier root its agent owner, and the service runs as the agent.
         self.migrate()
-        service = self.serve(agent=True, host='agent-host')
+        service = self.serve(agent=True, host='agent-host', workspace=self.workspace())
         self.await_answer(service)
         result = self.browser_create('agent-host')
         text = self.text(result)
@@ -397,6 +399,28 @@ class BrowserLaneTests(unittest.TestCase):
         self.assertIn('Requested browser is disabled by this cloud profile', text)
         for path in [self.browser_root, *self.browser_root.rglob('*')]:
             self.assertEqual(path.lstat().st_uid, AGENT, path)
+
+    @unittest.skipUnless(shutil.which('unshare'), 'needs unshare to show the service its workspace')
+    def test_unregistered_actor_is_refused_by_the_queue_before_browser_allocation(self):
+        if os.geteuid() != 0:
+            return self.nested()
+        workspace = self.workspace()
+        (workspace / 'sessions' / SESSION).rmdir()
+        service = self.serve(agent=True, host='agent-host', workspace=workspace)
+        self.await_answer(service)
+        result = self.browser_create('agent-host')
+        text = self.text(result)
+        self.assertTrue(result.get('isError'))
+        self.assertIn('panel_outside_workspace', text)
+        self.assertNotIn('Requested browser is disabled by this cloud profile', text)
+        # Firefox allocation would return the disabled-profile error, so this result
+        # also proves that the queue never called the allocator for the outside actor.
+        with socket.create_connection(SUPERVISE['CONTROL_ENDPOINT'], timeout=1) as connection:
+            connection.settimeout(2)
+            connection.sendall(b'{"operation":"list"}\n')
+            with connection.makefile('rb') as stream:
+                reply = json.loads(stream.readline(1 << 20))
+        self.assertEqual(reply.get('browsers'), [])
 
     @unittest.skipUnless(CHROMIUM, 'needs Google Chrome or Chromium on the system PATH, as on the worker image')
     @unittest.skipUnless(shutil.which('unshare'), 'needs unshare to show the service its workspace')

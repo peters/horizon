@@ -109,7 +109,22 @@ fn selected(
     horizon_app_runtime::account::Account,
     Arc<horizon_app_runtime::journal::Journal>,
 )> {
-    use horizon_app_runtime::{account::Account, journal::Journal};
+    selected_with(path, horizon_app_runtime::journal::Journal::open)
+}
+
+#[cfg(unix)]
+fn selected_with(
+    path: &Path,
+    open_journal: impl FnOnce(
+        &Path,
+        &horizon_app_runtime::account::Account,
+    ) -> horizon_app_runtime::Result<horizon_app_runtime::journal::Journal>,
+) -> Result<(
+    Client,
+    horizon_app_runtime::account::Account,
+    Arc<horizon_app_runtime::journal::Journal>,
+)> {
+    use horizon_app_runtime::account::Account;
     use horizon_core::{
         Config,
         remote_browser_credential::{CredentialStores, KeyringCredentialStore, SessionCredentialStore},
@@ -136,7 +151,7 @@ fn selected(
             environment: None,
         },
     )?;
-    let journal = Arc::new(Journal::open(&client.state, &account)?);
+    let journal = Arc::new(open_journal(&client.state, &account)?);
     Ok((client, account, journal))
 }
 
@@ -188,13 +203,102 @@ pub fn open(path: &Path) -> Result<Host> {
 /// Unknown/lost allocations remain held. Native sessions close before local services and uploads.
 #[cfg(unix)]
 pub fn reconcile(path: &Path) -> Result<Vec<horizon_app_runtime::journal::Operation>> {
+    reconcile_with_confirmation(path, None)
+}
+
+#[derive(serde::Serialize)]
+pub struct ReconcileStatus {
+    pub boot_id: Option<uuid::Uuid>,
+    pub operations: Vec<horizon_app_runtime::journal::Operation>,
+}
+
+/// # Errors
+/// Inspect only this original trusted owner's pending operations under its exclusive workspace lease.
+/// This does not invoke provider cleanup, stop processes, or recover journal resources.
+#[cfg(unix)]
+pub fn reconcile_status(path: &Path) -> Result<ReconcileStatus> {
+    use horizon_app_runtime::journal::execution::Workspace;
+    let (client, _account, journal) = selected_with(path, horizon_app_runtime::journal::Journal::open_existing)?;
+    let workspace = Workspace::open_existing(journal, client.owner, &client.project)?;
+    Ok(ReconcileStatus {
+        boot_id: horizon_app_process::boot::current(),
+        operations: workspace.journal().pending(client.owner)?,
+    })
+}
+
+#[cfg(not(unix))]
+pub fn reconcile_status(_path: &Path) -> Result<ReconcileStatus> {
+    Err(horizon_app_runtime::Error::ReconciliationRequired.into())
+}
+
+/// # Errors
+/// Recover only exact owned legacy local operations after the operator confirms a real host reboot.
+/// This never replaces original receipts, signals PIDs, changes ownership, or replays creation.
+#[cfg(unix)]
+pub fn reconcile_after_reboot(
+    path: &Path,
+    confirmation: &crate::local::recovery::RebootConfirmation,
+) -> Result<Vec<horizon_app_runtime::journal::Operation>> {
+    reconcile_with_confirmation(path, Some(confirmation))
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum ReconciliationMode {
+    Normal,
+    Existing,
+}
+
+#[cfg(unix)]
+impl ReconciliationMode {
+    fn for_confirmation(confirmation: Option<&crate::local::recovery::RebootConfirmation>) -> Self {
+        if confirmation.is_some() {
+            Self::Existing
+        } else {
+            Self::Normal
+        }
+    }
+
+    fn journal(
+        self,
+        path: &Path,
+        account: &horizon_app_runtime::account::Account,
+    ) -> horizon_app_runtime::Result<horizon_app_runtime::journal::Journal> {
+        use horizon_app_runtime::journal::Journal;
+        match self {
+            Self::Normal => Journal::open(path, account),
+            Self::Existing => Journal::open_existing(path, account),
+        }
+    }
+
+    fn workspace(
+        self,
+        journal: Arc<horizon_app_runtime::journal::Journal>,
+        client: &Client,
+    ) -> horizon_app_runtime::Result<horizon_app_runtime::journal::execution::Workspace> {
+        use horizon_app_runtime::journal::execution::Workspace;
+        match self {
+            Self::Normal => Workspace::open(journal, client.owner, &client.project),
+            Self::Existing => Workspace::open_existing(journal, client.owner, &client.project),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn reconcile_with_confirmation(
+    path: &Path,
+    confirmation: Option<&crate::local::recovery::RebootConfirmation>,
+) -> Result<Vec<horizon_app_runtime::journal::Operation>> {
     use horizon_app_runtime::journal::{
         Kind,
-        execution::Workspace,
         recovery::{Recovery, Resolution},
     };
-    let (client, account, journal) = selected(path)?;
-    let mut workspace = Workspace::open(journal, client.owner, &client.project)?;
+    let mode = ReconciliationMode::for_confirmation(confirmation);
+    let (client, account, journal) = selected_with(path, |state, account| mode.journal(state, account))?;
+    let mut workspace = mode.workspace(journal, &client)?;
+    if let Some(confirmation) = confirmation {
+        confirmation.validate(&workspace)?;
+    }
     let provider = workspace.provider(&account)?;
     let root = client
         .state
@@ -212,7 +316,12 @@ pub fn reconcile(path: &Path) -> Result<Vec<horizon_app_runtime::journal::Operat
             continue;
         }
         if matches!(operation.kind, Kind::Run | Kind::Tunnel) {
-            crate::local::confirm_receipt(&workspace, operation.id, &root.join(operation.id.simple().to_string()))?;
+            crate::local::confirm_receipt_with_reboot(
+                &workspace,
+                operation.id,
+                &root.join(operation.id.simple().to_string()),
+                confirmation,
+            )?;
             continue;
         }
         workspace
@@ -292,5 +401,13 @@ pub fn reconcile(_path: &Path) -> Result<Vec<horizon_app_runtime::journal::Opera
     Err(Error::Unavailable)
 }
 
+#[cfg(not(unix))]
+pub fn reconcile_after_reboot(
+    _path: &Path,
+    _confirmation: &crate::local::recovery::RebootConfirmation,
+) -> Result<Vec<horizon_app_runtime::journal::Operation>> {
+    Err(horizon_app_runtime::Error::ReconciliationRequired.into())
+}
+
 #[cfg(all(test, unix))]
-mod tests;
+pub(crate) mod tests;

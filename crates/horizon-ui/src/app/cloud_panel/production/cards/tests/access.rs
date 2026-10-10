@@ -43,7 +43,7 @@ fn the_header_status_and_every_step_reach_a_screen_reader() {
             explanation: "Estimated from the worker's rate.".into(),
         };
         strip::show(ui, header, &failed, &indicators, &spend, false, None);
-        steps::vertical(ui, &runtime, &failed);
+        steps::vertical(ui, 1, &runtime, &failed);
     });
     let sentence = labels
         .iter()

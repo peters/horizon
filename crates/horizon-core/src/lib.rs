@@ -4,6 +4,7 @@ pub mod agent_work;
 mod agents;
 mod board;
 pub mod browser;
+pub mod cloud_list;
 #[cfg(feature = "cloud-workspaces")]
 pub mod cloud_panel;
 #[cfg(feature = "cloud-workspaces")]
@@ -65,7 +66,7 @@ pub use horizon_home::{HorizonHome, browser_mcp_executable};
 pub use local_store::{codex_home_dir, grok_home_dir, user_home_dir};
 pub use panel::{
     CloudWait, DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions,
-    PanelResume, browser_actor,
+    PanelResume, ParkedScreen, browser_actor,
 };
 pub use remote_hosts::{
     RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,

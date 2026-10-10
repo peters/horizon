@@ -10,6 +10,7 @@ pub mod companions;
 pub mod cost;
 pub mod deployment;
 pub mod diagnosis;
+pub mod docker_daemon;
 pub mod git_auth;
 pub mod github;
 pub mod image;
@@ -26,6 +27,7 @@ pub mod project_setup;
 mod providers;
 pub mod registry;
 pub mod repository;
+pub mod repository_choice;
 pub mod session_status;
 pub mod settings;
 pub mod setup;
@@ -50,6 +52,9 @@ pub enum Error {
     Provider(#[from] horizon_cloud::CloudError),
     #[error("{0} failed; inspect deployment output")]
     Command(&'static str),
+    /// A Docker command outlived its time and Docker did not answer a health check either.
+    #[error("Docker is not responding: {0} did not finish and Docker did not answer a health check")]
+    DockerNotResponding(&'static str),
     #[error("Private worker request failed; its output is intentionally not logged")]
     PrivateTransport,
     #[error("Another controller owns this cloud operation")]

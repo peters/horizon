@@ -331,11 +331,12 @@ pub(in crate::panel) fn placeholder_terminal(panel: &Panel, rows: u16, cols: u16
     )
 }
 
-/// The terminal of a parked cloud member that shows `screen`, the rows of the last
-/// viewport of the terminal it replaces.
-pub(in crate::panel) fn parked_terminal(panel: &Panel, rows: u16, cols: u16, screen: &[String]) -> Result<Terminal> {
-    let replay = screen.join("\r\n");
-    spawn_restore_failure_snapshot_terminal(panel.id, panel.kind, rows, cols, replay.into_bytes())
+/// The rows that a placeholder for `placeholder` shows, as text.
+pub(in crate::panel) fn placeholder_lines(title: &str, placeholder: Placeholder<'_>) -> Vec<String> {
+    String::from_utf8_lossy(&placeholder_replay_bytes(title, placeholder))
+        .split("\r\n")
+        .map(str::to_owned)
+        .collect()
 }
 
 fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8> {

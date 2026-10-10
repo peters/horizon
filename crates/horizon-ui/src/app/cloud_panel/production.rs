@@ -1,4 +1,5 @@
 //! UI actions and progress for real deployments. Provider/build/session work lives in core.
+mod bulk_stop;
 mod capabilities;
 pub(super) mod cards;
 mod close;
@@ -7,11 +8,14 @@ mod creation;
 mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
+#[cfg(debug_assertions)]
+mod failure_preview;
 mod first_panel;
 mod github_requests;
 mod idle;
 mod launch;
 mod lifecycle;
+mod list;
 mod local_network;
 #[cfg(debug_assertions)]
 mod log_preview;
@@ -22,6 +26,8 @@ mod offers;
 mod park;
 mod preparation;
 mod presentation;
+#[cfg(debug_assertions)]
+mod preview;
 mod prices;
 mod progress;
 mod readiness;
@@ -62,6 +68,9 @@ const BILLING: cloud_runtime::billing::Fetch = |_, _, _, _| Err(cloud_runtime::b
 
 #[derive(Default)]
 pub(super) struct Production {
+    bulk_stop: bulk_stop::State,
+    /// Cloud list requests of agents, answered in the next frame.
+    list_requests: Vec<horizon_core::browser::manifest::provider_usage::UsageRequest>,
     close: close::State,
     pub(in crate::app) tailnets: crate::app::tailnets::State,
     tailnet: Option<String>,
@@ -761,6 +770,8 @@ impl HorizonApp {
             log_preview::seed(self, ctx);
             #[cfg(debug_assertions)]
             stopped_preview::seed(self, ctx);
+            #[cfg(debug_assertions)]
+            failure_preview::seed(self);
         }
     }
     /// Reconnects each resumed worker. The reconnect that finishes a resume is still that

@@ -10,6 +10,12 @@ pub(super) mod execution;
 
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum Initialization {
+    Allowed,
+    Forbidden,
+}
+
 pub(super) struct Store {
     directory: File,
     registry: File,
@@ -23,13 +29,23 @@ impl Store {
     pub(super) fn open(path: &Path) -> Result<Self> {
         Self::open_with(path, || ())
     }
+    pub(super) fn open_existing(path: &Path) -> Result<Self> {
+        Self::open_mode(path, Initialization::Forbidden, || ())
+    }
     pub(super) fn open_with(path: &Path, after_registry: impl FnOnce()) -> Result<Self> {
+        Self::open_mode(path, Initialization::Allowed, after_registry)
+    }
+    fn open_mode(path: &Path, initialization: Initialization, after_registry: impl FnOnce()) -> Result<Self> {
         use sha2::{Digest, Sha256};
         use std::fmt::Write as _;
         let parent = path.parent().ok_or(Error::JournalUnavailable)?;
-        let parent = private_directory(parent)?;
-        let registry = private_child(&parent, std::ffi::OsStr::new(".native-journal-registry"))?;
-        let registry_lock = open_file(&registry, "journal.lock", true)?;
+        let parent = private_directory(parent, initialization)?;
+        let registry = if initialization == Initialization::Allowed {
+            private_child(&parent, std::ffi::OsStr::new(".native-journal-registry"))?
+        } else {
+            existing_child(&parent, std::ffi::OsStr::new(".native-journal-registry"))?
+        };
+        let registry_lock = open_file(&registry, "journal.lock", initialization == Initialization::Allowed)?;
         registry_lock.lock().map_err(|_| Error::JournalUnavailable)?;
         let filename = path.file_name().ok_or(Error::JournalUnavailable)?;
         let digest = Sha256::digest(filename.as_encoded_bytes());
@@ -39,7 +55,7 @@ impl Store {
         });
         let expected = match open_file(&registry, &namespace, false) {
             Ok(marker) => Some(small(&marker)?),
-            Err(Error::JournalMissing) => None,
+            Err(Error::JournalMissing) if initialization == Initialization::Allowed => None,
             Err(error) => return Err(error),
         };
         after_registry();
@@ -271,7 +287,7 @@ fn initialize(directory: &File, mut lock: &File) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn private_directory(path: &Path) -> Result<File> {
+fn private_directory(path: &Path, initialization: Initialization) -> Result<File> {
     use std::os::unix::fs::MetadataExt;
     if !path.is_absolute() {
         return Err(Error::JournalUnavailable);
@@ -291,7 +307,7 @@ fn private_directory(path: &Path) -> Result<File> {
             rustix::fs::Mode::empty(),
         ) {
             Ok(next) => current = File::from(next),
-            Err(rustix::io::Errno::NOENT) => {
+            Err(rustix::io::Errno::NOENT) if initialization == Initialization::Allowed => {
                 rustix::fs::mkdirat(
                     &current,
                     name,
@@ -454,7 +470,7 @@ fn replace(directory: &File, name: &str) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn private_directory(_path: &Path) -> Result<File> {
+fn private_directory(_path: &Path, _initialization: Initialization) -> Result<File> {
     Err(Error::JournalUnavailable)
 }
 #[cfg(not(unix))]
@@ -468,3 +484,6 @@ fn replace(_directory: &File, _name: &str) -> Result<()> {
 
 #[cfg(test)]
 thread_local! { pub(super) static FAIL_REPLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+#[cfg(all(test, unix))]
+mod tests;

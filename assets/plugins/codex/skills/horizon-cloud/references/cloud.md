@@ -3,7 +3,7 @@
 ## Servers and offer inspection
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,
-`cloud_companions`, `cloud_companion_ensure_ready`, `cloud_companion_stop`, and
+`cloud_list`, `cloud_companions`, `cloud_companion_ensure_ready`, `cloud_companion_stop`, and
 `cloud_companion_operation`. Host operations require the owning Horizon to run.
 
 On a configured worker, `horizon-cloud-worker companions mcp` provides
@@ -37,6 +37,18 @@ Its validation helper defaults to two CPU build jobs; `CARGO_BUILD_JOBS` overrid
 this value. The GPU profile keeps its own resource and build-job defaults.
 Allocation minimums do not establish a successful full validation run. Report
 measured validation and memory results separately from the configured minimums.
+
+## Source transfer errors
+
+Use relative source paths without redundant separators or `.` components in a
+transfer manifest. Each module, transferred asset, and skipped asset must have a
+unique path. Nested submodules and assets inside modules remain supported.
+
+`horizon-worker-source` returns exit status 1 for an invalid request or source path, a failed
+Git command, or an expected source transfer error. The error appears on stderr with the
+`horizon-worker-source:` prefix. These failures do not start a desktop crash
+report. Read the error before you retry. A nonzero exit status does not mean
+that the source import or checkout completed.
 
 ## Host companion lifecycle
 
@@ -127,6 +139,40 @@ credentials there; no MCP tool does it. Do not ask for a token. Tell the person
 to click **Open Container registry**, add the credential, and then click the
 retry in the card header: **Retry deploy**, **Reconnect** or **Resume worker**,
 for the operation that failed.
+
+## Cloud list in the sidebar
+
+The sidebar groups the person's workspaces in **Needs you**, **Cloud**, **Parked**
+and **This PC**. **Needs you** holds a cloud that failed or waits for a decision,
+whose parked session ended or is not found, or whose agent waits for GitHub
+access. **Cloud** holds a cloud that is attached, disconnected, not deployed yet,
+or busy with an operation. A disconnected cloud shows **Disconnected**: its
+sessions continue on the worker. **Parked** holds a cloud
+with parked terminals or a stopped worker. **This PC** holds workspaces without a
+cloud. Each row shows a status dot and one status line, for example the last line
+of a parked agent. A **Parked** row is compact: its status line is the hover and
+accessibility text of its dot. A group header shows the hourly cost of its running
+workers. A click on a row goes to its workspace, and a parked cloud then attaches.
+A group with idle clouds shows **Stop idle…**: the person selects idle clouds and
+sees the hourly saving before their workers stop. To find a cloud for the person,
+name its workspace and its group.
+
+`cloud_list` reads and acts on the clouds in your own workspace only.
+`cloud_list` operations are `list`, `attach`, `park` and `stop`. `list` (the
+default) returns each cloud's `cloud` ID, name, group (`needs_you`, `cloud` or
+`parked`), status line, hourly rate, `working` and `idle`. The others take the
+`cloud` ID from `list`:
+
+- `attach` moves the person's view to the cloud, as a click on its row does.
+- `park` parks the terminals of a cloud that is out of view now. Horizon refuses
+  a cloud in view, because it attaches again.
+- `stop` stops the worker of an idle cloud, as **Stop idle…** does. Horizon
+  refuses a busy cloud, a cloud on which an agent works and a cloud that waits for
+  the person. For a parked cloud, the stop waits for a new status read and does
+  not occur when an agent works. Get explicit authorization from the person first.
+
+From a Horizon agent panel, `horizon-browser cloud list|attach|park|stop [CLOUD-ID]`
+calls the same tool.
 
 ## GitHub access
 

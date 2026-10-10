@@ -130,6 +130,7 @@ impl HorizonApp {
             fullscreen_panel: None, held_navigation_keys: Vec::new(),
             sidebar_visible: true,
             sidebar_drag_workspace: None,
+            sidebar_list: super::sidebar::ListCache::default(),
             minimap_visible: true,
             hud_visible: false,
             renaming_workspace: None,

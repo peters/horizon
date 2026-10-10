@@ -1,6 +1,11 @@
 //! Consume the existing public MCP host queues inside this one-cloud worker.
 use super::browser::Host;
 use horizon_browser_control::manifest::{self, AgentIdentity, BrowserCreateResult, CreateNavigation};
+pub(crate) struct PendingCreate {
+    request: manifest::BrowserCreateRequest,
+    failure: Option<BrowserCreateResult>,
+}
+
 pub fn poll(host: &mut Host) {
     host_controls(host);
     super::remote::poll(&mut host.remote_allocations, &host.capabilities, &mut host.catalog);
@@ -38,7 +43,7 @@ fn create_requests(host: &mut Host) {
                 continue;
             }
             let id = format!("browser-{}", request.request_id);
-            match start_before_deadline(&request, manifest::now_millis(), || {
+            match start_before_deadline(&request, &workspace(), manifest::now_millis(), || {
                 host.open_oriented(
                     &id,
                     request.url.clone(),
@@ -52,14 +57,16 @@ fn create_requests(host: &mut Host) {
                     if let Some(browser) = host.browsers.get_mut(&id) {
                         browser.state.visible = request.visible;
                     }
-                    host.pending.push(request);
+                    host.pending.push(PendingCreate { request, failure: None });
                 }
                 Err(error) => {
-                    let _ = manifest::complete_create_request(&BrowserCreateResult::failed(
-                        &request,
-                        "browser_start_failed",
-                        &error.to_string(),
-                    ));
+                    let result = create_failure(&request, &error, "browser_start_failed");
+                    if manifest::complete_create_request(&result).is_err() {
+                        host.pending.push(PendingCreate {
+                            request,
+                            failure: Some(result),
+                        });
+                    }
                 }
             }
         }
@@ -67,8 +74,17 @@ fn create_requests(host: &mut Host) {
 }
 
 fn pending_requests(host: &mut Host) {
-    host.pending.retain(|request| {
+    host.pending.retain_mut(|pending| {
+        let request = &pending.request;
         let id = format!("browser-{}", request.request_id);
+        if let Some(result) = &pending.failure {
+            return complete_failure(
+                &mut host.pending_cleanup,
+                host.browsers.contains_key(&id).then_some(id),
+                result,
+                manifest::complete_create_request,
+            );
+        }
         if let Some(horizon_browser::RemoteStartFailure::OrientationRejected { code, released }) = host
             .browsers
             .get(&id)
@@ -99,15 +115,19 @@ fn pending_requests(host: &mut Host) {
             return false;
         };
         let result = if browser.state.ready {
-            if manifest::publish_requested_panel(
+            if let Err(error) = manifest::publish_requested_panel(
                 &id,
                 request.visible,
                 &workspace(),
                 AgentIdentity::new(&request.actor, Some(manifest::host_instance())),
-            )
-            .is_err()
-            {
-                return true;
+            ) {
+                return publication_failure(
+                    pending,
+                    &mut host.pending_cleanup,
+                    id,
+                    &error,
+                    manifest::complete_create_request,
+                );
             }
             let navigation = if request.url.is_none() {
                 CreateNavigation::NotRequested
@@ -138,13 +158,58 @@ fn complete_orientation_failure(
     result: &BrowserCreateResult,
     complete: impl FnOnce(&BrowserCreateResult) -> std::io::Result<()>,
 ) -> bool {
+    complete_failure(cleanup, Some(id), result, complete)
+}
+
+fn complete_failure(
+    cleanup: &mut std::collections::BTreeSet<String>,
+    id: Option<String>,
+    result: &BrowserCreateResult,
+    complete: impl FnOnce(&BrowserCreateResult) -> std::io::Result<()>,
+) -> bool {
     // Cleanup removes the browser's typed startup failure, so keep both it and
     // the claimed request until publishing the result and retiring the request succeed.
     if complete(result).is_err() {
         return true;
     }
-    cleanup.insert(id);
+    if let Some(id) = id {
+        cleanup.insert(id);
+    }
     false
+}
+
+fn publication_failure(
+    pending: &mut PendingCreate,
+    cleanup: &mut std::collections::BTreeSet<String>,
+    id: String,
+    error: &std::io::Error,
+    complete: impl FnOnce(&BrowserCreateResult) -> std::io::Result<()>,
+) -> bool {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted | std::io::ErrorKind::TimedOut
+    ) {
+        return true;
+    }
+    let result = pending
+        .failure
+        .get_or_insert_with(|| create_failure(&pending.request, error, "browser_publish_failed"));
+    complete_failure(cleanup, Some(id), result, complete)
+}
+
+fn create_failure(
+    request: &manifest::BrowserCreateRequest,
+    error: &std::io::Error,
+    fallback_code: &str,
+) -> BrowserCreateResult {
+    let message = error.to_string();
+    let code = if error.kind() == std::io::ErrorKind::PermissionDenied && message == manifest::OUTSIDE_WORKSPACE_MESSAGE
+    {
+        "panel_outside_workspace"
+    } else {
+        fallback_code
+    };
+    BrowserCreateResult::failed(request, code, &message)
 }
 
 fn orientation_create_failure(
@@ -169,9 +234,16 @@ fn orientation_create_failure(
 
 fn start_before_deadline(
     request: &manifest::BrowserCreateRequest,
+    membership: &manifest::ManifestWorkspace,
     now: i64,
     start: impl FnOnce() -> std::io::Result<()>,
 ) -> std::io::Result<()> {
+    if !membership.authorizes(AgentIdentity::new(&request.actor, request.host_instance.as_deref())) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            manifest::OUTSIDE_WORKSPACE_MESSAGE,
+        ));
+    }
     if now >= request.deadline_at_millis {
         return Err(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
@@ -367,15 +439,169 @@ mod tests {
     }
 
     #[test]
+    fn workspace_preflight_refuses_unknown_actors_and_hosts_before_starting() {
+        let mut request = manifest::BrowserCreateRequest::for_tests("cloud-registered");
+        request.host_instance = Some("worker".into());
+        let membership = manifest::ManifestWorkspace::new("worker", "cloud", vec![request.actor.clone()]);
+        for (actor, host) in [
+            ("horizon:cloud-missing", Some("worker")),
+            ("horizon:cloud-registered", Some("other-worker")),
+            ("horizon:cloud-registered", None),
+        ] {
+            request.actor = actor.into();
+            request.host_instance = host.map(str::to_owned);
+            let error =
+                start_before_deadline(&request, &membership, 0, || panic!("unauthorized browser started")).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+            let result = create_failure(&request, &error, "browser_start_failed");
+            assert_eq!(
+                result.outcome,
+                manifest::BrowserCreateOutcome::Failed {
+                    code: "panel_outside_workspace".into(),
+                    message: manifest::OUTSIDE_WORKSPACE_MESSAGE.into(),
+                }
+            );
+        }
+        request.actor = "horizon:cloud-registered".into();
+        request.host_instance = Some("worker".into());
+        let mut starts = 0;
+        start_before_deadline(&request, &membership, 0, || {
+            starts += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(starts, 1);
+    }
+
+    #[test]
+    fn terminal_publication_failure_is_retained_until_result_completion_and_cleanup() {
+        let request = manifest::BrowserCreateRequest::for_tests("cloud-registered");
+        let mut pending = PendingCreate { request, failure: None };
+        let mut cleanup = std::collections::BTreeSet::new();
+        let error = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            manifest::OUTSIDE_WORKSPACE_MESSAGE,
+        );
+        let mut attempted = Vec::new();
+        assert!(publication_failure(
+            &mut pending,
+            &mut cleanup,
+            "browser".into(),
+            &error,
+            |result| {
+                attempted.push(result.clone());
+                Err(std::io::Error::other("result write failed"))
+            }
+        ));
+        let result = pending.failure.as_ref().unwrap();
+        assert_eq!(
+            result.outcome,
+            manifest::BrowserCreateOutcome::Failed {
+                code: "panel_outside_workspace".into(),
+                message: manifest::OUTSIDE_WORKSPACE_MESSAGE.into(),
+            }
+        );
+        assert!(cleanup.is_empty());
+        // The remembered refusal wins over a later deadline and does not retry publication.
+        pending.request.deadline_at_millis = 0;
+        for fails in [true, false] {
+            assert_eq!(
+                complete_failure(&mut cleanup, Some("browser".into()), result, |result| {
+                    attempted.push(result.clone());
+                    if fails {
+                        Err(std::io::Error::other("request retirement failed"))
+                    } else {
+                        Ok(())
+                    }
+                }),
+                fails
+            );
+            assert_eq!(cleanup.contains("browser"), !fails);
+        }
+        assert_eq!(attempted, vec![result.clone(); 3]);
+    }
+
+    #[test]
+    fn transient_publication_failure_retries_without_retiring_the_browser() {
+        let mut pending = PendingCreate {
+            request: manifest::BrowserCreateRequest::for_tests("cloud-registered"),
+            failure: None,
+        };
+        let mut cleanup = std::collections::BTreeSet::new();
+        for kind in [
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::TimedOut,
+        ] {
+            assert!(publication_failure(
+                &mut pending,
+                &mut cleanup,
+                "browser".into(),
+                &std::io::Error::from(kind),
+                |_| panic!("transient failure must not complete the request"),
+            ));
+            assert!(pending.failure.is_none());
+            assert!(cleanup.is_empty());
+        }
+        for kind in [
+            std::io::ErrorKind::InvalidData,
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::StorageFull,
+        ] {
+            pending.failure = None;
+            cleanup.clear();
+            let error = std::io::Error::new(kind, "manifest unavailable");
+            assert!(!publication_failure(
+                &mut pending,
+                &mut cleanup,
+                "browser".into(),
+                &error,
+                |result| {
+                    assert!(matches!(
+                        &result.outcome,
+                        manifest::BrowserCreateOutcome::Failed { code, .. } if code == "browser_publish_failed"
+                    ));
+                    Ok(())
+                }
+            ));
+            assert!(cleanup.contains("browser"));
+        }
+    }
+
+    #[test]
+    fn preflight_failure_completion_does_not_schedule_browser_cleanup() {
+        let request = manifest::BrowserCreateRequest::for_tests("cloud-missing");
+        let result =
+            BrowserCreateResult::failed(&request, "panel_outside_workspace", manifest::OUTSIDE_WORKSPACE_MESSAGE);
+        let mut cleanup = std::collections::BTreeSet::new();
+        for fails in [true, false] {
+            assert_eq!(
+                complete_failure(&mut cleanup, None, &result, |_| {
+                    if fails {
+                        Err(std::io::Error::other("result write failed"))
+                    } else {
+                        Ok(())
+                    }
+                }),
+                fails
+            );
+            assert!(cleanup.is_empty());
+        }
+    }
+
+    #[test]
     fn expired_create_never_invokes_the_allocator() {
         let mut request = manifest::BrowserCreateRequest::for_tests("cloud-agent");
         request.deadline_at_millis = 100;
+        request.host_instance = Some("worker".into());
+        let membership = manifest::ManifestWorkspace::new("worker", "cloud", vec![request.actor.clone()]);
         for now in [100, 101, i64::MAX] {
-            let error = start_before_deadline(&request, now, || panic!("expired allocation started")).unwrap_err();
+            let error =
+                start_before_deadline(&request, &membership, now, || panic!("expired allocation started")).unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         }
         let mut started = false;
-        start_before_deadline(&request, 99, || {
+        start_before_deadline(&request, &membership, 99, || {
             started = true;
             Ok(())
         })

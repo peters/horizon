@@ -38,7 +38,7 @@ pub(super) fn show(
                 )
                 .inner;
             ui.vertical(|ui| {
-                output_column(ui, id, &launch.id, runtime, status, size.y - hint_height);
+                output_column(ui, id, &launch.id, runtime, size.y - hint_height);
                 show_hint(ui, hint, status);
             });
             action
@@ -48,14 +48,7 @@ pub(super) fn show(
         let steps_height = (size.y * 0.55).max(250.0).min(size.y - 160.0);
         let action = steps_card(ui, id, launch, runtime, status, steps_height);
         ui.add_space(GAP);
-        output_column(
-            ui,
-            id,
-            &launch.id,
-            runtime,
-            status,
-            size.y - steps_height - GAP - hint_height,
-        );
+        output_column(ui, id, &launch.id, runtime, size.y - steps_height - GAP - hint_height);
         show_hint(ui, hint, status);
         action
     }
@@ -95,12 +88,14 @@ fn steps_card(
             });
             ui.add_space(10.0);
             let footer = 52.0;
+            // A solid bar takes room of its own, so an expanded cause cannot put it over the step times.
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             let action = egui::ScrollArea::vertical()
                 .id_salt("cloud-steps")
                 .max_height((ui.available_height() - footer).max(60.0))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    let action = steps::vertical(ui, runtime, status);
+                    let action = steps::vertical(ui, id, runtime, status);
                     // Without panels the drawer offers no Overview; the ready timeline is here.
                     if status.tone == super::status::Tone::Ready {
                         ui.add_space(12.0);
@@ -193,7 +188,7 @@ fn worker(runtime: &Runtime) -> String {
         )
 }
 
-fn output_column(ui: &mut egui::Ui, id: u32, cloud_id: &str, runtime: &mut Runtime, status: &Status, height: f32) {
+fn output_column(ui: &mut egui::Ui, id: u32, cloud_id: &str, runtime: &mut Runtime, height: f32) {
     let bottom = ui.cursor().top() + height;
     if super::github::waiting(runtime) {
         super::github::prompt(ui, cloud_id, runtime);
@@ -210,7 +205,7 @@ fn output_column(ui: &mut egui::Ui, id: u32, cloud_id: &str, runtime: &mut Runti
     });
     // Ends level with the steps card: the heading's own height comes off the log's.
     let room = bottom - ui.cursor().top();
-    super::output::show(ui, id, "body", runtime, room, status.failure.as_ref());
+    super::output::show(ui, id, "body", runtime, room);
 }
 
 /// What the empty body waits for, when the steps beside it do not already say so.

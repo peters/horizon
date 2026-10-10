@@ -111,3 +111,11 @@ printf 'synthetic-secret-error' >&2
         before
     );
 }
+
+#[test]
+fn a_stuck_docker_is_not_reported_as_a_refused_login() {
+    let stuck = Purpose::Pull.refusal(Error::DockerNotResponding("Private worker request"));
+    assert!(matches!(stuck, Error::DockerNotResponding("Private worker request")));
+    let refused = Purpose::Publish.refusal(Error::PrivateTransport);
+    assert_eq!(refused.to_string(), Purpose::Publish.failure().to_string());
+}

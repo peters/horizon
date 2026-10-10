@@ -2,7 +2,7 @@
 mod build_progress;
 mod prefix;
 pub mod terminal_progress;
-use super::{Error, Event, Result};
+use super::{Error, Event, Result, docker_daemon};
 use horizon_cloud::Cancellation;
 use std::{
     io::{Read, Seek, Write},
@@ -272,7 +272,7 @@ impl Runner<'_> {
             if self.cancel.is_cancelled() || started.elapsed() > timeout {
                 stop(&mut child);
                 self.cancel.check()?;
-                return Err(Error::Invalid(TIMED_OUT));
+                return Err(self.timed_out(name, command)?);
             }
             if status.is_none() {
                 status = child.try_wait()?;
@@ -292,6 +292,25 @@ impl Runner<'_> {
                 thread::sleep(Duration::from_millis(20));
             }
         }
+    }
+    /// A Docker command that outlived its time is a stuck daemon when Docker does not
+    /// answer a health check either; any other timeout stays a plain one.
+    /// # Errors
+    /// Cancellation during the health check.
+    fn timed_out(&self, name: &'static str, command: &Command) -> Result<Error> {
+        let cancelled = || self.cancel.is_cancelled();
+        let stuck = docker_daemon::Target::of(command).is_some_and(|target| {
+            target.probe(docker_daemon::PROBE_TIMEOUT, &cancelled) == docker_daemon::Health::NotResponding
+        });
+        self.cancel.check()?;
+        if !stuck {
+            return Ok(Error::Invalid(TIMED_OUT));
+        }
+        (self.emit)(Event::Output(format!(
+            "Docker did not answer docker version within {} s",
+            docker_daemon::PROBE_TIMEOUT.as_secs()
+        )));
+        Ok(Error::DockerNotResponding(name))
     }
     fn redact(&self, mut value: String) -> String {
         for secret in &self.secrets {
@@ -388,6 +407,50 @@ mod tests {
             assert!(output.metadata().unwrap().len() <= 4096);
             assert!(started.elapsed() < Duration::from_secs(2));
         }
+    }
+
+    #[test]
+    fn a_timed_out_docker_command_is_a_stuck_daemon_only_when_docker_does_not_answer() {
+        use std::path::Path;
+        let temp = tempfile::tempdir().unwrap();
+        let (cancel, lines) = (Cancellation::default(), std::cell::RefCell::new(Vec::new()));
+        let emit = |event| {
+            if let Event::Output(line) = event {
+                lines.borrow_mut().push(line);
+            }
+        };
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &emit,
+            secrets: vec![],
+        };
+        let create = |program: &Path| {
+            let mut command = Command::new(program);
+            command.args(["create", "--name", "horizon-contract-1"]);
+            runner.run(
+                "worker image contract creation",
+                &mut command,
+                Duration::from_millis(150),
+            )
+        };
+        // Docker answers its health check: the timeout is a plain one.
+        let docker = docker_daemon::fake_docker(
+            temp.path(),
+            "[ \"$1\" = version ] && echo 29.8.1 && exit\nexec sleep 30",
+        );
+        assert!(matches!(create(&docker), Err(Error::Invalid(TIMED_OUT))));
+        assert!(lines.borrow().is_empty());
+        // Docker answers nothing: the daemon is stuck.
+        let docker = docker_daemon::fake_docker(temp.path(), "exec sleep 30");
+        let result = create(&docker);
+        assert!(
+            matches!(
+                result,
+                Err(Error::DockerNotResponding("worker image contract creation"))
+            ),
+            "{result:?}"
+        );
+        assert_eq!(*lines.borrow(), ["Docker did not answer docker version within 5 s"]);
     }
 
     #[test]

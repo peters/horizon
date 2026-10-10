@@ -45,6 +45,30 @@ fn run(arguments: &[String]) -> crate::Result<()> {
             let result = crate::bootstrap::reconcile(std::path::Path::new(path))?;
             serde_json::to_writer(std::io::stdout().lock(), &result).map_err(|_| crate::Error::Unavailable)
         }
+        [mode, flag, path] if mode == "--reconcile-status" && flag == "--client" => {
+            let result = crate::bootstrap::reconcile_status(std::path::Path::new(path))?;
+            serde_json::to_writer(std::io::stdout().lock(), &result).map_err(|_| crate::Error::Unavailable)
+        }
+        [mode, flag, path, confirm_flag, boot_id, operations_flag, operations]
+            if mode == "--reconcile"
+                && flag == "--client"
+                && confirm_flag == "--confirm-host-reboot"
+                && operations_flag == "--local-operations" =>
+        {
+            let boot_id =
+                uuid::Uuid::parse_str(boot_id).map_err(|_| horizon_app_runtime::Error::ReconciliationRequired)?;
+            if operations.len() > 64 * 37 {
+                return Err(horizon_app_runtime::Error::OperationInvalid.into());
+            }
+            let operations = operations
+                .split(',')
+                .map(uuid::Uuid::parse_str)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|_| horizon_app_runtime::Error::OperationInvalid)?;
+            let confirmation = crate::local::recovery::RebootConfirmation::new(boot_id, operations)?;
+            let result = crate::bootstrap::reconcile_after_reboot(std::path::Path::new(path), &confirmation)?;
+            serde_json::to_writer(std::io::stdout().lock(), &result).map_err(|_| crate::Error::Unavailable)
+        }
         [mode, flag, path] if mode == "--mcp" && flag == "--client" => {
             let host = crate::bootstrap::open(std::path::Path::new(path))?;
             tokio::runtime::Builder::new_multi_thread()
@@ -76,7 +100,7 @@ pub fn execute(arguments: &[String]) {
     if let Err(error) = run(arguments) {
         if arguments.first().is_some_and(|argument| argument == "--run") {
             if error != crate::Error::RunFailed {
-                crate::cli::report_error(error);
+                crate::cli::report_error(&error);
             }
         } else {
             eprintln!("{error}");

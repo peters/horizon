@@ -13,8 +13,10 @@ use crate::tree::{Identity, References, Snapshot};
 use crate::{Error, Result};
 
 mod actions;
+mod deep_link;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+const APPIUM_VERSION: &str = "2.19.0";
 
 pub struct Launch {
     device: Device,
@@ -88,11 +90,17 @@ impl Launch {
                 "deviceLogs": self.evidence.logs_on_failure, "appiumLogs": self.evidence.logs_on_failure,
             }
         });
+        // This generation includes iOS deepLink; older iOS retains the provider's compatible default.
+        if !ios
+            || version(&self.device.os_version)
+                .and_then(|parts| parts.first().copied())
+                .is_some_and(|major| major >= 15)
+        {
+            caps["bstack:options"]["appiumVersion"] = json!(APPIUM_VERSION);
+        }
         if ios {
             caps["appium:processArguments"] = json!({"env": self.arguments});
         } else {
-            // BrowserStack's Android default is legacy Appium; native lifecycle commands require this pinned driver generation.
-            caps["bstack:options"]["appiumVersion"] = json!("2.19.0");
             caps["appium:optionalIntentArguments"] = Value::String(
                 self.arguments
                     .iter()
@@ -204,7 +212,7 @@ impl NativeDriver {
     }
 
     /// # Errors
-    /// Invalid, stale, ambiguous or failing actions return typed failures without provider diagnostics.
+    /// Invalid or failing actions return typed failures with bounded, redacted driver diagnostics.
     pub fn act(&mut self, action: &Action) -> Result<()> {
         action.validate()?;
         match action {
@@ -473,6 +481,25 @@ impl NativeDriver {
                     {
                         Error::ReferenceExpired
                     }
+                    WebDriverHttpError::WebDriver { error, message } => {
+                        if error == "no such alert" {
+                            return Error::AlertMissing;
+                        }
+                        if error == "invalid session id" {
+                            return Error::SessionClosed;
+                        }
+                        let mut private = vec![self.session_id.as_str()];
+                        private.extend(self.arguments.values().map(String::as_str));
+                        if let Some(body) = body {
+                            command_values(body, &mut private);
+                        }
+                        let diagnostic = Box::new(crate::diagnostic::DriverDiagnostic::new(&error, &message, &private));
+                        if diagnostic.unsupported() {
+                            Error::ActionUnsupported(diagnostic)
+                        } else {
+                            Error::DriverRejected(diagnostic)
+                        }
+                    }
                     _ => Error::TransportFailed,
                 }
             });
@@ -496,6 +523,18 @@ impl NativeDriver {
             Some(&json!({"script":script,"args":[arguments]})),
             limit,
         )
+    }
+}
+
+fn command_values<'a>(body: &'a Value, private: &mut Vec<&'a str>) {
+    match body {
+        Value::String(value) => private.push(value),
+        Value::Array(values) => values.iter().for_each(|value| command_values(value, private)),
+        Value::Object(values) => values
+            .iter()
+            .filter(|(key, _)| key.as_str() != "script")
+            .for_each(|(_, value)| command_values(value, private)),
+        _ => (),
     }
 }
 

@@ -69,7 +69,10 @@ for a known panel. Discovery and control are scoped to the workspace that
 contains your agent panel: `browser_list` never shows panels from other
 workspaces, every other tool rejects their ids, and a panel's `visible` field
 is host presentation state, not proof that the panel is in your workspace. If
-nothing usable is listed, create a panel rather than guessing an id. Before
+nothing usable is listed, create a panel rather than guessing an id. On a cloud
+worker, your injected actor must match a registered workspace session. For a
+request addressed to the current worker, an actor outside that workspace receives `panel_outside_workspace` before a browser starts.
+Use the registered session identity; do not retry an unregistered actor. Before
 interacting, call `browser_snapshot` or `browser_query` and prefer its
 short-lived `ref` in `browser_act`. Navigation, another snapshot or query, and
 `browser_wait` can invalidate earlier refs, so reacquire a ref immediately
