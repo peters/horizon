@@ -518,6 +518,7 @@ impl Runtime {
             || self.recovery_receiver.is_some()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
             || self.preparation.is_some()
+            || self.sessions.saving()
             || self.needs_attach
             || self.first_panel_due
             || self.needs_desktop

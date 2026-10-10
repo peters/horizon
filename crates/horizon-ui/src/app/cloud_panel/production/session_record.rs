@@ -75,6 +75,21 @@ impl Sessions {
         Ok(value)
     }
 
+    /// Whether a save holds the record's lock. Operations that lock the record
+    /// wait for it: the UI counts the cloud as busy, and work already started
+    /// waits on its own thread through [`Self::fence`].
+    pub(super) fn saving(&self) -> bool {
+        self.flight
+            .borrow()
+            .as_ref()
+            .is_some_and(|flight| !flight.lock().unwrap_or_else(PoisonError::into_inner).done)
+    }
+
+    /// What a worker thread waits on before it locks the record.
+    pub(super) fn fence(&self) -> Fence {
+        Fence(self.flight.borrow().clone())
+    }
+
     /// A save that failed since the last call.
     pub(super) fn failure(&self) -> Option<String> {
         self.failures.try_iter().last()
@@ -94,7 +109,7 @@ impl Sessions {
 
     /// A running save that holds `record`, as the save of a new panel's session does.
     #[cfg(test)]
-    pub(super) fn saving(record: Deployment) -> Self {
+    pub(super) fn saving_for_test(record: Deployment) -> Self {
         let sessions = Self::default();
         *sessions.flight.borrow_mut() = Some(Arc::new(Mutex::new(Flight {
             record,
@@ -129,6 +144,19 @@ impl HorizonApp {
     }
 }
 
+/// The save running when it was taken, if any.
+pub(super) struct Fence(Option<Arc<Mutex<Flight>>>);
+
+impl Fence {
+    /// Waits on this worker thread until that save released the record's lock.
+    pub(super) fn wait(&self) {
+        let Some(flight) = &self.0 else { return };
+        while !flight.lock().unwrap_or_else(PoisonError::into_inner).done {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+}
+
 /// Saves the record until a save holds every change, then releases its lock. The lock is
 /// released before the flight says it is done, so a reader that sees it done can lock.
 fn save(store: Store, flight: &Mutex<Flight>, failed: &Sender<String>, repaint: Option<egui::Context>) {
@@ -145,9 +173,10 @@ fn save(store: Store, flight: &Mutex<Flight>, failed: &Sender<String>, repaint: 
             drop(flight);
             if let Err(error) = saved {
                 let _ = failed.send(format!("Could not record the session of a new cloud panel: {error}"));
-                if let Some(ctx) = repaint {
-                    ctx.request_repaint();
-                }
+            }
+            // The cloud is no longer busy, or its failure shows.
+            if let Some(ctx) = repaint {
+                ctx.request_repaint();
             }
             return;
         }

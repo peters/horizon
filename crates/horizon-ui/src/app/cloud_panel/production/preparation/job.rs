@@ -37,6 +37,8 @@ pub(super) struct Input {
     pub settings_path: PathBuf,
     /// The session to make durable first, for a cloud that never started.
     pub first: Option<Durability>,
+    /// A new panel's session save that holds the record's lock.
+    pub fence: super::super::session_record::Fence,
 }
 
 pub(super) enum Report {
@@ -135,6 +137,7 @@ pub(super) fn prepare(input: Input, ctx: &egui::Context) -> Receiver<Report> {
 
 impl Input {
     fn run(self, send: &dyn Fn(Report)) -> Result<(), Failure> {
+        self.fence.wait();
         if let Some(first) = &self.first {
             first.sync().map_err(Failure::Unsaved)?;
         }

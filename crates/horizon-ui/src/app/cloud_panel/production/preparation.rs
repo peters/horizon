@@ -82,6 +82,14 @@ impl HorizonApp {
                 return;
             }
         };
+        let fence = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .entry(id)
+            .or_default()
+            .sessions
+            .fence();
         let reports = job::prepare(
             job::Input {
                 launch,
@@ -89,6 +97,7 @@ impl HorizonApp {
                 state_root,
                 settings_path: root.join("settings.json"),
                 first,
+                fence,
             },
             ctx,
         );

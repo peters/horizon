@@ -389,7 +389,7 @@ fn a_new_panel_adds_its_session_to_the_record_a_running_save_holds() {
         .unwrap()
         .unwrap();
     app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().sessions =
-        super::super::session_record::Sessions::saving(record);
+        super::super::session_record::Sessions::saving_for_test(record);
     // The save holds the record's lock, and the disk would not answer a read.
     std::fs::remove_file(directory.join("deployment.json")).unwrap();
     let made = std::process::Command::new("mkfifo")
@@ -421,6 +421,10 @@ fn a_new_panel_adds_its_session_to_the_record_a_running_save_holds() {
         added,
         ["new-shell"],
         "the second panel found the session the first added"
+    );
+    assert!(
+        app.cloud_prototype.production.runtimes[&1].busy(),
+        "no operation that locks the record starts while the save holds it"
     );
 }
 

@@ -103,7 +103,9 @@ impl Runtime {
     ) {
         let tx = self.hold_failure_for_check();
         let ctx = ctx.clone();
+        let fence = self.sessions.fence();
         std::thread::spawn(move || {
+            fence.wait();
             let result = cloud_runtime::lifecycle::check_lost_worker(
                 &state_root,
                 &settings,
@@ -219,6 +221,7 @@ impl Runtime {
             || self.resize.busy()
             || self.checking_provider()
             || self.preparation.is_some()
+            || self.sessions.saving()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
     }
 
