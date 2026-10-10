@@ -335,12 +335,7 @@ pub fn poll(
     }
     if let Ok(requests) = manifest::provider_usage::claim_provider_usage_requests(manifest::host_instance()) {
         for request in requests {
-            // The cloud list belongs to a Horizon host; a worker has none to show.
-            if request.cloud_list.is_some() {
-                let _ = manifest::provider_usage::complete_provider_usage(&request.result(
-                    Vec::new(),
-                    Some("cloud_list_unavailable: requires a Horizon agent panel".into()),
-                ));
+            if refused_cloud_list(&request) {
                 continue;
             }
             // Catalog and cloud offer requests are answered, and retried, with the catalog.
@@ -426,6 +421,19 @@ fn usage(
         return Err(io::Error::other("Remote provider is not configured"));
     }
     Ok(results)
+}
+
+/// The cloud list belongs to a Horizon host; a worker answers that it has none. Returns
+/// whether `request` was such a request.
+fn refused_cloud_list(request: &manifest::provider_usage::UsageRequest) -> bool {
+    if request.cloud_list.is_none() {
+        return false;
+    }
+    let _ = manifest::provider_usage::complete_provider_usage(&request.result(
+        Vec::new(),
+        Some("cloud_list_unavailable: requires a Horizon agent panel".into()),
+    ));
+    true
 }
 
 #[cfg(test)]
