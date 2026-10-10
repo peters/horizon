@@ -192,6 +192,8 @@ impl Readiness {
                 } else {
                     "Sign in with ChatGPT for Codex, or choose another Codex option.".into()
                 }
+            } else if *agent == Agent::Codex {
+                "Paste the Codex API key, or choose ChatGPT plan.".into()
             } else {
                 format!(
                     "Paste the {} API key, or choose subscription login.",
