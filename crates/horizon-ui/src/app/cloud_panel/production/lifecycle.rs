@@ -103,7 +103,7 @@ impl Runtime {
     ) {
         let tx = self.hold_failure_for_check();
         let ctx = ctx.clone();
-        let fence = self.sessions.fence();
+        let fence = super::session_record::fence(&state_root);
         std::thread::spawn(move || {
             fence.wait();
             let result = cloud_runtime::lifecycle::check_lost_worker(

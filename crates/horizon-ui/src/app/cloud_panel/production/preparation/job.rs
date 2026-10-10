@@ -22,10 +22,50 @@ impl Durability {
     }
 
     fn sync(&self) -> Result<(), String> {
-        self.store
-            .sync_runtime_state(&self.session_id)
-            .map_err(|error| error.to_string())
+        self.sync_until_unchanged(|| {})
     }
+
+    /// Syncs until no save replaced a session file meanwhile. The UI may save the session
+    /// again while this runs, and a file it replaced after the sync opened the old one is
+    /// not durable; the snapshot reported durable must be the one on disk. `synced` runs
+    /// after each pass.
+    fn sync_until_unchanged(&self, mut synced: impl FnMut()) -> Result<(), String> {
+        loop {
+            let before = self.identities();
+            self.store
+                .sync_runtime_state(&self.session_id)
+                .map_err(|error| error.to_string())?;
+            synced();
+            if self.identities() == before {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Which file each session path names. A save replaces a file with a new one, which
+    /// has another inode and change time.
+    fn identities(&self) -> [Option<(u64, u64, i64, i64)>; 3] {
+        let home = self.store.home();
+        [
+            home.session_runtime_path(&self.session_id),
+            home.session_meta_path(&self.session_id),
+            home.session_index_path(),
+        ]
+        .map(|path| identity(&path))
+    }
+}
+
+#[cfg(unix)]
+fn identity(path: &std::path::Path) -> Option<(u64, u64, i64, i64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.dev(), metadata.ino(), metadata.ctime(), metadata.ctime_nsec()))
+}
+
+/// Syncing a session refuses hosts other than Unix, so there is nothing to compare.
+#[cfg(not(unix))]
+fn identity(_: &std::path::Path) -> Option<(u64, u64, i64, i64)> {
+    None
 }
 
 /// What a preparation needs from the cloud as the UI holds it.
@@ -180,5 +220,33 @@ impl Input {
             pinned,
         });
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use horizon_core::{HorizonHome, RuntimeState};
+
+    #[test]
+    fn a_save_that_replaces_the_session_during_the_sync_is_synced_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(
+            HorizonHome::from_root(temp.path().join("home")),
+            temp.path().join("config.yaml"),
+        );
+        store.save_runtime_state("session", &RuntimeState::default()).unwrap();
+        let durability = Durability::new(store.clone(), "session".into());
+        let mut passes = 0;
+        durability
+            .sync_until_unchanged(|| {
+                passes += 1;
+                if passes == 1 {
+                    // The UI saves the session while the first sync runs.
+                    store.save_runtime_state("session", &RuntimeState::default()).unwrap();
+                }
+            })
+            .unwrap();
+        assert_eq!(passes, 2, "the replaced files are synced once more");
     }
 }

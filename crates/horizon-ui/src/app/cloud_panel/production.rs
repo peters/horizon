@@ -723,9 +723,17 @@ impl HorizonApp {
                 .iter()
                 .filter_map(|group| {
                     let launch = group.remote.as_ref()?;
-                    let result = cloud_runtime::state::cloud_directory(self.cloud_prototype.root.as_ref()?, &launch.id)
-                        .and_then(|root| Store::lock(&root))
-                        .and_then(|store| store.load());
+                    let directory =
+                        cloud_runtime::state::cloud_directory(self.cloud_prototype.root.as_ref()?, &launch.id);
+                    // A save that outlived the runtimes of the previous session holds the
+                    // newest record and its lock; this runtime joins it.
+                    let sessions = directory
+                        .as_deref()
+                        .map_or_else(|_| session_record::Sessions::default(), session_record::Sessions::of);
+                    let result = directory.and_then(|root| match sessions.saving_record() {
+                        Some(record) => Ok(Some(record)),
+                        None => Store::lock(&root).and_then(|store| store.load()),
+                    });
                     let state = match result {
                         Ok(Some(state)) => state,
                         Ok(None) if !launch.deployment_started => return None,
@@ -744,6 +752,7 @@ impl HorizonApp {
                                         &launch.id,
                                     )
                                     .map_or_else(|_| resize::State::default(), |root| resize::restored(&root)),
+                                    sessions,
                                     ..Runtime::default()
                                 },
                             );
@@ -755,6 +764,7 @@ impl HorizonApp {
                         Runtime {
                             stage: Some(state.stage),
                             state: Some(state.clone()),
+                            sessions,
                             ..Runtime::default()
                         },
                     );

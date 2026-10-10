@@ -82,14 +82,7 @@ impl HorizonApp {
                 return;
             }
         };
-        let fence = self
-            .cloud_prototype
-            .production
-            .runtimes
-            .entry(id)
-            .or_default()
-            .sessions
-            .fence();
+        let fence = super::session_record::fence(&state_root);
         let reports = job::prepare(
             job::Input {
                 launch,

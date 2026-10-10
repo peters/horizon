@@ -389,7 +389,7 @@ fn a_new_panel_adds_its_session_to_the_record_a_running_save_holds() {
         .unwrap()
         .unwrap();
     app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().sessions =
-        super::super::session_record::Sessions::saving_for_test(record);
+        super::super::session_record::Sessions::saving_for_test(&directory, record);
     // The save holds the record's lock, and the disk would not answer a read.
     std::fs::remove_file(directory.join("deployment.json")).unwrap();
     let made = std::process::Command::new("mkfifo")
@@ -425,6 +425,66 @@ fn a_new_panel_adds_its_session_to_the_record_a_running_save_holds() {
     assert!(
         app.cloud_prototype.production.runtimes[&1].busy(),
         "no operation that locks the record starts while the save holds it"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_preparation_after_a_session_switch_waits_for_the_save_the_old_runtime_started() {
+    use std::os::unix::fs::PermissionsExt;
+    let (temp, mut app) = restore_fixture();
+    let ctx = egui::Context::default();
+    let directory = temp.path().join("fixture");
+    let writable = |mode| std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(mode)).unwrap();
+    // The record's folder takes no new file, so the save of the new panel's session fails.
+    writable(0o500);
+    let mut options = horizon_core::PanelOptions {
+        kind: PanelKind::Shell,
+        local_id: Some("new-shell".into()),
+        ..Default::default()
+    };
+    app.prepare_cloud_remote_panel(0, &mut options).unwrap();
+    // A session switch drops the runtimes but keeps the cloud.
+    let state = app.cloud_prototype.production.runtimes[&1].state.clone();
+    app.cloud_prototype.production.runtimes.clear();
+    app.cloud_prototype.production.runtimes.insert(
+        1,
+        Runtime {
+            state,
+            sessions: super::super::session_record::Sessions::of(&directory),
+            ..Default::default()
+        },
+    );
+    assert!(
+        app.cloud_prototype.production.runtimes[&1].busy(),
+        "the new runtime counts the cloud as busy while the save runs"
+    );
+    // Without settings the preparation stops once it read the record.
+    std::fs::remove_file(temp.path().join("settings.json")).unwrap();
+    app.start_production_deployment(1, &ctx);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    app.poll_cloud_preparations(&ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(
+        runtime.preparation.is_some() && runtime.error.is_none(),
+        "the preparation waits for the save before it reads the record"
+    );
+
+    writable(0o700);
+    app.finish_cloud_preparations(&ctx);
+    let error = app.cloud_prototype.production.runtimes[&1]
+        .error
+        .clone()
+        .unwrap_or_default();
+    assert!(error.contains("settings.json"), "{error}");
+    let saved = cloud_runtime::state::Store::lock(&directory)
+        .unwrap()
+        .load()
+        .unwrap()
+        .unwrap();
+    assert!(
+        saved.sessions.iter().any(|session| session.panel_id == "new-shell"),
+        "the save recorded the session before the preparation read the record"
     );
 }
 
