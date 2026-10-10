@@ -194,6 +194,17 @@ class GitAuthenticationTests(unittest.TestCase):
             auth.install_as_root(self.value, lambda operation, value: steps.append(operation))
         self.assertEqual(steps, [])
 
+    def test_clear_empties_an_earlier_token_file_with_its_hard_links(self):
+        auth.write_private(self.value, auth.CREDENTIAL)
+        linked = auth.CREDENTIAL.with_name('copy.json')
+        os.link(auth.CREDENTIAL, linked)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', self.path / 'root/static-binding.json'), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()):
+            auth.clear()
+        self.assertFalse(auth.CREDENTIAL.exists())
+        self.assertEqual(linked.stat().st_size, 0)
+
     def test_a_failed_install_keeps_the_earlier_binding_where_only_root_reads_it(self):
         auth.write_private(self.value, auth.CREDENTIAL)
         root_file = self.path / 'root/static-binding.json'

@@ -36,22 +36,17 @@ credential_reply = targets.credential_reply
 
 
 CREDENTIAL = Path('/run/horizon-credentials/github.json')
-# Under agent isolation root keeps the static token where only the Git proxy and the API broker
-# read it; the agents' directory keeps only the binding's identities (identity_path).
+# Under agent isolation only root, the Git proxy and the API broker read the static token.
 ROOT_CREDENTIAL = Path('/run/horizon-github/static-binding.json')
 AGENT_ISOLATION = Path('/run/horizon-tailnet/agent-isolation')
-# The account of every agent session (horizon-worker-tailnet isolate).
-AGENT_UID = 10001
+AGENT_UID = 10001  # Every agent session's account (horizon-worker-tailnet isolate).
 AGENT_RUNNER = ('/usr/local/bin/horizon-worker-tailnet', 'agent', '/usr/local/bin/horizon-worker-git-auth')
-# Run as root under agent isolation; every other operation runs as the agent.
-ROOT_OPERATIONS = ('install', 'clear')
-# horizon-worker-github: a root service that holds a refreshing token chain and answers
-# agents with short-lived access tokens. While it holds a chain, it replaces the file above.
+ROOT_OPERATIONS = ('install', 'clear')  # Run as root under agent isolation; the rest as the agent.
+# horizon-worker-github, the root service that refreshes the token chain and answers agents.
 SERVICE_SOCKET = Path('/run/horizon-worker/github.sock')
 SERVICE_TIMEOUT = 10
-# The service's Git proxy. While the service runs, Git reaches github.com only through it, and
-# it adds a token to requests for granted repositories, so Git never holds one. Git trusts the
-# authority that the service makes for it, and only for github.com.
+# The service's Git proxy, which adds the token to requests for granted repositories, so Git
+# never holds one. Git trusts the service's authority only for github.com.
 PROXY_PORT = 47281
 PROXY_AUTHORITY = '/run/horizon-worker/github-ca.pem'
 # The service's API broker. While the service runs, gh sends every request to this socket
@@ -61,12 +56,10 @@ GH = '/usr/bin/gh'
 GITHUB = 'https://github.com/'
 ROUTE = (('http.' + GITHUB + '.proxy', 'http://127.0.0.1:%d' % PROXY_PORT),
          ('http.' + GITHUB + '.sslCAInfo', PROXY_AUTHORITY))
-# Other ways to write a GitHub remote go over HTTPS to github.com too, and so through the proxy.
-# The worker has no SSH key for github.com.
+# Other ways to write a GitHub remote go over HTTPS through the proxy (no SSH key on the worker).
 REWRITTEN = ('git@github.com:', 'ssh://git@github.com/', 'http://github.com/', 'https://www.github.com/',
              'http://www.github.com/')
-# The route lives in its own file that the global configuration includes, so removing it never
-# removes an entry that the agent wrote itself. Relative to HOME.
+# The route's own file under HOME, which the global configuration includes; the agent's entries stay.
 ROUTE_FILE = '.config/git/horizon-route'
 # Set by the gh wrapper when it injects a service token, so a nested gh can drop it.
 INJECTED = 'HORIZON_GH_TOKEN_INJECTED'
@@ -280,6 +273,15 @@ def install_identities(value, previous=None):
     write_private(value, identity_path())
 
 
+def empty_earlier():
+    """Empties the agents' own token file of an earlier image in place, with its hard links."""
+    with contextlib.suppress(OSError), open(os.open(CREDENTIAL, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                                                    | os.O_CLOEXEC), 'wb', closefd=True) as legacy:
+        found = os.fstat(legacy.fileno())
+        if stat.S_ISREG(found.st_mode) and found.st_uid == AGENT_UID:
+            legacy.truncate(0)
+
+
 def install_as_root(value, agent=None):
     """Under agent isolation the agent keeps the identities and root the token. An earlier
     image's token file is emptied in place (with its hard links) and removed first."""
@@ -288,11 +290,7 @@ def install_as_root(value, agent=None):
     with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
         found = read_private(CREDENTIAL, owner=AGENT_UID)
         earlier, previous = found, stripped(found)
-    with contextlib.suppress(OSError), open(os.open(CREDENTIAL, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-                                                    | os.O_CLOEXEC), 'wb', closefd=True) as legacy:
-        found = os.fstat(legacy.fileno())
-        if stat.S_ISREG(found.st_mode) and found.st_uid == AGENT_UID:
-            legacy.truncate(0)
+    empty_earlier()
     # Any failure but a directory there stops the install before the agent step.
     with contextlib.suppress(IsADirectoryError):
         CREDENTIAL.unlink(missing_ok=True)
@@ -319,10 +317,12 @@ def install_as_root(value, agent=None):
 
 
 def clear():
-    """Removes the static binding: its token wherever it is, and its identities."""
-    # The root-only token first, in every mode, so no agent's path can keep it.
+    """Removes the static binding: its token wherever it is (the root-only one first, in every
+    mode, so no agent's path can keep it), and its identities."""
     with contextlib.suppress(PermissionError):
         ROOT_CREDENTIAL.unlink(missing_ok=True)
+    if root_holds_token():
+        empty_earlier()
     for path in (CREDENTIAL, identity_path()):
         with contextlib.suppress(IsADirectoryError, PermissionError):
             path.unlink(missing_ok=True)
