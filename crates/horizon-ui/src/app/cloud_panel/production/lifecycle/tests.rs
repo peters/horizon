@@ -841,6 +841,7 @@ fn a_record_that_reads_again_is_not_blamed_for_a_later_settings_failure() {
     runtime.state_unavailable = true;
     runtime.error = Some("Deployment record is unreadable".into());
     app.start_production_deployment(1, &ctx);
+    app.finish_cloud_preparations(&ctx);
     let runtime = &app.cloud_prototype.production.runtimes[&1];
     assert!(!runtime.state_unavailable, "the record read");
     let error = runtime.error.as_deref().unwrap_or_default();

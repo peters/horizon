@@ -28,6 +28,7 @@ mod readiness;
 mod rebuild;
 mod repository_setup;
 mod resize;
+mod session_record;
 mod sessions;
 mod setup;
 #[cfg(debug_assertions)]
@@ -205,6 +206,10 @@ pub(super) struct Runtime {
     /// The GitHub access requests this cloud's agents wait on.
     github_requests: github_requests::State,
     receiver: Option<Receiver<Event>>,
+    /// Sessions new panels added to the record, saved on a worker thread.
+    sessions: session_record::Sessions,
+    /// The deployment being prepared on a worker thread; it starts once prepared.
+    preparation: Option<preparation::Pending>,
     recovery_receiver: Option<Receiver<cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>>>,
     recovery_worker_id: String,
     remote_release: Option<Receiver<cloud_runtime::Result<Deployment>>>,
@@ -512,6 +517,7 @@ impl Runtime {
             || self.resize.busy()
             || self.recovery_receiver.is_some()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
+            || self.preparation.is_some()
             || self.needs_attach
             || self.first_panel_due
             || self.needs_desktop
@@ -606,6 +612,8 @@ impl HorizonApp {
             }
             runtime.poll_release_and_repaint(ctx);
         }
+        self.report_failed_session_saves();
+        self.poll_cloud_preparations(ctx);
         self.follow_cloud_billing(ctx);
         self.finish_failed_cloud_operations(finished, ctx);
         self.reconcile_sharing(ctx);
@@ -767,54 +775,22 @@ impl HorizonApp {
     /// resume, so a failure there offers Resume worker.
     fn reconnect_resumed(&mut self, resumed: Vec<u32>, ctx: &egui::Context) {
         for id in resumed {
-            self.start_production_deployment(id, ctx);
-            if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
-                runtime.operation = Some(lifecycle::Action::Resume);
-            }
+            self.start_production_deployment_as(id, Some(lifecycle::Action::Resume), ctx);
         }
     }
 
-    /// Waits for a provider check, which may hold the record a deployment reads first.
     fn start_production_deployment(&mut self, id: u32, ctx: &egui::Context) {
+        self.start_production_deployment_as(id, None, ctx);
+    }
+
+    /// Waits for a provider check, which may hold the record a deployment reads first.
+    /// `then` is the operation the deployment continues.
+    fn start_production_deployment_as(&mut self, id: u32, then: Option<lifecycle::Action>, ctx: &egui::Context) {
         let runtimes = &self.cloud_prototype.production.runtimes;
         if runtimes.get(&id).is_some_and(Runtime::checking_provider) {
             return;
         }
-        if let Some((request, siblings)) = self.prepare_production_deployment(id) {
-            self.cloud_prototype
-                .production
-                .runtimes
-                .entry(id)
-                .or_default()
-                .start_deployment(request, siblings, ctx);
-        }
-    }
-
-    fn persist_cloud_before_allocation(&mut self, id: u32) -> bool {
-        let result = (|| {
-            let session = self
-                .active_session
-                .as_ref()
-                .filter(|session| session.persistent)
-                .ok_or_else(|| {
-                    "Save this workspace in a persistent Horizon session before allocating a worker".to_string()
-                })?;
-            if !self.auto_save_runtime_state() {
-                return Err(
-                    "Could not save this workspace before allocating a worker; retry after fixing session storage"
-                        .into(),
-                );
-            }
-            self.session_store
-                .sync_runtime_state(&session.session_id)
-                .map_err(|error| error.to_string())
-        })();
-        if let Err(error) = result {
-            self.cloud_prototype.production.runtimes.entry(id).or_default().error = Some(error.clone());
-            self.cloud_prototype.error = Some(error);
-            return false;
-        }
-        true
+        self.prepare_production_deployment(id, then, ctx);
     }
 
     pub(in crate::app) fn prepare_cloud_remote_panel(
@@ -824,10 +800,12 @@ impl HorizonApp {
     ) -> horizon_core::Result<()> {
         let group = &self.cloud_prototype.groups.0[index];
         let Some(launch) = &group.remote else { return Ok(()) };
-        let runtime = self.cloud_prototype.production.runtimes.get(&group.issue);
-        let state = runtime
-            .and_then(|r| r.state.as_ref())
-            .filter(|s| s.stage == Stage::Ready)
+        let (runtime, state) = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&group.issue)
+            .and_then(|runtime| Some((runtime, runtime.state.as_ref().filter(|s| s.stage == Stage::Ready)?)))
             .ok_or_else(|| horizon_core::Error::Config("Deploy or reconnect the cloud before adding panels".into()))?;
         if let Some(reason) = group.unavailable_panel_reason(options.kind) {
             return Err(horizon_core::Error::Config(reason.into()));
@@ -839,10 +817,12 @@ impl HorizonApp {
             .ok_or_else(|| horizon_core::Error::Config("No cloud settings".into()))?;
         let result = (|| -> cloud_runtime::Result<()> {
             let settings = Settings::load(&root.join("settings.json"))?;
-            let store = Store::lock(&cloud_runtime::state::cloud_directory(root, &launch.id)?)?;
-            let mut saved = store
-                .load()?
-                .ok_or(cloud_runtime::Error::Invalid("Missing cloud deployment"))?;
+            let directory = cloud_runtime::state::cloud_directory(root, &launch.id)?;
+            let repaint = runtime.repaint_context.clone();
+            // Every panel needs the record; only an agent or shell panel adds to it.
+            runtime
+                .sessions
+                .with_record(&directory, repaint.clone(), |_| ((), false))?;
             let id = options
                 .local_id
                 .clone()
@@ -851,10 +831,12 @@ impl HorizonApp {
                 .worker
                 .as_ref()
                 .ok_or(cloud_runtime::Error::Invalid("Cloud has no worker"))?;
-            let connection = Connection::new(worker, &settings, store.root())?;
+            let connection = Connection::new(worker, &settings, &directory)?;
             if options.kind == PanelKind::Browser {
-                let observed =
-                    runtime.and_then(|runtime| runtime.browsers.as_ref()?.iter().find(|browser| browser.id == id));
+                let observed = runtime
+                    .browsers
+                    .as_ref()
+                    .and_then(|browsers| browsers.iter().find(|browser| browser.id == id));
                 capabilities::prepare_browser(
                     &launch.profile.capabilities,
                     &state.browserstack_targets,
@@ -868,7 +850,8 @@ impl HorizonApp {
             }
             if options.kind == PanelKind::Device {
                 let endpoint = runtime
-                    .and_then(|r| r.desktop.as_ref())
+                    .desktop
+                    .as_ref()
                     .ok_or(cloud_runtime::Error::Invalid("Desktop tunnel is connecting"))?
                     .endpoint;
                 options.command = Some(endpoint.to_string());
@@ -882,29 +865,23 @@ impl HorizonApp {
                 PanelKind::Grok => "grok",
                 _ => "shell",
             };
-            let session = saved
-                .sessions
-                .iter()
-                .find(|session| session.panel_id == id)
-                .cloned()
-                .unwrap_or_else(|| Session {
+            let session = runtime.sessions.with_record(&directory, repaint, |saved| {
+                if let Some(session) = saved.sessions.iter().find(|session| session.panel_id == id) {
+                    return (session.clone(), false);
+                }
+                let session = Session {
                     panel_id: id.clone(),
                     agent: agent.into(),
                     tmux: id.clone(),
                     branch: String::new(),
                     worktree: cloud_runtime::siblings::shared_worktree(saved.siblings.as_ref()),
-                });
-            if !saved.sessions.iter().any(|s| s.panel_id == id) {
+                };
                 saved.sessions.push(session.clone());
-                store.save(&saved)?;
-            }
-            let worker = state
-                .worker
-                .as_ref()
-                .ok_or(cloud_runtime::Error::Invalid("Cloud has no worker"))?;
+                (session, true)
+            })?;
             options.cloud_connection = Some(connection);
             options.command = Some("ssh".into());
-            options.args = Connection::new(worker, &settings, store.root())?.attach_args(&session, &launch.revision)?;
+            options.args = Connection::new(worker, &settings, &directory)?.attach_args(&session, &launch.revision)?;
             options.cwd = None;
             options.local_id = Some(id);
             options.session_binding = None;

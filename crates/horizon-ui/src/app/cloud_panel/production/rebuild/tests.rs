@@ -185,7 +185,10 @@ fn run_action<'a>(app: &'a mut HorizonApp, ctx: &egui::Context, action: Action) 
     assert!(runtime.busy());
     let kind = Kind::of(action);
     let deadline = Instant::now() + Duration::from_secs(20);
-    while app.cloud_prototype.production.runtimes[&1].receiver.is_some() {
+    // A refused rebuild reconnects once its preparation finishes.
+    while app.cloud_prototype.production.runtimes[&1].receiver.is_some()
+        || app.cloud_prototype.production.runtimes[&1].preparation.is_some()
+    {
         assert!(Instant::now() < deadline, "{kind:?} must finish");
         std::thread::sleep(Duration::from_millis(10));
         app.prepare_production_clouds(ctx);
@@ -288,6 +291,7 @@ fn rebuild_actions_start_their_own_core_operation() {
             app.change_production_worker(1, Action::Stop, &ctx);
         } else {
             app.start_production_deployment(1, &ctx);
+            app.finish_cloud_preparations(&ctx);
         }
         let runtime = &app.cloud_prototype.production.runtimes[&1];
         assert!(runtime.rebuild.is_none(), "stop: {stop}");

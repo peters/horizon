@@ -218,6 +218,7 @@ impl Runtime {
         self.remote_release.is_some()
             || self.resize.busy()
             || self.checking_provider()
+            || self.preparation.is_some()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
     }
 
