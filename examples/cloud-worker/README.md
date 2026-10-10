@@ -737,7 +737,8 @@ that can publish packages. Horizon sends version 2 whenever a cloud has siblings
 even if only the primary has a binding, so ordinary `gh` use in a sibling checkout
 does not pick up the primary's token.
 
-Free-form input such as GraphQL queries is not inspected. This per-repository
+Without the GitHub access service, free-form input such as GraphQL queries is not
+inspected. This per-repository
 selection is routing, not isolation: every process in the
 container runs as the same user and can read the credential file, so the
 shared trust boundary described above still applies. The
@@ -757,9 +758,11 @@ Agents never see the chain. Git gets no token: while the service runs, Git goes
 to GitHub through the service's Git proxy, which adds the current access token
 only to requests for the repositories that you granted. A static token file stays
 as a fallback for the repositories that the GitHub App does not reach, and the
-proxy adds its token for those repositories. The `gh` wrapper still gets the
-full access token from the service for any granted repository, so for now the
-proxy guards Git only (see **Agent access** below).
+proxy adds its token for those repositories. `gh` gets no token either: it sends
+every request to the service's API broker, which adds the token only to the
+requests that a grant covers (see **gh through the API broker** below). The
+static token file is still readable by agents until a later step of issue #1393
+moves it to root-only storage.
 
 A GitHub App user access token lasts 8 hours. Its refresh token lasts about six
 months. Each refresh gives a new access token and a new refresh token, and GitHub
@@ -957,6 +960,97 @@ when the client or GitHub ends it early. The line has these fields:
   `client-gone` (the client left, timed out or broke its TLS), `github-cut`
   (GitHub's reply broke off) or `failed` (an unexpected error).
 
+**gh through the API broker.** The service listens on the Unix socket
+`/run/horizon-worker/github-api.sock` from its first start attempt. Before it
+opens its own socket, the Git helper sets `http_unix_socket` to that path in the
+agent's gh configuration (`/workspace/home/.config/gh/config.yml`), as the agent
+user. `gh` then sends each request, also each redirect, as plain HTTP to the
+socket. The `gh` wrapper gives `gh` the placeholder token `horizon-api-broker`,
+which the broker drops. The wrapper also sets `GH_CONFIG_DIR` to that
+configuration, so a `HOME`, `XDG_CONFIG_HOME` or `GH_CONFIG_DIR` of the caller
+does not move `gh` off the broker; a `gh` that runs past the wrapper, such as
+`/usr/bin/gh` with another configuration, reaches GitHub without a token. The
+route is removed with the Git route; the helper removes the value only when it
+is its own.
+
+The broker does these steps for each connection:
+
+- It reads the user ID of the connecting process from the kernel
+  (`SO_PEERCRED`) and answers only root and the agent user (UID 10001). It reads
+  one strict HTTP/1.1 or HTTP/1.0 request, as the Git proxy does, and then ends
+  the connection.
+- On `api.github.com` it accepts these requests:
+  - A repository's own paths, `/repos/OWNER/NAME/...`. `GET` and `HEAD` need
+    `read`. Other methods need `push`, and only for pull requests, issues,
+    labels, milestones, releases, Git data, contents, merges, statuses, checks,
+    comments, commits, deployments, dispatches and workflow runs (`actions/runs`,
+    `actions/jobs`, `actions/caches`, `actions/artifacts` and
+    `actions/workflows/WORKFLOW/dispatches`). It refuses changes to settings,
+    collaborators, hooks, keys, secrets, variables, environments, rulesets,
+    runners and branch protection, a transfer and a delete of the repository.
+    It also refuses reads of the repository's collaborators, invitations, teams,
+    hooks, keys, environments, forks, topics, rulesets, branch protection, and
+    Actions, Dependabot and Codespaces secrets, variables, runners and
+    permissions, also nested ones such as a workflow's permissions: a read of variables returns their values. It reads each path
+    segment percent-decoded, as GitHub does.
+  - `/repositories/ID/...`, which GitHub uses in its page links. The broker asks
+    GitHub for the current name of the repository for each request, and then
+    applies the rules above.
+  - `/search/issues`, `/search/commits`, `/search/code` and
+    `/search/repositories` with one `q` that has a `repo:` qualifier for each
+    repository, all granted, and no `OR`, `AND`, `NOT`, parentheses, `org:`,
+    `user:` or `owner:`.
+  - `GET /`, `/rate_limit` and `/meta`.
+  - `POST /graphql`, checked by the GraphQL policy below.
+- On `uploads.github.com` it accepts only a release asset upload, with `push`.
+- On `codeload.github.com` and `*.githubusercontent.com` it accepts only `GET`
+  and `HEAD`, and sends them without a token. GitHub redirects archives, release
+  assets and workflow logs there with a signed address.
+- It refuses percent-encoded slashes, dot segments and every other path or host.
+  The request does not go to GitHub.
+- It uses the token of the chain for a repository that the chain grants, and
+  the token of the static token file for a repository that only that file binds.
+  While the chain's token expires and is not refreshed yet, a repository that the
+  chain grants gets a refusal, never the static file's token.
+  It sends on only the fields that `gh` needs, never the client's
+  `Authorization` or cookies, and never passes on a reply field that holds the
+  token.
+- A refusal is a JSON error that `gh` prints, such as
+  `gh: Horizon: example/other has no GitHub grant on this worker. Ask for access
+  with the github_access tool. (HTTP 403)`.
+
+The GraphQL policy reads each request with GitHub's own schema, which the broker
+asks GitHub for once per start:
+
+- One `query` or `mutation` per request; no subscription.
+- A query starts at `repository` (for a granted repository), `node`, `nodes`,
+  `search` (with the `repo:` rules above), `viewer`, `rateLimit`, `meta` or
+  introspection.
+- Users, organizations, teams and other owners give only their plain fields, so
+  no request lists an owner's repositories. `node` and `nodes` reach only a
+  repository, a thing in one, a user, a bot, a team or an organization.
+- The broker adds fields under its own aliases that ask GitHub which repository
+  each object of the reply is in. If one object is in a repository without a
+  `read` grant, the whole reply is refused. The broker removes the added fields
+  before `gh` gets the reply.
+- A mutation must be one that `gh` uses for pull requests, issues, comments,
+  labels and reviews. Before it is sent, the broker asks GitHub what each ID of
+  its input is. Each must be a repository with a `push` grant, a thing in one,
+  or a user, bot or team.
+- The chain's token serves a request first. The static token file's token serves
+  it only when the chain reaches none of the repositories that the request names
+  or that its IDs are in, so a repository that the chain grants for reading only,
+  or whose token expires, never gets the static token. A `node` or `nodes` read of
+  a repository that only the static file binds is refused while a chain exists.
+- A refusal is a GraphQL error, which `gh` prints as `GraphQL: Horizon: ...`.
+
+The broker writes one line for each connection to the request log below, with
+`kind` set to `api`, the `host`, the `request` kind (`repository`, `search`,
+`plain`, `content`, `graphql` or `invalid`), `repository`, `uid`, `pid`,
+`granted` and `outcome` as for the Git proxy. `granted` is also true when the
+broker itself sent the token to GitHub for the request, to resolve a repository
+ID or to look up the IDs of a mutation, and then refused it.
+
 **Agent access.** Agents ask the service on `/run/horizon-worker/github.sock`.
 The socket accepts every local account, but the service reads the caller's user
 ID from the kernel (`SO_PEERCRED`) and answers only root and the agent user
@@ -967,7 +1061,9 @@ repository and the result, but never a token. Each request is one JSON line:
 - `{"request": "credential", ...}` always gets a refusal: Git goes through the
   proxy and needs no token.
 - `{"request": "gh-token", "repository": "owner/name"}` answers with `token`,
-  `repository` and `access`.
+  `repository` and `access`. For the agent user, `token` is the placeholder
+  `horizon-api-broker`: `gh` reaches GitHub through the API broker, which adds
+  the token itself. Only root gets the access token.
 
 The reply never contains the refresh token or the client secret. A repository
 without a grant gets a refusal. A token that expires within one minute is not
@@ -975,23 +1071,23 @@ given out. While a refreshed chain waits for its write, every request gets a
 refusal with `"state":"unstored"`. `horizon-worker-git-auth get` and the `gh`
 wrapper ask the socket first. The Git helper falls back to the static file only
 when no service answers; while the service answers, the proxy adds the token
-itself. The `gh` wrapper falls back to the static file also when the service holds
-no chain (`"state":"absent"`). The `gh` wrapper still
-chooses the repository as described above. When it refuses a nested `gh`, it
-removes the `GH_TOKEN` that an outer wrapped `gh` injected, but keeps every token
-variable that you set yourself.
+itself. The `gh` wrapper does the same: while the service answers, also without a
+chain (`"state":"absent"`), `gh` gets the placeholder and the API broker serves the
+static binding. The `gh` wrapper still
+chooses the repository as described above. When the service refuses the
+repository, the wrapper removes the `GH_TOKEN` that an outer wrapped `gh`
+injected, but keeps every token variable that you set yourself. Without one, it
+gives `gh` the placeholder, so the API broker answers the request with its reason
+(such as `gh: Horizon: owner/name has no GitHub grant on this worker. ...`)
+instead of `gh` asking you to sign in.
 
-For Git through the proxy, `access: "read"` is enforced: the proxy refuses each
-push. **Until the API broker of issue #1393 is done, the proxy guards Git only.**
-`gh-token` gives the chain's full access token for every granted repository, and
-`read` is only a routing guard there: `gh` gets the same token for a read and a
-write. That token is not limited to one repository. It can do what the GitHub
-App and your account allow on every repository that the App reaches. An agent
-can read it with `gh auth token` and then use it with `curl`, or with
-`git -c http.proxy=` past the proxy. Grant the GitHub App only the repositories
-that every agent of the cloud may use. A process
-that keeps `GH_TOKEN` in its environment for more than 8 hours uses an expired
-token; start `gh` again to get the current one.
+For Git through the proxy and `gh` through the API broker, `access: "read"` is
+enforced: a push or a change gets a refusal. No agent process holds the chain's
+access token: `gh auth token` prints the placeholder, and `curl` or
+`git -c http.proxy=` past the proxy and the broker reach GitHub without a token.
+The static token file is the exception until it moves to root-only storage: an
+agent can read it, and its token can do what its own permissions allow. The
+grants are per cloud: every agent session of the cloud uses the same grants.
 
 **Asking for more access.** An agent that needs a repository without a grant
 asks you for it with the `github_access` MCP tool. You decide in Horizon:

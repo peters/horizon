@@ -21,6 +21,10 @@
 !horizon-worker-github-agents
 !horizon-worker-github-git
 !horizon-worker-github-http
+!horizon-worker-github-api
+!horizon-worker-github-api-rest
+!horizon-worker-github-graphql
+!horizon-worker-github-graphql-policy
 !horizon-worker-browserstack
 !bin/
 bin/**
