@@ -34,6 +34,14 @@ def git(*args, **kwargs):
     subprocess.run(['git', *map(str, args)], check=True, **kwargs)
 
 
+def resolve_source_path(path):
+    try:
+        return path.resolve()
+    except RuntimeError as error:
+        # Python before 3.13 reports symlink loops as RuntimeError instead of OSError.
+        raise ValueError(str(error)) from error
+
+
 def lfs_selection(value):
     # The same rules as Horizon's source.lfs validation: lists of at most 64 patterns in
     # all, each a non-empty string of at most 256 characters without commas (git-lfs
@@ -182,7 +190,7 @@ def missing_objects(repo, revision, object_format, history):
     with tempfile.TemporaryDirectory() as scratch:
         probe = Path(scratch) / 'probe.git'
         git('init', '--bare', '-q', '--object-format=' + object_format, probe, stdout=subprocess.DEVNULL)
-        (probe / 'objects' / 'info' / 'alternates').write_text(str((repo / 'objects').resolve()) + '\n')
+        (probe / 'objects' / 'info' / 'alternates').write_text(str(resolve_source_path(repo / 'objects')) + '\n')
         # Streamed: a full history can list millions of objects.
         missing = False
         with subprocess.Popen(['git', '--git-dir', str(probe), 'rev-list', '--objects', '--missing=print',
@@ -236,7 +244,7 @@ def beside_siblings(worktree, repository):
         return False
     common = subprocess.run(['git', '-C', str(worktree), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
                             capture_output=True, text=True, check=False)
-    return common.returncode == 0 and Path(common.stdout.strip()).resolve() == repository.resolve()
+    return common.returncode == 0 and resolve_source_path(Path(common.stdout.strip())) == resolve_source_path(repository)
 
 
 def register(worktree, modules, index, origin):
@@ -265,7 +273,7 @@ def register(worktree, modules, index, origin):
 
 def checkout(worktree, alias=None):
     root = material(alias)
-    worktree = Path(worktree).resolve()
+    worktree = resolve_source_path(Path(worktree))
     alone = alias is None and (worktree == SHARED or worktree.parent in (AGENTS, Path('/workspace/companions/worktrees')))
     if not (alone or beside_siblings(worktree, root.parent / 'repository.git' if alias else Path('/workspace/repository.git'))):
         raise ValueError('Invalid agent worktree')
@@ -274,7 +282,7 @@ def checkout(worktree, alias=None):
     modules = manifest(root)['modules']
     for index, module in enumerate(modules):
         path = worktree / module['path']
-        if not path.resolve().is_relative_to(worktree):
+        if not resolve_source_path(path).is_relative_to(worktree):
             raise ValueError('Submodule checkout escapes agent worktree')
         origin = root / f'module-{index}.git'
         if not (path / '.git').exists():

@@ -15,17 +15,21 @@ SOURCE = Path(__file__).with_name('horizon-worker-source')
 
 
 class SourceErrorTests(unittest.TestCase):
-    def execute(self, root, workspace, *arguments):
+    def execute(self, root, workspace, *arguments, legacy_symlink_loop=False):
         script = root / 'horizon-worker-source'
         script.write_text(SOURCE.read_text().replace('/workspace', str(workspace)))
         runner = root / 'runner.py'
         # Disable site hooks, then install a spy instead of the real crash reporter.
         # A regression must fail the test without opening another desktop dialog.
+        legacy = ("from pathlib import Path\n"
+                  "def legacy_resolve(path):\n"
+                  "    raise RuntimeError('Symlink loop from ' + str(path))\n"
+                  "Path.resolve = legacy_resolve\n") if legacy_symlink_loop else ''
         runner.write_text("import runpy, sys\n"
                           "def crash_hook(kind, error, trace):\n"
                           "    print('CRASH_HOOK_CALLED: ' + str(error), file=sys.stderr)\n"
                           "sys.excepthook = crash_hook\n"
-                          "sys.argv.pop(0)\n"
+                          "sys.argv.pop(0)\n" + legacy +
                           "runpy.run_path(sys.argv[0], run_name='__main__')\n")
         return subprocess.run([sys.executable, '-S', str(runner), str(script), *arguments],
                               capture_output=True, timeout=30)
@@ -74,6 +78,24 @@ class SourceErrorTests(unittest.TestCase):
                 self.assertNotIn(b'CRASH_HOOK_CALLED', result.stderr)
                 self.assertNotIn(b'Traceback', result.stderr)
                 self.assertFalse((workspace / 'source' / 'manifest.json').exists())
+
+    def test_symlink_loop_requests_do_not_call_the_crash_hook(self):
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                workspace = root / 'workspace'
+                workspace.mkdir()
+                loop = root / 'loop'
+                loop.symlink_to(loop.name)
+                result = self.execute(root, workspace, 'checkout', str(loop), legacy_symlink_loop=legacy)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(result.stdout, b'')
+                self.assertIn(b'horizon-worker-source:', result.stderr)
+                if legacy:
+                    self.assertIn(b'Symlink loop', result.stderr)
+                self.assertNotIn(b'CRASH_HOOK_CALLED', result.stderr)
+                self.assertNotIn(b'Traceback', result.stderr)
+                self.assertFalse((workspace / 'source').exists())
 
     def test_malformed_manifests_do_not_call_the_crash_hook(self):
         cases = [None, [], {}, {'modules': []}, {'assets': []}]

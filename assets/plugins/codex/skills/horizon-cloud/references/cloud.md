@@ -40,7 +40,7 @@ measured validation and memory results separately from the configured minimums.
 
 ## Source transfer errors
 
-`horizon-worker-source` returns exit status 1 for an invalid request, a failed
+`horizon-worker-source` returns exit status 1 for an invalid request or source path, a failed
 Git command, or an expected source transfer error. The error appears on stderr with the
 `horizon-worker-source:` prefix. These failures do not start a desktop crash
 report. Read the error before you retry. A nonzero exit status does not mean
