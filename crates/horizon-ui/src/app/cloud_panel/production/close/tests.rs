@@ -45,27 +45,6 @@ fn add_cloud(app: &mut HorizonApp, root: &std::path::Path, state: Option<Deploym
 }
 
 #[test]
-fn closing_requires_known_idle_resources() {
-    let mut runtime = Runtime::default();
-    assert!(matches!(close_action(&runtime, false), Ok(Action::Remove)));
-    assert!(close_action(&runtime, true).is_err());
-    runtime.state = Some(deployment());
-    assert!(matches!(close_action(&runtime, true), Ok(Action::Delete)));
-    let (_, rx) = std::sync::mpsc::channel();
-    runtime.receiver = Some(rx);
-    runtime.stage = Some(Stage::Provision);
-    assert!(close_action(&runtime, true).is_err());
-    runtime.stage = Some(Stage::Ready);
-    assert!(
-        matches!(close_action(&runtime, true), Ok(Action::Delete)),
-        "ready discovery does not block closing"
-    );
-    runtime.receiver = None;
-    runtime.state_unavailable = true;
-    assert!(close_action(&runtime, true).is_err());
-}
-
-#[test]
 #[cfg(unix)] // Durable cloud records require Unix directory durability.
 fn failed_image_push_closes_without_worker_deletion_and_rechecks_storage() {
     let (temp, mut app) = test_app();
@@ -78,7 +57,7 @@ fn failed_image_push_closes_without_worker_deletion_and_rechecks_storage() {
     add_cloud(&mut app, temp.path(), Some(state));
     let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
     runtime.error = Some("error from registry: denied".into());
-    assert_eq!(close_action(runtime, true), Ok(Action::Remove));
+    assert_eq!(offer::offer(runtime, true, None).primary, Some(Primary::Remove));
 
     std::fs::write(path.join("workspace-volume.required"), "").unwrap();
     app.remove_deleted_cloud(101, &egui::Context::default());
@@ -396,4 +375,103 @@ fn a_finished_close_leaves_no_disposal_marker_behind() {
         !app.board.is_hidden_for_disposal(panel),
         "a closed cloud's panels leave nothing behind"
     );
+}
+
+#[test]
+fn a_deletion_that_cannot_start_asks_again_and_can_remove_anyway() {
+    let (temp, mut app) = test_app();
+    add_cloud(&mut app, temp.path(), Some(deployment()));
+    let panel = add_member(&mut app);
+    app.request_cloud_close(101);
+    let ctx = egui::Context::default();
+    // No settings.json: the provider cannot be reached, so the deletion cannot start.
+    app.delete_for_close(101, &ctx);
+    let close = &app.cloud_prototype.production.close;
+    assert_eq!(close.confirming, Some(101), "the dialog stays open");
+    assert!(!close.closing(101));
+    let failure = close.failed[&101].clone();
+    assert!(failure.starts_with("Could not delete the cloud resources"), "{failure}");
+    let runtime = &app.cloud_prototype.production.runtimes[&101];
+    let offer = offer::offer(runtime, true, Some(&failure));
+    assert!(offer.remove_anyway, "only now may the cloud leave without its deletion");
+
+    app.remove_cloud_anyway(101, &ctx);
+    assert!(app.cloud_prototype.groups.0.is_empty(), "the cloud is gone");
+    assert!(app.board.panel(panel).is_none(), "with its panels");
+    assert!(!app.cloud_prototype.production.runtimes.contains_key(&101));
+    assert!(app.cloud_prototype.production.close.failed.is_empty());
+    assert!(!app.cloud_close_confirmation_open());
+}
+
+#[test]
+fn a_failed_close_deletion_reopens_the_dialog_with_its_failure() {
+    let (temp, mut app) = test_app();
+    let (_panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
+    let ctx = egui::Context::default();
+    app.finish_closing_clouds(&ctx);
+    assert!(!app.cloud_close_confirmation_open(), "no dialog while deleting");
+
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
+    runtime.receiver = None;
+    runtime.error = Some("provider timed out".into());
+    app.finish_closing_clouds(&ctx);
+    let close = &app.cloud_prototype.production.close;
+    assert_eq!(close.confirming, Some(101));
+    assert_eq!(
+        close.failed[&101],
+        "Could not delete the cloud resources: provider timed out"
+    );
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1, "nothing is removed by itself");
+
+    app.cloud_prototype.production.close.confirming = None;
+    app.request_cloud_close(101);
+    assert!(
+        app.cloud_prototype.production.close.failed.is_empty(),
+        "the next × offers the deletion first again"
+    );
+}
+
+#[test]
+fn a_busy_cloud_is_not_removed_anyway() {
+    let (temp, mut app) = test_app();
+    let (_panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
+    app.remove_cloud_anyway(101, &egui::Context::default());
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+}
+
+#[test]
+fn cancel_forgets_the_failure_so_the_next_close_deletes_first() {
+    let (temp, mut app) = test_app();
+    add_cloud(&mut app, temp.path(), Some(deployment()));
+    app.request_cloud_close(101);
+    app.cloud_prototype
+        .production
+        .close
+        .failed
+        .insert(101, "Could not delete the cloud resources.".into());
+    let ctx = egui::Context::default();
+    for _ in 0..2 {
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                app.render_cloud_close_confirmation(ui.ctx());
+            })
+            .discard_textures();
+    }
+    let _ = ctx
+        .run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                ..Default::default()
+            },
+            |ui| app.render_cloud_close_confirmation(ui.ctx()),
+        )
+        .discard_textures();
+    assert!(!app.cloud_close_confirmation_open());
+    assert!(app.cloud_prototype.production.close.failed.is_empty());
 }

@@ -1,11 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+mod offer;
+
 use super::{HorizonApp, Runtime, Stage, cards::wording, lifecycle::Action};
+use offer::Primary;
 
 #[derive(Default)]
 pub(super) struct State {
     confirming: Option<u32>,
     deleting: BTreeSet<u32>,
+    /// Per cloud, what stopped its close: the dialog then offers to remove it anyway.
+    failed: BTreeMap<u32, String>,
     /// Per closing cloud, the panels that were showing when its disposal took over.
     hidden: BTreeMap<u32, Vec<String>>,
 }
@@ -37,8 +42,12 @@ impl HorizonApp {
         self.cloud_prototype.production.close.confirming.is_some()
     }
 
+    /// The × of a cloud: its close always offers to delete its resources first, so a
+    /// failure from an earlier close, possibly since retried from the card, is forgotten.
     pub(in crate::app::cloud_panel) fn request_cloud_close(&mut self, id: u32) {
-        self.cloud_prototype.production.close.confirming = Some(id);
+        let close = &mut self.cloud_prototype.production.close;
+        close.failed.remove(&id);
+        close.confirming = Some(id);
     }
 
     pub(in crate::app::cloud_panel) fn render_cloud_close_confirmation(&mut self, ctx: &egui::Context) {
@@ -47,12 +56,21 @@ impl HorizonApp {
         };
         let Some(group) = self.cloud_prototype.groups.0.iter().find(|group| group.issue == id) else {
             self.cloud_prototype.production.close.confirming = None;
+            self.cloud_prototype.production.close.failed.remove(&id);
             return;
         };
         let Some(launch) = &group.remote else { return };
+        let close = &self.cloud_prototype.production.close;
         let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
-        let choice = close_action(runtime, launch.deployment_started);
-        let mut confirmed = false;
+        let offer = offer::offer(
+            runtime,
+            launch.deployment_started,
+            close.failed.get(&id).map(String::as_str),
+        );
+        let remains = offer
+            .remove_anyway
+            .then(|| offer::remains(runtime, &launch.profile.provider));
+        let mut chosen = None;
         let mut cancelled = false;
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let modal = egui::Id::new("cloud-close-confirmation");
@@ -62,27 +80,48 @@ impl HorizonApp {
                 ui.set_width((ctx.content_rect().width() - 64.0).clamp(180.0, 460.0));
                 ui.heading(format!("Close {}?", group.title));
                 ui.add_space(10.0);
-                if matches!(choice, Ok(Action::Remove)) {
-                    ui.label("Close this cloud and its panels? No managed worker or workspace storage remains.");
-                } else {
-                    ui.label(wording::delete_confirmation(runtime));
+                match offer.primary {
+                    Some(Primary::Remove) => {
+                        ui.label(
+                            "This cloud has no worker or storage at its provider. Remove it from Horizon and close its panels?",
+                        );
+                    }
+                    Some(Primary::Delete) if offer.reason.is_none() => {
+                        ui.label(wording::delete_confirmation(runtime));
+                        ui.add_space(6.0);
+                        ui.label("The cloud is removed from Horizon once they are deleted.");
+                    }
+                    _ => {}
                 }
-                if let Err(reason) = choice {
+                if let Some(reason) = &offer.reason {
+                    ui.colored_label(crate::theme::PALETTE_RED(), reason);
+                }
+                if let Some(remains) = &remains {
                     ui.add_space(8.0);
-                    ui.label(reason);
+                    ui.label(remains);
+                    ui.label("Removing the cloud from Horizon does not delete them.");
                 }
                 ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    confirmed = ui
-                        .add_enabled(
-                            choice.is_ok(),
-                            egui::Button::new("Close cloud").fill(crate::theme::BTN_CLOSE()),
-                        )
-                        .clicked();
-                    cancelled = ui.button("Keep cloud").clicked();
+                ui.horizontal_wrapped(|ui| {
+                    let label = match offer.primary {
+                        Some(Primary::Delete) => Some("Delete cloud resources"),
+                        Some(Primary::Remove) => Some("Remove cloud"),
+                        None => None,
+                    };
+                    if let (Some(primary), Some(label)) = (offer.primary, label)
+                        && ui
+                            .add(egui::Button::new(label).fill(crate::theme::BTN_CLOSE()))
+                            .clicked()
+                    {
+                        chosen = Some(Choice::Primary(primary));
+                    }
+                    if offer.remove_anyway && ui.button("Remove from Horizon anyway").clicked() {
+                        chosen = Some(Choice::RemoveAnyway);
+                    }
+                    cancelled = ui.button("Cancel").clicked();
                 });
             });
-        let dismissed = response.should_close();
+        let dismissed = response.should_close() && chosen.is_none();
         if dismissed && escape {
             self.consume_navigation_key(
                 ctx,
@@ -92,30 +131,109 @@ impl HorizonApp {
                 ),
             );
         }
-        if cancelled || dismissed || confirmed {
+        if cancelled || dismissed {
             self.cloud_prototype.production.close.confirming = None;
+            self.cloud_prototype.production.close.failed.remove(&id);
+            return;
         }
-        if confirmed && let Ok(action) = choice {
-            match action {
-                Action::Remove => self.remove_deleted_cloud(id, ctx),
-                Action::Delete => {
-                    self.change_production_worker(id, action, ctx);
-                    if self
-                        .cloud_prototype
-                        .production
-                        .runtimes
-                        .get(&id)
-                        .is_some_and(|runtime| {
-                            runtime.receiver.is_some()
-                                && runtime.stage.is_some_and(|stage| Stage::DELETION.contains(&stage))
-                        })
-                    {
-                        self.cloud_prototype.production.close.deleting.insert(id);
-                    }
+        match chosen {
+            Some(Choice::Primary(Primary::Remove)) => {
+                if self.remove_deleted_cloud(id, ctx) {
+                    self.cloud_prototype.production.close.confirming = None;
+                } else {
+                    self.close_failed(id, "Could not remove the cloud");
                 }
-                _ => {}
+            }
+            Some(Choice::Primary(Primary::Delete)) => self.delete_for_close(id, ctx),
+            Some(Choice::RemoveAnyway) => self.remove_cloud_anyway(id, ctx),
+            None => {}
+        }
+    }
+
+    /// Removes cloud `id` from Horizon after its deletion failed or could not run,
+    /// leaving whatever its provider still holds.
+    fn remove_cloud_anyway(&mut self, id: u32, ctx: &egui::Context) {
+        self.cloud_prototype.production.close.confirming = None;
+        let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
+            return;
+        };
+        if self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&id)
+            .is_some_and(Runtime::busy)
+        {
+            return;
+        }
+        if let Some(launch) = &self.cloud_prototype.groups.0[index].remote {
+            tracing::warn!(cloud = %launch.id, "removed from Horizon while its provider resources may remain");
+        }
+        self.discard_cloud(index, ctx);
+    }
+
+    /// Starts deleting the resources of cloud `id`; the cloud closes once they are gone.
+    /// A deletion that cannot start keeps the dialog open with the reason.
+    fn delete_for_close(&mut self, id: u32, ctx: &egui::Context) {
+        self.cloud_prototype.production.close.failed.remove(&id);
+        self.change_production_worker(id, Action::Delete, ctx);
+        let started = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&id)
+            .is_some_and(|runtime| {
+                runtime.receiver.is_some() && runtime.stage.is_some_and(|stage| Stage::DELETION.contains(&stage))
+            });
+        if started {
+            self.cloud_prototype.production.close.confirming = None;
+            self.cloud_prototype.production.close.deleting.insert(id);
+        } else {
+            self.close_failed(id, "Could not delete the cloud resources");
+        }
+    }
+
+    /// Records why closing cloud `id` stopped short, and asks again unless another
+    /// cloud's close is being asked.
+    fn close_failed(&mut self, id: u32, what: &str) {
+        let error = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&id)
+            .and_then(|runtime| runtime.error.as_deref())
+            .filter(|error| *error != super::DELETED_RESOURCES_MESSAGE);
+        let reason = error.map_or_else(|| format!("{what}."), |error| format!("{what}: {error}"));
+        let close = &mut self.cloud_prototype.production.close;
+        close.failed.insert(id, reason);
+        close.confirming.get_or_insert(id);
+    }
+
+    /// Takes cloud `index` out of Horizon with its panels. Its saved record stays on disk.
+    pub(super) fn discard_cloud(&mut self, index: usize, ctx: &egui::Context) {
+        let id = self.cloud_prototype.groups.0[index].issue;
+        if self
+            .cloud_prototype
+            .fullscreen
+            .as_ref()
+            .is_some_and(|view| view.id == id)
+        {
+            self.exit_cloud_fullscreen(ctx);
+        }
+        let group = self.cloud_prototype.groups.0.remove(index);
+        for local in group.panels {
+            if let Some(panel) = self.board.panel_id_by_local_id(&local) {
+                self.board.close_panel(panel);
+                self.panel_render_caches.browser_ui_state.remove(&panel);
+                self.panel_render_caches.device_ui_state.remove(&panel);
+                self.panel_render_caches.terminal_grid_cache.remove(&panel);
             }
         }
+        self.cloud_prototype.production.runtimes.remove(&id);
+        self.cloud_prototype.production.close.failed.remove(&id);
+        super::cards::forget_log_heights(ctx, id);
+        self.save_cloud_prototype();
+        self.release_removed_cloud_workspace(&group.workspace, ctx);
     }
 
     /// The panels of a cloud being closed end with it: whichever are showing stay out of
@@ -200,32 +318,23 @@ impl HorizonApp {
                 // removal then closes them, or declines while the record still holds resources
                 // and leaves the cloud, with its panels, as it was.
                 self.restore_closing_panels(id);
-                self.remove_deleted_cloud(id, ctx);
+                if !self.remove_deleted_cloud(id, ctx) {
+                    self.close_failed(id, "Could not remove the cloud");
+                }
             } else {
-                // The deletion stopped short: the cloud stays, with its failure in the header.
+                // The deletion stopped short: the cloud stays, with its failure in the header,
+                // and the dialog asks again, now offering to remove it anyway.
                 self.restore_closing_panels(id);
+                self.close_failed(id, "Could not delete the cloud resources");
             }
         }
     }
 }
 
-fn close_action(runtime: &Runtime, deployment_started: bool) -> Result<Action, &'static str> {
-    if runtime.busy() {
-        return Err("Wait for the current cloud operation to finish before closing.");
-    }
-    if runtime.state_unavailable || (runtime.state.is_none() && deployment_started) {
-        return Err("Cloud resource state is unavailable. Reconnect or check the provider before closing.");
-    }
-    Ok(
-        if runtime.state.as_ref().is_none_or(|state| {
-            state.stage == Stage::Deleted
-                || (state.operation == horizon_core::cloud_runtime::CreateState::Prepared && state.spec.is_none())
-        }) {
-            Action::Remove
-        } else {
-            Action::Delete
-        },
-    )
+#[derive(Clone, Copy)]
+enum Choice {
+    Primary(Primary),
+    RemoveAnyway,
 }
 
 #[cfg(test)]

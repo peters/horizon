@@ -461,9 +461,11 @@ impl HorizonApp {
         });
     }
 
-    pub(super) fn remove_deleted_cloud(&mut self, id: u32, ctx: &egui::Context) {
+    /// Removes cloud `id` once its saved record holds no provider resources. Returns
+    /// whether it was removed; otherwise the card says why.
+    pub(super) fn remove_deleted_cloud(&mut self, id: u32, ctx: &egui::Context) -> bool {
         let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
-            return;
+            return false;
         };
         if self
             .cloud_prototype
@@ -472,17 +474,19 @@ impl HorizonApp {
             .get(&id)
             .is_some_and(|runtime| runtime.receiver.is_some())
         {
-            return;
+            return false;
         }
         let Some(launch) = self.cloud_prototype.groups.0[index].remote.as_ref() else {
-            return;
+            return false;
         };
-        let Some(root) = &self.cloud_prototype.root else { return };
+        let Some(root) = &self.cloud_prototype.root else {
+            return false;
+        };
         let store = match cloud_runtime::state::cloud_directory(root, &launch.id).and_then(|path| Store::lock(&path)) {
             Ok(store) => store,
             Err(error) => {
                 self.cloud_removal_error(id, error.to_string());
-                return;
+                return false;
             }
         };
         let allowed = match store.load() {
@@ -490,13 +494,13 @@ impl HorizonApp {
                 Ok(allowed) => allowed,
                 Err(error) => {
                     self.cloud_removal_error(id, error.to_string());
-                    return;
+                    return false;
                 }
             },
             Ok(None) => !launch.deployment_started,
             Err(error) => {
                 self.cloud_removal_error(id, error.to_string());
-                return;
+                return false;
             }
         };
         if !allowed {
@@ -504,29 +508,10 @@ impl HorizonApp {
                 id,
                 "Delete the worker and workspace storage before removing this cloud".into(),
             );
-            return;
+            return false;
         }
-        if self
-            .cloud_prototype
-            .fullscreen
-            .as_ref()
-            .is_some_and(|view| view.id == id)
-        {
-            self.exit_cloud_fullscreen(ctx);
-        }
-        let group = self.cloud_prototype.groups.0.remove(index);
-        for local in group.panels {
-            if let Some(panel) = self.board.panel_id_by_local_id(&local) {
-                self.board.close_panel(panel);
-                self.panel_render_caches.browser_ui_state.remove(&panel);
-                self.panel_render_caches.device_ui_state.remove(&panel);
-                self.panel_render_caches.terminal_grid_cache.remove(&panel);
-            }
-        }
-        self.cloud_prototype.production.runtimes.remove(&id);
-        super::cards::forget_log_heights(ctx, id);
-        self.save_cloud_prototype();
-        self.release_removed_cloud_workspace(&group.workspace, ctx);
+        self.discard_cloud(index, ctx);
+        true
     }
     fn cloud_removal_error(&mut self, id: u32, message: String) {
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {

@@ -885,6 +885,21 @@ then, the panel shows that Horizon reconnects the cloud. When the cloud is
 stopped, the panel shows that the cloud is stopped and that **Resume worker** on
 the card restores the panel.
 
+### Close a cloud
+
+The **×** on the header of a cloud opens a dialog. If the cloud has a worker or
+storage at its provider, the primary action is **Delete cloud resources**.
+Horizon deletes them in the background, and the card shows the steps. When the
+deletion is complete, Horizon removes the cloud and its panels. A cloud that
+has no worker or storage shows **Remove cloud** instead.
+
+If the deletion fails, or if Horizon cannot read the resource state of the
+cloud, the dialog shows the reason and **Remove from Horizon anyway**. This
+action removes the cloud and its panels from Horizon, but it does not delete
+the resources at the provider. The dialog names the resources that can remain.
+They can cost money until you delete them at the provider. Horizon keeps the
+state directory of the cloud. **Cancel** keeps the cloud.
+
 ### Parked terminals
 
 When no terminal of a ready cloud is on the screen for 2 minutes, Horizon parks
