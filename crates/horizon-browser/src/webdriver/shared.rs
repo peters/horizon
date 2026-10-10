@@ -109,12 +109,10 @@ impl GroupState {
         if self.native_flag_decided {
             return Ok(());
         }
-        let disclosure = self
-            .launch_identity
-            .as_ref()
-            .map(|identity| identity.disclosure)
-            .unwrap_or_default();
-        if disclosure != crate::AutomationDisclosurePolicy::MinimizeCommonSignals {
+        let allow_privileged_clear = self.launch_identity.as_ref().is_some_and(|identity| {
+            identity.system_access && identity.disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals
+        });
+        if !allow_privileged_clear {
             self.native_flag_decided = true;
             return Ok(());
         }
@@ -971,6 +969,7 @@ mod tests {
         let mut state = GroupState::default();
         let config = crate::BrowserConfig {
             backend: crate::BackendKind::FirefoxBidi,
+            firefox_system_access: true,
             ..crate::BrowserConfig::default()
         };
         state.pin_launch(&config, "group", false).expect("pin");
@@ -1065,6 +1064,22 @@ mod tests {
         assert!(!state.native_automation_flag_cleared);
         assert!(!state.native_flag_decided);
         assert_eq!(server.recorded().len(), 3);
+    }
+
+    #[test]
+    fn shared_process_skips_the_native_flag_without_system_access() {
+        let server = Server::start(vec![]);
+        let http = HttpClient::new(([127, 0, 0, 1], server.port).into()).expect("client");
+        let mut state = GroupState::default();
+        let config = crate::BrowserConfig {
+            backend: crate::BackendKind::FirefoxBidi,
+            ..crate::BrowserConfig::default()
+        };
+        state.pin_launch(&config, "group", false).expect("pin");
+        state.clear_native_automation_flag(&http, "session").expect("skip");
+        assert!(!state.native_automation_flag_cleared);
+        assert!(state.native_flag_decided);
+        assert!(server.recorded().is_empty());
     }
 
     #[test]

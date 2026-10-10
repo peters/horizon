@@ -1172,6 +1172,30 @@ mod tests {
         assert!(!geckodriver_allows_system_access(&browser_default_config));
     }
 
+    #[test]
+    fn native_flag_clear_requires_the_system_access_opt_in() {
+        let minimized = BrowserConfig {
+            backend: BackendKind::FirefoxBidi,
+            ..BrowserConfig::default()
+        };
+        assert!(!super::startup::firefox_attempts_native_flag_clear(&minimized, true));
+        let opted_in = BrowserConfig {
+            firefox_system_access: true,
+            ..minimized.clone()
+        };
+        assert!(super::startup::firefox_attempts_native_flag_clear(&opted_in, true));
+        assert!(!super::startup::firefox_attempts_native_flag_clear(&opted_in, false));
+        let browser_default = BrowserConfig {
+            automation_disclosure: crate::AutomationDisclosurePolicy::BrowserDefault,
+            firefox_system_access: true,
+            ..minimized
+        };
+        assert!(!super::startup::firefox_attempts_native_flag_clear(
+            &browser_default,
+            true
+        ));
+    }
+
     fn geckodriver_allows_system_access(config: &crate::BrowserConfig) -> bool {
         super::super::service::firefox_service_arguments(config, 9, 10, true)
             .iter()

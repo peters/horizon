@@ -232,8 +232,7 @@ pub(super) fn establish_bidi(
         true
     } else if shared {
         false
-    } else if firefox_bidi && config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
-    {
+    } else if firefox_attempts_native_flag_clear(&config.browser, firefox_bidi) {
         match clear_firefox_native_automation_flag(host.transport(), session_id) {
             FirefoxNativeFlagClear::Cleared => true,
             FirefoxNativeFlagClear::Unavailable(error) => {
@@ -287,6 +286,16 @@ pub(super) fn establish_bidi(
         automation_ws,
         disclosure,
     })
+}
+
+/// The privileged chrome-context clear runs only for opted-in local Firefox.
+///
+/// Older Firefox accepted chrome context without `--allow-system-access`.
+/// Gating only the geckodriver argument would still clear the native flags.
+pub(super) fn firefox_attempts_native_flag_clear(config: &crate::BrowserConfig, firefox_bidi: bool) -> bool {
+    firefox_bidi
+        && config.firefox_system_access
+        && config.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
 }
 
 /// Firefox `BiDi` is a local-host mode only; see [`super::Driver::firefox_bidi`].
