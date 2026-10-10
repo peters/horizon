@@ -36,7 +36,7 @@ fn config(text: &str) -> CloudConfig {
     CloudConfig::parse(text).unwrap()
 }
 
-fn texts(form: &Production) -> (bool, Vec<String>) {
+fn texts(form: &mut Production) -> (bool, Vec<String>) {
     let mut chosen = false;
     let output = egui::Context::default()
         .run_ui(egui::RawInput::default(), |ui| chosen = notes(ui, form))
@@ -52,17 +52,25 @@ fn texts(form: &Production) -> (bool, Vec<String>) {
     (chosen, texts)
 }
 
+fn plain_intent(workspace: WorkspaceId, gpu: bool) -> Intent {
+    Intent {
+        workspace,
+        gpu,
+        chosen_for: None,
+        no_gpu: false,
+        choices: Choices::default(),
+        root: None,
+        keep: false,
+        error: None,
+    }
+}
+
 #[test]
 fn cloud_gpu_takes_the_first_gpu_profile_of_each_repository_or_its_default() {
     let (_temp, mut app) = test_app();
     let workspace = app.board.create_workspace("cloud");
     let form = &mut app.cloud_prototype.production;
-    let intent = |gpu| Intent {
-        workspace,
-        gpu,
-        chosen_for: None,
-        no_gpu: false,
-    };
+    let intent = |gpu| plain_intent(workspace, gpu);
     form.new_workspace = Some(intent(true));
     form.repository = "/synthetic/cpu-only".into();
     assert_eq!(
@@ -184,4 +192,59 @@ fn a_session_switch_also_ends_the_account_setup_of_a_first_cloud() {
         before,
         "nothing empty is saved with the board"
     );
+}
+
+#[test]
+fn a_kept_choice_wins_over_what_the_repository_asks_for() {
+    let (_temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("cloud");
+    let root = tempfile::tempdir().unwrap();
+    let repository = "/synthetic/project";
+    let form = &mut app.cloud_prototype.production;
+    form.repository = repository.into();
+    form.profiles = Some(config(CPU_ONLY));
+    let mut intent = plain_intent(workspace, false);
+    intent.root = Some(root.path().into());
+    // Nothing is kept unless the person asks for it.
+    keep(&mut intent, repository, WorkspacePlacement::Local);
+    assert_eq!(Choices::load(root.path()).get(repository), None);
+    form.new_workspace = Some(intent);
+    let (_, shown) = texts(form);
+    assert!(
+        shown.iter().any(|text| text == "Keep my choice for this repository"),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|text| text == "Open on This PC instead"), "{shown:?}");
+
+    let intent = form.new_workspace.as_mut().unwrap();
+    intent.keep = true;
+    keep(intent, repository, WorkspacePlacement::Local);
+    assert_eq!(
+        Choices::load(root.path()).get(repository),
+        Some(WorkspacePlacement::Local)
+    );
+    let (chosen, shown) = texts(form);
+    assert!(!chosen);
+    assert!(
+        shown.iter().any(|text| text == "You keep This PC for this repository."),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|text| text == "Open on This PC"),
+        "a kept This PC offers it"
+    );
+
+    // A kept Cloud hides the This PC offer of a repository with placement: local.
+    keep(
+        form.new_workspace.as_mut().unwrap(),
+        repository,
+        WorkspacePlacement::Cloud,
+    );
+    form.profiles = Some(config(&format!("{CPU_ONLY}placement: local\n")));
+    let (_, shown) = texts(form);
+    assert!(
+        shown.iter().any(|text| text == "You keep Cloud for this repository."),
+        "{shown:?}"
+    );
+    assert!(!shown.iter().any(|text| text == "Open on This PC"), "{shown:?}");
 }

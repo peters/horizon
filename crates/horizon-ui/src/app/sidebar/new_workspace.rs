@@ -17,8 +17,8 @@ pub(in crate::app) enum NewWorkspace {
 }
 
 impl NewWorkspace {
-    /// In the order the menu shows them, the default first.
-    pub(in crate::app) const ALL: [Self; 3] = [Self::Cloud, Self::CloudGpu, Self::ThisPc];
+    /// In the order the menu shows them: the default first, and This PC second.
+    pub(in crate::app) const ALL: [Self; 3] = [Self::Cloud, Self::ThisPc, Self::CloudGpu];
 
     pub(in crate::app) fn label(self) -> &'static str {
         match self {
@@ -41,8 +41,9 @@ impl NewWorkspace {
     }
 }
 
-/// The menu that `button` opens. Without cloud workspaces ready, only This PC can be chosen.
-pub(in crate::app) fn menu(button: &Response, cloud_ready: bool) -> Option<NewWorkspace> {
+/// The menu that `button` opens, with `machine` under Cloud: the machine and its hourly
+/// price. Without cloud workspaces ready, only This PC can be chosen.
+pub(in crate::app) fn menu(button: &Response, cloud_ready: bool, machine: Option<&str>) -> Option<NewWorkspace> {
     let mut chosen = None;
     // The sidebar is drawn above the canvas, so the menu goes on the Tooltip order and
     // above the sidebar's own layer, as the sidebar's other menus do.
@@ -61,6 +62,12 @@ pub(in crate::app) fn menu(button: &Response, cloud_ready: bool) -> Option<NewWo
                 chosen = Some(choice);
                 ui.close();
             }
+            if choice == NewWorkspace::Cloud
+                && enabled
+                && let Some(machine) = machine
+            {
+                ui.label(RichText::new(machine).size(11.5).color(theme::FG_DIM()));
+            }
         }
     });
     if shown.is_some() {
@@ -72,6 +79,22 @@ pub(in crate::app) fn menu(button: &Response, cloud_ready: bool) -> Option<NewWo
 }
 
 impl HorizonApp {
+    /// The New workspace menu of `button`. Machine prices are asked for only while it is open.
+    pub(in crate::app) fn new_workspace_menu(&mut self, button: &Response) -> Option<NewWorkspace> {
+        let ready = self.new_cloud_workspace_ready();
+        let open = button.clicked() || Popup::is_id_open(&button.ctx, Popup::default_response_id(button));
+        #[cfg(feature = "cloud-workspaces")]
+        let machine = (ready && open)
+            .then(|| self.new_cloud_machine_line(&button.ctx))
+            .flatten();
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let machine: Option<String> = {
+            let _ = open;
+            None
+        };
+        menu(button, ready, machine.as_deref())
+    }
+
     /// Whether the New workspace menu can offer the cloud.
     pub(in crate::app) fn new_cloud_workspace_ready(&self) -> bool {
         #[cfg(feature = "cloud-workspaces")]
@@ -112,10 +135,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_cloud_comes_first_and_this_pc_last() {
+    fn the_cloud_comes_first_and_this_pc_second() {
         assert_eq!(
             NewWorkspace::ALL.map(NewWorkspace::label),
-            ["Cloud", "Cloud GPU", "This PC"]
+            ["Cloud", "This PC", "Cloud GPU"]
         );
         assert!(NewWorkspace::Cloud.is_cloud() && NewWorkspace::CloudGpu.is_cloud());
         assert!(!NewWorkspace::ThisPc.is_cloud());
