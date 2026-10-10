@@ -11,6 +11,8 @@ use zeroize::Zeroizing;
 
 mod activation;
 mod locking;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod macos;
 mod snapshot;
 #[cfg(windows)]
 mod windows;
@@ -273,6 +275,8 @@ fn private_directory(path: &Path) -> Result<()> {
         }
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
+    #[cfg(target_os = "macos")]
+    macos::protect(path)?;
     verify_directory(path)?;
     Ok(())
 }
@@ -294,6 +298,8 @@ fn verify_directory(path: &Path) -> Result<()> {
     }
     #[cfg(windows)]
     windows::verify(path)?;
+    #[cfg(target_os = "macos")]
+    macos::verify(path)?;
     Ok(())
 }
 
@@ -306,6 +312,9 @@ fn private_file(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut temp = tempfile::Builder::new().prefix(".chatgpt-").tempfile_in(directory)?;
     #[cfg(windows)]
     windows::protect(temp.path())?;
+    // Remove inherited ACLs before any credential bytes reach the temporary file.
+    #[cfg(target_os = "macos")]
+    macos::protect(temp.path())?;
     temp.write_all(bytes)?;
     temp.flush()?;
     temp.as_file().sync_all()?;
@@ -351,6 +360,8 @@ fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
     }
     #[cfg(windows)]
     windows::verify(path)?;
+    #[cfg(target_os = "macos")]
+    macos::verify(path)?;
     let file = options.open(path)?;
     let metadata = file.metadata()?;
     #[cfg(unix)]

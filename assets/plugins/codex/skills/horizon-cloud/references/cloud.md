@@ -197,6 +197,9 @@ account with no grant shows **Needs plan access**. On Windows, the system
 Windows PowerShell installation must be available. Horizon verifies a
 protected discretionary access control list (DACL) for the current user
 before it writes or reads credentials.
+On macOS, the system `/bin/ls` and `/bin/chmod` must be available.
+Credential readers reject extended ACLs on directories and files. Writers remove
+extended ACLs from owned credential objects before they write token bytes.
 A cancelled attempt does not open a new authorization page.
 On Unix, credential reads reject a directory that another user owns or can access.
 Save checks the current saved account again. If another window changes or signs
