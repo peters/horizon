@@ -109,7 +109,9 @@ mod tests {
         choices.set(root.path(), &path, None).unwrap();
         assert_eq!(Choices::load(root.path()).get(&path), None);
         assert!(choices.set(root.path(), "  ", Some(WorkspacePlacement::Local)).is_err());
-        assert_ne!(key("/work/project.git"), key("/work/project"), "a folder keeps .git");
+        let folder = repository.path().join("project");
+        let checkout = format!("{}.git", folder.display());
+        assert_ne!(key(&checkout), key(&folder.to_string_lossy()), "a folder keeps .git");
         let home = crate::dir_search::expand_tilde("~/code/app");
         assert_eq!(key("~/code/app"), key(&home.to_string_lossy()));
     }
