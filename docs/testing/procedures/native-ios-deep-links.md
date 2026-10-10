@@ -25,6 +25,9 @@ Keep credentials and evidence private. Use an isolated synthetic backend per lan
 
 ## Tasks
 
+> **CAUTION:** USE ONLY THE APPROVED DEVICE QUOTA.
+> This paid operation allocates devices and deletes its owned uploads after completion.
+
 1. Run a recipe with `deep_link` on the declared real iPhone matrix.
 
    Result: The driver sends the declared URL and bundle ID once.
@@ -52,10 +55,15 @@ Keep credentials and evidence private. Use an isolated synthetic backend per lan
    slow **no such alert** replies. The successful URL command must stay successful.
    Alert checks and any confirmation must finish within 15 seconds.
 
-6. Examine the terminal report and the exact cleanup receipts.
+> **CAUTION:** CLOSE ONLY THIS RUN'S OWNED RESOURCES.
+> Session closure stops the owned services. Upload deletion removes the owned artifact.
+
+6. Close this run's owned viewers. Examine the terminal report and the exact
+   cleanup receipts.
 
    Result: The report names the actual devices and the tested candidate.
-   All owned sessions, uploads, tunnels, backends, and viewers close.
+   The run has confirmed cleanup of its sessions, uploads, tunnels and backends.
+   The public viewer list confirms that this run's viewers are absent.
 
 ## Runtime limits
 

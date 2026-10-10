@@ -125,7 +125,11 @@ MCP arguments cannot replace the configured project or credentials.
 `latest-2` selects the third distinct numeric OS release in the physical-device catalog.
 A missing matrix entry causes refusal before any partial matrix starts.
 Android selects Appium 2.19.0 instead of the legacy default.
-iOS uses the provider's OS-compatible version.
+iOS 15 or later also selects Appium 2.19.0, with XCUITest 9.9.6.
+Older iOS versions keep the provider default.
+The iOS `deep_link` action requires iOS 16.4 or later, Xcode 14.3 or later,
+and XCUITest 4.17 or later. See the
+[deep-link procedure](../testing/procedures/native-ios-deep-links.md).
 
 ## 4. Declare the project
 
