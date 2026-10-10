@@ -42,5 +42,8 @@ fn every_parked_panel_gets_a_status_and_an_unreported_one_is_missing() {
     );
     // Without any recorded session, each parked panel is still missing.
     let none = every_local(&locals, &HashMap::new(), Vec::new());
-    assert!(none.iter().all(|(_, status)| status.activity == SessionActivity::Missing));
+    assert!(
+        none.iter()
+            .all(|(_, status)| status.activity == SessionActivity::Missing)
+    );
 }
