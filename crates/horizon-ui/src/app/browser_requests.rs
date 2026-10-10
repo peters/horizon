@@ -13,6 +13,7 @@ use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser
 
 use super::HorizonApp;
 use super::browser_host_io::HostIo;
+use super::browser_recovery::retired_allocations;
 use super::browser_request_claims::HOST_RETIRING;
 
 const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -197,33 +198,6 @@ struct BrowserPlacement {
     workspace: ManifestWorkspace,
 }
 
-/// A remote allocation a stamp covers, and the placement the stamp writes.
-struct StampedAllocation {
-    local_id: String,
-    allocation: horizon_core::browser::RemoteAllocation,
-    workspace: String,
-    owner: Option<String>,
-}
-
-impl StampedAllocation {
-    /// A panel moved and then closed before its stamp landed: its driver
-    /// kept the scope of the manifest as it was, which names the workspace
-    /// the panel left, while the allocation expects the one it moved to, so
-    /// no workspace could recover it. It keeps the scope this stamp would
-    /// have written, as when the stamp lands first. A scope a failed stamp
-    /// invalidated stays invalid, and without a known owner the driver's
-    /// scope stays, which refuses recovery.
-    fn keep_stamped_scope(&self) {
-        let Some(owner) = &self.owner else { return };
-        self.allocation.retain_scope(horizon_browser::RemoteAllocationScope {
-            admission_fallback: false,
-            host: manifest::host_instance().to_string(),
-            workspace: Some(self.workspace.clone()),
-            owner: Some(owner.clone()),
-        });
-    }
-}
-
 /// Outcome of stamping every browser manifest: whether any file changed and
 /// whether every manifest this host owns is now current. An incomplete sync
 /// keeps the placement fingerprint uncommitted so the next tick retries.
@@ -296,20 +270,7 @@ impl HorizonApp {
         let mut placements = browser_placements(&self.board);
         let allocations: Vec<_> = placements
             .iter()
-            .filter_map(|placement| {
-                let allocation = self.panel_remote_allocation(&placement.local_id)?;
-                allocation.expect_workspace(&placement.workspace.local_id);
-                Some(StampedAllocation {
-                    local_id: placement.local_id.clone(),
-                    allocation: allocation.clone(),
-                    workspace: placement.workspace.local_id.clone(),
-                    owner: self
-                        .browser_create_host
-                        .remote_allocations
-                        .owner(allocation)
-                        .map(str::to_string),
-                })
-            })
+            .filter_map(|placement| self.stamped_allocation(&placement.local_id, &placement.workspace.local_id))
             .collect();
         let host = &self.browser_create_host;
         if host.queued_placement == Some(placement) {
@@ -337,20 +298,11 @@ impl HorizonApp {
                 if sync.changed {
                     tracing::debug!("stamped browser manifests for a new board placement");
                 }
-                // The driver removes a manifest only after it kept its scope.
-                let retired: Vec<_> = allocations
-                    .into_iter()
-                    .filter(|stamped| !manifest::manifest_path_for_root(&root, &stamped.local_id).exists())
-                    .collect();
-                (sync, retired)
+                (sync, retired_allocations(&root, allocations))
             },
             move |app, outcome| {
                 let (sync, retired) = outcome.map_or((None, Vec::new()), |(sync, retired)| (Some(sync), retired));
-                for stamped in &retired {
-                    if app.board.panel_id_by_local_id(&stamped.local_id).is_none() {
-                        stamped.keep_stamped_scope();
-                    }
-                }
+                app.keep_stamped_scopes(&retired);
                 let host = &mut app.browser_create_host;
                 host.stamps_in_flight -= 1;
                 if host.stamps_in_flight == 0 {
