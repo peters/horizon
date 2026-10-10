@@ -64,8 +64,10 @@ ACTIONS = {'runs', 'jobs', 'workflows', 'caches', 'artifacts'}
 WORKFLOW_CHANGES = re.compile(r'/actions/workflows/[^/]{1,256}/dispatches')
 # Parts of a repository that a grant does not read either: its access, hooks, keys, secrets,
 # variables (whose values a read returns), environments, runners and branch protection.
+# Forks, topics and rulesets are refused too, as their changes are.
 PRIVATE_READS = {'hooks', 'keys', 'collaborators', 'invitations', 'environments', 'dependabot', 'codespaces',
-                 'secret-scanning', 'autolinks', 'interaction-limits', 'teams'}
+                 'secret-scanning', 'autolinks', 'interaction-limits', 'teams', 'forks', 'topics', 'rulesets',
+                 'rules'}
 PRIVATE_ACTIONS = {'secrets', 'variables', 'runners', 'permissions', 'oidc', 'organization-secrets',
                    'organization-variables'}
 
@@ -103,9 +105,15 @@ def split(target):
     return path, query
 
 
+def parts_of(rest):
+    """The segments of the path after OWNER/NAME as GitHub reads them, percent-decoded. split()
+    already refused an encoded slash, backslash, NUL or dot segment."""
+    return [urllib.parse.unquote(part) for part in rest.split('/')[1:]]
+
+
 def read_allowed(rest):
     """Whether a read grant may read the repository path after OWNER/NAME."""
-    parts = rest.split('/')[1:]
+    parts = parts_of(rest)
     if not parts:
         return True
     if parts[0] in PRIVATE_READS or parts[0] == 'branches' and 'protection' in parts[2:]:
@@ -117,7 +125,7 @@ def change_allowed(rest, method):
     """Whether a push grant may send `method` to the repository path after OWNER/NAME."""
     if method in READS:
         return True
-    parts = rest.split('/')[1:]
+    parts = parts_of(rest)
     if not parts or parts[0] not in CHANGES:
         return False
     if parts[0] == 'actions':

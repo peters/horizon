@@ -989,9 +989,10 @@ The broker does these steps for each connection:
     collaborators, hooks, keys, secrets, variables, environments, rulesets,
     runners and branch protection, a transfer and a delete of the repository.
     It also refuses reads of the repository's collaborators, invitations, teams,
-    hooks, keys, environments, branch protection, and Actions, Dependabot and
-    Codespaces secrets, variables, runners and permissions: a read of variables
-    returns their values.
+    hooks, keys, environments, forks, topics, rulesets, branch protection, and
+    Actions, Dependabot and Codespaces secrets, variables, runners and
+    permissions: a read of variables returns their values. It reads each path
+    segment percent-decoded, as GitHub does.
   - `/repositories/ID/...`, which GitHub uses in its page links. The broker asks
     GitHub for the current name of the repository for each request, and then
     applies the rules above.
