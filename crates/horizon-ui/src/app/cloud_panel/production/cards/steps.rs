@@ -226,9 +226,9 @@ fn opened(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) -> Option<StepA
             }
             super::docker::button(ui, failure);
         });
-        let retry = status.primary.and_then(super::status::Primary::retry_label);
-        if super::docker::status(ui, failure, retry) {
-            action = Some(StepAction::Retry);
+        let retry = super::next::Next::of(status).filter(|next| matches!(next, super::next::Next::Retry(_)));
+        if super::docker::status(ui, failure, retry.map(super::next::Next::label)) {
+            action = Some(StepAction::Next);
         }
         return action;
     }

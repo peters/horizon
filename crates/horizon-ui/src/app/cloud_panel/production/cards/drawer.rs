@@ -353,11 +353,9 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
                     }
                     super::docker::button(ui, failure);
                 });
-                let retry = status
-                    .primary
-                    .and_then(|primary| Some((primary.retries()?, primary.label())));
-                if super::docker::status(ui, failure, retry.map(|(_, label)| label)) {
-                    response.action = retry.map(|(action, _)| action);
+                let retry = super::next::Next::of(status).filter(|next| matches!(next, super::next::Next::Retry(_)));
+                if super::docker::status(ui, failure, retry.map(super::next::Next::label)) {
+                    response.action = retry.and_then(super::next::Next::action);
                 }
             });
         return;
