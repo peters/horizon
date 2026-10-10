@@ -12,7 +12,7 @@ from unittest import mock
 from test_github_access_requests import ALPHA
 from test_github_api_broker import BrokerTestCase
 from test_github_git_proxy import ProxyTestCase
-from test_horizon_worker_github import ACCESS, NOW, ServiceTestCase, agents, service
+from test_horizon_worker_github import ACCESS, NOW, ServiceTestCase, agents, chain, installation, service
 
 tasks = agents.tasks
 mcp = service.mcp
@@ -57,8 +57,13 @@ class ModuleTests(unittest.TestCase):
         self.assertIsNone(tasks.access(grants, 'example/extra', [21], account, self.proc.root))
         self.assertIsNone(tasks.access(grants, 'example/other', [12], account, self.proc.root))
         self.assertIsNone(tasks.access(grants, 'example/extra', [12], ['client', 'other'], self.proc.root))
-        # A socket that processes of two sessions hold gets no task grant.
+        # A socket that processes of two sessions hold gets no task grant, also when both
+        # sessions have the same grant.
         self.assertIsNone(tasks.access(grants, 'example/extra', [12, 21], account, self.proc.root))
+        both = grants + [grant('example/extra', 'push', (20, 200))]
+        self.assertEqual(tasks.access(both, 'example/extra', [21], account, self.proc.root), 'push')
+        self.assertIsNone(tasks.access(both, 'example/extra', [12, 21], account, self.proc.root))
+        self.assertEqual(tasks.access(both, 'example/extra', [11, 12], account, self.proc.root), 'push')
         self.assertIsNone(tasks.access(grants, 'example/extra', [], account, self.proc.root))
 
     def test_a_grant_ends_with_its_pane_and_never_passes_to_a_new_process_with_its_id(self):
@@ -148,6 +153,26 @@ class DecisionTests(ServiceTestCase):
         # A request from before task grants has no pane to allow.
         identifier = self.ask(ALPHA[:3] + (None,), 'example/other')['id']
         self.assertEqual(self.decide(identifier)['error'], 'session_ended')
+
+    def test_a_session_or_chain_that_changes_while_github_is_asked_gets_no_grant(self):
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        identifier = self.ask(('@2', 'agent-beta', 'codex', tasks.root(child.pid)))['id']
+
+        def session_ends(*args):
+            child.kill()
+            child.wait()
+        self.assertEqual(agents.decide(self.store, self.book, identifier, 'allow-task', now=lambda: NOW,
+                                       check=session_ends)['error'], 'session_ended')
+        self.assertEqual(self.book.read()['task_grants'], [])
+        identifier = self.ask(self.me)['id']
+
+        def another_account(*args):
+            self.install(installation(login='someone-else', chain=chain(access='ghu_other')))
+        self.assertEqual(agents.decide(self.store, self.book, identifier, 'allow-task', now=lambda: NOW,
+                                       check=another_account)['error'], 'chain_changed')
+        self.assertEqual(self.book.read()['task_grants'], [])
 
     def test_task_grants_are_bounded_and_ended_ones_are_dropped(self):
         with self.book.edit() as data:

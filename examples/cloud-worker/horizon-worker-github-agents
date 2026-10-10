@@ -455,6 +455,16 @@ def decide(store, book, identifier, decision, now=time.time, check=reachable, pr
         if code is not None:
             return failure(identifier, code)
         if decision == 'allow-task':
+            # GitHub was asked without the store lock: the chain and the session may have
+            # changed since.
+            state = store.load()[0]
+            if state is None or state['state'] != 'ok':
+                return failure(identifier, 'no_chain')
+            if not same_chain(checked, state):
+                return failure(identifier, 'chain_changed')
+            if not task_possible(record, proc):
+                record.update(status='expired', decided_at=int(current))
+                return failure(identifier, 'session_ended')
             return allow_task(data, record, result, int(current), proc)
         with store.lock():
             state = store.load()[0]

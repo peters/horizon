@@ -99,8 +99,13 @@ def access(grants, repository, pids, account, proc=PROC):
     `pids`: only when every one of them is in the same task's process tree."""
     if not grants or not pids:
         return None
-    found = {widest(grants, repository, lineage(pid, proc), account) for pid in pids}
-    return found.pop() if len(found) == 1 else None
+    roots = {tuple(grant['root']) for grant in grants}
+    # The pane of each holder that has task grants; every holder must be below the same one.
+    panes = {frozenset(roots & lineage(pid, proc)) for pid in pids}
+    if len(panes) != 1:
+        return None
+    pane = panes.pop()
+    return widest(grants, repository, pane, account) if len(pane) == 1 else None
 
 
 def holders(inode, proc=PROC):
