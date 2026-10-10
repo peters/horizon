@@ -2,20 +2,20 @@ use super::super::super::Runtime;
 use super::*;
 use horizon_core::cloud_runtime::state::Deployment;
 
-fn deployment(provider: &str, stage: &str, operation: serde_json::Value, spec: bool) -> Deployment {
-    let mut state = serde_json::json!({
+fn deployment(provider: &str, stage: &str, operation: &serde_json::Value, spec: bool) -> Deployment {
+    let mut record = serde_json::json!({
         "version": 1, "cloud_id": "fixture", "repository": "/synthetic", "revision": "a".repeat(40),
         "profile": {"provider": provider, "image": "registry.example/worker", "cpu": 4, "memory_gb": 8},
         "stage": stage, "operation": operation, "sessions": []
     });
     if spec {
-        state["spec"] = serde_json::json!({
-            "operation_id": "fixture", "image_digest": "sha256:fixture", "profile": state["profile"].clone(),
+        record["spec"] = serde_json::json!({
+            "operation_id": "fixture", "image_digest": "sha256:fixture", "profile": record["profile"].clone(),
             "public_key": "ssh-ed25519 fixture", "registry_auth_id": null,
             "gpu_types": [], "cpu_flavors": [], "data_centers": [],
         });
     }
-    serde_json::from_value(state).unwrap()
+    serde_json::from_value(record).unwrap()
 }
 
 fn bound(provider: &str) -> Runtime {
@@ -23,7 +23,7 @@ fn bound(provider: &str) -> Runtime {
         state: Some(deployment(
             provider,
             "Ready",
-            serde_json::json!({"state": "bound", "worker_id": "worker-7"}),
+            &serde_json::json!({"state": "bound", "worker_id": "worker-7"}),
             true,
         )),
         ..Runtime::default()
@@ -73,7 +73,7 @@ fn a_cloud_without_resources_is_removed_directly() {
         state: Some(deployment(
             "runpod",
             "Deleted",
-            serde_json::json!({"state": "terminated", "worker_id": "worker-7"}),
+            &serde_json::json!({"state": "terminated", "worker_id": "worker-7"}),
             true,
         )),
         ..Runtime::default()
@@ -87,7 +87,7 @@ fn a_cloud_without_resources_is_removed_directly() {
         state: Some(deployment(
             "runpod",
             "Push",
-            serde_json::json!({"state": "prepared"}),
+            &serde_json::json!({"state": "prepared"}),
             false,
         )),
         ..Runtime::default()
@@ -105,7 +105,7 @@ fn a_refused_removal_without_a_worker_request_offers_only_remove_anyway() {
         state: Some(deployment(
             "runpod",
             "Push",
-            serde_json::json!({"state": "prepared"}),
+            &serde_json::json!({"state": "prepared"}),
             false,
         )),
         ..Runtime::default()
@@ -177,7 +177,7 @@ fn what_may_remain_is_named_where_the_record_knows_it() {
         state: Some(deployment(
             "runpod",
             "Stopped",
-            serde_json::json!({"state": "terminated", "worker_id": "worker-7"}),
+            &serde_json::json!({"state": "terminated", "worker_id": "worker-7"}),
             true,
         )),
         ..Runtime::default()
