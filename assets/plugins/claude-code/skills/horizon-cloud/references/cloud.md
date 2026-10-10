@@ -178,6 +178,9 @@ Empty access and refresh tokens are rejected before storage.
 A private journal lets Horizon recover an interrupted sign-in publication.
 Credential readers hold the session lock until all records and the active account
 selection are read. A concurrent sign-in cannot change part of that snapshot.
+If the selected account record is missing, Horizon refuses the store. It does
+not select another saved account. The newest record is used only when there is
+no active account selection.
 A browser sign-in can finish only if the selected account and its saved record
 remain unchanged. If another sign-in, sign-out or refresh changes them, start
 a new sign-in attempt.

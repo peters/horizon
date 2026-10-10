@@ -74,12 +74,16 @@ fn selected_registration(
 ) -> Result<Option<Record>> {
     let mut found = read_records(lock)?;
     let active = read_pointer(lock.root())?;
-    let index = active
-        .as_ref()
-        .and_then(|id| found.iter().position(|record| &record.client_id == id));
-    Ok(index
-        .map(|index| found.remove(index))
-        .or_else(|| found.into_iter().next()))
+    match active {
+        Some(id) => {
+            let index = found
+                .iter()
+                .position(|record| record.client_id == id)
+                .ok_or(Error::Malformed)?;
+            Ok(Some(found.remove(index)))
+        }
+        None => Ok(found.into_iter().next()),
+    }
 }
 
 fn read_records(lock: &SessionLock) -> Result<Vec<Record>> {
@@ -105,6 +109,47 @@ fn read_records(lock: &SessionLock) -> Result<Vec<Record>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cloud_runtime::Cancellation;
+
+    #[test]
+    fn a_dangling_selection_never_uses_another_account() {
+        let root = tempfile::tempdir().unwrap();
+        super::super::save(root.path(), &super::super::tests::test_record("client-a", "account-a")).unwrap();
+        super::super::save(root.path(), &super::super::tests::test_record("client-b", "account-b")).unwrap();
+        super::super::set_active(root.path(), "client-a").unwrap();
+        fs::remove_file(super::super::file(root.path(), "client-a")).unwrap();
+        let remaining_path = super::super::file(root.path(), "client-b");
+        let remaining = fs::read(&remaining_path).unwrap();
+        let pointer = directory(root.path()).join("active");
+        let selected = fs::read(&pointer).unwrap();
+
+        assert!(matches!(default_registration(root.path()), Err(Error::Malformed)));
+        assert!(matches!(
+            super::super::super::status(root.path()),
+            Err(Error::Malformed)
+        ));
+        for expected in [None, Some("client-b")] {
+            assert!(matches!(
+                super::super::super::lock_plan(root.path(), expected),
+                Err(Error::Malformed)
+            ));
+        }
+        assert!(matches!(
+            super::super::super::start(
+                root.path(),
+                |_| panic!("a dangling selection must not open a browser"),
+                Cancellation::default()
+            ),
+            Err(Error::Malformed)
+        ));
+        assert_eq!(fs::read(&remaining_path).unwrap(), remaining);
+        assert_eq!(fs::read(&pointer).unwrap(), selected);
+
+        fs::remove_file(remaining_path).unwrap();
+        assert!(matches!(default_registration(root.path()), Err(Error::Malformed)));
+        fs::remove_file(pointer).unwrap();
+        assert!(default_registration(root.path()).unwrap().is_none());
+    }
 
     #[test]
     fn a_writer_cannot_change_selection_between_the_records_and_pointer_read() {

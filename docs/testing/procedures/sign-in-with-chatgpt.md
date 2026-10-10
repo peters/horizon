@@ -171,6 +171,9 @@ Settings save requires a provider. Do not create or deploy a cloud.
 - The snapshot test must prevent a concurrent writer between the record read and
   the active account read. Concurrent readers must fail closed while the writer
   holds the session lock.
+- If the active account record is missing, status, sign-in and settings save
+  must fail. Another saved account must not become selected. The remaining
+  credential records and the active account selection must not change.
 - A second first-time sign-in must not finish after another account becomes
   active. A pending sign-in must refuse changed tokens, sign-out or selection.
   The winning record and account selection must remain unchanged.
