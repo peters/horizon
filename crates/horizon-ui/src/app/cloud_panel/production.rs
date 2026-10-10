@@ -70,6 +70,8 @@ const BILLING: cloud_runtime::billing::Fetch = |_, _, _, _| Err(cloud_runtime::b
 #[derive(Default)]
 pub(super) struct Production {
     bulk_stop: bulk_stop::State,
+    /// Cloud list requests of agents, answered in the next frame.
+    list_requests: Vec<horizon_core::browser::manifest::provider_usage::UsageRequest>,
     close: close::State,
     pub(in crate::app) tailnets: crate::app::tailnets::State,
     tailnet: Option<String>,

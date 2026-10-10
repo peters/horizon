@@ -157,6 +157,13 @@ It also tests live views, evidence and cleanup after cancellation or a native ho
 
    Result: Exact provider acknowledgements and local receipts release the recorded resources.
 
+   For legacy receipts after a confirmed Linux reboot, follow the
+   [reboot recovery procedure](../../architecture/remote-device-testing.md#recover-local-resources-after-a-linux-reboot).
+   Supply all pending owned `run` and `tunnel` IDs, also records with no dispatched resource.
+   The host requires the existing journal and original owner binding.
+   Missing or extra IDs cause refusal before cleanup starts.
+   A later receipt or provider refusal keeps the affected resource held.
+
 4. If recovery remains uncertain, keep the original owner and receipts.
 
    Result: No new allocation bypasses an uncertain operation. A bounded repeat reconciles only the same operations.

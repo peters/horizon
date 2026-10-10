@@ -5,7 +5,7 @@ mod rows;
 mod toolbar;
 
 pub(in crate::app) use list::{IdleCloud, ListCache};
-pub(in crate::app) use new_workspace::{NewWorkspace, menu as new_workspace_menu};
+pub(in crate::app) use new_workspace::NewWorkspace;
 
 use std::collections::HashMap;
 
@@ -240,7 +240,7 @@ impl HorizonApp {
                 let new_workspace = ui
                     .add(util::chrome_button("New").min_size(Vec2::new(46.0, 24.0)))
                     .on_hover_text("Create a new workspace: in the cloud, or on This PC.");
-                if let Some(choice) = new_workspace::menu(&new_workspace, self.new_cloud_workspace_ready()) {
+                if let Some(choice) = self.new_workspace_menu(&new_workspace) {
                     actions.create_workspace = Some(choice);
                 }
             });

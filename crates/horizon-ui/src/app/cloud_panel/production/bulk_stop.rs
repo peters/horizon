@@ -14,6 +14,17 @@ use crate::app::sidebar::IdleCloud;
 /// sessions. When no read arrives in this time, the cloud keeps running.
 const STATUS_WAIT: Duration = Duration::from_secs(30);
 
+/// What a stop of an idle cloud did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum IdleStop {
+    /// The worker stops now.
+    Stopping,
+    /// A parked cloud waits for a new status read of its sessions.
+    Waiting,
+    /// The cloud is no longer idle and keeps running.
+    Busy,
+}
+
 #[derive(Default)]
 pub(super) struct State {
     /// The open dialog; `None` while it is closed.
@@ -138,21 +149,30 @@ impl HorizonApp {
         }
     }
 
-    /// Stops the workers of the clouds chosen in `dialog`. The list is up to a second
-    /// old, so a cloud that got busy since keeps running. The status of a parked cloud
-    /// can be older: its stop waits for a new read.
+    /// Stops the workers of the clouds chosen in `dialog`.
     fn stop_chosen(&mut self, dialog: &Dialog, ctx: &egui::Context, now: Instant) {
         for id in dialog.chosen().map(|idle| idle.cloud.id) {
-            // A parked cloud without a parked terminal has no session status to wait for.
-            let reads = self.cloud_has_parked_terminal(id);
-            let runtime = self.cloud_prototype.production.runtimes.get_mut(&id);
-            if let Some(runtime) = runtime.filter(|runtime| reads && runtime.parking.is_parked()) {
-                runtime.parking.read_now(now);
-                self.cloud_prototype.production.bulk_stop.waiting.push((id, now));
-                ctx.request_repaint();
-            } else if self.cloud_can_stop_now(id) {
-                self.change_production_worker(id, Action::Stop, ctx);
-            }
+            self.stop_idle_cloud(id, ctx, now);
+        }
+    }
+
+    /// Stops the worker of cloud `id`, which was idle when the user or an agent chose
+    /// it. The list is up to a second old, so a cloud that got busy since keeps
+    /// running. The status of a parked cloud can be older: its stop waits for a new read.
+    pub(super) fn stop_idle_cloud(&mut self, id: u32, ctx: &egui::Context, now: Instant) -> IdleStop {
+        // A parked cloud without a parked terminal has no session status to wait for.
+        let reads = self.cloud_has_parked_terminal(id);
+        let runtime = self.cloud_prototype.production.runtimes.get_mut(&id);
+        if let Some(runtime) = runtime.filter(|runtime| reads && runtime.parking.is_parked()) {
+            runtime.parking.read_now(now);
+            self.cloud_prototype.production.bulk_stop.waiting.push((id, now));
+            ctx.request_repaint();
+            IdleStop::Waiting
+        } else if self.cloud_can_stop_now(id) {
+            self.change_production_worker(id, Action::Stop, ctx);
+            IdleStop::Stopping
+        } else {
+            IdleStop::Busy
         }
     }
 
