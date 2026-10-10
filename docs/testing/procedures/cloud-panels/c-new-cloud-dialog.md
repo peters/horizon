@@ -3,7 +3,7 @@ procedure: cloud-panels-c-new-cloud-dialog
 feature: Cloud panels smoke test, area C (New cloud dialog and worker picker)
 platforms: [linux]
 cost: rents compute   # C08 if the watch starts, C31 through D01 and D02
-destructive: no
+destructive: yes   # C32 deletes the clone and owner folder it made in the private home
 secrets: [RunPod API key in Cloud settings, Hetzner Cloud API token in Cloud settings]
 owner: peters
 ---

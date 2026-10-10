@@ -151,7 +151,7 @@ const CANDIDATES: u32 = 25;
 /// The folders a clone of `remote` can land in, `parent/<owner>/<name>` first, in the
 /// order they are tried.
 fn candidates<'a>(parent: &'a Path, remote: &'a Remote) -> impl Iterator<Item = PathBuf> + 'a {
-    named(clone_folder(parent, remote), &remote.name)
+    named(clone_folder(parent, remote), portable(&remote.name))
 }
 
 /// The folder a clone of `remote` goes in: its owner's, unless a folder on the way there is
@@ -197,11 +197,11 @@ fn portable(segment: &str) -> String {
 /// Where clones went before they were kept by owner, `parent/<name>` first: only searched,
 /// so an earlier clone is found again, and never cloned into.
 fn earlier<'a>(parent: &'a Path, remote: &'a Remote) -> impl Iterator<Item = PathBuf> + 'a {
-    named(parent.to_owned(), &remote.name)
+    // By the name as it was, which an earlier Horizon used as the folder's name.
+    named(parent.to_owned(), remote.name.clone())
 }
 
-fn named(folder: PathBuf, name: &str) -> impl Iterator<Item = PathBuf> {
-    let name = portable(name);
+fn named(folder: PathBuf, name: String) -> impl Iterator<Item = PathBuf> {
     (1..=CANDIDATES).map(move |n| match n {
         1 => folder.join(&name),
         n => folder.join(format!("{name}-{n}")),
