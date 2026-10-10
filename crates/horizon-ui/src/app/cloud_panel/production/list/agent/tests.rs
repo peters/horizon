@@ -117,7 +117,10 @@ fn park_parks_an_attached_cloud_only_while_it_is_out_of_view() {
     runtime(&mut app).stage = Some(Stage::Ready);
     runtime(&mut app).pending_session_attachments.insert("one".into());
     let error = app.answer_cloud_list(&park, &ctx).unwrap_err();
-    assert!(error.starts_with("cloud_list_not_ready"), "a session still attaches: {error}");
+    assert!(
+        error.starts_with("cloud_list_not_ready"),
+        "a session still attaches: {error}"
+    );
 
     runtime(&mut app).pending_session_attachments.clear();
     app.board.focus(member(&app, "one"));
