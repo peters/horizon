@@ -1,5 +1,8 @@
 #!/usr/bin/python3
 """Private worker Git/gh binding. Token permissions remain the GitHub boundary."""
+import contextlib
+import importlib.machinery
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -10,30 +13,53 @@ import subprocess
 import sys
 import tempfile
 
+
+def load_sibling(name, module):
+    """A module beside this script, which runs from /usr/local/bin and as the gh symlink."""
+    if module not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(module, str(Path(__file__).resolve().with_name(name)))
+        loaded = importlib.util.module_from_spec(importlib.util.spec_from_loader(module, loader))
+        sys.modules[module] = loaded
+        try:
+            loader.exec_module(loaded)
+        except BaseException:
+            del sys.modules[module]
+            raise
+    return sys.modules[module]
+
+
+# Which repository a gh invocation or a Git credential request targets.
+targets = load_sibling('horizon-worker-gh-repository', 'horizon_worker_gh_repository')
+gh_repository = targets.gh_repository
+same_repository = targets.same_repository
+credential_reply = targets.credential_reply
+
+
 CREDENTIAL = Path('/run/horizon-credentials/github.json')
-# horizon-worker-github: a root service that holds a refreshing token chain and answers
-# agents with short-lived access tokens. While it holds a chain, it replaces the file above.
+# Under agent isolation only root, the Git proxy and the API broker read the static token.
+ROOT_CREDENTIAL = Path('/run/horizon-github/static-binding.json')
+AGENT_ISOLATION = Path('/run/horizon-tailnet/agent-isolation')
+AGENT_UID = 10001  # Every agent session's account (horizon-worker-tailnet isolate).
+AGENT_RUNNER = ('/usr/local/bin/horizon-worker-tailnet', 'agent', '/usr/local/bin/horizon-worker-git-auth')
+ROOT_OPERATIONS = ('install', 'clear')  # Run as root under agent isolation; the rest as the agent.
+# horizon-worker-github, the root service that refreshes the token chain and answers agents.
 SERVICE_SOCKET = Path('/run/horizon-worker/github.sock')
 SERVICE_TIMEOUT = 10
-# The service's Git proxy. While the service runs, Git reaches github.com only through it, and
-# it adds a token to requests for granted repositories, so Git never holds one. Git trusts the
-# authority that the service makes for it, and only for github.com.
+# The service's Git proxy, which adds the token to requests for granted repositories, so Git
+# never holds one. Git trusts the service's authority only for github.com.
 PROXY_PORT = 47281
 PROXY_AUTHORITY = '/run/horizon-worker/github-ca.pem'
 # The service's API broker. While the service runs, gh sends every request to this socket
-# (`http_unix_socket`) and holds only a placeholder token; the broker adds the token to the
-# requests that a grant covers.
+# (`http_unix_socket`) with a placeholder token; the broker adds the token that a grant covers.
 API_SOCKET = '/run/horizon-worker/github-api.sock'
 GH = '/usr/bin/gh'
 GITHUB = 'https://github.com/'
 ROUTE = (('http.' + GITHUB + '.proxy', 'http://127.0.0.1:%d' % PROXY_PORT),
          ('http.' + GITHUB + '.sslCAInfo', PROXY_AUTHORITY))
-# Other ways to write a GitHub remote go over HTTPS to github.com too, and so through the proxy.
-# The worker has no SSH key for github.com.
+# Other ways to write a GitHub remote go over HTTPS through the proxy (no SSH key on the worker).
 REWRITTEN = ('git@github.com:', 'ssh://git@github.com/', 'http://github.com/', 'https://www.github.com/',
              'http://www.github.com/')
-# The route lives in its own file that the global configuration includes, so removing it never
-# removes an entry that the agent wrote itself. Relative to HOME.
+# The route's own file under HOME, which the global configuration includes; the agent's entries stay.
 ROUTE_FILE = '.config/git/horizon-route'
 # Set by the gh wrapper when it injects a service token, so a nested gh can drop it.
 INJECTED = 'HORIZON_GH_TOKEN_INJECTED'
@@ -43,31 +69,11 @@ GIT_DIR = Path('/workspace/repository.git')
 SIBLINGS = Path('/workspace/siblings')
 HOME = '/workspace/home'
 FIELDS = {'repository', 'token', 'author_name', 'author_email'}
+IDENTITY_FIELDS = FIELDS - {'token'}
 MAX_GRANTS = 16
 # 16 maximal grants whose tokens and identities are all JSON escapes serialize to about 90 KB.
 MAX_BYTES = 131072
 ALIAS = re.compile(r'[a-z][a-z0-9_-]{0,63}')
-GITHUB_URL = re.compile(r'https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}?)(?:\.git)?/?')
-GITHUB_ARGUMENT = re.compile(r'(?:https?://)?(?:www\.)?github\.com/([^/?#\s]+/[^/?#\s]+?)(?:\.git)?(?:[/?#]|$)',
-                             re.IGNORECASE)
-SHORT_REPOSITORY = re.compile(r'-[A-Za-z]*?R(.*)', re.DOTALL)
-API_REPOSITORY = re.compile(r'(?:https?://api\.github\.com)?/?repos/([^/?#\s]+/[^/?#\s]+?)(?:[/?#]|$)',
-                            re.IGNORECASE)
-# `gh repo` commands whose first positional argument is a repository, with the flags that take a
-# separate value, so a flag value is never read as that repository.
-POSITIONAL_REPOSITORY_COMMANDS = {
-    'archive': (), 'delete': (), 'set-default': (), 'unarchive': (),
-    'clone': ('-u', '--upstream-remote-name'),
-    'create': ('-d', '--description', '-g', '--gitignore', '-h', '--homepage', '-l', '--license',
-               '-p', '--template', '-r', '--remote', '-s', '--source', '-t', '--team'),
-    'edit': ('--add-topic', '--default-branch', '-d', '--description', '-h', '--homepage',
-             '--remove-topic', '--visibility'),
-    'fork': ('--fork-name', '--org', '--remote-name'),
-    'sync': ('-b', '--branch', '-s', '--source'),
-    'view': ('-b', '--branch', '--json', '-q', '--jq', '-t', '--template'),
-}
-URL_HOST = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://([^/?#]*)')
-GITHUB_HOSTS = ('github.com', 'www.github.com', 'api.github.com')
 TOKEN_VARIABLES = ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN')
 
 
@@ -149,26 +155,61 @@ def parse(source):
     return json.loads(source, object_pairs_hook=unique_keys)
 
 
-def read_grants():
-    """Return (version, grants) from the private file, or None when no binding exists."""
+def root_holds_token():
+    """Whether this process is root under agent isolation, which keeps the token from agents."""
+    return os.geteuid() == 0 and AGENT_ISOLATION.exists()
+
+
+def token_path():
+    return ROOT_CREDENTIAL if root_holds_token() else CREDENTIAL
+
+
+def identity_path():
+    return CREDENTIAL.with_name('github-identity.json')
+
+
+def read_private(path):
+    """The JSON of a private regular file that this account owns, or None without one."""
     try:
         # Nonblocking: the Git proxy reads it as root, and a FIFO must not stop it.
-        fd = os.open(CREDENTIAL, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
     with os.fdopen(fd, 'rb') as source:
         status = os.fstat(source.fileno())
-        if not stat.S_ISREG(status.st_mode) or status.st_mode & 0o077 or status.st_size > MAX_BYTES:
+        if not stat.S_ISREG(status.st_mode) or status.st_mode & 0o077 or status.st_size > MAX_BYTES \
+                or status.st_uid != os.geteuid():
             raise ValueError('Git credential file must be private')
         data = source.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise ValueError('Git credential file must be private')
-    return grants(parse(data.decode()))
+    return parse(data.decode())
 
 
-def same_repository(requested, repository):
-    """ASCII-only comparison: Unicode case folding would let another path match."""
-    return requested.isascii() and requested.lower() == repository.lower()
+def read_grants():
+    """Return (version, grants) with their tokens, or None when no binding exists. Under agent
+    isolation only root reads them."""
+    value = read_private(token_path())
+    return None if value is None else grants(value)
+
+
+def stripped(value):
+    """A binding without its tokens: what agents keep to configure Git identities."""
+    version, entries = grants(value)
+    if version == 1:
+        return {key: value[key] for key in IDENTITY_FIELDS}
+    return {'version': 2, 'grants': [{key: entry[key] for key in IDENTITY_FIELDS | {'target'}}
+                                     for entry in entries]}
+
+
+def identity_grants(value):
+    """(version, grants) of a binding without tokens."""
+    if isinstance(value, dict) and 'version' not in value:
+        return 1, [dict(validate(value, IDENTITY_FIELDS), target='primary')]
+    if not isinstance(value, dict) or set(value) != {'version', 'grants'} or value['version'] != 2 \
+            or type(value['version']) is not int:
+        raise ValueError('Unsupported Git binding version')
+    return 2, checked_grants(value['grants'], IDENTITY_FIELDS)
 
 
 def present(directory, target):
@@ -189,8 +230,12 @@ def git_output(env, *args):
 
 
 def previous_grants():
+    """The identities of the binding in place; under agent isolation never from a token file."""
     try:
-        return read_grants()
+        value = read_private(identity_path())
+        if value is not None:
+            return identity_grants(value)
+        return None if AGENT_ISOLATION.exists() else read_grants()
     except ValueError:
         return None
 
@@ -215,9 +260,76 @@ def forget_identities(env, previous):
 
 
 def install(value):
-    version, entries = grants(value)
-    configure(version, entries, [previous_grants()])
-    write_private(value)
+    """The static binding: Git's identities and the token, in one account's files."""
+    install_identities(stripped(value))
+    write_private(value, token_path())
+
+
+def install_identities(value, previous=None):
+    """Git's configuration for a binding without tokens, replacing the earlier identities."""
+    version, entries = identity_grants(value)
+    configure(version, entries, [previous_grants(), identity_grants(previous) if previous else None])
+    write_private(value, identity_path())
+
+
+def take_earlier():
+    """The binding in an earlier image's token file in the agents' directory, or None, read and
+    emptied through one descriptor (with its hard links); a file that cannot be emptied raises."""
+    try:
+        fd = os.open(CREDENTIAL, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None  # None there, a directory, or a link (the agent's own copy, which removal takes).
+    with os.fdopen(fd, 'r+b') as legacy:
+        found = os.fstat(fd)
+        if not stat.S_ISREG(found.st_mode) or found.st_uid != AGENT_UID:
+            return None
+        data = legacy.read(MAX_BYTES + 1)
+        legacy.truncate(0)
+    with contextlib.suppress(ValueError, RecursionError, UnicodeDecodeError):
+        value = parse(data.decode())
+        return value if stripped(value) else None
+    return None
+
+
+def install_as_root(value, agent=None):
+    """Under agent isolation the agent keeps the identities and root the token (take_earlier)."""
+    grants(value)
+    earlier = take_earlier()
+    with contextlib.suppress(IsADirectoryError):  # Any other failure stops the install here.
+        CREDENTIAL.unlink(missing_ok=True)
+    agent = agent or (lambda operation, data: subprocess.run(
+        [*AGENT_RUNNER, operation], input=json.dumps(data).encode(), check=True, cwd='/workspace',
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120))
+    root = None
+    with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
+        root = read_private(ROOT_CREDENTIAL)
+    kept = root if root is not None else earlier
+    try:
+        agent('install-identity', {'binding': stripped(value), 'previous': earlier and stripped(earlier)})
+        write_private(value, ROOT_CREDENTIAL)
+    except BaseException:
+        # Back to one binding (root-only, else earlier), also after a partial agent step.
+        if root is None and earlier is not None:
+            with contextlib.suppress(ValueError, OSError):
+                write_private(earlier, ROOT_CREDENTIAL)
+        try:
+            if kept is not None:
+                agent('install-identity', {'binding': stripped(kept), 'previous': stripped(value)})
+        except (ValueError, OSError, subprocess.SubprocessError):
+            print('horizon: the identities of the earlier static binding could not be restored', file=sys.stderr)
+        raise
+
+
+def clear():
+    """Removes the static binding: its token wherever it is (the root-only one first, in every
+    mode, so no agent's path can keep it), and its identities."""
+    with contextlib.suppress(PermissionError):
+        ROOT_CREDENTIAL.unlink(missing_ok=True)
+    if root_holds_token():
+        take_earlier()
+    for path in (CREDENTIAL, identity_path()):
+        with contextlib.suppress(IsADirectoryError, PermissionError):
+            path.unlink(missing_ok=True)
 
 
 def configure(version, entries, previous):
@@ -250,10 +362,8 @@ def configure(version, entries, previous):
 
 
 def route(env, proxy):
-    """Sends Git's github.com requests through the service's proxy, or stops doing so. The
-    values are in ROUTE_FILE, which the global configuration includes once; removing the route
-    removes only that include and the file. The remote URLs stay github.com URLs, so gh still
-    finds the repository of a checkout."""
+    """Sends Git's github.com requests through the service's proxy, or stops doing so, with the
+    values in ROUTE_FILE that the global configuration includes once. Remote URLs stay as they are."""
     path = Path(env['HOME']) / ROUTE_FILE
     included = git_output(env, 'config', '--global', '--fixed-value', '--get-all', 'include.path', str(path))
     if not proxy:
@@ -293,9 +403,6 @@ def route_gh(env, broker):
         gh_config(env, 'set', 'http_unix_socket', '')
 
 
-IDENTITY_FIELDS = FIELDS - {'token'}
-
-
 def configure_chain(value):
     """Git configuration for a horizon-worker-github chain; no token reaches this helper. The
     service sends its grants with their identity and the grants of the chain it replaces."""
@@ -304,13 +411,11 @@ def configure_chain(value):
     entries = checked_grants(value['grants'], IDENTITY_FIELDS)
     previous = checked_grants(value['previous'], IDENTITY_FIELDS, minimum=0)
     configure(2, entries, [previous_grants(), (2, previous)])
-    # The static binding stays until the service has stored its chain and configured every
-    # repository; horizon-worker-github then removes it with `clear`.
+    # The static binding stays until horizon-worker-github removes it with `clear`.
 
 
 def restore_static(value):
-    """After a failed first chain install: the static binding's configuration again, without
-    the identities that the failed chain's configuration wrote."""
+    """After a failed first chain install: the static binding's configuration again."""
     if not isinstance(value, dict) or set(value) != {'previous'}:
         raise ValueError('Invalid Git configuration')
     failed = (2, checked_grants(value['previous'], IDENTITY_FIELDS, minimum=0))
@@ -321,11 +426,16 @@ def restore_static(value):
         forget_identities(dict(os.environ, HOME=HOME), failed)
 
 
-def write_private(value):
-    CREDENTIAL.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if CREDENTIAL.parent.stat().st_mode & 0o077:
+def private_folder(path):
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder = path.lstat()
+    if not stat.S_ISDIR(folder.st_mode) or folder.st_mode & 0o077 or folder.st_uid != os.geteuid():
         raise ValueError('Git credential directory must be private')
-    fd, temporary = tempfile.mkstemp(prefix='.github-', dir=CREDENTIAL.parent)
+
+
+def write_private(value, path):
+    private_folder(path.parent)
+    fd, temporary = tempfile.mkstemp(prefix='.github-', dir=path.parent)
     try:
         with os.fdopen(fd, 'w') as output:
             if os.fstat(output.fileno()).st_mode & 0o077:
@@ -333,126 +443,9 @@ def write_private(value):
             json.dump(value, output)
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temporary, CREDENTIAL)
+        os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
-
-
-def credential_reply(entries, request):
-    """Only the exactly requested HTTPS repository receives its own Git credential."""
-    fields = dict(line.split('=', 1) for line in request.splitlines() if '=' in line)
-    path = fields.get('path', '')
-    if path.endswith('.git'):
-        path = path[:-4]
-    if fields.get('protocol') != 'https' or fields.get('host') != 'github.com':
-        return ''
-    for entry in entries or ():
-        if same_repository(path, entry['repository']):
-            return 'username=x-access-token\npassword=' + entry['token'] + '\n\n'
-    return ''
-
-
-def repository_arguments(argv):
-    """Explicit --repo/-R selections (including short-flag clusters) and the repositories other
-    arguments imply: github.com URLs, `gh repo <command> OWNER/REPO` and
-    `gh api repos/OWNER/REPO/...`. An argument that selects another host implies None.
-
-    A selector right after a flag without an inline value, or after `--`, may be that flag's
-    value or a positional argument rather than a real selector. It only implies a repository,
-    so it can never redirect gh; it must agree with the repository chosen otherwise."""
-    explicit, implied = [], []
-    terminated = False
-    for index, argument in enumerate(argv):
-        following = argv[index + 1] if index + 1 < len(argv) else ''
-        previous = argv[index - 1] if index else ''
-        ambiguous = terminated or (previous.startswith('-') and '=' not in previous)
-        terminated = terminated or argument == '--'
-        selectors = implied if ambiguous else explicit
-        short = None if argument.startswith('--') else SHORT_REPOSITORY.fullmatch(argument)
-        url = GITHUB_ARGUMENT.match(argument)
-        endpoint = API_REPOSITORY.match(argument) if argv[:1] == ['api'] else None
-        if argument == '--repo':
-            selectors.append(following)
-        elif argument.startswith('--repo='):
-            selectors.append(argument[len('--repo='):])
-        elif short:
-            selectors.append(short.group(1).removeprefix('=') or following)
-        elif url:
-            implied.append(url.group(1))
-        elif endpoint:
-            # gh fills {owner}/{repo} from GH_REPO, which always matches the injected token.
-            if '{' not in endpoint.group(1):
-                implied.append(endpoint.group(1))
-        elif argument == '--hostname' or argument.startswith('--hostname='):
-            host = following if argument == '--hostname' else argument[len('--hostname='):]
-            if host.lower() not in GITHUB_HOSTS:
-                implied.append(None)
-        elif (other := URL_HOST.match(argument)) and other.group(1).lower() not in GITHUB_HOSTS:
-            implied.append(None)
-    positional = repository_positional(argv)
-    if positional is not None and not GITHUB_ARGUMENT.match(positional):
-        implied.append(positional)
-    return explicit, implied
-
-
-def repository_positional(argv):
-    """The repository argument of `gh repo <command>`, skipping flags and their values."""
-    if argv[:1] != ['repo'] or len(argv) < 2 or argv[1] not in POSITIONAL_REPOSITORY_COMMANDS:
-        return None
-    takes_value = POSITIONAL_REPOSITORY_COMMANDS[argv[1]] + ('-R', '--repo')
-    arguments = iter(argv[2:])
-    for argument in arguments:
-        if argument == '--':
-            return next(arguments, None)
-        if argument in takes_value:
-            next(arguments, None)
-        elif not argument.startswith('-'):
-            return argument
-    return None
-
-
-def repository_name(requested):
-    if requested is None:
-        return None
-    parts = requested.split('/')
-    if len(parts) == 3 and parts[0].lower() == 'github.com':
-        parts = parts[1:]
-    return '/'.join(parts) if len(parts) == 2 and requested.isascii() else None
-
-
-def agreed(requests):
-    names = [repository_name(requested) for requested in requests]
-    if not names or None in names or len({name.lower() for name in names}) != 1:
-        return None
-    return names[0]
-
-
-def origin_repository(env):
-    try:
-        origin = subprocess.run(['git', 'remote', 'get-url', 'origin'], env=env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    match = GITHUB_URL.fullmatch(origin.stdout.decode(errors='replace').strip())
-    return match.group(1) if origin.returncode == 0 and match else None
-
-
-def gh_repository(env, argv):
-    """The repository a gh invocation targets: --repo/-R, else GH_REPO, else the working
-    directory's origin, else what the arguments imply. Every implied repository must agree with
-    that choice; conflicts, other hosts and unreadable selections resolve to no repository."""
-    if env.get('GH_HOST', 'github.com').lower() != 'github.com':
-        return None
-    explicit, implied = repository_arguments(argv)
-    if explicit:
-        repository = agreed(explicit)
-    elif env.get('GH_REPO') is not None:
-        repository = agreed([env['GH_REPO']])
-    else:
-        repository = origin_repository(env) or agreed(implied[:1])
-    if repository is None or (implied and agreed([repository, *implied]) is None):
-        return None
-    return repository
 
 
 def gh_environment(loaded, env, argv=()):
@@ -504,24 +497,21 @@ def ask_service(request):
 
 
 def service_credential(request, ask=call_service):
-    """'' while the chain service answers: Git then goes through its proxy, which adds the token
-    of the chain or of the static binding itself, so Git gets no credential. None when no
-    service answers; the caller then falls back to the private file."""
+    """'' while the chain service answers (its proxy adds the token itself), else None, and the
+    caller falls back to the private file."""
     fields = dict(line.split('=', 1) for line in request.splitlines() if '=' in line)
     reply = ask({'request': 'credential', **{key: fields.get(key, '') for key in ('protocol', 'host', 'path')}})
     return None if reply is None else ''
 
 
 def service_environment(env, argv, ask=call_service):
-    """gh's environment with the chain service's token for the targeted repository, or None
-    when no service answers. Without a chain the service still routes gh to its API broker,
-    which serves the static binding, so gh never gets the static token there. A refusal drops a token that an outer wrapped gh injected, and gives gh the
-    placeholder unless the caller set a token, so the API broker answers with its reason."""
+    """gh's environment for the targeted repository, or None when no service answers. A refusal
+    drops a token that an outer wrapped gh injected and gives gh the placeholder (unless the
+    caller set a token), so the API broker answers with its reason."""
     reply = ask({'request': 'gh-token', 'repository': gh_repository(env, list(argv)) or ''})
     if reply is None:
         return None
-    # gh reads the configuration that routes it to the API broker, whatever HOME,
-    # XDG_CONFIG_HOME or GH_CONFIG_DIR the caller set.
+    # gh reads the routed configuration, whatever HOME, XDG_CONFIG_HOME or GH_CONFIG_DIR says.
     env = dict(env, GH_CONFIG_DIR=str(Path(HOME) / '.config/gh'))
     if (reply.get('ok') is True and valid_token(reply.get('token'))
             and valid_repository(reply.get('repository'))):
@@ -544,32 +534,38 @@ def without_injected(env):
     return env
 
 
+def read_input():
+    source = sys.stdin.read(MAX_BYTES + 1)
+    if len(source.encode()) > MAX_BYTES:
+        raise ValueError('Git binding is too large')
+    return source
+
+
 def main():
     if Path(sys.argv[0]).name == 'gh':
         env = service_environment(os.environ, sys.argv[1:])
         if env is None:
             # The service does not answer: a token an outer gh took from it must not outlive it.
             env = gh_environment(read_grants(), without_injected(os.environ), sys.argv[1:])
+            if AGENT_ISOLATION.exists():
+                # The broker's route, once a service sets it again, is in this configuration.
+                env['GH_CONFIG_DIR'] = str(Path(HOME) / '.config/gh')
         os.execve('/usr/bin/gh', ['/usr/bin/gh', *sys.argv[1:]], env)
         return
     operation = sys.argv[1] if len(sys.argv) > 1 else ''
     if operation == 'install':
-        source = sys.stdin.read(MAX_BYTES + 1)
-        if len(source.encode()) > MAX_BYTES:
-            raise ValueError('Git binding is too large')
-        install(parse(source))
+        (install_as_root if root_holds_token() else install)(parse(read_input()))
+    elif operation == 'install-identity':
+        value = parse(read_input())
+        if not isinstance(value, dict) or set(value) != {'binding', 'previous'}:
+            raise ValueError('Invalid Git configuration')
+        install_identities(value['binding'], value['previous'])
     elif operation == 'configure':
-        source = sys.stdin.read(MAX_BYTES + 1)
-        if len(source.encode()) > MAX_BYTES:
-            raise ValueError('Git configuration is too large')
-        configure_chain(parse(source))
+        configure_chain(parse(read_input()))
     elif operation == 'restore':
-        source = sys.stdin.read(MAX_BYTES + 1)
-        if len(source.encode()) > MAX_BYTES:
-            raise ValueError('Git configuration is too large')
-        restore_static(parse(source))
+        restore_static(parse(read_input()))
     elif operation == 'clear':
-        CREDENTIAL.unlink(missing_ok=True)
+        clear()
     elif operation in ('route', 'unroute'):
         # The service routes Git through its proxy and gh through its broker once they listen;
         # the worker's start and the end of the service route both to GitHub directly again.
@@ -591,12 +587,12 @@ def main():
 
 
 if __name__ == '__main__':
-    # The agents own their Git configuration and files, so root runs this helper as the agent.
-    # Only the script entry re-executes; horizon-worker-github imports these functions as root.
-    if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists():
+    # The agents own their Git files, so root runs this helper as the agent, except for the
+    # token that root keeps (ROOT_OPERATIONS). horizon-worker-github imports it as root.
+    if root_holds_token() and not (Path(sys.argv[0]).name != 'gh' and sys.argv[1:2]
+                                   and sys.argv[1] in ROOT_OPERATIONS):
         os.chdir('/workspace')
-        os.execv('/usr/local/bin/horizon-worker-tailnet', ['horizon-worker-tailnet', 'agent',
-                                                           '/usr/local/bin/horizon-worker-git-auth', *sys.argv[1:]])
+        os.execv(AGENT_RUNNER[0], ['horizon-worker-tailnet', *AGENT_RUNNER[1:], *sys.argv[1:]])
     try:
         main()
     except (ValueError, OSError, RecursionError, subprocess.SubprocessError):

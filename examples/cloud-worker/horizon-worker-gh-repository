@@ -1,0 +1,152 @@
+"""Which GitHub repository a gh invocation targets, for the gh wrapper of
+horizon-worker-git-auth: from --repo/-R, GH_REPO, the working directory's origin or what the
+arguments imply; and which binding answers a Git credential request. A module that horizon-worker-git-auth loads, not a command."""
+import re
+import subprocess
+import sys
+
+GITHUB_URL = re.compile(r'https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}?)(?:\.git)?/?')
+GITHUB_ARGUMENT = re.compile(r'(?:https?://)?(?:www\.)?github\.com/([^/?#\s]+/[^/?#\s]+?)(?:\.git)?(?:[/?#]|$)',
+                             re.IGNORECASE)
+SHORT_REPOSITORY = re.compile(r'-[A-Za-z]*?R(.*)', re.DOTALL)
+API_REPOSITORY = re.compile(r'(?:https?://api\.github\.com)?/?repos/([^/?#\s]+/[^/?#\s]+?)(?:[/?#]|$)',
+                            re.IGNORECASE)
+# `gh repo` commands whose first positional argument is a repository, with the flags that take a
+# separate value, so a flag value is never read as that repository.
+POSITIONAL_REPOSITORY_COMMANDS = {
+    'archive': (), 'delete': (), 'set-default': (), 'unarchive': (),
+    'clone': ('-u', '--upstream-remote-name'),
+    'create': ('-d', '--description', '-g', '--gitignore', '-h', '--homepage', '-l', '--license',
+               '-p', '--template', '-r', '--remote', '-s', '--source', '-t', '--team'),
+    'edit': ('--add-topic', '--default-branch', '-d', '--description', '-h', '--homepage',
+             '--remove-topic', '--visibility'),
+    'fork': ('--fork-name', '--org', '--remote-name'),
+    'sync': ('-b', '--branch', '-s', '--source'),
+    'view': ('-b', '--branch', '--json', '-q', '--jq', '-t', '--template'),
+}
+URL_HOST = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://([^/?#]*)')
+GITHUB_HOSTS = ('github.com', 'www.github.com', 'api.github.com')
+
+def repository_arguments(argv):
+    """Explicit --repo/-R selections (including short-flag clusters) and the repositories other
+    arguments imply: github.com URLs, `gh repo <command> OWNER/REPO` and
+    `gh api repos/OWNER/REPO/...`. An argument that selects another host implies None.
+
+    A selector right after a flag without an inline value, or after `--`, may be that flag's
+    value or a positional argument rather than a real selector. It only implies a repository,
+    so it can never redirect gh; it must agree with the repository chosen otherwise."""
+    explicit, implied = [], []
+    terminated = False
+    for index, argument in enumerate(argv):
+        following = argv[index + 1] if index + 1 < len(argv) else ''
+        previous = argv[index - 1] if index else ''
+        ambiguous = terminated or (previous.startswith('-') and '=' not in previous)
+        terminated = terminated or argument == '--'
+        selectors = implied if ambiguous else explicit
+        short = None if argument.startswith('--') else SHORT_REPOSITORY.fullmatch(argument)
+        url = GITHUB_ARGUMENT.match(argument)
+        endpoint = API_REPOSITORY.match(argument) if argv[:1] == ['api'] else None
+        if argument == '--repo':
+            selectors.append(following)
+        elif argument.startswith('--repo='):
+            selectors.append(argument[len('--repo='):])
+        elif short:
+            selectors.append(short.group(1).removeprefix('=') or following)
+        elif url:
+            implied.append(url.group(1))
+        elif endpoint:
+            # gh fills {owner}/{repo} from GH_REPO, which always matches the injected token.
+            if '{' not in endpoint.group(1):
+                implied.append(endpoint.group(1))
+        elif argument == '--hostname' or argument.startswith('--hostname='):
+            host = following if argument == '--hostname' else argument[len('--hostname='):]
+            if host.lower() not in GITHUB_HOSTS:
+                implied.append(None)
+        elif (other := URL_HOST.match(argument)) and other.group(1).lower() not in GITHUB_HOSTS:
+            implied.append(None)
+    positional = repository_positional(argv)
+    if positional is not None and not GITHUB_ARGUMENT.match(positional):
+        implied.append(positional)
+    return explicit, implied
+
+
+def repository_positional(argv):
+    """The repository argument of `gh repo <command>`, skipping flags and their values."""
+    if argv[:1] != ['repo'] or len(argv) < 2 or argv[1] not in POSITIONAL_REPOSITORY_COMMANDS:
+        return None
+    takes_value = POSITIONAL_REPOSITORY_COMMANDS[argv[1]] + ('-R', '--repo')
+    arguments = iter(argv[2:])
+    for argument in arguments:
+        if argument == '--':
+            return next(arguments, None)
+        if argument in takes_value:
+            next(arguments, None)
+        elif not argument.startswith('-'):
+            return argument
+    return None
+
+
+def repository_name(requested):
+    if requested is None:
+        return None
+    parts = requested.split('/')
+    if len(parts) == 3 and parts[0].lower() == 'github.com':
+        parts = parts[1:]
+    return '/'.join(parts) if len(parts) == 2 and requested.isascii() else None
+
+
+def agreed(requests):
+    names = [repository_name(requested) for requested in requests]
+    if not names or None in names or len({name.lower() for name in names}) != 1:
+        return None
+    return names[0]
+
+
+def origin_repository(env):
+    try:
+        origin = subprocess.run(['git', 'remote', 'get-url', 'origin'], env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = GITHUB_URL.fullmatch(origin.stdout.decode(errors='replace').strip())
+    return match.group(1) if origin.returncode == 0 and match else None
+
+
+def gh_repository(env, argv):
+    """The repository a gh invocation targets: --repo/-R, else GH_REPO, else the working
+    directory's origin, else what the arguments imply. Every implied repository must agree with
+    that choice; conflicts, other hosts and unreadable selections resolve to no repository."""
+    if env.get('GH_HOST', 'github.com').lower() != 'github.com':
+        return None
+    explicit, implied = repository_arguments(argv)
+    if explicit:
+        repository = agreed(explicit)
+    elif env.get('GH_REPO') is not None:
+        repository = agreed([env['GH_REPO']])
+    else:
+        repository = origin_repository(env) or agreed(implied[:1])
+    if repository is None or (implied and agreed([repository, *implied]) is None):
+        return None
+    return repository
+
+
+def same_repository(requested, repository):
+    """ASCII-only comparison: Unicode case folding would let another path match."""
+    return requested.isascii() and requested.lower() == repository.lower()
+
+
+def credential_reply(entries, request):
+    """Only the exactly requested HTTPS repository receives its own Git credential."""
+    fields = dict(line.split('=', 1) for line in request.splitlines() if '=' in line)
+    path = fields.get('path', '')
+    if path.endswith('.git'):
+        path = path[:-4]
+    if fields.get('protocol') != 'https' or fields.get('host') != 'github.com':
+        return ''
+    for entry in entries or ():
+        if same_repository(path, entry['repository']):
+            return 'username=x-access-token\npassword=' + entry['token'] + '\n\n'
+    return ''
+
+if __name__ == '__main__':
+    sys.exit('horizon-worker-gh-repository is a module of horizon-worker-git-auth, not a command.')

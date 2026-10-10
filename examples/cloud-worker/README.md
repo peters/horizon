@@ -676,8 +676,18 @@ allocation. Without a binding, the normal agent login flow remains available.
 The image must pass `horizon-worker-check --git-auth` before allocation. Transfer
 uses SSH stdin with output suppressed. The worker stores the token separately
 from source, images and session state in `/run/horizon-credentials/github.json`
-(0600). Git's HTTPS helper matches the exact repository path; `gh` reads the same
-binding into only its child environment. On an image with the
+(0600). Under agent isolation root keeps the token instead, in
+`/run/horizon-github/static-binding.json` (root only), and the agents' directory
+keeps only the binding's repositories and identities, in
+`/run/horizon-credentials/github-identity.json`; no agent process can read the
+token.
+
+A token file that an earlier image left in the agents' directory is emptied in
+place, with every hard link to it, and removed before the agent configures Git.
+If the install fails, the root-only file keeps that earlier binding.
+
+Git's HTTPS helper matches the exact repository path; `gh` reads the same binding
+into only its child environment where the agent can read it. On an image with the
 `horizon-worker-github` service, the binding is a fallback for the repositories
 that Connect GitHub does not reach: the service's Git proxy adds its token, and
 Git's helper gives Git no token (see
@@ -761,8 +771,7 @@ as a fallback for the repositories that the GitHub App does not reach, and the
 proxy adds its token for those repositories. `gh` gets no token either: it sends
 every request to the service's API broker, which adds the token only to the
 requests that a grant covers (see **gh through the API broker** below). The
-static token file is still readable by agents until a later step of issue #1393
-moves it to root-only storage.
+static token file is root-only: only the proxy and the broker read its token.
 
 A GitHub App user access token lasts 8 hours. Its refresh token lasts about six
 months. Each refresh gives a new access token and a new refresh token, and GitHub
@@ -1073,7 +1082,8 @@ wrapper ask the socket first. The Git helper falls back to the static file only
 when no service answers; while the service answers, the proxy adds the token
 itself. The `gh` wrapper does the same: while the service answers, also without a
 chain (`"state":"absent"`), `gh` gets the placeholder and the API broker serves the
-static binding. The `gh` wrapper still
+static binding. Under agent isolation the agent cannot read the static file, so
+without a service Git and `gh` get no token. The `gh` wrapper still
 chooses the repository as described above. When the service refuses the
 repository, the wrapper removes the `GH_TOKEN` that an outer wrapped `gh`
 injected, but keeps every token variable that you set yourself. Without one, it
@@ -1085,8 +1095,7 @@ For Git through the proxy and `gh` through the API broker, `access: "read"` is
 enforced: a push or a change gets a refusal. No agent process holds the chain's
 access token: `gh auth token` prints the placeholder, and `curl` or
 `git -c http.proxy=` past the proxy and the broker reach GitHub without a token.
-The static token file is the exception until it moves to root-only storage: an
-agent can read it, and its token can do what its own permissions allow. The
+That includes the static token file, which only root reads. The
 connected repositories and the repositories allowed for the cloud reach every
 agent session of the cloud; a repository allowed for a task reaches only the
 session that asked (see below).
