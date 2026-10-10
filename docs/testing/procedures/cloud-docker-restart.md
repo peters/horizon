@@ -49,29 +49,68 @@ Restart Docker, asks before it restarts, and then offers Retry.
    Result: `sha256sum` gives the hash to record with the evidence.
 
 2. Make a tools root at `/tmp/horizon-<task>-tools/root`. Unpack x11vnc into it
-   if the computer has no x11vnc. Put three stand-in programs in
-   `root/usr/bin`. They keep their files in `<state>/fake-docker`, because the
-   fixture gives Horizon a private `/tmp` but shows the state directory at its
-   own path:
+   if the computer has no x11vnc. Make the three stand-in programs in
+   `root/usr/bin` with the commands below. They keep their files in
+   `<state>/fake-docker`, because the fixture gives Horizon a private `/tmp`
+   but shows the state directory at its own path. They read that directory
+   from `FAKE_DOCKER_DIR`, which Horizon passes on to the programs it starts.
+   Use the absolute path of `<state>`.
 
-   - `docker` skips a leading `--config <dir>`. It answers `--version` and
-     `context inspect` with a rootless socket at `$XDG_RUNTIME_DIR/docker.sock`
-     and fails `desktop version`. It waits without end for each other command
-     until the file `<state>/fake-docker/restarted` exists. After that, it
-     answers `version` with `29.8.1`.
-   - `systemctl` answers `active` for `--user show ... docker.service`. For
+   ```bash
+   bin=/tmp/horizon-<task>-tools/root/usr/bin
+   export FAKE_DOCKER_DIR=<state>/fake-docker
+   mkdir -p "$bin" "$FAKE_DOCKER_DIR"
+   cat > "$bin/docker" <<'EOF'
+   #!/bin/sh
+   dir=${FAKE_DOCKER_DIR:?}
+   echo "docker $*" >> "$dir/calls.log"
+   while [ "$1" = --config ] || [ "$1" = --host ]; do shift 2; done
+   case "$1 $2" in
+     "--version "*) echo "Docker version 29.8.1, build stand-in" ;;
+     "context inspect") printf 'rootless\tunix://%s/docker.sock\n' "$XDG_RUNTIME_DIR" ;;
+     "desktop version") exit 1 ;;
+     *)
+       until [ -e "$dir/restarted" ]; do sleep 1; done
+       if [ "$1" = version ]; then echo 29.8.1; fi ;;
+   esac
+   EOF
+   cat > "$bin/systemctl" <<'EOF'
+   #!/bin/sh
+   dir=${FAKE_DOCKER_DIR:?}
+   echo "systemctl $*" >> "$dir/calls.log"
+   case "$*" in
+     "--user show --property=ActiveState --value docker.service") echo active ;;
+     "--user restart docker.service") sleep 4; touch "$dir/restarted" ;;
+     *) exit 1 ;;
+   esac
+   EOF
+   cat > "$bin/pkexec" <<'EOF'
+   #!/bin/sh
+   echo "pkexec $*" >> "${FAKE_DOCKER_DIR:?}/calls.log"
+   exit 126
+   EOF
+   chmod 755 "$bin/docker" "$bin/systemctl" "$bin/pkexec"
+   ```
+
+   - `docker` skips leading `--config` and `--host` options. It answers
+     `--version`, and `context inspect` with a rootless socket at
+     `$XDG_RUNTIME_DIR/docker.sock`, and fails `desktop version`. It waits
+     without end for each other command until the file `restarted` exists.
+     After that, it answers `version` with `29.8.1`.
+   - `systemctl` answers `active` only for the user unit. For
      `--user restart docker.service`, it waits 4 seconds and makes the file
-     `<state>/fake-docker/restarted`.
-   - `pkexec` writes its arguments to a log and refuses.
+     `restarted`. The system unit shows as not running.
+   - `pkexec` writes its arguments to the log and refuses.
 
-   Each program writes its arguments to `<state>/fake-docker/calls.log`.
+   Each program writes its arguments to `<state>/fake-docker/calls.log`. None
+   of them calls a real program.
 
    Result: `root/usr/bin` contains `docker`, `systemctl`, `pkexec` and
    `x11vnc`.
 
 3. Start the fixture with the tools root and the stuck-Docker preview of a
    debug build, with `DOCKER_HOST` unset, as Horizon honors it as the Docker CLI
-   does:
+   does. Run it in the shell of step 2, which exports `FAKE_DOCKER_DIR`:
    `env -u DOCKER_HOST HORIZON_CLOUD_DOCKER_STUCK_PREVIEW=1 python3 scripts/device-smoke/serve.py --horizon <binary> --tools /tmp/horizon-<task>-tools/root --native-view --state <state>`.
    The preview adds two synthetic clouds whose image build failed, each with
    `Docker did not answer docker version within 5 s` as its last output line.
