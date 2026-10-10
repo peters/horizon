@@ -43,6 +43,7 @@ mod capture;
 pub mod cast;
 mod close;
 mod cloud_companion;
+mod cloud_list;
 mod create;
 pub mod device;
 mod ownership;

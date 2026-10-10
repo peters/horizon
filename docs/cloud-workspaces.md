@@ -977,6 +977,23 @@ moves the cloud to **Needs you**.
 Stop ends the running processes. The workspace storage is kept and stays
 billable, and **Resume** on the card starts a worker again.
 
+#### The cloud list for agents
+
+A local agent panel in a workspace reads the clouds of that workspace with the
+`cloud_list` MCP tool, or with `horizon-browser cloud list` in its shell. The
+answer has the ID, the name, the group, the status line and the hourly rate of
+each cloud, and whether it is idle. The agent can act on one of these clouds as
+the sidebar does:
+
+- **attach** moves your view to the cloud, as a click on its row does.
+- **park** parks the terminals of a cloud that is out of view now. Horizon
+  refuses a cloud in view, because it attaches again.
+- **stop** stops the worker of an idle cloud, as **Stop idle…** does. Horizon
+  refuses a cloud that is not idle.
+
+An agent sees only the clouds of its own workspace. Clouds of other workspaces
+and requests from outside Horizon are not available.
+
 A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
 runtime card. Compute replacement retains the same network workspace but stops
 processes, discards temporary container files and reconnects recorded sessions on
