@@ -107,6 +107,9 @@ mod tests {
 
     #[test]
     fn an_expanded_cause_shows_every_character_and_breaks_a_hash_inside_its_width() {
+        let id = "0123456789abcdef".repeat(4);
+        let token = laid_out(&id, f32::INFINITY, 1).size().x;
+        assert!(token > 360.0, "the container id alone is wider than the width: {token}");
         let galley = laid_out(CONFLICT, 360.0, usize::MAX);
         assert!(!galley.elided);
         assert_eq!(galley.text(), CONFLICT);
