@@ -109,6 +109,26 @@ class GitAuthenticationTests(unittest.TestCase):
             auth.clear()
         self.assertFalse(root_file.exists())
 
+    def test_an_earlier_token_file_that_cannot_move_goes_after_the_root_write(self):
+        auth.write_private(self.value, auth.CREDENTIAL)
+        root_file = self.path / 'root/static-binding.json'
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth.os, 'rename', side_effect=OSError(18, 'Invalid cross-device link')):
+            auth.install_as_root(self.value, lambda operation, value: None)
+        self.assertFalse(auth.CREDENTIAL.exists())
+        self.assertTrue(root_file.exists())
+
+    def test_the_gh_fallback_under_isolation_reads_the_routed_configuration(self):
+        isolated = self.path / 'isolated'
+        isolated.touch()
+        with mock.patch.object(auth, 'AGENT_ISOLATION', isolated), \
+                mock.patch.dict(auth.os.environ, {'GH_CONFIG_DIR': '/elsewhere'}, clear=True), \
+                mock.patch.object(auth.sys, 'argv', ['gh', 'pr', 'list']), \
+                mock.patch.object(auth.os, 'execve') as execute:
+            auth.main()
+        self.assertEqual(execute.call_args.args[2]['GH_CONFIG_DIR'], '/workspace/home/.config/gh')
+
     def test_a_failed_root_write_keeps_the_earlier_binding(self):
         auth.write_private(self.value, auth.CREDENTIAL)
         with mock.patch.object(auth, 'ROOT_CREDENTIAL', self.path / 'root/static-binding.json'), \

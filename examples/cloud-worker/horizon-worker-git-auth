@@ -286,8 +286,7 @@ def install_identities(value, previous=None):
 
 def install_as_root(value, agent=None):
     """Under agent isolation the agent configures Git and keeps the identities; root keeps the
-    token. An earlier image's token file leaves the agents' reach first, and comes back only
-    if this install fails."""
+    token. An earlier image's token file leaves the agents' reach first (back if this fails)."""
     grants(value)
     earlier = ROOT_CREDENTIAL.with_name('earlier-binding.json')
     private_folder(earlier.parent)
@@ -301,11 +300,9 @@ def install_as_root(value, agent=None):
         with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
             legacy = stripped(read_private(earlier, owner=AGENT_UID)) if moved else None
         payload = {'binding': stripped(value), 'previous': legacy}
-        if agent is not None:
-            agent('install-identity', payload)
-        else:
-            subprocess.run([*AGENT_RUNNER, 'install-identity'], input=json.dumps(payload).encode(), check=True,
-                           cwd='/workspace', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        (agent or (lambda operation, data: subprocess.run(
+            [*AGENT_RUNNER, operation], input=json.dumps(data).encode(), check=True, cwd='/workspace',
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)))('install-identity', payload)
         write_private(value, ROOT_CREDENTIAL)
     except BaseException:
         if moved:
@@ -313,6 +310,8 @@ def install_as_root(value, agent=None):
                 os.rename(earlier, CREDENTIAL)
         raise
     earlier.unlink(missing_ok=True)
+    with contextlib.suppress(IsADirectoryError, PermissionError):  # it could not move, such as across filesystems
+        CREDENTIAL.unlink(missing_ok=True)
 
 
 def clear():
@@ -503,9 +502,9 @@ def service_credential(request, ask=call_service):
 
 
 def service_environment(env, argv, ask=call_service):
-    """gh's environment with the chain service's token for the targeted repository, or None
-    when no service answers. Without a chain the service still routes gh to its API broker,
-    which serves the static binding, so gh never gets the static token there. A refusal drops a token that an outer wrapped gh injected, and gives gh the
+    """gh's environment with the service's answer for the targeted repository, or None when no
+    service answers. Without a chain the broker serves the static binding, so gh never gets the
+    static token. A refusal drops a token that an outer wrapped gh injected, and gives gh the
     placeholder unless the caller set a token, so the API broker answers with its reason."""
     reply = ask({'request': 'gh-token', 'repository': gh_repository(env, list(argv)) or ''})
     if reply is None:
