@@ -22,11 +22,15 @@ AGENTS = Path('/workspace/agents')
 SHARED = Path('/workspace/checkout')
 
 
+class SourceError(ValueError):
+    """A rejected source request or invalid source transfer."""
+
+
 def material(alias=None):
     if alias is None:
         return PRIMARY
     if not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', alias):
-        raise ValueError('Invalid sibling alias')
+        raise SourceError('Invalid sibling alias')
     return Path('/workspace/siblings') / alias / 'source'
 
 
@@ -39,7 +43,7 @@ def resolve_source_path(path):
         return path.resolve()
     except RuntimeError as error:
         # Python before 3.13 reports symlink loops as RuntimeError instead of OSError.
-        raise ValueError(str(error)) from error
+        raise SourceError(str(error)) from error
 
 
 def lfs_selection(value):
@@ -51,49 +55,53 @@ def lfs_selection(value):
     # neither can be one it excludes; Horizon sends both.
     selection = value.get('lfs', {})
     if not isinstance(selection, dict) or set(selection) - {'include', 'exclude', 'skipped'}:
-        raise ValueError('Invalid LFS selection')
+        raise SourceError('Invalid LFS selection')
     patterns = {key: selection.get(key, []) for key in ('include', 'exclude')}
     if any(not isinstance(listed, list) for listed in patterns.values()) \
             or len(patterns['include']) + len(patterns['exclude']) > 64:
-        raise ValueError('Invalid LFS selection')
+        raise SourceError('Invalid LFS selection')
     for pattern in patterns['include'] + patterns['exclude']:
         if not isinstance(pattern, str) or not pattern or len(pattern) > 256 \
                 or any(c == ',' or unicodedata.category(c) in ('Cc', 'Cf', 'Cs', 'Co') for c in pattern):
-            raise ValueError('Invalid LFS selection pattern')
+            raise SourceError('Invalid LFS selection pattern')
     skipped = selection.get('skipped', [])
     if not isinstance(skipped, list) or any(
             not isinstance(asset, dict) or set(asset) != {'path', 'oid', 'size'} or not isinstance(asset['path'], str)
             or not isinstance(asset['oid'], str) or not re.fullmatch(r'[0-9a-f]{64}', asset['oid'])
             or type(asset['size']) is not int or asset['size'] < 0 for asset in skipped):
-        raise ValueError('Invalid LFS selection')
+        raise SourceError('Invalid LFS selection')
     if any(asset['size'] == 0 for asset in skipped):
-        raise ValueError('An empty LFS object is always transferred; a selection cannot skip it')
+        raise SourceError('An empty LFS object is always transferred; a selection cannot skip it')
     if any('\n' in asset['path'] for asset in skipped):
-        raise ValueError('An LFS path with a newline is always transferred; a selection cannot skip it')
+        raise SourceError('An LFS path with a newline is always transferred; a selection cannot skip it')
     return patterns, skipped
 
 
 def manifest(root):
-    value = json.loads((root / 'manifest.json').read_text())
+    try:
+        value = json.loads((root / 'manifest.json').read_text())
+    except ValueError as error:
+        raise SourceError(str(error)) from error
     if not isinstance(value, dict) or any(not isinstance(value.get(key), list) for key in ('modules', 'assets')):
-        raise ValueError('Invalid source manifest')
+        raise SourceError('Invalid source manifest')
     _, skipped = lfs_selection(value)
     for item in value['modules'] + value['assets'] + skipped:
         if not isinstance(item, dict) or not isinstance(item.get('path'), str):
-            raise ValueError('Invalid committed source path')
+            raise SourceError('Invalid committed source path')
         path = PurePosixPath(item['path'])
-        if path.is_absolute() or not path.parts or any(p in ('.', '..', '.git') for p in path.parts):
-            raise ValueError('Invalid committed source path')
+        if path.is_absolute() or not path.parts or any(p in ('.', '..', '.git') for p in path.parts) \
+                or any(c == '\0' or unicodedata.category(c) == 'Cs' for c in item['path']):
+            raise SourceError('Invalid committed source path')
     for module in value['modules']:
         revision = module.get('revision')
         if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', revision):
-            raise ValueError('Invalid submodule revision')
+            raise SourceError('Invalid submodule revision')
     for asset in value['assets']:
         oid = asset.get('oid')
         if not isinstance(oid, str) or not re.fullmatch(r'[0-9a-f]{64}', oid):
-            raise ValueError('Invalid LFS object identity')
+            raise SourceError('Invalid LFS object identity')
         if type(asset.get('size')) is not int or asset['size'] < 0:
-            raise ValueError('Invalid LFS object size')
+            raise SourceError('Invalid LFS object size')
     return value
 
 
@@ -107,11 +115,11 @@ def import_source(root, upload):
         folder = Path(temporary)
         with tarfile.open(upload) as archive:
             if any(not (m.isfile() or m.isdir()) for m in archive.getmembers()):
-                raise ValueError('Unexpected source archive member')
+                raise SourceError('Unexpected source archive member')
             archive.extractall(folder, filter='data')
         value = manifest(folder)
         if (root / 'manifest.json').exists() and manifest(root) != value:
-            raise ValueError('Cloud source dependency identity mismatch')
+            raise SourceError('Cloud source dependency identity mismatch')
         root.mkdir(parents=True, exist_ok=True)
         for asset in value['assets']:
             oid = asset['oid']
@@ -119,7 +127,7 @@ def import_source(root, upload):
             with content.open('rb') as stream:
                 digest = hashlib.file_digest(stream, 'sha256').hexdigest()
             if digest != oid or content.stat().st_size != asset['size']:
-                raise ValueError('LFS transfer checksum mismatch')
+                raise SourceError('LFS transfer checksum mismatch')
             destination = root / 'lfs' / 'objects' / oid[:2] / oid[2:4] / oid
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(content, destination)
@@ -131,7 +139,7 @@ def import_source(root, upload):
                 git('init', '--bare', '-q', '--object-format=' + object_format, repo, stdout=subprocess.DEVNULL)
             actual_format = subprocess.check_output(['git', '--git-dir', str(repo), 'rev-parse', '--show-object-format'], text=True).strip()
             if actual_format != object_format:
-                raise ValueError('Submodule object format mismatch')
+                raise SourceError('Submodule object format mismatch')
             with (folder / f'module-{index}.pack').open('rb') as objects:
                 git('--git-dir', repo, 'index-pack', '--stdin', stdin=objects, stdout=subprocess.DEVNULL)
             git('--git-dir', repo, 'cat-file', '-e', module['revision'] + '^{commit}')
@@ -172,7 +180,7 @@ def select_lfs(repository, value):
         excluded = lfs_paths(repository) - lfs_paths(repository, *filters)
         sent = {asset['path'] for asset in value['assets']}
         if any(asset['path'] not in excluded or asset['path'] in sent for asset in skipped):
-            raise ValueError('Selected LFS content is missing from the transfer')
+            raise SourceError('Selected LFS content is missing from the transfer')
     local_lfs_filters(['--git-dir', repository], patterns)
 
 
@@ -218,7 +226,7 @@ def record_shallow(repo, revision, object_format):
     # every ancestor and its tree is present, so a replay onto full history, or full
     # history arriving later, clears it, while partial history keeps it.
     if missing_objects(repo, revision, object_format, history=False):
-        raise ValueError('Submodule tree is incomplete')
+        raise SourceError('Submodule tree is incomplete')
     listed = repo / 'shallow'
     shallow = set(listed.read_text().split()) if listed.exists() else set()
     if missing_objects(repo, revision, object_format, history=True):
@@ -276,20 +284,20 @@ def checkout(worktree, alias=None):
     worktree = resolve_source_path(Path(worktree))
     alone = alias is None and (worktree == SHARED or worktree.parent in (AGENTS, Path('/workspace/companions/worktrees')))
     if not (alone or beside_siblings(worktree, root.parent / 'repository.git' if alias else Path('/workspace/repository.git'))):
-        raise ValueError('Invalid agent worktree')
+        raise SourceError('Invalid agent worktree')
     if not (root / 'manifest.json').exists():
-        raise ValueError('Source dependencies have not been imported')
+        raise SourceError('Source dependencies have not been imported')
     modules = manifest(root)['modules']
     for index, module in enumerate(modules):
         path = worktree / module['path']
         if not resolve_source_path(path).is_relative_to(worktree):
-            raise ValueError('Submodule checkout escapes agent worktree')
+            raise SourceError('Submodule checkout escapes agent worktree')
         origin = root / f'module-{index}.git'
         if not (path / '.git').exists():
             git('clone', '--no-checkout', origin, path)
         actual = subprocess.check_output(['git', '-C', str(path), 'remote', 'get-url', 'origin'], text=True).strip()
         if actual != str(origin):
-            raise ValueError('Submodule source binding mismatch')
+            raise SourceError('Submodule source binding mismatch')
         if alias is not None:
             # The global lfs.storage names the primary's store.
             git('-C', path, 'config', 'lfs.storage', root / 'lfs')
@@ -321,13 +329,13 @@ def main(arguments):
         elif len(command) == 2 and command[0] == 'checkout':
             checkout(command[1], sibling)
         else:
-            raise ValueError('Usage: horizon-worker-source import|checkout WORKTREE [--sibling ALIAS]')
+            raise SourceError('Usage: horizon-worker-source import|checkout WORKTREE [--sibling ALIAS]')
 
 
 def entry(arguments):
     try:
         return main(arguments)
-    except (ValueError, OSError, subprocess.SubprocessError, tarfile.TarError) as error:
+    except (SourceError, OSError, UnicodeDecodeError, subprocess.SubprocessError, tarfile.TarError) as error:
         # Expected request and transfer failures must not reach the desktop crash hook.
         print(f'horizon-worker-source: {error}', file=sys.stderr)
         return 1
