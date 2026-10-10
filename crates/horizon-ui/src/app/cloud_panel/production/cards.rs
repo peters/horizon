@@ -4,6 +4,7 @@ use crate::theme;
 use egui::{RichText, Vec2};
 use horizon_core::{Board, cloud_panel::CloudGroup};
 mod body;
+mod cause;
 mod cost;
 mod drawer;
 mod github;
@@ -505,7 +506,7 @@ fn stage_rows(ui: &mut egui::Ui, runtime: &super::Runtime, stages: &[Stage]) {
 fn verbose_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
     ui.add_space(4.0);
     ui.label(RichText::new("Output").size(12.0).color(theme::FG_DIM()));
-    output::show(ui, id, "manage", runtime, 260.0, None);
+    output::show(ui, id, "manage", runtime, 260.0);
 }
 
 fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {

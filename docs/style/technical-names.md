@@ -39,6 +39,9 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | panel | One terminal, agent, browser, device or cloud area on the board. | window, pane, tile |
 | session | The saved state of a board. An ephemeral session is not saved. | profile |
 | cloud | A Horizon cloud panel and its remote worker, storage and sessions. | cloud workspace, cloud panel instance |
+| cloud body | The area of a cloud without panels. It shows the steps and the output of the cloud. | empty cloud view |
+| stage track | The row of step marks under the header of a cloud. | stepper, progress bar |
+| failure cause | The output line that Horizon shows in red as the reason of a failed operation. | root cause, error headline |
 | worker | The remote machine or container that runs a cloud. | pod, server, VM (use these only for provider objects) |
 | profile | A named entry under `profiles:` in `.horizon/cloud.yml`. | flavor, preset |
 | provider | A compute vendor that Horizon supports, for example RunPod or Hetzner. | vendor, backend |
