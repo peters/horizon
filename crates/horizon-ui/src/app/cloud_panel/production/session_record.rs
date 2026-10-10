@@ -225,15 +225,16 @@ fn save(store: Store, directory: &Path, flight: &Arc<Mutex<Flight>>, repaint: Op
         };
         match store.save(&record) {
             Ok(()) => {
-                let current = flight.lock().unwrap_or_else(PoisonError::into_inner).generation == generation;
-                if current {
-                    land(store, directory, flight, repaint);
+                let held = flight.lock().unwrap_or_else(PoisonError::into_inner);
+                if held.generation == generation {
+                    land(store, held, directory, flight, repaint);
                     return;
                 }
             }
             Err(error) if !directory.exists() => {
                 tracing::warn!(directory = %directory.display(), %error, "a cloud's folder is gone; its sessions are not recorded");
-                land(store, directory, flight, repaint);
+                let held = flight.lock().unwrap_or_else(PoisonError::into_inner);
+                land(store, held, directory, flight, repaint);
                 return;
             }
             Err(error) => {
@@ -256,9 +257,18 @@ fn save(store: Store, directory: &Path, flight: &Arc<Mutex<Flight>>, repaint: Op
 }
 
 /// Ends a save: releases the record's lock, then says the save is done and forgets it.
-fn land(store: Store, directory: &Path, flight: &Arc<Mutex<Flight>>, repaint: Option<egui::Context>) {
+/// `held` is the flight, locked since the save was found to hold every change, so no
+/// panel adds a session between that check and the end.
+fn land(
+    store: Store,
+    mut held: std::sync::MutexGuard<'_, Flight>,
+    directory: &Path,
+    flight: &Arc<Mutex<Flight>>,
+    repaint: Option<egui::Context>,
+) {
     drop(store);
-    flight.lock().unwrap_or_else(PoisonError::into_inner).done = true;
+    held.done = true;
+    drop(held);
     let mut flights = FLIGHTS.lock().unwrap_or_else(PoisonError::into_inner);
     if flights
         .get(directory)
