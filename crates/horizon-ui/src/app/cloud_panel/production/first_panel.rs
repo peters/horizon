@@ -1,12 +1,18 @@
 //! A freshly deployed cloud opens its first panel itself, so the person lands in a
-//! working session instead of an empty card.
+//! working session instead of an empty card. The view moves to it only while the
+//! person still looks at the cloud.
 use super::{Deployment, HorizonApp};
-use horizon_core::cloud_panel::CloudGroup;
+use horizon_core::cloud_panel::park::Sight;
 
 /// Only a new deployment with nothing attached: a resumed or reconnected cloud, and one
 /// with sessions of its own, are left as the person had them.
 fn state_opens_first_panel(state: &Deployment) -> bool {
     state.sessions.is_empty() && state.timeline.as_ref().is_some_and(|timeline| !timeline.reconnected)
+}
+
+/// Whether the view moves to the first panel of a cloud the person sees as `sight`.
+fn reveals_first_panel(sight: Sight) -> bool {
+    sight != Sight::Hidden
 }
 
 impl super::Runtime {
@@ -49,10 +55,18 @@ impl HorizonApp {
                 .groups
                 .0
                 .iter()
-                .find(|group| group.issue == issue && group.panels.is_empty())
-                .map(CloudGroup::first_panel_kind);
-            if let Some(kind) = first {
+                .position(|group| group.issue == issue && group.panels.is_empty());
+            let Some(index) = first else {
+                continue;
+            };
+            let kind = self.cloud_prototype.groups.0[index].first_panel_kind();
+            // The panel comes into view only for a person who still looks at the cloud. A
+            // person who went elsewhere while it deployed keeps their view: the panel opens
+            // out of view, parks, and the cloud list shows its status line.
+            if reveals_first_panel(self.cloud_sight(index)) {
                 self.cloud_add_panel(ctx, issue, kind, None);
+            } else {
+                self.cloud_add_member(issue, kind, None);
             }
         }
     }
@@ -62,7 +76,7 @@ impl HorizonApp {
 mod tests {
     use super::*;
     use crate::app::test_support::test_app;
-    use horizon_core::cloud_panel::CloudLaunch;
+    use horizon_core::cloud_panel::{CloudGroup, CloudLaunch};
 
     fn deployment(sessions: &serde_json::Value, timeline: &serde_json::Value) -> Deployment {
         serde_json::from_value(serde_json::json!({
@@ -146,6 +160,13 @@ mod tests {
             !resumed.first_panel_due,
             "and a reconnect cannot be turned into a deployment later"
         );
+    }
+
+    #[test]
+    fn the_view_moves_to_the_first_panel_only_while_the_person_looks_at_the_cloud() {
+        assert!(reveals_first_panel(Sight::InUse));
+        assert!(reveals_first_panel(Sight::Visible));
+        assert!(!reveals_first_panel(Sight::Hidden));
     }
 
     #[test]

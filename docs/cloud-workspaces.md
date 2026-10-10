@@ -888,9 +888,9 @@ the card restores the panel.
 ### Parked terminals
 
 When no terminal of a ready cloud is on the screen for 2 minutes, Horizon parks
-the terminals of that cloud. A parked terminal has no SSH client and no live
-terminal on this computer. It shows a static snapshot of its last screen, and
-its session continues in tmux on the worker. The focused panel and a panel that fills the
+the terminals of that cloud. A parked terminal has no SSH client, no terminal and
+no process on this computer. It shows the text of its last screen in a dim color,
+without a cursor, and its session continues in tmux on the worker. The focused panel and a panel that fills the
 window do not park.
 
 The cloud attaches again after it stays in view for 1 second. It attaches at
@@ -908,8 +908,13 @@ While a cloud has parked terminals, Horizon reads the state of their sessions
 every 10 seconds through one SSH command. A parked panel shows this state in a
 strip at its bottom on the main canvas: working or idle, ended, or not found, with
 the last line of the session. In a detached window or a fullscreen cloud, a parked
-panel shows only its snapshot until it attaches. The worker needs only Python 3
+panel shows only its last screen until it attaches. The worker needs only Python 3
 and tmux for this.
+
+A new cloud opens its first panel when it becomes ready. The canvas moves to that
+panel only when the cloud is still in view. When you went to another workspace
+while the cloud deployed, your view stays where it is: the panel opens out of
+view, parks, and the cloud list shows its status line. Click the row to go to it.
 
 ### Cloud list
 

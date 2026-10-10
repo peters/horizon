@@ -13,9 +13,11 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that Horizon parks the terminals of a cloud that stays
-out of view. A parked terminal has no local SSH client, and its session continues
-on the worker. The procedure also makes sure that the terminal attaches again
-when it comes into view, and that it then shows the output of the session.
+out of view. A parked terminal has no local SSH client or terminal, it shows its
+last screen as dim text, and its session continues on the worker. The procedure
+also makes sure that the terminal attaches again when it comes into view, that it
+then shows the output of the session, and that the first panel of a new cloud does
+not move a view that went to another workspace.
 
 ## 2. Applicability
 
@@ -84,11 +86,19 @@ when it comes into view, and that it then shows the output of the session.
    > **CAUTION:** START ONLY ONE CLOUD FOR THIS RUN. The provider charges money
    > from the next step until the cleanup.
 
-5. Click **Start cloud**. Wait until the card shows **Ready**.
+5. Click **Start cloud**. While the cloud deploys, click the name of a local
+   workspace in the sidebar. Wait until the cloud row in the sidebar shows that
+   the cloud is ready.
 
-   Result: The cloud workspace shows a shell panel.
+   Result: The canvas stays on the local workspace: the first panel of the cloud
+   opens out of view. After 2 minutes, the cloud row moves to **Parked**.
 
-6. In the shell panel, type this command. Then push Enter.
+6. Click the name of the cloud workspace in the sidebar.
+
+   Result: The canvas moves to the cloud, which attaches. The cloud workspace
+   shows a shell panel.
+
+7. In the shell panel, type this command. Then push Enter.
 
    ```sh
    i=0; while :; do i=$((i+1)); echo "synthetic output $i"; sleep 1; done
@@ -125,7 +135,8 @@ when it comes into view, and that it then shows the output of the session.
 
 5. Count the `ssh` child processes of the Horizon child again.
 
-   Result: The count is less than ATTACHED. The terminal client of the cloud panel stopped.
+   Result: The count is less than ATTACHED. The terminal client of the cloud panel
+   stopped.
 
 ### 6.2 STATUS — Show the status of a parked panel
 
@@ -139,9 +150,10 @@ when it comes into view, and that it then shows the output of the session.
 3. Wait 15 seconds. Then drag the canvas until the panel is fully in view.
    Look at the panel at once.
 
-   Result: For about 1 second, the bottom of the panel shows a strip. The strip
-   starts with `Parked ·` and shows the last line of the session,
-   `synthetic output <n>`. Record `<n>`.
+   Result: The panel shows its last screen as dim text without a cursor. For
+   about 1 second, the bottom of the panel shows a strip. The strip starts with
+   `Parked ·` and shows the last line of the session, `synthetic output <n>`.
+   Record `<n>`.
 
 ### 6.3 ATTACH — Attach the panel when it comes into view
 

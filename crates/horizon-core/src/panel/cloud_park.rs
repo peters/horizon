@@ -1,13 +1,42 @@
-//! Parking of cloud members. A parked member has no SSH client or PTY; it keeps
-//! only a grid with its last screen. Its agent continues in tmux on the worker.
-use super::{CloudWait, Panel, spawn};
+//! Parking of cloud members. A parked member has no SSH client, PTY or terminal grid;
+//! it keeps only the text of its last screen. Its agent continues in tmux on the worker.
+use super::{CloudWait, Panel};
 use crate::{agents::AgentStatus, editor::PanelContent, error::Result};
 
+/// The last screen of a parked member, as passive text, and the size of the terminal
+/// that showed it, so the member attaches again at the same size.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ParkedScreen {
+    lines: Vec<String>,
+    rows: u16,
+    cols: u16,
+}
+
+impl ParkedScreen {
+    /// The screen `lines` of a terminal with `rows` and `cols`.
+    #[must_use]
+    pub fn new(lines: Vec<String>, rows: u16, cols: u16) -> Self {
+        Self { lines, rows, cols }
+    }
+
+    /// The text of each row of the screen, top to bottom.
+    #[must_use]
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    /// The rows and columns of the terminal that showed the screen.
+    #[must_use]
+    pub const fn size(&self) -> (u16, u16) {
+        (self.rows, self.cols)
+    }
+}
+
 impl Panel {
-    /// Parks this member of a cloud. A running terminal is replaced by a placeholder
-    /// that shows its last screen, and the old terminal is shut down, which detaches
-    /// its tmux client. A placeholder that waits for another reason says that it is
-    /// parked instead. Returns whether the panel changed.
+    /// Parks this member of a cloud. A running terminal is replaced by the text of its
+    /// last screen, and the terminal is shut down, which detaches its tmux client. A
+    /// placeholder that waits for another reason says that it is parked instead.
+    /// Returns whether the panel changed.
     ///
     /// # Errors
     ///
@@ -21,16 +50,21 @@ impl Panel {
         let Some(terminal) = self.terminal() else {
             return Ok(false);
         };
-        let (rows, cols) = (terminal.rows(), terminal.cols());
-        let screen = terminal.viewport_text();
-        let replacement = spawn::parked_terminal(self, rows, cols, &screen)?;
-        if let PanelContent::Terminal(mut old) =
-            std::mem::replace(&mut self.content, PanelContent::Terminal(replacement))
-        {
+        let screen = ParkedScreen::new(terminal.viewport_text(), terminal.rows(), terminal.cols());
+        if let PanelContent::Terminal(mut old) = std::mem::replace(&mut self.content, PanelContent::Parked(screen)) {
             old.request_shutdown();
         }
         self.cloud_wait = Some(CloudWait::Parked);
         Ok(true)
+    }
+
+    /// The last screen of a parked member.
+    #[must_use]
+    pub fn parked_screen(&self) -> Option<&ParkedScreen> {
+        match &self.content {
+            PanelContent::Parked(screen) => Some(screen),
+            _ => None,
+        }
     }
 
     /// Shows the agent status that the worker reports for a parked member. Every
