@@ -1016,8 +1016,9 @@ This task starts no cloud. `<local>` is a new repository whose committed
 
 6. Double-click an empty part of the canvas.
 
-   Result: The **New Workspace** menu shows **Cloud** and **Cloud GPU** first,
-   then **This PC** above the presets.
+   Result: This menu is the preset picker, not the menu of step 2. It shows the
+   cloud choices **Cloud** and **Cloud GPU** first, then the heading **This PC**
+   above the presets that make a workspace on this computer.
 
 7. Click **Cloud** in that menu. Type `<home>/smoke/local` in the repository field.
    This is `<data-home>/smoke/local` from step 1, as the fixture shows it.

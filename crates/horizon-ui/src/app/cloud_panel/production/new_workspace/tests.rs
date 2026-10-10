@@ -62,6 +62,7 @@ fn plain_intent(workspace: WorkspaceId, gpu: bool) -> Intent {
         root: None,
         keep: false,
         error: None,
+        looked_up: None,
     }
 }
 

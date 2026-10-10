@@ -16,7 +16,14 @@ pub(super) fn row(
     asked: bool,
     chosen: &mut bool,
 ) -> Option<WorkspacePlacement> {
-    let mut kept = intent.choices.get(repository);
+    let mut kept = match &intent.looked_up {
+        Some((looked, kept)) if looked == repository => *kept,
+        _ => {
+            let kept = intent.choices.get(repository);
+            intent.looked_up = Some((repository.to_owned(), kept));
+            kept
+        }
+    };
     ui.horizontal_wrapped(|ui| {
         let Some(placement) = kept else {
             ui.checkbox(&mut intent.keep, "Keep my choice for this repository");
@@ -46,6 +53,7 @@ pub(super) fn row(
             };
             if intent.error.is_none() {
                 kept = None;
+                intent.looked_up = None;
             }
         }
     });

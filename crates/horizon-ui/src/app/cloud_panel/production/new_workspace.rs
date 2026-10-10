@@ -29,6 +29,9 @@ pub(super) struct Intent {
     keep: bool,
     /// Why the last keep or forget was not saved.
     error: Option<String>,
+    /// The kept choice of the repository the field held when it was last looked up, so a
+    /// frame does not resolve the folder again.
+    looked_up: Option<(String, Option<WorkspacePlacement>)>,
 }
 
 impl HorizonApp {
@@ -47,6 +50,7 @@ impl HorizonApp {
                 root,
                 keep: false,
                 error: None,
+                looked_up: None,
             });
         }
     }
@@ -240,5 +244,6 @@ pub(super) fn keep(intent: &mut Intent, repository: &str, placement: WorkspacePl
     intent.error = saved
         .err()
         .map(|error| format!("The choice for this repository was not kept: {error}"));
+    intent.looked_up = None;
     intent.error.is_none()
 }
