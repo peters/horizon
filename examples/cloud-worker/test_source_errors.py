@@ -75,6 +75,36 @@ class SourceErrorTests(unittest.TestCase):
                 self.assertNotIn(b'Traceback', result.stderr)
                 self.assertFalse((workspace / 'source' / 'manifest.json').exists())
 
+    def test_malformed_manifests_do_not_call_the_crash_hook(self):
+        cases = [None, [], {}, {'modules': []}, {'assets': []}]
+        for key in ('modules', 'assets'):
+            for invalid in (None, {}, 'items', 1):
+                cases.append({'modules': [], 'assets': [], key: invalid})
+            for item in (None, [], {}, {'path': None}, {'path': []}, {'path': 1}):
+                cases.append({'modules': [], 'assets': [], key: [item]})
+        for revision in (None, [], 1, '', 'invalid'):
+            cases.append({'modules': [{'path': 'module', 'revision': revision}], 'assets': []})
+        for oid in (None, [], 1, '', 'invalid'):
+            cases.append({'modules': [], 'assets': [{'path': 'asset', 'oid': oid, 'size': 1}]})
+        for size in (None, [], '1', True, -1, 1.5):
+            cases.append({'modules': [], 'assets': [{'path': 'asset', 'oid': 'a' * 64, 'size': size}]})
+        cases.extend([{'modules': [{'path': 'module'}], 'assets': []},
+                      {'modules': [], 'assets': [{'path': 'asset', 'size': 1}]},
+                      {'modules': [], 'assets': [{'path': 'asset', 'oid': 'a' * 64}]}])
+        for value in cases:
+            with self.subTest(manifest=value), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                workspace = root / 'workspace'
+                workspace.mkdir()
+                self.archive(workspace, json.dumps(value).encode())
+                result = self.execute(root, workspace, 'import')
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(result.stdout, b'')
+                self.assertIn(b'horizon-worker-source: Invalid ', result.stderr)
+                self.assertNotIn(b'CRASH_HOOK_CALLED', result.stderr)
+                self.assertNotIn(b'Traceback', result.stderr)
+                self.assertFalse((workspace / 'source').exists())
+
     def test_contract_probes_succeed_without_a_workspace(self):
         for flag, contract in [('shallow', b'horizon-source-shallow-contract=1\n'),
                                ('lfs-selection', b'horizon-source-lfs-selection-contract=1\n')]:

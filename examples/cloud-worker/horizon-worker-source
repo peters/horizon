@@ -67,11 +67,25 @@ def lfs_selection(value):
 
 def manifest(root):
     value = json.loads((root / 'manifest.json').read_text())
+    if not isinstance(value, dict) or any(not isinstance(value.get(key), list) for key in ('modules', 'assets')):
+        raise ValueError('Invalid source manifest')
     _, skipped = lfs_selection(value)
     for item in value['modules'] + value['assets'] + skipped:
+        if not isinstance(item, dict) or not isinstance(item.get('path'), str):
+            raise ValueError('Invalid committed source path')
         path = PurePosixPath(item['path'])
         if path.is_absolute() or not path.parts or any(p in ('.', '..', '.git') for p in path.parts):
             raise ValueError('Invalid committed source path')
+    for module in value['modules']:
+        revision = module.get('revision')
+        if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', revision):
+            raise ValueError('Invalid submodule revision')
+    for asset in value['assets']:
+        oid = asset.get('oid')
+        if not isinstance(oid, str) or not re.fullmatch(r'[0-9a-f]{64}', oid):
+            raise ValueError('Invalid LFS object identity')
+        if type(asset.get('size')) is not int or asset['size'] < 0:
+            raise ValueError('Invalid LFS object size')
     return value
 
 
@@ -93,8 +107,6 @@ def import_source(root, upload):
         root.mkdir(parents=True, exist_ok=True)
         for asset in value['assets']:
             oid = asset['oid']
-            if len(oid) != 64 or any(c not in '0123456789abcdef' for c in oid):
-                raise ValueError('Invalid LFS object identity')
             content = folder / 'lfs' / oid
             with content.open('rb') as stream:
                 digest = hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -106,8 +118,6 @@ def import_source(root, upload):
         for index, module in enumerate(value['modules']):
             repo = root / f'module-{index}.git'
             revision = module['revision']
-            if len(revision) not in (40, 64) or any(c not in '0123456789abcdef' for c in revision):
-                raise ValueError('Invalid submodule revision')
             object_format = 'sha256' if len(revision) == 64 else 'sha1'
             if not repo.exists():
                 git('init', '--bare', '-q', '--object-format=' + object_format, repo, stdout=subprocess.DEVNULL)
